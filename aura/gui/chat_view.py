@@ -15,7 +15,7 @@ import json
 import re
 from dataclasses import dataclass
 
-from PySide6.QtCore import Qt, QSize, Signal
+from PySide6.QtCore import QEasingCurve, QPropertyAnimation, Qt, QSize, Signal
 from PySide6.QtGui import QFont, QPixmap, QTextCharFormat, QTextCursor, QTextDocument
 from PySide6.QtWidgets import (
     QFrame,
@@ -866,6 +866,7 @@ class ChatView(QScrollArea):
         # Map dispatch tool_call_id -> SpecCard.
         self._spec_cards: dict[str, SpecCard] = {}
         self._empty_hint: QLabel | None = None
+        self._scroll_anim: QPropertyAnimation | None = None
         self._show_empty_hint()
 
     # ---- container management --------------------------------------------
@@ -878,9 +879,23 @@ class ChatView(QScrollArea):
         self._layout.insertWidget(self._layout.count() - 1, w)
         self._scroll_to_bottom()
 
-    def _scroll_to_bottom(self) -> None:
+    def _is_at_bottom(self, threshold: int = 30) -> bool:
         bar = self.verticalScrollBar()
-        bar.setValue(bar.maximum())
+        return bar.maximum() - bar.value() <= threshold
+
+    def _scroll_to_bottom(self) -> None:
+        if not self._is_at_bottom():
+            return
+        bar = self.verticalScrollBar()
+        # Stop any in-flight smooth scroll
+        if hasattr(self, '_scroll_anim') and self._scroll_anim is not None:
+            self._scroll_anim.stop()
+        self._scroll_anim = QPropertyAnimation(bar, b"value")
+        self._scroll_anim.setDuration(200)
+        self._scroll_anim.setStartValue(bar.value())
+        self._scroll_anim.setEndValue(bar.maximum())
+        self._scroll_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._scroll_anim.start()
 
     def _show_empty_hint(self) -> None:
         hint = QLabel(

@@ -31,3 +31,5 @@ dist/
 build/
 .pytest_cache/
 .mypy_cache/
+/aura/conversation/
+/.aura/
