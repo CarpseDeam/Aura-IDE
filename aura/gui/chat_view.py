@@ -883,8 +883,8 @@ class ChatView(QScrollArea):
         bar = self.verticalScrollBar()
         return bar.maximum() - bar.value() <= threshold
 
-    def _scroll_to_bottom(self) -> None:
-        if not self._is_at_bottom():
+    def _scroll_to_bottom(self, force: bool = False) -> None:
+        if not force and not self._is_at_bottom():
             return
         bar = self.verticalScrollBar()
         # Stop any in-flight smooth scroll
@@ -947,14 +947,14 @@ class ChatView(QScrollArea):
 
     def append_reasoning(self, text: str) -> None:
         self.current_assistant().append_reasoning(text)
-        self._scroll_to_bottom()
+        self._scroll_to_bottom(force=True)
 
     def append_content(self, text: str) -> None:
         ac = self.current_assistant()
         # The first content delta means reasoning is done.
         ac.reasoning_done()
         ac.append_content(text)
-        self._scroll_to_bottom()
+        self._scroll_to_bottom(force=True)
 
     def add_tool_call(self, tool_call_id: str, name: str) -> None:
         ac = self.current_assistant()

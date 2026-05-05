@@ -501,18 +501,6 @@ class MainWindow(QMainWindow):
         card = self._chat.add_spec_card(
             tool_call_id, goal, list(files), spec, acceptance
         )
-        try:
-            card.dispatch_clicked.disconnect()
-        except (RuntimeError, TypeError):
-            pass
-        try:
-            card.edit_clicked.disconnect()
-        except (RuntimeError, TypeError):
-            pass
-        try:
-            card.cancel_clicked.disconnect()
-        except (RuntimeError, TypeError):
-            pass
         card.dispatch_clicked.connect(self._on_dispatch_clicked)
         card.edit_clicked.connect(self._on_edit_spec_clicked)
         card.cancel_clicked.connect(self._on_cancel_dispatch_clicked)
