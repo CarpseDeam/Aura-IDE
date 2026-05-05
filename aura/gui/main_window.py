@@ -585,7 +585,16 @@ class MainWindow(QMainWindow):
 
     def _on_api_error(self, status: int, message: str) -> None:
         title = f"API Error {status}" if status > 0 else "Error"
-        self._chat.add_error(title, message)
+        self._chat.add_error(title, message, show_retry=True)
+
+    def _on_retry(self) -> None:
+        if self._bridge.is_running():
+            return
+        self._chat.begin_assistant()
+        self._bridge.send(
+            model=self._input.current_model(),
+            thinking=self._input.current_thinking(),
+        )
 
     def _on_usage(
         self, model_id: str, prompt: int, completion: int, hit: int, miss: int

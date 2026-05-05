@@ -824,7 +824,9 @@ class SpecCard(QFrame):
 
 
 class ErrorCard(QFrame):
-    def __init__(self, title: str, message: str) -> None:
+    retry_clicked = Signal()
+
+    def __init__(self, title: str, message: str, show_retry: bool = False) -> None:
         super().__init__()
         self.setObjectName("errorCard")
         layout = QVBoxLayout(self)
@@ -838,6 +840,24 @@ class ErrorCard(QFrame):
         body.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         body.setStyleSheet(f"color: {FG};")
         layout.addWidget(body)
+
+        if show_retry:
+            btn_layout = QHBoxLayout()
+            btn_layout.setContentsMargins(0, 4, 0, 0)
+            self._retry_btn = QPushButton("Retry")
+            self._retry_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            self._retry_btn.setStyleSheet(
+                f"color: {FG}; background: {BG_ALT}; border: 1px solid {BORDER}; padding: 4px 12px; border-radius: 4px;"
+            )
+            self._retry_btn.clicked.connect(self._on_retry)
+            btn_layout.addWidget(self._retry_btn)
+            btn_layout.addStretch(1)
+            layout.addLayout(btn_layout)
+
+    def _on_retry(self) -> None:
+        self._retry_btn.setEnabled(False)
+        self._retry_btn.setText("Retrying...")
+        self.retry_clicked.emit()
 
 
 # -----------------------------------------------------------------------------
@@ -990,8 +1010,11 @@ class ChatView(QScrollArea):
         ac.add_footer_widget(card)
         self._scroll_to_bottom()
 
-    def add_error(self, title: str, message: str) -> None:
-        self._add_card(ErrorCard(title, message))
+    def add_error(self, title: str, message: str, show_retry: bool = False) -> None:
+        card = ErrorCard(title, message, show_retry=show_retry)
+        if show_retry:
+            card.retry_clicked.connect(self.retry_requested.emit)
+        self._add_card(card)
 
     def assistant_done(self) -> None:
         ac = self._current_assistant
