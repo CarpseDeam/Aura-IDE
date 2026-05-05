@@ -10,6 +10,7 @@ Card types:
 from __future__ import annotations
 
 import base64
+import html as _html
 import json
 import re
 from dataclasses import dataclass
@@ -38,9 +39,11 @@ from aura.gui.theme import (
     DIFF_ADD_BG,
     DIFF_DEL_BG,
     FG,
+    FG_BODY_USER,
     FG_DIM,
     FG_ITALIC,
     SUCCESS,
+    SUCCESS_DIM,
     WARN,
 )
 
@@ -107,6 +110,12 @@ def _render_markdown_with_code(text: str) -> str:
     doc.setMarkdown(intermediate)
     html = doc.toHtml()
 
+    # QTextDocument.toHtml() bakes color rules into every <p style="…"> element,
+    # which then override our QSS body color and make the text look gray on dark.
+    # Strip those colors so our wrapper div takes effect — pygments blocks are
+    # still placeholders at this point and aren't affected.
+    html = re.sub(r"color\s*:\s*#[0-9a-fA-F]+\s*;?", "", html)
+
     for i, block in enumerate(blocks):
         token = f"AURACODEPLACEHOLDER{i}ENDAURA"
         # Markdown wraps the bare token in paragraph tags — strip them.
@@ -115,7 +124,16 @@ def _render_markdown_with_code(text: str) -> str:
             html = wrapped.sub(block, html, count=1)
         else:
             html = html.replace(token, block, 1)
-    return html
+    # Final wrap: enforce body color + a comfortable line-height for paragraphs.
+    return f'<div style="color: {FG}; line-height: 145%;">{html}</div>'
+
+
+def _wrap_body_text(text: str, color: str) -> str:
+    """Escape plain text and wrap it in a div with explicit color and a comfortable
+    line-height — QLabel ignores QSS line-height, so rich-text wrapping is the only way.
+    """
+    escaped = _html.escape(text).replace("\n", "<br/>")
+    return f'<div style="color: {color}; line-height: 145%;">{escaped}</div>'
 
 
 def _mono_font(pt: int = 10) -> QFont:
@@ -185,11 +203,11 @@ class UserCard(QFrame):
         super().__init__()
         self.setObjectName("userCard")
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 10, 12, 10)
-        layout.setSpacing(6)
+        layout.setContentsMargins(14, 10, 14, 12)
+        layout.setSpacing(4)
 
         header = QLabel("You")
-        header.setObjectName("cardHeader")
+        header.setObjectName("userHeader")
         layout.addWidget(header)
 
         if image_b64s:
@@ -205,7 +223,8 @@ class UserCard(QFrame):
             body = QLabel(text)
             body.setWordWrap(True)
             body.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-            body.setStyleSheet(f"color: {FG};")
+            body.setTextFormat(Qt.TextFormat.RichText)
+            body.setText(_wrap_body_text(text, FG_BODY_USER))
             layout.addWidget(body)
 
     def _make_thumb(self, b64: str) -> QLabel:
@@ -237,16 +256,26 @@ class _StreamLabel(QLabel):
         self.setWordWrap(True)
         self.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self._italic = italic
         if italic:
             self.setObjectName("reasoning")
             self.setStyleSheet(f"color: {FG_ITALIC}; font-style: italic;")
         else:
             self.setStyleSheet(f"color: {FG};")
+        # Use rich text so we can control line-height during streaming.
+        self.setTextFormat(Qt.TextFormat.RichText)
         self._buf = ""
 
     def append(self, text: str) -> None:
         self._buf += text
-        self.setText(self._buf)
+        if self._italic:
+            escaped = _html.escape(self._buf).replace("\n", "<br/>")
+            self.setText(
+                f'<div style="color: {FG_ITALIC}; line-height: 145%; font-style: italic;">'
+                f"{escaped}</div>"
+            )
+        else:
+            self.setText(_wrap_body_text(self._buf, FG))
 
     def text_buffer(self) -> str:
         return self._buf
@@ -255,13 +284,13 @@ class _StreamLabel(QLabel):
 class AssistantCard(QFrame):
     def __init__(self) -> None:
         super().__init__()
-        self.setObjectName("card")
+        self.setObjectName("assistantCard")
         self._outer = QVBoxLayout(self)
-        self._outer.setContentsMargins(12, 8, 12, 10)
+        self._outer.setContentsMargins(14, 10, 14, 12)
         self._outer.setSpacing(4)
 
         header = QLabel("Aura")
-        header.setObjectName("cardHeader")
+        header.setObjectName("assistantHeader")
         self._outer.addWidget(header)
 
         # Reasoning: lazy — created on first reasoning delta.
@@ -273,12 +302,22 @@ class AssistantCard(QFrame):
         self._content_label.setVisible(False)
         self._outer.addWidget(self._content_label)
 
-        # Inline tool / diff cards live between content and footer.
+        # Tool calls grouped under the assistant turn — indented frame with a
+        # left rule so the cluster reads as supporting info under the message.
+        self._tool_cluster = QFrame()
+        self._tool_cluster.setObjectName("toolCluster")
+        self._tool_cluster_layout = QVBoxLayout(self._tool_cluster)
+        self._tool_cluster_layout.setContentsMargins(16, 6, 0, 0)
+        self._tool_cluster_layout.setSpacing(5)
+        self._tool_cluster.setVisible(False)
+        self._outer.addWidget(self._tool_cluster)
+
         self._tool_cards: dict[str, ToolCallCard] = {}
 
-        # Footer: usage / errors injected later.
+        # Footer: diff cards / usage / errors injected later.
         self._footer = QVBoxLayout()
-        self._footer.setSpacing(4)
+        self._footer.setContentsMargins(0, 4, 0, 0)
+        self._footer.setSpacing(6)
         self._outer.addLayout(self._footer)
 
     # ---- streaming hooks --------------------------------------------------
@@ -312,8 +351,9 @@ class AssistantCard(QFrame):
     def add_tool_card(self, tool_call_id: str, name: str) -> "ToolCallCard":
         card = ToolCallCard(name)
         self._tool_cards[tool_call_id] = card
-        # Insert before footer.
-        self._outer.insertWidget(self._outer.count() - 1, card)
+        if not self._tool_cluster.isVisible():
+            self._tool_cluster.setVisible(True)
+        self._tool_cluster_layout.addWidget(card)
         return card
 
     def get_tool_card(self, tool_call_id: str) -> "ToolCallCard | None":
@@ -336,15 +376,15 @@ class ToolCallCard(QFrame):
 
     def __init__(self, name: str) -> None:
         super().__init__()
-        self.setObjectName("card")
+        self.setObjectName("toolCard")
         self._name = name
         self._args_text = ""
         self._state = self.STATE_RUNNING
         self._result_text = ""
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 8, 10, 8)
-        layout.setSpacing(6)
+        layout.setContentsMargins(10, 6, 10, 6)
+        layout.setSpacing(5)
 
         self._header = QToolButton()
         self._header.setObjectName("sectionToggle")
@@ -399,7 +439,7 @@ class ToolCallCard(QFrame):
         }[self._state]
         color = {
             self.STATE_RUNNING: WARN,
-            self.STATE_DONE: SUCCESS,
+            self.STATE_DONE: SUCCESS_DIM,
             self.STATE_FAILED: DANGER,
         }[self._state]
         # Prefer a short args summary in the header for readability.
@@ -559,7 +599,7 @@ class ChatView(QScrollArea):
         container = QWidget()
         self._layout = QVBoxLayout(container)
         self._layout.setContentsMargins(20, 20, 20, 20)
-        self._layout.setSpacing(12)
+        self._layout.setSpacing(28)
         self._layout.addStretch(1)
         self.setWidget(container)
 
@@ -607,7 +647,16 @@ class ChatView(QScrollArea):
         self._show_empty_hint()
 
     def add_user(self, text: str, image_b64s: list[str] | None = None) -> None:
-        self._add_card(UserCard(text, image_b64s))
+        # Slight right inset on user cards so the conversation rhythm is visible at a glance —
+        # not a chat-bubble alignment, just enough to feel like input vs. output.
+        wrapper = QWidget()
+        wrapper.setStyleSheet("background: transparent;")
+        h = QHBoxLayout(wrapper)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(0)
+        h.addWidget(UserCard(text, image_b64s), 1)
+        h.addSpacing(40)
+        self._add_card(wrapper)
         self._current_assistant = None  # next assistant turn opens a new card
 
     def begin_assistant(self) -> AssistantCard:

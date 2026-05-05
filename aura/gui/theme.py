@@ -7,19 +7,26 @@ from PySide6.QtWidgets import QApplication
 
 # ---- color tokens ---------------------------------------------------------
 BG = "#181a20"           # window background
-BG_ALT = "#1f222a"       # panels / cards
+BG_ALT = "#1f222a"       # panels / generic cards
 BG_RAISED = "#262a33"    # input field, pressed buttons
 BORDER = "#2e333d"
 BORDER_STRONG = "#3a4050"
 
-FG = "#e6e9ef"           # primary text
-FG_DIM = "#a8aebb"        # secondary text
+# Message-card backgrounds — distinct so user/assistant turns separate at a glance.
+BG_USER_CARD = "#1e2536"        # cool blue tint (user — feels like input)
+BG_ASSISTANT_CARD = "#1f1f23"   # warm neutral (assistant — feels like output)
+BG_TOOL_CARD = "#1c2026"        # supporting info, slightly recessed
+
+FG = "#eaecef"           # primary text — bumped for chat readability
+FG_BODY_USER = "#dde0e6"  # user message body
+FG_DIM = "#a8aebb"        # secondary text (role labels, meta)
 FG_MUTED = "#6e7382"      # tertiary / placeholder
 FG_ITALIC = "#7e8494"     # reasoning text
 
-ACCENT = "#7aa2f7"         # primary accent (links, selected)
+ACCENT = "#7aa2f7"         # primary accent (links, selected, user-card edge)
 ACCENT_HOVER = "#94b6ff"
 SUCCESS = "#9ece6a"        # diff additions, ok
+SUCCESS_DIM = "#82a35a"    # tool-card supporting state (desaturated)
 DANGER = "#f7768e"         # diff removals, errors, rejection
 WARN = "#e0af68"           # warning, read-only badge
 
@@ -240,9 +247,25 @@ QFrame#card {{
     border-radius: 8px;
 }}
 QFrame#userCard {{
-    background: {BG_RAISED};
+    background: {BG_USER_CARD};
     border: 1px solid {BORDER_STRONG};
+    border-left: 3px solid {ACCENT};
     border-radius: 8px;
+}}
+QFrame#assistantCard {{
+    background: {BG_ASSISTANT_CARD};
+    border: 1px solid {BORDER};
+    border-radius: 8px;
+}}
+QFrame#toolCard {{
+    background: {BG_TOOL_CARD};
+    border: 1px solid {BORDER};
+    border-radius: 6px;
+}}
+QFrame#toolCluster {{
+    background: transparent;
+    border: none;
+    border-left: 1px solid {BORDER_STRONG};
 }}
 QFrame#errorCard {{
     background: rgba(247, 118, 142, 0.08);
@@ -254,7 +277,21 @@ QLabel#cardHeader {{
     color: {FG_DIM};
     font-weight: 600;
     font-size: 12px;
-    padding: 0;
+    padding: 0 0 4px 0;
+}}
+QLabel#userHeader {{
+    color: {ACCENT};
+    font-weight: 700;
+    font-size: 12px;
+    padding: 0 0 4px 0;
+    letter-spacing: 0.02em;
+}}
+QLabel#assistantHeader {{
+    color: {FG_DIM};
+    font-weight: 600;
+    font-size: 12px;
+    padding: 0 0 4px 0;
+    letter-spacing: 0.02em;
 }}
 
 QLabel#reasoning {{

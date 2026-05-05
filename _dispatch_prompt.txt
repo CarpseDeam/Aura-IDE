@@ -1,113 +1,96 @@
 
-**Aura — Phase 2 (polish pass)**
+**Aura — readability + message-distinction patch**
 
-Project: `C:\Projects\Aura-Harness2`. Phase 1 is done and working — app launches, chat streams, tool calls render, diff approval works, Read-Only Mode in toolbar. Read `SPEC.md` at the project root for the full architecture.
+Project: `C:\Projects\Aura-Harness2`. Phases 1+2 are done and working — engine is sound, GUI is functional, smokes pass. Read `SPEC.md` and `aura/gui/theme.py` + `aura/gui/chat_view.py` before changing anything. Use Desktop Commander.
 
-**Do not regress Phase 1.** After every change, the user must still be able to `python -m aura`, send a message, see streaming reasoning + content, and have the model call file tools. Run `scripts/smoke_conversation.py` after major changes to verify the engine still works.
+This is a **GUI-only patch**. Do not touch `client/`, `conversation/`, `bridge/`, or any tool code. If you find yourself editing those, stop — you're outside scope. After the patch, the user must still be able to `python -m aura`, send a message, see streaming, see tool calls, and approve diffs. Run `scripts/smoke_conversation.py` after to verify no regression on the engine path.
 
-Use Desktop Commander to read existing code before changing it. The Phase 1 build made decisions you need to respect; don't rewrite shared modules unless necessary.
+## Problem (from user screenshots)
 
-## Scope (everything below, in order)
+1. Chat text is too low contrast — body copy looks gray on dark gray, hard to read for long sessions.
+2. User messages and assistant messages look near-identical: same dark card, same inner background, only the small "You" / "Aura" label distinguishes them. After a few turns the eye can't separate the conversation flow.
+3. Tool-call cards stack visually well but the assistant message body and tool cards blur together — needs visual hierarchy: assistant *message* vs assistant *tool calls under the message*.
 
-### 1. Workspace tree pane (left pane)
+## Fixes
 
-Replace the Phase 1 placeholder ("Workspace tree, search, and history land in Phase 2") with a real tree.
+### 1. Body text contrast
 
-- New module `aura/gui/workspace_tree.py` with a `WorkspaceTree(QWidget)` class. Use `QTreeView` + `QFileSystemModel`. Read-only — this is for orientation, not editing. The model uses tools to access files; the user clicks here just to see structure or open files in their actual editor.
-- Filter the model: hide dotfiles (except expose `.aura/` so user can see backups exist), hide `__pycache__`, `.venv`, `.git`, `node_modules`, `.import` (Godot cache), `*.import` files. Use `setNameFilters` + `setNameFilterDisables(False)` and a custom `QSortFilterProxyModel` if needed for the dotfile rule.
-- Double-click a file: opens the file in the OS default editor via `QDesktopServices.openUrl(QUrl.fromLocalFile(path))`. Right-click context menu: "Reveal in Explorer" (uses `subprocess.run(["explorer", "/select,", path])` on Windows), "Copy path", "Copy relative path".
-- Update root when user clicks "Change Root..." in the workspace label area — already exists, just wire it to also update the tree's root index.
-- Replace the existing left-pane content in `main_window.py` accordingly. Keep the WORKSPACE label + path display + Change Root button at the top of the left pane; tree fills the space below.
+In `theme.py`, raise the primary chat text color. Current value is probably around `#9ca3af` or similar mid-gray. Change to something near `#e5e7eb` (light cool gray) for assistant body content. User message body can be slightly different (see below) but should also hit at least `#d4d4d8`. Keep secondary/muted text (the "Thinking" label, tool-call meta, timestamps if any) at the current muted level so it stays subordinate.
 
-### 2. Conversation persistence
+Verify line-height is comfortable — if it's currently 1.0 / default, bump to 1.4-1.5 for body paragraphs. Code blocks already get monospace treatment from Pygments; leave those.
 
-- New module `aura/conversation/persistence.py` with `save_conversation(history, workspace_root, title=None) -> Path` and `load_conversation(path) -> History`.
-- Storage: `<workspace_root>/.aura/conversations/<ISO-timestamp>-<slug>.json`. The slug is the first ~6 words of the first user message, lowercased, non-alphanumerics replaced with `-`, truncated to 40 chars. If no user message yet, use `untitled`.
-- JSON schema: `{"version": 1, "created_at": iso, "model": str, "thinking": bool, "messages": [...full history including reasoning_content...]}`.
-- Save behavior: auto-save after each assistant turn completes (after `Done` event in the manager loop, before the next round if there are tool calls — so partial state during a tool loop is saved). Hook into the bridge's event handler.
-- Load behavior: New menu in toolbar — "Open Conversation..." opens a file picker rooted at `<workspace>/.aura/conversations/`. Loads the history, replaces current chat view content, sets the model picker / thinking toggle to whatever was saved.
-- "New Conversation" button (already exists) clears the current history but doesn't delete the saved file.
-- Most-recent-on-launch: on app start, if `<workspace>/.aura/conversations/` has files, load the most recent one. Add a "Don't restore on launch" checkbox in settings (see #5). Default: restore.
+Font size: if body is currently 12-13px, leave it; if smaller, bump to 13. Don't go bigger than 14 — this is a dense tool, not a reading app.
 
-### 3. Syntax highlighting in code blocks
+### 2. Distinguish user vs assistant messages
 
-- Add `pygments` to `pyproject.toml` dependencies.
-- In `chat_view.py`, when rendering markdown content from the assistant, run a pre-pass that finds fenced code blocks (` ```lang\n...\n``` `) and replaces each with HTML produced by Pygments using the `monokai` style (or another dark style — pick one that looks good on the existing dark theme background).
-- Handle unspecified language gracefully — Pygments has `guess_lexer` but it's slow; default to `text` lexer if no lang specified or if `get_lexer_by_name` fails.
-- Inline code (single backticks) doesn't need highlighting — leave it as monospace styled by the theme.
-- Make sure the existing markdown-rendering still works for non-code content (lists, bold, etc.). If you're using `QTextDocument.setMarkdown`, you'll need to convert to HTML first then inject the highlighted code blocks; or switch to a different renderer. Pick whichever path is less invasive.
+Goal: the user should be able to scan the transcript and see the conversation rhythm at a glance, even from across the room.
 
-### 4. Status bar with cost meter
+Two visual axes to use (use both):
 
-- Add a `QStatusBar` to `main_window.py`.
-- Left side: workspace path (truncated with ellipsis if too long), model name, thinking state (Off/High/Max).
-- Right side: session token totals (`{cache_hit} hit · {cache_miss} miss · {output} out`), session cost in USD (`$0.0123`, 4 decimal places).
-- Pricing constants live in `config.py`. Verify they're already there from Phase 1 (`PRICING` dict). If not, add them:
-  ```python
-  PRICING = {
-      "deepseek-v4-flash": {"in_miss": 0.14, "in_hit": 0.003, "out": 0.28},
-      "deepseek-v4-pro":   {"in_miss": 1.74, "in_hit": 0.015, "out": 3.48},
-  }
-  ```
-- The bridge gets `Usage` events on stream completion. Forward them to the status bar via a Qt signal. Accumulate per-session totals; reset on "New Conversation".
-- Cost calc: `(in_hit_tokens * in_hit + in_miss_tokens * in_miss + output_tokens * out) / 1_000_000`. Per-model — track which model produced which usage if mixing in a session.
+**Color tint:**
+- User card: a slightly cooler / bluer dark background (e.g. `#1e2536` or similar — subtle blue tint, NOT a saturated blue), with a thin left border in the accent color (use whatever accent the theme already defines — looks orange/amber from the screenshots).
+- Assistant card: warmer neutral dark (e.g. `#1f1f23` — nearly the existing color but slightly different), no left border, OR a left border in a muted secondary color.
 
-### 5. Settings dialog
+The two backgrounds should be clearly different at a glance but neither should be loud. Test by squinting at the screen — you should still see two distinct colors.
 
-- New module `aura/gui/settings_dialog.py` with a modal `QDialog` reachable from a toolbar button or menu (add a "Settings" button to the toolbar near Read-Only Mode).
-- Settings exposed:
-  - Default model (Flash/Pro)
-  - Default thinking state (Off/High/Max)
-  - Restore most-recent conversation on launch (checkbox)
-  - Workspace root display (read-only label, with "Change..." button that does the same as the main one)
-  - API key status: show "DEEPSEEK_API_KEY: set" or "DEEPSEEK_API_KEY: NOT SET (set with `setx DEEPSEEK_API_KEY <key>` and restart)" — read-only, no input field for the key (we don't store it).
-  - Backup retention: read-only info "Backups stored in <workspace>/.aura/backups/, never auto-deleted. Manage manually."
-- Persist settings to `%APPDATA%\Aura\config.json` via `platformdirs`. Should already be wired from Phase 1's `config.py` — just extend the schema.
-- Apply on OK: update relevant widgets (model picker, thinking toggle) and re-save config.
+**Alignment / shape:**
+- Keep both cards full-width (don't go to chat-bubble alignment — this is a tool, not iMessage). 
+- User cards: maybe slightly inset on the right (margin-right: ~40px) so they feel like input.
+- Assistant cards: full width or slightly inset on the left.
 
-### 6. Phase 1 polish items observed in screenshots
+This combination — different tint + different inset — gives a strong rhythm without being cartoonish.
 
-- The user message bubble in the screenshot looks like a plain box, no role label, no clear visual distinction from the assistant card. Add a subtle "You" label above user messages matching the "Aura" label style on assistant messages.
-- Tighten spacing: the empty space between the "Aura" header and the response content in the screenshot looks excessive. Trim it.
-- The "> Thinking" collapsed header in the screenshot is too understated — make it slightly more visible (small caret icon, hover state) so users discover they can click to expand.
-- The toolbar buttons "New Conversation" and "Read-Only Mode" appear as plain text with no visual grouping. Add subtle borders or separators between toolbar sections (left group: New / Open · middle group: Read-Only · right group: Model / Thinking / Settings).
+**Role labels:**
+- "You" label: in the accent color, bold, 11-12px, more presence than current.
+- "Aura" label: in a secondary/muted color, same size, slightly less prominent.
 
-These are taste calls — use judgment, don't over-design. Reference: Cursor / Zed agent panel.
+### 3. Hierarchy: assistant message vs its tool calls
 
-## Smoke / verification
+Right now the assistant body and the tool-call cards underneath are both inside the same visual container, distinguished only by the green tool-call card styling. From the screenshot, after the model gives a long answer, a wall of tool cards stacks below and the eye loses track of which call belongs to which turn.
 
-After build:
+Fix:
+- Indent tool-call cards ~16-20px from the left edge of the assistant card content area, so they read as "children" of the assistant turn.
+- Add a thin vertical line on the left of the indent (1px, muted color) connecting the tool calls visually as a group — like a thread/branch indicator.
+- Reduce vertical spacing between consecutive tool cards (probably currently 8-12px gap, drop to 4-6px) so the cluster reads as one unit rather than disconnected items.
+- Keep the green accent on tool cards but reduce its saturation slightly so they feel like supporting info, not the main event. The body text of the assistant should still feel like the primary content of the turn.
 
-1. Run `scripts/smoke_conversation.py` — engine still works, no regressions.
-2. Launch app. Verify:
-   - Workspace tree populates and respects filters
-   - Send a message, status bar shows token counts + cost after response
-   - Send "write a python function with a list comprehension" and confirm the code block is syntax-highlighted
-   - Close app, reopen — last conversation restored
-   - Open Settings, change default model, OK, send new message — picker shows new default
-   - Write_file action through the model still produces a diff dialog and creates a backup
-3. Run `scripts/smoke_history.py` — replay rule still passes.
+### 4. Reasoning section polish
 
-If any smoke fails, fix before declaring done.
+The "▶ Thinking" collapsed header is currently good but the click affordance could be clearer. Make it:
+- Slightly muted background tint when hovered
+- Cursor changes to pointer on hover
+- The caret rotates from ▶ (collapsed) to ▼ (expanded) — if it doesn't already
 
-## Out of scope (Phase 3 territory — do not build)
+### 5. Spacing pass
 
-- Planner/worker model split (separate dispatch coming)
-- Vision/image input changes (Phase 1's smoke result stands)
-- Region screen capture
-- Multi-workspace tabs
-- Conversation search
-- Plugin system
+- Vertical gap between consecutive turns (user → assistant or assistant → user): currently looks ~16-20px from screenshots. Bump to ~28-32px so turns visually breathe.
+- Inner padding of message cards: looks tight around the role label specifically — give the role label ~8px below it before the body text starts.
+- Don't change anything in the input panel or toolbar — those look fine.
+
+## What NOT to change
+
+- Don't change the toolbar layout or buttons.
+- Don't change the workspace tree pane.
+- Don't change the input panel.
+- Don't change the diff dialog.
+- Don't change Pygments / code block styling — that's already good.
+- Don't touch the dark theme's overall background (`#181a20` or whatever it is) — only the message card backgrounds.
+
+## Verify
+
+1. Launch app, send "hi": user card should look distinctly different from assistant card.
+2. Send "list files in this project": tool calls should appear visually grouped/indented under the assistant turn.
+3. Read a paragraph of assistant text: should not feel like squinting.
+4. Run `scripts/smoke_conversation.py`: must still pass.
 
 ## Final report
 
-- Definition-of-done checklist for Phase 2 items above (pass/fail)
-- Smoke results
-- Anything you punted on with a reason
-- File tree of what got added/modified
-- Confirm Phase 1 features still work
+- What changed (file by file, brief)
+- Hex values you settled on for user bg, assistant bg, body text, role labels
+- Confirmation smoke still passes
+- Screenshot-impossible items you punted on with reason
 
-No filler.
+Keep it tight.
 
 
 Make the change described. The dispatch names the files that matter — work those, then stop. Match existing style; type hints everywhere.
