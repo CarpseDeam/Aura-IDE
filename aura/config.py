@@ -74,7 +74,7 @@ def cost_usd(
     ) / 1_000_000
 
 # Hard limit on tool-call rounds within a single user turn.
-MAX_TOOL_ROUNDS = 10
+MAX_TOOL_ROUNDS = 50
 # Cap for read_file and similar to avoid blowing the context window.
 MAX_READ_BYTES = 200 * 1024
 # Cap on glob results.

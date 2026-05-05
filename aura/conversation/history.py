@@ -62,6 +62,17 @@ class History:
         """Drop messages at `index` and beyond (used on cancel / rewind)."""
         self.messages = self.messages[:index]
 
+    def pop_if_empty_assistant_message(self) -> None:
+        """Remove the last message if it's an empty assistant message."""
+        if not self.messages:
+            return
+        last = self.messages[-1]
+        if last.get("role") != "assistant":
+            return
+        if last.get("content") or last.get("reasoning_content") or last.get("tool_calls"):
+            return
+        self.messages.pop()
+
     # ---- API view -----------------------------------------------------------
 
     def for_api(self) -> list[dict[str, Any]]:
