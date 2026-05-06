@@ -1,7 +1,7 @@
-"""Persistent tool window for worker dispatch output.
+"""Embeddable panel for worker dispatch output.
 
 Shows worker streaming (reasoning, tool calls, diffs, code) with auto-scroll
-for every dispatch in a single, persistent window pinned to the main window.
+for every dispatch in a single, persistent panel embedded in the main window.
 """
 
 from __future__ import annotations
@@ -10,9 +10,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QApplication,
     QLabel,
-    QMainWindow,
     QScrollArea,
-    QStatusBar,
     QVBoxLayout,
     QWidget,
 )
@@ -24,24 +22,27 @@ from aura.gui.chat_view import (
     ErrorCard,
     ToolCallCard,
 )
-from aura.gui.theme import BG, DANGER, FG, FG_DIM, SUCCESS
+from aura.gui.theme import BG, BORDER, DANGER, FG_DIM, SUCCESS
 
 
 CODE_WRITER_NAMES = frozenset({"write_file", "edit_file"})
 
 
-class WorkerWindow(QMainWindow):
-    """Persistent OS-level window showing live worker activity for all dispatches."""
+class WorkerWindow(QWidget):
+    """Embeddable panel showing live worker activity for all dispatches."""
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self._shutting_down: bool = False
 
-        self.setWindowTitle("Worker Activity")
-        self.resize(800, 700)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
-        # Dark themed
-        self.setStyleSheet(f"QMainWindow {{ background: {BG}; }}")
+        # Header
+        header = QLabel("Worker Activity")
+        header.setObjectName("paneTitle")
+        header.setStyleSheet("padding: 8px 12px;")
+        layout.addWidget(header)
 
         # Central scroll area
         scroll = QScrollArea()
@@ -52,23 +53,19 @@ class WorkerWindow(QMainWindow):
         container = QWidget()
         container.setStyleSheet("background: transparent;")
         self._layout = QVBoxLayout(container)
-        self._layout.setContentsMargins(20, 20, 20, 20)
+        self._layout.setContentsMargins(12, 12, 12, 12)
         self._layout.setSpacing(12)
         self._layout.addStretch(1)
         scroll.setWidget(container)
-        self.setCentralWidget(scroll)
+        layout.addWidget(scroll, 1)
         self._scroll = scroll
 
-        # Status bar
-        self._status_bar = QStatusBar()
-        self._status_bar.setStyleSheet(
-            f"QStatusBar {{ background: {BG}; border-top: 1px solid {BG}; "
-            f"color: {FG_DIM}; }}"
+        # Status label at the bottom
+        self._status_label = QLabel("")
+        self._status_label.setStyleSheet(
+            f"color: {FG_DIM}; padding: 6px 12px; border-top: 1px solid {BORDER};"
         )
-        self._status_label = QLabel("Running…")
-        self._status_label.setStyleSheet(f"color: {FG_DIM};")
-        self._status_bar.addWidget(self._status_label, 1)
-        self.setStatusBar(self._status_bar)
+        layout.addWidget(self._status_label)
 
         # Internal state
         self._current_assistant: AssistantCard | None = None
@@ -165,14 +162,20 @@ class WorkerWindow(QMainWindow):
 
         if ok:
             self._status_label.setText("Completed")
-            self._status_label.setStyleSheet(f"color: {SUCCESS}; font-weight: 600;")
+            self._status_label.setStyleSheet(
+                f"color: {SUCCESS}; font-weight: 600; padding: 6px 12px; border-top: 1px solid {BORDER};"
+            )
         else:
             self._status_label.setText("Completed with errors")
-            self._status_label.setStyleSheet(f"color: {DANGER}; font-weight: 600;")
+            self._status_label.setStyleSheet(
+                f"color: {DANGER}; font-weight: 600; padding: 6px 12px; border-top: 1px solid {BORDER};"
+            )
 
     def worker_cancelled(self) -> None:
         self._status_label.setText("Cancelled")
-        self._status_label.setStyleSheet(f"color: {DANGER};")
+        self._status_label.setStyleSheet(
+            f"color: {DANGER}; padding: 6px 12px; border-top: 1px solid {BORDER};"
+        )
 
     def clear(self) -> None:
         """Remove all cards and reset state (called on New Conversation)."""
@@ -186,18 +189,3 @@ class WorkerWindow(QMainWindow):
         self._current_assistant = None
         self._tool_cards.clear()
         self._tool_owner.clear()
-
-    def shutdown(self) -> None:
-        """Permanently close and destroy this window (used on New Conversation)."""
-        self._shutting_down = True
-        self.close()
-
-    # ---- close event -------------------------------------------------------
-
-    def closeEvent(self, event) -> None:
-        if self._shutting_down:
-            event.accept()
-            return
-        # Just hide — the window can be re-shown via "View Worker".
-        self.hide()
-        event.ignore()

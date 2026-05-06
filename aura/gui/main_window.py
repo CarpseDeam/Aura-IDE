@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QFont, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -124,14 +124,14 @@ class MainWindow(QMainWindow):
         self._left_pane = self._build_left_pane()
         splitter.addWidget(self._left_pane)
 
-        # Right pane = chat | planner log | input panel
-        right = QWidget()
-        right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(0)
+        # Middle pane: chat + input
+        center = QWidget()
+        center_layout = QVBoxLayout(center)
+        center_layout.setContentsMargins(0, 0, 0, 0)
+        center_layout.setSpacing(0)
 
         self._chat = ChatView()
-        right_layout.addWidget(self._chat, 1)
+        center_layout.addWidget(self._chat, 1)
 
         self._input = InputPanel(self._workspace_root)
         # Apply default model / thinking from settings.
@@ -144,26 +144,23 @@ class MainWindow(QMainWindow):
         self._input.set_worker_model(self._settings.default_worker_model)
         self._input.set_worker_thinking(self._settings.default_worker_thinking)
         self._input.set_planner_worker_mode(self._settings.planner_worker_mode)
-        right_layout.addWidget(self._input)
+        center_layout.addWidget(self._input)
 
-        splitter.addWidget(right)
-        splitter.setSizes([280, 1120])
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
+        splitter.addWidget(center)
+
+        # Right pane: worker activity (embedded, not a separate window)
+        self._worker_window = WorkerWindow(parent=self)
+        splitter.addWidget(self._worker_window)
+
+        splitter.setSizes([240, 600, 400])
+        splitter.setStretchFactor(0, 0)  # workspace tree doesn't stretch
+        splitter.setStretchFactor(1, 1)  # chat stretches
+        splitter.setStretchFactor(2, 0)  # worker doesn't stretch (initial)
 
         self.setCentralWidget(splitter)
 
         # ----- status bar -----
         self._build_status_bar()
-
-        # Persistent worker window — pinned to the main window as a tool window.
-        self._worker_window = WorkerWindow(parent=self)
-        self._worker_window.setWindowFlags(
-            self._worker_window.windowFlags() | Qt.Tool
-        )
-        self._worker_window.show()
-        # Position it to the right of the main window.
-        QTimer.singleShot(0, self._position_worker_window)
 
         # ----- wire bridge ↔ view -----
         self._bridge.started.connect(self._on_started)
@@ -297,11 +294,6 @@ class MainWindow(QMainWindow):
         self._status_cost = QLabel("$0.0000")
         self._status_cost.setObjectName("statusCost")
         bar.addPermanentWidget(self._status_cost)
-
-    def _position_worker_window(self) -> None:
-        geo = self.geometry()
-        self._worker_window.move(geo.x() + geo.width() + 10, geo.y())
-        self._worker_window.resize(700, geo.height())
 
     def _refresh_status_bar(self) -> None:
         # Left: workspace path (truncated), model, thinking
@@ -622,9 +614,6 @@ class MainWindow(QMainWindow):
         self._bridge.user_cancelled_dispatch(tool_call_id)
 
     def _on_worker_started(self, tool_call_id: str) -> None:
-        self._worker_window.show()
-        self._worker_window.raise_()
-        self._worker_window.activateWindow()
         self._worker_window.begin_assistant()
         self._input.set_streaming(False)
 
@@ -682,9 +671,7 @@ class MainWindow(QMainWindow):
         self._worker_window.add_error(f"{title}: {message}")
 
     def _on_view_worker_clicked(self, tool_call_id: str) -> None:
-        self._worker_window.show()
-        self._worker_window.raise_()
-        self._worker_window.activateWindow()
+        pass
 
     def _on_worker_usage(
         self,
