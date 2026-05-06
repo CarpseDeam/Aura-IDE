@@ -1303,7 +1303,7 @@ class ChatView(QScrollArea):
     def begin_assistant(self) -> AssistantCard:
         card = AssistantCard(compact_tools=self._compact_tools)
         self._current_assistant = card
-        wrapper = AuraWidget(card, aura_color=ACCENT, border_thickness=1)
+        wrapper = AuraWidget(card, glow_color=ACCENT, glow_spread=16)
         self._add_card(wrapper)
         wrapper.start_aura()
         return card

@@ -1,48 +1,50 @@
-"""AuraWidget — animated spinning conic-gradient border for active-streaming indication."""
+"""AuraWidget — soft breathing glow effect for active-streaming indication."""
 from __future__ import annotations
 
-from PySide6.QtCore import QAbstractAnimation, QPropertyAnimation, QVariantAnimation
-from PySide6.QtGui import QColor, QConicGradient, QPainter, QPainterPath, QRegion
+import math
+
+from PySide6.QtCore import QAbstractAnimation, QVariantAnimation
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QRadialGradient
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
 
 class AuraWidget(QWidget):
-    """Wrapper widget that draws a spinning gradient border around an inner widget.
+    """Wrapper widget that draws a soft breathing radial glow underneath an inner card.
 
-    The inner widget's solid background masks the center of the conic gradient so
-    only a thin moving streak is visible at the wrapper's margin area.
+    The glow pulsates: it expands outward and fades in, then contracts and fades out,
+    creating a low-key neon-light effect beneath the card.
     """
 
     def __init__(
         self,
         inner_widget: QWidget,
-        aura_color: str = "#7aa2f7",
-        border_thickness: int = 1,
+        glow_color: str = "#6d28d9",
+        glow_spread: int = 16,
     ) -> None:
         super().__init__()
-        self._aura_color = QColor(aura_color)
-        self._border_thickness = border_thickness
-        self._angle: float = 0.0
+        self._glow_color = QColor(glow_color)
+        self._glow_spread = glow_spread
+        self._breath: float = 0.0
 
         self.setStyleSheet("background: transparent;")
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(
-            border_thickness, border_thickness,
-            border_thickness, border_thickness,
+            glow_spread, glow_spread, glow_spread, glow_spread,
         )
         layout.addWidget(inner_widget)
 
-        # Infinite looping angle animation
+        # Breathing animation: cycles 0.0 → 1.0 infinitely
         self._animation = QVariantAnimation(self)
         self._animation.setStartValue(0.0)
-        self._animation.setEndValue(360.0)
+        self._animation.setEndValue(1.0)
         self._animation.setDuration(2500)
-        self._animation.setLoopCount(-1)  # infinite
-        self._animation.valueChanged.connect(self._on_angle_changed)
+        self._animation.setLoopCount(-1)
+        self._animation.valueChanged.connect(self._on_breath_changed)
 
-    def _on_angle_changed(self, value: float) -> None:
-        self._angle = value
+    def _on_breath_changed(self, value: float) -> None:
+        # Sine shaping: 0 → 1 → 0 for smooth breathe-in / breathe-out
+        self._breath = math.sin(value * math.pi)
         self.update()
 
     def start_aura(self) -> None:
@@ -50,12 +52,12 @@ class AuraWidget(QWidget):
 
     def stop_aura(self) -> None:
         self._animation.stop()
-        self.update()  # repaint without gradient
+        self._breath = 0.0
+        self.update()
 
     def paintEvent(self, event) -> None:
         if self._animation.state() != QAbstractAnimation.State.Running:
-            # When not animating, draw nothing (transparent background).
-            # The inner card's own border shows through.
+            # No glow when idle — fully transparent
             super().paintEvent(event)
             return
 
@@ -63,26 +65,38 @@ class AuraWidget(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         rect = self.rect()
-        radius = 8
+        if rect.isEmpty():
+            painter.end()
+            return
 
-        # Clip to rounded rect so the gradient doesn't bleed into sharp corners
+        b = self._breath
+        if b < 0.005:
+            painter.end()
+            return
+
+        # Radial gradient centered on the widget
+        center = rect.center()
+        max_r = max(rect.width(), rect.height()) * 0.5
+        radius = max_r * (0.2 + 0.8 * b)  # expands/contracts with breath
+
+        alpha = int(90 * b)  # fades in/out with breath
+
+        c = self._glow_color
+        inner = QColor(c.red(), c.green(), c.blue(), alpha)
+        mid = QColor(c.red(), c.green(), c.blue(), alpha // 2)
+        outer = QColor(0, 0, 0, 0)
+
+        gradient = QRadialGradient(center, radius)
+        gradient.setColorAt(0.0, inner)
+        gradient.setColorAt(0.5, mid)
+        gradient.setColorAt(1.0, outer)
+
+        # Clip to rounded rect matching the app's corner radius
         path = QPainterPath()
         path.addRoundedRect(float(rect.x()), float(rect.y()),
                             float(rect.width()), float(rect.height()),
-                            radius, radius)
+                            8, 8)
         painter.setClipPath(path)
-
-        # Conic gradient: mostly transparent with a concentrated streak
-        # at the leading edge that rotates as _angle increases.
-        center = rect.center()
-        gradient = QConicGradient(center, -self._angle)
-        gradient.setColorAt(0.00, QColor(0, 0, 0, 0))       # transparent
-        gradient.setColorAt(0.40, QColor(0, 0, 0, 0))       # transparent
-        gradient.setColorAt(0.48, self._aura_color)           # streak start
-        gradient.setColorAt(0.50, self._aura_color)           # peak
-        gradient.setColorAt(0.52, self._aura_color)           # streak end
-        gradient.setColorAt(0.60, QColor(0, 0, 0, 0))       # transparent
-        gradient.setColorAt(1.00, QColor(0, 0, 0, 0))       # transparent
 
         painter.fillRect(rect, gradient)
         painter.end()

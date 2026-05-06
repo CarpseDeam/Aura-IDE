@@ -105,7 +105,7 @@ class WorkerWindow(QWidget):
     def begin_assistant(self) -> AssistantCard:
         card = AssistantCard()
         self._current_assistant = card
-        wrapper = AuraWidget(card, aura_color=SUCCESS, border_thickness=1)
+        wrapper = AuraWidget(card, glow_color=SUCCESS, glow_spread=16)
         self._add_card(wrapper)
         wrapper.start_aura()
         return card
