@@ -38,7 +38,7 @@ class AuraWidget(QWidget):
         self._animation = QVariantAnimation(self)
         self._animation.setStartValue(0.0)
         self._animation.setEndValue(1.0)
-        self._animation.setDuration(2500)
+        self._animation.setDuration(2000)
         self._animation.setLoopCount(-1)
         self._animation.valueChanged.connect(self._on_breath_changed)
 
@@ -92,9 +92,9 @@ class AuraWidget(QWidget):
         # Radial gradient centered on the widget — still pulses with breath
         center = rect.center()
         max_r = max(rect.width(), rect.height()) * 0.5
-        radius = max_r * (0.2 + 0.8 * b)  # expands/contracts with breath
+        radius = max_r * (0.3 + 0.7 * b)  # expands/contracts with breath
 
-        alpha = int(90 * b)  # fades in/out with breath
+        alpha = int(140 * b)  # fades in/out with breath
 
         c = self._glow_color
         inner = QColor(c.red(), c.green(), c.blue(), alpha)

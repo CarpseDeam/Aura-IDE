@@ -6,7 +6,7 @@ for every dispatch in a single, persistent panel embedded in the main window.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QAbstractAnimation, QEasingCurve, QPropertyAnimation, Qt
+from PySide6.QtCore import QAbstractAnimation, QEasingCurve, QPropertyAnimation, Qt, QVariantAnimation
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QApplication,
@@ -63,10 +63,18 @@ class TodoListWidget(QFrame):
         self._tasks_layout.setSpacing(2)
         outer.addLayout(self._tasks_layout)
 
+        self._pulse_anims: list[QVariantAnimation] = []
+
         self.setVisible(False)  # Hidden until tasks arrive
 
     def update_tasks(self, tasks: list[dict]) -> None:
         """Clear and redraw the task list from the worker's update_todo_list tool."""
+        # Stop any running pulse animations
+        for anim in self._pulse_anims:
+            anim.stop()
+            anim.deleteLater()
+        self._pulse_anims.clear()
+
         # Remove old task labels
         while self._tasks_layout.count() > 0:
             item = self._tasks_layout.takeAt(0)
@@ -110,6 +118,25 @@ class TodoListWidget(QFrame):
             if status == "active":
                 font.setBold(True)
                 label.setFont(font)
+
+                # Add a breathing pulse animation to the label
+                effect = QGraphicsOpacityEffect(label)
+                effect.setOpacity(1.0)
+                label.setGraphicsEffect(effect)
+
+                pulse = QVariantAnimation(label)
+                pulse.setStartValue(0.55)
+                pulse.setEndValue(1.0)
+                pulse.setDuration(900)
+                pulse.setLoopCount(-1)
+                pulse.setEasingCurve(QEasingCurve.Type.InOutSine)
+
+                def _make_opacity_setter(eff):
+                    return lambda v: eff.setOpacity(v)
+
+                pulse.valueChanged.connect(_make_opacity_setter(effect))
+                pulse.start()
+                self._pulse_anims.append(pulse)
 
             label.setStyleSheet(f"color: {color}; padding: 1px 0;")
             self._tasks_layout.addWidget(label)

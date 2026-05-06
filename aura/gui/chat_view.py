@@ -15,7 +15,7 @@ import json
 import re
 from dataclasses import dataclass
 
-from PySide6.QtCore import QAbstractAnimation, QEasingCurve, QPropertyAnimation, Qt, QSize, Signal
+from PySide6.QtCore import QAbstractAnimation, QEasingCurve, QPropertyAnimation, Qt, QSize, QVariantAnimation, Signal
 from PySide6.QtGui import QFont, QPixmap, QTextCharFormat, QTextCursor, QTextDocument
 from PySide6.QtWidgets import (
     QFrame,
@@ -339,6 +339,19 @@ class AssistantCard(QFrame):
 
         header_layout.addStretch(1)
 
+        self._thinking_label = QLabel("")
+        self._thinking_label.setObjectName("thinkingIndicator")
+        self._thinking_label.setVisible(False)
+        f = self._thinking_label.font()
+        f.setPointSize(10)
+        self._thinking_label.setFont(f)
+        self._thinking_label.setStyleSheet(f"color: {WARN}; font-style: italic;")
+        header_layout.addWidget(self._thinking_label)
+
+        # Animated dots for the thinking indicator
+        self._thinking_anim: QVariantAnimation | None = None
+        self._thinking_dots: int = 0
+
         self._tool_status = QLabel("")
         self._tool_status.setObjectName("toolStatus")
         font = self._tool_status.font()
@@ -381,6 +394,7 @@ class AssistantCard(QFrame):
     # ---- streaming hooks --------------------------------------------------
 
     def append_reasoning(self, text: str) -> None:
+        self._start_thinking_animation()
         if self._reasoning_label is None:
             self._reasoning_label = _StreamLabel(italic=True)
             scroll_area = QScrollArea()
@@ -409,6 +423,7 @@ class AssistantCard(QFrame):
                 self._reasoning_section.set_open(False)
 
     def append_content(self, text: str) -> None:
+        self._stop_thinking_animation()
         if not self._content_label.isVisible():
             self._content_label.setVisible(True)
             # First content -> collapse reasoning.
@@ -438,6 +453,33 @@ class AssistantCard(QFrame):
         self._compact_tool_active = 0
         self._compact_tool_names.clear()
         self._tool_status.setVisible(False)
+        self._stop_thinking_animation()
+
+    # ---- thinking animation ---------------------------------------------
+
+    def _start_thinking_animation(self) -> None:
+        if self._thinking_anim is not None:
+            return
+        self._thinking_label.setVisible(True)
+        self._thinking_anim = QVariantAnimation(self)
+        self._thinking_anim.setStartValue(0)
+        self._thinking_anim.setEndValue(3)
+        self._thinking_anim.setDuration(1200)
+        self._thinking_anim.setLoopCount(-1)
+        self._thinking_anim.valueChanged.connect(self._on_thinking_tick)
+        self._thinking_anim.start()
+
+    def _stop_thinking_animation(self) -> None:
+        if self._thinking_anim is not None:
+            self._thinking_anim.stop()
+            self._thinking_anim.deleteLater()
+            self._thinking_anim = None
+        self._thinking_label.setVisible(False)
+        self._thinking_label.setText("")
+
+    def _on_thinking_tick(self, value: int) -> None:
+        dots = "." * (value + 1)
+        self._thinking_label.setText(f"Thinking{dots}")
 
     # ---- tool cards -----------------------------------------------------
 
