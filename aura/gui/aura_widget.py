@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import math
 
-from PySide6.QtCore import QAbstractAnimation, QVariantAnimation
+from PySide6.QtCore import QAbstractAnimation, QRectF, QVariantAnimation
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QRadialGradient
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
@@ -74,7 +74,22 @@ class AuraWidget(QWidget):
             painter.end()
             return
 
-        # Radial gradient centered on the widget
+        # Build a ring-shaped clip path: outer rounded rect minus inner
+        # rounded rect, so the glow only appears in the margin around the card.
+        s = self._glow_spread
+        outer_rect = QRectF(rect)
+        inner_rect = QRectF(
+            rect.x() + s, rect.y() + s,
+            rect.width() - 2 * s, rect.height() - 2 * s,
+        )
+        outer_path = QPainterPath()
+        outer_path.addRoundedRect(outer_rect, 8, 8)
+        inner_path = QPainterPath()
+        inner_path.addRoundedRect(inner_rect, 8, 8)
+        ring_path = outer_path.subtracted(inner_path)
+        painter.setClipPath(ring_path)
+
+        # Radial gradient centered on the widget — still pulses with breath
         center = rect.center()
         max_r = max(rect.width(), rect.height()) * 0.5
         radius = max_r * (0.2 + 0.8 * b)  # expands/contracts with breath
@@ -87,16 +102,15 @@ class AuraWidget(QWidget):
         outer = QColor(0, 0, 0, 0)
 
         gradient = QRadialGradient(center, radius)
-        gradient.setColorAt(0.0, inner)
-        gradient.setColorAt(0.5, mid)
+        # Position the strongest colour at the inner edge of the ring so the
+        # glow fades naturally from the card border outward.
+        inner_pos = 0.0
+        if max_r > 0:
+            inner_pos = max(0.0, (min(rect.width(), rect.height()) * 0.5 - s) / max_r)
+        inner_pos = min(inner_pos, 0.99)
+        gradient.setColorAt(inner_pos, inner)
+        gradient.setColorAt(inner_pos + (1.0 - inner_pos) * 0.5, mid)
         gradient.setColorAt(1.0, outer)
-
-        # Clip to rounded rect matching the app's corner radius
-        path = QPainterPath()
-        path.addRoundedRect(float(rect.x()), float(rect.y()),
-                            float(rect.width()), float(rect.height()),
-                            8, 8)
-        painter.setClipPath(path)
 
         painter.fillRect(rect, gradient)
         painter.end()
