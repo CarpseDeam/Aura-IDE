@@ -47,7 +47,7 @@ from aura.conversation.persistence import (
     most_recent_conversation,
     save_conversation,
 )
-from aura.gui.chat_view import ChatView, SpecCard
+from aura.gui.chat_view import ChatView
 from aura.gui.input_panel import Attachment, InputPanel, SendPayload
 from aura.gui.settings_dialog import SettingsDialog
 from aura.gui.spec_edit_dialog import SpecEditDialog
@@ -436,7 +436,8 @@ class MainWindow(QMainWindow):
         self._bridge.set_system_prompt(
             PLANNER_SYSTEM_PROMPT if enabled else SYSTEM_PROMPT
         )
-        self._chat.set_compact_tools(enabled)
+        if hasattr(self, "_chat"):
+            self._chat.set_compact_tools(enabled)
 
     def _on_worker_model_changed(self, model: str) -> None:
         self._bridge.set_worker_model(model)  # type: ignore[arg-type]
@@ -597,13 +598,9 @@ class MainWindow(QMainWindow):
         spec: str,
         acceptance: str,
     ) -> None:
-        card = self._chat.add_spec_card(
-            tool_call_id, goal, list(files), spec, acceptance
-        )
-        card.dispatch_clicked.connect(self._on_dispatch_clicked)
-        card.edit_clicked.connect(self._on_edit_spec_clicked)
-        card.cancel_clicked.connect(self._on_cancel_dispatch_clicked)
-        card.view_worker_clicked.connect(self._on_view_worker_clicked)
+        # Auto-dispatch immediately — the user already confirmed the plan in conversation.
+        # Worker progress appears in the WorkerWindow right pane.
+        self._bridge.user_dispatched(tool_call_id, goal, list(files), spec, acceptance)
 
     def _on_dispatch_clicked(self, tool_call_id: str) -> None:
         card = self._chat.get_spec_card(tool_call_id)
@@ -630,17 +627,9 @@ class MainWindow(QMainWindow):
 
     def _on_worker_finished(self, tool_call_id: str, ok: bool, summary: str) -> None:
         self._worker_window.worker_finished(ok, summary)
-        card = self._chat.get_spec_card(tool_call_id)
-        if card:
-            card.worker_finished(ok, summary)
-            goal = card.current_spec()[0]
-            self._chat.add_worker_summary(tool_call_id, goal, ok, summary)
 
     def _on_worker_cancelled(self, tool_call_id: str) -> None:
         self._worker_window.worker_cancelled()
-        card = self._chat.get_spec_card(tool_call_id)
-        if card:
-            card.disable_buttons()
 
     def _on_worker_reasoning(self, tool_call_id: str, text: str) -> None:
         self._worker_window.append_reasoning(text)

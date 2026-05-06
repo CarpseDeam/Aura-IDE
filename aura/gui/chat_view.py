@@ -165,12 +165,15 @@ def _fade_in_widget(widget: QWidget, duration: int = 150) -> None:
     # Clean up the effect after animation completes so it doesn't interfere
     # with sub-widget rendering (QPlainTextEdit etc.)
     def _cleanup():
-        if widget is not None:
-            widget.setGraphicsEffect(None)
-        effect.deleteLater()
-        anim.deleteLater()
+        try:
+            if widget is not None:
+                widget.setGraphicsEffect(None)
+            effect.deleteLater()
+            anim.deleteLater()
+        except RuntimeError:
+            pass  # C++ object already deleted (widget/effect cleaned up by parent deletion)
     anim.finished.connect(_cleanup)
-    anim.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
+    anim.start()
 
 
 class _CollapsibleSection(QFrame):
