@@ -20,6 +20,7 @@ from typing import Any, Callable, Literal
 
 from aura.conversation.tools.backup import backup_existing
 from aura.conversation.tools.fs_read import glob_files, list_directory, read_file
+from aura.conversation.tools.grep import grep_files
 from aura.conversation.tools.fs_write import propose_edit, propose_write
 from aura.conversation.tools.web import web_search, web_fetch
 
@@ -103,6 +104,48 @@ READ_TOOL_DEFS: list[dict[str, Any]] = [
                         "type": "string",
                         "description": "Glob pattern, e.g. '**/*.gd' or 'res/**/*.tscn'.",
                     }
+                },
+                "required": ["pattern"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "grep_search",
+            "description": (
+                "Search file contents in the workspace for a given string or regex pattern. "
+                "Returns matching file paths, line numbers, the matching line content, "
+                "and the column where the match starts. "
+                "Use this to find where functions are defined, variables are used, "
+                "error messages, or any text pattern across the codebase."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": "The string or regex pattern to search for.",
+                    },
+                    "regex_mode": {
+                        "type": "boolean",
+                        "description": "If true, treat pattern as a regex. If false, plain text substring match.",
+                        "default": False,
+                    },
+                    "case_sensitive": {
+                        "type": "boolean",
+                        "description": "If true, match case exactly. Default (false) is case-insensitive.",
+                        "default": False,
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Maximum number of matching lines to return.",
+                        "default": 50,
+                    },
+                    "include_pattern": {
+                        "type": "string",
+                        "description": "Optional glob pattern to filter which files to search (e.g. '**/*.py' to only search Python files).",
+                    },
                 },
                 "required": ["pattern"],
             },
@@ -393,6 +436,23 @@ class ToolRegistry:
                         payload={"ok": False, "error": "glob pattern must be workspace-relative"},
                     )
                 return ToolExecResult(ok=True, payload=glob_files(self._root, pattern))
+            if name == "grep_search":
+                pattern = args.get("pattern", "")
+                if not pattern:
+                    return ToolExecResult(
+                        ok=False, payload={"ok": False, "error": "pattern is required"}
+                    )
+                return ToolExecResult(
+                    ok=True,
+                    payload=grep_files(
+                        workspace_root=self._root,
+                        pattern=pattern,
+                        regex_mode=bool(args.get("regex_mode", False)),
+                        case_sensitive=bool(args.get("case_sensitive", False)),
+                        max_results=int(args.get("max_results", 50)),
+                        include_pattern=args.get("include_pattern"),
+                    ),
+                )
             if name == "web_search":
                 if self._mode != "researcher":
                     return ToolExecResult(ok=False, payload={"ok": False, "error": "Tool web_search is only available in researcher mode."})
