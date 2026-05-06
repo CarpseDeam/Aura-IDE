@@ -6,9 +6,10 @@ for every dispatch in a single, persistent panel embedded in the main window.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QAbstractAnimation, QEasingCurve, QPropertyAnimation, Qt
 from PySide6.QtWidgets import (
     QApplication,
+    QGraphicsOpacityEffect,
     QLabel,
     QScrollArea,
     QVBoxLayout,
@@ -21,6 +22,7 @@ from aura.gui.chat_view import (
     DiffCard,
     ErrorCard,
     ToolCallCard,
+    _fade_in_widget,
 )
 from aura.gui.theme import BG, BORDER, DANGER, FG_DIM, SUCCESS
 
@@ -59,6 +61,7 @@ class WorkerWindow(QWidget):
         scroll.setWidget(container)
         layout.addWidget(scroll, 1)
         self._scroll = scroll
+        self._scroll_anim: QPropertyAnimation | None = None
 
         # Status label at the bottom
         self._status_label = QLabel("")
@@ -75,13 +78,20 @@ class WorkerWindow(QWidget):
     # ---- helpers -----------------------------------------------------------
 
     def _scroll_to_bottom(self) -> None:
-        """Immediate scroll-to-bottom — no animation, needed for streaming."""
         bar = self._scroll.verticalScrollBar()
-        bar.setValue(bar.maximum())
-        QApplication.processEvents()
+        # Stop any in-flight smooth scroll
+        if self._scroll_anim is not None:
+            self._scroll_anim.stop()
+        self._scroll_anim = QPropertyAnimation(bar, b"value")
+        self._scroll_anim.setDuration(150)
+        self._scroll_anim.setStartValue(bar.value())
+        self._scroll_anim.setEndValue(bar.maximum())
+        self._scroll_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._scroll_anim.start()
 
     def _add_card(self, w: QWidget) -> None:
         self._layout.insertWidget(self._layout.count() - 1, w)
+        _fade_in_widget(w)
         self._scroll_to_bottom()
 
     def _current_or_new_assistant(self) -> AssistantCard:
@@ -119,6 +129,7 @@ class WorkerWindow(QWidget):
         if not ac._tool_cluster.isVisible():
             ac._tool_cluster.setVisible(True)
         ac._tool_cluster_layout.addWidget(card)
+        _fade_in_widget(card)
         self._tool_cards[worker_tool_id] = card
         self._tool_owner[worker_tool_id] = ac
         self._scroll_to_bottom()

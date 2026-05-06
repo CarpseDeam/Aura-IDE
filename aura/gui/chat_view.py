@@ -15,10 +15,11 @@ import json
 import re
 from dataclasses import dataclass
 
-from PySide6.QtCore import QEasingCurve, QPropertyAnimation, Qt, QSize, Signal
+from PySide6.QtCore import QAbstractAnimation, QEasingCurve, QPropertyAnimation, Qt, QSize, Signal
 from PySide6.QtGui import QFont, QPixmap, QTextCharFormat, QTextCursor, QTextDocument
 from PySide6.QtWidgets import (
     QFrame,
+    QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
     QPlainTextEdit,
@@ -147,6 +148,29 @@ def _mono_font(pt: int = 10) -> QFont:
     f.setFixedPitch(True)
     f.setPointSize(pt)
     return f
+
+
+def _fade_in_widget(widget: QWidget, duration: int = 150) -> None:
+    """Apply a fade-in opacity animation to a newly-added widget."""
+    effect = QGraphicsOpacityEffect(widget)
+    widget.setGraphicsEffect(effect)
+    effect.setOpacity(0.0)
+
+    anim = QPropertyAnimation(effect, b"opacity")
+    anim.setDuration(duration)
+    anim.setStartValue(0.0)
+    anim.setEndValue(1.0)
+    anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+    # Clean up the effect after animation completes so it doesn't interfere
+    # with sub-widget rendering (QPlainTextEdit etc.)
+    def _cleanup():
+        if widget is not None:
+            widget.setGraphicsEffect(None)
+        effect.deleteLater()
+        anim.deleteLater()
+    anim.finished.connect(_cleanup)
+    anim.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
 
 
 class _CollapsibleSection(QFrame):
@@ -359,6 +383,7 @@ class AssistantCard(QFrame):
         if not self._tool_cluster.isVisible():
             self._tool_cluster.setVisible(True)
         self._tool_cluster_layout.addWidget(card)
+        _fade_in_widget(card)
         return card
 
     def get_tool_card(self, tool_call_id: str) -> "ToolCallCard | None":
@@ -366,6 +391,7 @@ class AssistantCard(QFrame):
 
     def add_footer_widget(self, w: QWidget) -> None:
         self._footer.addWidget(w)
+        _fade_in_widget(w)
 
     def finalize_content(self) -> None:
         """Replace the streaming label with a rich layout that renders code
@@ -649,6 +675,8 @@ class CodeWriterCard(QFrame):
         layout.addWidget(self._body)
 
         self._refresh_header()
+
+        _fade_in_widget(self)
 
     def _toggle_body(self) -> None:
         self._body.setVisible(not self._body.isVisible())
@@ -1150,6 +1178,7 @@ class ChatView(QScrollArea):
             self._empty_hint = None
         # Insert before the trailing stretch.
         self._layout.insertWidget(self._layout.count() - 1, w)
+        _fade_in_widget(w)
         self._scroll_to_bottom()
 
     def _is_at_bottom(self, threshold: int = 30) -> bool:
@@ -1164,7 +1193,7 @@ class ChatView(QScrollArea):
         if hasattr(self, '_scroll_anim') and self._scroll_anim is not None:
             self._scroll_anim.stop()
         self._scroll_anim = QPropertyAnimation(bar, b"value")
-        self._scroll_anim.setDuration(200)
+        self._scroll_anim.setDuration(150)
         self._scroll_anim.setStartValue(bar.value())
         self._scroll_anim.setEndValue(bar.maximum())
         self._scroll_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
