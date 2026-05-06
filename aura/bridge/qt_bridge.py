@@ -273,12 +273,14 @@ class _DispatchProxy(QObject):
         client: DeepSeekClient,
         registry_factory,
         approval_proxy: _ApprovalProxy,
+        workspace_root: Path | None = None,
     ) -> None:
         super().__init__()
         self._parent_widget = parent_widget
         self._client = client
         self._registry_factory = registry_factory
         self._approval_proxy = approval_proxy
+        self._workspace_root = workspace_root
 
         self._worker_model: ModelId = DEFAULT_WORKER_MODEL
         self._worker_thinking: ThinkingMode = DEFAULT_WORKER_THINKING
@@ -291,6 +293,9 @@ class _DispatchProxy(QObject):
         self._records: list[WorkerDispatchRecord] = []
 
     # ---- config -----------------------------------------------------------
+
+    def set_workspace_root(self, root: Path) -> None:
+        self._workspace_root = root
 
     def set_worker_model(self, model: ModelId) -> None:
         self._worker_model = model
@@ -487,6 +492,22 @@ class _DispatchProxy(QObject):
         )
         self._records.append(record)
 
+        # Auto-commit if worker made changes
+        if self._workspace_root is not None and write_results:
+            try:
+                from aura.git import auto_commit
+
+                written_files = [w["path"] for w in write_results if isinstance(w.get("path"), str) and w.get("path")]
+                if written_files:
+                    auto_commit(
+                        workspace_root=self._workspace_root,
+                        goal=req.goal,
+                        files=written_files,
+                        summary=summary,
+                    )
+            except Exception:
+                pass  # Never block the chat on git failures
+
         self.workerFinished.emit(tool_call_id, ok, summary)
         return WorkerDispatchResult(
             ok=ok,
@@ -603,6 +624,7 @@ class ConversationBridge(QObject):
             client=self._client,
             registry_factory=self._make_worker_registry,
             approval_proxy=self._approval_proxy,
+            workspace_root=self._registry.workspace_root,
         )
 
         self._cancel: threading.Event = threading.Event()
@@ -653,6 +675,7 @@ class ConversationBridge(QObject):
 
     def set_workspace_root(self, root) -> None:
         self._registry.set_workspace_root(root)
+        self._dispatch_proxy.set_workspace_root(root)
 
     def set_read_only(self, value: bool) -> None:
         self._registry.set_read_only(value)

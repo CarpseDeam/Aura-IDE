@@ -337,6 +337,13 @@ class InputPanel(QFrame):
         self._stop_btn.setVisible(streaming)
         self._editor.setEnabled(not streaming)
 
+    def set_queued_messages(self, count: int) -> None:
+        """Update the send button to show how many messages are queued."""
+        if count > 0:
+            self._send_btn.setText(f"Send  Ctrl+Enter  [{count} queued]")
+        else:
+            self._send_btn.setText("Send  Ctrl+Enter")
+
     # ---- attachments ------------------------------------------------------
 
     def _on_image_pasted(self, qimg: QImage) -> None:

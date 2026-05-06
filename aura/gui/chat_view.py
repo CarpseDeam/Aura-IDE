@@ -367,6 +367,81 @@ class AssistantCard(QFrame):
     def add_footer_widget(self, w: QWidget) -> None:
         self._footer.addWidget(w)
 
+    def finalize_content(self) -> None:
+        """Replace the streaming label with a rich layout that renders code
+        blocks as CodeBlockCard widgets instead of inline HTML pre blocks."""
+        text = self._content_label.text_buffer()
+        if not text:
+            return
+
+        # If no fenced code blocks, fall back to the old inline HTML render
+        if not _CODE_FENCE_RE.search(text):
+            html = _render_markdown_with_code(text)
+            self._content_label.setTextFormat(Qt.TextFormat.RichText)
+            self._content_label.setText(html)
+            return
+
+        # Parse into segments: list of (type, content, language)
+        segments = self._parse_content(text)
+
+        # Build a container widget to replace the streaming label
+        container = QWidget()
+        container.setStyleSheet("background: transparent;")
+        container_layout = QVBoxLayout(container)
+        container_layout.setContentsMargins(0, 0, 0, 0)
+        container_layout.setSpacing(8)
+
+        for seg_type, content, lang in segments:
+            if seg_type == "text":
+                if content.strip():
+                    lbl = QLabel()
+                    lbl.setWordWrap(True)
+                    lbl.setTextInteractionFlags(
+                        Qt.TextInteractionFlag.TextSelectableByMouse
+                    )
+                    lbl.setTextFormat(Qt.TextFormat.RichText)
+                    # Render markdown (there are no code fences left, so this
+                    # will just process inline formatting)
+                    html = _render_markdown_with_code(content)
+                    lbl.setText(html)
+                    lbl.setStyleSheet(f"color: {FG};")
+                    container_layout.addWidget(lbl)
+            elif seg_type == "code":
+                card = CodeBlockCard(lang, content)
+                container_layout.addWidget(card)
+
+        # Swap the streaming label out for the rich container
+        idx = self._outer.indexOf(self._content_label)
+        if idx >= 0:
+            self._content_label.hide()
+            # Insert new container at the same position
+            self._outer.insertWidget(idx, container)
+            # Remove old label from layout (but keep the object — it still
+            # owns the text buffer and is referenced by append_content etc.)
+            self._outer.removeWidget(self._content_label)
+
+    def _parse_content(self, text: str) -> list[tuple[str, str, str]]:
+        """Split text into a list of segments around fenced code blocks.
+        Each segment is (type, content, language).
+        type is 'text' or 'code'.
+        """
+        segments: list[tuple[str, str, str]] = []
+        last_end = 0
+        for m in _CODE_FENCE_RE.finditer(text):
+            before = text[last_end:m.start()]
+            if before.strip():
+                segments.append(("text", before, ""))
+            lang = (m.group(1) or "").strip().lower()
+            code = m.group(2)
+            segments.append(("code", code, lang))
+            last_end = m.end()
+        after = text[last_end:]
+        if after.strip():
+            segments.append(("text", after, ""))
+        if not segments:
+            segments.append(("text", text, ""))
+        return segments
+
 
 class ToolCallCard(QFrame):
     """Inline card representing one tool call.
@@ -529,7 +604,6 @@ class CodeWriterCard(QFrame):
         )
         self._header.clicked.connect(self._toggle_body)
         layout.addWidget(self._header)
-        self._refresh_header()
 
         # Body
         self._body = QWidget()
@@ -573,6 +647,8 @@ class CodeWriterCard(QFrame):
 
         self._body.setVisible(False)
         layout.addWidget(self._body)
+
+        self._refresh_header()
 
     def _toggle_body(self) -> None:
         self._body.setVisible(not self._body.isVisible())
@@ -676,6 +752,72 @@ class CodeWriterCard(QFrame):
             # Auto-expand body on failure
             self._body.setVisible(True)
         self._refresh_header()
+
+
+class CodeBlockCard(QFrame):
+    """Read-only card displaying a single syntax-highlighted code block."""
+
+    def __init__(self, language: str, code: str) -> None:
+        super().__init__()
+        self.setObjectName("codeBlockCard")
+        # Subtle card styling — distinct background, rounded border
+        self.setStyleSheet(
+            f"QFrame#codeBlockCard {{ background: {BG}; border: 1px solid {BORDER}; "
+            f"border-radius: 6px; }}"
+        )
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        # Language header bar
+        lang_display = language if language else "code"
+        header = QLabel(f" {lang_display} ")
+        header.setStyleSheet(
+            f"color: {FG_DIM}; font-family: 'Cascadia Mono', Consolas, monospace; "
+            f"font-size: 10px; padding: 3px 10px; background: {BG_ALT}; "
+            f"border-top-left-radius: 6px; border-top-right-radius: 6px; "
+            f"border-bottom: 1px solid {BORDER};"
+        )
+        layout.addWidget(header)
+
+        # Code view
+        code_view = QPlainTextEdit()
+        code_view.setReadOnly(True)
+        code_view.setFont(_mono_font(10))
+        code_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        code_view.setStyleSheet(
+            f"QPlainTextEdit {{ background: {BG}; color: {FG}; border: none; "
+            f"padding: 8px; border-radius: 4px; }}"
+        )
+        code_view.setPlainText(code)
+        code_view.setMinimumHeight(40)
+        code_view.setMaximumHeight(400)
+        # Auto-resize to content height (clamped by min/max)
+        code_view.document().setDocumentMargin(2)
+        layout.addWidget(code_view)
+
+        # Apply Pygments highlighting
+        self._highlight(code_view, language, code)
+
+    @staticmethod
+    def _highlight(view: QPlainTextEdit, language: str, code: str) -> None:
+        if not _HAVE_PYGMENTS:
+            return
+        try:
+            if language:
+                lexer = get_lexer_by_name(language)
+            else:
+                lexer = TextLexer()
+        except ClassNotFound:
+            lexer = TextLexer()
+        formatter = HtmlFormatter(style="monokai", noclasses=True, nowrap=True)
+        try:
+            highlighted = highlight(code, lexer, formatter)
+            doc = view.document()
+            doc.setHtml(highlighted)
+        except Exception:
+            pass  # Falls back to plain text set by caller
 
 
 class DiffCard(QFrame):
@@ -1130,12 +1272,7 @@ class ChatView(QScrollArea):
         ac = self._current_assistant
         if ac is None:
             return
-        text = ac._content_label.text_buffer()
-        if not text:
-            return
-        html = _render_markdown_with_code(text)
-        ac._content_label.setTextFormat(Qt.TextFormat.RichText)
-        ac._content_label.setText(html)
+        ac.finalize_content()
 
     # ---- spec card / worker dispatch ------------------------------------
 
