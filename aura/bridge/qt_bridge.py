@@ -86,6 +86,9 @@ WORKER_SYSTEM_PROMPT = (
     "by the planner accurately and efficiently. You operate with read/write filesystem access, subject "
     "to user approval.\n\n"
     "Execution Protocol:\n"
+    "0. Planning: Before making any file changes, call update_todo_list to establish a step-by-step plan. "
+    "Mark the first task as 'active', then update statuses as you progress. "
+    "Mark each task 'done' when completed. The list MUST be kept in sync with your actions.\n"
     "1. State Synchronization: Always execute `read_file` on target files prior to modification to ensure "
     "accurate context.\n"
     "2. Precision Editing: When utilizing `edit_file`, the `old_str` parameter must be an exact, literal "
@@ -253,6 +256,7 @@ class _DispatchProxy(QObject):
     workerStreamDone = Signal(str, str, dict)
     workerApiError = Signal(str, int, str)
     workerUsage = Signal(str, str, int, int, int, int)  # tool_id, model, prompt, comp, hit, miss
+    workerTodoListUpdated = Signal(str, list)  # tool_call_id, tasks
 
     def __init__(
         self,
@@ -434,6 +438,10 @@ class _DispatchProxy(QObject):
                 self.workerToolResult.emit(
                     tool_call_id, ev.tool_call_id, ev.name, ev.ok, ev.result, ev.extras or {}
                 )
+                # If this is a todo list update, emit the dedicated signal for the pinned UI.
+                if ev.name == "update_todo_list":
+                    tasks = (ev.extras or {}).get("tasks", [])
+                    self.workerTodoListUpdated.emit(tool_call_id, tasks)
                 # Track writes for the summary back to the planner.
                 try:
                     parsed = json.loads(ev.result)
@@ -594,6 +602,7 @@ class ConversationBridge(QObject):
     workerDiffDecided = Signal(str, str, str, str, str, str, bool)
     workerApiError = Signal(str, int, str)
     workerUsage = Signal(str, str, int, int, int, int)
+    workerTodoListUpdated = Signal(str, list)
 
     def __init__(self, parent_widget) -> None:
         super().__init__()
@@ -637,6 +646,7 @@ class ConversationBridge(QObject):
         self._dispatch_proxy.workerDiffDecided.connect(self.workerDiffDecided)
         self._dispatch_proxy.workerApiError.connect(self.workerApiError)
         self._dispatch_proxy.workerUsage.connect(self.workerUsage)
+        self._dispatch_proxy.workerTodoListUpdated.connect(self.workerTodoListUpdated)
 
     # ---- config -----------------------------------------------------------
 

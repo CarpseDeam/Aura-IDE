@@ -282,6 +282,35 @@ RESEARCH_TOOL_DEFS: list[dict[str, Any]] = [
     }
 ]
 
+WORKER_TODO_TOOL_DEF: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "update_todo_list",
+        "description": (
+            "Update the worker's pinned TODO list. Call this before making file changes "
+            "to establish your execution plan, and update as task statuses change. "
+            "The list is displayed prominently to the user."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "tasks": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "description": {"type": "string", "description": "Short description of the task."},
+                            "status": {"type": "string", "enum": ["pending", "active", "done"]},
+                        },
+                        "required": ["description", "status"],
+                    },
+                }
+            },
+            "required": ["tasks"],
+        },
+    },
+}
+
 WEB_TOOL_DEFS: list[dict[str, Any]] = [
     {
         "type": "function",
@@ -383,7 +412,7 @@ class ToolRegistry:
         if self._mode == "planner":
             return list(READ_TOOL_DEFS) + [dict(DISPATCH_TOOL_DEF)] + list(RESEARCH_TOOL_DEFS)
         if self._mode == "worker":
-            return list(READ_TOOL_DEFS) + list(WRITE_TOOL_DEFS)
+            return list(READ_TOOL_DEFS) + list(WRITE_TOOL_DEFS) + [dict(WORKER_TODO_TOOL_DEF)]
         return list(READ_TOOL_DEFS) + list(WRITE_TOOL_DEFS)
 
     # ---- path resolution ---------------------------------------------------
@@ -485,6 +514,23 @@ class ToolRegistry:
                         },
                     )
                 return self._handle_write(name, args, approval_cb, reject_all)
+            if name == "update_todo_list":
+                tasks = args.get("tasks", [])
+                if not isinstance(tasks, list):
+                    return ToolExecResult(ok=False, payload={"ok": False, "error": "tasks must be an array"})
+                # Validate each task has required fields
+                for t in tasks:
+                    if not isinstance(t, dict):
+                        return ToolExecResult(ok=False, payload={"ok": False, "error": "each task must be an object"})
+                    if "description" not in t or "status" not in t:
+                        return ToolExecResult(ok=False, payload={"ok": False, "error": "each task must have description and status"})
+                    if t["status"] not in ("pending", "active", "done"):
+                        return ToolExecResult(ok=False, payload={"ok": False, "error": f"invalid status: {t['status']}"})
+                return ToolExecResult(
+                    ok=True,
+                    payload={"ok": True, "message": "TODO list updated", "tasks": tasks},
+                    extras={"is_todo_update": True, "tasks": tasks},
+                )
             return ToolExecResult(
                 ok=False, payload={"ok": False, "error": f"unknown tool: {name}"}
             )

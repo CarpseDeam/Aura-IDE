@@ -7,8 +7,10 @@ for every dispatch in a single, persistent panel embedded in the main window.
 from __future__ import annotations
 
 from PySide6.QtCore import QAbstractAnimation, QEasingCurve, QPropertyAnimation, Qt
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QApplication,
+    QFrame,
     QGraphicsOpacityEffect,
     QLabel,
     QScrollArea,
@@ -31,6 +33,88 @@ from aura.gui.theme import BG, BORDER, DANGER, FG_DIM, SUCCESS, WARN
 CODE_WRITER_NAMES = frozenset({"write_file", "edit_file"})
 
 
+class TodoListWidget(QFrame):
+    """Pinned TODO list showing the worker's execution plan with live status updates."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setObjectName("todoListWidget")
+        self.setStyleSheet(
+            f"QFrame#todoListWidget {{"
+            f"  background: {BG};"
+            f"  border-bottom: 1px solid {BORDER};"
+            f"  padding: 0;"
+            f"}}"
+        )
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(12, 8, 12, 8)
+        outer.setSpacing(4)
+
+        # Header
+        header = QLabel("TODO LIST")
+        header.setObjectName("paneTitle")
+        header.setStyleSheet("padding: 0 0 4px 0;")
+        outer.addWidget(header)
+
+        # Container for task labels
+        self._tasks_layout = QVBoxLayout()
+        self._tasks_layout.setContentsMargins(0, 0, 0, 0)
+        self._tasks_layout.setSpacing(2)
+        outer.addLayout(self._tasks_layout)
+
+        self.setVisible(False)  # Hidden until tasks arrive
+
+    def update_tasks(self, tasks: list[dict]) -> None:
+        """Clear and redraw the task list from the worker's update_todo_list tool."""
+        # Remove old task labels
+        while self._tasks_layout.count() > 0:
+            item = self._tasks_layout.takeAt(0)
+            if item and item.widget():
+                item.widget().deleteLater()
+
+        if not tasks:
+            self.setVisible(False)
+            return
+
+        self.setVisible(True)
+
+        for task in tasks:
+            description = task.get("description", "")
+            status = task.get("status", "pending")
+
+            # Choose prefix and color
+            if status == "done":
+                prefix = "✓"
+                color = SUCCESS
+            elif status == "active":
+                prefix = "►"
+                color = WARN
+            else:  # pending
+                prefix = "○"
+                color = FG_DIM
+
+            label_text = f"{prefix} {description}"
+            label = QLabel(label_text)
+            label.setWordWrap(True)
+            label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+
+            # Monospace font
+            font = label.font()
+            font.setFamily("Cascadia Mono, Consolas, monospace")
+            font.setStyleHint(QFont.StyleHint.Monospace)
+            font.setPointSize(11)
+            label.setFont(font)
+
+            # Bold for active tasks
+            if status == "active":
+                font.setBold(True)
+                label.setFont(font)
+
+            label.setStyleSheet(f"color: {color}; padding: 1px 0;")
+            self._tasks_layout.addWidget(label)
+
+
 class WorkerWindow(QWidget):
     """Embeddable panel showing live worker activity for all dispatches."""
 
@@ -46,6 +130,10 @@ class WorkerWindow(QWidget):
         header.setObjectName("paneTitle")
         header.setStyleSheet("padding: 8px 12px;")
         layout.addWidget(header)
+
+        # Pinned TODO list
+        self._todo_widget = TodoListWidget()
+        layout.addWidget(self._todo_widget)
 
         # Central scroll area
         scroll = QScrollArea()
@@ -121,6 +209,8 @@ class WorkerWindow(QWidget):
         self._scroll_to_bottom()
 
     def add_tool_call(self, worker_tool_id: str, name: str) -> None:
+        if name == "update_todo_list":
+            return  # Pinned todo widget handles this, don't render a tool card.
         ac = self._current_or_new_assistant()
         if name in CODE_WRITER_NAMES:
             card: ToolCallCard | CodeWriterCard = CodeWriterCard(name)
@@ -199,6 +289,10 @@ class WorkerWindow(QWidget):
             f"color: {DANGER}; padding: 6px 12px; border-top: 1px solid {BORDER};"
         )
 
+    def update_todo_list(self, tasks: list) -> None:
+        """Forward the worker's TODO list update to the pinned widget."""
+        self._todo_widget.update_tasks(tasks)
+
     def clear(self) -> None:
         """Remove all cards and reset state (called on New Conversation)."""
         # Remove every widget from the layout except the trailing stretch.
@@ -211,3 +305,4 @@ class WorkerWindow(QWidget):
         self._current_assistant = None
         self._tool_cards.clear()
         self._tool_owner.clear()
+        self._todo_widget.update_tasks([])

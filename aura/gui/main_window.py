@@ -199,6 +199,7 @@ class MainWindow(QMainWindow):
         self._bridge.workerDiffDecided.connect(self._on_worker_diff_decided)
         self._bridge.workerApiError.connect(self._on_worker_api_error)
         self._bridge.workerUsage.connect(self._on_worker_usage)
+        self._bridge.workerTodoListUpdated.connect(self._on_worker_todo_list_updated)
 
         self._update_workspace_label()
         self._refresh_status_bar()
@@ -691,6 +692,10 @@ class MainWindow(QMainWindow):
         bucket["miss"] += miss
         bucket["out"] += completion
         self._refresh_status_bar()
+
+    def _on_worker_todo_list_updated(self, tool_call_id: str, tasks: list) -> None:
+        """Route the worker's TODO list update to the WorkerWindow's pinned widget."""
+        self._worker_window.update_todo_list(tasks)
 
     def _on_undo(self) -> None:
         """Handle /undo command — git reset the last commit."""
