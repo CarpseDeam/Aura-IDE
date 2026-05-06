@@ -44,7 +44,7 @@ def main() -> int:
         (root / "src" / "b.py").write_text("def bar():\n    return 1\n", encoding="utf-8")
         (root / "twice.py").write_text("x = 1\nx = 1\n", encoding="utf-8")
         (root / ".hidden").write_text("hidden\n", encoding="utf-8")
-        (root / "mod.import").write_text("godot import\n", encoding="utf-8")
+        (root / "mod.import").write_text("test import\n", encoding="utf-8")
 
         reg = ToolRegistry(root, read_only=False)
 

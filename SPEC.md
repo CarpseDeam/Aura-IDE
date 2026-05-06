@@ -1,9 +1,9 @@
 # Aura — Specification (Phase 1 + Phase 2 plan)
 
 Aura is a Windows desktop chat app for troubleshooting code with the DeepSeek V4 LLM.
-The user is the maintainer of an irreplaceable Godot 4 game; the app is a daily driver
-focused on safety (every write is gated), groundedness (the model uses tools, not guesses),
-and a polished dark UI in the spirit of Cursor's chat panel and Zed's agent mode.
+The app is a daily driver focused on safety (every write is gated), groundedness
+(the model uses tools, not guesses), and a polished dark UI in the spirit of
+Cursor's chat panel and Zed's agent mode.
 
 This document captures the Phase-1 architecture so Phase 2 can extend it without
 breaking contracts.

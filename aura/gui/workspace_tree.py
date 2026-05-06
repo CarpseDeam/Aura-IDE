@@ -1,7 +1,7 @@
 """Read-only workspace tree pane.
 
 Backed by QFileSystemModel + a thin proxy that hides clutter (dotfiles except
-`.aura`, build/cache directories, Godot import sidecars). Double-click opens
+`.aura`, build/cache directories). Double-click opens
 files in the OS default editor; right-click shows reveal/copy actions.
 """
 from __future__ import annotations
@@ -33,8 +33,8 @@ from PySide6.QtWidgets import (
 # Mirrors the SKIP rules in conversation/tools/fs_read.py so the user sees
 # what the tools see — minus `.aura`, which we keep visible so backups are
 # discoverable.
-_HIDDEN_DIRS = {"__pycache__", ".venv", ".git", "node_modules", ".import"}
-_HIDDEN_SUFFIXES = {".import"}
+_HIDDEN_DIRS = {"__pycache__", ".venv", ".git", "node_modules"}
+_HIDDEN_SUFFIXES = set()
 
 
 class _WorkspaceFilterProxy(QSortFilterProxyModel):
