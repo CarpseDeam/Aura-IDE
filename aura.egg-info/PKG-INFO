@@ -9,3 +9,6 @@ Requires-Dist: pydantic>=2.5
 Requires-Dist: platformdirs>=4.0
 Requires-Dist: pillow>=10.0
 Requires-Dist: pygments>=2.17
+Requires-Dist: httpx
+Requires-Dist: ddgs
+Requires-Dist: beautifulsoup4

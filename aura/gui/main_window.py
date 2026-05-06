@@ -52,6 +52,7 @@ from aura.gui.input_panel import Attachment, InputPanel, SendPayload
 from aura.gui.settings_dialog import SettingsDialog
 from aura.gui.spec_edit_dialog import SpecEditDialog
 from aura.gui.theme import BG, BG_ALT, BORDER, FG, FG_DIM, FG_MUTED, WARN
+from aura.gui.worker_window import WorkerWindow
 from aura.gui.workspace_tree import WorkspaceTree
 
 SYSTEM_PROMPT = (
@@ -105,6 +106,9 @@ class MainWindow(QMainWindow):
 
         # Session usage accumulators (per-model so cost is exact when mixing).
         self._session_usage: dict[str, dict[str, int]] = {}
+
+        # Worker pop-out windows keyed by tool_call_id.
+        self._worker_windows: dict[str, WorkerWindow] = {}
 
         # ----- toolbar ----
         self._toolbar = QToolBar("Main")
@@ -178,10 +182,10 @@ class MainWindow(QMainWindow):
         self._bridge.workerStarted.connect(self._on_worker_started)
         self._bridge.workerFinished.connect(self._on_worker_finished)
         self._bridge.workerCancelled.connect(self._on_worker_cancelled)
-        self._bridge.workerReasoningDelta.connect(self._chat.worker_append_reasoning)
-        self._bridge.workerContentDelta.connect(self._chat.worker_append_content)
-        self._bridge.workerToolCallStart.connect(self._chat.worker_add_tool_call)
-        self._bridge.workerToolCallArgs.connect(self._chat.worker_append_tool_args)
+        self._bridge.workerReasoningDelta.connect(self._on_worker_reasoning)
+        self._bridge.workerContentDelta.connect(self._on_worker_content)
+        self._bridge.workerToolCallStart.connect(self._on_worker_tool_call_start)
+        self._bridge.workerToolCallArgs.connect(self._on_worker_tool_args)
         self._bridge.workerToolCallEnd.connect(lambda _t, _w: None)
         self._bridge.workerToolResult.connect(self._on_worker_tool_result)
         self._bridge.workerDiffDecided.connect(self._on_worker_diff_decided)
@@ -359,6 +363,9 @@ class MainWindow(QMainWindow):
         self._chat.reset()
         self._current_conversation_path = None
         self._reset_session_usage()
+        for w in list(self._worker_windows.values()):
+            w.shutdown()
+        self._worker_windows.clear()
 
     def _on_open_conversation(self) -> None:
         if self._bridge.is_running():
@@ -434,10 +441,66 @@ class MainWindow(QMainWindow):
             text = f"{text}\n\n{ref_block}".strip() if text else ref_block
         image_atts = [a for a in payload.attachments if a.kind == "image" and a.b64]
 
-        if image_atts:
-            parts = []
+        # --- Vision preprocessing ---
+        vision_descriptions: list[str] = []
+        vision_error: str | None = None
+        if image_atts and self._settings.vision_enabled:
+            try:
+                from aura.vision import VisionClient
+
+                client = VisionClient(
+                    endpoint=self._settings.vision_endpoint,
+                    model=self._settings.vision_model,
+                )
+                for a in image_atts:
+                    desc = client.describe(a.b64)
+                    vision_descriptions.append(desc)
+            except Exception as exc:
+                vision_error = (
+                    f"Local vision model unavailable "
+                    f"({self._settings.vision_model}): {exc}"
+                )
+
+        if vision_descriptions:
+            # Build vision block
+            vision_block_parts = []
+            for i, desc in enumerate(vision_descriptions):
+                vision_block_parts.append(
+                    f"[Image {i + 1} description via local vision model:]\n{desc}"
+                )
+            vision_block = "\n\n---\n\n".join(vision_block_parts)
+
+            if vision_error:
+                vision_block += f"\n\n[Vision error: {vision_error}]"
+
+            # Final text for DeepSeek
             if text:
-                parts.append({"type": "text", "text": text})
+                final_text = f"{vision_block}\n\n[User's question:]\n{text}"
+            else:
+                final_text = vision_block
+
+            # Display text for the UserCard (same as final_text)
+            display_text = final_text
+        elif vision_error and not vision_descriptions:
+            # Vision completely failed — fall back to sending text-only with error note
+            final_text = (
+                f"{text}\n\n[Note: {vision_error}]"
+                if text
+                else f"[Vision error: {vision_error}]"
+            )
+            display_text = final_text
+        else:
+            # No images or vision disabled
+            final_text = text
+            display_text = text
+
+        # If vision processed images, ALWAYS use plain text (not multimodal)
+        # If vision is disabled and images exist, keep current behavior (multimodal → 400 error)
+        if image_atts and not self._settings.vision_enabled:
+            # Current behavior: send multimodal (will 400, but user may want to see error)
+            parts = []
+            if final_text:
+                parts.append({"type": "text", "text": final_text})
             for a in image_atts:
                 parts.append(
                     {
@@ -447,9 +510,9 @@ class MainWindow(QMainWindow):
                 )
             self._bridge.history.append_user_multimodal(parts)
         else:
-            self._bridge.history.append_user_text(text)
+            self._bridge.history.append_user_text(final_text)
 
-        self._chat.add_user(text, [a.b64 for a in image_atts] or None)
+        self._chat.add_user(display_text, [a.b64 for a in image_atts] or None)
         self._chat.begin_assistant()
 
         self._bridge.send(
@@ -504,6 +567,7 @@ class MainWindow(QMainWindow):
         card.dispatch_clicked.connect(self._on_dispatch_clicked)
         card.edit_clicked.connect(self._on_edit_spec_clicked)
         card.cancel_clicked.connect(self._on_cancel_dispatch_clicked)
+        card.view_worker_clicked.connect(self._on_view_worker_clicked)
 
     def _on_dispatch_clicked(self, tool_call_id: str) -> None:
         card = self._chat.get_spec_card(tool_call_id)
@@ -524,16 +588,52 @@ class MainWindow(QMainWindow):
     def _on_cancel_dispatch_clicked(self, tool_call_id: str) -> None:
         self._bridge.user_cancelled_dispatch(tool_call_id)
 
-    def _on_worker_started(self, _tool_call_id: str) -> None:
-        return
+    def _on_worker_started(self, tool_call_id: str) -> None:
+        card = self._chat.get_spec_card(tool_call_id)
+        goal = card.current_spec()[0] if card else "Worker task"
+        window = WorkerWindow(tool_call_id, goal, parent=self)
+        window.closed.connect(self._on_worker_window_closed)
+        self._worker_windows[tool_call_id] = window
+        window.begin_assistant()
+        window.show()
 
     def _on_worker_finished(self, tool_call_id: str, ok: bool, summary: str) -> None:
-        self._chat.worker_finished(tool_call_id, ok, summary)
+        w = self._worker_windows.get(tool_call_id)
+        if w:
+            w.worker_finished(ok, summary)
+        card = self._chat.get_spec_card(tool_call_id)
+        if card:
+            card.worker_finished(ok, summary)
+            goal = card.current_spec()[0]
+            self._chat.add_worker_summary(tool_call_id, goal, ok, summary)
 
     def _on_worker_cancelled(self, tool_call_id: str) -> None:
+        w = self._worker_windows.get(tool_call_id)
+        if w:
+            w.worker_cancelled()
         card = self._chat.get_spec_card(tool_call_id)
-        if card is not None:
+        if card:
             card.disable_buttons()
+
+    def _on_worker_reasoning(self, tool_call_id: str, text: str) -> None:
+        w = self._worker_windows.get(tool_call_id)
+        if w:
+            w.append_reasoning(text)
+
+    def _on_worker_content(self, tool_call_id: str, text: str) -> None:
+        w = self._worker_windows.get(tool_call_id)
+        if w:
+            w.append_content(text)
+
+    def _on_worker_tool_call_start(self, tool_call_id: str, worker_tool_id: str, name: str) -> None:
+        w = self._worker_windows.get(tool_call_id)
+        if w:
+            w.add_tool_call(worker_tool_id, name)
+
+    def _on_worker_tool_args(self, tool_call_id: str, worker_tool_id: str, fragment: str) -> None:
+        w = self._worker_windows.get(tool_call_id)
+        if w:
+            w.append_tool_args(worker_tool_id, fragment)
 
     def _on_worker_tool_result(
         self,
@@ -544,7 +644,9 @@ class MainWindow(QMainWindow):
         result: str,
         extras: dict,
     ) -> None:
-        self._chat.worker_set_tool_result(parent_tool_id, worker_tool_id, ok, result)
+        w = self._worker_windows.get(parent_tool_id)
+        if w:
+            w.set_tool_result(worker_tool_id, ok, result)
 
     def _on_worker_diff_decided(
         self,
@@ -556,13 +658,26 @@ class MainWindow(QMainWindow):
         new: str,
         is_new_file: bool,
     ) -> None:
-        self._chat.worker_add_diff_card(
-            parent_tool_id, worker_tool_id, rel_path, old, new, decision, is_new_file
-        )
+        w = self._worker_windows.get(parent_tool_id)
+        if w:
+            w.add_diff_card(worker_tool_id, rel_path, old, new, decision, is_new_file)
 
     def _on_worker_api_error(self, tool_call_id: str, status: int, message: str) -> None:
-        title = f"API Error {status}" if status > 0 else "Worker Error"
-        self._chat.worker_add_error(tool_call_id, f"{title}: {message}")
+        w = self._worker_windows.get(tool_call_id)
+        if w:
+            title = f"API Error {status}" if status > 0 else "Worker Error"
+            w.add_error(f"{title}: {message}")
+
+    def _on_worker_window_closed(self, tool_call_id: str) -> None:
+        # Window was closed by user — remove from dict but keep SpecCard's "View Worker" button.
+        self._worker_windows.pop(tool_call_id, None)
+
+    def _on_view_worker_clicked(self, tool_call_id: str) -> None:
+        w = self._worker_windows.get(tool_call_id)
+        if w is not None:
+            w.show()
+            w.raise_()
+            w.activateWindow()
 
     def _on_worker_usage(
         self,

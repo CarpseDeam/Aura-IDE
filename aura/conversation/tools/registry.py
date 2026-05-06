@@ -21,8 +21,9 @@ from typing import Any, Callable, Literal
 from aura.conversation.tools.backup import backup_existing
 from aura.conversation.tools.fs_read import glob_files, list_directory, read_file
 from aura.conversation.tools.fs_write import propose_edit, propose_write
+from aura.conversation.tools.web import web_search, web_fetch
 
-ApprovalAction = Literal["approve", "reject", "reject_all"]
+ApprovalAction = Literal["approve", "reject", "reject_all", "approve_all"]
 RegistryMode = Literal["single", "planner", "worker"]
 
 
@@ -213,6 +214,73 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
     },
 ]
 
+RESEARCH_TOOL_DEFS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "run_research",
+            "description": (
+                "Dispatch an open-ended research task to a background sub-agent. The agent will "
+                "autonomously use search engines and web scraping to gather information before "
+                "returning a summarized report. Use this to look up documentation, troubleshooting "
+                "steps, or general information not found in the workspace."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "objective": {
+                        "type": "string",
+                        "description": "The specific question or goal the researcher should answer.",
+                    }
+                },
+                "required": ["objective"],
+            },
+        },
+    }
+]
+
+WEB_TOOL_DEFS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": "Search the web for a given query and return a list of matching URLs and snippets.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The search query.",
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Maximum number of results to return.",
+                        "default": 5,
+                    }
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "web_fetch",
+            "description": "Fetch the contents of a specific URL and return the readable text.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "The URL to fetch.",
+                    }
+                },
+                "required": ["url"],
+            },
+        },
+    }
+]
+
 
 @dataclass
 class ToolExecResult:
@@ -267,8 +335,10 @@ class ToolRegistry:
         # there's nothing for a worker to do without writes).
         if self._read_only:
             return list(READ_TOOL_DEFS)
+        if self._mode == "researcher":
+            return list(WEB_TOOL_DEFS)
         if self._mode == "planner":
-            return list(READ_TOOL_DEFS) + [dict(DISPATCH_TOOL_DEF)]
+            return list(READ_TOOL_DEFS) + [dict(DISPATCH_TOOL_DEF)] + list(RESEARCH_TOOL_DEFS)
         if self._mode == "worker":
             return list(READ_TOOL_DEFS) + list(WRITE_TOOL_DEFS)
         return list(READ_TOOL_DEFS) + list(WRITE_TOOL_DEFS)
@@ -323,6 +393,17 @@ class ToolRegistry:
                         payload={"ok": False, "error": "glob pattern must be workspace-relative"},
                     )
                 return ToolExecResult(ok=True, payload=glob_files(self._root, pattern))
+            if name == "web_search":
+                if self._mode != "researcher":
+                    return ToolExecResult(ok=False, payload={"ok": False, "error": "Tool web_search is only available in researcher mode."})
+                query = args.get("query", "")
+                max_results = args.get("max_results", 5)
+                return ToolExecResult(ok=True, payload=web_search(query, max_results))
+            if name == "web_fetch":
+                if self._mode != "researcher":
+                    return ToolExecResult(ok=False, payload={"ok": False, "error": "Tool web_fetch is only available in researcher mode."})
+                url = args.get("url", "")
+                return ToolExecResult(ok=True, payload=web_fetch(url))
             if name in ("write_file", "edit_file"):
                 if self._read_only:
                     return ToolExecResult(

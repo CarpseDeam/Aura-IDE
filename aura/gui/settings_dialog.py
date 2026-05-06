@@ -62,6 +62,9 @@ class SettingsDialog(QDialog):
             default_worker_model=settings.default_worker_model,
             default_planner_thinking=settings.default_planner_thinking,
             default_worker_thinking=settings.default_worker_thinking,
+            vision_enabled=settings.vision_enabled,
+            vision_model=settings.vision_model,
+            vision_endpoint=settings.vision_endpoint,
         )
         self._on_change_root = on_change_root
 
@@ -137,6 +140,34 @@ class SettingsDialog(QDialog):
         form.addRow("Worker thinking:", self._worker_thinking_combo)
 
         self._refresh_pw_enabled()
+
+        # --- Vision settings ---
+        vision_sep = QLabel("Vision (Local Model)")
+        vision_sep.setStyleSheet(
+            f"color: {FG_DIM}; font-weight: 600; font-size: 11px;"
+            " text-transform: uppercase; letter-spacing: 0.04em;"
+        )
+        form.addRow("", vision_sep)
+
+        self._vision_enabled_chk = QCheckBox(
+            "Enable local vision model for image descriptions"
+        )
+        self._vision_enabled_chk.setChecked(self._settings.vision_enabled)
+        form.addRow("", self._vision_enabled_chk)
+
+        self._vision_model_combo = QComboBox()
+        self._vision_model_combo.setEditable(True)
+        self._vision_model_combo.addItems(
+            ["llama3.2-vision", "llava:13b", "minicpm-v", "bakllava"]
+        )
+        self._vision_model_combo.setCurrentText(self._settings.vision_model)
+        form.addRow("Vision model:", self._vision_model_combo)
+
+        self._vision_endpoint_combo = QComboBox()
+        self._vision_endpoint_combo.setEditable(True)
+        self._vision_endpoint_combo.addItems(["http://localhost:11434/v1"])
+        self._vision_endpoint_combo.setCurrentText(self._settings.vision_endpoint)
+        form.addRow("Vision endpoint:", self._vision_endpoint_combo)
 
         # Workspace
         ws_row = QHBoxLayout()
@@ -216,6 +247,9 @@ class SettingsDialog(QDialog):
             default_worker_model=self._worker_model_combo.currentData(),
             default_planner_thinking=self._planner_thinking_combo.currentData(),
             default_worker_thinking=self._worker_thinking_combo.currentData(),
+            vision_enabled=self._vision_enabled_chk.isChecked(),
+            vision_model=self._vision_model_combo.currentText(),
+            vision_endpoint=self._vision_endpoint_combo.currentText(),
         )
 
     def accept(self) -> None:  # type: ignore[override]

@@ -14,6 +14,7 @@ aura/client/__init__.py
 aura/client/deepseek.py
 aura/client/events.py
 aura/conversation/__init__.py
+aura/conversation/dispatch.py
 aura/conversation/history.py
 aura/conversation/manager.py
 aura/conversation/persistence.py
@@ -22,11 +23,13 @@ aura/conversation/tools/backup.py
 aura/conversation/tools/fs_read.py
 aura/conversation/tools/fs_write.py
 aura/conversation/tools/registry.py
+aura/conversation/tools/web.py
 aura/gui/__init__.py
 aura/gui/chat_view.py
 aura/gui/diff_dialog.py
 aura/gui/input_panel.py
 aura/gui/main_window.py
 aura/gui/settings_dialog.py
+aura/gui/spec_edit_dialog.py
 aura/gui/theme.py
 aura/gui/workspace_tree.py

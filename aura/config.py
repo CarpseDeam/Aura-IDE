@@ -49,6 +49,11 @@ MODELS: dict[ModelId, ModelInfo] = {
 DEFAULT_MODEL: ModelId = "deepseek-v4-flash"
 DEFAULT_THINKING: ThinkingMode = "high"
 
+# Vision settings (local Ollama model)
+DEFAULT_VISION_ENABLED = True
+DEFAULT_VISION_MODEL = "llama3.2-vision"
+DEFAULT_VISION_ENDPOINT = "http://localhost:11434/v1"
+
 
 # Per-million USD pricing used by the status-bar cost meter.
 # Keys: in_hit (cached input), in_miss (uncached input), out (output).
@@ -149,6 +154,9 @@ class AppSettings:
     default_worker_model: ModelId = DEFAULT_WORKER_MODEL
     default_planner_thinking: ThinkingMode = DEFAULT_PLANNER_THINKING
     default_worker_thinking: ThinkingMode = DEFAULT_WORKER_THINKING
+    vision_enabled: bool = DEFAULT_VISION_ENABLED
+    vision_model: str = DEFAULT_VISION_MODEL
+    vision_endpoint: str = DEFAULT_VISION_ENDPOINT
 
     @classmethod
     def from_dict(cls, data: dict) -> "AppSettings":
@@ -169,6 +177,12 @@ class AppSettings:
             s.default_planner_thinking = data["default_planner_thinking"]  # type: ignore[assignment]
         if data.get("default_worker_thinking") in ("off", "high", "max"):
             s.default_worker_thinking = data["default_worker_thinking"]  # type: ignore[assignment]
+        if isinstance(data.get("vision_enabled"), bool):
+            s.vision_enabled = data["vision_enabled"]
+        if isinstance(data.get("vision_model"), str):
+            s.vision_model = data["vision_model"]
+        if isinstance(data.get("vision_endpoint"), str):
+            s.vision_endpoint = data["vision_endpoint"]
         return s
 
 

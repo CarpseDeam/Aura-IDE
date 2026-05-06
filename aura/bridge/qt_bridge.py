@@ -204,8 +204,11 @@ class _ApprovalProxy(QObject):
         self._last_decision: ApprovalDecision = ApprovalDecision(action="reject")
         self._last_request: ApprovalRequest | None = None
         self.last_event: dict[str, Any] | None = None
+        self._approve_all_session: bool = False
 
     def request_approval(self, request: ApprovalRequest) -> ApprovalDecision:
+        if self._approve_all_session:
+            return ApprovalDecision(action="approve")
         with self._lock:
             self._last_request = request
             QMetaObject.invokeMethod(
@@ -224,6 +227,9 @@ class _ApprovalProxy(QObject):
         dlg = DiffApprovalDialog(req, parent=self._parent_widget)
         dlg.exec()
         self._last_decision = dlg.decision()
+        if self._last_decision.action == "approve_all":
+            self._approve_all_session = True
+            self._last_decision = ApprovalDecision(action="approve")
         self.last_event = {
             "rel_path": req.rel_path,
             "old_content": req.old_content,
@@ -231,6 +237,9 @@ class _ApprovalProxy(QObject):
             "is_new_file": req.is_new_file,
             "decision": self._last_decision.action,
         }
+
+    def reset_approve_all(self) -> None:
+        self._approve_all_session = False
 
 
 class _DispatchProxy(QObject):
@@ -671,6 +680,7 @@ class ConversationBridge(QObject):
         self._index_to_id.clear()
         self._index_to_name.clear()
         self._dispatch_proxy.clear_records()
+        self._approval_proxy.reset_approve_all()
 
     def is_running(self) -> bool:
         return self._thread is not None and self._thread.isRunning()

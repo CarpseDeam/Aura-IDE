@@ -6,6 +6,7 @@ import difflib
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
+    QCheckBox,
     QDialog,
     QHBoxLayout,
     QLabel,
@@ -83,6 +84,15 @@ class DiffApprovalDialog(QDialog):
 
         self._populate_diff(request)
 
+        # Checkbox row — approve all remaining writes this session
+        checkbox_row = QHBoxLayout()
+        checkbox_row.setSpacing(8)
+        self._approve_all_checkbox = QCheckBox("Approve all remaining writes this session")
+        self._approve_all_checkbox.setStyleSheet(f"color: {FG_DIM};")
+        checkbox_row.addWidget(self._approve_all_checkbox)
+        checkbox_row.addStretch(1)
+        layout.addLayout(checkbox_row)
+
         button_row = QHBoxLayout()
         button_row.setSpacing(8)
         button_row.addStretch(1)
@@ -156,7 +166,10 @@ class DiffApprovalDialog(QDialog):
         return QColor(hex_str)
 
     def _on_apply(self) -> None:
-        self._decision = ApprovalDecision(action="approve")
+        if self._approve_all_checkbox.isChecked():
+            self._decision = ApprovalDecision(action="approve_all")
+        else:
+            self._decision = ApprovalDecision(action="approve")
         self.accept()
 
     def _on_reject(self) -> None:

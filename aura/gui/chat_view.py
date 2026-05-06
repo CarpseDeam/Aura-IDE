@@ -495,6 +495,189 @@ class ToolCallCard(QFrame):
         self._refresh_header()
 
 
+class CodeWriterCard(QFrame):
+    """Card for showing code being written/edited in real time.
+
+    Header: "📝 Writing code…" with collapsible toggle.
+    Body: file path label + monospace code view that streams character-by-character.
+    """
+
+    STATE_RUNNING = "running"
+    STATE_DONE = "done"
+    STATE_FAILED = "failed"
+
+    def __init__(self, name: str) -> None:
+        super().__init__()
+        self.setObjectName("toolCard")
+        self._name = name
+        self._path: str = ""
+        self._args_text = ""
+        self._state = self.STATE_RUNNING
+        self._content_key = "content" if name == "write_file" else "new_str"
+        self._last_content_len = 0
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 6, 10, 6)
+        layout.setSpacing(5)
+
+        # Header
+        self._header = QToolButton()
+        self._header.setObjectName("sectionToggle")
+        self._header.setStyleSheet(
+            f"QToolButton#sectionToggle {{ color: {FG_DIM}; }} "
+            f"QToolButton#sectionToggle:hover {{ color: {FG}; }}"
+        )
+        self._header.clicked.connect(self._toggle_body)
+        layout.addWidget(self._header)
+        self._refresh_header()
+
+        # Body
+        self._body = QWidget()
+        body_layout = QVBoxLayout(self._body)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(4)
+
+        # File path subtitle
+        self._path_label = QLabel("")
+        self._path_label.setStyleSheet(
+            f"color: {FG_DIM}; font-family: 'Cascadia Mono', Consolas, monospace; "
+            "font-size: 10px;"
+        )
+        self._path_label.setVisible(False)
+        body_layout.addWidget(self._path_label)
+
+        # Code view
+        self._code_view = QPlainTextEdit()
+        self._code_view.setReadOnly(True)
+        self._code_view.setFont(_mono_font(10))
+        self._code_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        self._code_view.setStyleSheet(
+            f"background: {BG}; color: {FG}; border: 1px solid {BORDER}; "
+            "border-radius: 4px; padding: 6px;"
+        )
+        self._code_view.setMinimumHeight(100)
+        self._code_view.setMaximumHeight(400)
+        body_layout.addWidget(self._code_view)
+
+        # Raw args fallback (shown when JSON can't be parsed yet)
+        self._raw_view = QPlainTextEdit()
+        self._raw_view.setReadOnly(True)
+        self._raw_view.setFont(_mono_font(9))
+        self._raw_view.setStyleSheet(
+            f"background: {BG}; color: {FG_MUTED}; border: 1px solid {BORDER}; "
+            "border-radius: 4px; padding: 6px;"
+        )
+        self._raw_view.setMaximumHeight(160)
+        self._raw_view.setVisible(False)
+        body_layout.addWidget(self._raw_view)
+
+        self._body.setVisible(False)
+        layout.addWidget(self._body)
+
+    def _toggle_body(self) -> None:
+        self._body.setVisible(not self._body.isVisible())
+        self._refresh_header()
+
+    def _refresh_header(self) -> None:
+        chev = "v" if self._body.isVisible() else ">"
+        state_str = {
+            self.STATE_RUNNING: "…",
+            self.STATE_DONE: "Applied ✓",
+            self.STATE_FAILED: "Failed ✗",
+        }[self._state]
+        state_color = {
+            self.STATE_RUNNING: WARN,
+            self.STATE_DONE: SUCCESS,
+            self.STATE_FAILED: DANGER,
+        }[self._state]
+        label = self._path if self._path else "Writing code…"
+        text = f"{chev} 📝 {label}  {state_str}"
+        self._header.setText(text)
+        self._header.setStyleSheet(
+            f"QToolButton#sectionToggle {{ color: {state_color}; }}"
+        )
+
+    def append_args(self, fragment: str) -> None:
+        self._args_text += fragment
+        # Try to parse JSON
+        try:
+            parsed = json.loads(self._args_text)
+        except json.JSONDecodeError:
+            # JSON incomplete — show raw args in dim style
+            self._raw_view.setVisible(True)
+            self._raw_view.setPlainText(self._args_text)
+            # Also try a best-effort path extraction from partial JSON
+            self._try_extract_partial_path()
+            return
+
+        # JSON parsed successfully — hide raw view
+        self._raw_view.setVisible(False)
+
+        # Extract path
+        path = parsed.get("path", "")
+        if path:
+            self._path = path
+            self._path_label.setText(f"📄 {path}")
+            self._path_label.setVisible(True)
+            self._refresh_header()
+
+        # Extract code content
+        content = parsed.get(self._content_key, "")
+        if content:
+            self._code_view.setPlainText(content)
+            # Attempt Pygments highlighting
+            self._highlight_code()
+
+        # Show the body on first successful parse
+        if not self._body.isVisible():
+            self._body.setVisible(True)
+
+    def _try_extract_partial_path(self) -> None:
+        """Best-effort path extraction from partial JSON."""
+        import re
+        m = re.search(r'"path"\s*:\s*"([^"]*)', self._args_text)
+        if m:
+            path = m.group(1)
+            if path and not self._path:
+                self._path = path
+                self._path_label.setText(f"📄 {path}")
+                self._path_label.setVisible(True)
+                self._refresh_header()
+
+    def _highlight_code(self) -> None:
+        if not _HAVE_PYGMENTS or not self._path:
+            return
+        # Guess lexer from file extension
+        ext = self._path.rsplit(".", 1)[-1].lower() if "." in self._path else ""
+        try:
+            if ext:
+                lexer = get_lexer_by_name(ext)
+            else:
+                lexer = TextLexer()
+        except ClassNotFound:
+            lexer = TextLexer()
+        formatter = HtmlFormatter(
+            style="monokai",
+            noclasses=True,
+            nowrap=True,
+        )
+        code = self._code_view.toPlainText()
+        try:
+            highlighted = highlight(code, lexer, formatter)
+            # Set as HTML in the code view via the underlying document
+            doc = self._code_view.document()
+            doc.setHtml(highlighted)
+        except Exception:
+            pass  # Fall back to plain text
+
+    def set_result(self, ok: bool, result_text: str) -> None:
+        self._state = self.STATE_DONE if ok else self.STATE_FAILED
+        if not ok:
+            # Auto-expand body on failure
+            self._body.setVisible(True)
+        self._refresh_header()
+
+
 class DiffCard(QFrame):
     """Read-only inline diff display, after the user has decided."""
 
@@ -574,14 +757,14 @@ class DiffCard(QFrame):
 class SpecCard(QFrame):
     """Worker dispatch spec — collapsible, with Dispatch/Edit/Cancel buttons.
 
-    After dispatch (or cancel), the buttons collapse into a status header and
-    a nested area below shows the worker's streaming output (a sub-conversation
-    visually indented under the spec).
+    After dispatch, the buttons collapse into a status header and a "View Worker"
+    button appears to open the pop-out WorkerWindow.
     """
 
     dispatch_clicked = Signal(str)  # tool_call_id (with current spec values)
     edit_clicked = Signal(str)
     cancel_clicked = Signal(str)
+    view_worker_clicked = Signal(str)  # tool_call_id
 
     def __init__(
         self,
@@ -675,28 +858,19 @@ class SpecCard(QFrame):
 
         outer.addWidget(self._buttons_row)
 
+        # "View Worker" button — hidden until dispatch.
+        self._view_worker_btn = QPushButton("View Worker")
+        self._view_worker_btn.setVisible(False)
+        self._view_worker_btn.clicked.connect(
+            lambda: self.view_worker_clicked.emit(self._tool_call_id)
+        )
+        outer.addWidget(self._view_worker_btn)
+
         # Status label, hidden until dispatch/cancel.
         self._status_label = QLabel("")
         self._status_label.setStyleSheet(f"color: {FG_DIM}; font-size: 11px;")
         self._status_label.setVisible(False)
         outer.addWidget(self._status_label)
-
-        # Nested area for the worker's sub-conversation. Created on dispatch.
-        self._nested_container = QFrame()
-        self._nested_container.setObjectName("workerNest")
-        self._nested_container.setStyleSheet(
-            f"QFrame#workerNest {{ background: transparent; border: none; "
-            f"border-left: 1px solid {BORDER_STRONG}; }}"
-        )
-        self._nested_layout = QVBoxLayout(self._nested_container)
-        self._nested_layout.setContentsMargins(14, 6, 0, 0)
-        self._nested_layout.setSpacing(8)
-        self._nested_container.setVisible(False)
-        outer.addWidget(self._nested_container)
-
-        # Worker turn state.
-        self._current_worker_assistant: AssistantCard | None = None
-        self._worker_tool_owner: dict[str, AssistantCard] = {}
 
     # ---- helpers ---------------------------------------------------------
 
@@ -728,11 +902,11 @@ class SpecCard(QFrame):
 
     def _on_dispatch(self) -> None:
         self._dispatched = True
+        self._worker_running = True
         self._buttons_row.setVisible(False)
         self._status_label.setText("Dispatched — worker running…")
         self._status_label.setVisible(True)
-        self._nested_container.setVisible(True)
-        self._worker_running = True
+        self._view_worker_btn.setVisible(True)
         self.dispatch_clicked.emit(self._tool_call_id)
 
     def _on_cancel(self) -> None:
@@ -748,79 +922,13 @@ class SpecCard(QFrame):
         self._edit_btn.setEnabled(False)
         self._cancel_btn.setEnabled(False)
 
-    # ---- worker streaming hooks -----------------------------------------
-
-    def begin_worker_assistant(self) -> "AssistantCard":
-        card = AssistantCard()
-        self._current_worker_assistant = card
-        self._nested_layout.addWidget(card)
-        return card
-
-    def current_worker_assistant(self) -> "AssistantCard":
-        if self._current_worker_assistant is None:
-            return self.begin_worker_assistant()
-        return self._current_worker_assistant
-
-    def append_worker_reasoning(self, text: str) -> None:
-        self.current_worker_assistant().append_reasoning(text)
-
-    def append_worker_content(self, text: str) -> None:
-        ac = self.current_worker_assistant()
-        ac.reasoning_done()
-        ac.append_content(text)
-
-    def add_worker_tool_call(self, tool_call_id: str, name: str) -> None:
-        ac = self.current_worker_assistant()
-        ac.add_tool_card(tool_call_id, name)
-        self._worker_tool_owner[tool_call_id] = ac
-
-    def append_worker_tool_args(self, tool_call_id: str, fragment: str) -> None:
-        ac = self._worker_tool_owner.get(tool_call_id) or self.current_worker_assistant()
-        card = ac.get_tool_card(tool_call_id)
-        if card is not None:
-            card.append_args(fragment)
-
-    def set_worker_tool_result(self, tool_call_id: str, ok: bool, result: str) -> None:
-        ac = self._worker_tool_owner.get(tool_call_id) or self.current_worker_assistant()
-        card = ac.get_tool_card(tool_call_id)
-        if card is not None:
-            card.set_result(ok, result)
-
-    def add_worker_diff_card(
-        self,
-        worker_tool_call_id: str,
-        rel_path: str,
-        old: str,
-        new: str,
-        decision: str,
-        is_new_file: bool,
-    ) -> None:
-        ac = self._worker_tool_owner.get(worker_tool_call_id) or self.current_worker_assistant()
-        card = DiffCard(rel_path, old, new, decision, is_new_file)
-        ac.add_footer_widget(card)
-
-    def add_worker_error(self, message: str) -> None:
-        err = ErrorCard("Worker error", message)
-        self._nested_layout.addWidget(err)
-
-    def finalize_worker_assistant(self) -> None:
-        ac = self._current_worker_assistant
-        if ac is None:
-            return
-        text = ac._content_label.text_buffer()
-        if text:
-            html = _render_markdown_with_code(text)
-            ac._content_label.setTextFormat(Qt.TextFormat.RichText)
-            ac._content_label.setText(html)
-        self._current_worker_assistant = None
-
     def worker_finished(self, ok: bool, summary: str) -> None:
         self._worker_running = False
-        self.finalize_worker_assistant()
-        verb = "Worker finished" if ok else "Worker finished with errors"
+        verb = "Completed" if ok else "Completed with errors"
         color = SUCCESS if ok else DANGER
         self._status_label.setText(verb)
         self._status_label.setStyleSheet(f"color: {color}; font-size: 11px;")
+        # Keep "View Worker" button visible for later review.
 
 
 class ErrorCard(QFrame):
@@ -867,6 +975,8 @@ class ErrorCard(QFrame):
 
 class ChatView(QScrollArea):
     """Vertical, scrollable column of cards."""
+
+    retry_requested = Signal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -1051,67 +1161,41 @@ class ChatView(QScrollArea):
     def get_spec_card(self, tool_call_id: str) -> SpecCard | None:
         return self._spec_cards.get(tool_call_id)
 
-    def worker_begin_assistant(self, tool_call_id: str) -> None:
-        card = self._spec_cards.get(tool_call_id)
-        if card is not None:
-            card.begin_worker_assistant()
-
-    def worker_append_reasoning(self, tool_call_id: str, text: str) -> None:
-        card = self._spec_cards.get(tool_call_id)
-        if card is not None:
-            card.append_worker_reasoning(text)
-            self._scroll_to_bottom()
-
-    def worker_append_content(self, tool_call_id: str, text: str) -> None:
-        card = self._spec_cards.get(tool_call_id)
-        if card is not None:
-            card.append_worker_content(text)
-            self._scroll_to_bottom()
-
-    def worker_add_tool_call(self, tool_call_id: str, worker_tool_id: str, name: str) -> None:
-        card = self._spec_cards.get(tool_call_id)
-        if card is not None:
-            card.add_worker_tool_call(worker_tool_id, name)
-            self._scroll_to_bottom()
-
-    def worker_append_tool_args(
-        self, tool_call_id: str, worker_tool_id: str, fragment: str
+    def add_worker_summary(
+        self, tool_call_id: str, goal: str, ok: bool, summary: str
     ) -> None:
-        card = self._spec_cards.get(tool_call_id)
-        if card is not None:
-            card.append_worker_tool_args(worker_tool_id, fragment)
+        """Add a summary card to the chat after a worker completes."""
+        card = QFrame()
+        card.setObjectName("card")
+        card.setStyleSheet(
+            f"QFrame#card {{ background: {BG_ALT}; border: 1px solid {BORDER}; "
+            f"border-left: 3px solid {SUCCESS if ok else DANGER}; border-radius: 8px; }}"
+        )
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(14, 10, 14, 12)
+        layout.setSpacing(6)
 
-    def worker_set_tool_result(
-        self, tool_call_id: str, worker_tool_id: str, ok: bool, result: str
-    ) -> None:
-        card = self._spec_cards.get(tool_call_id)
-        if card is not None:
-            card.set_worker_tool_result(worker_tool_id, ok, result)
+        # Header
+        status_icon = "✅" if ok else "⚠️"
+        header = QLabel(f"{status_icon} Worker completed")
+        header.setStyleSheet(
+            f"color: {SUCCESS if ok else DANGER}; font-weight: 700; font-size: 12px;"
+        )
+        layout.addWidget(header)
 
-    def worker_add_diff_card(
-        self,
-        tool_call_id: str,
-        worker_tool_id: str,
-        rel_path: str,
-        old: str,
-        new: str,
-        decision: str,
-        is_new_file: bool,
-    ) -> None:
-        card = self._spec_cards.get(tool_call_id)
-        if card is not None:
-            card.add_worker_diff_card(
-                worker_tool_id, rel_path, old, new, decision, is_new_file
-            )
-            self._scroll_to_bottom()
+        # Goal (dim)
+        if goal:
+            goal_label = QLabel(goal)
+            goal_label.setWordWrap(True)
+            goal_label.setStyleSheet(f"color: {FG_DIM}; font-style: italic;")
+            layout.addWidget(goal_label)
 
-    def worker_add_error(self, tool_call_id: str, message: str) -> None:
-        card = self._spec_cards.get(tool_call_id)
-        if card is not None:
-            card.add_worker_error(message)
+        # Summary
+        if summary:
+            body = QLabel(summary)
+            body.setWordWrap(True)
+            body.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            body.setStyleSheet(f"color: {FG};")
+            layout.addWidget(body)
 
-    def worker_finished(self, tool_call_id: str, ok: bool, summary: str) -> None:
-        card = self._spec_cards.get(tool_call_id)
-        if card is not None:
-            card.worker_finished(ok, summary)
-            self._scroll_to_bottom()
+        self._add_card(card)
