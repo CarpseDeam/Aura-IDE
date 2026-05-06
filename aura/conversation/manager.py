@@ -291,6 +291,9 @@ class ConversationManager:
             on_event(ToolResult(tool_call_id=tool_call_id, name="run_research", ok=False, result=payload))
             return
             
+        # Emit a parent ToolCallStart for run_research so the GUI shows a card
+        on_event(ToolCallStart(index=0, id=tool_call_id, name="run_research"))
+
         try:
             research_history = History()
             research_history.set_system(
@@ -315,9 +318,14 @@ class ConversationManager:
             def _research_on_event(ev: Event) -> None:
                 if isinstance(ev, ToolCallStart):
                     print(f"  [Researcher] Started tool: {ev.name}")
+                    on_event(ev)
+                if isinstance(ev, ToolCallArgsDelta):
+                    on_event(ev)
+                if isinstance(ev, ToolCallEnd):
+                    on_event(ev)
                 if isinstance(ev, ToolResult):
                     print(f"  [Researcher] Tool result [{ev.name}]: ok={ev.ok}")
-                # We can optionally forward Usage events here to keep the total count accurate
+                    on_event(ev)
                 if isinstance(ev, Usage):
                     on_event(ev)
                 
