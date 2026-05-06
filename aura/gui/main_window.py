@@ -291,9 +291,17 @@ class MainWindow(QMainWindow):
         # Right side
         self._status_tokens = QLabel("0 hit · 0 miss · 0 out")
         bar.addPermanentWidget(self._status_tokens)
+
         self._status_cost = QLabel("$0.0000")
         self._status_cost.setObjectName("statusCost")
         bar.addPermanentWidget(self._status_cost)
+
+        # Monospace for numbers — prevents jitter as digit widths change.
+        mono_font = QFont("Consolas, 'Cascadia Mono', monospace")
+        mono_font.setStyleHint(QFont.StyleHint.Monospace)
+        mono_font.setPointSize(11)
+        self._status_tokens.setFont(mono_font)
+        self._status_cost.setFont(mono_font)
 
     def _refresh_status_bar(self) -> None:
         # Left: workspace path (truncated), model, thinking

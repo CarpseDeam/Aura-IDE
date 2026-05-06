@@ -156,6 +156,9 @@ QComboBox, QLineEdit, QTextEdit, QPlainTextEdit {{
 QTextEdit, QPlainTextEdit {{
     padding: 6px 8px;
 }}
+QTextEdit:focus, QPlainTextEdit:focus {{
+    border: 1px solid {ACCENT};
+}}
 QComboBox::drop-down {{
     border: none;
     width: 18px;
@@ -349,7 +352,7 @@ QStatusBar QLabel {{
     padding: 0 8px;
 }}
 QStatusBar QLabel#statusCost {{
-    color: {FG};
-    font-weight: 600;
+    color: {FG_DIM};
+    font-weight: 500;
 }}
 """
