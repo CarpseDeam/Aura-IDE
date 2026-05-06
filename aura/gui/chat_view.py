@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
 )
 
 from aura.gui.diff_dialog import render_unified_diff
+from aura.gui.aura_widget import AuraWidget
 from aura.gui.theme import (
     ACCENT,
     BG,
@@ -1302,7 +1303,9 @@ class ChatView(QScrollArea):
     def begin_assistant(self) -> AssistantCard:
         card = AssistantCard(compact_tools=self._compact_tools)
         self._current_assistant = card
-        self._add_card(card)
+        wrapper = AuraWidget(card, aura_color=ACCENT, border_thickness=1)
+        self._add_card(wrapper)
+        wrapper.start_aura()
         return card
 
     def current_assistant(self) -> AssistantCard:
@@ -1379,6 +1382,10 @@ class ChatView(QScrollArea):
         if ac is None:
             return
         ac.finalize_content()
+        # Stop the spinning aura on the wrapper
+        wrapper = ac.parentWidget()
+        if isinstance(wrapper, AuraWidget):
+            wrapper.stop_aura()
 
     # ---- spec card / worker dispatch ------------------------------------
 

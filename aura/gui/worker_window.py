@@ -24,7 +24,8 @@ from aura.gui.chat_view import (
     ToolCallCard,
     _fade_in_widget,
 )
-from aura.gui.theme import BG, BORDER, DANGER, FG_DIM, SUCCESS
+from aura.gui.aura_widget import AuraWidget
+from aura.gui.theme import BG, BORDER, DANGER, FG_DIM, SUCCESS, WARN
 
 
 CODE_WRITER_NAMES = frozenset({"write_file", "edit_file"})
@@ -104,7 +105,9 @@ class WorkerWindow(QWidget):
     def begin_assistant(self) -> AssistantCard:
         card = AssistantCard()
         self._current_assistant = card
-        self._add_card(card)
+        wrapper = AuraWidget(card, aura_color=SUCCESS, border_thickness=1)
+        self._add_card(wrapper)
+        wrapper.start_aura()
         return card
 
     def append_reasoning(self, text: str) -> None:
@@ -165,9 +168,12 @@ class WorkerWindow(QWidget):
         self._add_card(err)
 
     def worker_finished(self, ok: bool, summary: str) -> None:
-        # Finalize the last assistant card's markdown
+        # Stop the spinning aura on the current card
         ac = self._current_assistant
         if ac is not None:
+            wrapper = ac.parentWidget()
+            if isinstance(wrapper, AuraWidget):
+                wrapper.stop_aura()
             ac.finalize_content()
             self._current_assistant = None
 
@@ -183,6 +189,11 @@ class WorkerWindow(QWidget):
             )
 
     def worker_cancelled(self) -> None:
+        ac = self._current_assistant
+        if ac is not None:
+            wrapper = ac.parentWidget()
+            if isinstance(wrapper, AuraWidget):
+                wrapper.stop_aura()
         self._status_label.setText("Cancelled")
         self._status_label.setStyleSheet(
             f"color: {DANGER}; padding: 6px 12px; border-top: 1px solid {BORDER};"
