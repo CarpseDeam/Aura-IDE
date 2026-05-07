@@ -2,9 +2,9 @@
 
 <img src="media/AurA.ico" alt="Aura icon" width="64" height="64" align="right">
 
-**Desktop AI coding assistant for Godot 4 — powered by DeepSeek V4.**
+**Desktop AI coding assistant — powered by DeepSeek V4.**
 
-Aura is a desktop chat application that helps you troubleshoot and modify your Godot 4 codebase. You chat with an AI agent that can read your project files, search your codebase, propose code changes, and — when you approve — apply those changes directly to disk. Think of it as a pair programmer that lives on your machine, with full awareness of your project.
+Aura is a desktop chat application that helps you troubleshoot and modify your codebase. You chat with an AI agent that can read your project files, search your codebase, propose code changes, and — when you approve — apply those changes directly to disk. Think of it as a pair programmer that lives on your machine, with full awareness of your project.
 
 It is built with [PySide6](https://pypi.org/project/PySide6/) (Qt for Python) and talks to [DeepSeek's API](https://platform.deepseek.com/) for reasoning and code generation. A local [Ollama](https://ollama.com/) vision model (`llama3.2-vision`) can preprocess screenshots you paste into the chat so the AI can "see" what's on your screen.
 
@@ -199,6 +199,6 @@ aura/
 
 ## License & Credits
 
-Aura is a personal/indie project. Built with ❤️ for the Godot community.
+Aura is a personal/indie project. Built with ❤️ for developers everywhere.
 
 The application icon is located at [`media/AurA.ico`](media/AurA.ico).
