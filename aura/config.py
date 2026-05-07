@@ -85,6 +85,14 @@ MAX_READ_BYTES = 200 * 1024
 # Cap on glob results.
 MAX_GLOB_RESULTS = 200
 
+# Token budget for the conversation context window. DeepSeek V4 models support
+# 64K tokens; we keep headroom for the model's response and misc overhead.
+MAX_CONTEXT_TOKENS = 60_000
+
+# When pruning old tool results, keep at most this many characters of the
+# original content. Longer results are replaced with a truncation marker.
+TRUNCATE_TOOL_RESULT_CHARS = 500
+
 SKIP_DIRS = {"__pycache__", ".venv", ".git", "node_modules", ".import", ".aura"}
 SKIP_FILE_SUFFIXES = {".import"}
 
