@@ -2,7 +2,7 @@
 
 <img src="media/AurA.ico" alt="Aura icon" width="64" height="64" align="right">
 
-**Desktop AI coding assistant — powered by DeepSeek V4.**
+**Desktop AI Orchestration IDE**
 
 Aura is a desktop chat application that helps you troubleshoot and modify your codebase. You chat with an AI agent that can read your project files, search your codebase, propose code changes, and — when you approve — apply those changes directly to disk. Think of it as a pair programmer that lives on your machine, with full awareness of your project.
 
