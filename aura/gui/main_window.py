@@ -124,6 +124,9 @@ class MainWindow(QMainWindow):
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self._toolbar)
         self._build_toolbar()
 
+        # ----- status bar -----
+        self._build_status_bar()
+
         # ----- splitter ----
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setHandleWidth(3)
@@ -169,9 +172,6 @@ class MainWindow(QMainWindow):
         splitter.setStretchFactor(2, 1)  # worker gets 1/2 of stretch
 
         self.setCentralWidget(splitter)
-
-        # ----- status bar -----
-        self._build_status_bar()
 
         # ----- wire bridge ↔ view -----
         self._bridge.started.connect(self._on_started)
@@ -304,6 +304,7 @@ class MainWindow(QMainWindow):
         planner_model_label.setStyleSheet(f"color: {FG_DIM};")
         planner_model_row.addWidget(planner_model_label)
         self._planner_model_combo = QComboBox()
+        self._worker_model_combo = QComboBox()
         self._populate_model_combos(self._settings.provider)
         self._planner_model_combo.setCurrentIndex(-1)  # will be set below
         self._planner_model_combo.currentIndexChanged.connect(self._refresh_status_bar)
@@ -331,9 +332,6 @@ class MainWindow(QMainWindow):
         self._worker_model_label = QLabel("Worker:")
         self._worker_model_label.setStyleSheet(f"color: {FG_DIM};")
         worker_model_row.addWidget(self._worker_model_label)
-        self._worker_model_combo = QComboBox()
-        # Same models as planner (same provider)
-        self._populate_model_combos(self._settings.provider, combo=self._worker_model_combo)
         self._worker_model_combo.setCurrentIndex(-1)  # will be set below
         self._worker_model_combo.currentIndexChanged.connect(self._on_sidebar_worker_model_changed)
         worker_model_row.addWidget(self._worker_model_combo, 1)
