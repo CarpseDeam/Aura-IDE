@@ -154,10 +154,11 @@ class MainWindow(QMainWindow):
         self._worker_window = WorkerWindow(parent=self)
         splitter.addWidget(self._worker_window)
 
-        splitter.setSizes([140, 840, 420])
+        w = self.width()
+        splitter.setSizes([min(200, w // 8), (w - min(200, w // 8)) // 2, (w - min(200, w // 8)) // 2])
         splitter.setStretchFactor(0, 0)  # workspace tree doesn't stretch
-        splitter.setStretchFactor(1, 2)  # chat gets 2/3 of stretch
-        splitter.setStretchFactor(2, 1)  # worker gets 1/3 of stretch
+        splitter.setStretchFactor(1, 1)  # chat gets 1/2 of stretch
+        splitter.setStretchFactor(2, 1)  # worker gets 1/2 of stretch
 
         self.setCentralWidget(splitter)
 
@@ -258,7 +259,6 @@ class MainWindow(QMainWindow):
         frame = QFrame()
         frame.setObjectName("leftPane")
         frame.setMinimumWidth(160)
-        frame.setMaximumWidth(280)
         layout = QVBoxLayout(frame)
         layout.setContentsMargins(0, 8, 0, 8)
         layout.setSpacing(4)

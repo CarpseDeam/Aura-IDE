@@ -74,8 +74,8 @@ QMainWindow, QWidget {{
 
 QSplitter::handle {{
     background: {BORDER};
-    width: 1px;
-    height: 1px;
+    width: 3px;
+    height: 3px;
 }}
 
 QToolBar {{

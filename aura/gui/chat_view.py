@@ -401,7 +401,7 @@ class AssistantCard(QFrame):
             scroll_area = QScrollArea()
             scroll_area.setWidgetResizable(True)
             scroll_area.setWidget(self._reasoning_label)
-            scroll_area.setMaximumHeight(250)
+            scroll_area.setMaximumHeight(500)
             scroll_area.setStyleSheet("QScrollArea { border: none; background: transparent; }")
             self._reasoning_scroll_area = scroll_area
             section = _CollapsibleSection(
@@ -419,17 +419,13 @@ class AssistantCard(QFrame):
     def reasoning_done(self) -> None:
         if self._reasoning_section is not None:
             self._reasoning_section.set_title("Thinking")
-            # If content has started, collapse reasoning by default.
-            if self._content_label.isVisible():
-                self._reasoning_section.set_open(False)
+            # Keep reasoning open so the user can review it
 
     def append_content(self, text: str) -> None:
         self._stop_thinking_animation()
         if not self._content_label.isVisible():
             self._content_label.setVisible(True)
-            # First content -> collapse reasoning.
-            if self._reasoning_section is not None:
-                self._reasoning_section.set_open(False)
+            # Keep reasoning visible so user can see the thinking
         self._content_label.append(text)
 
     # ---- compact tool status --------------------------------------------
