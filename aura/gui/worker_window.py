@@ -111,7 +111,7 @@ class TodoListWidget(QFrame):
 
             # Monospace font
             font = label.font()
-            font.setFamily("Cascadia Mono, Consolas, monospace")
+            font.setFamily("Geist Mono, JetBrains Mono, Consolas, monospace")
             font.setStyleHint(QFont.StyleHint.Monospace)
             font.setPointSize(11)
             label.setFont(font)
@@ -192,6 +192,7 @@ class WorkerWindow(QWidget):
 
         # Internal state
         self._current_assistant: AssistantCard | None = None
+        self._current_aura: AuraWidget | None = None
         self._tool_cards: dict[str, ToolCallCard | CodeWriterCard] = {}
         self._terminal_cards: dict[str, TerminalCard] = {}
         self._tool_owner: dict[str, AssistantCard] = {}
@@ -226,11 +227,14 @@ class WorkerWindow(QWidget):
         card = AssistantCard()
         self._current_assistant = card
         wrapper = AuraWidget(card, glow_color=SUCCESS, glow_spread=16)
+        self._current_aura = wrapper
         self._add_card(wrapper)
         wrapper.start_aura()
         return card
 
     def append_reasoning(self, text: str) -> None:
+        if self._current_aura is not None:
+            self._current_aura.set_glow_state("thinking")
         self._current_or_new_assistant().append_reasoning(text)
         self._scroll_to_bottom()
 
@@ -243,6 +247,8 @@ class WorkerWindow(QWidget):
     def add_tool_call(self, worker_tool_id: str, name: str) -> None:
         if name == "update_todo_list":
             return  # Pinned todo widget handles this, don't render a tool card.
+        if self._current_aura is not None:
+            self._current_aura.set_glow_state("coding")
         ac = self._current_or_new_assistant()
         if name == "run_terminal_command":
             card: TerminalCard = TerminalCard(command="...")
@@ -338,6 +344,7 @@ class WorkerWindow(QWidget):
                 wrapper.stop_aura()
             ac.finalize_content()
             self._current_assistant = None
+            self._current_aura = None
 
         if ok:
             self._status_label.setText("Completed")
@@ -356,6 +363,8 @@ class WorkerWindow(QWidget):
             wrapper = ac.parentWidget()
             if isinstance(wrapper, AuraWidget):
                 wrapper.stop_aura()
+            self._current_assistant = None
+            self._current_aura = None
         self._status_label.setText("Cancelled")
         self._status_label.setStyleSheet(
             f"color: {DANGER}; padding: 6px 12px; border-top: 1px solid {BORDER};"
@@ -375,6 +384,7 @@ class WorkerWindow(QWidget):
                 if w is not None:
                     w.deleteLater()
         self._current_assistant = None
+        self._current_aura = None
         self._tool_cards.clear()
         self._terminal_cards.clear()
         self._tool_owner.clear()

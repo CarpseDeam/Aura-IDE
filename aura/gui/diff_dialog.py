@@ -126,9 +126,7 @@ class DiffApprovalDialog(QDialog):
 
     def _populate_diff(self, request: ApprovalRequest) -> None:
         if request.is_new_file:
-            text = f"--- /dev/null\n+++ b/{request.rel_path}\n"
-            for line in request.new_content.splitlines():
-                text += f"+{line}\n"
+            text = "\n".join(f"+{line}" for line in request.new_content.splitlines())
         else:
             text = render_unified_diff(
                 request.old_content, request.new_content, request.rel_path
@@ -156,11 +154,11 @@ class DiffApprovalDialog(QDialog):
                 QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor
             )
             line = cursor.selectedText()
-            if line.startswith("+") and not line.startswith("+++"):
+            if line.startswith("+"):
                 cursor.setCharFormat(add_fmt)
-            elif line.startswith("-") and not line.startswith("---"):
+            elif line.startswith("-"):
                 cursor.setCharFormat(del_fmt)
-            elif line.startswith("@@") or line.startswith("+++") or line.startswith("---"):
+            elif line.startswith("@@"):
                 cursor.setCharFormat(head_fmt)
             cursor.clearSelection()
             if not cursor.movePosition(QTextCursor.MoveOperation.NextBlock):

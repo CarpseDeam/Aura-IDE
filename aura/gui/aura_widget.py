@@ -56,7 +56,7 @@ class AuraWidget(QWidget):
         self.update()
 
     def transition_glow_color(self, new_color: str, duration: int = 600) -> None:
-        \"\"\"Animate the glow color from its current value to *new_color*.\"\"\"
+        """Animate the glow color from its current value to *new_color*."""
         target = QColor(new_color)
         start = QColor(self._glow_color)
         anim = QVariantAnimation(self)
@@ -75,7 +75,7 @@ class AuraWidget(QWidget):
         anim.start()
 
     def set_glow_state(self, state: str) -> None:
-        \"\"\"Transition the glow to a semantic colour state.\"\"\"
+        """Transition the glow to a semantic colour state."""
         colors = {
             "thinking": "#9b30ff",
             "coding": "#00e5ff",

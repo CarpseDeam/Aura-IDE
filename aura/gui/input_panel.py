@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from aura.gui.theme import BG_RAISED, DANGER, FG, FG_DIM
+from aura.gui.theme import BG_RAISED, BORDER, DANGER, FG, FG_DIM
 
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}

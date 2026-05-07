@@ -90,7 +90,8 @@ def _render_code_block(lang: str, code: str) -> str:
             "padding:8px; font-family:'Geist Mono','JetBrains Mono',monospace; "
             "font-size:12px; white-space:pre;"
         ),
-    )    return highlight(code, lexer, formatter)
+    )
+    return highlight(code, lexer, formatter)
 
 
 def _render_markdown_with_code(text: str) -> str:
@@ -1618,9 +1619,10 @@ class ChatView(QScrollArea):
             self._current_aura.stop_aura()
 
     def stop_current_aura(self) -> None:
-        \"\"\"Stop the breathing glow on the current assistant card without finalizing content.\"\"\"
+        """Stop the breathing glow on the current assistant card without finalizing content."""
         if self._current_aura is not None:
             self._current_aura.stop_aura()
+
     # ---- spec card / worker dispatch ------------------------------------
 
     def add_spec_card(
