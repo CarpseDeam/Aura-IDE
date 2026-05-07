@@ -135,6 +135,11 @@ def has_api_key() -> bool:
     return bool(os.environ.get(ENV_API_KEY))
 
 
+def icon_path() -> Path:
+    """Return the absolute path to the application window icon (AurA.ico)."""
+    return Path(__file__).resolve().parent / "icon.ico"
+
+
 # ---- App settings (persisted JSON) ----------------------------------------
 
 

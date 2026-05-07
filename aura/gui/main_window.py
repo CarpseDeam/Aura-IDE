@@ -35,6 +35,7 @@ from aura.config import (
     ModelId,
     ThinkingMode,
     cost_usd,
+    icon_path,
     load_settings,
     load_workspace_root,
     save_settings,
@@ -84,6 +85,7 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle(APP_NAME)
+        self.setWindowIcon(QIcon(str(icon_path())))
         self.resize(1400, 900)
 
         # Settings.

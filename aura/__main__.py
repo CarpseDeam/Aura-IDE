@@ -5,10 +5,10 @@ import os
 import sys
 
 from PySide6.QtCore import QCoreApplication, Qt
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtGui import QGuiApplication, QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 
-from aura.config import APP_NAME, ENV_API_KEY
+from aura.config import APP_NAME, ENV_API_KEY, icon_path
 from aura.gui.main_window import MainWindow
 from aura.gui.theme import apply_theme
 
@@ -25,6 +25,7 @@ def main() -> int:
     )
 
     app = QApplication(sys.argv)
+    app.setWindowIcon(QIcon(str(icon_path())))
     apply_theme(app)
 
     if not os.environ.get(ENV_API_KEY):
