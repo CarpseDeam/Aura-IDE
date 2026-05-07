@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QGraphicsOpacityEffect,
     QLabel,
     QScrollArea,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -148,6 +149,7 @@ class WorkerWindow(QWidget):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
+        self.setMinimumWidth(200)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -171,6 +173,7 @@ class WorkerWindow(QWidget):
 
         container = QWidget()
         container.setStyleSheet("background: transparent;")
+        container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.MinimumExpanding)
         self._layout = QVBoxLayout(container)
         self._layout.setContentsMargins(12, 12, 12, 12)
         self._layout.setSpacing(12)

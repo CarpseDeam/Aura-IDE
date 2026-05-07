@@ -767,8 +767,6 @@ class CodeWriterCard(QFrame):
             f"background: {BG}; color: {FG}; border: 1px solid {BORDER}; "
             "border-radius: 4px; padding: 6px;"
         )
-        self._code_view.setMinimumHeight(100)
-        self._code_view.setMaximumHeight(400)
         body_layout.addWidget(self._code_view)
 
         # Raw args fallback (shown when JSON can't be parsed yet)
@@ -843,6 +841,7 @@ class CodeWriterCard(QFrame):
             self._code_view.setPlainText(content)
             # Attempt Pygments highlighting
             self._highlight_code()
+            self._auto_size_code_view()
 
         # Show the body on first successful parse
         if not self._body.isVisible():
@@ -876,6 +875,11 @@ class CodeWriterCard(QFrame):
             style="monokai",
             noclasses=True,
             nowrap=True,
+            prestyles=(
+                f"background:{BG}; border:none; "
+                "font-family:Consolas,'Cascadia Mono',monospace; "
+                "font-size:12px; line-height:1.4;"
+            ),
         )
         code = self._code_view.toPlainText()
         try:
@@ -885,6 +889,13 @@ class CodeWriterCard(QFrame):
             doc.setHtml(highlighted)
         except Exception:
             pass  # Fall back to plain text
+
+    def _auto_size_code_view(self) -> None:
+        doc = self._code_view.document()
+        doc.setDocumentMargin(4)
+        doc_height = doc.size().height() + 8  # small padding
+        doc_height = max(60, min(doc_height, 400))  # clamp between 60-400
+        self._code_view.setFixedHeight(int(doc_height))
 
     def set_result(self, ok: bool, result_text: str) -> None:
         self._state = self.STATE_DONE if ok else self.STATE_FAILED

@@ -154,10 +154,10 @@ class MainWindow(QMainWindow):
         self._worker_window = WorkerWindow(parent=self)
         splitter.addWidget(self._worker_window)
 
-        splitter.setSizes([240, 600, 400])
+        splitter.setSizes([140, 840, 420])
         splitter.setStretchFactor(0, 0)  # workspace tree doesn't stretch
-        splitter.setStretchFactor(1, 1)  # chat stretches
-        splitter.setStretchFactor(2, 0)  # worker doesn't stretch (initial)
+        splitter.setStretchFactor(1, 2)  # chat gets 2/3 of stretch
+        splitter.setStretchFactor(2, 1)  # worker gets 1/3 of stretch
 
         self.setCentralWidget(splitter)
 
@@ -257,8 +257,8 @@ class MainWindow(QMainWindow):
     def _build_left_pane(self) -> QFrame:
         frame = QFrame()
         frame.setObjectName("leftPane")
-        frame.setMinimumWidth(220)
-        frame.setMaximumWidth(420)
+        frame.setMinimumWidth(160)
+        frame.setMaximumWidth(280)
         layout = QVBoxLayout(frame)
         layout.setContentsMargins(0, 8, 0, 8)
         layout.setSpacing(4)
@@ -729,6 +729,7 @@ class MainWindow(QMainWindow):
     def _on_api_error(self, status: int, message: str) -> None:
         title = f"API Error {status}" if status > 0 else "Error"
         self._chat.add_error(title, message, show_retry=True)
+        self._chat.stop_current_aura()
 
     def _on_retry(self) -> None:
         if self._bridge.is_running():
