@@ -1593,6 +1593,10 @@ class ChatView(QScrollArea):
         if ac is None:
             return
         ac.finalize_content()
+        # Stop the breathing glow — content is complete, no need to pulse anymore.
+        wrapper = ac.parentWidget()
+        if isinstance(wrapper, AuraWidget):
+            wrapper.stop_aura()
 
     def stop_current_aura(self) -> None:
         """Stop the breathing glow on the current assistant card without finalizing content."""
