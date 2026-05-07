@@ -24,6 +24,9 @@ def main() -> int:
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
 
+    # Force software OpenGL to suppress startup window flicker on Windows.
+    QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_UseSoftwareOpenGL, True)
+
     app = QApplication(sys.argv)
     app.setWindowIcon(QIcon(str(icon_path())))
     apply_theme(app)
