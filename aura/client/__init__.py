@@ -6,6 +6,7 @@ from aura.client.events import (
     Done,
     Event,
     ReasoningDelta,
+    TerminalOutput,
     ToolCallArgsDelta,
     ToolCallEnd,
     ToolCallStart,
@@ -27,4 +28,5 @@ __all__ = [
     "ApiError",
     "ToolResult",
     "WorkerDispatchRequested",
+    "TerminalOutput",
 ]
