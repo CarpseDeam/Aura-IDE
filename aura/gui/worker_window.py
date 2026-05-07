@@ -301,6 +301,13 @@ class WorkerWindow(QWidget):
             card.set_result(ok, result)
         self._scroll_to_bottom()
 
+    def append_terminal_output(self, worker_tool_id: str, text: str) -> None:
+        """Append a chunk of stdout/stderr to the TerminalCard in the worker window."""
+        card = self._terminal_cards.get(worker_tool_id)
+        if card is not None:
+            card.append_output(text)
+        self._scroll_to_bottom()
+
     def add_diff_card(
         self,
         worker_tool_id: str,
