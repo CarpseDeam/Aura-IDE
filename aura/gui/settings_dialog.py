@@ -281,10 +281,10 @@ class SettingsDialog(QDialog):
         _fill(self._planner_model_combo, self._settings.default_planner_model)
         _fill(self._worker_model_combo, self._settings.default_worker_model)
 
-        # Reset thinking combos to provider defaults.
+        # Reset thinking combos to user's saved preference.
         self._thinking_combo.blockSignals(True)
         self._thinking_combo.setCurrentIndex(
-            [v for _, v in _THINKING_ITEMS].index(cfg.default_thinking)
+            [v for _, v in _THINKING_ITEMS].index(self._settings.default_thinking)
         )
         self._thinking_combo.blockSignals(False)
 
