@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Callable, Literal
 
 from aura.conversation.tools.backup import backup_existing
-from aura.conversation.tools.fs_read import glob_files, list_directory, read_file
+from aura.conversation.tools.fs_read import glob_files, list_directory, read_file, read_file_outline
 from aura.conversation.tools.grep import grep_files
 from aura.conversation.tools.fs_write import propose_edit, propose_write
 from aura.conversation.tools.web import web_search, web_fetch
@@ -106,6 +106,30 @@ READ_TOOL_DEFS: list[dict[str, Any]] = [
                     }
                 },
                 "required": ["pattern"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_file_outline",
+            "description": (
+                "Read a file's structural outline — class names, function signatures, "
+                "and import/extends lines — without loading the full content. "
+                "Uses AST parsing for Python files and regex for GDScript/shaders. "
+                "Returns a compact text summary plus structured data. "
+                "Use this when you need to understand a file's structure without "
+                "reading every line. The path argument MUST be relative to the workspace root."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Workspace-relative path, e.g. 'scripts/player.gd'.",
+                    }
+                },
+                "required": ["path"],
             },
         },
     },
@@ -516,6 +540,9 @@ class ToolRegistry:
                         include_pattern=args.get("include_pattern"),
                     ),
                 )
+            if name == "read_file_outline":
+                target = self._resolve_in_root(args.get("path", ""))
+                return ToolExecResult(ok=True, payload=read_file_outline(self._root, target))
             if name == "web_search":
                 if self._mode != "researcher":
                     return ToolExecResult(ok=False, payload={"ok": False, "error": "Tool web_search is only available in researcher mode."})
