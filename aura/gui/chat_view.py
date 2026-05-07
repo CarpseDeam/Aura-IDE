@@ -15,7 +15,7 @@ import json
 import re
 from dataclasses import dataclass
 
-from PySide6.QtCore import QAbstractAnimation, QEasingCurve, QPropertyAnimation, Qt, QSize, QVariantAnimation, Signal
+from PySide6.QtCore import QAbstractAnimation, QEasingCurve, QPropertyAnimation, Qt, QSize, QTimer, QVariantAnimation, Signal
 from PySide6.QtGui import QFont, QPixmap, QTextCharFormat, QTextCursor, QTextDocument
 from PySide6.QtWidgets import (
     QFrame,
@@ -282,8 +282,9 @@ class UserCard(QFrame):
 
 
 class _StreamLabel(QLabel):
-    """Word-wrapping label that grows as text is appended. Cheap, good enough for
-    streaming display before the final markdown render."""
+    """Word-wrapping label that grows as text is appended. Tokens accumulate in a
+    buffer and the UI is flushed at most 30 fps to keep the GUI thread responsive
+    on fast token streams."""
 
     def __init__(self, italic: bool = False) -> None:
         super().__init__()
@@ -299,9 +300,23 @@ class _StreamLabel(QLabel):
         # Use rich text so we can control line-height during streaming.
         self.setTextFormat(Qt.TextFormat.RichText)
         self._buf = ""
+        self._dirty = False
+
+        # Throttle: update UI at most 30fps (33ms interval)
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._flush)
+        self._timer.setInterval(33)  # ~30 fps
+        self._timer.start()
 
     def append(self, text: str) -> None:
         self._buf += text
+        self._dirty = True
+        # Don't call setText here — let the timer flush it
+
+    def _flush(self) -> None:
+        if not self._dirty:
+            return
+        self._dirty = False
         if self._italic:
             escaped = _html.escape(self._buf).replace("\n", "<br/>")
             self.setText(
@@ -310,6 +325,9 @@ class _StreamLabel(QLabel):
             )
         else:
             self.setText(_wrap_body_text(self._buf, FG))
+
+    def stop_timer(self) -> None:
+        self._timer.stop()
 
     def text_buffer(self) -> str:
         return self._buf
@@ -548,6 +566,7 @@ class AssistantCard(QFrame):
         # Swap the streaming label out for the rich container
         idx = self._outer.indexOf(self._content_label)
         if idx >= 0:
+            self._content_label.stop_timer()
             self._content_label.hide()
             # Insert new container at the same position
             self._outer.insertWidget(idx, container)

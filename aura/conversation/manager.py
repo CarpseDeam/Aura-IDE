@@ -401,16 +401,23 @@ class ConversationManager:
         output_lines: list[str] = []
 
         try:
-            proc = subprocess.Popen(
-                command,
-                shell=True,
-                cwd=str(self._tools.workspace_root),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
-            )
+            popen_kwargs: dict[str, Any] = {
+                "shell": True,
+                "cwd": str(self._tools.workspace_root),
+                "stdout": subprocess.PIPE,
+                "stderr": subprocess.STDOUT,
+                "text": True,
+                "bufsize": 1,
+            }
+            if sys.platform == "win32":
+                popen_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+                # STARTUPINFO with SW_HIDE definitively suppresses any console flash
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                startupinfo.wShowWindow = subprocess.SW_HIDE
+                popen_kwargs["startupinfo"] = startupinfo
+
+            proc = subprocess.Popen(command, **popen_kwargs)
 
             try:
                 for line in iter(proc.stdout.readline, ""):
