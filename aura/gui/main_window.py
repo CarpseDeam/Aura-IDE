@@ -700,6 +700,12 @@ class MainWindow(QMainWindow):
             self._apply_planner_worker_mode_to_bridge(self._settings.planner_worker_mode)
             self._bridge.set_worker_model(self._settings.default_worker_model)
             self._bridge.set_worker_thinking(self._settings.default_worker_thinking)
+            self._bridge.set_temperature(self._settings.temperature)
+            self._bridge.set_custom_system_prompts(
+                self._settings.system_prompt,
+                self._settings.planner_system_prompt,
+                self._settings.worker_system_prompt,
+            )
             self._refresh_status_bar()
 
     def _apply_planner_worker_mode_to_bridge(self, enabled: bool) -> None:
@@ -1075,6 +1081,14 @@ class MainWindow(QMainWindow):
         self._bridge.history.messages = list(loaded.history.messages)
         self._current_conversation_path = loaded.path
         self._reset_session_usage()
+
+        # Propagate custom prompts to bridge for future mode switches
+        self._bridge.set_custom_system_prompts(
+            self._settings.system_prompt,
+            self._settings.planner_system_prompt,
+            self._settings.worker_system_prompt,
+        )
+        self._bridge.set_temperature(self._settings.temperature)
 
         # If the loaded conversation has a different provider, update the bridge.
         if loaded.provider != self._settings.provider:
