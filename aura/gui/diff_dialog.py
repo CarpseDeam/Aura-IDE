@@ -4,7 +4,7 @@ from __future__ import annotations
 import difflib
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont, QTextCharFormat, QTextCursor
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
@@ -17,16 +17,18 @@ from PySide6.QtWidgets import (
 )
 
 from aura.conversation.tools.registry import ApprovalDecision, ApprovalRequest
+
+try:
+    from aura.gui.syntax import DiffHighlighter, language_from_path
+    _HAVE_PYGMENTS = True
+except ImportError:
+    _HAVE_PYGMENTS = False
+
 from aura.gui.theme import (
     BG,
-    BG_ALT,
     BORDER,
-    DIFF_ADD_BG,
-    DIFF_DEL_BG,
-    DANGER,
     FG,
     FG_DIM,
-    SUCCESS,
 )
 
 
@@ -88,6 +90,11 @@ class DiffApprovalDialog(QDialog):
         )
         layout.addWidget(self._diff_view, 1)
 
+        # Attach syntax highlighter for the diff view
+        if _HAVE_PYGMENTS:
+            lang = language_from_path(request.rel_path) or "text"
+            self._highlighter = DiffHighlighter(self._diff_view.document(), lang)
+
         self._populate_diff(request)
 
         # Checkbox row — approve all remaining writes this session
@@ -134,40 +141,6 @@ class DiffApprovalDialog(QDialog):
             if not text.strip():
                 text = "(no textual difference)"
         self._diff_view.setPlainText(text)
-        self._highlight_hunks()
-
-    def _highlight_hunks(self) -> None:
-        doc = self._diff_view.document()
-        cursor = QTextCursor(doc)
-        add_fmt = QTextCharFormat()
-        add_fmt.setBackground(self._color(DIFF_ADD_BG))
-        add_fmt.setForeground(self._color(SUCCESS))
-        del_fmt = QTextCharFormat()
-        del_fmt.setBackground(self._color(DIFF_DEL_BG))
-        del_fmt.setForeground(self._color(DANGER))
-        head_fmt = QTextCharFormat()
-        head_fmt.setForeground(self._color(FG_DIM))
-        cursor.movePosition(QTextCursor.MoveOperation.Start)
-        while not cursor.atEnd():
-            cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-            cursor.movePosition(
-                QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor
-            )
-            line = cursor.selectedText()
-            if line.startswith("+"):
-                cursor.setCharFormat(add_fmt)
-            elif line.startswith("-"):
-                cursor.setCharFormat(del_fmt)
-            elif line.startswith("@@"):
-                cursor.setCharFormat(head_fmt)
-            cursor.clearSelection()
-            if not cursor.movePosition(QTextCursor.MoveOperation.NextBlock):
-                break
-
-    @staticmethod
-    def _color(hex_str: str):
-        from PySide6.QtGui import QColor
-        return QColor(hex_str)
 
     def _on_apply(self) -> None:
         if self._approve_all_checkbox.isChecked():

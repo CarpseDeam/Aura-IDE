@@ -15,7 +15,7 @@ import json
 import re
 
 from PySide6.QtCore import QEasingCurve, QPropertyAnimation, Qt, QTimer, QVariantAnimation, Signal
-from PySide6.QtGui import QFont, QPixmap, QTextCharFormat, QTextCursor, QTextDocument
+from PySide6.QtGui import QFont, QPixmap, QTextDocument
 from PySide6.QtWidgets import (
     QFrame,
     QGraphicsOpacityEffect,
@@ -38,8 +38,6 @@ from aura.gui.theme import (
     BG_ALT,
     BORDER,
     DANGER,
-    DIFF_ADD_BG,
-    DIFF_DEL_BG,
     FG,
     FG_BODY_USER,
     FG_DIM,
@@ -56,7 +54,7 @@ try:
     from pygments.formatters import HtmlFormatter
     from pygments.lexers import TextLexer, get_lexer_by_name
     from pygments.util import ClassNotFound
-    from aura.gui.syntax import PygmentsHighlighter, language_from_path
+    from aura.gui.syntax import PygmentsHighlighter, DiffHighlighter, language_from_path
     _HAVE_PYGMENTS = True
 except ImportError:  # pragma: no cover — declared in pyproject, but soft-fail.
     _HAVE_PYGMENTS = False
@@ -1021,36 +1019,14 @@ class DiffCard(QFrame):
             text = "\n".join(f"+{line}" for line in new.splitlines())
         else:
             text = render_unified_diff(old, new, rel_path) or "(no textual difference)"
+
+        # Native syntax highlighting via DiffHighlighter
+        if _HAVE_PYGMENTS:
+            lang = language_from_path(rel_path) or "text"
+            self._diff_highlighter = DiffHighlighter(diff_view.document(), lang)
+
         diff_view.setPlainText(text)
-        self._highlight(diff_view)
         layout.addWidget(diff_view)
-
-    @staticmethod
-    def _highlight(view: QPlainTextEdit) -> None:
-        from PySide6.QtGui import QColor
-        doc = view.document()
-        cursor = QTextCursor(doc)
-        add_fmt = QTextCharFormat()
-        add_fmt.setBackground(QColor(DIFF_ADD_BG))
-        add_fmt.setForeground(QColor(SUCCESS))
-        del_fmt = QTextCharFormat()
-        del_fmt.setBackground(QColor(DIFF_DEL_BG))
-        del_fmt.setForeground(QColor(DANGER))
-        cursor.movePosition(QTextCursor.MoveOperation.Start)
-        while True:
-            cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-            cursor.movePosition(
-                QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor
-            )
-            line = cursor.selectedText()
-            if line.startswith("+"):
-                cursor.setCharFormat(add_fmt)
-            elif line.startswith("-"):
-                cursor.setCharFormat(del_fmt)
-            cursor.clearSelection()
-            if not cursor.movePosition(QTextCursor.MoveOperation.NextBlock):
-                break
-
 
 class SpecCard(QFrame):
     """Worker dispatch spec — collapsible, with Dispatch/Edit/Cancel buttons.

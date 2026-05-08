@@ -7,6 +7,8 @@ from pygments.lexers import get_lexer_by_name, TextLexer
 from pygments.util import ClassNotFound
 from pygments.styles import get_style_by_name
 
+from aura.gui.theme import DIFF_ADD_BG, DIFF_DEL_BG, FG_DIM, SUCCESS, DANGER
+
 
 def language_from_path(path: str) -> str:
     """Return a pygments-compatible language identifier from a file path."""
@@ -98,3 +100,70 @@ class PygmentsHighlighter(QSyntaxHighlighter):
 
         self._format_cache[token] = fmt
         return fmt
+
+
+class DiffHighlighter(PygmentsHighlighter):
+    """QSyntaxHighlighter for unified diff views.
+
+    Strips the leading +/-/space prefix before feeding text to the Pygments
+    lexer, then applies token colours starting at offset 1.  The whole line
+    gets a diff background (green for +, red for -) and the prefix character
+    itself is coloured with SUCCESS / DANGER.
+    """
+
+    def __init__(self, parent, language: str = "text"):
+        super().__init__(parent, language)
+
+        # Whole-line background only (token foregrounds shine through)
+        self._add_bg = QTextCharFormat()
+        self._add_bg.setBackground(QColor(DIFF_ADD_BG))
+        self._del_bg = QTextCharFormat()
+        self._del_bg.setBackground(QColor(DIFF_DEL_BG))
+
+        # Prefix character formats
+        self._add_prefix = QTextCharFormat()
+        self._add_prefix.setForeground(QColor(SUCCESS))
+        self._add_prefix.setBackground(QColor(DIFF_ADD_BG))
+        self._del_prefix = QTextCharFormat()
+        self._del_prefix.setForeground(QColor(DANGER))
+        self._del_prefix.setBackground(QColor(DIFF_DEL_BG))
+
+        # Hunk header format
+        self._hunk_fmt = QTextCharFormat()
+        self._hunk_fmt.setForeground(QColor(FG_DIM))
+
+    def highlightBlock(self, text: str) -> None:
+        if not text:
+            return
+
+        # Hunk headers (e.g. "@@ -1,4 +1,5 @@")
+        if text.startswith("@@"):
+            self.setFormat(0, len(text), self._hunk_fmt)
+            return
+
+        prefix = text[0] if text else ""
+        if prefix not in ("+", "-", " "):
+            # Fallback: no diff prefix — use normal pygments highlighting
+            super().highlightBlock(text)
+            return
+
+        code = text[1:]
+
+        # Whole-line diff background
+        if prefix == "+":
+            self.setFormat(0, len(text), self._add_bg)
+            self.setFormat(0, 1, self._add_prefix)
+        elif prefix == "-":
+            self.setFormat(0, len(text), self._del_bg)
+            self.setFormat(0, 1, self._del_prefix)
+
+        # Token-level syntax highlighting on the code portion (offset = 1)
+        if code:
+            offset = 1
+            for token, content in self._lexer.get_tokens(code):
+                length = len(content)
+                if length == 0:
+                    continue
+                fmt = self._get_format(token)
+                self.setFormat(offset, length, fmt)
+                offset += length
