@@ -39,7 +39,6 @@ class DiffCard(QFrame):
         diff_view.setReadOnly(True)
         diff_view.setFont(_mono_font(9))
         diff_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
-        diff_view.setMaximumHeight(360)
         diff_view.setStyleSheet(
             f"background: {BG}; color: {FG}; border: 1px solid {BORDER}; "
             "border-radius: 4px; padding: 6px;"
@@ -55,4 +54,10 @@ class DiffCard(QFrame):
             self._diff_highlighter = DiffHighlighter(diff_view.document(), lang)
 
         diff_view.setPlainText(text)
+        
+        # Auto-size to content
+        doc = diff_view.document()
+        doc_height = int(doc.size().height() + 16)
+        diff_view.setFixedHeight(max(100, min(doc_height, 600)))
+        
         layout.addWidget(diff_view)

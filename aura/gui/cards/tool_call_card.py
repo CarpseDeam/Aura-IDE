@@ -53,7 +53,7 @@ class ToolCallCard(QFrame):
             f"background: {BG}; color: {FG_DIM}; border: 1px solid {BORDER}; "
             "border-radius: 4px; padding: 6px;"
         )
-        self._args_view.setMaximumHeight(160)
+        self._args_view.setFixedHeight(80)
         body_layout.addWidget(self._args_view)
 
         self._result_view = QPlainTextEdit()
@@ -63,7 +63,7 @@ class ToolCallCard(QFrame):
             f"background: {BG}; color: {FG}; border: 1px solid {BORDER}; "
             "border-radius: 4px; padding: 6px;"
         )
-        self._result_view.setMaximumHeight(220)
+        self._result_view.setFixedHeight(100)
         self._result_view.setVisible(False)
         body_layout.addWidget(self._result_view)
 
@@ -115,12 +115,20 @@ class ToolCallCard(QFrame):
     def update_args(self, text: str) -> None:
         self._args_text = text
         self._args_view.setPlainText(text)
+        self._auto_size_view(self._args_view, 80, 400)
         self._refresh_header()
 
     def set_result(self, ok: bool, result_text: str) -> None:
         self._state = self.STATE_DONE if ok else self.STATE_FAILED
         self._result_view.setPlainText(result_text)
         self._result_view.setVisible(True)
+        self._auto_size_view(self._result_view, 100, 500)
         if not ok:
             self._body.setVisible(True)  # auto-expand failed
         self._refresh_header()
+
+    def _auto_size_view(self, view: QPlainTextEdit, min_h: int, max_h: int) -> None:
+        doc = view.document()
+        doc_height = doc.size().height() + 12
+        clamped = max(min_h, min(doc_height, max_h))
+        view.setFixedHeight(int(clamped))

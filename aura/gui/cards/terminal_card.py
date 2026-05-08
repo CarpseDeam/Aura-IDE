@@ -63,7 +63,7 @@ class TerminalCard(QFrame):
             "border-radius: 4px; padding: 6px; "
             "font-family: 'Geist Mono', 'JetBrains Mono', monospace;"
         )
-        self._output_view.setMaximumHeight(400)
+        self._output_view.setFixedHeight(120)
         body_layout.addWidget(self._output_view)
 
         self._body.setVisible(True)  # Open by default for streaming
@@ -120,6 +120,13 @@ class TerminalCard(QFrame):
         # Auto-scroll to bottom
         sb = self._output_view.verticalScrollBar()
         sb.setValue(sb.maximum())
+        self._auto_size_output_view()
+
+    def _auto_size_output_view(self) -> None:
+        doc = self._output_view.document()
+        doc_height = doc.size().height() + 12
+        clamped = max(120, min(doc_height, 600))
+        self._output_view.setFixedHeight(int(clamped))
 
     def set_result(self, exit_code: int) -> None:
         """Set the final state based on the exit code."""

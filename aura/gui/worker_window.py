@@ -316,8 +316,7 @@ class ArtifactCard(QFrame):
             f"QPlainTextEdit {{ background: {BG}; "
             f"border: none; padding: 8px; }}"
         )
-        self._code_view.setMinimumHeight(60)
-        self._code_view.setMaximumHeight(400)
+        self._code_view.setFixedHeight(120)
         self._stack.addWidget(self._code_view)  # index 0
 
         # Attach native syntax highlighter — must be stored as an instance
@@ -445,6 +444,7 @@ class ArtifactCard(QFrame):
         # Auto-scroll to bottom
         sb = self._code_view.verticalScrollBar()
         sb.setValue(sb.maximum())
+        self._auto_size_code_view()
 
     def _flush_typing(self) -> None:
         """Immediately reveal all remaining typing content."""
@@ -452,6 +452,12 @@ class ArtifactCard(QFrame):
             self._typing_timer.stop()
         self._typing_position = len(self._typing_target)
         self._refresh_code_view()
+
+    def _auto_size_code_view(self) -> None:
+        doc = self._code_view.document()
+        doc_height = doc.size().height() + 12
+        clamped = max(120, min(doc_height, 600))
+        self._code_view.setFixedHeight(int(clamped))
 
     # ---- Button handlers --------------------------------------------------
 
@@ -494,6 +500,7 @@ class ArtifactCard(QFrame):
     def _refresh_code_view(self) -> None:
         """Update the code view with current content."""
         self._code_view.setPlainText(self._content)
+        self._auto_size_code_view()
 
     def _refresh_preview(self) -> None:
         """Render the preview in the QWebEngineView based on language."""
@@ -579,7 +586,7 @@ class WorkerLogCard(QFrame):
             f"QPlainTextEdit {{ background: transparent; border: none; color: {FG}; }}"
         )
         self._content_view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self._content_view.setMinimumHeight(40)
+        self._content_view.setFixedHeight(120)
         layout.addWidget(self._content_view)
 
         # Typewriter state
@@ -620,14 +627,14 @@ class WorkerLogCard(QFrame):
         # Adjust height based on content
         doc = self._content_view.document()
         height = int(doc.size().height() + 10)
-        self._content_view.setFixedHeight(max(40, min(height, 500)))
+        self._content_view.setFixedHeight(max(120, min(height, 600)))
 
     def clear(self) -> None:
         self._timer.stop()
         self._full_buffer = ""
         self._visible_buffer = ""
         self._content_view.setPlainText("")
-        self._content_view.setFixedHeight(40)
+        self._content_view.setFixedHeight(120)
 
 
 # ===========================================================================

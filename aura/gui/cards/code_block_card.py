@@ -45,9 +45,13 @@ class CodeBlockCard(QFrame):
             f"padding: 8px; border-radius: 4px; }}"
         )
         code_view.setPlainText(code)
-        code_view.setMinimumHeight(40)
-        code_view.setMaximumHeight(400)
-        code_view.document().setDocumentMargin(2)
+        
+        # Auto-size to content
+        doc = code_view.document()
+        doc.setDocumentMargin(2)
+        doc_height = int(doc.size().height() + 16)
+        code_view.setFixedHeight(max(80, min(doc_height, 600)))
+        
         layout.addWidget(code_view)
 
         # Attach native syntax highlighter — must be stored as an instance

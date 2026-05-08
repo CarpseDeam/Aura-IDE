@@ -124,9 +124,10 @@ class CodeWriterCard(QFrame):
     def _auto_size_code_view(self) -> None:
         doc = self._code_view.document()
         doc.setDocumentMargin(4)
-        doc_height = doc.size().height() + 8  # small padding
-        doc_height = max(60, min(doc_height, 400))  # clamp between 60-400
-        self._code_view.setFixedHeight(int(doc_height))
+        doc_height = doc.size().height() + 12
+        # Start at 120 (approx 7-8 lines), max out at 600
+        clamped = max(120, min(doc_height, 600))
+        self._code_view.setFixedHeight(int(clamped))
 
     def set_result(self, ok: bool) -> None:
         self._state = self.STATE_DONE if ok else self.STATE_FAILED
