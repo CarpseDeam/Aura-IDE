@@ -32,7 +32,6 @@ from PySide6.QtWidgets import (
 
 from aura.gui.diff_dialog import render_unified_diff
 from aura.gui.aura_widget import AuraWidget
-from aura.gui.syntax import PygmentsHighlighter
 from aura.gui.theme import (
     ACCENT,
     BG,
@@ -57,6 +56,7 @@ try:
     from pygments.formatters import HtmlFormatter
     from pygments.lexers import TextLexer, get_lexer_by_name
     from pygments.util import ClassNotFound
+    from aura.gui.syntax import PygmentsHighlighter, language_from_path
     _HAVE_PYGMENTS = True
 except ImportError:  # pragma: no cover — declared in pyproject, but soft-fail.
     _HAVE_PYGMENTS = False
@@ -885,10 +885,10 @@ class CodeWriterCard(QFrame):
             self._path_label.setVisible(True)
             self._refresh_header()
             # Update highlighter language from file extension
-            if self._highlighter is not None:
-                ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
-                if ext:
-                    self._highlighter.set_language(ext)
+            if self._highlighter is not None and _HAVE_PYGMENTS:
+                lang = language_from_path(path)
+                if lang:
+                    self._highlighter.set_language(lang)
 
         # Extract code content
         content = parsed.get(self._content_key, "")
@@ -912,10 +912,10 @@ class CodeWriterCard(QFrame):
                 self._path_label.setVisible(True)
                 self._refresh_header()
                 # Also update highlighter from file extension
-                if self._highlighter is not None:
-                    ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
-                    if ext:
-                        self._highlighter.set_language(ext)
+                if self._highlighter is not None and _HAVE_PYGMENTS:
+                    lang = language_from_path(path)
+                    if lang:
+                        self._highlighter.set_language(lang)
 
     def _auto_size_code_view(self) -> None:
         doc = self._code_view.document()

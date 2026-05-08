@@ -30,6 +30,9 @@ from PySide6.QtWidgets import (
 
 from aura.gui.aura_widget import AuraWidget
 from aura.gui.theme import BG, BORDER, FG, FG_DIM, SUCCESS, WARN
+from aura.gui.syntax import PygmentsHighlighter, language_from_path as _language_from_path
+
+_HAVE_PYGMENTS = True
 
 # ---------------------------------------------------------------------------
 # Load mermaid.min.js at module init time so we can embed it in preview HTML.
@@ -42,36 +45,6 @@ try:
     _MERMAID_JS = _MERMAID_JS_PATH.read_text(encoding="utf-8")
 except (FileNotFoundError, OSError):
     pass  # Fall back to CDN in the HTML template.
-
-
-# ---------------------------------------------------------------------------
-# Native Pygments-based syntax highlighter (shared with chat_view)
-# ---------------------------------------------------------------------------
-
-try:
-    from aura.gui.syntax import PygmentsHighlighter
-    _HAVE_PYGMENTS = True
-except ImportError:
-    PygmentsHighlighter = None  # type: ignore[assignment]
-    _HAVE_PYGMENTS = False
-
-
-def _language_from_path(path: str) -> str:
-    """Return a pygments-compatible language identifier from a file path."""
-    ext = Path(path).suffix.lower()
-    lang_map = {
-        ".html": "html", ".svg": "svg", ".md": "markdown",
-        ".py": "python", ".pyi": "python", ".gd": "python",  # GDScript ≈ Python highlighting
-        ".js": "javascript", ".ts": "typescript", ".tsx": "tsx",
-        ".jsx": "jsx", ".css": "css", ".scss": "scss", ".json": "json",
-        ".yaml": "yaml", ".yml": "yaml", ".toml": "toml",
-        ".rs": "rust", ".go": "go", ".c": "c", ".cpp": "cpp", ".h": "c",
-        ".hpp": "cpp", ".java": "java", ".kt": "kotlin", ".swift": "swift",
-        ".sh": "bash", ".bash": "bash", ".zsh": "bash",
-        ".txt": "text", ".cfg": "ini", ".ini": "ini",
-        ".xml": "xml", ".sql": "sql", ".r": "r",
-    }
-    return lang_map.get(ext, "text")  # fallback to plain text
 
 
 def _is_previewable(language: str) -> bool:
