@@ -20,6 +20,7 @@ from typing import Any, Callable, Literal
 
 from aura.conversation.tools.backup import backup_existing
 from aura.conversation.tools.fs_read import glob_files, list_directory, read_file, read_file_outline
+from aura.conversation.tools.git_tools import git_diff, git_status
 from aura.conversation.tools.grep import grep_files
 from aura.conversation.tools.fs_write import propose_edit, propose_write
 from aura.conversation.tools.web import web_search, web_fetch
@@ -116,7 +117,7 @@ READ_TOOL_DEFS: list[dict[str, Any]] = [
             "description": (
                 "Read a file's structural outline — class names, function signatures, "
                 "and import/extends lines — without loading the full content. "
-                "Uses AST parsing for Python files and regex for GDScript/shaders. "
+                "Uses AST parsing for Python files."
                 "Returns a compact text summary plus structured data. "
                 "Use this when you need to understand a file's structure without "
                 "reading every line. The path argument MUST be relative to the workspace root."
@@ -172,6 +173,55 @@ READ_TOOL_DEFS: list[dict[str, Any]] = [
                     },
                 },
                 "required": ["pattern"],
+            },
+        },
+    },
+]
+
+GIT_TOOL_DEFS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "git_status",
+            "description": (
+                "Show the current git working tree status. Returns the current branch "
+                "name and lists staged, unstaged, and untracked files. Use this before "
+                "finishing a coding task to review what files were changed, or to verify "
+                "the repository state before making edits."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "git_diff",
+            "description": (
+                "Show the git diff of changes in the workspace. By default shows "
+                "unstaged changes (working tree vs HEAD). Set staged=true to see "
+                "changes staged for commit. Optionally restrict to a single file "
+                "with the path parameter. Output is capped at 200KB. Use this to "
+                "review your own changes for mistakes before finishing, or to verify "
+                "exactly what was modified."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "staged": {
+                        "type": "boolean",
+                        "description": "If true, show changes staged for commit. Default false (working tree changes).",
+                        "default": False,
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Optional workspace-relative path to restrict the diff to a single file.",
+                    },
+                },
+                "required": [],
             },
         },
     },
@@ -464,14 +514,14 @@ class ToolRegistry:
         # Read-only is the safety floor — strips writes AND dispatch (since
         # there's nothing for a worker to do without writes).
         if self._read_only:
-            return list(READ_TOOL_DEFS)
+            return list(READ_TOOL_DEFS) + list(GIT_TOOL_DEFS)
         if self._mode == "researcher":
             return list(WEB_TOOL_DEFS)
         if self._mode == "planner":
-            return list(READ_TOOL_DEFS) + [dict(DISPATCH_TOOL_DEF)] + list(RESEARCH_TOOL_DEFS)
+            return list(READ_TOOL_DEFS) + [dict(DISPATCH_TOOL_DEF)] + list(RESEARCH_TOOL_DEFS) + list(GIT_TOOL_DEFS)
         if self._mode == "worker":
-            return list(READ_TOOL_DEFS) + list(WRITE_TOOL_DEFS) + [dict(WORKER_TODO_TOOL_DEF)] + [dict(TERMINAL_TOOL_DEF)]
-        return list(READ_TOOL_DEFS) + list(WRITE_TOOL_DEFS) + [dict(TERMINAL_TOOL_DEF)]
+            return list(READ_TOOL_DEFS) + list(WRITE_TOOL_DEFS) + [dict(WORKER_TODO_TOOL_DEF)] + [dict(TERMINAL_TOOL_DEF)] + list(GIT_TOOL_DEFS)
+        return list(READ_TOOL_DEFS) + list(WRITE_TOOL_DEFS) + [dict(TERMINAL_TOOL_DEF)] + list(GIT_TOOL_DEFS)
 
     # ---- path resolution ---------------------------------------------------
 
@@ -543,6 +593,12 @@ class ToolRegistry:
             if name == "read_file_outline":
                 target = self._resolve_in_root(args.get("path", ""))
                 return ToolExecResult(ok=True, payload=read_file_outline(self._root, target))
+            if name == "git_status":
+                return ToolExecResult(ok=True, payload=git_status(self._root))
+            if name == "git_diff":
+                staged = bool(args.get("staged", False))
+                path = args.get("path")
+                return ToolExecResult(ok=True, payload=git_diff(self._root, staged=staged, path=path))
             if name == "web_search":
                 if self._mode != "researcher":
                     return ToolExecResult(ok=False, payload={"ok": False, "error": "Tool web_search is only available in researcher mode."})
