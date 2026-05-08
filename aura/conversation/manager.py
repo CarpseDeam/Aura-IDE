@@ -312,76 +312,11 @@ class ConversationManager:
             self._history.append_tool_result(tool_call_id, payload)
             on_event(ToolResult(tool_call_id=tool_call_id, name="run_research", ok=False, result=payload))
             return
-            
-        # Emit a parent ToolCallStart for run_research so the GUI shows a card
-        on_event(ToolCallStart(index=0, id=tool_call_id, name="run_research"))
-
-        try:
-            research_history = History()
-            research_history.set_system(
-                "You are an autonomous web research agent. Use the provided web_search and web_fetch "
-                "tools to gather information. Synthesize your findings into a comprehensive "
-                "report answering the user's objective. Be concise but thorough."
-            )
-            research_history.append_user_text(f"Research Objective: {objective}")
-            
-            research_registry = ToolRegistry(
-                workspace_root=self._tools.workspace_root,
-                read_only=False,
-                mode="researcher"
-            )
-            
-            manager = ConversationManager(
-                client=self._client,
-                history=research_history,
-                tool_registry=research_registry
-            )
-            
-            def _research_on_event(ev: Event) -> None:
-                if isinstance(ev, ToolCallStart):
-                    print(f"  [Researcher] Started tool: {ev.name}")
-                    on_event(ev)
-                if isinstance(ev, ToolCallArgsDelta):
-                    on_event(ev)
-                if isinstance(ev, ToolCallEnd):
-                    on_event(ev)
-                if isinstance(ev, ToolResult):
-                    print(f"  [Researcher] Tool result [{ev.name}]: ok={ev.ok}")
-                    on_event(ev)
-                if isinstance(ev, Usage):
-                    on_event(ev)
-                
-            from aura.conversation.tools.registry import ApprovalDecision
-            manager.send(
-                on_event=_research_on_event,
-                approval_cb=lambda req: ApprovalDecision(action="reject"),
-                cancel_event=cancel_event,
-                model=model,
-                thinking="off",
-                dispatch_cb=None,
-                temperature=temperature,
-            )
-            
-            api_msgs = research_history.for_api()
-            if api_msgs and api_msgs[-1]["role"] == "assistant":
-                content = api_msgs[-1].get("content") or "Research completed but no content generated."
-            else:
-                content = "Research failed to generate a response."
-                
-            payload = json.dumps({"ok": True, "report": content}, ensure_ascii=False)
-            
-        except Exception as exc:
-            payload = json.dumps({"ok": False, "error": f"research failed: {exc}"})
-            
+        
+        # Web search has been removed and is awaiting rebuild.
+        payload = json.dumps({"ok": False, "error": "Web search has been removed and is being rebuilt. Research is temporarily unavailable."})
         self._history.append_tool_result(tool_call_id, payload)
-        on_event(
-            ToolResult(
-                tool_call_id=tool_call_id,
-                name="run_research",
-                ok=json.loads(payload).get("ok", False),
-                result=payload,
-            )
-        )
+        on_event(ToolResult(tool_call_id=tool_call_id, name="run_research", ok=False, result=payload))
 
     def _apply_circuit_breaker(self, name: str, args: dict, ok: bool, result_payload: str) -> str:
         """Track tool failures and inject warnings if they repeat consecutively."""

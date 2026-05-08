@@ -24,8 +24,6 @@ from aura.conversation.tools.fs_read import glob_files, list_directory, read_fil
 from aura.conversation.tools.git_tools import git_diff, git_status
 from aura.conversation.tools.grep import grep_files
 from aura.conversation.tools.fs_write import propose_edit, propose_write
-from aura.conversation.tools.web import web_search, web_fetch
-
 ApprovalAction = Literal["approve", "reject", "reject_all", "approve_all"]
 RegistryMode = Literal["single", "planner", "worker"]
 
@@ -462,49 +460,6 @@ TERMINAL_TOOL_DEF: dict[str, Any] = {
     },
 }
 
-WEB_TOOL_DEFS: list[dict[str, Any]] = [
-    {
-        "type": "function",
-        "function": {
-            "name": "web_search",
-            "description": "Search the web for a given query and return a list of matching URLs and snippets.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "The search query.",
-                    },
-                    "max_results": {
-                        "type": "integer",
-                        "description": "Maximum number of results to return.",
-                        "default": 5,
-                    }
-                },
-                "required": ["query"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "web_fetch",
-            "description": "Fetch the contents of a specific URL and return the readable text.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "url": {
-                        "type": "string",
-                        "description": "The URL to fetch.",
-                    }
-                },
-                "required": ["url"],
-            },
-        },
-    }
-]
-
-
 @dataclass
 class ToolExecResult:
     ok: bool
@@ -559,7 +514,7 @@ class ToolRegistry:
         if self._read_only:
             return list(READ_TOOL_DEFS) + list(GIT_TOOL_DEFS)
         if self._mode == "researcher":
-            return list(WEB_TOOL_DEFS)
+            return []  # web tools removed; awaiting rebuild
         if self._mode == "planner":
             return list(READ_TOOL_DEFS) + [dict(DISPATCH_TOOL_DEF)] + list(RESEARCH_TOOL_DEFS) + list(GIT_TOOL_DEFS)
         if self._mode == "worker":
@@ -664,17 +619,7 @@ class ToolRegistry:
                 staged = bool(args.get("staged", False))
                 path = args.get("path")
                 return ToolExecResult(ok=True, payload=git_diff(self._root, staged=staged, path=path))
-            if name == "web_search":
-                if self._mode != "researcher":
-                    return ToolExecResult(ok=False, payload={"ok": False, "error": "Tool web_search is only available in researcher mode."})
-                query = args.get("query", "")
-                max_results = args.get("max_results", 5)
-                return ToolExecResult(ok=True, payload=web_search(query, max_results))
-            if name == "web_fetch":
-                if self._mode != "researcher":
-                    return ToolExecResult(ok=False, payload={"ok": False, "error": "Tool web_fetch is only available in researcher mode."})
-                url = args.get("url", "")
-                return ToolExecResult(ok=True, payload=web_fetch(url))
+
             if name in ("write_file", "edit_file"):
                 if self._read_only:
                     return ToolExecResult(
