@@ -21,7 +21,16 @@ from typing import Any, Callable, Literal
 from aura.conversation.tools.backup import backup_existing
 from aura.conversation.tools.find_usages import find_usages
 from aura.conversation.tools.fs_read import glob_files, list_directory, read_file, read_file_outline
-from aura.conversation.tools.git_tools import git_branch_list, git_diff, git_log, git_log_file, git_show, git_status
+from aura.conversation.tools.git_tools import (
+    git_branch_list,
+    git_diff,
+    git_log,
+    git_log_file,
+    git_show,
+    git_stash_list,
+    git_stash_show,
+    git_status,
+)
 from aura.conversation.tools.grep import grep_files
 from aura.conversation.tools.fs_write import propose_edit, propose_write
 from aura.conversation.tools.web import web_fetch, web_search
@@ -357,6 +366,45 @@ GIT_TOOL_DEFS: list[dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "git_stash_list",
+            "description": (
+                "List all stashes in the repository. Returns a list of stashes "
+                "with index, context (branch/commit), and message. Use this "
+                "to see what work-in-progress is currently stashed."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "git_stash_show",
+            "description": (
+                "Show the diff of a specific stash by its index. Returns the "
+                "full diff of the stashed changes. Output is capped at 200KB. "
+                "Use this to inspect the contents of a stash before deciding "
+                "to apply it."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "index": {
+                        "type": "integer",
+                        "description": "The index of the stash to show (e.g. 0 for the most recent stash). Default: 0.",
+                        "default": 0,
+                    },
+                },
                 "required": [],
             },
         },
@@ -782,6 +830,13 @@ class ToolRegistry:
 
             if name == "git_branch_list":
                 return ToolExecResult(ok=True, payload=git_branch_list(self._root))
+
+            if name == "git_stash_list":
+                return ToolExecResult(ok=True, payload=git_stash_list(self._root))
+
+            if name == "git_stash_show":
+                index = int(args.get("index", 0))
+                return ToolExecResult(ok=True, payload=git_stash_show(self._root, index=index))
 
             if name == "web_search":
                 query = args.get("query", "")

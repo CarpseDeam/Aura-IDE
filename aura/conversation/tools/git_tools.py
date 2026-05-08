@@ -419,3 +419,97 @@ def git_branch_list(
         return {"ok": False, "error": "git branch_list timed out."}
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
+
+
+def git_stash_list(
+    workspace_root: Path,
+) -> dict[str, Any]:
+    """List all stashes in the repository.
+
+    Returns a list of stashes with index, branch, and description.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "stash", "list"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            cwd=str(workspace_root),
+            **get_subprocess_kwargs(),
+        )
+
+        if result.returncode != 0:
+            return {"ok": False, "error": result.stderr.strip() or "git stash list failed."}
+
+        stashes: list[dict[str, str]] = []
+        for line in result.stdout.strip().splitlines():
+            if not line:
+                continue
+            # Format: stash@{0}: WIP on master: <message>
+            import re
+            match = re.match(r"stash@\{(\d+)\}: (.*?): (.*)", line)
+            if match:
+                stashes.append({
+                    "index": match.group(1),
+                    "context": match.group(2).strip(),
+                    "message": match.group(3).strip(),
+                })
+            else:
+                stashes.append({"raw": line})
+
+        return {"ok": True, "stashes": stashes, "count": len(stashes)}
+    except FileNotFoundError:
+        return {"ok": False, "error": "git is not installed or not found on PATH."}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "git stash list timed out."}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+def git_stash_show(
+    workspace_root: Path,
+    index: int = 0,
+) -> dict[str, Any]:
+    """Show the diff of a specific stash.
+
+    Returns the diff of the stash at the given index (default 0).
+    Output is capped at 200KB.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "stash", "show", "-p", f"stash@{{{index}}}"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            cwd=str(workspace_root),
+            **get_subprocess_kwargs(),
+        )
+
+        if result.returncode != 0:
+            return {"ok": False, "error": result.stderr.strip() or "git stash show failed."}
+
+        stdout = result.stdout
+        max_bytes = 200_000
+        encoded = stdout.encode("utf-8")
+        truncated = len(encoded) > max_bytes
+
+        if truncated:
+            sliced = encoded[:max_bytes]
+            last_nl = sliced.rfind(b"\n")
+            if last_nl > 0:
+                sliced = sliced[:last_nl]
+            while sliced:
+                try:
+                    sliced.decode("utf-8")
+                    break
+                except UnicodeDecodeError:
+                    sliced = sliced[:-1]
+            stdout = sliced.decode("utf-8") + "\n... [truncated at 200KB]\n"
+
+        return {"ok": True, "diff": stdout, "truncated": truncated}
+    except FileNotFoundError:
+        return {"ok": False, "error": "git is not installed or not found on PATH."}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "git stash show timed out."}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
