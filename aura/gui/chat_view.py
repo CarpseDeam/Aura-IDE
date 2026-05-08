@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 
 from aura.gui.diff_dialog import render_unified_diff
 from aura.gui.aura_widget import AuraWidget
+from aura.gui.controllers import ToolStreamController
 from aura.gui.theme import (
     ACCENT,
     BG,
@@ -716,35 +717,23 @@ class ToolCallCard(QFrame):
     def _summarize_args(self) -> str:
         if not self._args_text:
             return ""
-        try:
-            parsed = json.loads(self._args_text)
-        except json.JSONDecodeError:
-            return self._args_text[:60].replace("\n", " ")
-        if isinstance(parsed, dict):
-            for key in ("path", "pattern"):
-                if key in parsed and isinstance(parsed[key], str):
-                    return f'"{parsed[key]}"'
-            return ", ".join(f"{k}=…" for k in parsed)
-        return str(parsed)[:60]
+        # Best-effort extraction without full JSON parse if it's already a clean string
+        if '"path"' in self._args_text:
+            m = re.search(r'"path"\s*:\s*"([^"]+)"', self._args_text)
+            if m: return f'"{m.group(1)}"'
+        if '"pattern"' in self._args_text:
+            m = re.search(r'"pattern"\s*:\s*"([^"]+)"', self._args_text)
+            if m: return f'"{m.group(1)}"'
+        return self._args_text[:60].replace("\n", " ")
 
-    def append_args(self, fragment: str) -> None:
-        self._args_text += fragment
-        # Try to pretty-print, fall back to raw.
-        try:
-            pretty = json.dumps(json.loads(self._args_text), indent=2, ensure_ascii=False)
-            self._args_view.setPlainText(pretty)
-        except json.JSONDecodeError:
-            self._args_view.setPlainText(self._args_text)
+    def update_args(self, text: str) -> None:
+        self._args_text = text
+        self._args_view.setPlainText(text)
         self._refresh_header()
 
     def set_result(self, ok: bool, result_text: str) -> None:
         self._state = self.STATE_DONE if ok else self.STATE_FAILED
-        self._result_text = result_text
-        try:
-            pretty = json.dumps(json.loads(result_text), indent=2, ensure_ascii=False)
-            self._result_view.setPlainText(pretty)
-        except json.JSONDecodeError:
-            self._result_view.setPlainText(result_text)
+        self._result_view.setPlainText(result_text)
         self._result_view.setVisible(True)
         if not ok:
             self._body.setVisible(True)  # auto-expand failed
@@ -767,10 +756,7 @@ class CodeWriterCard(QFrame):
         self.setObjectName("toolCard")
         self._name = name
         self._path: str = ""
-        self._args_text = ""
         self._state = self.STATE_RUNNING
-        self._content_key = "content" if name == "write_file" else "new_str"
-        self._last_content_len = 0
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 8, 12, 8)
@@ -817,18 +803,6 @@ class CodeWriterCard(QFrame):
         if _HAVE_PYGMENTS:
             self._highlighter = PygmentsHighlighter(self._code_view.document(), "text")
 
-        # Raw args fallback (shown when JSON can't be parsed yet)
-        self._raw_view = QPlainTextEdit()
-        self._raw_view.setReadOnly(True)
-        self._raw_view.setFont(_mono_font(9))
-        self._raw_view.setStyleSheet(
-            f"background: {BG}; color: {FG_MUTED}; border: 1px solid {BORDER}; "
-            "border-radius: 4px; padding: 6px;"
-        )
-        self._raw_view.setMaximumHeight(160)
-        self._raw_view.setVisible(False)
-        body_layout.addWidget(self._raw_view)
-
         self._body.setVisible(False)
         layout.addWidget(self._body)
 
@@ -872,46 +846,12 @@ class CodeWriterCard(QFrame):
             if lang:
                 self._highlighter.set_language(lang)
 
-    def append_args(self, fragment: str) -> None:
-        self._args_text += fragment
-        # Try to parse JSON
-        try:
-            parsed = json.loads(self._args_text)
-        except json.JSONDecodeError:
-            # JSON incomplete — show raw args in dim style
-            self._raw_view.setVisible(True)
-            self._raw_view.setPlainText(self._args_text)
-            # Also try a best-effort path extraction from partial JSON
-            self._try_extract_partial_path()
-            return
-
-        # JSON parsed successfully — hide raw view
-        self._raw_view.setVisible(False)
-
-        # Extract path
-        path = parsed.get("path", "")
-        if path:
-            self.set_target_path(path)
-
-        # Extract code content
-        content = parsed.get(self._content_key, "")
-        if content:
-            self._code_view.setPlainText(content)
-            self._auto_size_code_view()
-
-        # Show the body on first successful parse
+    def update_content(self, content: str) -> None:
+        """Update code content and adjust height."""
+        self._code_view.setPlainText(content)
+        self._auto_size_code_view()
         if not self._body.isVisible():
             self._body.setVisible(True)
-
-    def _try_extract_partial_path(self) -> None:
-        """Best-effort path extraction from partial JSON."""
-        import re
-
-        m = re.search(r'"path"\s*:\s*"([^"]+)"', self._args_text)
-        if m:
-            path = m.group(1)
-            if path and not self._path:
-                self.set_target_path(path)
 
     def _auto_size_code_view(self) -> None:
         doc = self._code_view.document()
@@ -920,12 +860,13 @@ class CodeWriterCard(QFrame):
         doc_height = max(60, min(doc_height, 400))  # clamp between 60-400
         self._code_view.setFixedHeight(int(doc_height))
 
-    def set_result(self, ok: bool, result_text: str) -> None:
+    def set_result(self, ok: bool) -> None:
         self._state = self.STATE_DONE if ok else self.STATE_FAILED
         if not ok:
             # Auto-expand body on failure
             self._body.setVisible(True)
         self._refresh_header()
+
 
 
 class CodeBlockCard(QFrame):
@@ -1398,6 +1339,8 @@ class ChatView(QScrollArea):
         self._spec_cards: dict[str, SpecCard] = {}
         # Map tool_call_id -> TerminalCard.
         self._terminal_cards: dict[str, TerminalCard] = {}
+        # Map tool_call_id -> ToolStreamController.
+        self._controllers: dict[str, ToolStreamController] = {}
         self._empty_hint: QLabel | None = None
         self._scroll_anim: QPropertyAnimation | None = None
         self._compact_tools: bool = False
@@ -1459,6 +1402,7 @@ class ChatView(QScrollArea):
         self._tool_owner.clear()
         self._spec_cards.clear()
         self._terminal_cards.clear()
+        self._controllers.clear()
         self._compact_tool_names.clear()
         self._empty_hint = None
         self._show_empty_hint()
@@ -1518,6 +1462,11 @@ class ChatView(QScrollArea):
             self._compact_tool_names[tool_call_id] = name
             self._scroll_to_bottom()
             return
+        
+        # Instantiate controller
+        controller = ToolStreamController(name, parent=self)
+        self._controllers[tool_call_id] = controller
+
         ac = self.current_assistant()
         if name == "run_terminal_command":
             card = TerminalCard(command="...")
@@ -1527,30 +1476,41 @@ class ChatView(QScrollArea):
             ac._tool_cluster_layout.addWidget(card)
             _fade_in_widget(card)
             self._tool_owner[tool_call_id] = ac
-            self._scroll_to_bottom()
-            return
-        ac.add_tool_card(tool_call_id, name)
-        self._tool_owner[tool_call_id] = ac
+            
+            # Wire terminal signals
+            controller.command_resolved.connect(card.set_command)
+            controller.args_updated.connect(lambda text: card.append_output(f"\n[args updated: {text}]\n") if False else None) # Terminal card usually doesn't show args in body
+            controller.result_finalized.connect(lambda d: card.set_result(d.get("exit_code", -1)))
+            
+        elif name in ("write_file", "edit_file"):
+            card = CodeWriterCard(name)
+            if not ac._tool_cluster.isVisible():
+                ac._tool_cluster.setVisible(True)
+            ac._tool_cluster_layout.addWidget(card)
+            self._tool_owner[tool_call_id] = ac
+            
+            # Wire code writer signals
+            controller.path_resolved.connect(card.set_target_path)
+            controller.content_updated.connect(card.update_content)
+            controller.state_changed.connect(lambda s: card.set_result(s == "done"))
+        
+        else:
+            card = ac.add_tool_card(tool_call_id, name)
+            self._tool_owner[tool_call_id] = ac
+            if card is not None:
+                # Wire generic tool card signals
+                controller.args_updated.connect(card.update_args)
+                controller.result_finalized_text.connect(lambda text: card.set_result(controller._state == "done", text))
+
         self._scroll_to_bottom()
 
     def append_tool_args(self, tool_call_id: str, fragment: str) -> None:
         if self._compact_tools:
             return
-        # Check for terminal card first
-        term_card = self._terminal_cards.get(tool_call_id)
-        if term_card is not None:
-            # Try to extract command from partial/complete JSON
-            import re as _re
-            m = _re.search(r'"command"\s*:\s*"([^"]*)', fragment)
-            if m:
-                cmd = m.group(1)
-                if cmd and cmd != "...":
-                    term_card.set_command(cmd)
-            return
-        ac = self._tool_owner.get(tool_call_id) or self.current_assistant()
-        card = ac.get_tool_card(tool_call_id)
-        if card is not None:
-            card.append_args(fragment)
+        controller = self._controllers.get(tool_call_id)
+        if controller:
+            controller.append_fragment(fragment)
+            self._scroll_to_bottom()
 
     def set_tool_result(self, tool_call_id: str, ok: bool, result_text: str) -> None:
         if self._compact_tools:
@@ -1558,20 +1518,11 @@ class ChatView(QScrollArea):
             ac = self.current_assistant()
             ac.notify_compact_tool_done(name)
             return
-        # Check for terminal card first
-        term_card = self._terminal_cards.get(tool_call_id)
-        if term_card is not None:
-            try:
-                parsed = json.loads(result_text)
-                exit_code = parsed.get("exit_code", -1)
-                term_card.set_result(exit_code)
-            except (json.JSONDecodeError, TypeError):
-                term_card.set_result(-1)
-            return
-        ac = self._tool_owner.get(tool_call_id) or self.current_assistant()
-        card = ac.get_tool_card(tool_call_id)
-        if card is not None:
-            card.set_result(ok, result_text)
+        
+        controller = self._controllers.pop(tool_call_id, None)
+        if controller:
+            controller.finalize(ok, result_text)
+            self._scroll_to_bottom()
 
     def append_terminal_output(self, tool_call_id: str, text: str) -> None:
         """Append a chunk of stdout/stderr to the TerminalCard."""

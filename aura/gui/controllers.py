@@ -19,10 +19,14 @@ class ToolStreamController(QObject):
     command_resolved = Signal(str)
     # Emitted whenever the "content" or "new_str" field grows
     content_updated = Signal(str)
+    # Emitted whenever arguments are updated (pretty-printed if possible)
+    args_updated = Signal(str)
     # Emitted when the tool state changes ("running", "done", "failed")
     state_changed = Signal(str)
     # Emitted when the tool call is finished with the full result
     result_finalized = Signal(dict)
+    # Emitted when the tool call is finished with a formatted result string
+    result_finalized_text = Signal(str)
 
     def __init__(self, tool_name: str, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -62,11 +66,15 @@ class ToolStreamController(QObject):
                 self._command = m_cmd.group(1)
                 self.command_resolved.emit(self._command)
 
-        # 2. Try full JSON parse to get content updates
+        # 2. Try full JSON parse to get content updates and pretty-printed args
         try:
             parsed = json.loads(self._buffer)
             if not isinstance(parsed, dict):
                 return
+
+            # Emit pretty-printed args
+            pretty = json.dumps(parsed, indent=2, ensure_ascii=False)
+            self.args_updated.emit(pretty)
 
             # Update path if we haven't already (or if it changed, though rare)
             path = parsed.get("path")
@@ -92,7 +100,8 @@ class ToolStreamController(QObject):
                 self.content_updated.emit(content)
 
         except json.JSONDecodeError:
-            # Buffer is still incomplete JSON
+            # Buffer is still incomplete JSON — emit raw buffer for now
+            self.args_updated.emit(self._buffer)
             pass
 
     def finalize(self, ok: bool, result_text: str) -> None:
@@ -101,9 +110,13 @@ class ToolStreamController(QObject):
         self.state_changed.emit(self._state)
 
         result_dict: dict[str, Any] = {}
+        formatted_result = result_text
         try:
             result_dict = json.loads(result_text)
+            if isinstance(result_dict, dict):
+                formatted_result = json.dumps(result_dict, indent=2, ensure_ascii=False)
         except json.JSONDecodeError:
             result_dict = {"raw_result": result_text}
 
         self.result_finalized.emit(result_dict)
+        self.result_finalized_text.emit(formatted_result)

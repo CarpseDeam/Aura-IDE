@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 )
 
 from aura.gui.aura_widget import AuraWidget
+from aura.gui.controllers import ToolStreamController
 from aura.gui.theme import BG, BORDER, FG, FG_DIM, SUCCESS, WARN
 from aura.gui.syntax import PygmentsHighlighter, language_from_path as _language_from_path
 
@@ -585,7 +586,7 @@ class AuraPlayground(QWidget):
 
         # Internal state
         self._artifacts: dict[str, ArtifactCard] = {}
-        self._write_tools: dict[str, dict] = {}
+        self._controllers: dict[str, ToolStreamController] = {}
         self._artifact_counter = 0
         self._auras: dict[str, AuraWidget] = {}
         self._worker_banner: QLabel | None = None
@@ -635,7 +636,7 @@ class AuraPlayground(QWidget):
             card.deleteLater()
         self._artifacts.clear()
         self._auras.clear()
-        self._write_tools.clear()
+        self._controllers.clear()
         self._artifact_counter = 0
         # Show a pulsing "Worker active" banner while the worker starts up
         if self._worker_banner is None:
@@ -665,122 +666,43 @@ class AuraPlayground(QWidget):
         so the user sees a "target lock" even before the first args arrive.
         """
         if name in ("write_file", "edit_file"):
-            self._write_tools[worker_tool_id] = {
-                "name": name,
-                "buffered_args": "",
-                "last_content_len": 0,
-                "path": "",
-                "content": "",
-            }
+            controller = ToolStreamController(name, parent=self)
+            self._controllers[worker_tool_id] = controller
+
             # Eagerly create a placeholder card with a pulsing aura.
             artifact_id = f"file-{worker_tool_id}"
             if artifact_id not in self._artifacts:
                 label = "Targeting file…" if name == "write_file" else "Reading target…"
                 card = self._add_artifact(artifact_id, label, "text", "")
                 card.set_streaming(True)
+                
+                # Wire signals
+                controller.path_resolved.connect(card.set_target_path)
+                controller.content_updated.connect(card.update_content)
+                
+                # Special handling for edit_file transition
+                if name == "edit_file":
+                    # For edit_file, the controller might emit content_updated for new_str.
+                    # We also need to handle the old_str phase if possible.
+                    # Currently ToolStreamController only emits content_updated for new_str.
+                    pass
+
                 aura = self._auras.get(artifact_id)
                 if aura is not None:
                     aura.start_aura()
 
     def append_tool_args(self, worker_tool_id: str, fragment: str) -> None:
-        """Stream JSON args for write_file/edit_file, creating/updating ArtifactCards.
-
-        Supports ALL file types (not just .html/.svg/.md). For edit_file,
-        shows old_str first then transitions to streaming new_str.
-        """
-        info = self._write_tools.get(worker_tool_id)
-        if info is None:
-            return
-
-        info["buffered_args"] += fragment
-
-        try:
-            parsed = json.loads(info["buffered_args"])
-        except json.JSONDecodeError:
-            # Try regex to extract path from partial JSON (require closing quote)
-            m = re.search(r'"path"\s*:\s*"([^"]+)"', info["buffered_args"])
-            if m and not info["path"]:
-                info["path"] = m.group(1)
-                # Card was already created eagerly in add_tool_call —
-                # update its label and language now that we know the path.
-                artifact_id = f"file-{worker_tool_id}"
-                card = self._artifacts.get(artifact_id)
-                if card is not None:
-                    card.set_target_path(info["path"])
-
-            # Also try to extract old_str from partial JSON for edit_file
-            m_old = re.search(r'"old_str"\s*:\s*"', info["buffered_args"])
-            if m_old and "old_str_seen" not in info:
-                info["old_str_seen"] = True
-            return
-
-        # Successfully parsed full JSON
-        path = parsed.get("path", "")
-        if path:
-            info["path"] = path
-
-        artifact_id = f"file-{worker_tool_id}"
-        card = self._artifacts.get(artifact_id)
-
-        if info["name"] == "write_file":
-            content = parsed.get("content", "")
-            info["content"] = content
-            if card is not None:
-                # Update the label if path was just resolved in this parse
-                if path and card._label in ("Targeting file…", "text"):
-                    card.set_target_path(path)
-                card.update_content(content)
-            else:
-                # Fallback: card not yet created (shouldn't happen, but be safe)
-                language = _language_from_path(path) if path else "text"
-                label = Path(path).name if path else info["name"]
-                card = self._add_artifact(artifact_id, label, language, content)
-                card.set_streaming(True)
-                aura = self._auras.get(artifact_id)
-                if aura is not None:
-                    aura.start_aura()
-
-        elif info["name"] == "edit_file":
-            old_str = parsed.get("old_str", "")
-            new_str = parsed.get("new_str", "")
-            if card is None:
-                # Fallback: card not yet created
-                language = _language_from_path(path) if path else "text"
-                label = Path(path).name if path else info["name"]
-                card = self._add_artifact(
-                    artifact_id, label, language, old_str if old_str else ""
-                )
-                card.set_edit_phase("old")
-                card._edit_old_str = old_str
-                card._edit_new_str = ""
-            else:
-                # Update the label if path was just resolved
-                if path and card._label in ("Reading target…", "text"):
-                    card.set_target_path(path)
-                # If we haven't shown old_str yet, do it now
-                if old_str and not card._edit_old_str:
-                    card.set_edit_phase("old")
-                    card._edit_old_str = old_str
-                    card.update_content(old_str)
-            if new_str and (not card._edit_new_str):
-                # First chunk of new_str arrived — transition to showing new_str
-                card.set_edit_phase("new")
-                card.set_streaming(True)
-                aura = self._auras.get(artifact_id)
-                if aura is not None:
-                    aura.set_glow_state("coding")
-                    aura.start_aura()
-            if new_str:
-                card._edit_new_str = new_str
-                card.update_content(new_str)
-
-        self._scroll_to_bottom()
+        """Stream JSON args for write_file/edit_file, creating/updating ArtifactCards."""
+        controller = self._controllers.get(worker_tool_id)
+        if controller:
+            controller.append_fragment(fragment)
+            self._scroll_to_bottom()
 
     def set_tool_result(self, worker_tool_id: str, ok: bool, result: str) -> None:
         """Finalize streaming indicator; keep card on success, remove on failure."""
-        info = self._write_tools.pop(worker_tool_id, None)
-        if info is None:
-            return
+        controller = self._controllers.pop(worker_tool_id, None)
+        if controller:
+            controller.finalize(ok, result)
 
         artifact_id = f"file-{worker_tool_id}"
         card = self._artifacts.get(artifact_id)
@@ -834,7 +756,7 @@ class AuraPlayground(QWidget):
             card.deleteLater()
         self._artifacts.clear()
         self._auras.clear()
-        self._write_tools.clear()
+        self._controllers.clear()
         self._artifact_counter = 0
         self._todo_widget.update_tasks([])
         if self._worker_banner is not None:
