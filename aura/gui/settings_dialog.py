@@ -146,8 +146,6 @@ class SettingsDialog(QDialog):
             self._worker_thinking_combo.addItem(label, val)
         form.addRow("Worker thinking:", self._worker_thinking_combo)
 
-        self._refresh_pw_enabled()
-
         # Populate model combos for the current provider
         self._populate_model_combos(current_provider)
 
@@ -207,6 +205,8 @@ class SettingsDialog(QDialog):
         )
         self._worker_temperature_spin.setValue(self._settings.worker_temperature)
         form.addRow("Worker Temperature:", self._worker_temperature_spin)
+
+        self._refresh_pw_enabled()
 
         # --- System Prompts ---
         prompts_sep = QLabel("System Prompts")
