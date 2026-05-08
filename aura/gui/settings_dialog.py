@@ -94,7 +94,7 @@ class SettingsDialog(QDialog):
 
         # ---- Provider selection ----
         self._provider_combo = QComboBox()
-        for pid in ("deepseek", "openai", "google"):
+        for pid in ("deepseek", "openai", "google", "openrouter"):
             cfg = PROVIDERS[pid]  # type: ignore[literal-required]
             self._provider_combo.addItem(cfg.label, pid)
         self._provider_combo.setCurrentIndex(

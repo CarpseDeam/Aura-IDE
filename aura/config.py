@@ -120,6 +120,92 @@ GOOGLE_PRICING: dict[str, dict[str, float]] = {
     "gemini-2.5-pro": {"in_miss": 1.25, "in_hit": 0.25, "out": 10.00},
 }
 
+OPENROUTER_MODELS: dict[str, ModelInfo] = {
+    "openai/gpt-4o": ModelInfo(
+        id="openai/gpt-4o",
+        label="OpenAI GPT-4o",
+        input_per_m_usd=2.50,
+        output_per_m_usd=10.00,
+        cache_hit_per_m_usd=1.25,
+    ),
+    "openai/gpt-4o-mini": ModelInfo(
+        id="openai/gpt-4o-mini",
+        label="OpenAI GPT-4o Mini",
+        input_per_m_usd=0.15,
+        output_per_m_usd=0.60,
+        cache_hit_per_m_usd=0.075,
+    ),
+    "anthropic/claude-3.5-sonnet": ModelInfo(
+        id="anthropic/claude-3.5-sonnet",
+        label="Claude 3.5 Sonnet",
+        input_per_m_usd=3.00,
+        output_per_m_usd=15.00,
+        cache_hit_per_m_usd=0.30,
+    ),
+    "anthropic/claude-3.7-sonnet": ModelInfo(
+        id="anthropic/claude-3.7-sonnet",
+        label="Claude 3.7 Sonnet",
+        input_per_m_usd=3.00,
+        output_per_m_usd=15.00,
+        cache_hit_per_m_usd=0.30,
+    ),
+    "meta-llama/llama-3.1-8b-instruct": ModelInfo(
+        id="meta-llama/llama-3.1-8b-instruct",
+        label="Llama 3.1 8B",
+        input_per_m_usd=0.06,
+        output_per_m_usd=0.06,
+        cache_hit_per_m_usd=0.03,
+    ),
+    "meta-llama/llama-3.1-70b-instruct": ModelInfo(
+        id="meta-llama/llama-3.1-70b-instruct",
+        label="Llama 3.1 70B",
+        input_per_m_usd=0.59,
+        output_per_m_usd=0.79,
+        cache_hit_per_m_usd=0.30,
+    ),
+    "mistralai/mistral-7b-instruct": ModelInfo(
+        id="mistralai/mistral-7b-instruct",
+        label="Mistral 7B",
+        input_per_m_usd=0.06,
+        output_per_m_usd=0.06,
+        cache_hit_per_m_usd=0.03,
+    ),
+    "x-ai/grok-2-1212": ModelInfo(
+        id="x-ai/grok-2-1212",
+        label="Grok 2",
+        input_per_m_usd=2.00,
+        output_per_m_usd=10.00,
+        cache_hit_per_m_usd=1.00,
+    ),
+    "google/gemini-2.5-flash-001": ModelInfo(
+        id="google/gemini-2.5-flash-001",
+        label="Gemini 2.5 Flash",
+        input_per_m_usd=0.15,
+        output_per_m_usd=0.60,
+        cache_hit_per_m_usd=0.015,
+    ),
+    "google/gemini-2.5-pro-001": ModelInfo(
+        id="google/gemini-2.5-pro-001",
+        label="Gemini 2.5 Pro",
+        input_per_m_usd=1.25,
+        output_per_m_usd=10.00,
+        cache_hit_per_m_usd=0.25,
+    ),
+}
+
+OPENROUTER_PRICING: dict[str, dict[str, float]] = {
+    "openai/gpt-4o": {"in_miss": 2.50, "in_hit": 1.25, "out": 10.00},
+    "openai/gpt-4o-mini": {"in_miss": 0.15, "in_hit": 0.075, "out": 0.60},
+    "anthropic/claude-3.5-sonnet": {"in_miss": 3.00, "in_hit": 0.30, "out": 15.00},
+    "anthropic/claude-3.7-sonnet": {"in_miss": 3.00, "in_hit": 0.30, "out": 15.00},
+    "meta-llama/llama-3.1-8b-instruct": {"in_miss": 0.06, "in_hit": 0.03, "out": 0.06},
+    "meta-llama/llama-3.1-70b-instruct": {"in_miss": 0.59, "in_hit": 0.30, "out": 0.79},
+    "mistralai/mistral-7b-instruct": {"in_miss": 0.06, "in_hit": 0.03, "out": 0.06},
+    "x-ai/grok-2-1212": {"in_miss": 2.00, "in_hit": 1.00, "out": 10.00},
+    "google/gemini-2.5-flash-001": {"in_miss": 0.15, "in_hit": 0.015, "out": 0.60},
+    "google/gemini-2.5-pro-001": {"in_miss": 1.25, "in_hit": 0.25, "out": 10.00},
+}
+
 PROVIDERS: dict[ProviderId, ProviderConfig] = {
     "deepseek": ProviderConfig(
         id="deepseek",
@@ -151,6 +237,16 @@ PROVIDERS: dict[ProviderId, ProviderConfig] = {
         models=GOOGLE_MODELS,
         pricing=GOOGLE_PRICING,
     ),
+    "openrouter": ProviderConfig(
+        id="openrouter",
+        label="OpenRouter",
+        base_url="https://openrouter.ai/api/v1",
+        env_key="OPENROUTER_API_KEY",
+        default_model="openai/gpt-4o-mini",
+        default_thinking="off",
+        models=OPENROUTER_MODELS,
+        pricing=OPENROUTER_PRICING,
+    ),
 }
 
 # ---------------------------------------------------------------------------
@@ -167,6 +263,8 @@ MODELS: dict[str, ModelInfo] = dict(PROVIDERS["deepseek"].models)
 # ---------------------------------------------------------------------------
 # Tavily (web search) API key
 # ---------------------------------------------------------------------------
+
+OPENROUTER_API_KEY_ENV: str = "OPENROUTER_API_KEY"
 
 TAVILY_API_KEY_ENV: str = "TAVILY_API_KEY"
 
