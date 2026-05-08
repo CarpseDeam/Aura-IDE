@@ -19,7 +19,7 @@ class AuraWidget(QWidget):
         self,
         inner_widget: QWidget,
         glow_color: str = "#6d28d9",
-        glow_spread: int = 16,
+        glow_spread: int = 20,
     ) -> None:
         super().__init__()
         self._glow_color = QColor(glow_color)
@@ -123,7 +123,7 @@ class AuraWidget(QWidget):
         max_r = max(rect.width(), rect.height()) * 0.5
         radius = max_r * (0.3 + 0.7 * b)  # expands/contracts with breath
 
-        alpha = int(140 * b)  # fades in/out with breath
+        alpha = int(220 * b)  # fades in/out with breath
 
         c = self._glow_color
         inner = QColor(c.red(), c.green(), c.blue(), alpha)

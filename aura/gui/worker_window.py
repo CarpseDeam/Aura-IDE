@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from aura.gui.aura_widget import AuraWidget
 from aura.gui.theme import BG, BORDER, FG, FG_DIM, SUCCESS, WARN
 
 # ---------------------------------------------------------------------------
@@ -634,8 +635,8 @@ class AuraPlayground(QWidget):
         self._card_container = QWidget()
         self._card_container.setStyleSheet("background: transparent;")
         self._card_layout = QVBoxLayout(self._card_container)
-        self._card_layout.setContentsMargins(0, 0, 0, 0)
-        self._card_layout.setSpacing(10)
+        self._card_layout.setContentsMargins(8, 0, 8, 0)
+        self._card_layout.setSpacing(24)
         self._card_layout.addStretch(1)  # push cards to top
         scroll.setWidget(self._card_container)
         self._scroll = scroll
@@ -646,7 +647,7 @@ class AuraPlayground(QWidget):
         self._artifacts: dict[str, ArtifactCard] = {}
         self._write_tools: dict[str, dict] = {}
         self._artifact_counter = 0
-
+        self._auras: dict[str, AuraWidget] = {}
     # ---- helpers -----------------------------------------------------------
 
     def _add_artifact(
@@ -655,8 +656,11 @@ class AuraPlayground(QWidget):
         """Create card, add to layout, store in dict, return it."""
         card = ArtifactCard(artifact_id, label, language, content)
         self._artifacts[artifact_id] = card
+        # Wrap in AuraWidget for breathing glow effect
+        wrapper = AuraWidget(card, glow_color="#7aa2f7", glow_spread=20)
+        self._auras[artifact_id] = wrapper
         # Insert before the trailing stretch
-        self._card_layout.insertWidget(self._card_layout.count() - 1, card)
+        self._card_layout.insertWidget(self._card_layout.count() - 1, wrapper)
         self._scroll_to_bottom()
         return card
 
@@ -673,6 +677,7 @@ class AuraPlayground(QWidget):
         for card in list(self._artifacts.values()):
             card.deleteLater()
         self._artifacts.clear()
+        self._auras.clear()
         self._write_tools.clear()
         self._artifact_counter = 0
 
@@ -739,6 +744,9 @@ class AuraPlayground(QWidget):
             if artifact_id not in self._artifacts:
                 card = self._add_artifact(artifact_id, label, language, content)
                 card.set_streaming(True)
+                aura = self._auras.get(artifact_id)
+                if aura is not None:
+                    aura.start_aura()
             else:
                 self._artifacts[artifact_id].update_content(content)
 
@@ -756,6 +764,10 @@ class AuraPlayground(QWidget):
                 # First chunk of new_str arrived — transition to showing new_str
                 card.set_edit_phase("new")
                 card.set_streaming(True)
+                aura = self._auras.get(artifact_id)
+                if aura is not None:
+                    aura.set_glow_state("coding")
+                    aura.start_aura()
             if new_str:
                 card._edit_new_str = new_str
                 card.update_content(new_str)
@@ -774,6 +786,10 @@ class AuraPlayground(QWidget):
             return
 
         card.set_streaming(False)  # stop the pulse
+
+        aura = self._auras.get(artifact_id)
+        if aura is not None:
+            aura.stop_aura()
 
         if ok:
             # Keep the card — it shows the final content
@@ -815,6 +831,7 @@ class AuraPlayground(QWidget):
         for card in list(self._artifacts.values()):
             card.deleteLater()
         self._artifacts.clear()
+        self._auras.clear()
         self._write_tools.clear()
         self._artifact_counter = 0
         self._todo_widget.update_tasks([])

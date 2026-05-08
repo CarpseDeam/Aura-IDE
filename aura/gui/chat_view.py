@@ -1398,7 +1398,7 @@ class ChatView(QScrollArea):
         container = QWidget()
         self._layout = QVBoxLayout(container)
         self._layout.setContentsMargins(20, 20, 20, 20)
-        self._layout.setSpacing(28)
+        self._layout.setSpacing(32)
         self._layout.addStretch(1)
         self.setWidget(container)
 
@@ -1496,6 +1496,7 @@ class ChatView(QScrollArea):
         self._current_aura = wrapper
         self._add_card(wrapper)
         wrapper.start_aura()
+        wrapper.set_glow_state("thinking")
         return card
 
     def current_assistant(self) -> AssistantCard:
@@ -1513,6 +1514,10 @@ class ChatView(QScrollArea):
         ac = self.current_assistant()
         # The first content delta means reasoning is done.
         ac.reasoning_done()
+        # On first content delta, ensure the glow is in "thinking" state
+        # (important for planners that don't produce reasoning content).
+        if not ac._content_label.isVisible() and self._current_aura is not None:
+            self._current_aura.set_glow_state("thinking")
         ac.append_content(text)
         self._scroll_to_bottom(force=True)
 
