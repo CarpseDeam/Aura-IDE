@@ -319,9 +319,11 @@ class ArtifactCard(QFrame):
         self._code_view.setMaximumHeight(400)
         self._stack.addWidget(self._code_view)  # index 0
 
-        # Attach native syntax highlighter
+        # Attach native syntax highlighter — must be stored as an instance
+        # attribute to prevent Python GC from destroying the highlightBlock override.
+        self._highlighter = None
         if _HAVE_PYGMENTS:
-            PygmentsHighlighter(self._code_view.document(), language)
+            self._highlighter = PygmentsHighlighter(self._code_view.document(), language)
 
         # Page 1 — Preview View (QWebEngineView)
         self._preview_view = QWebEngineView()

@@ -975,9 +975,11 @@ class CodeBlockCard(QFrame):
         code_view.document().setDocumentMargin(2)
         layout.addWidget(code_view)
 
-        # Attach native syntax highlighter
+        # Attach native syntax highlighter — must be stored as an instance
+        # attribute to prevent Python GC from destroying the highlightBlock override.
+        self._highlighter = None
         if _HAVE_PYGMENTS:
-            PygmentsHighlighter(code_view.document(), language)
+            self._highlighter = PygmentsHighlighter(code_view.document(), language)
 
 
 class DiffCard(QFrame):
