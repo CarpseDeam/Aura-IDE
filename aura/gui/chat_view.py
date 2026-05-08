@@ -1260,6 +1260,8 @@ class TerminalCard(QFrame):
         self._command = command
         self._state = self.STATE_RUNNING
         self._output_buf = ""
+        self._pending = ""
+        self._dirty = False
 
         self.setStyleSheet(
             f"QFrame#terminalCard {{"
@@ -1304,6 +1306,12 @@ class TerminalCard(QFrame):
 
         self._refresh_header()
 
+        # Throttle output updates to ~30fps to keep the GUI responsive
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._flush)
+        self._timer.setInterval(33)  # ~30 fps
+        self._timer.start()
+
     def _toggle_body(self) -> None:
         self._body.setVisible(not self._body.isVisible())
         self._refresh_header()
@@ -1332,15 +1340,25 @@ class TerminalCard(QFrame):
             self._refresh_header()
 
     def append_output(self, text: str) -> None:
-        """Append a chunk of stdout/stderr text and auto-scroll."""
+        """Append a chunk of stdout/stderr text (buffered, flushed at 30fps)."""
         self._output_buf += text
-        self._output_view.insertPlainText(text)
+        self._pending += text
+        self._dirty = True
+
+    def _flush(self) -> None:
+        """Flush the pending output buffer to the QPlainTextEdit at most 30fps."""
+        if not self._dirty:
+            return
+        self._dirty = False
+        self._output_view.insertPlainText(self._pending)
+        self._pending = ""
         # Auto-scroll to bottom
         sb = self._output_view.verticalScrollBar()
         sb.setValue(sb.maximum())
 
     def set_result(self, exit_code: int) -> None:
         """Set the final state based on the exit code."""
+        self._timer.stop()  # No more output coming
         self._state = self.STATE_DONE if exit_code == 0 else self.STATE_FAILED
         if exit_code != 0:
             # Auto-expand on failure
