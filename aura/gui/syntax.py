@@ -35,7 +35,6 @@ class PygmentsHighlighter(QSyntaxHighlighter):
     """
 
     def __init__(self, parent, language: str = "text"):
-        super().__init__(parent)
         try:
             self._style = get_style_by_name("dracula")
         except ClassNotFound:
@@ -47,6 +46,7 @@ class PygmentsHighlighter(QSyntaxHighlighter):
         self._format_cache: dict[tuple, QTextCharFormat] = {}
         self._lexer = TextLexer()
         self.set_language(language)
+        super().__init__(parent)
 
     def set_language(self, language: str) -> None:
         """Update the lexer based on the language name or file extension."""

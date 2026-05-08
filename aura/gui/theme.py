@@ -63,7 +63,6 @@ def apply_theme(app: QApplication) -> None:
 
 QSS = f"""
 * {{
-    color: {FG};
     font-family: "Segoe UI", "Inter", "Geist", system-ui, sans-serif;
     font-size: 13px;
 }}
@@ -177,7 +176,6 @@ QPushButton#success:hover {{
 
 QComboBox, QLineEdit, QTextEdit, QPlainTextEdit {{
     background: {BG_RAISED};
-    color: {FG};
     border: 1px solid {BORDER};
     border-radius: 5px;
     padding: 5px 8px;
