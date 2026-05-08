@@ -733,6 +733,13 @@ class MainWindow(QMainWindow):
         self._bridge.set_worker_thinking(thinking)  # type: ignore[arg-type]
         self._refresh_status_bar()
 
+    def _get_current_model_info(self) -> ModelInfo | None:
+        """Helper to get metadata for the currently selected planner model."""
+        cfg = PROVIDERS.get(self._settings.provider)
+        if not cfg:
+            return None
+        return cfg.models.get(self.current_model())
+
     def _on_send(self, payload: SendPayload) -> None:
         # Intercept /undo command
         if payload.text.strip().lower() == "/undo":
@@ -744,6 +751,11 @@ class MainWindow(QMainWindow):
             self._message_queue.append(payload)
             self._input.set_queued_messages(len(self._message_queue))
             return
+
+        # Check if the current model supports native vision
+        m_info = self._get_current_model_info()
+        native_vision = m_info.supports_vision if m_info else False
+
         # Prepare history append: image attachments go via multimodal content array.
         text = payload.text
         # Add text refs from non-image attachments to the text body so the model knows.
@@ -753,12 +765,13 @@ class MainWindow(QMainWindow):
             text = f"{text}\n\n{ref_block}".strip() if text else ref_block
         image_atts = [a for a in payload.attachments if a.kind == "image" and a.b64]
 
-        # --- Vision preprocessing ---
+        # --- Vision routing ---
         vision_descriptions: list[str] = []
         vision_error: str | None = None
-        if image_atts and self._settings.vision_enabled:
-            # Show "analyzing" state in input panel
-            self._input.set_placeholder("Analyzing images...")
+
+        if image_atts and not native_vision and self._settings.vision_enabled:
+            # Fall back to local vision model for descriptive middleman
+            self._input.set_placeholder("Analyzing images (local fallback)...")
             self._input.setEnabled(False)
             
             def _run_vision():
@@ -786,6 +799,7 @@ class MainWindow(QMainWindow):
             threading.Thread(target=_run_vision, daemon=True).start()
             return  # Wait for _on_vision_done
 
+        # Either no images, native vision supported, or local vision disabled
         self._finalize_send(payload, vision_descriptions, vision_error)
 
     def _on_vision_done(self, payload: SendPayload, descriptions: list[str], error: str | None) -> None:
@@ -801,8 +815,25 @@ class MainWindow(QMainWindow):
             ref_block = "\n".join(text_refs)
             text = f"{text}\n\n{ref_block}".strip() if text else ref_block
 
-        if vision_descriptions:
-            # Build vision block
+        # Determine if we should send a native multimodal payload
+        m_info = self._get_current_model_info()
+        native_vision = m_info.supports_vision if m_info else False
+
+        if native_vision and image_atts:
+            # Construct native multimodal parts
+            parts = []
+            if text:
+                parts.append({"type": "text", "text": text})
+            for a in image_atts:
+                # Note: PySide6 QWebEngine/Base64 handling ensures valid PNG/JPG data
+                parts.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/png;base64,{a.b64}"}
+                })
+            self._bridge.history.append_user_multimodal(parts)
+            display_text = text
+        elif vision_descriptions:
+            # Build vision block from local fallback
             vision_block_parts = []
             for i, desc in enumerate(vision_descriptions):
                 vision_block_parts.append(
@@ -814,43 +845,30 @@ class MainWindow(QMainWindow):
                 vision_block += f"\n\n[Vision error: {vision_error}]"
 
             # Final text for the model
-            if text:
-                final_text = f"{vision_block}\n\n[User's question:]\n{text}"
-            else:
-                final_text = vision_block
-
-            # Display text for the UserCard (same as final_text)
+            final_text = f"{vision_block}\n\n[User's question:]\n{text}" if text else vision_block
             display_text = final_text
+            self._bridge.history.append_user_text(final_text)
         elif vision_error and not vision_descriptions:
             # Vision completely failed — fall back to sending text-only with error note
-            final_text = (
-                f"{text}\n\n[Note: {vision_error}]"
-                if text
-                else f"[Vision error: {vision_error}]"
-            )
+            final_text = f"{text}\n\n[Note: {vision_error}]" if text else f"[Vision error: {vision_error}]"
             display_text = final_text
-        else:
-            # No images or vision disabled
-            final_text = text
-            display_text = text
-
-        # If vision processed images, ALWAYS use plain text (not multimodal)
-        # If vision is disabled and images exist, keep current behavior (multimodal → 400 error)
-        if image_atts and not self._settings.vision_enabled:
-            # Current behavior: send multimodal (will 400, but user may want to see error)
-            parts = []
-            if final_text:
-                parts.append({"type": "text", "text": final_text})
-            for a in image_atts:
-                parts.append(
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/png;base64,{a.b64}"},
-                    }
-                )
-            self._bridge.history.append_user_multimodal(parts)
-        else:
             self._bridge.history.append_user_text(final_text)
+        else:
+            # No images or vision disabled (keep old multimodal-400-fallback behavior for safety)
+            if image_atts and not self._settings.vision_enabled:
+                parts = []
+                if text:
+                    parts.append({"type": "text", "text": text})
+                for a in image_atts:
+                    parts.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{a.b64}"}
+                    })
+                self._bridge.history.append_user_multimodal(parts)
+                display_text = text
+            else:
+                display_text = text
+                self._bridge.history.append_user_text(text)
 
         self._chat.add_user(display_text, [a.b64 for a in image_atts] or None)
         self._chat.begin_assistant()

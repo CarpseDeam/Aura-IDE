@@ -28,6 +28,7 @@ class ModelInfo:
     input_per_m_usd: float
     output_per_m_usd: float
     cache_hit_per_m_usd: float
+    supports_vision: bool = False
 
 
 @dataclass
@@ -75,6 +76,7 @@ OPENAI_MODELS: dict[str, ModelInfo] = {
         input_per_m_usd=2.50,
         output_per_m_usd=10.00,
         cache_hit_per_m_usd=1.25,
+        supports_vision=True,
     ),
     "gpt-4o-mini": ModelInfo(
         id="gpt-4o-mini",
@@ -82,6 +84,7 @@ OPENAI_MODELS: dict[str, ModelInfo] = {
         input_per_m_usd=0.15,
         output_per_m_usd=0.60,
         cache_hit_per_m_usd=0.075,
+        supports_vision=True,
     ),
     "gpt-4.1": ModelInfo(
         id="gpt-4.1",
@@ -89,6 +92,7 @@ OPENAI_MODELS: dict[str, ModelInfo] = {
         input_per_m_usd=2.00,
         output_per_m_usd=8.00,
         cache_hit_per_m_usd=0.50,
+        supports_vision=True,
     ),
 }
 
@@ -99,25 +103,36 @@ OPENAI_PRICING: dict[str, dict[str, float]] = {
 }
 
 GOOGLE_MODELS: dict[str, ModelInfo] = {
-    "gemini-2.5-flash": ModelInfo(
-        id="gemini-2.5-flash",
-        label="Gemini 2.5 Flash",
-        input_per_m_usd=0.15,
-        output_per_m_usd=0.60,
-        cache_hit_per_m_usd=0.015,
+    "gemini-2.0-flash": ModelInfo(
+        id="gemini-2.0-flash",
+        label="Gemini 2.0 Flash",
+        input_per_m_usd=0.10,
+        output_per_m_usd=0.40,
+        cache_hit_per_m_usd=0.01,
+        supports_vision=True,
     ),
-    "gemini-2.5-pro": ModelInfo(
-        id="gemini-2.5-pro",
-        label="Gemini 2.5 Pro",
+    "gemini-2.0-pro-exp-02-05": ModelInfo(
+        id="gemini-2.0-pro-exp-02-05",
+        label="Gemini 2.0 Pro (Exp)",
+        input_per_m_usd=0.00,
+        output_per_m_usd=0.00,
+        cache_hit_per_m_usd=0.00,
+        supports_vision=True,
+    ),
+    "gemini-1.5-pro": ModelInfo(
+        id="gemini-1.5-pro",
+        label="Gemini 1.5 Pro",
         input_per_m_usd=1.25,
         output_per_m_usd=10.00,
         cache_hit_per_m_usd=0.25,
+        supports_vision=True,
     ),
 }
 
 GOOGLE_PRICING: dict[str, dict[str, float]] = {
-    "gemini-2.5-flash": {"in_miss": 0.15, "in_hit": 0.015, "out": 0.60},
-    "gemini-2.5-pro": {"in_miss": 1.25, "in_hit": 0.25, "out": 10.00},
+    "gemini-2.0-flash": {"in_miss": 0.10, "in_hit": 0.01, "out": 0.40},
+    "gemini-2.0-pro-exp-02-05": {"in_miss": 0.00, "in_hit": 0.00, "out": 0.00},
+    "gemini-1.5-pro": {"in_miss": 1.25, "in_hit": 0.25, "out": 10.00},
 }
 
 OPENROUTER_MODELS: dict[str, ModelInfo] = {
@@ -127,6 +142,7 @@ OPENROUTER_MODELS: dict[str, ModelInfo] = {
         input_per_m_usd=2.50,
         output_per_m_usd=10.00,
         cache_hit_per_m_usd=1.25,
+        supports_vision=True,
     ),
     "openai/gpt-4o-mini": ModelInfo(
         id="openai/gpt-4o-mini",
@@ -134,6 +150,7 @@ OPENROUTER_MODELS: dict[str, ModelInfo] = {
         input_per_m_usd=0.15,
         output_per_m_usd=0.60,
         cache_hit_per_m_usd=0.075,
+        supports_vision=True,
     ),
     "anthropic/claude-3.5-sonnet": ModelInfo(
         id="anthropic/claude-3.5-sonnet",
@@ -141,6 +158,7 @@ OPENROUTER_MODELS: dict[str, ModelInfo] = {
         input_per_m_usd=3.00,
         output_per_m_usd=15.00,
         cache_hit_per_m_usd=0.30,
+        supports_vision=True,
     ),
     "anthropic/claude-3.7-sonnet": ModelInfo(
         id="anthropic/claude-3.7-sonnet",
@@ -148,24 +166,27 @@ OPENROUTER_MODELS: dict[str, ModelInfo] = {
         input_per_m_usd=3.00,
         output_per_m_usd=15.00,
         cache_hit_per_m_usd=0.30,
+        supports_vision=True,
+    ),
+    "google/gemini-2.0-flash-001": ModelInfo(
+        id="google/gemini-2.0-flash-001",
+        label="Gemini 2.0 Flash",
+        input_per_m_usd=0.10,
+        output_per_m_usd=0.40,
+        cache_hit_per_m_usd=0.01,
+        supports_vision=True,
+    ),
+    "google/gemini-2.0-pro-exp-02-05:free": ModelInfo(
+        id="google/gemini-2.0-pro-exp-02-05:free",
+        label="Gemini 2.0 Pro (Free)",
+        input_per_m_usd=0.00,
+        output_per_m_usd=0.00,
+        cache_hit_per_m_usd=0.00,
+        supports_vision=True,
     ),
     "meta-llama/llama-3.1-8b-instruct": ModelInfo(
         id="meta-llama/llama-3.1-8b-instruct",
         label="Llama 3.1 8B",
-        input_per_m_usd=0.06,
-        output_per_m_usd=0.06,
-        cache_hit_per_m_usd=0.03,
-    ),
-    "meta-llama/llama-3.1-70b-instruct": ModelInfo(
-        id="meta-llama/llama-3.1-70b-instruct",
-        label="Llama 3.1 70B",
-        input_per_m_usd=0.59,
-        output_per_m_usd=0.79,
-        cache_hit_per_m_usd=0.30,
-    ),
-    "mistralai/mistral-7b-instruct": ModelInfo(
-        id="mistralai/mistral-7b-instruct",
-        label="Mistral 7B",
         input_per_m_usd=0.06,
         output_per_m_usd=0.06,
         cache_hit_per_m_usd=0.03,
@@ -176,20 +197,7 @@ OPENROUTER_MODELS: dict[str, ModelInfo] = {
         input_per_m_usd=2.00,
         output_per_m_usd=10.00,
         cache_hit_per_m_usd=1.00,
-    ),
-    "google/gemini-2.5-flash-001": ModelInfo(
-        id="google/gemini-2.5-flash-001",
-        label="Gemini 2.5 Flash",
-        input_per_m_usd=0.15,
-        output_per_m_usd=0.60,
-        cache_hit_per_m_usd=0.015,
-    ),
-    "google/gemini-2.5-pro-001": ModelInfo(
-        id="google/gemini-2.5-pro-001",
-        label="Gemini 2.5 Pro",
-        input_per_m_usd=1.25,
-        output_per_m_usd=10.00,
-        cache_hit_per_m_usd=0.25,
+        supports_vision=True,
     ),
 }
 
@@ -349,12 +357,17 @@ def fetch_provider_models(provider_id: ProviderId) -> tuple[dict[str, ModelInfo]
             except (ValueError, TypeError):
                 in_m = out_m = hit_m = 0.0
 
+            # Detect vision support from OpenRouter modalities
+            modalities = m.get("architecture", {}).get("modalities", [])
+            supports_vision = "image" in modalities
+
             models[mid] = ModelInfo(
                 id=mid,
                 label=name,
                 input_per_m_usd=in_m,
                 output_per_m_usd=out_m,
-                cache_hit_per_m_usd=hit_m
+                cache_hit_per_m_usd=hit_m,
+                supports_vision=supports_vision
             )
             pricing[mid] = {"in_miss": in_m, "in_hit": hit_m, "out": out_m}
     else:
@@ -379,12 +392,20 @@ def fetch_provider_models(provider_id: ProviderId) -> tuple[dict[str, ModelInfo]
             # Friendly label: capitalized ID or stripped prefix
             label = mid.split("/")[-1].replace("-", " ").title()
             
+            # Default vision support check for hardcoded models
+            supports_vision = False
+            for p_cfg in PROVIDERS.values():
+                if mid in p_cfg.models:
+                    supports_vision = p_cfg.models[mid].supports_vision
+                    break
+
             models[mid] = ModelInfo(
                 id=mid,
                 label=label,
                 input_per_m_usd=in_m,
                 output_per_m_usd=out_m,
-                cache_hit_per_m_usd=hit_m
+                cache_hit_per_m_usd=hit_m,
+                supports_vision=supports_vision
             )
             pricing[mid] = {"in_miss": in_m, "in_hit": hit_m, "out": out_m}
 
