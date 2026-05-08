@@ -21,7 +21,7 @@ from typing import Any, Callable, Literal
 from aura.conversation.tools.backup import backup_existing
 from aura.conversation.tools.find_usages import find_usages
 from aura.conversation.tools.fs_read import glob_files, list_directory, read_file, read_file_outline
-from aura.conversation.tools.git_tools import git_diff, git_status
+from aura.conversation.tools.git_tools import git_diff, git_log, git_status
 from aura.conversation.tools.grep import grep_files
 from aura.conversation.tools.fs_write import propose_edit, propose_write
 from aura.conversation.tools.web import web_fetch, web_search
@@ -227,7 +227,8 @@ GIT_TOOL_DEFS: list[dict[str, Any]] = [
             "name": "git_status",
             "description": (
                 "Show the current git working tree status. Returns the current branch "
-                "name and lists staged, unstaged, and untracked files. Use this before "
+                "name, remote tracking info (ahead/behind counts, remote URL), and "
+                "lists staged, unstaged, and untracked files. Use this before "
                 "finishing a coding task to review what files were changed, or to verify "
                 "the repository state before making edits."
             ),
@@ -261,6 +262,33 @@ GIT_TOOL_DEFS: list[dict[str, Any]] = [
                     "path": {
                         "type": "string",
                         "description": "Optional workspace-relative path to restrict the diff to a single file.",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "git_log",
+            "description": (
+                "Show recent git commit history. Returns a list of commits "
+                "with hash and message. Use this to understand what changed "
+                "recently in the repository. Optionally restrict to a single "
+                "file with the path parameter."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "max_count": {
+                        "type": "integer",
+                        "description": "Maximum number of commits to return. Default: 10.",
+                        "default": 10,
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Optional workspace-relative path to show history for a single file.",
                     },
                 },
                 "required": [],
@@ -668,6 +696,10 @@ class ToolRegistry:
                 staged = bool(args.get("staged", False))
                 path = args.get("path")
                 return ToolExecResult(ok=True, payload=git_diff(self._root, staged=staged, path=path))
+            if name == "git_log":
+                max_count = int(args.get("max_count", 10))
+                path = args.get("path")
+                return ToolExecResult(ok=True, payload=git_log(self._root, max_count=max_count, path=path))
 
             if name == "web_search":
                 query = args.get("query", "")

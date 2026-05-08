@@ -27,12 +27,12 @@ def is_git_repo(workspace_root: Path) -> bool:
         return False
 
 
-def auto_commit(workspace_root: Path, goal: str, files: list[str], summary: str) -> bool:
-    """Stage the listed files and create a commit. Returns True on success."""
+def auto_commit(workspace_root: Path, goal: str, files: list[str], summary: str) -> tuple[bool, str]:
+    """Stage the listed files and create a commit. Returns (success, message)."""
     if not is_git_repo(workspace_root):
-        return False
+        return False, "Not a git repository."
     if not files:
-        return False
+        return False, "No files to commit."
 
     # Stage files
     try:
@@ -44,7 +44,7 @@ def auto_commit(workspace_root: Path, goal: str, files: list[str], summary: str)
             timeout=10,
         )
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-        return False
+        return False, "git add failed."
 
     # Check if there are staged changes
     try:
@@ -57,7 +57,7 @@ def auto_commit(workspace_root: Path, goal: str, files: list[str], summary: str)
         if result.returncode == 0:
             # No changes to commit — unstage and return
             subprocess.run(["git", "reset", "--"] + files, cwd=str(workspace_root), capture_output=True)
-            return False
+            return False, "No changes to commit."
     except subprocess.CalledProcessError:
         pass
 
@@ -76,11 +76,11 @@ def auto_commit(workspace_root: Path, goal: str, files: list[str], summary: str)
             check=True,
             timeout=10,
         )
-        return True
+        return True, f"Committed: {goal}"
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
         # Unstage on failure
         subprocess.run(["git", "reset", "--"] + files, cwd=str(workspace_root), capture_output=True)
-        return False
+        return False, "git commit failed."
 
 
 def undo_last_commit(workspace_root: Path) -> tuple[bool, str]:

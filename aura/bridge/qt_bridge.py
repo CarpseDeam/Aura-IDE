@@ -174,6 +174,7 @@ class _Worker(QObject):
         model: ModelId,
         thinking: ThinkingMode,
         temperature: float = 0.7,
+        workspace_root: Path | None = None,
     ) -> None:
         super().__init__()
         self._manager = manager
@@ -183,6 +184,8 @@ class _Worker(QObject):
         self._model = model
         self._thinking = thinking
         self._temperature = temperature
+        self._workspace_root = workspace_root
+        self._write_paths: list[str] = []
 
     @Slot()
     def run(self) -> None:
@@ -201,6 +204,19 @@ class _Worker(QObject):
                 dispatch_cb=dispatch_cb,
                 temperature=self._temperature,
             )
+            # Auto-commit writes in single mode
+            if self._write_paths and self._workspace_root is not None:
+                try:
+                    from aura.git import auto_commit
+                    goal_msg = f"AI-assisted edit: {', '.join(self._write_paths)}"
+                    summary_msg = f"Modified {len(self._write_paths)} file(s)"
+                    threading.Thread(
+                        target=auto_commit,
+                        args=(self._workspace_root, goal_msg, self._write_paths, summary_msg),
+                        daemon=True,
+                    ).start()
+                except Exception:
+                    pass  # Never block the chat on git failures
         except Exception as exc:
             self.apiError.emit(-1, f"{type(exc).__name__}: {exc}")
         finally:
@@ -230,6 +246,16 @@ class _Worker(QObject):
                 self.streamDone.emit(ev.finish_reason or "", ev.full_message)
         elif isinstance(ev, ToolResult):
             self.toolResultEmitted.emit(ev.tool_call_id, ev.name, ev.ok, ev.result, ev.extras or {})
+            # Track successful writes for auto-commit in single mode
+            if ev.name in ("write_file", "edit_file") and ev.ok:
+                try:
+                    import json
+                    parsed = json.loads(ev.result)
+                    path = parsed.get("path")
+                    if isinstance(path, str) and path:
+                        self._write_paths.append(path)
+                except Exception:
+                    pass
         elif isinstance(ev, WorkerDispatchRequested):
             self.workerDispatchRequested.emit(
                 ev.tool_call_id, ev.goal, list(ev.files), ev.spec, ev.acceptance
@@ -575,8 +601,10 @@ class _DispatchProxy(QObject):
 
                 written_files = [w["path"] for w in write_results if isinstance(w.get("path"), str) and w.get("path")]
                 if written_files:
+                    def _do_commit(root, goal, files, summary):
+                        auto_commit(root, goal, files, summary)
                     threading.Thread(
-                        target=auto_commit,
+                        target=_do_commit,
                         args=(self._workspace_root, req.goal, written_files, summary),
                         daemon=True,
                     ).start()
@@ -906,6 +934,7 @@ class ConversationBridge(QObject):
             model=model,
             thinking=thinking,
             temperature=self._temperature,
+            workspace_root=self._registry.workspace_root,
         )
         self._worker.moveToThread(self._thread)
 
