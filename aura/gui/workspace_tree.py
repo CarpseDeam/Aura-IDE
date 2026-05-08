@@ -13,13 +13,14 @@ from pathlib import Path
 
 from PySide6.QtCore import (
     QDir,
+    QFileInfo,
     QModelIndex,
     QSortFilterProxyModel,
     Qt,
     QUrl,
     Signal,
 )
-from PySide6.QtGui import QAction, QDesktopServices
+from PySide6.QtGui import QAction, QDesktopServices, QFileIconProvider, QIcon
 from PySide6.QtWidgets import (
     QFileSystemModel,
     QHeaderView,
@@ -29,12 +30,38 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from aura.config import media_path
+
 
 # Mirrors the SKIP rules in conversation/tools/fs_read.py so the user sees
 # what the tools see — minus `.aura`, which we keep visible so backups are
 # discoverable.
 _HIDDEN_DIRS = {"__pycache__", ".venv", ".git", "node_modules"}
 _HIDDEN_SUFFIXES = set()
+
+
+class _AuraIconProvider(QFileIconProvider):
+    """Custom icon provider that returns SVG icons for files and folders."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._file_icon = QIcon(str(media_path("file_24.svg")))
+        self._folder_icon = QIcon(str(media_path("folder_24.svg")))
+
+    def icon(self, arg):
+        # QFileSystemModel calls icon(QFileInfo) for each item in the tree
+        if isinstance(arg, QFileInfo):
+            if arg.isDir():
+                return self._folder_icon
+            return self._file_icon
+        # Standard icon-type fallback (e.g. for the header or other requests)
+        if isinstance(arg, QFileIconProvider.IconType):
+            if arg == QFileIconProvider.IconType.Folder:
+                return self._folder_icon
+            if arg == QFileIconProvider.IconType.File:
+                return self._file_icon
+            return super().icon(arg)
+        return super().icon(arg)
 
 
 class _WorkspaceFilterProxy(QSortFilterProxyModel):
@@ -88,6 +115,7 @@ class WorkspaceTree(QWidget):
             | QDir.Filter.NoDotAndDotDot
             | QDir.Filter.Hidden  # let proxy decide; otherwise `.aura` would be hidden
         )
+        self._fs_model.setIconProvider(_AuraIconProvider())
         # setNameFilters works on file *display*, not directories. Combined with
         # the proxy above, this gives us coverage on both axes.
         self._fs_model.setNameFilterDisables(False)
