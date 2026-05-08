@@ -51,15 +51,36 @@ try:
     from pygments import highlight
     from pygments.formatters import HtmlFormatter
     from pygments.lexers import (
-        HtmlLexer,
-        MarkdownLexer,
         TextLexer,
-        XmlLexer,
+        get_lexer_by_name,
     )
 
     _HAVE_PYGMENTS = True
 except ImportError:  # pragma: no cover
     _HAVE_PYGMENTS = False
+
+
+def _language_from_path(path: str) -> str:
+    """Return a pygments-compatible language identifier from a file path."""
+    ext = Path(path).suffix.lower()
+    lang_map = {
+        ".html": "html", ".svg": "svg", ".md": "markdown",
+        ".py": "python", ".pyi": "python", ".gd": "python",  # GDScript ≈ Python highlighting
+        ".js": "javascript", ".ts": "typescript", ".tsx": "tsx",
+        ".jsx": "jsx", ".css": "css", ".scss": "scss", ".json": "json",
+        ".yaml": "yaml", ".yml": "yaml", ".toml": "toml",
+        ".rs": "rust", ".go": "go", ".c": "c", ".cpp": "cpp", ".h": "c",
+        ".hpp": "cpp", ".java": "java", ".kt": "kotlin", ".swift": "swift",
+        ".sh": "bash", ".bash": "bash", ".zsh": "bash",
+        ".txt": "text", ".cfg": "ini", ".ini": "ini",
+        ".xml": "xml", ".sql": "sql", ".r": "r",
+    }
+    return lang_map.get(ext, "text")  # fallback to plain text
+
+
+def _is_previewable(language: str) -> bool:
+    """Whether this language supports a rendered Preview toggle."""
+    return language in ("html", "svg", "markdown", "mermaid")
 
 
 def _highlight_code(code: str, language: str) -> str:
@@ -76,14 +97,9 @@ def _highlight_code(code: str, language: str) -> str:
             f'">{escaped}</pre>'
         )
 
-    lexer_map = {
-        "html": HtmlLexer,
-        "svg": XmlLexer,
-        "markdown": MarkdownLexer,
-    }
-    lexer_cls = lexer_map.get(language, TextLexer)
+    # Try dynamic lexer lookup by name first, then fall back to TextLexer
     try:
-        lexer = lexer_cls()
+        lexer = get_lexer_by_name(language)
     except Exception:
         lexer = TextLexer()
 
@@ -243,6 +259,13 @@ class ArtifactCard(QFrame):
         self._language = language
         self._content = content
 
+        # Streaming state
+        self._streaming = False
+        self._streaming_cursor = None  # QTimer for blink
+        self._cursor_label = None  # QLabel for "⏳ streaming..." indicator
+        self._edit_old_str: str = ""
+        self._edit_new_str: str = ""
+
         # Glass-card styling (same as old CodeStreamCard)
         self.setStyleSheet("""
             QFrame#artifactCard {
@@ -275,6 +298,11 @@ class ArtifactCard(QFrame):
         self._header_label = QLabel(label)
         self._header_label.setStyleSheet(f"color: {FG}; font-weight: 600; font-size: 12px;")
         header_layout.addWidget(self._header_label)
+
+        # Status indicator (streaming / done / edit phase)
+        self._status_label = QLabel("")
+        self._status_label.setStyleSheet(f"color: {WARN}; font-size: 10px;")
+        header_layout.addWidget(self._status_label)
 
         header_layout.addStretch(1)
 
@@ -314,17 +342,20 @@ class ArtifactCard(QFrame):
         self._expand_btn.clicked.connect(self._on_expand_toggle)
         header_layout.addWidget(self._expand_btn)
 
-        # Toggle View button (Code / Preview)
-        self._toggle_btn = QPushButton("Preview")
-        self._toggle_btn.setFixedHeight(24)
-        self._toggle_btn.setStyleSheet(
-            f"QPushButton {{ color: {FG_DIM}; background: transparent; "
-            f"border: 1px solid {BORDER}; border-radius: 4px; "
-            f"padding: 2px 8px; font-size: 10px; }}"
-            f"QPushButton:hover {{ color: {FG}; border-color: {FG_DIM}; }}"
-        )
-        self._toggle_btn.clicked.connect(self._on_toggle_view)
-        header_layout.addWidget(self._toggle_btn)
+        # Toggle View button (Code / Preview) — only for previewable types
+        if _is_previewable(language):
+            self._toggle_btn = QPushButton("Preview")
+            self._toggle_btn.setFixedHeight(24)
+            self._toggle_btn.setStyleSheet(
+                f"QPushButton {{ color: {FG_DIM}; background: transparent; "
+                f"border: 1px solid {BORDER}; border-radius: 4px; "
+                f"padding: 2px 8px; font-size: 10px; }}"
+                f"QPushButton:hover {{ color: {FG}; border-color: {FG_DIM}; }}"
+            )
+            self._toggle_btn.clicked.connect(self._on_toggle_view)
+            header_layout.addWidget(self._toggle_btn)
+        else:
+            self._toggle_btn = None  # No preview for code-only files
 
         outer.addWidget(header)
 
@@ -378,6 +409,39 @@ class ArtifactCard(QFrame):
         self._refresh_code_view()
         self._refresh_preview()
 
+    def set_streaming(self, active: bool) -> None:
+        """Show/hide a streaming indicator on the card."""
+        self._streaming = active
+        if active:
+            self._status_label.setText("● streaming")
+            # Start a subtle pulse timer
+            if self._streaming_cursor is None:
+                from PySide6.QtCore import QTimer
+                self._streaming_cursor = QTimer(self)
+                self._streaming_cursor.timeout.connect(self._toggle_status_dot)
+                self._streaming_cursor.start(600)
+        else:
+            if self._streaming_cursor is not None:
+                self._streaming_cursor.stop()
+                self._streaming_cursor = None
+            self._status_label.setText("✓ done")
+            # Fade the done indicator after 2 seconds
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(2000, lambda: self._status_label.setText(""))
+
+    def _toggle_status_dot(self) -> None:
+        if self._status_label.text() == "● streaming":
+            self._status_label.setText("○ streaming")
+        else:
+            self._status_label.setText("● streaming")
+
+    def set_edit_phase(self, phase: str) -> None:
+        """For edit_file: 'old' = showing old_str, 'new' = streaming new_str."""
+        if phase == "old":
+            self._status_label.setText("✂ removing...")
+        elif phase == "new":
+            self._status_label.setText("● streaming")
+
     # ---- Button handlers --------------------------------------------------
 
     def _on_copy(self) -> None:
@@ -403,6 +467,8 @@ class ArtifactCard(QFrame):
         self._expand_btn.setText("Expand" if visible else "Collapse")
 
     def _on_toggle_view(self) -> None:
+        if self._toggle_btn is None:
+            return
         current = self._stack.currentIndex()
         if current == 0:
             self._stack.setCurrentIndex(1)
@@ -563,9 +629,10 @@ class AuraPlayground(QWidget):
             }
 
     def append_tool_args(self, worker_tool_id: str, fragment: str) -> None:
-        """Extract path/content from streaming JSON and create/update ArtifactCards.
+        """Stream JSON args for write_file/edit_file, creating/updating ArtifactCards.
 
-        Only creates cards for .html, .svg, .md files. Other file types are ignored.
+        Supports ALL file types (not just .html/.svg/.md). For edit_file,
+        shows old_str first then transitions to streaming new_str.
         """
         info = self._write_tools.get(worker_tool_id)
         if info is None:
@@ -580,6 +647,16 @@ class AuraPlayground(QWidget):
             m = re.search(r'"path"\s*:\s*"([^"]*)', info["buffered_args"])
             if m and not info["path"]:
                 info["path"] = m.group(1)
+                # Create a placeholder card as soon as we know the path
+                artifact_id = f"file-{worker_tool_id}"
+                if artifact_id not in self._artifacts:
+                    language = _language_from_path(info["path"])
+                    label = Path(info["path"]).name
+                    self._add_artifact(artifact_id, label, language, "")
+            # Also try to extract old_str from partial JSON for edit_file
+            m_old = re.search(r'"old_str"\s*:\s*"', info["buffered_args"])
+            if m_old and "old_str_seen" not in info:
+                info["old_str_seen"] = True
             return
 
         # Successfully parsed full JSON
@@ -587,28 +664,41 @@ class AuraPlayground(QWidget):
         if path:
             info["path"] = path
 
-        content_key = "content" if info["name"] == "write_file" else "new_str"
-        content = parsed.get(content_key, "")
-        info["content"] = content
+        artifact_id = f"file-{worker_tool_id}"
+        language = _language_from_path(path) if path else "text"
+        label = Path(path).name if path else info["name"]
 
-        # Determine if this file type gets an artifact card
-        if path:
-            ext = Path(path).suffix.lower()
-            if ext in {".html", ".svg", ".md"}:
-                lang_map = {".html": "html", ".svg": "svg", ".md": "markdown"}
-                language = lang_map[ext]
-                label = Path(path).name
-                artifact_id = f"file-{worker_tool_id}"
+        if info["name"] == "write_file":
+            content = parsed.get("content", "")
+            info["content"] = content
+            if artifact_id not in self._artifacts:
+                card = self._add_artifact(artifact_id, label, language, content)
+                card.set_streaming(True)
+            else:
+                self._artifacts[artifact_id].update_content(content)
 
-                if artifact_id not in self._artifacts:
-                    self._add_artifact(artifact_id, label, language, content)
-                else:
-                    self._artifacts[artifact_id].update_content(content)
+        elif info["name"] == "edit_file":
+            old_str = parsed.get("old_str", "")
+            new_str = parsed.get("new_str", "")
+            if artifact_id not in self._artifacts:
+                # Start by showing old_str
+                card = self._add_artifact(artifact_id, label, language, old_str if old_str else "")
+                card.set_edit_phase("old")
+                card._edit_old_str = old_str
+                card._edit_new_str = ""
+            card = self._artifacts[artifact_id]
+            if new_str and not card._edit_new_str:
+                # First chunk of new_str arrived — transition to showing new_str
+                card.set_edit_phase("new")
+                card.set_streaming(True)
+            if new_str:
+                card._edit_new_str = new_str
+                card.update_content(new_str)
 
-                self._scroll_to_bottom()
+        self._scroll_to_bottom()
 
     def set_tool_result(self, worker_tool_id: str, ok: bool, result: str) -> None:
-        """Finalize or remove artifact card on tool result."""
+        """Finalize streaming indicator; keep card on success, remove on failure."""
         info = self._write_tools.pop(worker_tool_id, None)
         if info is None:
             return
@@ -618,13 +708,13 @@ class AuraPlayground(QWidget):
         if card is None:
             return
 
+        card.set_streaming(False)  # stop the pulse
+
         if ok:
-            # Finalize: ensure content is up to date
-            content = info.get("content", "")
-            if content:
-                card.update_content(content)
+            # Keep the card — it shows the final content
+            pass
         else:
-            # Remove the card on failure
+            # On failure, remove the card (the change wasn't applied)
             card.deleteLater()
             del self._artifacts[artifact_id]
 
