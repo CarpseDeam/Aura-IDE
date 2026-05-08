@@ -54,6 +54,7 @@ try:
         TextLexer,
         get_lexer_by_name,
     )
+    from pygments.util import ClassNotFound
 
     _HAVE_PYGMENTS = True
 except ImportError:  # pragma: no cover
@@ -97,23 +98,29 @@ def _highlight_code(code: str, language: str) -> str:
             f'">{escaped}</pre>'
         )
 
-    # Try dynamic lexer lookup by name first, then fall back to TextLexer
     try:
-        lexer = get_lexer_by_name(language)
-    except Exception:
+        if language:
+            lexer = get_lexer_by_name(language)
+        else:
+            lexer = TextLexer()
+    except ClassNotFound:
         lexer = TextLexer()
 
     formatter = HtmlFormatter(
         style="dracula",
         noclasses=True,
-        nowrap=False,
-        prestyles=(
-            "background: transparent; border: none; border-radius:6px; "
-            "padding:8px; font-family:'Geist Mono','JetBrains Mono',monospace; "
-            "font-size:12px; white-space:pre;"
-        ),
+        nowrap=True,
     )
-    return highlight(code, lexer, formatter)
+    try:
+        return highlight(code, lexer, formatter)
+    except Exception:
+        escaped = code.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        return (
+            f'<pre style="background:transparent; color:{FG}; '
+            f"border:none; border-radius:6px; padding:8px; "
+            f"font-family:'Geist Mono','JetBrains Mono',monospace;"
+            f'">{escaped}</pre>'
+        )
 
 
 # ===========================================================================
@@ -266,6 +273,11 @@ class ArtifactCard(QFrame):
         self._edit_old_str: str = ""
         self._edit_new_str: str = ""
 
+        # Typing effect state
+        self._typing_timer = None  # QTimer, created lazily
+        self._typing_target = ""   # full text to reveal
+        self._typing_position = 0  # how many chars revealed so far
+
         # Glass-card styling (same as old CodeStreamCard)
         self.setStyleSheet("""
             QFrame#artifactCard {
@@ -406,7 +418,11 @@ class ArtifactCard(QFrame):
     def update_content(self, content: str) -> None:
         """Update internal content, refresh code view and preview."""
         self._content = content
-        self._refresh_code_view()
+        if self._streaming:
+            # In streaming mode, animate the content character by character
+            self._start_typing(content)
+        else:
+            self._refresh_code_view()
         self._refresh_preview()
 
     def set_streaming(self, active: bool) -> None:
@@ -424,6 +440,7 @@ class ArtifactCard(QFrame):
             if self._streaming_cursor is not None:
                 self._streaming_cursor.stop()
                 self._streaming_cursor = None
+            self._flush_typing()
             self._status_label.setText("✓ done")
             # Fade the done indicator after 2 seconds
             from PySide6.QtCore import QTimer
@@ -440,7 +457,55 @@ class ArtifactCard(QFrame):
         if phase == "old":
             self._status_label.setText("✂ removing...")
         elif phase == "new":
+            self._typing_position = 0
             self._status_label.setText("● streaming")
+
+    def _start_typing(self, target: str) -> None:
+        """Begin or continue the typing animation toward `target`."""
+        from PySide6.QtCore import QTimer
+
+        self._typing_target = target
+        # If position is already past the new target (edit_file transition),
+        # reset to animate the new content from scratch.
+        if self._typing_position > len(target):
+            self._typing_position = 0
+
+        if self._typing_timer is None:
+            self._typing_timer = QTimer(self)
+            self._typing_timer.timeout.connect(self._on_typing_tick)
+            self._typing_timer.setInterval(33)  # ~30 fps
+        if not self._typing_timer.isActive():
+            self._typing_timer.start()
+
+    def _on_typing_tick(self) -> None:
+        """Reveal a chunk of characters from the typing buffer."""
+        if self._typing_position >= len(self._typing_target):
+            self._typing_timer.stop()
+            return
+
+        # Reveal ~3-5 characters per tick for a smooth but fast effect
+        remaining = len(self._typing_target) - self._typing_position
+        chunk = max(1, min(remaining, 5))
+        self._typing_position += chunk
+        partial = self._typing_target[:self._typing_position]
+
+        # Update code view with syntax-highlighted partial content
+        if _HAVE_PYGMENTS:
+            html = _highlight_code(partial, self._language)
+            self._code_view.document().setHtml(html)
+        else:
+            self._code_view.setPlainText(partial)
+
+        # Auto-scroll to bottom
+        sb = self._code_view.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+    def _flush_typing(self) -> None:
+        """Immediately reveal all remaining typing content."""
+        if self._typing_timer is not None:
+            self._typing_timer.stop()
+        self._typing_position = len(self._typing_target)
+        self._refresh_code_view()
 
     # ---- Button handlers --------------------------------------------------
 
