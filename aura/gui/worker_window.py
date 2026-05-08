@@ -110,7 +110,12 @@ def _highlight_code(code: str, language: str) -> str:
     formatter = HtmlFormatter(
         style="dracula",
         noclasses=True,
-        nowrap=True,
+        nowrap=False,
+        prestyles=(
+            "background: transparent; border: none; border-radius:6px; "
+            "padding:8px; font-family:'Geist Mono','JetBrains Mono',monospace; "
+            "font-size:12px; white-space:pre;"
+        ),
     )
     try:
         return highlight(code, lexer, formatter)
@@ -384,7 +389,7 @@ class ArtifactCard(QFrame):
         font.setPointSize(9)
         self._code_view.setFont(font)
         self._code_view.setStyleSheet(
-            f"QPlainTextEdit {{ background: {BG}; color: {FG}; "
+            f"QPlainTextEdit {{ background: {BG}; "
             f"border: none; padding: 8px; }}"
         )
         self._code_view.setMinimumHeight(60)
