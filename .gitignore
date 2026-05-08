@@ -32,3 +32,4 @@ build/
 .pytest_cache/
 .mypy_cache/
 /.aura/
+/docs/god_files_report.md

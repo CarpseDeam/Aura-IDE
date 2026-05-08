@@ -48,7 +48,8 @@ class AuraWidget(QWidget):
         self.update()
 
     def start_aura(self) -> None:
-        self._animation.start()
+        if self._animation.state() != QAbstractAnimation.State.Running:
+            self._animation.start()
 
     def stop_aura(self) -> None:
         self._animation.stop()
@@ -83,6 +84,7 @@ class AuraWidget(QWidget):
         color = colors.get(state)
         if color is not None:
             self.transition_glow_color(color)
+            self.start_aura()
 
     def paintEvent(self, event) -> None:
         if self._animation.state() != QAbstractAnimation.State.Running:

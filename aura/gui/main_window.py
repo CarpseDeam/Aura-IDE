@@ -854,21 +854,23 @@ class MainWindow(QMainWindow):
         self._on_send(payload)
 
     def _on_stream_done(self, finish_reason: str, full_message: dict) -> None:
-        # Check whether the planner is about to dispatch to a worker.
-        # If so, keep the aura breathing in "coding" state through the
-        # dispatch resolution and worker execution — the planner is still
-        # busy in its tool loop.
+        # If the model produced tool calls, it's not actually done — the bridge
+        # will execute them and loop back. Keep the aura alive.
         tool_calls = full_message.get("tool_calls") or []
-        has_dispatch = any(
-            tc.get("function", {}).get("name") == "dispatch_to_worker"
-            for tc in tool_calls
-        )
-        if has_dispatch:
+        if tool_calls:
             # Finalize markdown but keep the aura pulsing.
             self._chat.finalize_markdown_only()
-            self._chat.hold_aura_coding()
+            # If any call is a dispatch, transition to "coding" (cyan)
+            has_dispatch = any(
+                tc.get("function", {}).get("name") == "dispatch_to_worker"
+                for tc in tool_calls
+            )
+            if has_dispatch:
+                self._chat.hold_aura_coding()
+            # Note: For non-dispatch tool calls, we keep the current aura state
+            # (which is usually already "coding" if a tool call was emitted).
         else:
-            # No pending dispatch — normal end of stream, stop the aura.
+            # No tool calls — this is the final turn.
             self._chat.assistant_done()
         # Auto-save after each assistant turn — including partial tool-call rounds.
         self._auto_save_conversation()

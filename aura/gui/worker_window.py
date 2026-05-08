@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
 
 from aura.gui.aura_widget import AuraWidget
 from aura.gui.controllers import ToolStreamController
-from aura.gui.theme import BG, BORDER, FG, FG_DIM, SUCCESS, WARN
+from aura.gui.theme import ACCENT, BG, BORDER, DANGER, FG, FG_DIM, SUCCESS, WARN
 from aura.gui.syntax import PygmentsHighlighter, language_from_path as _language_from_path
 
 _HAVE_PYGMENTS = True
@@ -538,6 +538,99 @@ class ArtifactCard(QFrame):
 
 
 # ===========================================================================
+# WorkerLogCard
+# ===========================================================================
+
+
+class WorkerLogCard(QFrame):
+    """Card for showing the worker's text output (reasoning, content, terminal)
+    with a character-by-character typewriter effect.
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("workerLogCard")
+        self.setStyleSheet(
+            f"QFrame#workerLogCard {{ "
+            f"  background: rgba(28, 28, 34, 0.4); "
+            f"  border: 1px solid {BORDER}; "
+            f"  border-radius: 8px; "
+            f"  margin: 4px 0; "
+            f"}}"
+        )
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(6)
+
+        # Header
+        self._header = QLabel("⚡ Worker Activity")
+        self._header.setStyleSheet(f"color: {ACCENT}; font-weight: 700; font-size: 11px; text-transform: uppercase;")
+        layout.addWidget(self._header)
+
+        # Content area
+        self._content_view = QPlainTextEdit()
+        self._content_view.setReadOnly(True)
+        font = QFont("Geist Mono, JetBrains Mono, Consolas, monospace")
+        font.setStyleHint(QFont.StyleHint.Monospace)
+        font.setPointSize(10)
+        self._content_view.setFont(font)
+        self._content_view.setStyleSheet(
+            f"QPlainTextEdit {{ background: transparent; border: none; color: {FG}; }}"
+        )
+        self._content_view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._content_view.setMinimumHeight(40)
+        layout.addWidget(self._content_view)
+
+        # Typewriter state
+        self._full_buffer = ""      # Everything we want to show
+        self._visible_buffer = ""   # What's actually in the text edit
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._on_tick)
+        self._timer.setInterval(20)  # ~50 fps for smooth character typing
+
+    def append_text(self, text: str, is_reasoning: bool = False) -> None:
+        """Add new text to the buffer to be typed out."""
+        if is_reasoning:
+            # Wrap reasoning in a dim/italic style if we were using RichText,
+            # but for QPlainTextEdit we'll just prefix it or keep it simple.
+            # Let's just append it.
+            pass
+        self._full_buffer += text
+        if not self._timer.isActive():
+            self._timer.start()
+
+    def _on_tick(self) -> None:
+        if len(self._visible_buffer) >= len(self._full_buffer):
+            self._timer.stop()
+            return
+
+        # Advance by 1-3 characters for a natural "streaming" feel
+        import random
+        step = random.randint(1, 3)
+        next_chunk = self._full_buffer[len(self._visible_buffer) : len(self._visible_buffer) + step]
+        self._visible_buffer += next_chunk
+        
+        self._content_view.setPlainText(self._visible_buffer)
+        
+        # Auto-scroll to bottom
+        sb = self._content_view.verticalScrollBar()
+        sb.setValue(sb.maximum())
+        
+        # Adjust height based on content
+        doc = self._content_view.document()
+        height = int(doc.size().height() + 10)
+        self._content_view.setFixedHeight(max(40, min(height, 500)))
+
+    def clear(self) -> None:
+        self._timer.stop()
+        self._full_buffer = ""
+        self._visible_buffer = ""
+        self._content_view.setPlainText("")
+        self._content_view.setFixedHeight(40)
+
+
+# ===========================================================================
 # AuraPlayground — replaces WorkerWindow
 # ===========================================================================
 
@@ -590,7 +683,17 @@ class AuraPlayground(QWidget):
         self._artifact_counter = 0
         self._auras: dict[str, AuraWidget] = {}
         self._worker_banner: QLabel | None = None
+        self._log_card: WorkerLogCard | None = None
+
     # ---- helpers -----------------------------------------------------------
+
+    def _ensure_log_card(self) -> WorkerLogCard:
+        if self._log_card is None:
+            self._log_card = WorkerLogCard()
+            # Insert at the very top of the card layout (before artifacts)
+            self._card_layout.insertWidget(0, self._log_card)
+        self._log_card.setVisible(True)
+        return self._log_card
 
     def _add_artifact(
         self, artifact_id: str, label: str, language: str, content: str
@@ -601,13 +704,17 @@ class AuraPlayground(QWidget):
             self._worker_banner.setVisible(False)
             if hasattr(self, '_banner_pulse_timer'):
                 self._banner_pulse_timer.stop()
+        
         card = ArtifactCard(artifact_id, label, language, content)
         self._artifacts[artifact_id] = card
         # Wrap in AuraWidget for breathing glow effect
         wrapper = AuraWidget(card, glow_color="#7aa2f7", glow_spread=20)
         self._auras[artifact_id] = wrapper
-        # Insert before the trailing stretch
-        self._card_layout.insertWidget(self._card_layout.count() - 1, wrapper)
+        
+        # Insert after the log card (if any) but before the trailing stretch
+        idx = self._card_layout.count() - 1
+        self._card_layout.insertWidget(idx, wrapper)
+        
         self._scroll_to_bottom()
         return card
 
@@ -638,6 +745,11 @@ class AuraPlayground(QWidget):
         self._auras.clear()
         self._controllers.clear()
         self._artifact_counter = 0
+        
+        if self._log_card:
+            self._log_card.clear()
+            self._log_card.setVisible(False)
+
         # Show a pulsing "Worker active" banner while the worker starts up
         if self._worker_banner is None:
             self._worker_banner = QLabel("◉  Worker active — awaiting tool calls…")
@@ -654,10 +766,18 @@ class AuraPlayground(QWidget):
         self._banner_pulse_timer.start(700)
 
     def append_reasoning(self, text: str) -> None:
-        """No-op."""
+        """Stream worker reasoning into the activity log."""
+        if self._worker_banner:
+            self._worker_banner.setVisible(False)
+        self._ensure_log_card().append_text(text, is_reasoning=True)
+        self._scroll_to_bottom()
 
     def append_content(self, text: str) -> None:
-        """No-op."""
+        """Stream worker content into the activity log."""
+        if self._worker_banner:
+            self._worker_banner.setVisible(False)
+        self._ensure_log_card().append_text(text, is_reasoning=False)
+        self._scroll_to_bottom()
 
     def add_tool_call(self, worker_tool_id: str, name: str) -> None:
         """Track write_file / edit_file calls for artifact streaming.
@@ -724,7 +844,9 @@ class AuraPlayground(QWidget):
             del self._artifacts[artifact_id]
 
     def append_terminal_output(self, worker_tool_id: str, text: str) -> None:
-        """No-op."""
+        """Stream terminal output into the activity log."""
+        self._ensure_log_card().append_text(text)
+        self._scroll_to_bottom()
 
     def add_diff_card(
         self,
@@ -738,13 +860,23 @@ class AuraPlayground(QWidget):
         """No-op."""
 
     def add_error(self, message: str) -> None:
-        """No-op."""
+        """Add an error message to the log card."""
+        self._ensure_log_card().append_text(f"\n❌ {message}\n")
+        self._scroll_to_bottom()
 
     def worker_finished(self, ok: bool, summary: str) -> None:
         """Artifact cards stay visible — no-op."""
+        if self._log_card:
+            status = "✓ DONE" if ok else "⚠ FINISHED WITH ERRORS"
+            color = SUCCESS if ok else WARN
+            self._log_card._header.setText(f"⚡ Worker Activity — {status}")
+            self._log_card._header.setStyleSheet(f"color: {color}; font-weight: 700; font-size: 11px; text-transform: uppercase;")
 
     def worker_cancelled(self) -> None:
-        """No-op."""
+        """Handle worker cancellation."""
+        if self._log_card:
+            self._log_card._header.setText("⚡ Worker Activity — CANCELLED")
+            self._log_card._header.setStyleSheet(f"color: {DANGER}; font-weight: 700; font-size: 11px; text-transform: uppercase;")
 
     def update_todo_list(self, tasks: list) -> None:
         """Forward the worker's TODO list update to the pinned widget."""
@@ -763,6 +895,9 @@ class AuraPlayground(QWidget):
             self._worker_banner.setVisible(False)
         if hasattr(self, '_banner_pulse_timer'):
             self._banner_pulse_timer.stop()
+        if self._log_card:
+            self._log_card.clear()
+            self._log_card.setVisible(False)
 
     # ---- New methods -------------------------------------------------------
 
