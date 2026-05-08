@@ -1,0 +1,285 @@
+"""Assistant message card with reasoning, content, and inline tool cards."""
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from PySide6.QtCore import Qt, QVariantAnimation
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QScrollArea, QVBoxLayout, QWidget
+
+from aura.gui.cards._collapsible import _CollapsibleSection
+from aura.gui.cards._helpers import _CODE_FENCE_RE, _fade_in_widget
+from aura.gui.cards._stream_label import _StreamLabel
+from aura.gui.cards.code_block_card import CodeBlockCard
+from aura.gui.cards.tool_call_card import ToolCallCard
+from aura.gui.markdown_renderer import _render_markdown_with_code
+from aura.gui.theme import FG, SUCCESS_DIM, WARN
+
+if TYPE_CHECKING:
+    from aura.gui.chat_view import ChatView
+
+
+class AssistantCard(QFrame):
+    def __init__(self, compact_tools: bool = False) -> None:
+        super().__init__()
+        self.setObjectName("assistantCard")
+        self._compact_tools = compact_tools
+        self._compact_tool_active: int = 0
+        self._compact_tool_names: list[str] = []
+        self._chat_view: ChatView | None = None
+
+        self._outer = QVBoxLayout(self)
+        self._outer.setContentsMargins(16, 14, 16, 14)
+        self._outer.setSpacing(6)
+
+        # Header row: "Aura" on left, tool status on right.
+        header_row = QWidget()
+        header_row.setStyleSheet("background: transparent;")
+        header_layout = QHBoxLayout(header_row)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(0)
+
+        header = QLabel("Aura")
+        header.setObjectName("assistantHeader")
+        header_layout.addWidget(header)
+
+        header_layout.addStretch(1)
+
+        self._thinking_label = QLabel("")
+        self._thinking_label.setObjectName("thinkingIndicator")
+        self._thinking_label.setVisible(False)
+        f = self._thinking_label.font()
+        f.setPointSize(10)
+        self._thinking_label.setFont(f)
+        self._thinking_label.setStyleSheet(f"color: {WARN}; font-style: italic;")
+        header_layout.addWidget(self._thinking_label)
+
+        # Animated dots for the thinking indicator
+        self._thinking_anim: QVariantAnimation | None = None
+        self._thinking_dots: int = 0
+
+        self._tool_status = QLabel("")
+        self._tool_status.setObjectName("toolStatus")
+        font = self._tool_status.font()
+        font.setPointSize(10)
+        self._tool_status.setFont(font)
+        self._tool_status.setTextFormat(Qt.TextFormat.RichText)
+        self._tool_status.setVisible(False)
+        header_layout.addWidget(self._tool_status)
+
+        self._outer.addWidget(header_row)
+
+        # Reasoning: lazy — created on first reasoning delta.
+        self._reasoning_section: _CollapsibleSection | None = None
+        self._reasoning_label: _StreamLabel | None = None
+        self._reasoning_scroll_area: QScrollArea | None = None
+
+        # Content: the streamed answer.
+        self._content_label = _StreamLabel(italic=False)
+        self._content_label.setVisible(False)
+        self._outer.addWidget(self._content_label)
+
+        # Tool calls grouped under the assistant turn — indented frame with a
+        # left rule so the cluster reads as supporting info under the message.
+        self._tool_cluster = QFrame()
+        self._tool_cluster.setObjectName("toolCluster")
+        self._tool_cluster_layout = QVBoxLayout(self._tool_cluster)
+        self._tool_cluster_layout.setContentsMargins(16, 6, 0, 0)
+        self._tool_cluster_layout.setSpacing(5)
+        self._tool_cluster.setVisible(False)
+        self._outer.addWidget(self._tool_cluster)
+
+        self._tool_cards: dict[str, ToolCallCard] = {}
+
+        # Footer: diff cards / usage / errors injected later.
+        self._footer = QVBoxLayout()
+        self._footer.setContentsMargins(0, 4, 0, 0)
+        self._footer.setSpacing(6)
+        self._outer.addLayout(self._footer)
+
+    # ---- streaming hooks --------------------------------------------------
+
+    def append_reasoning(self, text: str) -> None:
+        self._start_thinking_animation()
+        if self._reasoning_label is None:
+            self._reasoning_label = _StreamLabel(italic=True)
+            scroll_area = QScrollArea()
+            scroll_area.setWidgetResizable(True)
+            scroll_area.setWidget(self._reasoning_label)
+            scroll_area.setMaximumHeight(500)
+            scroll_area.setMinimumHeight(190)
+            scroll_area.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+            self._reasoning_scroll_area = scroll_area
+            section = _CollapsibleSection(
+                "Thinking…", scroll_area, start_open=True, prominent=True
+            )
+            self._reasoning_section = section
+            # Insert reasoning at the top, after header (index 1).
+            self._outer.insertWidget(1, section)
+        self._reasoning_label.append(text)
+        # Auto-scroll the reasoning box to the bottom
+        if self._reasoning_scroll_area is not None:
+            sb = self._reasoning_scroll_area.verticalScrollBar()
+            sb.setValue(sb.maximum())
+
+    def reasoning_done(self) -> None:
+        if self._reasoning_section is not None:
+            self._reasoning_section.set_title("Thinking")
+            # Keep reasoning open so the user can review it
+
+    def append_content(self, text: str) -> None:
+        self._stop_thinking_animation()
+        if not self._content_label.isVisible():
+            self._content_label.setVisible(True)
+            # Keep reasoning visible so user can see the thinking
+        self._content_label.append(text)
+
+    # ---- compact tool status --------------------------------------------
+
+    def notify_compact_tool_start(self, name: str) -> None:
+        self._compact_tool_active += 1
+        self._tool_status.setVisible(True)
+        self._tool_status.setText(
+            f"<span style='color:{WARN};'>📄 Reading files…</span>"
+        )
+
+    def notify_compact_tool_done(self, name: str) -> None:
+        self._compact_tool_active = max(0, self._compact_tool_active - 1)
+        self._compact_tool_names.append(name)
+        if self._compact_tool_active == 0:
+            n = len(self._compact_tool_names)
+            self._tool_status.setText(
+                f"<span style='color:{SUCCESS_DIM};'>✓ {n} tool{'s' if n != 1 else ''}</span>"
+            )
+
+    def reset_compact_tool_state(self) -> None:
+        self._compact_tool_active = 0
+        self._compact_tool_names.clear()
+        self._tool_status.setVisible(False)
+        self._stop_thinking_animation()
+
+    # ---- thinking animation ---------------------------------------------
+
+    def _start_thinking_animation(self) -> None:
+        if self._thinking_anim is not None:
+            return
+        self._thinking_label.setVisible(True)
+        self._thinking_anim = QVariantAnimation(self)
+        self._thinking_anim.setStartValue(0)
+        self._thinking_anim.setEndValue(3)
+        self._thinking_anim.setDuration(1200)
+        self._thinking_anim.setLoopCount(-1)
+        self._thinking_anim.valueChanged.connect(self._on_thinking_tick)
+        self._thinking_anim.start()
+
+    def _stop_thinking_animation(self) -> None:
+        if self._thinking_anim is not None:
+            self._thinking_anim.stop()
+            self._thinking_anim.deleteLater()
+            self._thinking_anim = None
+        self._thinking_label.setVisible(False)
+        self._thinking_label.setText("")
+
+    def _on_thinking_tick(self, value: int) -> None:
+        dots = "." * (value + 1)
+        self._thinking_label.setText(f"Thinking{dots}")
+
+    # ---- tool cards -----------------------------------------------------
+
+    def add_tool_card(self, tool_call_id: str, name: str) -> "ToolCallCard | None":
+        if self._compact_tools:
+            self.notify_compact_tool_start(name)
+            return None
+        card = ToolCallCard(name)
+        self._tool_cards[tool_call_id] = card
+        if not self._tool_cluster.isVisible():
+            self._tool_cluster.setVisible(True)
+        self._tool_cluster_layout.addWidget(card)
+        _fade_in_widget(card)
+        return card
+
+    def get_tool_card(self, tool_call_id: str) -> "ToolCallCard | None":
+        if self._compact_tools:
+            return None
+        return self._tool_cards.get(tool_call_id)
+
+    def add_footer_widget(self, w: QWidget) -> None:
+        self._footer.addWidget(w)
+        _fade_in_widget(w)
+
+    def finalize_content(self) -> None:
+        """Replace the streaming label with a rich layout that renders code
+        blocks as CodeBlockCard widgets instead of inline HTML pre blocks."""
+        text = self._content_label.text_buffer()
+        if not text:
+            return
+
+        # If no fenced code blocks, fall back to the old inline HTML render
+        if not _CODE_FENCE_RE.search(text):
+            html = _render_markdown_with_code(text)
+            self._content_label.setTextFormat(Qt.TextFormat.RichText)
+            self._content_label.setText(html)
+            return
+
+        # Parse into segments: list of (type, content, language)
+        segments = self._parse_content(text)
+
+        # Build a container widget to replace the streaming label
+        container = QWidget()
+        container.setStyleSheet("background: transparent;")
+        container_layout = QVBoxLayout(container)
+        container_layout.setContentsMargins(0, 0, 0, 0)
+        container_layout.setSpacing(8)
+
+        for seg_type, content, lang in segments:
+            if seg_type == "text":
+                if content.strip():
+                    lbl = QLabel()
+                    lbl.setWordWrap(True)
+                    lbl.setTextInteractionFlags(
+                        Qt.TextInteractionFlag.TextSelectableByMouse
+                    )
+                    lbl.setTextFormat(Qt.TextFormat.RichText)
+                    # Render markdown (there are no code fences left, so this
+                    # will just process inline formatting)
+                    html = _render_markdown_with_code(content)
+                    lbl.setText(html)
+                    lbl.setStyleSheet(f"color: {FG};")
+                    container_layout.addWidget(lbl)
+            elif seg_type == "code":
+                card = CodeBlockCard(lang, content)
+                container_layout.addWidget(card)
+                if lang == "mermaid" and self._chat_view is not None:
+                    self._chat_view.mermaid_detected.emit(content)
+
+        # Swap the streaming label out for the rich container
+        idx = self._outer.indexOf(self._content_label)
+        if idx >= 0:
+            self._content_label.stop_timer()
+            self._content_label.hide()
+            # Insert new container at the same position
+            self._outer.insertWidget(idx, container)
+            # Remove old label from layout (but keep the object — it still
+            # owns the text buffer and is referenced by append_content etc.)
+            self._outer.removeWidget(self._content_label)
+
+    def _parse_content(self, text: str) -> list[tuple[str, str, str]]:
+        """Split text into a list of segments around fenced code blocks.
+        Each segment is (type, content, language).
+        type is 'text' or 'code'.
+        """
+        segments: list[tuple[str, str, str]] = []
+        last_end = 0
+        for m in _CODE_FENCE_RE.finditer(text):
+            before = text[last_end:m.start()]
+            if before.strip():
+                segments.append(("text", before, ""))
+            lang = (m.group(1) or "").strip().lower()
+            code = m.group(2)
+            segments.append(("code", code, lang))
+            last_end = m.end()
+        after = text[last_end:]
+        if after.strip():
+            segments.append(("text", after, ""))
+        if not segments:
+            segments.append(("text", text, ""))
+        return segments
