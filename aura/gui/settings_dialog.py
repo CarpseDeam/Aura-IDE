@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QObject, Signal, QThread
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QVBoxLayout,
@@ -43,6 +44,22 @@ _THINKING_ITEMS: list[tuple[str, str]] = [
     ("High", "high"),
     ("Max", "max"),
 ]
+
+
+class DiscoveryWorker(QObject):
+    """Background worker for model discovery."""
+    finished = Signal(str, dict, dict, str) # provider_id, models, pricing, error_msg
+
+    def __init__(self, provider_id: ProviderId):
+        super().__init__()
+        self.provider_id = provider_id
+
+    def run(self):
+        try:
+            models, pricing, error = fetch_provider_models(self.provider_id)
+            self.finished.emit(self.provider_id, models, pricing, error or "")
+        except Exception as exc:
+            self.finished.emit(self.provider_id, {}, {}, str(exc))
 
 
 class SettingsDialog(QDialog):
@@ -333,23 +350,37 @@ class SettingsDialog(QDialog):
         self._refresh_btn.setEnabled(False)
         self._refresh_btn.setText("Fetching...")
 
-        import threading
-        from PySide6.QtCore import QTimer
+        # Use QThread and DiscoveryWorker for robust background execution
+        self._discovery_thread = QThread()
+        self._discovery_worker = DiscoveryWorker(provider_id)
+        self._discovery_worker.moveToThread(self._discovery_thread)
+        
+        self._discovery_thread.started.connect(self._discovery_worker.run)
+        self._discovery_worker.finished.connect(self._on_refresh_done)
+        self._discovery_worker.finished.connect(self._discovery_thread.quit)
+        self._discovery_worker.finished.connect(self._discovery_worker.deleteLater)
+        self._discovery_thread.finished.connect(self._discovery_thread.deleteLater)
+        
+        self._discovery_thread.start()
 
-        def _worker():
-            try:
-                models, pricing = fetch_provider_models(provider_id)
-                QTimer.singleShot(0, lambda: self._on_refresh_done(provider_id, models, pricing))
-            except Exception:
-                QTimer.singleShot(0, lambda: self._on_refresh_done(provider_id, {}, {}))
-
-        threading.Thread(target=_worker, daemon=True).start()
-
-    def _on_refresh_done(self, provider_id: ProviderId, models: dict, pricing: dict) -> None:
+    def _on_refresh_done(self, provider_id: ProviderId, models: dict, pricing: dict, error: str) -> None:
         self._refresh_btn.setEnabled(True)
         self._refresh_btn.setText("Refresh")
 
+        if error:
+            QMessageBox.warning(
+                self, 
+                "Refresh Failed", 
+                f"Failed to fetch models for {get_provider(provider_id).label}:\n\n{error}"
+            )
+            return
+
         if not models:
+            QMessageBox.warning(
+                self, 
+                "Refresh Failed", 
+                f"No models were returned by {get_provider(provider_id).label}."
+            )
             return
 
         # Update the global PROVIDERS registry for this session
@@ -469,6 +500,3 @@ class SettingsDialog(QDialog):
         save_settings(new_settings)
         self._settings = new_settings
         super().accept()
-
-
-

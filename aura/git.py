@@ -11,6 +11,8 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+from aura.config import get_subprocess_kwargs
+
 
 def is_git_repo(workspace_root: Path) -> bool:
     """Return True if workspace_root is inside a git working tree."""
@@ -21,6 +23,7 @@ def is_git_repo(workspace_root: Path) -> bool:
             capture_output=True,
             check=True,
             timeout=5,
+            **get_subprocess_kwargs(),
         )
         return True
     except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
@@ -42,6 +45,7 @@ def auto_commit(workspace_root: Path, goal: str, files: list[str], summary: str)
             capture_output=True,
             check=True,
             timeout=10,
+            **get_subprocess_kwargs(),
         )
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return False, "git add failed."
@@ -53,10 +57,16 @@ def auto_commit(workspace_root: Path, goal: str, files: list[str], summary: str)
             cwd=str(workspace_root),
             capture_output=True,
             timeout=5,
+            **get_subprocess_kwargs(),
         )
         if result.returncode == 0:
             # No changes to commit — unstage and return
-            subprocess.run(["git", "reset", "--"] + files, cwd=str(workspace_root), capture_output=True)
+            subprocess.run(
+                ["git", "reset", "--"] + files,
+                cwd=str(workspace_root),
+                capture_output=True,
+                **get_subprocess_kwargs(),
+            )
             return False, "No changes to commit."
     except subprocess.CalledProcessError:
         pass
@@ -75,11 +85,17 @@ def auto_commit(workspace_root: Path, goal: str, files: list[str], summary: str)
             capture_output=True,
             check=True,
             timeout=10,
+            **get_subprocess_kwargs(),
         )
         return True, f"Committed: {goal}"
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
         # Unstage on failure
-        subprocess.run(["git", "reset", "--"] + files, cwd=str(workspace_root), capture_output=True)
+        subprocess.run(
+            ["git", "reset", "--"] + files,
+            cwd=str(workspace_root),
+            capture_output=True,
+            **get_subprocess_kwargs(),
+        )
         return False, "git commit failed."
 
 
@@ -100,6 +116,7 @@ def undo_last_commit(workspace_root: Path) -> tuple[bool, str]:
             text=True,
             check=True,
             timeout=5,
+            **get_subprocess_kwargs(),
         )
         if int(result.stdout.strip()) == 0:
             return False, "No commits to undo."
@@ -113,6 +130,7 @@ def undo_last_commit(workspace_root: Path) -> tuple[bool, str]:
             capture_output=True,
             check=True,
             timeout=10,
+            **get_subprocess_kwargs(),
         )
         return True, "Undo complete — last commit reverted, changes are staged."
     except subprocess.CalledProcessError as e:

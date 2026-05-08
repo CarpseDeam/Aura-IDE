@@ -6,6 +6,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from aura.config import get_subprocess_kwargs
+
 
 def git_status(workspace_root: Path) -> dict[str, Any]:
     """Return the current branch, remote tracking info, and lists of staged, unstaged, and untracked files."""
@@ -17,6 +19,7 @@ def git_status(workspace_root: Path) -> dict[str, Any]:
             text=True,
             timeout=10,
             cwd=str(workspace_root),
+            **get_subprocess_kwargs(),
         )
         if status_result.returncode != 0:
             return {"ok": False, "error": "Not a git repository (or git not found)."}
@@ -92,6 +95,7 @@ def git_status(workspace_root: Path) -> dict[str, Any]:
                     text=True,
                     timeout=5,
                     cwd=str(workspace_root),
+                    **get_subprocess_kwargs(),
                 )
                 if branch_result.returncode == 0:
                     branch = branch_result.stdout.strip()
@@ -108,6 +112,7 @@ def git_status(workspace_root: Path) -> dict[str, Any]:
                     text=True,
                     timeout=5,
                     cwd=str(workspace_root),
+                    **get_subprocess_kwargs(),
                 )
                 if remote_result.returncode == 0:
                     remote_url = remote_result.stdout.strip()
@@ -155,6 +160,7 @@ def git_log(
             text=True,
             timeout=10,
             cwd=str(workspace_root),
+            **get_subprocess_kwargs(),
         )
 
         if result.returncode != 0:
@@ -205,6 +211,7 @@ def git_diff(
             text=True,
             timeout=10,
             cwd=str(workspace_root),
+            **get_subprocess_kwargs(),
         )
 
         if result.returncode != 0:
@@ -255,6 +262,7 @@ def git_show(
             text=True,
             timeout=30,
             cwd=str(workspace_root),
+            **get_subprocess_kwargs(),
         )
 
         if result.returncode != 0:
@@ -315,6 +323,7 @@ def git_log_file(
             text=True,
             timeout=10,
             cwd=str(workspace_root),
+            **get_subprocess_kwargs(),
         )
 
         if result.returncode != 0:
@@ -378,6 +387,7 @@ def git_branch_list(
             text=True,
             timeout=10,
             cwd=str(workspace_root),
+            **get_subprocess_kwargs(),
         )
 
         if result.returncode != 0:

@@ -7,7 +7,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from aura.config import MAX_GLOB_RESULTS, SKIP_DIRS, SKIP_FILE_SUFFIXES
+from aura.config import MAX_GLOB_RESULTS, SKIP_DIRS, SKIP_FILE_SUFFIXES, get_subprocess_kwargs
 
 
 def _should_skip(path: Path) -> bool:
@@ -73,7 +73,13 @@ def _grep_ripgrep(
     try:
         # ripgrep returns 1 if no matches found, 0 if matches found.
         # We handle this manually.
-        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            **get_subprocess_kwargs(),
+        )
         if proc.returncode not in (0, 1):
             return {"ok": False, "error": proc.stderr or f"ripgrep failed with code {proc.returncode}"}
 

@@ -86,20 +86,19 @@ OPENAI_MODELS: dict[str, ModelInfo] = {
         cache_hit_per_m_usd=0.075,
         supports_vision=True,
     ),
-    "gpt-4.1": ModelInfo(
-        id="gpt-4.1",
-        label="GPT-4.1",
-        input_per_m_usd=2.00,
-        output_per_m_usd=8.00,
-        cache_hit_per_m_usd=0.50,
-        supports_vision=True,
+    "o1": ModelInfo(
+        id="o1",
+        label="o1 (Preview)",
+        input_per_m_usd=15.00,
+        output_per_m_usd=60.00,
+        cache_hit_per_m_usd=7.50,
     ),
 }
 
 OPENAI_PRICING: dict[str, dict[str, float]] = {
     "gpt-4o": {"in_miss": 2.50, "in_hit": 1.25, "out": 10.00},
     "gpt-4o-mini": {"in_miss": 0.15, "in_hit": 0.075, "out": 0.60},
-    "gpt-4.1": {"in_miss": 2.00, "in_hit": 0.50, "out": 8.00},
+    "o1": {"in_miss": 15.00, "in_hit": 7.50, "out": 60.00},
 }
 
 GOOGLE_MODELS: dict[str, ModelInfo] = {
@@ -119,37 +118,20 @@ GOOGLE_MODELS: dict[str, ModelInfo] = {
         cache_hit_per_m_usd=0.00,
         supports_vision=True,
     ),
-    "gemini-1.5-pro": ModelInfo(
-        id="gemini-1.5-pro",
-        label="Gemini 1.5 Pro",
-        input_per_m_usd=1.25,
-        output_per_m_usd=10.00,
-        cache_hit_per_m_usd=0.25,
-        supports_vision=True,
-    ),
 }
 
 GOOGLE_PRICING: dict[str, dict[str, float]] = {
     "gemini-2.0-flash": {"in_miss": 0.10, "in_hit": 0.01, "out": 0.40},
     "gemini-2.0-pro-exp-02-05": {"in_miss": 0.00, "in_hit": 0.00, "out": 0.00},
-    "gemini-1.5-pro": {"in_miss": 1.25, "in_hit": 0.25, "out": 10.00},
 }
 
 OPENROUTER_MODELS: dict[str, ModelInfo] = {
     "openai/gpt-4o": ModelInfo(
         id="openai/gpt-4o",
-        label="OpenAI GPT-4o",
+        label="GPT-4o",
         input_per_m_usd=2.50,
         output_per_m_usd=10.00,
         cache_hit_per_m_usd=1.25,
-        supports_vision=True,
-    ),
-    "openai/gpt-4o-mini": ModelInfo(
-        id="openai/gpt-4o-mini",
-        label="OpenAI GPT-4o Mini",
-        input_per_m_usd=0.15,
-        output_per_m_usd=0.60,
-        cache_hit_per_m_usd=0.075,
         supports_vision=True,
     ),
     "anthropic/claude-3.5-sonnet": ModelInfo(
@@ -176,42 +158,21 @@ OPENROUTER_MODELS: dict[str, ModelInfo] = {
         cache_hit_per_m_usd=0.01,
         supports_vision=True,
     ),
-    "google/gemini-2.0-pro-exp-02-05:free": ModelInfo(
-        id="google/gemini-2.0-pro-exp-02-05:free",
-        label="Gemini 2.0 Pro (Free)",
-        input_per_m_usd=0.00,
-        output_per_m_usd=0.00,
-        cache_hit_per_m_usd=0.00,
-        supports_vision=True,
-    ),
-    "meta-llama/llama-3.1-8b-instruct": ModelInfo(
-        id="meta-llama/llama-3.1-8b-instruct",
-        label="Llama 3.1 8B",
-        input_per_m_usd=0.06,
-        output_per_m_usd=0.06,
-        cache_hit_per_m_usd=0.03,
-    ),
-    "x-ai/grok-2-1212": ModelInfo(
-        id="x-ai/grok-2-1212",
-        label="Grok 2",
-        input_per_m_usd=2.00,
-        output_per_m_usd=10.00,
-        cache_hit_per_m_usd=1.00,
-        supports_vision=True,
+    "deepseek/deepseek-r1": ModelInfo(
+        id="deepseek/deepseek-r1",
+        label="DeepSeek R1",
+        input_per_m_usd=0.14,
+        output_per_m_usd=2.19,
+        cache_hit_per_m_usd=0.014,
     ),
 }
 
 OPENROUTER_PRICING: dict[str, dict[str, float]] = {
     "openai/gpt-4o": {"in_miss": 2.50, "in_hit": 1.25, "out": 10.00},
-    "openai/gpt-4o-mini": {"in_miss": 0.15, "in_hit": 0.075, "out": 0.60},
     "anthropic/claude-3.5-sonnet": {"in_miss": 3.00, "in_hit": 0.30, "out": 15.00},
     "anthropic/claude-3.7-sonnet": {"in_miss": 3.00, "in_hit": 0.30, "out": 15.00},
-    "meta-llama/llama-3.1-8b-instruct": {"in_miss": 0.06, "in_hit": 0.03, "out": 0.06},
-    "meta-llama/llama-3.1-70b-instruct": {"in_miss": 0.59, "in_hit": 0.30, "out": 0.79},
-    "mistralai/mistral-7b-instruct": {"in_miss": 0.06, "in_hit": 0.03, "out": 0.06},
-    "x-ai/grok-2-1212": {"in_miss": 2.00, "in_hit": 1.00, "out": 10.00},
-    "google/gemini-2.5-flash-001": {"in_miss": 0.15, "in_hit": 0.015, "out": 0.60},
-    "google/gemini-2.5-pro-001": {"in_miss": 1.25, "in_hit": 0.25, "out": 10.00},
+    "google/gemini-2.0-flash-001": {"in_miss": 0.10, "in_hit": 0.01, "out": 0.40},
+    "deepseek/deepseek-r1": {"in_miss": 0.55, "in_hit": 0.07, "out": 2.19},
 }
 
 PROVIDERS: dict[ProviderId, ProviderConfig] = {
@@ -240,7 +201,7 @@ PROVIDERS: dict[ProviderId, ProviderConfig] = {
         label="Google Gemini",
         base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
         env_key="GEMINI_API_KEY",
-        default_model="gemini-2.5-flash",
+        default_model="gemini-2.0-flash",
         default_thinking="off",
         models=GOOGLE_MODELS,
         pricing=GOOGLE_PRICING,
@@ -250,7 +211,7 @@ PROVIDERS: dict[ProviderId, ProviderConfig] = {
         label="OpenRouter",
         base_url="https://openrouter.ai/api/v1",
         env_key="OPENROUTER_API_KEY",
-        default_model="openai/gpt-4o-mini",
+        default_model="openai/gpt-4o",
         default_thinking="off",
         models=OPENROUTER_MODELS,
         pricing=OPENROUTER_PRICING,
@@ -271,8 +232,6 @@ MODELS: dict[str, ModelInfo] = dict(PROVIDERS["deepseek"].models)
 # ---------------------------------------------------------------------------
 # Tavily (web search) API key
 # ---------------------------------------------------------------------------
-
-OPENROUTER_API_KEY_ENV: str = "OPENROUTER_API_KEY"
 
 TAVILY_API_KEY_ENV: str = "TAVILY_API_KEY"
 
@@ -319,18 +278,20 @@ def get_tavily_api_key() -> str | None:
     return os.environ.get(TAVILY_API_KEY_ENV) or None
 
 
-def fetch_provider_models(provider_id: ProviderId) -> tuple[dict[str, ModelInfo], dict[str, dict[str, float]]]:
+def fetch_provider_models(provider_id: ProviderId) -> tuple[dict[str, ModelInfo], dict[str, dict[str, float]], str | None]:
     """Fetch models and pricing from the provider's API.
     
-    Returns (models_dict, pricing_dict).
+    Returns (models_dict, pricing_dict, error_message).
     """
     from aura.client.deepseek import DeepSeekClient
     
     try:
         client = DeepSeekClient(provider=provider_id)
         raw = client.fetch_raw_models()
-    except Exception:
-        return {}, {}
+        if not raw:
+            return {}, {}, "Provider returned no models. Check your API key or connection."
+    except Exception as exc:
+        return {}, {}, str(exc)
         
     models: dict[str, ModelInfo] = {}
     pricing: dict[str, dict[str, float]] = {}
@@ -343,9 +304,6 @@ def fetch_provider_models(provider_id: ProviderId) -> tuple[dict[str, ModelInfo]
             
             # OpenRouter gives us friendly names and pricing!
             name = m.get("name") or mid
-            # Pricing is in USD per 1k tokens in the API, we want per 1M.
-            # actually OpenRouter API returns strings for pricing sometimes or floats.
-            # Per docs: prompt, completion are in USD.
             p = m.get("pricing", {})
             try:
                 # Convert from price-per-token to price-per-1M-tokens
@@ -372,15 +330,11 @@ def fetch_provider_models(provider_id: ProviderId) -> tuple[dict[str, ModelInfo]
             pricing[mid] = {"in_miss": in_m, "in_hit": hit_m, "out": out_m}
     else:
         # Standard OpenAI-compatible (DeepSeek, Google, OpenAI)
-        # These usually just give a list of IDs.
         for m in raw:
-            mid = m.get("id") or m.get("name") # Some variants use name
+            mid = m.get("id") or m.get("name")
             if not mid:
                 continue
             
-            # We don't have pricing for dynamic models on these providers 
-            # (they don't expose it via API usually). 
-            # We'll check if we have hardcoded pricing first.
             existing_p = get_pricing(mid)
             if existing_p:
                 in_m = existing_p["in_miss"]
@@ -389,10 +343,8 @@ def fetch_provider_models(provider_id: ProviderId) -> tuple[dict[str, ModelInfo]
             else:
                 in_m = out_m = hit_m = 0.0
             
-            # Friendly label: capitalized ID or stripped prefix
             label = mid.split("/")[-1].replace("-", " ").title()
             
-            # Default vision support check for hardcoded models
             supports_vision = False
             for p_cfg in PROVIDERS.values():
                 if mid in p_cfg.models:
@@ -409,7 +361,7 @@ def fetch_provider_models(provider_id: ProviderId) -> tuple[dict[str, ModelInfo]
             )
             pricing[mid] = {"in_miss": in_m, "in_hit": hit_m, "out": out_m}
 
-    return models, pricing
+    return models, pricing, None
 
 
 def require_tavily_api_key() -> str:
@@ -571,6 +523,22 @@ class AppSettings:
 # ---------------------------------------------------------------------------
 # Paths and file helpers
 # ---------------------------------------------------------------------------
+
+
+def get_subprocess_kwargs() -> dict[str, Any]:
+    """Return kwargs for subprocess.run/Popen to suppress console flashes on Windows."""
+    import subprocess
+    import sys
+    kwargs: dict[str, Any] = {}
+    if sys.platform == "win32":
+        # CREATE_NO_WINDOW prevents the console window from appearing.
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        # STARTUPINFO SW_HIDE is a belt-and-suspenders approach for some environments.
+        si = subprocess.STARTUPINFO()
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        si.wShowWindow = subprocess.SW_HIDE
+        kwargs["startupinfo"] = si
+    return kwargs
 
 
 def config_dir() -> Path:

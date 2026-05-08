@@ -11,6 +11,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from aura.config import get_subprocess_kwargs
 from PySide6.QtCore import (
     QDir,
     QFileInfo,
@@ -218,11 +219,19 @@ class WorkspaceTree(QWidget):
         if sys.platform == "win32":
             # `explorer /select,<path>` highlights the file in its parent dir.
             try:
-                subprocess.run(["explorer", f"/select,{path}"], check=False)
+                subprocess.run(
+                    ["explorer", f"/select,{path}"],
+                    check=False,
+                    **get_subprocess_kwargs(),
+                )
             except OSError:
                 QDesktopServices.openUrl(QUrl.fromLocalFile(str(path.parent)))
         elif sys.platform == "darwin":
-            subprocess.run(["open", "-R", str(path)], check=False)
+            subprocess.run(
+                ["open", "-R", str(path)],
+                check=False,
+                **get_subprocess_kwargs(),
+            )
         else:
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(path.parent)))
 

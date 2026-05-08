@@ -71,14 +71,17 @@ class DeepSeekClient:
             if self._provider == "openrouter":
                 # OpenRouter provides a richer metadata endpoint
                 import httpx
-                resp = httpx.get("https://openrouter.ai/api/v1/models")
+                # Set a reasonable 10s timeout to prevent hanging
+                resp = httpx.get("https://openrouter.ai/api/v1/models", timeout=10.0)
                 resp.raise_for_status()
                 return resp.json().get("data", [])
             
-            models = self._client.models.list()
+            # Standard OpenAI-compatible fetch with timeout
+            models = self._client.models.list(timeout=10.0)
             # Convert OpenAI model objects to dicts for uniform handling
             return [m.model_dump() for m in models]
         except Exception:
+            # Silently return empty on failure, but ensure we don't hang
             return []
 
     def stream(
