@@ -53,7 +53,7 @@ from aura.gui.input_panel import InputPanel, SendPayload
 from aura.gui.settings_dialog import SettingsDialog
 from aura.gui.spec_edit_dialog import SpecApprovalDialog, SpecEditDialog
 from aura.gui.theme import BORDER, FG_DIM
-from aura.gui.worker_window import WorkerWindow
+from aura.gui.worker_window import AuraPlayground
 from aura.gui.workspace_tree import WorkspaceTree
 
 SYSTEM_PROMPT = (
@@ -169,8 +169,8 @@ class MainWindow(QMainWindow):
         splitter.addWidget(center)
 
         # Right pane: worker activity (embedded, not a separate window)
-        self._worker_window = WorkerWindow(parent=self)
-        splitter.addWidget(self._worker_window)
+        self._playground = AuraPlayground(parent=self)
+        splitter.addWidget(self._playground)
 
         w = self.width()
         splitter.setSizes([min(200, w // 8), (w - min(200, w // 8)) // 2, (w - min(200, w // 8)) // 2])
@@ -222,6 +222,9 @@ class MainWindow(QMainWindow):
         self._bridge.workerTodoListUpdated.connect(self._on_worker_todo_list_updated)
         self._bridge.workerTerminalOutput.connect(self._on_worker_terminal_output)
         self._bridge.terminalOutput.connect(self._on_terminal_output)
+
+        # Mermaid diagram detection from chat → playground
+        self._chat.mermaid_detected.connect(self._playground.add_mermaid_artifact)
 
         self._update_workspace_label()
         self._refresh_status_bar()
@@ -645,7 +648,7 @@ class MainWindow(QMainWindow):
         self._chat.reset()
         self._current_conversation_path = None
         self._reset_session_usage()
-        self._worker_window.clear()
+        self._playground.clear()
         self._message_queue.clear()
         self._input.set_queued_messages(0)
 
@@ -906,26 +909,26 @@ class MainWindow(QMainWindow):
         self._bridge.user_cancelled_dispatch(tool_call_id)
 
     def _on_worker_started(self, tool_call_id: str) -> None:
-        self._worker_window.begin_assistant()
+        self._playground.begin_assistant()
         self._input.set_streaming(False)
 
     def _on_worker_finished(self, tool_call_id: str, ok: bool, summary: str) -> None:
-        self._worker_window.worker_finished(ok, summary)
+        self._playground.worker_finished(ok, summary)
 
     def _on_worker_cancelled(self, tool_call_id: str) -> None:
-        self._worker_window.worker_cancelled()
+        self._playground.worker_cancelled()
 
     def _on_worker_reasoning(self, tool_call_id: str, text: str) -> None:
-        self._worker_window.append_reasoning(text)
+        self._playground.append_reasoning(text)
 
     def _on_worker_content(self, tool_call_id: str, text: str) -> None:
-        self._worker_window.append_content(text)
+        self._playground.append_content(text)
 
     def _on_worker_tool_call_start(self, tool_call_id: str, worker_tool_id: str, name: str) -> None:
-        self._worker_window.add_tool_call(worker_tool_id, name)
+        self._playground.add_tool_call(worker_tool_id, name)
 
     def _on_worker_tool_args(self, tool_call_id: str, worker_tool_id: str, fragment: str) -> None:
-        self._worker_window.append_tool_args(worker_tool_id, fragment)
+        self._playground.append_tool_args(worker_tool_id, fragment)
 
     def _on_worker_tool_result(
         self,
@@ -936,7 +939,7 @@ class MainWindow(QMainWindow):
         result: str,
         extras: dict,
     ) -> None:
-        self._worker_window.set_tool_result(worker_tool_id, ok, result)
+        self._playground.set_tool_result(worker_tool_id, ok, result)
 
     def _on_worker_diff_decided(
         self,
@@ -948,11 +951,11 @@ class MainWindow(QMainWindow):
         new: str,
         is_new_file: bool,
     ) -> None:
-        self._worker_window.add_diff_card(worker_tool_id, rel_path, old, new, decision, is_new_file)
+        self._playground.add_diff_card(worker_tool_id, rel_path, old, new, decision, is_new_file)
 
     def _on_worker_api_error(self, tool_call_id: str, status: int, message: str) -> None:
         title = f"API Error {status}" if status > 0 else "Worker Error"
-        self._worker_window.add_error(f"{title}: {message}")
+        self._playground.add_error(f"{title}: {message}")
 
     def _on_view_worker_clicked(self, tool_call_id: str) -> None:
         pass
@@ -977,16 +980,16 @@ class MainWindow(QMainWindow):
         self._refresh_status_bar()
 
     def _on_worker_todo_list_updated(self, tool_call_id: str, tasks: list) -> None:
-        """Route the worker's TODO list update to the WorkerWindow's pinned widget."""
-        self._worker_window.update_todo_list(tasks)
+        """Route the worker's TODO list update to the Playground's pinned widget."""
+        self._playground.update_todo_list(tasks)
 
     def _on_terminal_output(self, tool_call_id: str, text: str) -> None:
         """Route terminal output (single mode) to the ChatView's TerminalCard."""
         self._chat.append_terminal_output(tool_call_id, text)
 
     def _on_worker_terminal_output(self, parent_tool_id: str, worker_tool_id: str, text: str) -> None:
-        """Route terminal output (worker mode) to the WorkerWindow's TerminalCard."""
-        self._worker_window.append_terminal_output(worker_tool_id, text)
+        """Route terminal output (worker mode) to the Playground's TerminalCard."""
+        self._playground.append_terminal_output(worker_tool_id, text)
 
     def _on_undo(self) -> None:
         """Handle /undo command — git reset the last commit."""

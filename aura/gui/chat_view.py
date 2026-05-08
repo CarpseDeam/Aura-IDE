@@ -13,9 +13,8 @@ import base64
 import html as _html
 import json
 import re
-from dataclasses import dataclass
 
-from PySide6.QtCore import QAbstractAnimation, QEasingCurve, QPropertyAnimation, Qt, QSize, QTimer, QVariantAnimation, Signal
+from PySide6.QtCore import QEasingCurve, QPropertyAnimation, Qt, QTimer, QVariantAnimation, Signal
 from PySide6.QtGui import QFont, QPixmap, QTextCharFormat, QTextCursor, QTextDocument
 from PySide6.QtWidgets import (
     QFrame,
@@ -26,7 +25,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
-    QTextBrowser,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -38,9 +36,7 @@ from aura.gui.theme import (
     ACCENT,
     BG,
     BG_ALT,
-    BG_RAISED,
     BORDER,
-    BORDER_STRONG,
     DANGER,
     DIFF_ADD_BG,
     DIFF_DEL_BG,
@@ -86,7 +82,7 @@ def _render_code_block(lang: str, code: str) -> str:
         noclasses=True,
         nowrap=False,
         prestyles=(
-            f"background: transparent; border: none; border-radius:6px; "
+            "background: transparent; border: none; border-radius:6px; "
             "padding:8px; font-family:'Geist Mono','JetBrains Mono',monospace; "
             "font-size:12px; white-space:pre;"
         ),
@@ -340,6 +336,7 @@ class AssistantCard(QFrame):
         self._compact_tools = compact_tools
         self._compact_tool_active: int = 0
         self._compact_tool_names: list[str] = []
+        self._chat_view: ChatView | None = None
 
         self._outer = QVBoxLayout(self)
         self._outer.setContentsMargins(16, 14, 16, 14)
@@ -562,6 +559,8 @@ class AssistantCard(QFrame):
             elif seg_type == "code":
                 card = CodeBlockCard(lang, content)
                 container_layout.addWidget(card)
+                if lang == "mermaid" and self._chat_view is not None:
+                    self._chat_view.mermaid_detected.emit(content)
 
         # Swap the streaming label out for the rich container
         idx = self._outer.indexOf(self._content_label)
@@ -892,7 +891,7 @@ class CodeWriterCard(QFrame):
             noclasses=True,
             nowrap=True,
             prestyles=(
-                f"background: transparent; border:none; "
+                "background: transparent; border:none; "
                 "font-family:Consolas,'Cascadia Mono',monospace; "
                 "font-size:12px; line-height:1.4;"
             ),
@@ -1389,6 +1388,7 @@ class ChatView(QScrollArea):
     """Vertical, scrollable column of cards."""
 
     retry_requested = Signal()
+    mermaid_detected = Signal(str)  # emits the raw mermaid code
 
     def __init__(self) -> None:
         super().__init__()
@@ -1490,6 +1490,7 @@ class ChatView(QScrollArea):
 
     def begin_assistant(self) -> AssistantCard:
         card = AssistantCard(compact_tools=self._compact_tools)
+        card._chat_view = self
         self._current_assistant = card
         wrapper = AuraWidget(card, glow_color=ACCENT, glow_spread=16)
         self._current_aura = wrapper
@@ -1546,7 +1547,6 @@ class ChatView(QScrollArea):
         term_card = self._terminal_cards.get(tool_call_id)
         if term_card is not None:
             # Try to extract command from partial/complete JSON
-            import json as _json
             import re as _re
             m = _re.search(r'"command"\s*:\s*"([^"]*)', fragment)
             if m:

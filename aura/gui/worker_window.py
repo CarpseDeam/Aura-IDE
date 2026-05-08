@@ -1,27 +1,108 @@
 """Embeddable panel for worker dispatch output.
 
-Shows a pinned TODO list and one code-stream card per file edited by the worker,
-with dark syntax highlighting.
+Shows a pinned TODO list and interactive artifact cards (HTML, SVG,
+Markdown, Mermaid) with code/preview toggle and QWebEngineView preview.
 """
 
 from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 
-from PySide6.QtCore import QEasingCurve, Qt, QTimer, QVariantAnimation
-from PySide6.QtGui import QColor, QFont, QSyntaxHighlighter, QTextCharFormat
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QFont
+from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import (
+    QApplication,
+    QFileDialog,
     QFrame,
     QGraphicsOpacityEffect,
+    QHBoxLayout,
     QLabel,
+    QPlainTextEdit,
+    QPushButton,
     QScrollArea,
-    QTextEdit,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from aura.gui.theme import BG, BORDER, FG, FG_DIM, SUCCESS, WARN
+
+# ---------------------------------------------------------------------------
+# Load mermaid.min.js at module init time so we can embed it in preview HTML.
+# ---------------------------------------------------------------------------
+
+_MERMAID_JS_PATH = Path(__file__).resolve().parent.parent.parent / "media" / "mermaid.min.js"
+
+_MERMAID_JS: str = ""
+try:
+    _MERMAID_JS = _MERMAID_JS_PATH.read_text(encoding="utf-8")
+except (FileNotFoundError, OSError):
+    pass  # Fall back to CDN in the HTML template.
+
+
+# ---------------------------------------------------------------------------
+# Pygments helpers (mirrors the pattern in chat_view.py)
+# ---------------------------------------------------------------------------
+
+try:
+    from pygments import highlight
+    from pygments.formatters import HtmlFormatter
+    from pygments.lexers import (
+        HtmlLexer,
+        MarkdownLexer,
+        TextLexer,
+        XmlLexer,
+    )
+
+    _HAVE_PYGMENTS = True
+except ImportError:  # pragma: no cover
+    _HAVE_PYGMENTS = False
+
+
+def _highlight_code(code: str, language: str) -> str:
+    """Return Pygments-highlighted HTML for the given code string.
+
+    Falls back to plain-text escaping when Pygments is unavailable.
+    """
+    if not _HAVE_PYGMENTS:
+        escaped = code.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        return (
+            f'<pre style="background:transparent; color:{FG}; '
+            f"border:none; border-radius:6px; padding:8px; "
+            f"font-family:'Geist Mono','JetBrains Mono',monospace;"
+            f'">{escaped}</pre>'
+        )
+
+    lexer_map = {
+        "html": HtmlLexer,
+        "svg": XmlLexer,
+        "markdown": MarkdownLexer,
+    }
+    lexer_cls = lexer_map.get(language, TextLexer)
+    try:
+        lexer = lexer_cls()
+    except Exception:
+        lexer = TextLexer()
+
+    formatter = HtmlFormatter(
+        style="dracula",
+        noclasses=True,
+        nowrap=False,
+        prestyles=(
+            "background: transparent; border: none; border-radius:6px; "
+            "padding:8px; font-family:'Geist Mono','JetBrains Mono',monospace; "
+            "font-size:12px; white-space:pre;"
+        ),
+    )
+    return highlight(code, lexer, formatter)
+
+
+# ===========================================================================
+# TodoListWidget — kept exactly as-is from the original worker_window.py
+# ===========================================================================
 
 
 class TodoListWidget(QFrame):
@@ -54,12 +135,14 @@ class TodoListWidget(QFrame):
         self._tasks_layout.setSpacing(2)
         outer.addLayout(self._tasks_layout)
 
-        self._pulse_anims: list[QVariantAnimation] = []
+        self._pulse_anims: list = []  # QVariantAnimation list
 
         self.setVisible(False)  # Hidden until tasks arrive
 
     def update_tasks(self, tasks: list[dict]) -> None:
         """Clear and redraw the task list from the worker's update_todo_list tool."""
+        from PySide6.QtCore import QEasingCurve, QVariantAnimation
+
         # Stop any running pulse animations
         for anim in self._pulse_anims:
             anim.stop()
@@ -133,252 +216,267 @@ class TodoListWidget(QFrame):
             self._tasks_layout.addWidget(label)
 
 
-class DarkSyntaxHighlighter(QSyntaxHighlighter):
-    """Regex-based syntax highlighter using VS Code Dark+ theme colors."""
-
-    def __init__(self, parent=None) -> None:
-        super().__init__(parent)
-        self._rules: list[tuple[str, QTextCharFormat]] = []
-
-        # Keywords — blue
-        kw_fmt = QTextCharFormat()
-        kw_fmt.setForeground(QColor("#569CD6"))
-        keywords = [
-            "and", "as", "assert", "async", "await", "break", "case",
-            "class", "class_name", "const", "continue", "def", "elif",
-            "else", "enum", "except", "export", "extends", "false",
-            "finally", "for", "from", "func", "global", "if", "import",
-            "in", "is", "lambda", "match", "not", "null", "onready",
-            "or", "pass", "print", "raise", "return", "self", "signal",
-            "static", "super", "true", "try", "var", "while", "with",
-            "yield",
-        ]
-        for kw in keywords:
-            self._rules.append((rf"\b{kw}\b", kw_fmt))
-
-        # Types / built-ins — teal
-        type_fmt = QTextCharFormat()
-        type_fmt.setForeground(QColor("#4EC9B0"))
-        types = [
-            "Array", "bool", "Color", "Dictionary", "float", "int",
-            "Node", "Node2D", "Node3D", "Object", "PoolStringArray",
-            "PoolIntArray", "PoolRealArray", "PackedByteArray",
-            "PackedColorArray", "PackedFloat32Array", "PackedFloat64Array",
-            "PackedInt32Array", "PackedInt64Array", "PackedStringArray",
-            "PackedVector2Array", "PackedVector3Array", "Rect2", "Rect2i",
-            "String", "Vector2", "Vector2i", "Vector3", "Vector3i",
-            "Vector4", "Vector4i", "void",
-        ]
-        for t in types:
-            self._rules.append((rf"\b{t}\b", type_fmt))
-
-        # Numbers — light green
-        num_fmt = QTextCharFormat()
-        num_fmt.setForeground(QColor("#B5CEA8"))
-        self._rules.append((r"\b\d+\.?\d*\b", num_fmt))
-        self._rules.append((r"\b0x[0-9a-fA-F]+\b", num_fmt))
-
-        # Strings (double-quoted) — orange
-        str_fmt = QTextCharFormat()
-        str_fmt.setForeground(QColor("#CE9178"))
-        self._rules.append((r'"[^"\\]*(\\.[^"\\]*)*"', str_fmt))
-
-        # Strings (single-quoted) — orange
-        self._rules.append((r"'[^'\\]*(\\.[^'\\]*)*'", str_fmt))
-
-        # Comments (# style) — green
-        cmt_fmt = QTextCharFormat()
-        cmt_fmt.setForeground(QColor("#6A9955"))
-        self._rules.append((r"#.*$", cmt_fmt))
-
-        # Comments (// style) — green
-        self._rules.append((r"//.*$", cmt_fmt))
-
-        # Decorators / annotations — yellow
-        dec_fmt = QTextCharFormat()
-        dec_fmt.setForeground(QColor("#DCDCAA"))
-        self._rules.append((r"@\w+", dec_fmt))
-
-        # Compile all patterns into QRegularExpression objects for performance
-        from PySide6.QtCore import QRegularExpression
-        self._compiled: list[tuple[QRegularExpression, QTextCharFormat]] = []
-        for pattern, fmt in self._rules:
-            self._compiled.append((QRegularExpression(pattern), fmt))
-        self._rules.clear()  # free the string list
-
-    def highlightBlock(self, text: str) -> None:
-        for pattern, fmt in self._compiled:
-            it = pattern.globalMatch(text)
-            while it.hasNext():
-                match = it.next()
-                self.setFormat(match.capturedStart(), match.capturedLength(), fmt)
+# ===========================================================================
+# ArtifactCard
+# ===========================================================================
 
 
-class CodeStreamCard(QFrame):
-    """Dark glass card with a character-by-character typing animation.
+class ArtifactCard(QFrame):
+    """Interactive card with a header bar and QStackedWidget toggling
+    between Code View (syntax-highlighted) and Preview View (QWebEngineView).
 
-    Renders incoming text progressively via a flush timer (3 chars every 20ms,
-    ~150 chars/sec) and shows a blinking block cursor ``▌`` at the end of the
-    document while the card is active.
+    Supports HTML, SVG, Markdown, and Mermaid content.
     """
 
-    CURSOR_CHAR = "▌"  # U+258C LEFT HALF BLOCK
-    FLUSH_INTERVAL = 20       # ms (~50 fps)
-    CHARS_PER_TICK = 3        # ~150 chars/sec
-    BLINK_INTERVAL = 530      # ms
-
-    def __init__(self, parent=None) -> None:
+    def __init__(
+        self,
+        artifact_id: str,
+        label: str,
+        language: str,
+        content: str,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
-        self.setObjectName("codeStreamCard")
-        self.setStyleSheet(f"""
-            QFrame#codeStreamCard {{
+        self.setObjectName("artifactCard")
+        self._artifact_id = artifact_id
+        self._label = label
+        self._language = language
+        self._content = content
+
+        # Glass-card styling (same as old CodeStreamCard)
+        self.setStyleSheet("""
+            QFrame#artifactCard {
                 background: rgba(28, 28, 34, 0.50);
                 border-top: 1px solid rgba(255, 255, 255, 0.06);
                 border-right: 1px solid rgba(0, 0, 0, 0.18);
                 border-bottom: 1px solid rgba(0, 0, 0, 0.25);
                 border-left: 1px solid rgba(255, 255, 255, 0.04);
                 border-radius: 10px;
-            }}
-            QFrame#codeStreamCard QTextEdit {{
-                background: transparent;
-                color: {FG};
-                border: none;
-                padding: 12px;
-                font-family: "Geist Mono", "JetBrains Mono", "Consolas", monospace;
-                font-size: 11pt;
-            }}
+            }
         """)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
 
-        self._editor = QTextEdit()
-        self._editor.setReadOnly(True)
-        self._editor.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
-        self._highlighter = DarkSyntaxHighlighter(self._editor.document())
-        layout.addWidget(self._editor)
+        # ---- Header bar ---------------------------------------------------
+        header = QWidget()
+        header.setStyleSheet("background: transparent;")
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(10, 6, 10, 6)
+        header_layout.setSpacing(8)
 
-        # Internal state
-        self._buffer = ""
-        self._active = False
-        self._cursor_visible = False
+        # Icon label
+        icon_lbl = QLabel("< >")
+        icon_lbl.setStyleSheet(f"color: {FG_DIM}; font-family: 'Geist Mono', monospace; font-size: 11px;")
+        header_layout.addWidget(icon_lbl)
 
-        # Flush timer – releases characters from the buffer
-        self._flush_timer = QTimer(self)
-        self._flush_timer.setInterval(self.FLUSH_INTERVAL)
-        self._flush_timer.timeout.connect(self._flush)
+        # Language / filename label
+        self._header_label = QLabel(label)
+        self._header_label.setStyleSheet(f"color: {FG}; font-weight: 600; font-size: 12px;")
+        header_layout.addWidget(self._header_label)
 
-        # Blink timer – toggles the trailing block cursor
-        self._blink_timer = QTimer(self)
-        self._blink_timer.setInterval(self.BLINK_INTERVAL)
-        self._blink_timer.timeout.connect(self._blink)
+        header_layout.addStretch(1)
 
-        self.setVisible(False)
+        # Copy button
+        copy_btn = QPushButton("Copy")
+        copy_btn.setFixedHeight(24)
+        copy_btn.setStyleSheet(
+            f"QPushButton {{ color: {FG_DIM}; background: transparent; "
+            f"border: 1px solid {BORDER}; border-radius: 4px; "
+            f"padding: 2px 8px; font-size: 10px; }}"
+            f"QPushButton:hover {{ color: {FG}; border-color: {FG_DIM}; }}"
+        )
+        copy_btn.clicked.connect(self._on_copy)
+        header_layout.addWidget(copy_btn)
 
-    # --- Public API ---------------------------------------------------------
+        # Download button
+        download_btn = QPushButton("Download")
+        download_btn.setFixedHeight(24)
+        download_btn.setStyleSheet(
+            f"QPushButton {{ color: {FG_DIM}; background: transparent; "
+            f"border: 1px solid {BORDER}; border-radius: 4px; "
+            f"padding: 2px 8px; font-size: 10px; }}"
+            f"QPushButton:hover {{ color: {FG}; border-color: {FG_DIM}; }}"
+        )
+        download_btn.clicked.connect(self._on_download)
+        header_layout.addWidget(download_btn)
 
-    def append(self, text: str) -> None:
-        """Add *text* to the typing buffer.
+        # Expand/collapse button
+        self._expand_btn = QPushButton("Collapse")
+        self._expand_btn.setFixedHeight(24)
+        self._expand_btn.setStyleSheet(
+            f"QPushButton {{ color: {FG_DIM}; background: transparent; "
+            f"border: 1px solid {BORDER}; border-radius: 4px; "
+            f"padding: 2px 8px; font-size: 10px; }}"
+            f"QPushButton:hover {{ color: {FG}; border-color: {FG_DIM}; }}"
+        )
+        self._expand_btn.clicked.connect(self._on_expand_toggle)
+        header_layout.addWidget(self._expand_btn)
 
-        The text will be progressively revealed by the flush timer.  Has no
-        effect when the card is not active.
-        """
-        if not self._active:
-            return
-        self._buffer += text
-        if not self._flush_timer.isActive():
-            self._flush_timer.start()
+        # Toggle View button (Code / Preview)
+        self._toggle_btn = QPushButton("Preview")
+        self._toggle_btn.setFixedHeight(24)
+        self._toggle_btn.setStyleSheet(
+            f"QPushButton {{ color: {FG_DIM}; background: transparent; "
+            f"border: 1px solid {BORDER}; border-radius: 4px; "
+            f"padding: 2px 8px; font-size: 10px; }}"
+            f"QPushButton:hover {{ color: {FG}; border-color: {FG_DIM}; }}"
+        )
+        self._toggle_btn.clicked.connect(self._on_toggle_view)
+        header_layout.addWidget(self._toggle_btn)
 
-    def begin(self) -> None:
-        """Clear the editor, show the card, and start the typing effect."""
-        self._editor.clear()
-        self._buffer = ""
-        self._active = True
-        self.setVisible(True)
-        self._append_cursor()
-        self._flush_timer.start()
-        self._blink_timer.start()
+        outer.addWidget(header)
 
-    def finish(self) -> None:
-        """Flush any remaining buffered text, remove the cursor, and stop timers."""
-        if not self._active:
-            return
-        self._active = False
-        if self._buffer:
-            self._flush_buffer(self._buffer)
-            self._buffer = ""
-        self._remove_cursor()
-        self._flush_timer.stop()
-        self._blink_timer.stop()
+        # ---- Body: QStackedWidget -----------------------------------------
+        self._stack = QStackedWidget()
+        self._stack.setStyleSheet("background: transparent;")
 
-    def clear(self) -> None:
-        """Immediately clear all content, hide the card, and stop all timers."""
-        self._active = False
-        self._buffer = ""
-        self._flush_timer.stop()
-        self._blink_timer.stop()
-        self._editor.clear()
-        self.setVisible(False)
+        # Page 0 — Code View
+        self._code_view = QPlainTextEdit()
+        self._code_view.setReadOnly(True)
+        font = QFont("Geist Mono, JetBrains Mono, Consolas, monospace")
+        font.setStyleHint(QFont.StyleHint.Monospace)
+        font.setPointSize(9)
+        self._code_view.setFont(font)
+        self._code_view.setStyleSheet(
+            f"QPlainTextEdit {{ background: {BG}; color: {FG}; "
+            f"border: none; padding: 8px; }}"
+        )
+        self._code_view.setMinimumHeight(60)
+        self._code_view.setMaximumHeight(400)
+        self._stack.addWidget(self._code_view)  # index 0
 
-    # --- Internals ----------------------------------------------------------
+        # Page 1 — Preview View (QWebEngineView)
+        self._preview_view = QWebEngineView()
+        self._preview_view.setMinimumHeight(100)
+        self._preview_view.setStyleSheet("background: transparent; border: none;")
+        self._stack.addWidget(self._preview_view)  # index 1
 
-    def _flush(self) -> None:
-        """Release up to *CHARS_PER_TICK* characters from the buffer."""
-        if not self._active:
-            return
-        if self._buffer:
-            chunk = self._buffer[: self.CHARS_PER_TICK]
-            self._buffer = self._buffer[self.CHARS_PER_TICK :]
-            self._flush_buffer(chunk)
+        self._stack.setCurrentIndex(0)  # Start in code view
+        outer.addWidget(self._stack, 1)
 
-    def _flush_buffer(self, text: str) -> None:
-        """Insert *text* into the editor while preserving the trailing cursor."""
-        self._remove_cursor()
-        self._editor.insertPlainText(text)
-        self._append_cursor()
-        self._scroll_to_end()
+        # Populate initial content
+        self._refresh_code_view()
+        self._refresh_preview()
 
-    def _blink(self) -> None:
-        """Toggle the ``▌`` cursor at the end of the document."""
-        if not self._active:
-            return
-        if self._cursor_visible:
-            self._remove_cursor()
+    # ---- Properties -------------------------------------------------------
+
+    @property
+    def language(self) -> str:
+        return self._language
+
+    @property
+    def artifact_id(self) -> str:
+        return self._artifact_id
+
+    # ---- Public API -------------------------------------------------------
+
+    def update_content(self, content: str) -> None:
+        """Update internal content, refresh code view and preview."""
+        self._content = content
+        self._refresh_code_view()
+        self._refresh_preview()
+
+    # ---- Button handlers --------------------------------------------------
+
+    def _on_copy(self) -> None:
+        QApplication.clipboard().setText(self._content)
+
+    def _on_download(self) -> None:
+        ext_map = {
+            "html": "HTML Files (*.html)",
+            "svg": "SVG Files (*.svg)",
+            "markdown": "Markdown Files (*.md)",
+            "mermaid": "Mermaid Files (*.mmd)",
+        }
+        file_filter = ext_map.get(self._language, "All Files (*.*)")
+        chosen, _ = QFileDialog.getSaveFileName(
+            self, "Save Artifact", self._label, file_filter
+        )
+        if chosen:
+            Path(chosen).write_text(self._content, encoding="utf-8")
+
+    def _on_expand_toggle(self) -> None:
+        visible = self._stack.isVisible()
+        self._stack.setVisible(not visible)
+        self._expand_btn.setText("Expand" if visible else "Collapse")
+
+    def _on_toggle_view(self) -> None:
+        current = self._stack.currentIndex()
+        if current == 0:
+            self._stack.setCurrentIndex(1)
+            self._toggle_btn.setText("Code")
+            self._refresh_preview()
         else:
-            self._append_cursor()
+            self._stack.setCurrentIndex(0)
+            self._toggle_btn.setText("Preview")
 
-    def _remove_cursor(self) -> None:
-        """Remove the trailing cursor character if it is present."""
-        doc = self._editor.document()
-        text = doc.toPlainText()
-        if text.endswith(self.CURSOR_CHAR):
-            cursor = self._editor.textCursor()
-            cursor.movePosition(cursor.MoveOperation.End)
-            cursor.movePosition(
-                cursor.MoveOperation.Left, cursor.MoveMode.KeepAnchor, 1
+    # ---- Internal refresh helpers -----------------------------------------
+
+    def _refresh_code_view(self) -> None:
+        """Apply Pygments syntax highlighting to the code view."""
+        if _HAVE_PYGMENTS:
+            html = _highlight_code(self._content, self._language)
+            self._code_view.document().setHtml(html)
+        else:
+            self._code_view.setPlainText(self._content)
+
+    def _refresh_preview(self) -> None:
+        """Render the preview in the QWebEngineView based on language."""
+        if self._language == "html":
+            self._preview_view.setHtml(self._content)
+        elif self._language == "svg":
+            wrapped = (
+                f'<html><body style="margin:0;background:#{BG};">'
+                f"{self._content}</body></html>"
             )
-            cursor.removeSelectedText()
-            self._cursor_visible = False
+            self._preview_view.setHtml(wrapped)
+        elif self._language == "markdown":
+            from PySide6.QtGui import QTextDocument
 
-    def _append_cursor(self) -> None:
-        """Append the cursor character at the very end of the document."""
-        cursor = self._editor.textCursor()
-        cursor.movePosition(cursor.MoveOperation.End)
-        cursor.insertText(self.CURSOR_CHAR)
-        self._cursor_visible = True
+            doc = QTextDocument()
+            doc.setMarkdown(self._content)
+            body_html = doc.toHtml()
+            wrapped = (
+                "<html><body style=\"margin:12px; background:#ffffff; "
+                "color:#1a1a1a; font-family:'Segoe UI',sans-serif; "
+                "line-height:1.6;\">"
+                f"{body_html}</body></html>"
+            )
+            self._preview_view.setHtml(wrapped)
+        elif self._language == "mermaid":
+            if _MERMAID_JS:
+                mermaid_include = f"<script>{_MERMAID_JS}</script>"
+            else:
+                mermaid_include = (
+                    '<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js">'
+                    "</script>"
+                )
+            html = (
+                "<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
+                f"{mermaid_include}"
+                "</head><body>"
+                f'<div class="mermaid">{self._content}</div>'
+                "<script>mermaid.initialize({startOnLoad:true, theme:'default'})</script>"
+                "</body></html>"
+            )
+            self._preview_view.setHtml(html)
 
-    def _scroll_to_end(self) -> None:
-        """Scroll the editor to the bottom."""
-        scrollbar = self._editor.verticalScrollBar()
-        if scrollbar:
-            scrollbar.setValue(scrollbar.maximum())
+
+# ===========================================================================
+# AuraPlayground — replaces WorkerWindow
+# ===========================================================================
 
 
-class WorkerWindow(QWidget):
-    """Shows a pinned TODO list and one code-stream card per file edited by the worker, with dark syntax highlighting."""
+class AuraPlayground(QWidget):
+    """Right-side panel showing TODO list and ArtifactCards for worker output.
 
-    def __init__(self, parent=None) -> None:
+    Public API matches the old WorkerWindow so main_window.py only needs
+    import/name changes.
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setMinimumWidth(200)
 
@@ -387,7 +485,7 @@ class WorkerWindow(QWidget):
         layout.setSpacing(0)
 
         # Header
-        header = QLabel("Worker")
+        header = QLabel("Playground")
         header.setObjectName("paneTitle")
         header.setStyleSheet("padding: 8px 12px;")
         layout.addWidget(header)
@@ -396,7 +494,7 @@ class WorkerWindow(QWidget):
         self._todo_widget = TodoListWidget()
         layout.addWidget(self._todo_widget)
 
-        # Scrollable container for multiple code-stream cards
+        # Scrollable container for artifact cards
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -407,26 +505,28 @@ class WorkerWindow(QWidget):
         self._card_layout = QVBoxLayout(self._card_container)
         self._card_layout.setContentsMargins(0, 0, 0, 0)
         self._card_layout.setSpacing(10)
+        self._card_layout.addStretch(1)  # push cards to top
         scroll.setWidget(self._card_container)
-        self._cards: list[CodeStreamCard] = []
-        self._current_card: CodeStreamCard | None = None
         self._scroll = scroll
 
         layout.addWidget(scroll, 1)
 
-        self._write_tools: dict[str, dict] = {}  # worker_tool_id -> {name, buffered_args, last_content_len, path}
+        # Internal state
+        self._artifacts: dict[str, ArtifactCard] = {}
+        self._write_tools: dict[str, dict] = {}
+        self._artifact_counter = 0
 
     # ---- helpers -----------------------------------------------------------
 
-    def _new_card(self) -> CodeStreamCard:
-        """Finish the current card (if any), create and return a new one."""
-        if self._current_card is not None:
-            self._current_card.finish()
-        card = CodeStreamCard()
-        self._cards.append(card)
-        self._card_layout.addWidget(card, stretch=1)
-        self._current_card = card
-        card.begin()
+    def _add_artifact(
+        self, artifact_id: str, label: str, language: str, content: str
+    ) -> ArtifactCard:
+        """Create card, add to layout, store in dict, return it."""
+        card = ArtifactCard(artifact_id, label, language, content)
+        self._artifacts[artifact_id] = card
+        # Insert before the trailing stretch
+        self._card_layout.insertWidget(self._card_layout.count() - 1, card)
+        self._scroll_to_bottom()
         return card
 
     def _scroll_to_bottom(self) -> None:
@@ -435,35 +535,38 @@ class WorkerWindow(QWidget):
         if bar:
             bar.setValue(bar.maximum())
 
-    # ---- public streaming API ----------------------------------------------
+    # ---- public streaming API (matches old WorkerWindow) ------------------
 
     def begin_assistant(self) -> None:
-        # Remove all existing cards
-        for card in self._cards:
-            card.finish()
+        """Clear all existing artifact cards. Do NOT clear the TODO widget."""
+        for card in list(self._artifacts.values()):
             card.deleteLater()
-        self._cards.clear()
-        self._current_card = None
+        self._artifacts.clear()
         self._write_tools.clear()
+        self._artifact_counter = 0
 
     def append_reasoning(self, text: str) -> None:
-        """Drop all thinking — no-op."""
+        """No-op."""
 
     def append_content(self, text: str) -> None:
-        """Drop all content text — no-op."""
+        """No-op."""
 
     def add_tool_call(self, worker_tool_id: str, name: str) -> None:
-        """Only track write_file and edit_file tool calls."""
+        """Track write_file / edit_file calls for artifact streaming."""
         if name in ("write_file", "edit_file"):
             self._write_tools[worker_tool_id] = {
                 "name": name,
                 "buffered_args": "",
                 "last_content_len": 0,
                 "path": "",
+                "content": "",
             }
 
     def append_tool_args(self, worker_tool_id: str, fragment: str) -> None:
-        """Extract code content from streaming JSON and feed new characters to the card."""
+        """Extract path/content from streaming JSON and create/update ArtifactCards.
+
+        Only creates cards for .html, .svg, .md files. Other file types are ignored.
+        """
         info = self._write_tools.get(worker_tool_id)
         if info is None:
             return
@@ -473,42 +576,60 @@ class WorkerWindow(QWidget):
         try:
             parsed = json.loads(info["buffered_args"])
         except json.JSONDecodeError:
-            # Try regex to extract path from partial JSON for the header
+            # Try regex to extract path from partial JSON
             m = re.search(r'"path"\s*:\s*"([^"]*)', info["buffered_args"])
             if m and not info["path"]:
                 info["path"] = m.group(1)
-                self._new_card()
-                self._current_card.append(f"📄 {info['path']}\n\n")
-                self._scroll_to_bottom()
             return
 
         # Successfully parsed full JSON
         path = parsed.get("path", "")
-        if path and path != info["path"]:
+        if path:
             info["path"] = path
-            self._new_card()
-            self._current_card.append(f"📄 {path}\n\n")
 
         content_key = "content" if info["name"] == "write_file" else "new_str"
         content = parsed.get(content_key, "")
-        new_chars = content[info["last_content_len"] :]
-        if new_chars:
-            if self._current_card is None:
-                self._new_card()
-            self._current_card.append(new_chars)
-            info["last_content_len"] = len(content)
-            self._scroll_to_bottom()
+        info["content"] = content
 
-    def set_tool_result(self, worker_tool_id: str, ok: bool, result: str) -> None:
-        """On failure append a brief failure marker; on success, nothing extra."""
-        if worker_tool_id in self._write_tools:
-            del self._write_tools[worker_tool_id]
-            if not ok and self._current_card is not None:
-                self._current_card.append("\n// ✗ failed\n")
+        # Determine if this file type gets an artifact card
+        if path:
+            ext = Path(path).suffix.lower()
+            if ext in {".html", ".svg", ".md"}:
+                lang_map = {".html": "html", ".svg": "svg", ".md": "markdown"}
+                language = lang_map[ext]
+                label = Path(path).name
+                artifact_id = f"file-{worker_tool_id}"
+
+                if artifact_id not in self._artifacts:
+                    self._add_artifact(artifact_id, label, language, content)
+                else:
+                    self._artifacts[artifact_id].update_content(content)
+
                 self._scroll_to_bottom()
 
+    def set_tool_result(self, worker_tool_id: str, ok: bool, result: str) -> None:
+        """Finalize or remove artifact card on tool result."""
+        info = self._write_tools.pop(worker_tool_id, None)
+        if info is None:
+            return
+
+        artifact_id = f"file-{worker_tool_id}"
+        card = self._artifacts.get(artifact_id)
+        if card is None:
+            return
+
+        if ok:
+            # Finalize: ensure content is up to date
+            content = info.get("content", "")
+            if content:
+                card.update_content(content)
+        else:
+            # Remove the card on failure
+            card.deleteLater()
+            del self._artifacts[artifact_id]
+
     def append_terminal_output(self, worker_tool_id: str, text: str) -> None:
-        """Drop all terminal output — no-op."""
+        """No-op."""
 
     def add_diff_card(
         self,
@@ -519,29 +640,34 @@ class WorkerWindow(QWidget):
         decision: str,
         is_new_file: bool,
     ) -> None:
-        """Drop all diff cards — no-op."""
+        """No-op."""
 
     def add_error(self, message: str) -> None:
-        """Drop all errors — no-op."""
+        """No-op."""
 
     def worker_finished(self, ok: bool, summary: str) -> None:
-        if self._current_card is not None:
-            self._current_card.finish()
+        """Artifact cards stay visible — no-op."""
 
     def worker_cancelled(self) -> None:
-        if self._current_card is not None:
-            self._current_card.finish()
+        """No-op."""
 
     def update_todo_list(self, tasks: list) -> None:
         """Forward the worker's TODO list update to the pinned widget."""
         self._todo_widget.update_tasks(tasks)
 
     def clear(self) -> None:
-        """Remove all card content and reset state (called on New Conversation)."""
-        for card in self._cards:
-            card.clear()
+        """Remove all artifact cards, reset state, clear TODO widget."""
+        for card in list(self._artifacts.values()):
             card.deleteLater()
-        self._cards.clear()
-        self._current_card = None
-        self._todo_widget.update_tasks([])
+        self._artifacts.clear()
         self._write_tools.clear()
+        self._artifact_counter = 0
+        self._todo_widget.update_tasks([])
+
+    # ---- New methods -------------------------------------------------------
+
+    def add_mermaid_artifact(self, code: str) -> None:
+        """Called when the planner generates a mermaid diagram."""
+        artifact_id = f"mermaid-{self._artifact_counter}"
+        self._artifact_counter += 1
+        self._add_artifact(artifact_id, "Mermaid Diagram", "mermaid", code)
