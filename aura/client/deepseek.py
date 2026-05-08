@@ -92,6 +92,8 @@ class DeepSeekClient:
         content_buf: list[str] = []
         # tool_calls indexed by stream "index" — the model can stream multiple in parallel.
         tool_calls: dict[int, dict[str, Any]] = {}
+        # Buffer arguments until ToolCallStart is yielded
+        args_buffers: dict[int, list[str]] = {}
         seen_starts: set[int] = set()
         finish_reason: str | None = None
         usage_emitted = False
@@ -165,13 +167,20 @@ class DeepSeekClient:
                                 slot["function"]["name"] = tc.function.name
                             if tc.function.arguments:
                                 slot["function"]["arguments"] += tc.function.arguments
+                                # Buffer arguments if we haven't yielded start yet
+                                if idx not in seen_starts:
+                                    args_buffers.setdefault(idx, []).append(tc.function.arguments)
 
                         if idx not in seen_starts and slot["id"] and slot["function"]["name"]:
                             seen_starts.add(idx)
                             yield ToolCallStart(
                                 index=idx, id=slot["id"], name=slot["function"]["name"]
                             )
-                        if tc.function is not None and tc.function.arguments:
+                            # Flush buffered arguments
+                            if idx in args_buffers:
+                                for fragment in args_buffers.pop(idx):
+                                    yield ToolCallArgsDelta(index=idx, args_chunk=fragment)
+                        elif idx in seen_starts and tc.function is not None and tc.function.arguments:
                             yield ToolCallArgsDelta(
                                 index=idx, args_chunk=tc.function.arguments
                             )

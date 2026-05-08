@@ -23,6 +23,7 @@ def propose_write(workspace_root: Path, target: Path, content: str) -> dict[str,
     else:
         old_content = ""
     return {
+        "ok": True,
         "rel_path": rel,
         "old_content": old_content,
         "new_content": content,
@@ -109,8 +110,9 @@ def propose_edit(
     if len(old_lines) > len(file_lines):
         best_ratio = 0.0
     else:
-        # Normalize old_lines once (strip trailing whitespace from each)
-        normalized_old = [line.rstrip() for line in old_lines]
+        # Normalize old_lines once (strip leading/trailing whitespace from each line)
+        # for the comparison, while keeping the original block structure.
+        normalized_old = [line.strip() for line in old_lines]
         normalized_old_block = "\n".join(normalized_old)
 
         best_ratio = 0.0
@@ -118,7 +120,7 @@ def propose_edit(
 
         for i in range(len(file_lines) - len(old_lines) + 1):
             window = file_lines[i:i + len(old_lines)]
-            normalized_window = [line.rstrip() for line in window]
+            normalized_window = [line.strip() for line in window]
             normalized_window_block = "\n".join(normalized_window)
             ratio = difflib.SequenceMatcher(
                 None, normalized_old_block, normalized_window_block

@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Slot
 from PySide6.QtGui import QAction, QColor, QFont, QIcon, QPainter, QRadialGradient
 from PySide6.QtWidgets import (
     QComboBox,
@@ -755,21 +755,50 @@ class MainWindow(QMainWindow):
         vision_descriptions: list[str] = []
         vision_error: str | None = None
         if image_atts and self._settings.vision_enabled:
-            try:
-                from aura.vision import VisionClient
+            # Show "analyzing" state in input panel
+            self._input.set_placeholder("Analyzing images...")
+            self._input.setEnabled(False)
+            
+            def _run_vision():
+                nonlocal vision_error
+                try:
+                    from aura.vision import VisionClient
+                    client = VisionClient(
+                        endpoint=self._settings.vision_endpoint,
+                        model=self._settings.vision_model,
+                    )
+                    for a in image_atts:
+                        desc = client.describe(a.b64)
+                        vision_descriptions.append(desc)
+                except Exception as exc:
+                    vision_error = (
+                        f"Local vision model unavailable "
+                        f"({self._settings.vision_model}): {exc}"
+                    )
+                
+                # Marshal back to GUI thread to actually send the message
+                from PySide6.QtCore import QMetaObject, Qt
+                QMetaObject.invokeMethod(self, "_on_vision_done", Qt.QueuedConnection, 
+                                        payload, vision_descriptions, vision_error)
 
-                client = VisionClient(
-                    endpoint=self._settings.vision_endpoint,
-                    model=self._settings.vision_model,
-                )
-                for a in image_atts:
-                    desc = client.describe(a.b64)
-                    vision_descriptions.append(desc)
-            except Exception as exc:
-                vision_error = (
-                    f"Local vision model unavailable "
-                    f"({self._settings.vision_model}): {exc}"
-                )
+            import threading
+            threading.Thread(target=_run_vision, daemon=True).start()
+            return  # Wait for _on_vision_done
+
+        self._finalize_send(payload, vision_descriptions, vision_error)
+
+    def _on_vision_done(self, payload: SendPayload, descriptions: list[str], error: str | None) -> None:
+        self._input.setEnabled(True)
+        self._input.set_placeholder("")
+        self._finalize_send(payload, descriptions, error)
+
+    def _finalize_send(self, payload: SendPayload, vision_descriptions: list[str], vision_error: str | None) -> None:
+        image_atts = [a for a in payload.attachments if a.kind == "image" and a.b64]
+        text = payload.text
+        text_refs = [a.text_ref for a in payload.attachments if a.text_ref]
+        if text_refs:
+            ref_block = "\n".join(text_refs)
+            text = f"{text}\n\n{ref_block}".strip() if text else ref_block
 
         if vision_descriptions:
             # Build vision block
@@ -1066,24 +1095,50 @@ class MainWindow(QMainWindow):
             return
         if not self._bridge.history.messages:
             return
-        try:
-            self._current_conversation_path = save_conversation(
-                history=self._bridge.history,
-                workspace_root=self._workspace_root,
-                model=self.current_model(),
-                thinking=self.current_thinking(),
-                existing_path=self._current_conversation_path,
-                planner_worker_mode=self._bridge.planner_worker_mode,
-                planner_model=self.current_model(),
-                worker_model=self.current_worker_model(),
-                planner_thinking=self.current_thinking(),
-                worker_thinking=self.current_worker_thinking(),
-                worker_dispatches=self._bridge.dispatch_records,
-                provider=self._settings.provider,
-            )
-        except OSError as exc:
-            # Disk error — surface but don't crash the chat.
-            self._chat.add_error("Could not save conversation", str(exc))
+
+        # Deep copy data for thread safety
+        import copy
+        history_copy = copy.deepcopy(self._bridge.history)
+        dispatch_records_copy = list(self._bridge.dispatch_records)
+        workspace_root = self._workspace_root
+        model = self.current_model()
+        thinking = self.current_thinking()
+        worker_model = self.current_worker_model()
+        worker_thinking = self.current_worker_thinking()
+        existing_path = self._current_conversation_path
+        pwm = self._bridge.planner_worker_mode
+        provider = self._settings.provider
+
+        def _run_save():
+            try:
+                path = save_conversation(
+                    history=history_copy,
+                    workspace_root=workspace_root,
+                    model=model,
+                    thinking=thinking,
+                    existing_path=existing_path,
+                    planner_worker_mode=pwm,
+                    planner_model=model,
+                    worker_model=worker_model,
+                    planner_thinking=thinking,
+                    worker_thinking=worker_thinking,
+                    worker_dispatches=dispatch_records_copy,
+                    provider=provider,
+                )
+                # Update the current path pointer on the GUI thread
+                from PySide6.QtCore import QMetaObject, Qt
+                QMetaObject.invokeMethod(self, "_set_current_conv_path", Qt.QueuedConnection, path)
+            except OSError as exc:
+                from PySide6.QtCore import QMetaObject, Qt
+                QMetaObject.invokeMethod(self._chat, "add_error", Qt.QueuedConnection, 
+                                        "Could not save conversation", str(exc))
+
+        import threading
+        threading.Thread(target=_run_save, daemon=True).start()
+
+    @Slot(Path)
+    def _set_current_conv_path(self, path: Path) -> None:
+        self._current_conversation_path = path
 
     def _maybe_restore_last_conversation(self) -> None:
         if self._workspace_root is None:

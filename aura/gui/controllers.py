@@ -17,6 +17,8 @@ class ToolStreamController(QObject):
     path_resolved = Signal(str)
     # Emitted once when "command" is found (for run_terminal_command)
     command_resolved = Signal(str)
+    # Emitted when "tasks" is found or updated (for update_todo_list)
+    todo_updated = Signal(list)
     # Emitted whenever the "content" or "new_str" field grows
     content_updated = Signal(str)
     # Emitted whenever arguments are updated (pretty-printed if possible)
@@ -98,6 +100,12 @@ class ToolStreamController(QObject):
             if content and content != self._last_content:
                 self._last_content = content
                 self.content_updated.emit(content)
+
+            # Update tasks for update_todo_list
+            if self._tool_name == "update_todo_list":
+                tasks = parsed.get("tasks")
+                if isinstance(tasks, list):
+                    self.todo_updated.emit(tasks)
 
         except json.JSONDecodeError:
             # Buffer is still incomplete JSON — emit raw buffer for now

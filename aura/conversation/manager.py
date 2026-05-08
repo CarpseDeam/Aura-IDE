@@ -539,6 +539,16 @@ class ConversationManager:
         )
 
     def _cleanup_cancelled(self, on_event: EventCallback) -> None:
+        """Call this when a turn is cancelled while waiting for model or tool.
+        Ensure history doesn't contain an assistant message with pending tool calls."""
+        # If the last message is an assistant message with tool calls but no 
+        # results yet, we MUST remove it before the next turn, otherwise the 
+        # API will error (each tool_call must have a tool_result).
+        if self._history.messages:
+            last = self._history.messages[-1]
+            if last.get("role") == "assistant" and last.get("tool_calls"):
+                self._history.messages.pop()
+
         on_event(ApiError(status_code=None, message="Cancelled."))
 
 

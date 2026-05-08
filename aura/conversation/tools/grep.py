@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import re
+import subprocess
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +14,7 @@ def _should_skip(path: Path) -> bool:
     parts = set(path.parts)
     if parts & SKIP_DIRS:
         return True
-    if path.name.startswith("."):
+    if any(p.startswith(".") for p in path.parts):
         return True
     if path.suffix in SKIP_FILE_SUFFIXES:
         return True
@@ -26,6 +28,90 @@ def grep_files(
     case_sensitive: bool = False,
     max_results: int = 50,
     include_pattern: str | None = None,
+) -> dict[str, Any]:
+    """Search file contents under workspace_root for the given pattern.
+    
+    Uses 'ripgrep' (rg) if installed, otherwise falls back to sequential Python glob.
+    """
+    if not pattern:
+        return {"ok": False, "error": "pattern is required"}
+
+    rg_path = shutil.which("rg")
+    if rg_path:
+        return _grep_ripgrep(workspace_root, pattern, regex_mode, case_sensitive, max_results, include_pattern)
+    
+    return _grep_python(workspace_root, pattern, regex_mode, case_sensitive, max_results, include_pattern)
+
+
+def _grep_ripgrep(
+    root: Path,
+    pattern: str,
+    regex: bool,
+    case_sensitive: bool,
+    max_results: int,
+    include: str | None
+) -> dict[str, Any]:
+    cmd = ["rg", "--json", "--column", "--max-count", str(max_results)]
+    
+    if not regex:
+        cmd.append("--fixed-strings")
+    if not case_sensitive:
+        cmd.append("--ignore-case")
+    
+    if include:
+        cmd.extend(["--glob", include])
+    
+    # Exclude common junk
+    for skip in SKIP_DIRS:
+        cmd.extend(["--glob", f"!{skip}/*"])
+    for suffix in SKIP_FILE_SUFFIXES:
+        cmd.extend(["--glob", f"!*{suffix}"])
+    
+    cmd.append(pattern)
+    cmd.append(str(root))
+
+    try:
+        # ripgrep returns 1 if no matches found, 0 if matches found.
+        # We handle this manually.
+        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
+        if proc.returncode not in (0, 1):
+            return {"ok": False, "error": proc.stderr or f"ripgrep failed with code {proc.returncode}"}
+
+        import json
+        matches = []
+        for line in proc.stdout.splitlines():
+            if not line.strip():
+                continue
+            data = json.loads(line)
+            if data.get("type") == "match":
+                m_data = data["data"]
+                rel_path = Path(m_data["path"]["text"]).relative_to(root).as_posix()
+                matches.append({
+                    "path": rel_path,
+                    "line_number": m_data["line_number"],
+                    "line": m_data["lines"]["text"].strip(),
+                    "match_column": m_data["submatches"][0]["start"],
+                })
+                if len(matches) >= max_results:
+                    break
+
+        return {
+            "ok": True,
+            "matches": matches,
+            "truncated": len(matches) >= max_results,
+            "engine": "ripgrep"
+        }
+    except Exception as exc:
+        return {"ok": False, "error": f"ripgrep error: {exc}"}
+
+
+def _grep_python(
+    workspace_root: Path,
+    pattern: str,
+    regex_mode: bool,
+    case_sensitive: bool,
+    max_results: int,
+    include_pattern: str | None,
 ) -> dict[str, Any]:
     """Search file contents under workspace_root for the given pattern.
 

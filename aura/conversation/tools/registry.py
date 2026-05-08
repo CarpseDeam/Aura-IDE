@@ -581,6 +581,12 @@ class ToolRegistry:
         s = str(raw).strip()
         if s == "":
             raise ValueError("path must not be empty")
+
+        # Strip leading slashes to prevent absolute path interpretation on Windows/Linux.
+        # Models often provide /path/to/file or \path\to\file, which on Windows
+        # resolves relative to the drive root, escaping the project jail.
+        s = s.lstrip("/\\")
+
         if ".." in Path(s).parts:
             raise ValueError("'..' is not allowed in tool paths")
         candidate = (self._root / s).resolve() if not Path(s).is_absolute() else Path(s).resolve()

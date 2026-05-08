@@ -688,10 +688,14 @@ class AuraPlayground(QWidget):
     # ---- helpers -----------------------------------------------------------
 
     def _ensure_log_card(self) -> WorkerLogCard:
+        # Create a new log card if we don't have an active one for this turn,
+        # or if the last card was an artifact (chronological insertion).
         if self._log_card is None:
             self._log_card = WorkerLogCard()
-            # Insert at the very top of the card layout (before artifacts)
-            self._card_layout.insertWidget(0, self._log_card)
+            # Insert before the trailing stretch
+            idx = self._card_layout.count() - 1
+            self._card_layout.insertWidget(idx, self._log_card)
+        
         self._log_card.setVisible(True)
         return self._log_card
 
@@ -705,13 +709,17 @@ class AuraPlayground(QWidget):
             if hasattr(self, '_banner_pulse_timer'):
                 self._banner_pulse_timer.stop()
         
+        # When an artifact is added, the next log text should go into a new card
+        # to maintain chronological order.
+        self._log_card = None
+        
         card = ArtifactCard(artifact_id, label, language, content)
         self._artifacts[artifact_id] = card
         # Wrap in AuraWidget for breathing glow effect
         wrapper = AuraWidget(card, glow_color="#7aa2f7", glow_spread=20)
         self._auras[artifact_id] = wrapper
         
-        # Insert after the log card (if any) but before the trailing stretch
+        # Insert before the trailing stretch
         idx = self._card_layout.count() - 1
         self._card_layout.insertWidget(idx, wrapper)
         
@@ -785,10 +793,14 @@ class AuraPlayground(QWidget):
         Immediately creates a placeholder artifact card with a pulsing aura
         so the user sees a "target lock" even before the first args arrive.
         """
-        if name in ("write_file", "edit_file"):
-            controller = ToolStreamController(name, parent=self)
-            self._controllers[worker_tool_id] = controller
+        controller = ToolStreamController(name, parent=self)
+        self._controllers[worker_tool_id] = controller
 
+        # Real-time TODO updates from update_todo_list tool
+        if name == "update_todo_list":
+            controller.todo_updated.connect(self.update_todo_list)
+
+        if name in ("write_file", "edit_file"):
             # Eagerly create a placeholder card with a pulsing aura.
             artifact_id = f"file-{worker_tool_id}"
             if artifact_id not in self._artifacts:
