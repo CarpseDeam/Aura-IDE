@@ -479,8 +479,7 @@ class WorkerWindow(QWidget):
             m = re.search(r'"path"\s*:\s*"([^"]*)', info["buffered_args"])
             if m and not info["path"]:
                 info["path"] = m.group(1)
-                if self._current_card is None:
-                    self._new_card()
+                self._new_card()
                 self._current_card.append(f"📄 {info['path']}\n\n")
                 self._scroll_to_bottom()
             return
@@ -489,8 +488,7 @@ class WorkerWindow(QWidget):
         path = parsed.get("path", "")
         if path and path != info["path"]:
             info["path"] = path
-            if self._current_card is None:
-                self._new_card()
+            self._new_card()
             self._current_card.append(f"📄 {path}\n\n")
 
         content_key = "content" if info["name"] == "write_file" else "new_str"
