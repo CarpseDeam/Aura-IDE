@@ -10,7 +10,7 @@ import json
 import re
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import (

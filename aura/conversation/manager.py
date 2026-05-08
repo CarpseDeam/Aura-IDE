@@ -63,6 +63,8 @@ class ConversationManager:
         self._client = client
         self._history = history
         self._tools = tool_registry
+        # Tracks repetitive tool failures: (tool_name, args_json) -> (last_result, count)
+        self._failure_tracker: dict[str, tuple[str, int]] = {}
 
     @property
     def history(self) -> History:
@@ -212,6 +214,10 @@ class ConversationManager:
                     reject_all_for_turn = True
 
                 tool_msg_content = exec_result.to_tool_message_content()
+
+                # Apply circuit breaker
+                tool_msg_content = self._apply_circuit_breaker(name, args, exec_result.ok, tool_msg_content)
+
                 self._history.append_tool_result(tool_call_id, tool_msg_content)
                 on_event(
                     ToolResult(
@@ -377,6 +383,50 @@ class ConversationManager:
             )
         )
 
+    def _apply_circuit_breaker(self, name: str, args: dict, ok: bool, result_payload: str) -> str:
+        """Track tool failures and inject warnings if they repeat consecutively."""
+        if ok:
+            # Success resets the failure tracker for this tool/command
+            # (using just the name/command for terminal, or full args for others)
+            key = f"terminal:{args.get('command')}" if name == "run_terminal_command" else f"{name}:{json.dumps(args, sort_keys=True)}"
+            self._failure_tracker.pop(key, None)
+            return result_payload
+
+        tracker_key = f"terminal:{args.get('command')}" if name == "run_terminal_command" else f"{name}:{json.dumps(args, sort_keys=True)}"
+        last_output, count = self._failure_tracker.get(tracker_key, ("", 0))
+        
+        # For terminal commands, we only care if the output is identical.
+        # For others, we compare the full result payload.
+        if last_output == result_payload:
+            count += 1
+        else:
+            count = 1
+        
+        self._failure_tracker[tracker_key] = (result_payload, count)
+
+        if count >= 3:
+            warning = (
+                f"\n\n[CIRCUIT BREAKER: Consecutive failure #{count}]\n"
+                f"The tool '{name}' produced the EXACT SAME failure output {count} times in a row.\n"
+                "You are likely in a loop. STOP and re-examine your assumptions. "
+                "The error might be different than what you think, or your fix is "
+                "not being applied as expected. DO NOT repeat the same change or tool call."
+            )
+            try:
+                parsed = json.loads(result_payload)
+                if isinstance(parsed, dict):
+                    if "output" in parsed:
+                        parsed["output"] += warning
+                    elif "error" in parsed:
+                        parsed["error"] += warning
+                    else:
+                        parsed["circuit_breaker_warning"] = warning
+                    return json.dumps(parsed, ensure_ascii=False)
+            except:
+                return result_payload + warning
+        
+        return result_payload
+
     def _handle_terminal_command(
         self,
         tool_call_id: str,
@@ -474,6 +524,9 @@ class ConversationManager:
             },
             ensure_ascii=False,
         )
+
+        # Apply circuit breaker
+        payload = self._apply_circuit_breaker("run_terminal_command", args, ok, payload)
 
         self._history.append_tool_result(tool_call_id, payload)
         on_event(

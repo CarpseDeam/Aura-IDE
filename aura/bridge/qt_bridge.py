@@ -76,7 +76,10 @@ PLANNER_SYSTEM_PROMPT = (
     "1. Delegation Only: Do not generate implementation code directly for the user. Your execution "
     "must culminate in a call to the `dispatch_to_worker` tool.\n"
     "2. Reconnaissance: Utilize `read_file`, `list_directory`, and `grep_search` to map exact file "
-    "paths, existing architectures, and dependencies prior to delegation.\n\n"
+    "paths, existing architectures, and dependencies prior to delegation.\n"
+    "3. Strategic Re-evaluation: If a worker fails to implement your specification more than twice, "
+    "re-examine your assumptions. The bug may be in a different file or require a different "
+    "architectural approach than what you originally planned.\n\n"
     "Specification Standards:\n"
     "The execution agent operates in an isolated context and relies entirely on your specification. "
     "The `spec` parameter must be deterministic and exhaustive. You must define:\n"
@@ -107,7 +110,10 @@ WORKER_SYSTEM_PROMPT = (
     "test/lint setup (e.g., pyproject.toml with pytest/ruff config), you MUST run the appropriate command "
     "via run_terminal_command after modifying files. If the command fails, analyze the output and fix the "
     "code before finishing. When projects lack tests, at minimum run a linter or type checker if the "
-    "ecosystem supports it (e.g., 'ruff check .' or 'mypy .' for Python)."
+    "ecosystem supports it (e.g., 'ruff check .' or 'mypy .' for Python).\n"
+    "6. Strategic Re-evaluation: If you attempt to fix a failing implementation or linter error more than "
+    "3 times without success, you MUST stop. Report the exact error output and explain why your current "
+    "approach is failing rather than continuing to loop."
 )
 
 
