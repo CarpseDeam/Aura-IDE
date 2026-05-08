@@ -294,6 +294,7 @@ class AppSettings:
     vision_model: str = DEFAULT_VISION_MODEL
     vision_endpoint: str = DEFAULT_VISION_ENDPOINT
     temperature: float = 0.7
+    worker_temperature: float = 0.1
     system_prompt: str = ""
     planner_system_prompt: str = ""
     worker_system_prompt: str = ""
@@ -332,6 +333,10 @@ class AppSettings:
             raw = data["temperature"]
             if isinstance(raw, (int, float)):
                 s.temperature = max(0.0, min(2.0, float(raw)))
+        if "worker_temperature" in data:
+            raw = data["worker_temperature"]
+            if isinstance(raw, (int, float)):
+                s.worker_temperature = max(0.0, min(2.0, float(raw)))
         # System prompts
         if isinstance(data.get("system_prompt"), str):
             s.system_prompt = data["system_prompt"]

@@ -198,6 +198,16 @@ class SettingsDialog(QDialog):
         self._temperature_spin.setValue(self._settings.temperature)
         form.addRow("Temperature:", self._temperature_spin)
 
+        self._worker_temperature_spin = QDoubleSpinBox()
+        self._worker_temperature_spin.setRange(0.0, 2.0)
+        self._worker_temperature_spin.setSingleStep(0.1)
+        self._worker_temperature_spin.setDecimals(1)
+        self._worker_temperature_spin.setToolTip(
+            "Controls response randomness for the worker model. Lower = more deterministic."
+        )
+        self._worker_temperature_spin.setValue(self._settings.worker_temperature)
+        form.addRow("Worker Temperature:", self._worker_temperature_spin)
+
         # --- System Prompts ---
         prompts_sep = QLabel("System Prompts")
         prompts_sep.setStyleSheet(
@@ -381,6 +391,7 @@ class SettingsDialog(QDialog):
         self._planner_thinking_combo.setEnabled(enabled)
         self._worker_model_combo.setEnabled(enabled)
         self._worker_thinking_combo.setEnabled(enabled)
+        self._worker_temperature_spin.setEnabled(enabled)
 
     def result_settings(self) -> AppSettings:
         """Read the current widget values and return a fresh AppSettings."""
@@ -400,6 +411,7 @@ class SettingsDialog(QDialog):
             vision_model=self._vision_model_combo.currentText(),
             vision_endpoint=self._vision_endpoint_combo.currentText(),
             temperature=self._temperature_spin.value(),
+            worker_temperature=self._worker_temperature_spin.value(),
             system_prompt=self._single_prompt_edit.toPlainText().strip(),
             planner_system_prompt=self._planner_prompt_edit.toPlainText().strip(),
             worker_system_prompt=self._worker_prompt_edit.toPlainText().strip(),

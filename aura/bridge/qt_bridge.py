@@ -774,6 +774,9 @@ class ConversationBridge(QObject):
     def set_worker_thinking(self, thinking: ThinkingMode) -> None:
         self._dispatch_proxy.set_worker_thinking(thinking)
 
+    def set_worker_temperature(self, temperature: float) -> None:
+        self._dispatch_proxy.set_worker_temperature(temperature)
+
     def set_provider(self, provider: ProviderId) -> None:
         """Recreate the internal client for a new provider."""
         # Capture current dispatch proxy settings before recreating.

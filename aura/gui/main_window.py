@@ -110,6 +110,7 @@ class MainWindow(QMainWindow):
         self._bridge.set_worker_model(self._settings.default_worker_model)
         self._bridge.set_worker_thinking(self._settings.default_worker_thinking)
         self._bridge.set_temperature(self._settings.temperature)
+        self._bridge.set_worker_temperature(self._settings.worker_temperature)
         self._bridge.set_custom_system_prompts(
             self._settings.system_prompt,
             self._settings.planner_system_prompt,
@@ -704,6 +705,7 @@ class MainWindow(QMainWindow):
             self._bridge.set_worker_model(self._settings.default_worker_model)
             self._bridge.set_worker_thinking(self._settings.default_worker_thinking)
             self._bridge.set_temperature(self._settings.temperature)
+            self._bridge.set_worker_temperature(self._settings.worker_temperature)
             self._bridge.set_custom_system_prompts(
                 self._settings.system_prompt,
                 self._settings.planner_system_prompt,
@@ -1092,6 +1094,7 @@ class MainWindow(QMainWindow):
             self._settings.worker_system_prompt,
         )
         self._bridge.set_temperature(self._settings.temperature)
+        self._bridge.set_worker_temperature(self._settings.worker_temperature)
 
         # If the loaded conversation has a different provider, update the bridge.
         if loaded.provider != self._settings.provider:

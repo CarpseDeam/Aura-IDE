@@ -178,6 +178,20 @@ class History:
         if self.estimate_tokens() <= max_tokens:
             return
 
+        # --- Pass 1.5: if still over budget, aggressively truncate tool results
+        # in preserved turns too (the current turn may have ballooned).
+        if self.estimate_tokens() > max_tokens:
+            aggressive_chars = max_tool_result_chars // 2
+            for turn_idx in range(num_turns):
+                if turn_idx not in preserved:
+                    continue  # already done above
+                start = turn_starts[turn_idx]
+                end = turn_starts[turn_idx + 1] if turn_idx + 1 < num_turns else len(self.messages)
+                self._truncate_tool_results_in_range(start, end, aggressive_chars)
+
+        if self.estimate_tokens() <= max_tokens:
+            return
+
         # --- Pass 2: drop entire middle turns ---
         # Find turns that are neither first nor in the last N.
         droppable = sorted(
