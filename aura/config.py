@@ -165,6 +165,12 @@ DEFAULT_PROVIDER: ProviderId = "deepseek"
 MODELS: dict[str, ModelInfo] = dict(PROVIDERS["deepseek"].models)
 
 # ---------------------------------------------------------------------------
+# Tavily (web search) API key
+# ---------------------------------------------------------------------------
+
+TAVILY_API_KEY_ENV: str = "TAVILY_API_KEY"
+
+# ---------------------------------------------------------------------------
 # Convenience accessors
 # ---------------------------------------------------------------------------
 
@@ -200,6 +206,22 @@ def has_api_key(provider_id: ProviderId | None = None) -> bool:
 def require_api_key() -> str:
     """Legacy wrapper — checks the default (DeepSeek) provider."""
     return resolve_api_key(DEFAULT_PROVIDER)
+
+
+def get_tavily_api_key() -> str | None:
+    """Read TAVILY_API_KEY from environment. Returns None if not set."""
+    return os.environ.get(TAVILY_API_KEY_ENV) or None
+
+
+def require_tavily_api_key() -> str:
+    """Like get_tavily_api_key() but raises RuntimeError if not found."""
+    key = get_tavily_api_key()
+    if not key:
+        raise RuntimeError(
+            "Tavily API key not found. "
+            f"Set the {TAVILY_API_KEY_ENV} environment variable."
+        )
+    return key
 
 
 # ---------------------------------------------------------------------------
