@@ -1,38 +1,22 @@
 """Embeddable panel for worker dispatch output.
 
-Shows worker streaming (reasoning, tool calls, diffs, code) with auto-scroll
-for every dispatch in a single, persistent panel embedded in the main window.
+Shows a pinned TODO list and a single scrolling card for worker streaming output.
 """
 
 from __future__ import annotations
 
-from PySide6.QtCore import QAbstractAnimation, QEasingCurve, QPropertyAnimation, Qt, QVariantAnimation
+from PySide6.QtCore import QEasingCurve, Qt, QVariantAnimation
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
-    QApplication,
     QFrame,
     QGraphicsOpacityEffect,
     QLabel,
     QScrollArea,
-    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 
-from aura.gui.chat_view import (
-    AssistantCard,
-    CodeWriterCard,
-    DiffCard,
-    ErrorCard,
-    TerminalCard,
-    ToolCallCard,
-    _fade_in_widget,
-)
-from aura.gui.aura_widget import AuraWidget
-from aura.gui.theme import BG, BORDER, DANGER, FG_DIM, SUCCESS, WARN
-
-
-CODE_WRITER_NAMES = frozenset({"write_file", "edit_file"})
+from aura.gui.theme import BG, BORDER, FG_DIM, SUCCESS, WARN
 
 
 class TodoListWidget(QFrame):
@@ -156,7 +140,7 @@ class WorkerWindow(QWidget):
         layout.setSpacing(0)
 
         # Header
-        header = QLabel("Worker Activity")
+        header = QLabel("Worker")
         header.setObjectName("paneTitle")
         header.setStyleSheet("padding: 8px 12px;")
         layout.addWidget(header)
@@ -165,157 +149,79 @@ class WorkerWindow(QWidget):
         self._todo_widget = TodoListWidget()
         layout.addWidget(self._todo_widget)
 
-        # Central scroll area
+        # Single scrollable card for worker output
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
 
-        container = QWidget()
-        container.setStyleSheet("background: transparent;")
-        container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.MinimumExpanding)
-        self._layout = QVBoxLayout(container)
-        self._layout.setContentsMargins(12, 12, 12, 12)
-        self._layout.setSpacing(12)
-        self._layout.addStretch(1)
-        scroll.setWidget(container)
-        layout.addWidget(scroll, 1)
-        self._scroll = scroll
-        self._scroll_anim: QPropertyAnimation | None = None
-
-        # Status label at the bottom
-        self._status_label = QLabel("")
-        self._status_label.setStyleSheet(
-            f"color: {FG_DIM}; padding: 6px 12px; border-top: 1px solid {BORDER};"
+        self._card = QLabel()
+        self._card.setWordWrap(True)
+        self._card.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self._card.setStyleSheet(
+            f"color: #eaecef;"
+            f"background: {BG};"
+            f"padding: 12px;"
+            f"border-top: 1px solid {BORDER};"
         )
-        layout.addWidget(self._status_label)
+        font = self._card.font()
+        font.setFamily("Geist Mono, JetBrains Mono, Consolas, monospace")
+        font.setStyleHint(QFont.StyleHint.Monospace)
+        font.setPointSize(11)
+        self._card.setFont(font)
+        self._card.setVisible(False)
+
+        scroll.setWidget(self._card)
+        layout.addWidget(scroll, 1)
 
         # Internal state
-        self._current_assistant: AssistantCard | None = None
-        self._current_aura: AuraWidget | None = None
-        self._tool_cards: dict[str, ToolCallCard | CodeWriterCard] = {}
-        self._terminal_cards: dict[str, TerminalCard] = {}
-        self._tool_owner: dict[str, AssistantCard] = {}
-
-    # ---- helpers -----------------------------------------------------------
-
-    def _scroll_to_bottom(self) -> None:
-        bar = self._scroll.verticalScrollBar()
-        # Stop any in-flight smooth scroll
-        if self._scroll_anim is not None:
-            self._scroll_anim.stop()
-        self._scroll_anim = QPropertyAnimation(bar, b"value")
-        self._scroll_anim.setDuration(150)
-        self._scroll_anim.setStartValue(bar.value())
-        self._scroll_anim.setEndValue(bar.maximum())
-        self._scroll_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
-        self._scroll_anim.start()
-
-    def _add_card(self, w: QWidget) -> None:
-        self._layout.insertWidget(self._layout.count() - 1, w)
-        _fade_in_widget(w)
-        self._scroll_to_bottom()
-
-    def _current_or_new_assistant(self) -> AssistantCard:
-        if self._current_assistant is None:
-            return self.begin_assistant()
-        return self._current_assistant
+        self._active = False
 
     # ---- public streaming API ----------------------------------------------
 
-    def begin_assistant(self) -> AssistantCard:
-        card = AssistantCard()
-        self._current_assistant = card
-        wrapper = AuraWidget(card, glow_color=SUCCESS, glow_spread=16)
-        self._current_aura = wrapper
-        self._add_card(wrapper)
-        wrapper.start_aura()
-        return card
+    def begin_assistant(self) -> None:
+        self._card.setText("")
+        self._card.setVisible(True)
+        self._active = True
 
     def append_reasoning(self, text: str) -> None:
-        if self._current_aura is not None:
-            self._current_aura.set_glow_state("thinking")
-        self._current_or_new_assistant().append_reasoning(text)
-        self._scroll_to_bottom()
+        if not self._active:
+            return
+        current = self._card.text()
+        self._card.setText(current + f"[thinking] {text}")
 
     def append_content(self, text: str) -> None:
-        ac = self._current_or_new_assistant()
-        ac.reasoning_done()
-        ac.append_content(text)
-        self._scroll_to_bottom()
+        if not self._active:
+            return
+        current = self._card.text()
+        self._card.setText(current + text)
 
     def add_tool_call(self, worker_tool_id: str, name: str) -> None:
+        if not self._active:
+            return
         if name == "update_todo_list":
             return  # Pinned todo widget handles this, don't render a tool card.
-        if self._current_aura is not None:
-            self._current_aura.set_glow_state("coding")
-        ac = self._current_or_new_assistant()
-        if name == "run_terminal_command":
-            card: TerminalCard = TerminalCard(command="...")
-            ac._tool_cards[worker_tool_id] = card  # type: ignore[assignment]
-            if not ac._tool_cluster.isVisible():
-                ac._tool_cluster.setVisible(True)
-            ac._tool_cluster_layout.addWidget(card)
-            _fade_in_widget(card)
-            self._terminal_cards[worker_tool_id] = card
-            self._tool_owner[worker_tool_id] = ac
-            self._scroll_to_bottom()
-            return
-        if name in CODE_WRITER_NAMES:
-            card: ToolCallCard | CodeWriterCard = CodeWriterCard(name)
-        else:
-            card = ToolCallCard(name)
-        # Add directly to the assistant's tool cluster (bypass add_tool_card
-        # which always creates a plain ToolCallCard).
-        ac._tool_cards[worker_tool_id] = card
-        if not ac._tool_cluster.isVisible():
-            ac._tool_cluster.setVisible(True)
-        ac._tool_cluster_layout.addWidget(card)
-        _fade_in_widget(card)
-        self._tool_cards[worker_tool_id] = card
-        self._tool_owner[worker_tool_id] = ac
-        self._scroll_to_bottom()
+        current = self._card.text()
+        self._card.setText(current + f"\n🛠 {name}")
 
     def append_tool_args(self, worker_tool_id: str, fragment: str) -> None:
-        # Check for terminal card first
-        term_card = self._terminal_cards.get(worker_tool_id)
-        if term_card is not None:
-            import re as _re
-            m = _re.search(r'"command"\s*:\s*"([^"]*)', fragment)
-            if m:
-                cmd = m.group(1)
-                if cmd and cmd != "...":
-                    term_card.set_command(cmd)
-            return
-        card = self._tool_cards.get(worker_tool_id)
-        if card is not None:
-            card.append_args(fragment)
-        self._scroll_to_bottom()
+        # no-op: simplified card doesn't show tool args
+        pass
 
     def set_tool_result(self, worker_tool_id: str, ok: bool, result: str) -> None:
-        # Check for terminal card first
-        term_card = self._terminal_cards.get(worker_tool_id)
-        if term_card is not None:
-            try:
-                import json as _json
-                parsed = _json.loads(result)
-                exit_code = parsed.get("exit_code", -1)
-                term_card.set_result(exit_code)
-            except Exception:
-                term_card.set_result(-1)
-            self._scroll_to_bottom()
+        if not self._active:
             return
-        card = self._tool_cards.get(worker_tool_id)
-        if card is not None:
-            card.set_result(ok, result)
-        self._scroll_to_bottom()
+        current = self._card.text()
+        if ok:
+            self._card.setText(current + " ✓")
+        else:
+            self._card.setText(current + " ✗")
 
     def append_terminal_output(self, worker_tool_id: str, text: str) -> None:
-        """Append a chunk of stdout/stderr to the TerminalCard in the worker window."""
-        card = self._terminal_cards.get(worker_tool_id)
-        if card is not None:
-            card.append_output(text)
-        self._scroll_to_bottom()
+        if not self._active:
+            return
+        current = self._card.text()
+        self._card.setText(current + text)
 
     def add_diff_card(
         self,
@@ -326,66 +232,41 @@ class WorkerWindow(QWidget):
         decision: str,
         is_new_file: bool,
     ) -> None:
-        ac = self._tool_owner.get(worker_tool_id) or self._current_or_new_assistant()
-        card = DiffCard(rel_path, old, new, decision, is_new_file)
-        ac.add_footer_widget(card)
-        self._scroll_to_bottom()
+        if not self._active:
+            return
+        current = self._card.text()
+        self._card.setText(current + f"\n📄 {decision}: {rel_path}")
 
     def add_error(self, message: str) -> None:
-        err = ErrorCard("Worker error", message)
-        self._add_card(err)
+        if not self._active:
+            return
+        current = self._card.text()
+        self._card.setText(current + f"\n❌ {message}")
 
     def worker_finished(self, ok: bool, summary: str) -> None:
-        # Stop the spinning aura on the current card
-        ac = self._current_assistant
-        if ac is not None:
-            wrapper = ac.parentWidget()
-            if isinstance(wrapper, AuraWidget):
-                wrapper.stop_aura()
-            ac.finalize_content()
-            self._current_assistant = None
-            self._current_aura = None
-
+        if not self._active:
+            return
+        current = self._card.text()
         if ok:
-            self._status_label.setText("Completed")
-            self._status_label.setStyleSheet(
-                f"color: {SUCCESS}; font-weight: 600; padding: 6px 12px; border-top: 1px solid {BORDER};"
-            )
+            self._card.setText(current + "\n---\n✅ Completed")
         else:
-            self._status_label.setText("Completed with errors")
-            self._status_label.setStyleSheet(
-                f"color: {DANGER}; font-weight: 600; padding: 6px 12px; border-top: 1px solid {BORDER};"
-            )
+            self._card.setText(current + "\n---\n❌ Completed with errors")
+        self._active = False
 
     def worker_cancelled(self) -> None:
-        ac = self._current_assistant
-        if ac is not None:
-            wrapper = ac.parentWidget()
-            if isinstance(wrapper, AuraWidget):
-                wrapper.stop_aura()
-            self._current_assistant = None
-            self._current_aura = None
-        self._status_label.setText("Cancelled")
-        self._status_label.setStyleSheet(
-            f"color: {DANGER}; padding: 6px 12px; border-top: 1px solid {BORDER};"
-        )
+        if not self._active:
+            return
+        current = self._card.text()
+        self._card.setText(current + "\n---\n⏹ Cancelled")
+        self._active = False
 
     def update_todo_list(self, tasks: list) -> None:
         """Forward the worker's TODO list update to the pinned widget."""
         self._todo_widget.update_tasks(tasks)
 
     def clear(self) -> None:
-        """Remove all cards and reset state (called on New Conversation)."""
-        # Remove every widget from the layout except the trailing stretch.
-        while self._layout.count() > 1:
-            item = self._layout.takeAt(0)
-            if item is not None:
-                w = item.widget()
-                if w is not None:
-                    w.deleteLater()
-        self._current_assistant = None
-        self._current_aura = None
-        self._tool_cards.clear()
-        self._terminal_cards.clear()
-        self._tool_owner.clear()
+        """Remove all card content and reset state (called on New Conversation)."""
+        self._card.setText("")
+        self._card.setVisible(False)
         self._todo_widget.update_tasks([])
+        self._active = False
