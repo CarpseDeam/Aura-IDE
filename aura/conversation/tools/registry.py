@@ -737,6 +737,8 @@ class ToolRegistry:
                     ok=False, payload={"ok": False, "error": "content must be a string"}
                 )
             proposal = propose_write(self._root, target, content)
+            if not proposal.get("ok", False):
+                return ToolExecResult(ok=False, payload=proposal)
             req = ApprovalRequest(
                 tool_name="write_file",
                 rel_path=proposal["rel_path"],

@@ -33,7 +33,7 @@ def read_file(workspace_root: Path, target: Path) -> dict[str, Any]:
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError:
-        text = raw.decode("utf-8", errors="replace")
+        return {"ok": False, "error": f"file cannot be decoded as UTF-8: {target.relative_to(workspace_root)}"}
     if truncated:
         text += f"\n\n[... truncated at {MAX_READ_BYTES} bytes ...]"
     rel = target.relative_to(workspace_root).as_posix()

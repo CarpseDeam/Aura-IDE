@@ -12,7 +12,14 @@ def propose_write(workspace_root: Path, target: Path, content: str) -> dict[str,
         try:
             old_content = target.read_text(encoding="utf-8")
         except UnicodeDecodeError:
-            old_content = target.read_bytes().decode("utf-8", errors="replace")
+            return {
+                "ok": False,
+                "rel_path": rel,
+                "old_content": "",
+                "new_content": content,
+                "is_new_file": False,
+                "error": "file is not valid UTF-8 text",
+            }
     else:
         old_content = ""
     return {
