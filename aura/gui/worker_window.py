@@ -1,6 +1,7 @@
 """Embeddable panel for worker dispatch output.
 
-Shows a pinned TODO list and a single scrolling card for worker streaming output.
+Shows a pinned TODO list and one code-stream card per file edited by the worker,
+with dark syntax highlighting.
 """
 
 from __future__ import annotations
@@ -9,13 +10,13 @@ import json
 import re
 
 from PySide6.QtCore import QEasingCurve, Qt, QTimer, QVariantAnimation
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QColor, QFont, QSyntaxHighlighter, QTextCharFormat
 from PySide6.QtWidgets import (
     QFrame,
     QGraphicsOpacityEffect,
     QLabel,
-    QPlainTextEdit,
     QScrollArea,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -132,6 +133,87 @@ class TodoListWidget(QFrame):
             self._tasks_layout.addWidget(label)
 
 
+class DarkSyntaxHighlighter(QSyntaxHighlighter):
+    """Regex-based syntax highlighter using VS Code Dark+ theme colors."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._rules: list[tuple[str, QTextCharFormat]] = []
+
+        # Keywords — blue
+        kw_fmt = QTextCharFormat()
+        kw_fmt.setForeground(QColor("#569CD6"))
+        keywords = [
+            "and", "as", "assert", "async", "await", "break", "case",
+            "class", "class_name", "const", "continue", "def", "elif",
+            "else", "enum", "except", "export", "extends", "false",
+            "finally", "for", "from", "func", "global", "if", "import",
+            "in", "is", "lambda", "match", "not", "null", "onready",
+            "or", "pass", "print", "raise", "return", "self", "signal",
+            "static", "super", "true", "try", "var", "while", "with",
+            "yield",
+        ]
+        for kw in keywords:
+            self._rules.append((rf"\b{kw}\b", kw_fmt))
+
+        # Types / built-ins — teal
+        type_fmt = QTextCharFormat()
+        type_fmt.setForeground(QColor("#4EC9B0"))
+        types = [
+            "Array", "bool", "Color", "Dictionary", "float", "int",
+            "Node", "Node2D", "Node3D", "Object", "PoolStringArray",
+            "PoolIntArray", "PoolRealArray", "PackedByteArray",
+            "PackedColorArray", "PackedFloat32Array", "PackedFloat64Array",
+            "PackedInt32Array", "PackedInt64Array", "PackedStringArray",
+            "PackedVector2Array", "PackedVector3Array", "Rect2", "Rect2i",
+            "String", "Vector2", "Vector2i", "Vector3", "Vector3i",
+            "Vector4", "Vector4i", "void",
+        ]
+        for t in types:
+            self._rules.append((rf"\b{t}\b", type_fmt))
+
+        # Numbers — light green
+        num_fmt = QTextCharFormat()
+        num_fmt.setForeground(QColor("#B5CEA8"))
+        self._rules.append((r"\b\d+\.?\d*\b", num_fmt))
+        self._rules.append((r"\b0x[0-9a-fA-F]+\b", num_fmt))
+
+        # Strings (double-quoted) — orange
+        str_fmt = QTextCharFormat()
+        str_fmt.setForeground(QColor("#CE9178"))
+        self._rules.append((r'"[^"\\]*(\\.[^"\\]*)*"', str_fmt))
+
+        # Strings (single-quoted) — orange
+        self._rules.append((r"'[^'\\]*(\\.[^'\\]*)*'", str_fmt))
+
+        # Comments (# style) — green
+        cmt_fmt = QTextCharFormat()
+        cmt_fmt.setForeground(QColor("#6A9955"))
+        self._rules.append((r"#.*$", cmt_fmt))
+
+        # Comments (// style) — green
+        self._rules.append((r"//.*$", cmt_fmt))
+
+        # Decorators / annotations — yellow
+        dec_fmt = QTextCharFormat()
+        dec_fmt.setForeground(QColor("#DCDCAA"))
+        self._rules.append((r"@\w+", dec_fmt))
+
+        # Compile all patterns into QRegularExpression objects for performance
+        from PySide6.QtCore import QRegularExpression
+        self._compiled: list[tuple[QRegularExpression, QTextCharFormat]] = []
+        for pattern, fmt in self._rules:
+            self._compiled.append((QRegularExpression(pattern), fmt))
+        self._rules.clear()  # free the string list
+
+    def highlightBlock(self, text: str) -> None:
+        for pattern, fmt in self._compiled:
+            it = pattern.globalMatch(text)
+            while it.hasNext():
+                match = it.next()
+                self.setFormat(match.capturedStart(), match.capturedLength(), fmt)
+
+
 class CodeStreamCard(QFrame):
     """Dark glass card with a character-by-character typing animation.
 
@@ -157,7 +239,7 @@ class CodeStreamCard(QFrame):
                 border-left: 1px solid rgba(255, 255, 255, 0.04);
                 border-radius: 10px;
             }}
-            QFrame#codeStreamCard QPlainTextEdit {{
+            QFrame#codeStreamCard QTextEdit {{
                 background: transparent;
                 color: {FG};
                 border: none;
@@ -171,9 +253,10 @@ class CodeStreamCard(QFrame):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        self._editor = QPlainTextEdit()
+        self._editor = QTextEdit()
         self._editor.setReadOnly(True)
-        self._editor.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        self._editor.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
+        self._highlighter = DarkSyntaxHighlighter(self._editor.document())
         layout.addWidget(self._editor)
 
         # Internal state
@@ -293,7 +376,7 @@ class CodeStreamCard(QFrame):
 
 
 class WorkerWindow(QWidget):
-    """Shows a pinned TODO list and a single code-stream card that displays only the file being edited by the worker."""
+    """Shows a pinned TODO list and one code-stream card per file edited by the worker, with dark syntax highlighting."""
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -313,24 +396,56 @@ class WorkerWindow(QWidget):
         self._todo_widget = TodoListWidget()
         layout.addWidget(self._todo_widget)
 
-        # Single scrollable card for worker output
+        # Scrollable container for multiple code-stream cards
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
 
-        self._card = CodeStreamCard()
-        self._card.setVisible(False)
+        self._card_container = QWidget()
+        self._card_container.setStyleSheet("background: transparent;")
+        self._card_layout = QVBoxLayout(self._card_container)
+        self._card_layout.setContentsMargins(0, 0, 0, 0)
+        self._card_layout.setSpacing(10)
+        self._card_layout.addStretch(1)
+        scroll.setWidget(self._card_container)
+        self._cards: list[CodeStreamCard] = []
+        self._current_card: CodeStreamCard | None = None
+        self._scroll = scroll
 
-        scroll.setWidget(self._card)
         layout.addWidget(scroll, 1)
 
         self._write_tools: dict[str, dict] = {}  # worker_tool_id -> {name, buffered_args, last_content_len, path}
 
+    # ---- helpers -----------------------------------------------------------
+
+    def _new_card(self) -> CodeStreamCard:
+        """Finish the current card (if any), create and return a new one."""
+        if self._current_card is not None:
+            self._current_card.finish()
+        card = CodeStreamCard()
+        self._cards.append(card)
+        # Insert before the trailing stretch
+        self._card_layout.insertWidget(self._card_layout.count() - 1, card)
+        self._current_card = card
+        card.begin()
+        return card
+
+    def _scroll_to_bottom(self) -> None:
+        """Scroll the outer scroll area to the bottom."""
+        bar = self._scroll.verticalScrollBar()
+        if bar:
+            bar.setValue(bar.maximum())
+
     # ---- public streaming API ----------------------------------------------
 
     def begin_assistant(self) -> None:
-        self._card.begin()
+        # Remove all existing cards
+        for card in self._cards:
+            card.finish()
+            card.deleteLater()
+        self._cards.clear()
+        self._current_card = None
         self._write_tools.clear()
 
     def append_reasoning(self, text: str) -> None:
@@ -364,28 +479,37 @@ class WorkerWindow(QWidget):
             m = re.search(r'"path"\s*:\s*"([^"]*)', info["buffered_args"])
             if m and not info["path"]:
                 info["path"] = m.group(1)
-                self._card.append(f"📄 {info['path']}\n\n")
+                if self._current_card is None:
+                    self._new_card()
+                self._current_card.append(f"📄 {info['path']}\n\n")
+                self._scroll_to_bottom()
             return
 
         # Successfully parsed full JSON
         path = parsed.get("path", "")
         if path and path != info["path"]:
             info["path"] = path
-            self._card.append(f"📄 {path}\n\n")
+            if self._current_card is None:
+                self._new_card()
+            self._current_card.append(f"📄 {path}\n\n")
 
         content_key = "content" if info["name"] == "write_file" else "new_str"
         content = parsed.get(content_key, "")
         new_chars = content[info["last_content_len"] :]
         if new_chars:
-            self._card.append(new_chars)
+            if self._current_card is None:
+                self._new_card()
+            self._current_card.append(new_chars)
             info["last_content_len"] = len(content)
+            self._scroll_to_bottom()
 
     def set_tool_result(self, worker_tool_id: str, ok: bool, result: str) -> None:
         """On failure append a brief failure marker; on success, nothing extra."""
         if worker_tool_id in self._write_tools:
             del self._write_tools[worker_tool_id]
-            if not ok:
-                self._card.append("\n// ✗ failed\n")
+            if not ok and self._current_card is not None:
+                self._current_card.append("\n// ✗ failed\n")
+                self._scroll_to_bottom()
 
     def append_terminal_output(self, worker_tool_id: str, text: str) -> None:
         """Drop all terminal output — no-op."""
@@ -405,10 +529,12 @@ class WorkerWindow(QWidget):
         """Drop all errors — no-op."""
 
     def worker_finished(self, ok: bool, summary: str) -> None:
-        self._card.finish()
+        if self._current_card is not None:
+            self._current_card.finish()
 
     def worker_cancelled(self) -> None:
-        self._card.finish()
+        if self._current_card is not None:
+            self._current_card.finish()
 
     def update_todo_list(self, tasks: list) -> None:
         """Forward the worker's TODO list update to the pinned widget."""
@@ -416,6 +542,10 @@ class WorkerWindow(QWidget):
 
     def clear(self) -> None:
         """Remove all card content and reset state (called on New Conversation)."""
-        self._card.clear()
+        for card in self._cards:
+            card.clear()
+            card.deleteLater()
+        self._cards.clear()
+        self._current_card = None
         self._todo_widget.update_tasks([])
         self._write_tools.clear()
