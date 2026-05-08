@@ -779,7 +779,7 @@ class CodeWriterCard(QFrame):
         self._code_view.setFont(_mono_font(10))
         self._code_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
         self._code_view.setStyleSheet(
-            f"background: {BG}; color: {FG}; border: 1px solid {BORDER}; "
+            f"background: {BG}; border: 1px solid {BORDER}; "
             "border-radius: 4px; padding: 6px;"
         )
         body_layout.addWidget(self._code_view)
@@ -889,7 +889,7 @@ class CodeWriterCard(QFrame):
         formatter = HtmlFormatter(
             style="dracula",
             noclasses=True,
-            nowrap=True,
+            nowrap=False,
             prestyles=(
                 "background: transparent; border:none; "
                 "font-family:Consolas,'Cascadia Mono',monospace; "
@@ -953,7 +953,7 @@ class CodeBlockCard(QFrame):
         code_view.setFont(_mono_font(10))
         code_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
         code_view.setStyleSheet(
-            f"QPlainTextEdit {{ background: {BG}; color: {FG}; border: none; "
+            f"QPlainTextEdit {{ background: {BG}; border: none; "
             f"padding: 8px; border-radius: 4px; }}"
         )
         code_view.setPlainText(code)
@@ -977,7 +977,16 @@ class CodeBlockCard(QFrame):
                 lexer = TextLexer()
         except ClassNotFound:
             lexer = TextLexer()
-        formatter = HtmlFormatter(style="dracula", noclasses=True, nowrap=True)
+        formatter = HtmlFormatter(
+            style="dracula",
+            noclasses=True,
+            nowrap=False,
+            prestyles=(
+                "background: transparent; border: none; border-radius:6px; "
+                "padding:8px; font-family:'Geist Mono','JetBrains Mono',monospace; "
+                "font-size:12px; white-space:pre;"
+            ),
+        )
         try:
             highlighted = highlight(code, lexer, formatter)
             doc = view.document()
