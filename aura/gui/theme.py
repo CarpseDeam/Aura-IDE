@@ -67,13 +67,13 @@ QSS = f"""
     font-size: 13px;
 }}
 
-QMainWindow {
+QMainWindow {{
     background: {BG};
-}
+}}
 
-QWidget {
+QWidget {{
     background: transparent;
-}
+}}
 
 
 QSplitter::handle {{

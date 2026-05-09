@@ -393,7 +393,16 @@ class ArtifactCard(QFrame):
             self._status_label.setText("✓ done")
             # Fade the done indicator after 2 seconds
             from PySide6.QtCore import QTimer
-            QTimer.singleShot(2000, lambda: self._status_label.setText(""))
+
+            def _clear_status():
+                try:
+                    # Check if C++ object still exists
+                    if self._status_label is not None:
+                        self._status_label.setText("")
+                except (RuntimeError, AttributeError):
+                    pass
+
+            QTimer.singleShot(2000, _clear_status)
 
     def _toggle_status_dot(self) -> None:
         if self._status_label.text() == "● streaming":
