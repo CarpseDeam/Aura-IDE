@@ -165,6 +165,10 @@ def test_app_settings_from_dict_partial():
 def test_stored_key_fallback(tmp_path, monkeypatch):
     """get_api_key should fall back to stored key when env var is not set."""
     from aura.key_manager import KeyManager
+    import aura.key_manager
+
+    # Reset singleton to ensure it picks up the monkeypatched config_dir
+    aura.key_manager._key_manager = None
 
     # Create a temp keys.json
     keys_dir = tmp_path / "Aura"

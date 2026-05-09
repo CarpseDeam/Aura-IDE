@@ -33,11 +33,31 @@ def _derive_machine_key() -> bytes:
     Returns a 44-character URL-safe base64-encoded byte string suitable for
     ``Fernet(key)``. The key is stable for the same machine+user combination
     but differs across machines, providing hardware-tethering.
+
+    The node ID (MAC) is cached to disk to avoid a 5-second synchronous hang
+    during startup on Windows.
     """
-    try:
-        node = str(uuid.getnode())
-    except Exception:
-        node = "0"
+    cache_path = config_dir() / "node_id"
+    if cache_path.exists():
+        try:
+            node = cache_path.read_text("utf-8").strip()
+        except Exception:
+            node = None
+    else:
+        node = None
+
+    if not node:
+        try:
+            node = str(uuid.getnode())
+            # Cache it for next time to avoid the Windows startup hang
+            try:
+                cache_path.write_text(node, encoding="utf-8")
+                os.chmod(cache_path, 0o600)
+            except Exception:
+                pass
+        except Exception:
+            node = "0"
+
     try:
         user = os.getlogin()
     except Exception:

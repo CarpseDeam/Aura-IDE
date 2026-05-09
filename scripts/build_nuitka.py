@@ -19,7 +19,6 @@ def build():
 
     # Nuitka command construction
     # --standalone: produce a folder with all dependencies
-    # --onefile: compress into a single EXE
     # --enable-plugin=pyside6: critical for Qt apps
     # --windows-console-mode=disable: hide console
     # --windows-icon-from-ico: set app icon
@@ -29,7 +28,6 @@ def build():
     cmd = [
         sys.executable, "-m", "nuitka",
         "--standalone",
-        "--onefile",
         "--enable-plugin=pyside6",
         "--windows-console-mode=disable",
         f"--windows-icon-from-ico={ICON_PATH}",
@@ -47,7 +45,8 @@ def build():
     try:
         # Note: Nuitka builds take a significant amount of time as they compile to C++.
         subprocess.run(cmd, check=True)
-        print(f"\nBuild successful! The compiled EXE is in the 'build' folder.")
+        print(f"\nBuild successful! The compiled application is in the 'build/{APP_NAME}.dist' folder.")
+        print("To distribute, zip the entire .dist directory.")
     except subprocess.CalledProcessError as e:
         print(f"\nBuild failed with exit code {e.returncode}")
         sys.exit(e.returncode)

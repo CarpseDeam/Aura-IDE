@@ -553,6 +553,7 @@ class AppSettings:
         if isinstance(data.get("tavily_api_key"), str):
             s.tavily_api_key = data["tavily_api_key"]
         # Provider
+        if isinstance(data.get("provider"), str):
             s.provider = data["provider"]  # type: ignore[assignment]
         # Models — accept any string now
         if isinstance(data.get("default_model"), str):
