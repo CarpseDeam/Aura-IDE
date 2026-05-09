@@ -67,6 +67,19 @@ class ChatView(QScrollArea):
         self._is_bulk_updating: bool = False
         self._show_empty_hint()
 
+        # Connect to scroll bar changes to implement sticky scroll
+        self.verticalScrollBar().rangeChanged.connect(self._on_scroll_range_changed)
+        self._last_scroll_max = 0
+
+    def _on_scroll_range_changed(self, min_val: int, max_val: int) -> None:
+        """If we were at the bottom before the range increased, stay at the bottom."""
+        bar = self.verticalScrollBar()
+        # If user was near the bottom (within 50px), stick to the new bottom
+        if max_val > self._last_scroll_max:
+            if self._last_scroll_max - bar.value() < 50:
+                bar.setValue(max_val)
+        self._last_scroll_max = max_val
+
     # ---- container management --------------------------------------------
 
     def begin_bulk_update(self) -> None:
