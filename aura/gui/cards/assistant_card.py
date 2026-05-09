@@ -89,6 +89,7 @@ class AssistantCard(QFrame):
         self._outer.addWidget(self._tool_cluster)
 
         self._tool_cards: dict[str, ToolCallCard] = {}
+        self._reasoning_finalized = False
 
         # Footer: diff cards / usage / errors injected later.
         self._footer = QVBoxLayout()
@@ -122,9 +123,13 @@ class AssistantCard(QFrame):
             sb.setValue(sb.maximum())
 
     def reasoning_done(self) -> None:
+        if self._reasoning_finalized:
+            return
+        self._reasoning_finalized = True
         if self._reasoning_section is not None:
             self._reasoning_section.set_title("Thinking")
             # Keep reasoning open so the user can review it
+        self.finalize_reasoning()
 
     def append_content(self, text: str) -> None:
         self._stop_thinking_animation()
@@ -132,6 +137,29 @@ class AssistantCard(QFrame):
             self._content_label.setVisible(True)
             # Keep reasoning visible so user can see the thinking
         self._content_label.append(text)
+
+    def finalize_reasoning(self) -> None:
+        """Replace the streaming reasoning label with a rich layout."""
+        if self._reasoning_label is None or self._reasoning_scroll_area is None:
+            return
+
+        text = self._reasoning_label.text_buffer()
+        if not text:
+            return
+
+        # If no fenced code blocks, just render markdown in the existing label
+        if not _CODE_FENCE_RE.search(text):
+            self._reasoning_label.stop_timer()
+            html = _render_markdown_with_code(text)
+            self._reasoning_label.setTextFormat(Qt.TextFormat.RichText)
+            self._reasoning_label.setText(html)
+            return
+
+        # Otherwise, build a rich container
+        container = self._build_rich_container(text)
+        self._reasoning_label.stop_timer()
+        self._reasoning_scroll_area.setWidget(container)
+        self._reasoning_label = None
 
     # ---- compact tool status --------------------------------------------
 
@@ -220,10 +248,23 @@ class AssistantCard(QFrame):
             self._content_label.setText(html)
             return
 
-        # Parse into segments: list of (type, content, language)
-        segments = self._parse_content(text)
-
         # Build a container widget to replace the streaming label
+        container = self._build_rich_container(text)
+
+        # Swap the streaming label out for the rich container
+        idx = self._outer.indexOf(self._content_label)
+        if idx >= 0:
+            self._content_label.stop_timer()
+            self._content_label.hide()
+            # Insert new container at the same position
+            self._outer.insertWidget(idx, container)
+            # Remove old label from layout (but keep the object — it still
+            # owns the text buffer and is referenced by append_content etc.)
+            self._outer.removeWidget(self._content_label)
+
+    def _build_rich_container(self, text: str) -> QWidget:
+        """Build a container widget with interleaved text (markdown) and code cards."""
+        segments = self._parse_content(text)
         container = QWidget()
         container.setStyleSheet("background: transparent;")
         container_layout = QVBoxLayout(container)
@@ -239,8 +280,6 @@ class AssistantCard(QFrame):
                         Qt.TextInteractionFlag.TextSelectableByMouse
                     )
                     lbl.setTextFormat(Qt.TextFormat.RichText)
-                    # Render markdown (there are no code fences left, so this
-                    # will just process inline formatting)
                     html = _render_markdown_with_code(content)
                     lbl.setText(html)
                     lbl.setStyleSheet(f"color: {FG};")
@@ -250,17 +289,7 @@ class AssistantCard(QFrame):
                 container_layout.addWidget(card)
                 if lang == "mermaid" and self._chat_view is not None:
                     self._chat_view.mermaid_detected.emit(content)
-
-        # Swap the streaming label out for the rich container
-        idx = self._outer.indexOf(self._content_label)
-        if idx >= 0:
-            self._content_label.stop_timer()
-            self._content_label.hide()
-            # Insert new container at the same position
-            self._outer.insertWidget(idx, container)
-            # Remove old label from layout (but keep the object — it still
-            # owns the text buffer and is referenced by append_content etc.)
-            self._outer.removeWidget(self._content_label)
+        return container
 
     def _parse_content(self, text: str) -> list[tuple[str, str, str]]:
         """Split text into a list of segments around fenced code blocks.

@@ -5,7 +5,8 @@ import re
 
 from PySide6.QtWidgets import QFrame, QPlainTextEdit, QToolButton, QVBoxLayout, QWidget
 
-from aura.gui.cards._helpers import _mono_font
+from aura.gui.cards._helpers import _HAVE_PYGMENTS, _mono_font
+from aura.gui.syntax import PygmentsHighlighter
 from aura.gui.theme import BG, BORDER, DANGER, FG, FG_DIM, SUCCESS_DIM, WARN
 
 
@@ -56,6 +57,12 @@ class ToolCallCard(QFrame):
         self._args_view.setFixedHeight(80)
         body_layout.addWidget(self._args_view)
 
+        self._args_highlighter = None
+        if _HAVE_PYGMENTS:
+            self._args_highlighter = PygmentsHighlighter(
+                self._args_view.document(), "json"
+            )
+
         self._result_view = QPlainTextEdit()
         self._result_view.setReadOnly(True)
         self._result_view.setFont(_mono_font(9))
@@ -66,6 +73,14 @@ class ToolCallCard(QFrame):
         self._result_view.setFixedHeight(100)
         self._result_view.setVisible(False)
         body_layout.addWidget(self._result_view)
+
+        self._result_highlighter = None
+        if _HAVE_PYGMENTS:
+            # Result could be anything; we'll try to guess or use text.
+            # For now, let's use text and maybe detect JSON.
+            self._result_highlighter = PygmentsHighlighter(
+                self._result_view.document(), "text"
+            )
 
         self._body.setVisible(False)
         layout.addWidget(self._body)
@@ -114,13 +129,29 @@ class ToolCallCard(QFrame):
 
     def update_args(self, text: str) -> None:
         self._args_text = text
-        self._args_view.setPlainText(text)
+        formatted = text
+        try:
+            import json
+            data = json.loads(text)
+            formatted = json.dumps(data, indent=2)
+        except Exception:
+            pass
+        self._args_view.setPlainText(formatted)
         self._auto_size_view(self._args_view, 80, 400)
         self._refresh_header()
 
     def set_result(self, ok: bool, result_text: str) -> None:
         self._state = self.STATE_DONE if ok else self.STATE_FAILED
-        self._result_view.setPlainText(result_text)
+        formatted = result_text
+        try:
+            import json
+            data = json.loads(result_text)
+            formatted = json.dumps(data, indent=2)
+            if self._result_highlighter:
+                self._result_highlighter.set_language("json")
+        except Exception:
+            pass
+        self._result_view.setPlainText(formatted)
         self._result_view.setVisible(True)
         self._auto_size_view(self._result_view, 100, 500)
         if not ok:

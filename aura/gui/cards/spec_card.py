@@ -5,6 +5,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from aura.gui.cards._collapsible import _CollapsibleSection
+from aura.gui.markdown_renderer import _render_markdown_with_code
 from aura.gui.theme import ACCENT, BG_ALT, DANGER, FG, FG_DIM, FG_MUTED, SUCCESS
 
 
@@ -54,40 +55,58 @@ class SpecCard(QFrame):
         header.setStyleSheet(f"color: {ACCENT}; font-weight: 700; font-size: 12px;")
         outer.addWidget(header)
 
-        self._goal_label = QLabel(self._goal)
+        self._goal_label = QLabel()
         self._goal_label.setWordWrap(True)
-        self._goal_label.setStyleSheet(f"color: {FG}; font-weight: 600;")
+        self._goal_label.setTextFormat(Qt.TextFormat.RichText)
+        self._goal_label.setText(_render_markdown_with_code(self._goal))
+        self._goal_label.setStyleSheet(f"color: {FG}; font-size: 14px;")
         outer.addWidget(self._goal_label)
 
-        self._files_label = QLabel(self._format_files(self._files))
-        self._files_label.setWordWrap(True)
-        self._files_label.setStyleSheet(
-            f"color: {FG_DIM}; font-family: 'Geist Mono', 'JetBrains Mono', monospace; "
-            "font-size: 11px;"
-        )
-        outer.addWidget(self._files_label)
+        # Files section
+        self._files_header = QLabel("FILES")
+        self._files_header.setStyleSheet(f"color: {FG_MUTED}; font-weight: 700; font-size: 10px; margin-top: 4px;")
+        outer.addWidget(self._files_header)
+        
+        self._files_container = QWidget()
+        files_layout = QVBoxLayout(self._files_container)
+        files_layout.setContentsMargins(0, 0, 0, 0)
+        files_layout.setSpacing(4)
+        outer.addWidget(self._files_container)
+        
+        self._refresh_files_list(files_layout)
+
+        # Spec section
+        spec_header = QLabel("SPECIFICATION")
+        spec_header.setStyleSheet(f"color: {FG_MUTED}; font-weight: 700; font-size: 10px; margin-top: 8px;")
+        outer.addWidget(spec_header)
 
         # Spec body (collapsible if long).
-        self._spec_label = QLabel(self._spec)
+        self._spec_label = QLabel()
         self._spec_label.setWordWrap(True)
+        self._spec_label.setTextFormat(Qt.TextFormat.RichText)
+        self._spec_label.setText(_render_markdown_with_code(self._spec))
         self._spec_label.setStyleSheet(f"color: {FG};")
-        self._spec_label.setTextFormat(Qt.TextFormat.PlainText)
 
         self._spec_section: _CollapsibleSection | None = None
         if self._spec.count("\n") > 6 or len(self._spec) > 600:
             section = _CollapsibleSection(
-                "Spec", self._spec_label, start_open=False, prominent=False
+                "Expand Spec", self._spec_label, start_open=False, prominent=False
             )
             self._spec_section = section
             outer.addWidget(section)
         else:
             outer.addWidget(self._spec_label)
 
-        self._acceptance_label = QLabel(f"Acceptance: {self._acceptance}")
+        # Acceptance section
+        acc_header = QLabel("ACCEPTANCE CRITERIA")
+        acc_header.setStyleSheet(f"color: {FG_MUTED}; font-weight: 700; font-size: 10px; margin-top: 8px;")
+        outer.addWidget(acc_header)
+
+        self._acceptance_label = QLabel()
         self._acceptance_label.setWordWrap(True)
-        self._acceptance_label.setStyleSheet(
-            f"color: {FG_MUTED}; font-style: italic;"
-        )
+        self._acceptance_label.setTextFormat(Qt.TextFormat.RichText)
+        self._acceptance_label.setText(_render_markdown_with_code(self._acceptance))
+        self._acceptance_label.setStyleSheet(f"color: {FG_DIM};")
         outer.addWidget(self._acceptance_label)
 
         # Buttons row.
@@ -130,6 +149,38 @@ class SpecCard(QFrame):
 
     # ---- helpers ---------------------------------------------------------
 
+    def _refresh_files_list(self, layout: QVBoxLayout) -> None:
+        # Clear layout
+        while layout.count():
+            child = layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+
+        if not self._files:
+            lbl = QLabel("(no files listed)")
+            lbl.setStyleSheet(f"color: {FG_MUTED}; font-style: italic; font-size: 11px;")
+            layout.addWidget(lbl)
+            return
+
+        for path in self._files:
+            row = QWidget()
+            h = QHBoxLayout(row)
+            h.setContentsMargins(0, 0, 0, 0)
+            h.setSpacing(6)
+            
+            icon = QLabel("📄") # Could use a real SVG icon later
+            icon.setFixedWidth(16)
+            h.addWidget(icon)
+            
+            p_lbl = QLabel(path)
+            p_lbl.setStyleSheet(
+                f"color: {FG_DIM}; font-family: 'Geist Mono', 'JetBrains Mono', monospace; "
+                "font-size: 11px;"
+            )
+            h.addWidget(p_lbl)
+            h.addStretch(1)
+            layout.addWidget(row)
+
     @staticmethod
     def _format_files(files: list[str]) -> str:
         if not files:
@@ -143,10 +194,14 @@ class SpecCard(QFrame):
         self._files = list(files)
         self._spec = spec
         self._acceptance = acceptance
-        self._goal_label.setText(self._goal)
-        self._files_label.setText(self._format_files(self._files))
-        self._spec_label.setText(self._spec)
-        self._acceptance_label.setText(f"Acceptance: {self._acceptance}")
+        self._goal_label.setText(_render_markdown_with_code(self._goal))
+        
+        # Refresh files list
+        if hasattr(self, "_files_container"):
+            self._refresh_files_list(self._files_container.layout())
+            
+        self._spec_label.setText(_render_markdown_with_code(self._spec))
+        self._acceptance_label.setText(_render_markdown_with_code(self._acceptance))
 
     def current_spec(self) -> tuple[str, list[str], str, str]:
         return (self._goal, list(self._files), self._spec, self._acceptance)

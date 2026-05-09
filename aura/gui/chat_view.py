@@ -167,7 +167,8 @@ class ChatView(QScrollArea):
     def append_content(self, text: str) -> None:
         ac = self.current_assistant()
         # The first content delta means reasoning is done.
-        ac.reasoning_done()
+        if not ac._content_label.isVisible():
+            ac.reasoning_done()
         # On first content delta, ensure the glow is in "thinking" state
         # (important for planners that don't produce reasoning content).
         if not ac._content_label.isVisible() and self._current_aura is not None:

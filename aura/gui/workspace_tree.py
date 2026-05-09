@@ -138,8 +138,8 @@ class WorkspaceTree(QWidget):
         self._view.doubleClicked.connect(self._on_double_clicked)
 
         self._view.setStyleSheet(
-            f"QTreeView {{ border: none; background: transparent; }} "
-            f"QTreeView::item {{ padding: 4px 6px; }}"
+            "QTreeView { border: none; background: transparent; } "
+            "QTreeView::item { padding: 4px 6px; }"
         )
 
         # Show only the file name column (size/type/date are noise here).

@@ -50,8 +50,6 @@ from aura.config import (
     ModelId,
     ProviderId,
     ThinkingMode,
-    get_api_key,
-    get_provider,
 )
 from aura.conversation import (
     ConversationManager,

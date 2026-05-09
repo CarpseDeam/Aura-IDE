@@ -19,12 +19,9 @@ from PySide6.QtWidgets import (
 from aura.gui.theme import (
     ACCENT,
     BG,
-    BG_ALT,
     BORDER,
-    DANGER,
     FG,
     FG_DIM,
-    SUCCESS,
 )
 
 

@@ -34,6 +34,7 @@ from aura.config import (
     AppSettings,
     DEFAULT_THINKING,
     DEFAULT_WORKER_THINKING,
+    ModelInfo,
     ProviderId,
     ThinkingMode,
     cost_usd,
@@ -315,7 +316,6 @@ class MainWindow(QMainWindow):
         settings_act.triggered.connect(self._on_open_settings)
         self._toolbar.addAction(settings_act)
 
-        from aura import __version__
         about_act = QAction("\u24d8", self)  # ⓘ
         about_act.setToolTip("About Aura")
         about_act.triggered.connect(self._on_about)

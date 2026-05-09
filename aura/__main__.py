@@ -1,7 +1,6 @@
 """Entry point: `python -m aura`."""
 from __future__ import annotations
 
-import os
 import sys
 
 from PySide6.QtCore import QCoreApplication, Qt

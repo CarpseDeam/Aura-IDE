@@ -56,7 +56,11 @@ class _StreamLabel(QLabel):
             self.setText(_wrap_body_text(self._buf, FG))
 
     def stop_timer(self) -> None:
-        self._timer.stop()
+        try:
+            self._timer.stop()
+        except RuntimeError:
+            # Internal C++ object might already be deleted
+            pass
 
     def text_buffer(self) -> str:
         return self._buf

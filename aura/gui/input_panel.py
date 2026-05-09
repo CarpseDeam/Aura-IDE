@@ -8,7 +8,7 @@ from pathlib import Path
 
 from PIL import Image
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor, QImage, QKeySequence, QPixmap, QShortcut, QTextOption
+from PySide6.QtGui import QColor, QImage, QPixmap, QTextOption
 from PySide6.QtWidgets import (
     QFrame,
     QGraphicsDropShadowEffect,

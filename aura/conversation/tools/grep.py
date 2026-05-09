@@ -7,7 +7,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from aura.config import MAX_GLOB_RESULTS, SKIP_DIRS, SKIP_FILE_SUFFIXES, get_subprocess_kwargs
+from aura.config import SKIP_DIRS, SKIP_FILE_SUFFIXES, get_subprocess_kwargs
 
 
 def _should_skip(path: Path) -> bool:

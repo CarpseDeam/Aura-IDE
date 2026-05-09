@@ -6,8 +6,6 @@ Markdown, Mermaid) with code/preview toggle and QWebEngineView preview.
 
 from __future__ import annotations
 
-import json
-import re
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer

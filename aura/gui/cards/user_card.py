@@ -7,7 +7,7 @@ from PySide6.QtCore import Qt, QBuffer, QByteArray
 from PySide6.QtGui import QPixmap, QMovie
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout
 
-from aura.gui.cards._helpers import _wrap_body_text
+from aura.gui.markdown_renderer import _render_markdown_with_code
 from aura.gui.theme import BORDER, DANGER, FG_BODY_USER
 
 
@@ -35,11 +35,12 @@ class UserCard(QFrame):
             layout.addLayout(row)
 
         if text:
-            body = QLabel(text)
+            body = QLabel()
             body.setWordWrap(True)
             body.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             body.setTextFormat(Qt.TextFormat.RichText)
-            body.setText(_wrap_body_text(text, FG_BODY_USER))
+            body.setText(_render_markdown_with_code(text))
+            body.setStyleSheet(f"color: {FG_BODY_USER};")
             layout.addWidget(body)
 
     def _make_thumb(self, b64: str) -> QLabel:
