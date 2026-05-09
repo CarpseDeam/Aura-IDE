@@ -16,7 +16,7 @@ APP_AUTHOR = "Aura"
 # Provider types and registry
 # ---------------------------------------------------------------------------
 
-ProviderId = Literal["deepseek", "openai", "google", "openrouter"]
+ProviderId = Literal["deepseek", "openai", "google", "openrouter", "anthropic"]
 ThinkingMode = Literal["off", "high", "max"]
 ModelId = str  # Any model string from any provider
 
@@ -125,6 +125,48 @@ GOOGLE_PRICING: dict[str, dict[str, float]] = {
     "gemini-2.0-pro-exp-02-05": {"in_miss": 0.00, "in_hit": 0.00, "out": 0.00},
 }
 
+ANTHROPIC_MODELS: dict[str, ModelInfo] = {
+    "claude-sonnet-4-20250514": ModelInfo(
+        id="claude-sonnet-4-20250514",
+        label="Claude Sonnet 4",
+        input_per_m_usd=3.00,
+        output_per_m_usd=15.00,
+        cache_hit_per_m_usd=0.30,
+        supports_vision=True,
+    ),
+    "claude-3-5-sonnet-20241022": ModelInfo(
+        id="claude-3-5-sonnet-20241022",
+        label="Claude 3.5 Sonnet",
+        input_per_m_usd=3.00,
+        output_per_m_usd=15.00,
+        cache_hit_per_m_usd=0.30,
+        supports_vision=True,
+    ),
+    "claude-3-5-haiku-20241022": ModelInfo(
+        id="claude-3-5-haiku-20241022",
+        label="Claude 3.5 Haiku",
+        input_per_m_usd=0.80,
+        output_per_m_usd=4.00,
+        cache_hit_per_m_usd=0.08,
+        supports_vision=True,
+    ),
+    "claude-3-opus-20240229": ModelInfo(
+        id="claude-3-opus-20240229",
+        label="Claude 3 Opus",
+        input_per_m_usd=15.00,
+        output_per_m_usd=75.00,
+        cache_hit_per_m_usd=1.50,
+        supports_vision=True,
+    ),
+}
+
+ANTHROPIC_PRICING: dict[str, dict[str, float]] = {
+    "claude-sonnet-4-20250514": {"in_miss": 3.00, "in_hit": 0.30, "out": 15.00},
+    "claude-3-5-sonnet-20241022": {"in_miss": 3.00, "in_hit": 0.30, "out": 15.00},
+    "claude-3-5-haiku-20241022": {"in_miss": 0.80, "in_hit": 0.08, "out": 4.00},
+    "claude-3-opus-20240229": {"in_miss": 15.00, "in_hit": 1.50, "out": 75.00},
+}
+
 OPENROUTER_MODELS: dict[str, ModelInfo] = {
     "openai/gpt-4o": ModelInfo(
         id="openai/gpt-4o",
@@ -215,6 +257,16 @@ PROVIDERS: dict[ProviderId, ProviderConfig] = {
         default_thinking="off",
         models=OPENROUTER_MODELS,
         pricing=OPENROUTER_PRICING,
+    ),
+    "anthropic": ProviderConfig(
+        id="anthropic",
+        label="Anthropic",
+        base_url="https://api.anthropic.com/v1",
+        env_key="ANTHROPIC_API_KEY",
+        default_model="claude-sonnet-4-20250514",
+        default_thinking="high",
+        models=ANTHROPIC_MODELS,
+        pricing=ANTHROPIC_PRICING,
     ),
 }
 

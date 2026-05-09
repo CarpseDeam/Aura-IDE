@@ -2,6 +2,7 @@
 
 Yields events; never raises. Honors thinking mode rules:
 - DeepSeek:    extra_body={"thinking":...} for thinking control
+- Anthropic:   extra_body={"thinking":{"type":"enabled","budget_tokens":N}} for thinking
 - OpenAI/Gemini: reasoning_effort at top level; no extra_body when thinking is off
 """
 from __future__ import annotations
@@ -111,6 +112,12 @@ class DeepSeekClient:
                 kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
                 kwargs["reasoning_effort"] = "high" if thinking == "high" else "max"
                 # Per docs: temperature/top_p/penalties silently ignored. Skip them.
+        elif self._provider == "anthropic":
+            if thinking == "off":
+                kwargs["temperature"] = temperature
+            else:
+                budget = 16000 if thinking == "high" else 32000
+                kwargs["extra_body"] = {"thinking": {"type": "enabled", "budget_tokens": budget}}
         else:
             # OpenAI / Google Gemini: no extra_body thinking param.
             if thinking == "off":
