@@ -556,12 +556,31 @@ class AuraPlayground(QWidget):
         layout.addWidget(self._scroll, 1)
 
         self._artifacts, self._controllers, self._auras, self._terminal_cards, self._log_card = {}, {}, {}, {}, None
+        
+        # Connect to scroll bar changes to implement sticky scroll
+        self._scroll.verticalScrollBar().rangeChanged.connect(self._on_scroll_range_changed)
+        self._last_scroll_max = 0
+
+    def _on_scroll_range_changed(self, min_val: int, max_val: int) -> None:
+        """If we were at the bottom before the range increased, stay at the bottom."""
+        bar = self._scroll.verticalScrollBar()
+        # If user was near the bottom (within 50px), stick to the new bottom
+        if max_val > self._last_scroll_max:
+            if self._last_scroll_max - bar.value() < 50:
+                bar.setValue(max_val)
+        self._last_scroll_max = max_val
+
+    def _scroll_to_bottom(self):
+        """Force scroll to bottom (e.g. when a new card is added)."""
+        bar = self._scroll.verticalScrollBar()
+        bar.setValue(bar.maximum())
 
     def begin_assistant(self):
         for w in list(self._auras.values()): w.deleteLater()
         for w in list(self._terminal_cards.values()): w.deleteLater()
         self._artifacts.clear(); self._auras.clear(); self._controllers.clear(); self._terminal_cards.clear()
         if self._log_card: self._log_card.clear(); self._log_card.setVisible(False)
+        self._scroll_to_bottom()
 
     def _ensure_log_card(self):
         if not self._log_card:
@@ -570,8 +589,11 @@ class AuraPlayground(QWidget):
         self._log_card.setVisible(True)
         return self._log_card
 
-    def append_reasoning(self, text: str): self._ensure_log_card().append_text(text)
-    def append_content(self, text: str): self._ensure_log_card().append_text(text)
+    def append_reasoning(self, text: str): 
+        self._ensure_log_card().append_text(text)
+
+    def append_content(self, text: str): 
+        self._ensure_log_card().append_text(text)
 
     def add_tool_call(self, worker_tool_id: str, name: str):
         from aura.gui.cards import TerminalCard
@@ -596,9 +618,8 @@ class AuraPlayground(QWidget):
             self._terminal_cards[worker_tool_id] = card
             self._card_layout.insertWidget(self._card_layout.count() - 1, card)
             c.command_resolved.connect(card.set_command)
-
-    def append_tool_args(self, worker_tool_id: str, fragment: str):
-        if worker_tool_id in self._controllers: self._controllers[worker_tool_id].append_fragment(fragment)
+        
+        self._scroll_to_bottom()
 
     def set_tool_result(self, worker_tool_id: str, ok: bool, result: str):
         if worker_tool_id in self._controllers: self._controllers.pop(worker_tool_id).finalize(ok, result)
@@ -618,6 +639,8 @@ class AuraPlayground(QWidget):
             except Exception:
                 pass
             self._terminal_cards[worker_tool_id].set_result(exit_code)
+        
+        self._scroll_to_bottom()
 
     def update_todo_list(self, tasks: list): self._todo_widget.update_tasks(tasks)
 
