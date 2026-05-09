@@ -112,7 +112,8 @@ class MainWindow(QMainWindow):
             self._settings.worker_system_prompt,
         )
         self._bridge.set_auto_commit_enabled(self._settings.auto_commit_enabled)
-
+        self._bridge.set_auto_dispatch(self._settings.auto_dispatch)
+        self._bridge.set_auto_approve(self._settings.auto_approve)
         # Persistence state.
         self._current_conversation_path: Path | None = None
 
@@ -316,6 +317,21 @@ class MainWindow(QMainWindow):
         about_act.setToolTip("About Aura")
         about_act.triggered.connect(self._on_about)
         self._toolbar.addAction(about_act)
+
+        # Group 4: auto toggles
+        self._auto_dispatch_act = QAction("⚡ Dispatch", self)
+        self._auto_dispatch_act.setCheckable(True)
+        self._auto_dispatch_act.setChecked(self._settings.auto_dispatch)
+        self._auto_dispatch_act.triggered.connect(self._on_auto_dispatch_toggled)
+        self._auto_dispatch_act.setToolTip("Auto-approve dispatch spec cards")
+        self._toolbar.addAction(self._auto_dispatch_act)
+
+        self._auto_approve_act = QAction("✓ Approve", self)
+        self._auto_approve_act.setCheckable(True)
+        self._auto_approve_act.setChecked(self._settings.auto_approve)
+        self._auto_approve_act.triggered.connect(self._on_auto_approve_toggled)
+        self._auto_approve_act.setToolTip("Auto-approve file modification diffs")
+        self._toolbar.addAction(self._auto_approve_act)
 
         # Icon-only style.
         self._toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
@@ -672,6 +688,18 @@ class MainWindow(QMainWindow):
             self._read_only_act.setText("Read-Only Mode")
             self._read_only_badge.setText("")
 
+    def _on_auto_dispatch_toggled(self, checked: bool) -> None:
+        self._settings.auto_dispatch = checked
+        self._bridge.set_auto_dispatch(checked)
+        from aura.config import save_settings
+        save_settings(self._settings)
+
+    def _on_auto_approve_toggled(self, checked: bool) -> None:
+        self._settings.auto_approve = checked
+        self._bridge.set_auto_approve(checked)
+        from aura.config import save_settings
+        save_settings(self._settings)
+
     def _on_new_conversation(self) -> None:
         if self._bridge.is_running():
             QMessageBox.information(
@@ -749,6 +777,10 @@ class MainWindow(QMainWindow):
                 self._settings.worker_system_prompt,
             )
             self._bridge.set_auto_commit_enabled(self._settings.auto_commit_enabled)
+            self._bridge.set_auto_dispatch(self._settings.auto_dispatch)
+            self._bridge.set_auto_approve(self._settings.auto_approve)
+            self._auto_dispatch_act.setChecked(self._settings.auto_dispatch)
+            self._auto_approve_act.setChecked(self._settings.auto_approve)
             self._refresh_status_bar()
 
     def _apply_planner_worker_mode_to_bridge(self, enabled: bool) -> None:
@@ -982,6 +1014,9 @@ class MainWindow(QMainWindow):
         spec: str,
         acceptance: str,
     ) -> None:
+        if self._bridge.auto_dispatch:
+            self._bridge.user_dispatched(tool_call_id, goal, list(files), spec, acceptance)
+            return
         dlg = SpecApprovalDialog(goal, list(files), spec, acceptance, parent=self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self._bridge.user_dispatched(

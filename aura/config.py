@@ -538,6 +538,8 @@ class AppSettings:
     planner_system_prompt: str = ""
     worker_system_prompt: str = ""
     auto_commit_enabled: bool = True
+    auto_dispatch: bool = False
+    auto_approve: bool = False
     sandbox_mode: str = DEFAULT_SANDBOX_MODE
 
     @classmethod
@@ -587,6 +589,10 @@ class AppSettings:
             s.worker_system_prompt = data["worker_system_prompt"]
         if isinstance(data.get("auto_commit_enabled"), bool):
             s.auto_commit_enabled = data["auto_commit_enabled"]
+        if isinstance(data.get("auto_dispatch"), bool):
+            s.auto_dispatch = data["auto_dispatch"]
+        if isinstance(data.get("auto_approve"), bool):
+            s.auto_approve = data["auto_approve"]
         if isinstance(data.get("sandbox_mode"), str) and data["sandbox_mode"] in ("host", "docker", "wasm"):
             s.sandbox_mode = data["sandbox_mode"]
         return s

@@ -678,6 +678,7 @@ class ConversationBridge(QObject):
         self._single_system_prompt: str = ""
         self._planner_system_prompt: str = ""
         self._auto_commit_enabled: bool = True
+        self._auto_dispatch: bool = False
         self._pre_worker_sha: str | None = None
 
         # Re-emit dispatch proxy signals on the bridge so the GUI binds once.
@@ -710,6 +711,10 @@ class ConversationBridge(QObject):
     @property
     def planner_worker_mode(self) -> bool:
         return self._planner_worker_mode
+
+    @property
+    def auto_dispatch(self) -> bool:
+        return self._auto_dispatch
 
     @property
     def dispatch_records(self) -> list[WorkerDispatchRecord]:
@@ -772,6 +777,12 @@ class ConversationBridge(QObject):
     def set_auto_commit_enabled(self, enabled: bool) -> None:
         self._auto_commit_enabled = enabled
         self._dispatch_proxy.set_auto_commit_enabled(enabled)
+
+    def set_auto_dispatch(self, enabled: bool) -> None:
+        self._auto_dispatch = enabled
+
+    def set_auto_approve(self, enabled: bool) -> None:
+        self._approval_proxy._approve_all_session = enabled
 
     def set_provider(self, provider: ProviderId) -> None:
         """Recreate the internal client for a new provider."""
