@@ -116,7 +116,7 @@ def test_app_settings_defaults():
     """AppSettings should have sensible defaults."""
     s = AppSettings()
     assert s.provider == "deepseek"
-    assert s.default_planner_thinking == "high"
+    assert s.default_planner_thinking == "off"
     assert s.default_worker_thinking == "high"
     assert s.default_planner_model == "deepseek-v4-flash"
     assert s.default_worker_model == "deepseek-v4-pro"
@@ -153,7 +153,7 @@ def test_app_settings_from_dict_partial():
     assert s.provider == "google"
     assert s.default_planner_model == "gemini-2.0-flash"
     # Defaults for unspecified fields
-    assert s.default_planner_thinking == "high"
+    assert s.default_planner_thinking == "off"
     assert s.default_worker_model == "deepseek-v4-pro"
 
 

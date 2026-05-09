@@ -509,7 +509,7 @@ DEFAULT_MODEL: str = PROVIDERS["deepseek"].default_model
 DEFAULT_THINKING: ThinkingMode = PROVIDERS["deepseek"].default_thinking
 DEFAULT_PLANNER_MODEL: str = "deepseek-v4-flash"
 DEFAULT_WORKER_MODEL: str = "deepseek-v4-pro"
-DEFAULT_PLANNER_THINKING: ThinkingMode = "high"
+DEFAULT_PLANNER_THINKING: ThinkingMode = "off"
 DEFAULT_WORKER_THINKING: ThinkingMode = "high"
 
 

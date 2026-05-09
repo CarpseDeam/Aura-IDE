@@ -223,7 +223,7 @@ class SettingsDialog(QDialog):
 
         self._planner_thinking_combo = QComboBox()
         for label, val in _THINKING_ITEMS:
-            self._thinking_combo.addItem(label, val)
+            self._planner_thinking_combo.addItem(label, val)
         form.addRow("Planner thinking:", self._planner_thinking_combo)
 
         self._worker_model_combo = QComboBox()
