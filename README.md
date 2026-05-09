@@ -43,8 +43,11 @@ https://github.com/user-attachments/assets/b295ea01-cec9-428d-af87-56c1dcfb9fbe
   - [Cross-Platform](#cross-platform)
 - [Supported Providers](#supported-providers)
 - [Installation](#installation)
+- [First Launch Checklist](#first-launch-checklist)
 - [Usage](#usage)
 - [Configuration](#configuration)
+- [Safety Model](#safety-model)
+- [Known Limitations](#known-limitations)
 - [Architecture](#architecture)
 - [Project Structure](#project-structure)
 - [Development](#development)
@@ -70,12 +73,12 @@ https://github.com/user-attachments/assets/b295ea01-cec9-428d-af87-56c1dcfb9fbe
 
 Aura uses a **two-agent system** inspired by pair programming:
 
-- **Planner** - Reads your codebase, reasons about the requested change, asks clarifying questions, and writes a precise technical specification. Once you're satisfied, it calls `dispatch_to_worker` to hand off the spec.
+- **Planner** - Reads targeted parts of your codebase, asks clarifying questions when needed, gives a short plan summary, and writes a precise technical specification for the Worker.
 - **Worker** - Executes the specification with read/write filesystem access. It reads target files, applies edits, runs validation commands, and reports back a summary.
 
 Both agents can use **different models** and **different reasoning depths** from the same provider. For example, use a fast/cheap model for the Planner and a more capable model for the Worker.
 
-The **Planner Log viewer** lets you inspect the Planner's full reasoning chain before dispatching. The **Spec Edit dialog** lets you modify the spec before handing it to the Worker - giving you full control over what gets implemented and how.
+The Planner is tuned for speed: it keeps visible planning brief and puts the important implementation detail into the `dispatch_to_worker` spec. The **Spec Edit dialog** lets you modify that spec before handing it to the Worker - giving you full control over what gets implemented and how.
 
 ### Comprehensive Tools Suite
 
@@ -247,6 +250,11 @@ Choose reasoning depth for each agent independently:
 
 Configure separately for **Planner**, **Worker**, and **Single** (non-Planner/Worker) modes. Works with models that support extended thinking (e.g., DeepSeek R1, Claude Sonnet).
 
+Defaults are intentionally split for responsiveness and quality:
+
+- **Planner Thinking** defaults to **Off** so planning and spec creation feel snappy.
+- **Worker Thinking** defaults to **High** so implementation work gets more reasoning budget.
+
 ### Custom System Prompts
 
 Configure separate system prompts via the Settings dialog:
@@ -279,7 +287,7 @@ Optional settings for faster workflows:
 - **Auto-Dispatch** - Skips the spec review dialog; the spec is dispatched to the Worker immediately after the Planner writes it.
 - **Auto-Approve** - Skips the diff approval dialog; all file writes are applied automatically.
 
-Toggle these from the toolbar or Settings dialog. Use with caution - great for trusted, low-risk changes.
+Toggle these from the toolbar or Settings dialog. In the toolbar, a blue/bold label means the toggle is enabled; a dim label means it is disabled. Use with caution - these are best for trusted, low-risk changes.
 
 ### Conversation Persistence
 
@@ -340,17 +348,19 @@ Fetched models are **cached to disk** (`~/.config/Aura/models_cache.json`) and r
 - (Optional) [Git](https://git-scm.com/) for auto-commit and `/undo` support
 - (Optional) [Docker](https://docker.com/) for sandboxed execution mode
 
-### Install via pip
+### Install From Source
 
 ```bash
-pip install -e .
+pip install .
 ```
 
-Or, once published:
+For development:
 
 ```bash
-pip install aura
+pip install -e .[dev]
 ```
+
+For packaged releases, use the installer or archive attached to the GitHub release. If you publish to PyPI later, replace this section with the final package name.
 
 ### API Key Setup
 
@@ -385,13 +395,24 @@ python -m aura
 
 ---
 
+## First Launch Checklist
+
+1. Choose a workspace folder. Aura scopes file tools to this directory.
+2. Open **Settings** (gear icon) and add at least one provider API key, or set the matching environment variable.
+3. Optional: add a Tavily key for `web_search` and `run_research`.
+4. Optional: install Ollama and pull `llama3.2-vision` for local screenshot preprocessing.
+5. Keep **Auto-Approve** off until you trust the workflow on that project.
+6. For git-backed projects, check `git status` before and after a Worker run so you can review changes cleanly.
+
+---
+
 ## Usage
 
 ### Basic Workflow
 
 1. Launch Aura and select your project folder as the workspace root (or it defaults to the current directory).
 2. Type a question or request in the input panel - describe a bug, ask for an explanation, or request a change.
-3. The **Planner** reads relevant files, asks clarifying questions if needed, then writes a spec and calls `dispatch_to_worker`.
+3. The **Planner** reads relevant files, asks clarifying questions if needed, then writes a short plan summary and calls `dispatch_to_worker` with a complete worker spec.
 4. A **Spec Card** appears in the chat. Review it (you can edit the spec if needed), then click **Dispatch**.
 5. The **Worker** runs, reads target files, and proposes edits. Each write triggers a diff dialog for your approval.
 6. When the Worker finishes, it reports a summary back to the Planner, and the conversation continues.
@@ -435,6 +456,8 @@ The Planner and Worker always use the same provider but can be assigned differen
 
 Settings are stored at `~/.config/Aura/config.json` (or the platform-appropriate equivalent via [platformdirs](https://pypi.org/project/platformdirs/)). Open the **Settings** dialog via the toolbar gear icon to configure:
 
+The Settings dialog is scrollable and includes provider keys, Tavily web-search keys, model selection, thinking modes, automation toggles, sandbox mode, custom prompts, and workspace information.
+
 | Setting | Description |
 |---------|-------------|
 | **Provider** | Select the AI provider (DeepSeek / OpenAI / Anthropic / Google Gemini / OpenRouter) |
@@ -444,8 +467,8 @@ Settings are stored at `~/.config/Aura/config.json` (or the platform-appropriate
 | **Planner/Worker Mode** | Toggle the two-agent architecture on or off |
 | **Planner Model** | Model assigned to the Planner |
 | **Worker Model** | Model assigned to the Worker |
-| **Planner Thinking** | Reasoning depth for the Planner |
-| **Worker Thinking** | Reasoning depth for the Worker |
+| **Planner Thinking** | Reasoning depth for the Planner. Default: Off |
+| **Worker Thinking** | Reasoning depth for the Worker. Default: High |
 | **Temperature** | Sampling temperature (0.0-2.0) for Single/Planner mode. Default: 0.7 |
 | **Worker Temperature** | Sampling temperature (0.0-2.0) for the Worker. Default: 0.1 |
 | **System Prompt** | Custom system prompt for Single mode |
@@ -460,6 +483,34 @@ Settings are stored at `~/.config/Aura/config.json` (or the platform-appropriate
 | **Sandbox Mode** | Execution mode: `host` (direct), `docker` (containerised), or `wasm` (reserved) |
 
 > **Security note:** API keys are **never** written to `config.json`. They are either read from environment variables or stored encrypted in a separate `keys.json` file with `0o600` permissions.
+
+---
+
+## Safety Model
+
+Aura is designed to keep AI-driven changes reviewable:
+
+- File tools are scoped to the selected workspace root.
+- Write tools require diff approval unless **Auto-Approve** is enabled.
+- Existing files are backed up under `.aura/backups/` before writes.
+- Conversations are saved under `.aura/conversations/`.
+- API keys are stored separately from `config.json` and encrypted with a machine-derived key when saved through Settings.
+- Terminal commands run in either **host** mode or **docker** mode, depending on your sandbox setting.
+- **Read-Only Mode** removes write tools so Aura can inspect and explain code without changing files.
+
+Review generated changes like you would review a teammate's pull request. Keep **Auto-Approve** off for unfamiliar repositories, large refactors, and high-risk changes.
+
+---
+
+## Known Limitations
+
+- AI-generated edits still need human review.
+- **Auto-Approve** can apply incorrect edits without showing the diff dialog.
+- Docker sandbox mode requires Docker to be installed and running.
+- Screenshot preprocessing requires local Ollama unless the selected provider/model supports native vision.
+- Web search and research require a Tavily key.
+- Provider model availability, pricing, and thinking-mode support vary and can change over time.
+- Very large workspaces may require targeted prompts or `search_codebase` to keep planning fast.
 
 ---
 
