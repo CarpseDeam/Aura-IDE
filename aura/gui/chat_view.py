@@ -64,9 +64,19 @@ class ChatView(QScrollArea):
         self._scroll_anim: QPropertyAnimation | None = None
         self._compact_tools: bool = False
         self._compact_tool_names: dict[str, str] = {}
+        self._is_bulk_updating: bool = False
         self._show_empty_hint()
 
     # ---- container management --------------------------------------------
+
+    def begin_bulk_update(self) -> None:
+        """Suspend animations and scrolling for bulk card insertion."""
+        self._is_bulk_updating = True
+
+    def end_bulk_update(self) -> None:
+        """Resume animations and scrolling, and sync the view."""
+        self._is_bulk_updating = False
+        self._scroll_to_bottom(force=True)
 
     def _add_card(self, w: QWidget) -> None:
         if self._empty_hint is not None:
@@ -77,14 +87,17 @@ class ChatView(QScrollArea):
             w.setParent(self)
         # Insert before the trailing stretch.
         self._layout.insertWidget(self._layout.count() - 1, w)
-        _fade_in_widget(w)
-        self._scroll_to_bottom()
+        if not self._is_bulk_updating:
+            _fade_in_widget(w)
+            self._scroll_to_bottom()
 
     def _is_at_bottom(self, threshold: int = 30) -> bool:
         bar = self.verticalScrollBar()
         return bar.maximum() - bar.value() <= threshold
 
     def _scroll_to_bottom(self, force: bool = False) -> None:
+        if self._is_bulk_updating and not force:
+            return
         if not force and not self._is_at_bottom():
             return
         bar = self.verticalScrollBar()

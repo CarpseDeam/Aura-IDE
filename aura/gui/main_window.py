@@ -1322,6 +1322,15 @@ class MainWindow(QMainWindow):
         recorded args + result so the conversation reads coherently.
         """
         msgs = self._bridge.history.messages
+        if not msgs:
+            return
+
+        # Cancel any in-flight replay
+        if not hasattr(self, "_active_replay_id"):
+            self._active_replay_id = 0
+        self._active_replay_id += 1
+        my_id = self._active_replay_id
+
         # Index tool results by tool_call_id for inline pairing.
         tool_results: dict[str, str] = {}
         for m in msgs:
@@ -1330,45 +1339,78 @@ class MainWindow(QMainWindow):
                 if isinstance(tcid, str):
                     tool_results[tcid] = m.get("content", "")
 
-        for m in msgs:
-            role = m.get("role")
-            if role == "user":
-                content = m.get("content")
-                if isinstance(content, str):
-                    self._chat.add_user(content)
-                elif isinstance(content, list):
-                    text_parts = [
-                        p.get("text", "")
-                        for p in content
-                        if isinstance(p, dict) and p.get("type") == "text"
-                    ]
-                    self._chat.add_user("\n".join(text_parts))
-            elif role == "assistant":
-                self._chat.begin_assistant()
-                rc = m.get("reasoning_content")
-                if rc:
-                    self._chat.append_reasoning(rc)
-                content = m.get("content")
-                if isinstance(content, str) and content:
-                    self._chat.append_content(content)
-                for tc in m.get("tool_calls") or []:
-                    tcid = tc.get("id", "")
-                    fn = tc.get("function", {})
-                    name = fn.get("name", "")
-                    args = fn.get("arguments", "")
-                    self._chat.add_tool_call(tcid, name)
-                    if args:
-                        self._chat.append_tool_args(tcid, args)
-                    if tcid in tool_results:
-                        # Determine ok by parsing the recorded JSON if possible.
-                        ok = True
-                        try:
-                            parsed = json.loads(tool_results[tcid])
-                            if isinstance(parsed, dict) and parsed.get("ok") is False:
-                                ok = False
-                        except json.JSONDecodeError:
-                            pass
-                        self._chat.set_tool_result(tcid, ok, tool_results[tcid])
-                # Finalize markdown for content if present.
-                self._chat.assistant_done()
-            # tool messages are paired into the assistant cards above
+        self._chat.begin_bulk_update()
+        
+        # Filter out tool messages as they are paired into assistant cards.
+        process_msgs = [m for m in msgs if m.get("role") != "tool"]
+        msg_iter = iter(process_msgs)
+
+        def process_chunk():
+            if self._active_replay_id != my_id:
+                return
+
+            chunk_size = 5
+            try:
+                for _ in range(chunk_size):
+                    m = next(msg_iter)
+                    role = m.get("role")
+                    if role == "user":
+                        content = m.get("content")
+                        if isinstance(content, str):
+                            self._chat.add_user(content)
+                        elif isinstance(content, list):
+                            text_parts = [
+                                p.get("text", "")
+                                for p in content
+                                if isinstance(p, dict) and p.get("type") == "text"
+                            ]
+                            self._chat.add_user("\n".join(text_parts))
+                    elif role == "assistant":
+                        self._chat.begin_assistant()
+                        rc = m.get("reasoning_content")
+                        if rc:
+                            self._chat.append_reasoning(rc)
+                        content = m.get("content")
+                        if isinstance(content, str) and content:
+                            self._chat.append_content(content)
+                        for tc in m.get("tool_calls") or []:
+                            tcid = tc.get("id", "")
+                            fn = tc.get("function", {})
+                            name = fn.get("name", "")
+                            args_str = fn.get("arguments", "")
+                            
+                            if name == "dispatch_to_worker" and args_str:
+                                try:
+                                    args = json.loads(args_str)
+                                    if isinstance(args, dict):
+                                        goal = args.get("goal", "")
+                                        files = args.get("files", [])
+                                        spec = args.get("spec", "")
+                                        acceptance = args.get("acceptance", "")
+                                        self._chat.add_spec_card(tcid, goal, files, spec, acceptance)
+                                except json.JSONDecodeError:
+                                    self._chat.add_tool_call(tcid, name)
+                                    self._chat.append_tool_args(tcid, args_str)
+                            else:
+                                self._chat.add_tool_call(tcid, name)
+                                if args_str:
+                                    self._chat.append_tool_args(tcid, args_str)
+                            
+                            if tcid in tool_results:
+                                ok = True
+                                try:
+                                    parsed = json.loads(tool_results[tcid])
+                                    if isinstance(parsed, dict) and parsed.get("ok") is False:
+                                        ok = False
+                                except json.JSONDecodeError:
+                                    pass
+                                self._chat.set_tool_result(tcid, ok, tool_results[tcid])
+                        self._chat.assistant_done()
+                
+                # Schedule next chunk
+                QTimer.singleShot(0, process_chunk)
+            except StopIteration:
+                if self._active_replay_id == my_id:
+                    self._chat.end_bulk_update()
+
+        process_chunk()

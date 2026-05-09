@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from PySide6.QtGui import QSyntaxHighlighter, QTextCharFormat, QColor, QFont
 from pygments.lexers import get_lexer_by_name, TextLexer
@@ -9,8 +10,38 @@ from pygments.styles import get_style_by_name
 
 from aura.gui.theme import DIFF_ADD_BG, DIFF_DEL_BG, FG_DIM, SUCCESS, DANGER
 
+# Global cache to avoid redundant lookups during bulk replay
+_STYLE_CACHE: dict[str, Any] = {}
+_LEXER_CACHE: dict[str, Any] = {}
+
+
+def _get_cached_style(name: str = "dracula") -> Any:
+    if name not in _STYLE_CACHE:
+        try:
+            _STYLE_CACHE[name] = get_style_by_name(name)
+        except ClassNotFound:
+            from pygments.styles import get_all_styles
+            available = list(get_all_styles())
+            fallback = available[0] if available else "default"
+            if fallback not in _STYLE_CACHE:
+                _STYLE_CACHE[fallback] = get_style_by_name(fallback)
+            _STYLE_CACHE[name] = _STYLE_CACHE[fallback]
+    return _STYLE_CACHE[name]
+
+
+def _get_cached_lexer(language: str) -> Any:
+    if not language:
+        return TextLexer()
+    if language not in _LEXER_CACHE:
+        try:
+            _LEXER_CACHE[language] = get_lexer_by_name(language)
+        except ClassNotFound:
+            _LEXER_CACHE[language] = TextLexer()
+    return _LEXER_CACHE[language]
+
 
 def language_from_path(path: str) -> str:
+    # ... (same as before)
     """Return a pygments-compatible language identifier from a file path."""
     ext = Path(path).suffix.lower()
     lang_map = {
@@ -35,31 +66,14 @@ class PygmentsHighlighter(QSyntaxHighlighter):
     """
 
     def __init__(self, parent, language: str = "text"):
-        try:
-            self._style = get_style_by_name("dracula")
-        except ClassNotFound:
-            # Fallback if dracula is missing for some reason
-            from pygments.styles import get_all_styles
-            available = list(get_all_styles())
-            self._style = get_style_by_name(available[0] if available else "default")
-            
+        self._style = _get_cached_style("dracula")
         self._format_cache: dict[tuple, QTextCharFormat] = {}
-        self._lexer = TextLexer()
+        self._lexer = _get_cached_lexer(language)
         super().__init__(parent)
-        self.set_language(language)
 
     def set_language(self, language: str) -> None:
         """Update the lexer based on the language name or file extension."""
-        try:
-            if language:
-                # Try to get lexer by name or alias
-                self._lexer = get_lexer_by_name(language)
-            else:
-                self._lexer = TextLexer()
-        except ClassNotFound:
-            # If not found, fall back to plain text
-            self._lexer = TextLexer()
-        
+        self._lexer = _get_cached_lexer(language)
         # Trigger re-highlighting of the entire document
         self.rehighlight()
 

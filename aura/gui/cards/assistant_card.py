@@ -222,7 +222,8 @@ class AssistantCard(QFrame):
         if not self._tool_cluster.isVisible():
             self._tool_cluster.setVisible(True)
         self._tool_cluster_layout.addWidget(card)
-        _fade_in_widget(card)
+        if self._chat_view is None or not self._chat_view._is_bulk_updating:
+            _fade_in_widget(card)
         return card
 
     def get_tool_card(self, tool_call_id: str) -> "ToolCallCard | None":
@@ -232,7 +233,8 @@ class AssistantCard(QFrame):
 
     def add_footer_widget(self, w: QWidget) -> None:
         self._footer.addWidget(w)
-        _fade_in_widget(w)
+        if self._chat_view is None or not self._chat_view._is_bulk_updating:
+            _fade_in_widget(w)
 
     def finalize_content(self) -> None:
         """Replace the streaming label with a rich layout that renders code
