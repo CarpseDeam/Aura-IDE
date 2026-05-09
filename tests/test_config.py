@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 from aura.config import (
     PROVIDERS,
@@ -152,3 +155,119 @@ def test_app_settings_from_dict_partial():
     # Defaults for unspecified fields
     assert s.default_planner_thinking == "high"
     assert s.default_worker_model == "deepseek-v4-pro"
+
+
+# ---------------------------------------------------------------------------
+# KeyManager integration
+# ---------------------------------------------------------------------------
+
+
+def test_stored_key_fallback(tmp_path, monkeypatch):
+    """get_api_key should fall back to stored key when env var is not set."""
+    from aura.key_manager import KeyManager
+
+    # Create a temp keys.json
+    keys_dir = tmp_path / "Aura"
+    keys_dir.mkdir()
+
+    # Monkeypatch config_dir to return our temp path
+    monkeypatch.setattr("aura.config.config_dir", lambda: keys_dir)
+    monkeypatch.setattr("aura.key_manager.config_dir", lambda: keys_dir)
+
+    # Ensure env var is not set
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    km = KeyManager()
+    km.set_key("openai", "sk-test-key-123")
+
+    # Now get_api_key should return the stored key
+    from aura.config import get_api_key
+
+    key = get_api_key("openai")
+    assert key == "sk-test-key-123"
+
+
+def test_stored_key_is_encrypted_on_disk(tmp_path, monkeypatch):
+    """The keys.json file should contain Fernet tokens, not plaintext."""
+    from aura.key_manager import KeyManager
+
+    keys_dir = tmp_path / "Aura"
+    keys_dir.mkdir()
+    monkeypatch.setattr("aura.key_manager.config_dir", lambda: keys_dir)
+
+    km = KeyManager()
+    km.set_key("deepseek", "sk-plaintext-secret")
+
+    data = json.loads(km._path.read_text("utf-8"))
+    ciphertext = data["deepseek"]
+    # Must be a Fernet token (starts with gAAAAA)
+    assert ciphertext.startswith("gAAAAA")
+    # Must NOT contain the plaintext
+    assert "sk-plaintext-secret" not in ciphertext
+
+
+def test_legacy_plaintext_migration(tmp_path, monkeypatch):
+    """Legacy plaintext in keys.json should be auto-migrated to encrypted."""
+    from aura.key_manager import KeyManager
+
+    keys_dir = tmp_path / "Aura"
+    keys_dir.mkdir()
+    monkeypatch.setattr("aura.key_manager.config_dir", lambda: keys_dir)
+
+    km = KeyManager()
+    # Simulate old plaintext storage: write directly to file
+    km._path.write_text(json.dumps({"google": "sk-legacy-plaintext"}), encoding="utf-8")
+
+    # get_key should return the plaintext
+    key = km.get_key("google")
+    assert key == "sk-legacy-plaintext"
+
+    # But now the file should contain a Fernet token
+    data = json.loads(km._path.read_text("utf-8"))
+    assert data["google"].startswith("gAAAAA")
+
+
+def test_key_manager_delete(tmp_path, monkeypatch):
+    """Deleting a key should remove it from the file."""
+    from aura.key_manager import KeyManager
+
+    keys_dir = tmp_path / "Aura"
+    keys_dir.mkdir()
+    monkeypatch.setattr("aura.key_manager.config_dir", lambda: keys_dir)
+
+    km = KeyManager()
+    km.set_key("anthropic", "sk-ant-abc")
+    assert km.has_key("anthropic")
+
+    km.delete_key("anthropic")
+    assert not km.has_key("anthropic")
+    assert km.get_key("anthropic") is None
+
+
+def test_get_key_missing_file(tmp_path, monkeypatch):
+    """get_key should return None when keys.json doesn't exist."""
+    from aura.key_manager import KeyManager
+
+    keys_dir = tmp_path / "Aura"
+    keys_dir.mkdir()
+    monkeypatch.setattr("aura.key_manager.config_dir", lambda: keys_dir)
+
+    km = KeyManager()
+    assert km.get_key("openai") is None
+    assert not km.has_key("openai")
+
+
+def test_set_api_key_public_function(tmp_path, monkeypatch):
+    """The public set_api_key in config.py should work."""
+    from aura.config import set_api_key, get_api_key
+
+    keys_dir = tmp_path / "Aura"
+    keys_dir.mkdir()
+    monkeypatch.setattr("aura.config.config_dir", lambda: keys_dir)
+    monkeypatch.setattr("aura.key_manager.config_dir", lambda: keys_dir)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+
+    set_api_key("deepseek", "sk-ds-public-test")
+    key = get_api_key("deepseek")
+    assert key == "sk-ds-public-test"

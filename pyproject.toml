@@ -8,13 +8,14 @@ version = "0.1.0"
 description = "Aura — desktop chat troubleshooter for code, supporting DeepSeek, OpenAI, Anthropic, Google Gemini, and OpenRouter."
 requires-python = ">=3.10"
 dependencies = [
-    "PySide6>=6.6",
-    "openai>=1.40",
-    "pydantic>=2.5",
-    "platformdirs>=4.0",
-    "pillow>=10.0",
-    "pygments>=2.17",
+    "cryptography>=41.0",
     "httpx",
+    "openai>=1.40",
+    "pillow>=10.0",
+    "platformdirs>=4.0",
+    "pydantic>=2.5",
+    "pygments>=2.17",
+    "PySide6>=6.6",
 ]
 
 [project.optional-dependencies]

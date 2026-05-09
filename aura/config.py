@@ -9,6 +9,8 @@ from typing import Literal, Any
 
 from platformdirs import user_config_dir, user_data_dir
 
+from aura.key_manager import get_key as _stored_get_key, has_key as _stored_has_key, set_key as _stored_set_key
+
 APP_NAME = "Aura"
 APP_AUTHOR = "Aura"
 
@@ -259,9 +261,14 @@ def get_provider(provider_id: ProviderId) -> ProviderConfig:
 
 
 def get_api_key(provider_id: ProviderId) -> str | None:
-    """Check env var only — API keys are never stored in config.json."""
+    """Check env var first, then hardware-encrypted stored key."""
     cfg = PROVIDERS[provider_id]
-    return os.environ.get(cfg.env_key) or None
+    # 1. Environment variable takes precedence
+    env_val = os.environ.get(cfg.env_key)
+    if env_val:
+        return env_val
+    # 2. Stored key (hardware-tethered, auto-migrates legacy plaintext)
+    return _stored_get_key(provider_id)
 
 
 def resolve_api_key(provider_id: ProviderId) -> str:
@@ -285,6 +292,20 @@ def has_api_key(provider_id: ProviderId | None = None) -> bool:
 def require_api_key() -> str:
     """Legacy wrapper — checks the default (DeepSeek) provider."""
     return resolve_api_key(DEFAULT_PROVIDER)
+
+
+def set_api_key(provider_id: ProviderId, api_key: str) -> None:
+    """Store an API key encrypted with a hardware-derived key."""
+    _stored_set_key(provider_id, api_key)
+
+
+def list_stored_providers() -> list[ProviderId]:
+    """Return list of provider IDs that have a stored key (encrypted or legacy)."""
+    result: list[ProviderId] = []
+    for pid in PROVIDERS:
+        if _stored_has_key(pid):
+            result.append(pid)
+    return result
 
 
 def get_tavily_api_key() -> str | None:

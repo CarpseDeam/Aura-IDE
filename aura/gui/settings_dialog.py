@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
@@ -33,6 +34,7 @@ from aura.config import (
     get_provider,
     save_dynamic_catalog,
     save_settings,
+    set_api_key,
 )
 from aura.gui.theme import FG_DIM, SUCCESS, WARN
 
@@ -129,10 +131,34 @@ class SettingsDialog(QDialog):
         
         form.addRow("Provider:", provider_row)
 
-        # ---- API Key status ----
+        # ---- API Key input ----
+        api_key_row = QHBoxLayout()
+        api_key_row.setSpacing(6)
+        
+        self._api_key_input = QLineEdit()
+        self._api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self._api_key_input.setPlaceholderText("Paste API key here...")
+        api_key_row.addWidget(self._api_key_input, 1)
+        
+        self._save_key_btn = QPushButton("Save")
+        self._save_key_btn.setToolTip("Encrypt and store this key on disk")
+        self._save_key_btn.clicked.connect(self._on_save_api_key)
+        api_key_row.addWidget(self._save_key_btn)
+        
+        self._clear_key_btn = QPushButton("Clear")
+        self._clear_key_btn.setToolTip("Remove stored key for this provider")
+        self._clear_key_btn.clicked.connect(self._on_clear_api_key)
+        api_key_row.addWidget(self._clear_key_btn)
+        
+        api_key_widget = QWidget()
+        api_key_widget.setLayout(api_key_row)
+        form.addRow("API Key:", api_key_widget)
+        
+        # Status label below the input
         self._api_key_status = QLabel("")
-        form.addRow("API Key:", self._api_key_status)
-
+        self._api_key_status.setWordWrap(True)
+        form.addRow("", self._api_key_status)
+        
         current_provider = self._settings.provider
         self._refresh_api_key_status(current_provider)
 
@@ -429,14 +455,80 @@ class SettingsDialog(QDialog):
         self._populate_model_combos(provider_id)
 
     def _refresh_api_key_status(self, provider_id: ProviderId) -> None:
+        from aura.key_manager import get_key_manager
+
         cfg = PROVIDERS[provider_id]
         env_val = os.environ.get(cfg.env_key)
+        km = get_key_manager()
+        stored_val = km.get_key(provider_id)
+
+        # Clear the input field
+        self._api_key_input.clear()
+
         if env_val:
-            self._api_key_status.setText(f"{cfg.env_key}: ✓ set")
-            self._api_key_status.setStyleSheet(f"color: {SUCCESS};")
+            self._api_key_status.setText(
+                f"Using key from environment variable {cfg.env_key}. "
+                f"(Stored keys are ignored when env var is set.)"
+            )
+            self._api_key_status.setStyleSheet(f"color: {SUCCESS}; font-size: 10px;")
+            self._api_key_input.setEnabled(False)
+            self._api_key_input.setPlaceholderText("Key is set via environment variable")
+            self._save_key_btn.setEnabled(False)
+            self._clear_key_btn.setEnabled(False)
+        elif stored_val:
+            # Show masked version: first 4 + last 4 chars
+            masked = stored_val[:4] + "****" + stored_val[-4:] if len(stored_val) > 8 else "****"
+            self._api_key_status.setText(
+                f"Stored key: {masked} (encrypted on disk with hardware key)"
+            )
+            self._api_key_status.setStyleSheet(f"color: {SUCCESS}; font-size: 10px;")
+            self._api_key_input.setEnabled(True)
+            self._api_key_input.setPlaceholderText("Enter a new key to replace...")
+            self._save_key_btn.setEnabled(True)
+            self._clear_key_btn.setEnabled(True)
         else:
-            self._api_key_status.setText(f"{cfg.env_key}: missing — set in your shell and restart")
-            self._api_key_status.setStyleSheet(f"color: {WARN};")
+            self._api_key_status.setText(
+                f"No key configured. Set {cfg.env_key} in your environment "
+                f"or paste a key below to store it securely."
+            )
+            self._api_key_status.setStyleSheet(f"color: {WARN}; font-size: 10px;")
+            self._api_key_input.setEnabled(True)
+            self._api_key_input.setPlaceholderText("Paste API key here...")
+            self._save_key_btn.setEnabled(True)
+            self._clear_key_btn.setEnabled(False)
+
+    # ---- API Key Save / Clear ---------------------------------------------
+
+    def _on_save_api_key(self) -> None:
+        provider_id: ProviderId = self._provider_combo.currentData()
+        key_text = self._api_key_input.text().strip()
+        if not key_text:
+            QMessageBox.warning(self, "No Key", "Please paste an API key first.")
+            return
+        try:
+            set_api_key(provider_id, key_text)
+        except Exception as exc:
+            QMessageBox.warning(self, "Save Failed", f"Could not save API key: {exc}")
+            return
+        self._api_key_input.clear()
+        self._refresh_api_key_status(provider_id)
+
+    def _on_clear_api_key(self) -> None:
+        from aura.key_manager import get_key_manager
+
+        provider_id: ProviderId = self._provider_combo.currentData()
+        cfg = PROVIDERS[provider_id]
+
+        reply = QMessageBox.question(
+            self,
+            "Clear Key",
+            f"Remove the stored API key for {cfg.label}?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            get_key_manager().delete_key(provider_id)
+            self._refresh_api_key_status(provider_id)
 
     # ---- Model combo helpers ----------------------------------------------
 
