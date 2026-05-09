@@ -37,7 +37,9 @@ _HAVE_PYGMENTS = True
 # Load mermaid.min.js at module init time so we can embed it in preview HTML.
 # ---------------------------------------------------------------------------
 
-_MERMAID_JS_PATH = Path(__file__).resolve().parent.parent.parent / "media" / "mermaid.min.js"
+from aura.resources import get_resource_path
+
+_MERMAID_JS_PATH = get_resource_path("media/mermaid.min.js")
 
 _MERMAID_JS: str = ""
 try:

@@ -68,7 +68,7 @@ The AI has direct, sandboxed access to your workspace. All file paths are valida
 | **Read** | `read_file`, `list_directory`, `glob`, `read_file_outline`, `grep_search`, `find_usages` | Explore the codebase — read files, list directories, find files by pattern, extract structural outlines via AST, search text with regex, and find all usages of a symbol |
 | **Write** | `write_file`, `edit_file` | Create or replace files; surgically replace code blocks with fuzzy matching |
 | **Git** | `git_status`, `git_diff` | Inspect working tree state, review staged or unstaged changes |
-| **Web** | `web_search`, `web_fetch` | Search the web and fetch page content (used by the research sub-agent) |
+| **Web** | `web_search`, `web_fetch` | Search the web (Tavily) and fetch page content (used by the research sub-agent) |
 | **Terminal** | `run_terminal_command` | Run linters, test suites, type checkers, or installers with live-streamed output |
 | **Worker** | `update_todo_list` | Worker-only: maintains a live progress tracker shown to the user |
 | **Dispatch** | `dispatch_to_worker` | Planner-only: hands off a spec to the Worker for execution |
@@ -418,14 +418,13 @@ python scripts/smoke_client.py
 | Package | Purpose |
 |---------|---------|
 | [PySide6](https://pypi.org/project/PySide6/) | Qt for Python GUI |
-| [openai](https://pypi.org/project/openai/) | AI provider client (OpenAI-compatible endpoint used by all providers) |
-| [pydantic](https://pypi.org/project/pydantic/) | Data validation |
+| [openai](https://pypi.org/project/openai/) | AI provider client (OpenAI-compatible) |
+| [beautifulsoup4](https://pypi.org/project/beautifulsoup4/) | HTML parsing for web research |
+| [cryptography](https://pypi.org/project/cryptography/) | Hardware-tethered key encryption |
 | [platformdirs](https://pypi.org/project/platformdirs/) | Cross-platform config/data directories |
 | [Pillow](https://pypi.org/project/Pillow/) | Image handling for pasted screenshots |
 | [Pygments](https://pypi.org/project/Pygments/) | Syntax highlighting in diff dialogs |
 | [httpx](https://pypi.org/project/httpx/) | HTTP client for web research |
-| [ddgs](https://pypi.org/project/ddgs/) | Web search for research |
-| [beautifulsoup4](https://pypi.org/project/beautifulsoup4/) | HTML parsing for web research |
 
 ---
 

@@ -652,8 +652,8 @@ WEB_TOOL_DEFS: list[dict[str, Any]] = [
         "function": {
             "name": "web_search",
             "description": (
-                "Search the web using DuckDuckGo. Returns a list of result objects "
-                "with title, href (URL), and body (snippet)."
+                "Search the web using Tavily. Returns a list of result objects "
+                "with title, url, and content (snippet)."
             ),
             "parameters": {
                 "type": "object",

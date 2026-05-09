@@ -619,6 +619,9 @@ def get_subprocess_kwargs() -> dict[str, Any]:
     return kwargs
 
 
+from aura.resources import get_resource_path
+
+
 def workspace_root_pointer() -> Path:
     """File that stores the last-selected workspace root path."""
     return config_dir() / "workspace_root.txt"
@@ -641,12 +644,12 @@ def save_workspace_root(path: Path) -> None:
 
 def icon_path() -> Path:
     """Return the absolute path to the application window icon (AurA.ico)."""
-    return Path(__file__).resolve().parent / "icon.ico"
+    return get_resource_path("media/AurA.ico")
 
 
 def media_path(name: str) -> Path:
     """Return the absolute path to a file in the project media/ directory."""
-    return Path(__file__).resolve().parent.parent / "media" / name
+    return get_resource_path(f"media/{name}")
 
 
 # ---- settings persistence -------------------------------------------------
