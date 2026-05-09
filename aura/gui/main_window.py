@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal, Slot
+from PySide6.QtCore import Qt, Signal, Slot, QTimer
 from PySide6.QtGui import QAction, QColor, QFont, QIcon, QPainter, QRadialGradient
 from PySide6.QtWidgets import (
     QComboBox,
@@ -237,10 +237,13 @@ class MainWindow(QMainWindow):
         if self._settings.restore_last_conversation:
             self._maybe_restore_last_conversation()
 
-        # --- Onboarding ---
+    def showEvent(self, event) -> None:
+        """Triggered when the window is shown. Used for first-launch onboarding."""
+        super().showEvent(event)
         if not self._settings.first_launch_done:
-            # Subtle delay to ensure window is fully visible first
-            QTimer.singleShot(500, self._show_onboarding)
+            # We use a 0ms timer to ensure the event loop processes the window
+            # show COMPLETELY before popping the modal dialog.
+            QTimer.singleShot(0, self._show_onboarding)
 
     def _show_onboarding(self) -> None:
         dlg = OnboardingDialog(self)
