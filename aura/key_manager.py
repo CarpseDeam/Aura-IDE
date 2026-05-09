@@ -17,7 +17,7 @@ from pathlib import Path
 
 from cryptography.fernet import Fernet
 
-from aura.config import config_dir
+from aura.paths import config_dir
 
 _logger = logging.getLogger(__name__)
 

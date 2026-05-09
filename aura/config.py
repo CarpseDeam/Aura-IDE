@@ -7,12 +7,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal, Any
 
-from platformdirs import user_config_dir, user_data_dir
-
+from aura.paths import APP_NAME, APP_AUTHOR, config_dir, data_dir
 from aura.key_manager import get_key as _stored_get_key, has_key as _stored_has_key, set_key as _stored_set_key
-
-APP_NAME = "Aura"
-APP_AUTHOR = "Aura"
 
 # ---------------------------------------------------------------------------
 # Provider types and registry
@@ -463,7 +459,7 @@ MAX_GLOB_RESULTS = 200
 # Sandbox configuration
 # ---------------------------------------------------------------------------
 
-DEFAULT_SANDBOX_MODE: str = "docker"
+DEFAULT_SANDBOX_MODE: str = "host"
 """Default sandbox mode for terminal commands and dynamic tools.
 'host' — run directly on the host (no isolation).
 'docker' — run inside a Docker container with resource limits.
@@ -615,18 +611,6 @@ def get_subprocess_kwargs() -> dict[str, Any]:
         si.wShowWindow = subprocess.SW_HIDE
         kwargs["startupinfo"] = si
     return kwargs
-
-
-def config_dir() -> Path:
-    p = Path(user_config_dir(APP_NAME, APP_AUTHOR))
-    p.mkdir(parents=True, exist_ok=True)
-    return p
-
-
-def data_dir() -> Path:
-    p = Path(user_data_dir(APP_NAME, APP_AUTHOR))
-    p.mkdir(parents=True, exist_ok=True)
-    return p
 
 
 def workspace_root_pointer() -> Path:
