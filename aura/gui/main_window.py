@@ -56,7 +56,6 @@ from aura.gui.input_panel import InputPanel, SendPayload
 from aura.gui.settings_dialog import SettingsDialog
 from aura.gui.spec_edit_dialog import SpecApprovalDialog, SpecEditDialog
 from aura.gui.onboarding_dialog import OnboardingDialog
-from aura.gui.onboarding_dialog import OnboardingDialog
 from aura.gui.theme import BORDER, FG_DIM, FG, BG_RAISED, ACCENT
 from aura.gui.aura_widget import AuraPlayground, GlassSwitch
 from aura.gui.workspace_tree import WorkspaceTree
@@ -1349,7 +1348,7 @@ class MainWindow(QMainWindow):
             if self._active_replay_id != my_id:
                 return
 
-            chunk_size = 5
+            chunk_size = 10
             try:
                 for _ in range(chunk_size):
                     m = next(msg_iter)
@@ -1379,22 +1378,9 @@ class MainWindow(QMainWindow):
                             name = fn.get("name", "")
                             args_str = fn.get("arguments", "")
                             
-                            if name == "dispatch_to_worker" and args_str:
-                                try:
-                                    args = json.loads(args_str)
-                                    if isinstance(args, dict):
-                                        goal = args.get("goal", "")
-                                        files = args.get("files", [])
-                                        spec = args.get("spec", "")
-                                        acceptance = args.get("acceptance", "")
-                                        self._chat.add_spec_card(tcid, goal, files, spec, acceptance)
-                                except json.JSONDecodeError:
-                                    self._chat.add_tool_call(tcid, name)
-                                    self._chat.append_tool_args(tcid, args_str)
-                            else:
-                                self._chat.add_tool_call(tcid, name)
-                                if args_str:
-                                    self._chat.append_tool_args(tcid, args_str)
+                            self._chat.add_tool_call(tcid, name)
+                            if args_str:
+                                self._chat.append_tool_args(tcid, args_str)
                             
                             if tcid in tool_results:
                                 ok = True

@@ -541,6 +541,7 @@ class AppSettings:
     auto_dispatch: bool = False
     auto_approve: bool = False
     sandbox_mode: str = DEFAULT_SANDBOX_MODE
+    tavily_api_key: str = ""
     first_launch_done: bool = False
 
     @classmethod
@@ -549,6 +550,8 @@ class AppSettings:
         # Flags
         if isinstance(data.get("first_launch_done"), bool):
             s.first_launch_done = data["first_launch_done"]
+        if isinstance(data.get("tavily_api_key"), str):
+            s.tavily_api_key = data["tavily_api_key"]
         # Provider
             s.provider = data["provider"]  # type: ignore[assignment]
         # Models — accept any string now

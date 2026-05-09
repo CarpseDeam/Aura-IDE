@@ -104,6 +104,7 @@ class SettingsDialog(QDialog):
             auto_dispatch=settings.auto_dispatch,
             auto_approve=settings.auto_approve,
             sandbox_mode=settings.sandbox_mode,
+            tavily_api_key=settings.tavily_api_key,
         )
         self._on_change_root = on_change_root
 
@@ -163,6 +164,38 @@ class SettingsDialog(QDialog):
         self._api_key_status.setWordWrap(True)
         form.addRow("", self._api_key_status)
         
+        # ---- Tavily API Key ----
+        tavily_sep = QLabel("Web Search (Tavily)")
+        tavily_sep.setStyleSheet(
+            f"color: {FG_DIM}; font-weight: 600; font-size: 11px;"
+            " text-transform: uppercase; letter-spacing: 0.04em;"
+        )
+        form.addRow("", tavily_sep)
+
+        tavily_key_row = QHBoxLayout()
+        tavily_key_row.setSpacing(6)
+        self._tavily_key_input = QLineEdit()
+        self._tavily_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self._tavily_key_input.setPlaceholderText("Paste Tavily API key here...")
+        tavily_key_row.addWidget(self._tavily_key_input, 1)
+
+        self._save_tavily_btn = QPushButton("Save")
+        self._save_tavily_btn.clicked.connect(self._on_save_tavily_key)
+        tavily_key_row.addWidget(self._save_tavily_btn)
+
+        self._clear_tavily_btn = QPushButton("Clear")
+        self._clear_tavily_btn.clicked.connect(self._on_clear_tavily_key)
+        tavily_key_row.addWidget(self._clear_tavily_btn)
+
+        tavily_widget = QWidget()
+        tavily_widget.setLayout(tavily_key_row)
+        form.addRow("Tavily Key:", tavily_widget)
+
+        self._tavily_status = QLabel("")
+        self._tavily_status.setWordWrap(True)
+        form.addRow("", self._tavily_status)
+        self._refresh_tavily_status()
+
         current_provider = self._settings.provider
         self._refresh_api_key_status(current_provider)
 
@@ -409,6 +442,38 @@ class SettingsDialog(QDialog):
         backup_label.setWordWrap(True)
         form.addRow("Backups:", backup_label)
 
+        # ---- Search (Tavily) API Key ----
+        search_sep = QLabel("Web Search (Tavily)")
+        search_sep.setStyleSheet(
+            f"color: {FG_DIM}; font-weight: 600; font-size: 11px;"
+            " text-transform: uppercase; letter-spacing: 0.04em;"
+        )
+        form.addRow("", search_sep)
+
+        tavily_key_row = QHBoxLayout()
+        tavily_key_row.setSpacing(6)
+        self._tavily_key_input = QLineEdit()
+        self._tavily_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self._tavily_key_input.setPlaceholderText("Paste Tavily API key here...")
+        tavily_key_row.addWidget(self._tavily_key_input, 1)
+
+        self._save_tavily_btn = QPushButton("Save")
+        self._save_tavily_btn.clicked.connect(self._on_save_tavily_key)
+        tavily_key_row.addWidget(self._save_tavily_btn)
+
+        self._clear_tavily_btn = QPushButton("Clear")
+        self._clear_tavily_btn.clicked.connect(self._on_clear_tavily_key)
+        tavily_key_row.addWidget(self._clear_tavily_btn)
+
+        tavily_widget = QWidget()
+        tavily_widget.setLayout(tavily_key_row)
+        form.addRow("Tavily Key:", tavily_widget)
+
+        self._tavily_status = QLabel("")
+        self._tavily_status.setWordWrap(True)
+        form.addRow("", self._tavily_status)
+        self._refresh_tavily_status()
+
         outer.addLayout(form)
 
         # Buttons
@@ -552,6 +617,53 @@ class SettingsDialog(QDialog):
             get_key_manager().delete_key(provider_id)
             self._refresh_api_key_status(provider_id)
 
+    def _refresh_tavily_status(self) -> None:
+        from aura.key_manager import get_key_manager
+        from aura.config import TAVILY_API_KEY_ENV
+
+        env_val = os.environ.get(TAVILY_API_KEY_ENV)
+        stored_val = get_key_manager().get_key("tavily")
+
+        self._tavily_key_input.clear()
+
+        if env_val:
+            self._tavily_status.setText(
+                f"Using key from environment variable {TAVILY_API_KEY_ENV}."
+            )
+            self._tavily_status.setStyleSheet(f"color: {SUCCESS}; font-size: 10px;")
+            self._tavily_key_input.setEnabled(False)
+            self._save_tavily_btn.setEnabled(False)
+            self._clear_tavily_btn.setEnabled(False)
+        elif stored_val:
+            masked = stored_val[:4] + "****" + stored_val[-4:] if len(stored_val) > 8 else "****"
+            self._tavily_status.setText(f"Stored key: {masked}")
+            self._tavily_status.setStyleSheet(f"color: {SUCCESS}; font-size: 10px;")
+            self._tavily_key_input.setEnabled(True)
+            self._save_tavily_btn.setEnabled(True)
+            self._clear_tavily_btn.setEnabled(True)
+        else:
+            self._tavily_status.setText("No key configured for web search.")
+            self._tavily_status.setStyleSheet(f"color: {WARN}; font-size: 10px;")
+            self._tavily_key_input.setEnabled(True)
+            self._save_tavily_btn.setEnabled(True)
+            self._clear_tavily_btn.setEnabled(False)
+
+    def _on_save_tavily_key(self) -> None:
+        key_text = self._tavily_key_input.text().strip()
+        if not key_text:
+            return
+        try:
+            set_api_key("tavily", key_text)  # type: ignore[arg-type]
+        except Exception as exc:
+            QMessageBox.warning(self, "Save Failed", str(exc))
+            return
+        self._refresh_tavily_status()
+
+    def _on_clear_tavily_key(self) -> None:
+        from aura.key_manager import get_key_manager
+        get_key_manager().delete_key("tavily")
+        self._refresh_tavily_status()
+
     # ---- Model combo helpers ----------------------------------------------
 
     def _populate_model_combos(self, provider_id: ProviderId) -> None:
@@ -644,6 +756,7 @@ class SettingsDialog(QDialog):
             auto_dispatch=self._auto_dispatch_chk.isChecked(),
             auto_approve=self._auto_approve_chk.isChecked(),
             sandbox_mode=self._sandbox_combo.currentData(),
+            tavily_api_key=self._settings.tavily_api_key, # preserve if set via other means
         )
 
     def accept(self) -> None:  # type: ignore[override]

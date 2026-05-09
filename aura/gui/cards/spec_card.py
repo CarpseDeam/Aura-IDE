@@ -42,7 +42,7 @@ class SpecCard(QFrame):
         self._worker_running = False
 
         self.setStyleSheet(
-            f"QFrame#specCard {{ background: {BG_ALT}; "
+            f"QFrame#card {{ background: {BG_ALT}; "
             f"border: 1px solid rgba(255, 255, 255, 0.08); "
             f"border-left: 3px solid {ACCENT}; border-radius: 8px; }}"
         )
@@ -240,3 +240,16 @@ class SpecCard(QFrame):
         self._status_label.setText(verb)
         self._status_label.setStyleSheet(f"color: {color}; font-size: 11px;")
         # Keep "View Worker" button visible for later review.
+
+    def set_dispatched_and_finished(self, ok: bool) -> None:
+        """Force the card into a read-only finished state (for history replay)."""
+        self._dispatched = True
+        self._worker_running = False
+        self._buttons_row.setVisible(False)
+        verb = "Completed" if ok else "Completed with errors"
+        color = SUCCESS if ok else DANGER
+        self._status_label.setText(verb)
+        self._status_label.setStyleSheet(f"color: {color}; font-size: 11px;")
+        self._status_label.setVisible(True)
+        # Note: We don't show the "View Worker" button during replay because
+        # the background worker process doesn't exist anymore.
