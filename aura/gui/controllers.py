@@ -96,6 +96,8 @@ class ToolStreamController(QObject):
                 content = parsed.get("content", "")
             elif self._tool_name == "edit_file":
                 content = parsed.get("new_str", "")
+            elif self._tool_name == "edit_symbol":
+                content = parsed.get("new_definition", "")
 
             if content and content != self._last_content:
                 self._last_content = content
@@ -110,7 +112,25 @@ class ToolStreamController(QObject):
         except json.JSONDecodeError:
             # Buffer is still incomplete JSON — emit raw buffer for now
             self.args_updated.emit(self._buffer)
-            pass
+            
+            # Fallback regex extraction for streaming code
+            key = None
+            if self._tool_name == "write_file":
+                key = "content"
+            elif self._tool_name == "edit_file":
+                key = "new_str"
+            elif self._tool_name == "edit_symbol":
+                key = "new_definition"
+                
+            if key:
+                match = re.search(r'"' + key + r'"\s*:\s*"(.*)', self._buffer, re.DOTALL)
+                if match:
+                    raw_tail = match.group(1)
+                    content = re.sub(r'\\([n"t\\])', lambda m: {'n':'\n', '"':'"', 't':'\t', '\\':'\\'}[m.group(1)], raw_tail)
+                    if content and content != self._last_content:
+                        self._last_content = content
+                        self.content_updated.emit(content)
+
 
     def finalize(self, ok: bool, result_text: str) -> None:
         """Finalize the tool call with the result."""

@@ -6,7 +6,7 @@ import html as _html
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QLabel, QSizePolicy
 
-from aura.gui.cards._helpers import _wrap_body_text
+from aura.gui.markdown_renderer import _render_markdown_with_code
 from aura.gui.theme import FG, FG_ITALIC
 
 
@@ -53,7 +53,7 @@ class _StreamLabel(QLabel):
                 f"{escaped}</div>"
             )
         else:
-            self.setText(_wrap_body_text(self._buf, FG))
+            self.setText(_render_markdown_with_code(self._buf))
 
     def stop_timer(self) -> None:
         try:
