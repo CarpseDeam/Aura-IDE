@@ -55,6 +55,7 @@ from aura.gui.chat_view import ChatView
 from aura.gui.input_panel import InputPanel, SendPayload
 from aura.gui.settings_dialog import SettingsDialog
 from aura.gui.spec_edit_dialog import SpecApprovalDialog, SpecEditDialog
+from aura.gui.onboarding_dialog import OnboardingDialog
 from aura.gui.theme import BORDER, FG_DIM, FG, BG_RAISED, ACCENT
 from aura.gui.aura_widget import AuraPlayground, GlassSwitch
 from aura.gui.workspace_tree import WorkspaceTree
@@ -235,6 +236,18 @@ class MainWindow(QMainWindow):
         # Restore most recent conversation if enabled.
         if self._settings.restore_last_conversation:
             self._maybe_restore_last_conversation()
+
+        # --- Onboarding ---
+        if not self._settings.first_launch_done:
+            # Subtle delay to ensure window is fully visible first
+            QTimer.singleShot(500, self._show_onboarding)
+
+    def _show_onboarding(self) -> None:
+        dlg = OnboardingDialog(self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self._settings.first_launch_done = True
+            from aura.config import save_settings
+            save_settings(self._settings)
 
     # ----- paintEvent: radial gradient background --------------------------
 

@@ -36,9 +36,10 @@ def build():
         f"--include-data-dir={MEDIA_DIR}={MEDIA_DIR}",
         "--output-dir=build",
         f"--output-filename={APP_NAME}",
-        "--clean-cache",
+        "--clean-cache=all",
         "--assume-yes-for-downloads",
-        ENTRY_POINT
+        "--python-flag=-m",
+        "aura"
     ]
 
     print(f"Running: {' '.join(cmd)}")
