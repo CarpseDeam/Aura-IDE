@@ -5,7 +5,7 @@ import json
 import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Any
 
 from platformdirs import user_config_dir, user_data_dir
 
@@ -438,6 +438,17 @@ MAX_READ_BYTES = 200 * 1024
 # Cap on glob results.
 MAX_GLOB_RESULTS = 200
 
+# ---------------------------------------------------------------------------
+# Sandbox configuration
+# ---------------------------------------------------------------------------
+
+DEFAULT_SANDBOX_MODE: str = "host"
+"""Default sandbox mode for terminal commands and dynamic tools.
+'host' — run directly on the host (no isolation).
+'docker' — run inside a Docker container with resource limits.
+'wasm' — reserved for future WASM runtime.
+"""
+
 # Token budget for the conversation context window. DeepSeek V4 models support
 # 64K tokens; we keep headroom for the model's response and misc overhead.
 MAX_CONTEXT_TOKENS = 60_000
@@ -510,6 +521,7 @@ class AppSettings:
     planner_system_prompt: str = ""
     worker_system_prompt: str = ""
     auto_commit_enabled: bool = True
+    sandbox_mode: str = DEFAULT_SANDBOX_MODE
 
     @classmethod
     def from_dict(cls, data: dict) -> "AppSettings":
@@ -558,6 +570,8 @@ class AppSettings:
             s.worker_system_prompt = data["worker_system_prompt"]
         if isinstance(data.get("auto_commit_enabled"), bool):
             s.auto_commit_enabled = data["auto_commit_enabled"]
+        if isinstance(data.get("sandbox_mode"), str) and data["sandbox_mode"] in ("host", "docker", "wasm"):
+            s.sandbox_mode = data["sandbox_mode"]
         return s
 
 

@@ -16,8 +16,6 @@ the supplied DispatchCallback rather than the registry.
 from __future__ import annotations
 
 import json
-import subprocess
-import sys
 import threading
 from typing import Any, Callable
 
@@ -49,6 +47,7 @@ from aura.conversation.tools.registry import (
     ApprovalRequest,
     ToolRegistry,
 )
+from aura.sandbox import SandboxExecutor, SandboxResult
 
 EventCallback = Callable[[Event], None]
 
@@ -422,7 +421,7 @@ class ConversationManager:
                     else:
                         parsed["circuit_breaker_warning"] = warning
                     return json.dumps(parsed, ensure_ascii=False)
-            except:
+            except Exception:
                 return result_payload + warning
         
         return result_payload
@@ -453,68 +452,37 @@ class ConversationManager:
         # Emit ToolCallStart so the GUI can create a TerminalCard
         on_event(ToolCallStart(index=0, id=tool_call_id, name="run_terminal_command"))
 
+        # Create sandbox executor based on current settings
+        from aura.config import load_settings
+        settings = load_settings()
+        sandbox = SandboxExecutor(
+            mode=settings.sandbox_mode,  # type: ignore[arg-type]
+            workspace_root=self._tools.workspace_root,
+            network_enabled=True,  # Terminal commands often need network (pip install, etc.)
+        )
+
+        # Collect output for streaming to GUI
         output_lines: list[str] = []
 
-        try:
-            popen_kwargs: dict[str, Any] = {
-                "shell": True,
-                "cwd": str(self._tools.workspace_root),
-                "stdout": subprocess.PIPE,
-                "stderr": subprocess.STDOUT,
-                "text": True,
-                "bufsize": 1,
-            }
-            if sys.platform == "win32":
-                popen_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-                # STARTUPINFO with SW_HIDE definitively suppresses any console flash
-                startupinfo = subprocess.STARTUPINFO()
-                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                startupinfo.wShowWindow = subprocess.SW_HIDE
-                popen_kwargs["startupinfo"] = startupinfo
+        def on_output_chunk(text: str) -> None:
+            output_lines.append(text)
+            on_event(TerminalOutput(tool_call_id=tool_call_id, text=text))
 
-            proc = subprocess.Popen(command, **popen_kwargs)
+        result: SandboxResult = sandbox.run_terminal_command(
+            command=command,
+            timeout=timeout,
+            cancel_event=cancel_event,
+            on_output=on_output_chunk,
+        )
 
-            try:
-                for line in iter(proc.stdout.readline, ""):
-                    if cancel_event.is_set():
-                        proc.kill()
-                        proc.wait()
-                        payload = json.dumps(
-                            {
-                                "ok": False,
-                                "exit_code": -1,
-                                "output": "".join(output_lines),
-                                "command": command,
-                                "error": "Cancelled.",
-                            }
-                        )
-                        self._history.append_tool_result(tool_call_id, payload)
-                        on_event(
-                            ToolResult(
-                                tool_call_id=tool_call_id,
-                                name="run_terminal_command",
-                                ok=False,
-                                result=payload,
-                                extras={"cancelled": True},
-                            )
-                        )
-                        return
-                    output_lines.append(line)
-                    on_event(TerminalOutput(tool_call_id=tool_call_id, text=line))
+        full_output = result.stdout
+        ok = result.ok
+        exit_code = result.exit_code
 
-                proc.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait()
-                output_lines.append("\n[ERROR: Command timed out after {} seconds]\n".format(timeout))
+        # If Docker isn't available and mode is docker, result will have the error in stderr
+        if not ok and result.stderr and "Docker is not available" in result.stderr:
+            full_output = f"[SANDBOX ERROR] {result.stderr}"
 
-            exit_code = proc.returncode
-        except Exception as exc:
-            exit_code = -1
-            output_lines.append(f"\n[ERROR: {type(exc).__name__}: {exc}]\n")
-
-        full_output = "".join(output_lines)
-        ok = exit_code == 0
         payload = json.dumps(
             {
                 "ok": ok,

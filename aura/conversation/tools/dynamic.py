@@ -9,12 +9,10 @@ from __future__ import annotations
 
 import ast
 import json
-import subprocess
-import sys
 from pathlib import Path
 from typing import Any
 
-from aura.config import get_subprocess_kwargs
+from aura.sandbox import SandboxExecutor, SandboxResult
 
 
 def _get_base_name(node: ast.expr) -> str:
@@ -245,6 +243,9 @@ def execute_dynamic_tool(
     Python process.  Arguments are passed as JSON on stdin, and the result
     (or error) is returned as JSON on stdout.
 
+    When sandbox_mode is 'docker', runs inside a lightweight Docker container
+    with resource limits and capability dropping for true OS-level isolation.
+
     Args:
         file_path: Path to the ``.py`` file containing the function.
         function_name: Name of the function to call.
@@ -254,63 +255,31 @@ def execute_dynamic_tool(
     Returns:
         A dict with ``ok`` (bool) and either ``result`` or ``error`` (str).
     """
-    # Self-contained runner script.  We use sys.executable -c to avoid
-    # creating temporary files on disk.
-    runner_script = r"""
-import sys, json, importlib.util
+    from aura.config import load_settings
 
-file_path = sys.argv[1]
-function_name = sys.argv[2]
+    settings = load_settings()
+    sandbox = SandboxExecutor(
+        mode=settings.sandbox_mode,  # type: ignore[arg-type]
+        workspace_root=workspace_root,
+        network_enabled=False,  # Dynamic tools should not need network
+    )
 
-try:
-    raw_args = sys.stdin.read()
-    parsed_args = json.loads(raw_args) if raw_args.strip() else {}
-except json.JSONDecodeError as exc:
-    print(json.dumps({"ok": False, "error": f"Invalid JSON arguments: {exc}"}))
-    sys.exit(0)
+    result: SandboxResult = sandbox.run_dynamic_tool(
+        file_path=file_path,
+        function_name=function_name,
+        arguments=arguments,
+        timeout=30,
+    )
 
-try:
-    spec = importlib.util.spec_from_file_location("dynamic_tool", file_path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    func = getattr(module, function_name)
-
-    # Isolate stdout: redirect to stderr so tool print()s don't
-    # pollute the JSON result channel.
-    _real_stdout = sys.stdout
-    sys.stdout = sys.stderr
-    try:
-        result = func(**parsed_args)
-    finally:
-        sys.stdout = _real_stdout
-
-    print(json.dumps({"ok": True, "result": result}, ensure_ascii=False, default=str))
-except Exception as exc:
-    print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
-"""
+    stdout = result.stdout.strip()
+    stderr = result.stderr.strip()
 
     try:
-        proc = subprocess.run(
-            [sys.executable, "-c", runner_script, str(file_path), function_name],
-            input=json.dumps(arguments),
-            capture_output=True,
-            text=True,
-            timeout=30,
-            cwd=str(workspace_root),
-            **get_subprocess_kwargs(),
-        )
-    except subprocess.TimeoutExpired:
-        return {"ok": False, "error": "Dynamic tool timed out after 30s."}
-
-    stdout = proc.stdout.strip()
-    stderr = proc.stderr.strip()
-
-    try:
-        result = json.loads(stdout)
+        parsed = json.loads(stdout)
     except json.JSONDecodeError:
         return {
             "ok": False,
             "error": f"Dynamic tool output parse error: {stderr or stdout}",
         }
 
-    return result
+    return parsed
