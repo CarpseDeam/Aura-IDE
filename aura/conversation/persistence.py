@@ -30,6 +30,7 @@ from aura.config import (
     ThinkingMode,
 )
 from aura.conversation.history import History
+from aura.git_ops import ensure_aura_gitignored
 
 SCHEMA_VERSION = 2
 CONVERSATIONS_SUBDIR = ".aura/conversations"
@@ -124,6 +125,7 @@ def save_conversation(
     """Write the conversation to disk and return the file path."""
     target_dir = conversations_dir(workspace_root)
     target_dir.mkdir(parents=True, exist_ok=True)
+    ensure_aura_gitignored(workspace_root)
 
     if existing_path is not None:
         try:

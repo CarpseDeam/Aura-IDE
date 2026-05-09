@@ -234,3 +234,49 @@ def git_init(workspace_root: Path) -> tuple[bool, str]:
             return False, f"git commit failed: {stderr}"
     except subprocess.TimeoutExpired:
         return False, "git commit timed out."
+
+
+def ensure_aura_gitignored(workspace_root: Path) -> None:
+    """Ensure `.aura/` is listed in the workspace's .gitignore file.
+
+    If no .gitignore exists, create one with `.aura/` as its content.
+    If a .gitignore exists but does not mention `.aura`, append `.aura/` to it.
+    The operation is idempotent — repeated calls are safe.
+
+    All failures (missing permissions, disk full, etc.) are silently ignored
+    so callers never need to handle exceptions from this function.
+    """
+    gitignore_path = workspace_root / ".gitignore"
+    aura_pattern = ".aura/"
+
+    if gitignore_path.exists():
+        try:
+            content = gitignore_path.read_text(encoding="utf-8")
+        except OSError:
+            return
+
+        # Check if .aura or .aura/ is already present (as a line or part of a glob)
+        lines = content.splitlines()
+        for line in lines:
+            stripped = line.strip()
+            if stripped == ".aura" or stripped == ".aura/":
+                return  # Already present, nothing to do
+            # Also catch cases like ".aura/*" or similar
+            if stripped.startswith(".aura") and (len(stripped) == 5 or stripped[5] in ("/", "*", "!")):
+                return  # Already present in some form
+
+        # Append .aura/ to the existing .gitignore
+        # Ensure we start on a new line if the file doesn't end with one
+        if content and not content.endswith("\n"):
+            content += "\n"
+        content += f"{aura_pattern}\n"
+        try:
+            gitignore_path.write_text(content, encoding="utf-8")
+        except OSError:
+            pass
+    else:
+        # Create a new .gitignore with just .aura/
+        try:
+            gitignore_path.write_text(f"{aura_pattern}\n", encoding="utf-8")
+        except OSError:
+            pass

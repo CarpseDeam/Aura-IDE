@@ -49,7 +49,7 @@ from aura.conversation.persistence import (
     most_recent_conversation,
     save_conversation,
 )
-from aura.git_ops import git_init, is_git_repo
+from aura.git_ops import ensure_aura_gitignored, git_init, is_git_repo
 from aura.gui.chat_view import ChatView
 from aura.gui.input_panel import InputPanel, SendPayload
 from aura.gui.settings_dialog import SettingsDialog
@@ -703,6 +703,7 @@ class MainWindow(QMainWindow):
             return
         start = str(self._workspace_root / ".aura" / "conversations")
         Path(start).mkdir(parents=True, exist_ok=True)
+        ensure_aura_gitignored(self._workspace_root)
         chosen, _ = QFileDialog.getOpenFileName(
             self, "Open Conversation", start, "Conversations (*.json)"
         )
