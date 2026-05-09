@@ -36,7 +36,8 @@ from aura.config import (
     save_settings,
     set_api_key,
 )
-from aura.gui.theme import FG_DIM, SUCCESS, WARN
+from aura.gui.theme import FG_DIM, SUCCESS, WARN, ACCENT, BG_RAISED, BORDER, FG
+from aura.gui.aura_widget import GlassSwitch
 
 _THINKING_ITEMS: list[tuple[str, str]] = [
     ("Off", "off"),
@@ -95,10 +96,13 @@ class SettingsDialog(QDialog):
             vision_model=settings.vision_model,
             vision_endpoint=settings.vision_endpoint,
             temperature=settings.temperature,
+            worker_temperature=settings.worker_temperature,
             system_prompt=settings.system_prompt,
             planner_system_prompt=settings.planner_system_prompt,
             worker_system_prompt=settings.worker_system_prompt,
             auto_commit_enabled=settings.auto_commit_enabled,
+            auto_dispatch=settings.auto_dispatch,
+            auto_approve=settings.auto_approve,
             sandbox_mode=settings.sandbox_mode,
         )
         self._on_change_root = on_change_root
@@ -171,14 +175,13 @@ class SettingsDialog(QDialog):
             self._thinking_combo.addItem(label, val)
         form.addRow("Default thinking:", self._thinking_combo)
 
-        self._restore_chk = QCheckBox("Restore most-recent conversation on launch")
-        self._restore_chk.setChecked(self._settings.restore_last_conversation)
+        self._restore_chk = GlassSwitch("Restore most-recent conversation on launch", self._settings.restore_last_conversation)
         form.addRow("", self._restore_chk)
 
-        self._pw_mode_chk = QCheckBox(
-            "Planner/Worker mode (planner chats; worker executes code changes)"
+        self._pw_mode_chk = GlassSwitch(
+            "Planner/Worker mode (planner chats; worker executes code changes)",
+            self._settings.planner_worker_mode
         )
-        self._pw_mode_chk.setChecked(self._settings.planner_worker_mode)
         self._pw_mode_chk.toggled.connect(self._on_pw_toggled)
         form.addRow("", self._pw_mode_chk)
 
@@ -187,7 +190,7 @@ class SettingsDialog(QDialog):
 
         self._planner_thinking_combo = QComboBox()
         for label, val in _THINKING_ITEMS:
-            self._planner_thinking_combo.addItem(label, val)
+            self._thinking_combo.addItem(label, val)
         form.addRow("Planner thinking:", self._planner_thinking_combo)
 
         self._worker_model_combo = QComboBox()
@@ -209,10 +212,10 @@ class SettingsDialog(QDialog):
         )
         form.addRow("", vision_sep)
 
-        self._vision_enabled_chk = QCheckBox(
-            "Enable local vision model for image descriptions"
+        self._vision_enabled_chk = GlassSwitch(
+            "Enable local vision model for image descriptions",
+            self._settings.vision_enabled
         )
-        self._vision_enabled_chk.setChecked(self._settings.vision_enabled)
         form.addRow("", self._vision_enabled_chk)
 
         self._vision_model_combo = QComboBox()
@@ -260,12 +263,31 @@ class SettingsDialog(QDialog):
 
         self._refresh_pw_enabled()
 
-        # --- Auto-commit ---
-        self._auto_commit_chk = QCheckBox(
-            "Auto-commit changes after worker completes"
+        # --- Automation ---
+        auto_sep = QLabel("Automation")
+        auto_sep.setStyleSheet(
+            f"color: {FG_DIM}; font-weight: 600; font-size: 11px;"
+            " text-transform: uppercase; letter-spacing: 0.04em;"
         )
-        self._auto_commit_chk.setChecked(self._settings.auto_commit_enabled)
+        form.addRow("", auto_sep)
+
+        self._auto_commit_chk = GlassSwitch(
+            "Auto-commit changes after worker completes",
+            self._settings.auto_commit_enabled
+        )
         form.addRow("", self._auto_commit_chk)
+
+        self._auto_dispatch_chk = GlassSwitch(
+            "Auto-dispatch: Send specs to worker without approval",
+            self._settings.auto_dispatch
+        )
+        form.addRow("", self._auto_dispatch_chk)
+
+        self._auto_approve_chk = GlassSwitch(
+            "Auto-approve: Apply file edits without diff approval",
+            self._settings.auto_approve
+        )
+        form.addRow("", self._auto_approve_chk)
 
         # --- Sandbox ---
         sandbox_sep = QLabel("Execution Sandbox")
@@ -619,6 +641,8 @@ class SettingsDialog(QDialog):
             planner_system_prompt=self._planner_prompt_edit.toPlainText().strip(),
             worker_system_prompt=self._worker_prompt_edit.toPlainText().strip(),
             auto_commit_enabled=self._auto_commit_chk.isChecked(),
+            auto_dispatch=self._auto_dispatch_chk.isChecked(),
+            auto_approve=self._auto_approve_chk.isChecked(),
             sandbox_mode=self._sandbox_combo.currentData(),
         )
 

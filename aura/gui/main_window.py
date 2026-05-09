@@ -55,8 +55,8 @@ from aura.gui.chat_view import ChatView
 from aura.gui.input_panel import InputPanel, SendPayload
 from aura.gui.settings_dialog import SettingsDialog
 from aura.gui.spec_edit_dialog import SpecApprovalDialog, SpecEditDialog
-from aura.gui.theme import BORDER, FG_DIM
-from aura.gui.worker_window import AuraPlayground
+from aura.gui.theme import BORDER, FG_DIM, FG, BG_RAISED, ACCENT
+from aura.gui.aura_widget import AuraPlayground, GlassSwitch
 from aura.gui.workspace_tree import WorkspaceTree
 
 _THINKING_LABEL = {"off": "Off", "high": "High", "max": "Max"}
@@ -319,19 +319,17 @@ class MainWindow(QMainWindow):
         self._toolbar.addAction(about_act)
 
         # Group 4: auto toggles
-        self._auto_dispatch_act = QAction("⚡ Dispatch", self)
-        self._auto_dispatch_act.setCheckable(True)
-        self._auto_dispatch_act.setChecked(self._settings.auto_dispatch)
-        self._auto_dispatch_act.triggered.connect(self._on_auto_dispatch_toggled)
-        self._auto_dispatch_act.setToolTip("Auto-approve dispatch spec cards")
-        self._toolbar.addAction(self._auto_dispatch_act)
+        self._auto_dispatch_switch = GlassSwitch("Dispatch", self._settings.auto_dispatch, vertical=True)
+        self._auto_dispatch_switch.toggled.connect(self._on_auto_dispatch_toggled)
+        self._auto_dispatch_switch.setToolTip("Auto-approve dispatch spec cards")
+        self._toolbar.addWidget(self._auto_dispatch_switch)
 
-        self._auto_approve_act = QAction("✓ Approve", self)
-        self._auto_approve_act.setCheckable(True)
-        self._auto_approve_act.setChecked(self._settings.auto_approve)
-        self._auto_approve_act.triggered.connect(self._on_auto_approve_toggled)
-        self._auto_approve_act.setToolTip("Auto-approve file modification diffs")
-        self._toolbar.addAction(self._auto_approve_act)
+        self._toolbar.addWidget(_toolbar_separator())
+
+        self._auto_approve_switch = GlassSwitch("Approve", self._settings.auto_approve, vertical=True)
+        self._auto_approve_switch.toggled.connect(self._on_auto_approve_toggled)
+        self._auto_approve_switch.setToolTip("Auto-approve file modification diffs")
+        self._toolbar.addWidget(self._auto_approve_switch)
 
         # Icon-only style.
         self._toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
@@ -779,8 +777,8 @@ class MainWindow(QMainWindow):
             self._bridge.set_auto_commit_enabled(self._settings.auto_commit_enabled)
             self._bridge.set_auto_dispatch(self._settings.auto_dispatch)
             self._bridge.set_auto_approve(self._settings.auto_approve)
-            self._auto_dispatch_act.setChecked(self._settings.auto_dispatch)
-            self._auto_approve_act.setChecked(self._settings.auto_approve)
+            self._auto_dispatch_switch.setChecked(self._settings.auto_dispatch)
+            self._auto_approve_switch.setChecked(self._settings.auto_approve)
             self._refresh_status_bar()
 
     def _apply_planner_worker_mode_to_bridge(self, enabled: bool) -> None:
