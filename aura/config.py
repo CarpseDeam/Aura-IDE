@@ -450,6 +450,30 @@ SKIP_DIRS = {"__pycache__", ".venv", ".git", "node_modules", ".import", ".aura"}
 SKIP_FILE_SUFFIXES = {".import"}
 
 # ---------------------------------------------------------------------------
+# Codebase index (BM25 search_codebase tool)
+# ---------------------------------------------------------------------------
+
+# File extensions to include when building the codebase index.
+# Must be lowercase, with leading dot.
+CODEBASE_INDEX_EXTENSIONS: set[str] = {
+    ".py", ".js", ".ts", ".jsx", ".tsx", ".gd", ".cpp", ".c", ".h", ".hpp",
+    ".rs", ".go", ".java", ".rb", ".php", ".swift", ".kt", ".scala",
+    ".cfg", ".toml", ".yaml", ".yml", ".json", ".xml", ".ini",
+    ".md", ".rst", ".txt", ".sh", ".bash", ".zsh", ".fish",
+    ".css", ".scss", ".less", ".html", ".vue", ".svelte",
+    ".sql", ".r", ".lua", ".zig", ".odin",
+}
+
+# Maximum number of files to index. Beyond this, the indexer stops.
+MAX_CODEBASE_INDEX_FILES: int = 1500
+
+# Maximum file size in bytes to read into the index.
+CODEBASE_INDEX_MAX_FILE_BYTES: int = 128 * 1024
+
+# Default number of results returned by search_codebase.
+SEARCH_CODEBASE_TOP_K: int = 5
+
+# ---------------------------------------------------------------------------
 # Default model/thinking constants
 # ---------------------------------------------------------------------------
 

@@ -35,6 +35,9 @@ from aura.conversation.tools.git_tools import (
 from aura.conversation.tools.grep import grep_files
 from aura.conversation.tools.fs_edit_structured import propose_edit_symbol
 from aura.conversation.tools.fs_write import propose_edit, propose_write
+from aura.codebase_index.tool import search_codebase as _search_codebase
+from aura.codebase_index.indexer import CodebaseIndex
+from aura.config import SEARCH_CODEBASE_TOP_K
 from aura.conversation.tools.web import web_fetch, web_search
 ApprovalAction = Literal["approve", "reject", "reject_all", "approve_all"]
 RegistryMode = Literal["single", "planner", "worker", "researcher"]
@@ -227,6 +230,35 @@ READ_TOOL_DEFS: list[dict[str, Any]] = [
                             },
                         },
                         "required": ["symbol"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "search_codebase",
+                    "description": (
+                        "Semantic search over the workspace codebase using a local BM25 index. "
+                        "Use this to recall files, functions, or code patterns when you need context "
+                        "that may have been pruned from the conversation history. This is NOT a grep — "
+                        "it ranks entire files by relevance to your query. Great for re-discovering "
+                        "\"the file that handled authentication\" or \"the database migration script\" "
+                        "without knowing the exact path or keyword."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {
+                                "type": "string",
+                                "description": "Natural language or keyword query, e.g. 'authentication handler', 'database migration', 'error logging setup'."
+                            },
+                            "top_k": {
+                                "type": "integer",
+                                "description": "Maximum number of results to return. Default: 5.",
+                                "default": 5,
+                            },
+                        },
+                        "required": ["query"],
                     },
                 },
             },
@@ -723,6 +755,7 @@ class ToolRegistry:
         self._mode: RegistryMode = mode
         self._dynamic_cache: dict[str, Path] = {}
         self._dynamic_cache_mtimes: dict[str, float] = {}
+        self._codebase_index: CodebaseIndex | None = None
 
     @property
     def workspace_root(self) -> Path:
@@ -732,6 +765,8 @@ class ToolRegistry:
         self._root = root.resolve()
         self._dynamic_cache.clear()
         self._dynamic_cache_mtimes.clear()
+        # Reset codebase index for the new workspace
+        self._codebase_index = None
 
     @property
     def read_only(self) -> bool:
@@ -997,6 +1032,24 @@ class ToolRegistry:
                     payload={"ok": True, "message": "TODO list updated", "tasks": tasks},
                     extras={"is_todo_update": True, "tasks": tasks},
                 )
+            if name == "search_codebase":
+                query = str(args.get("query", "")).strip()
+                if not query:
+                    return ToolExecResult(
+                        ok=False, payload={"ok": False, "error": "query is required"}
+                    )
+                top_k = int(args.get("top_k", SEARCH_CODEBASE_TOP_K))
+                # Lazily create or reuse the codebase index
+                if self._codebase_index is None:
+                    self._codebase_index = CodebaseIndex(self._root)
+                result = _search_codebase(
+                    workspace_root=self._root,
+                    query=query,
+                    top_k=top_k,
+                    _index=self._codebase_index,
+                )
+                return ToolExecResult(ok=result.get("ok", False), payload=result)
+
             # Check dynamic tools before giving up
             dynamic = self._scan_dynamic_tools()
             if name in dynamic:
