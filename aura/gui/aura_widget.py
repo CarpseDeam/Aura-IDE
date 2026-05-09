@@ -157,6 +157,7 @@ class AuraWidget(QWidget):
         self._glow_color = QColor(glow_color)
         self._glow_spread = glow_spread
         self._breath: float = 0.0
+        self._cached_ring_path: QPainterPath | None = None
 
         self.setStyleSheet("background: transparent;")
 
@@ -173,6 +174,26 @@ class AuraWidget(QWidget):
         self._animation.setDuration(2000)
         self._animation.setLoopCount(-1)
         self._animation.valueChanged.connect(self._on_breath_changed)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        rect = self.rect()
+        if rect.isEmpty():
+            self._cached_ring_path = None
+            return
+
+        s = self._glow_spread
+        outer_rect = QRectF(rect)
+        inner_rect = QRectF(
+            rect.x() + s, rect.y() + s,
+            rect.width() - 2 * s, rect.height() - 2 * s,
+        )
+        outer_path = QPainterPath()
+        # Keeping 8px radius to match "just like it is now"
+        outer_path.addRoundedRect(outer_rect, 8, 8)
+        inner_path = QPainterPath()
+        inner_path.addRoundedRect(inner_rect, 8, 8)
+        self._cached_ring_path = outer_path.subtracted(inner_path)
 
     def _on_breath_changed(self, value: float) -> None:
         # Sine shaping: 0 -> 1 -> 0 for smooth breathe-in / breathe-out
@@ -239,18 +260,8 @@ class AuraWidget(QWidget):
 
         # Build a ring-shaped clip path: outer rounded rect minus inner
         # rounded rect, so the glow only appears in the margin around the card.
-        s = self._glow_spread
-        outer_rect = QRectF(rect)
-        inner_rect = QRectF(
-            rect.x() + s, rect.y() + s,
-            rect.width() - 2 * s, rect.height() - 2 * s,
-        )
-        outer_path = QPainterPath()
-        outer_path.addRoundedRect(outer_rect, 8, 8)
-        inner_path = QPainterPath()
-        inner_path.addRoundedRect(inner_rect, 8, 8)
-        ring_path = outer_path.subtracted(inner_path)
-        painter.setClipPath(ring_path)
+        if self._cached_ring_path:
+            painter.setClipPath(self._cached_ring_path)
 
         # Radial gradient centered on the widget - still pulses with breath
         center = rect.center()
@@ -268,6 +279,7 @@ class AuraWidget(QWidget):
         # Position the strongest colour at the inner edge of the ring so the
         # glow fades naturally from the card border outward.
         inner_pos = 0.0
+        s = self._glow_spread
         if max_r > 0:
             inner_pos = max(0.0, (min(rect.width(), rect.height()) * 0.5 - s) / max_r)
         inner_pos = min(inner_pos, 0.99)
