@@ -17,24 +17,49 @@ from typing import Any
 from aura.config import get_subprocess_kwargs
 
 
+def _get_base_name(node: ast.expr) -> str:
+    """Extract a human-readable base name from an annotation expression.
+
+    ast.Name("list")       → "list"
+    ast.Attribute(..., "List") → "List"
+    anything else           → ""
+    """
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return ""
+
+
 def _annotation_to_json_type(ann_node: ast.expr | None) -> str:
     """Convert an AST annotation node to a JSON Schema type string.
 
-    Mapping:
-        str  → "string"
-        int  → "integer"
-        float → "number"
-        bool → "boolean"
-        None → "null"
-        list[...] → "array"
-        dict[...] → "object"
-        No annotation → "string" (default)
-        Any other → "string" (conservative fallback)
+    Handles simple types (str, int, float, bool, None), PEP 604 unions
+    (str | None), typing generics (Optional, List, Dict), and falls back
+    to "string" for anything unrecognised.
     """
     if ann_node is None:
         return "string"
 
-    # ast.Name: e.g. str, int, float, bool, None
+    # --- PEP 604 union: X | Y  → extract the first non-None side ---
+    if isinstance(ann_node, ast.BinOp):
+        # We only handle the | operator (BitOr)
+        if isinstance(ann_node.op, ast.BitOr):
+            # Try each side; prefer the non-None one
+            for side in (ann_node.left, ann_node.right):
+                t = _annotation_to_json_type(side)
+                if t != "null":
+                    return t
+            return "null"
+        return "string"
+
+    # --- ast.Constant: e.g. None literal ---
+    if isinstance(ann_node, ast.Constant):
+        if ann_node.value is None:
+            return "null"
+        return "string"
+
+    # --- ast.Name: e.g. str, int, float, bool, None, Any ---
     if isinstance(ann_node, ast.Name):
         mapping = {
             "str": "string",
@@ -45,19 +70,22 @@ def _annotation_to_json_type(ann_node: ast.expr | None) -> str:
         }
         return mapping.get(ann_node.id, "string")
 
-    # ast.Constant(value=None): e.g. None literal
-    if isinstance(ann_node, ast.Constant) and ann_node.value is None:
-        return "null"
-
-    # ast.Subscript: e.g. list[str], dict[str, int]
+    # --- ast.Subscript: e.g. list[str], Optional[str], typing.List[int] ---
     if isinstance(ann_node, ast.Subscript):
-        if isinstance(ann_node.value, ast.Name):
-            if ann_node.value.id == "list":
-                return "array"
-            if ann_node.value.id == "dict":
-                return "object"
+        # Extract the base name, handling both Name("list") and
+        # Attribute(Name("typing"), "List")
+        base_id = _get_base_name(ann_node.value)
+        if base_id in ("list", "List", "Sequence", "MutableSequence"):
+            return "array"
+        if base_id in ("dict", "Dict", "Mapping", "MutableMapping"):
+            return "object"
+        if base_id in ("Optional",):
+            # typing.Optional[X] — extract X (the slice)
+            return _annotation_to_json_type(ann_node.slice)
+        # Anything else (including Union, Tuple, Set, etc.) → string
+        return "string"
 
-    # Conservative fallback
+    # --- Conservative fallback ---
     return "string"
 
 
@@ -246,7 +274,16 @@ try:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     func = getattr(module, function_name)
-    result = func(**parsed_args)
+
+    # Isolate stdout: redirect to stderr so tool print()s don't
+    # pollute the JSON result channel.
+    _real_stdout = sys.stdout
+    sys.stdout = sys.stderr
+    try:
+        result = func(**parsed_args)
+    finally:
+        sys.stdout = _real_stdout
+
     print(json.dumps({"ok": True, "result": result}, ensure_ascii=False, default=str))
 except Exception as exc:
     print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))

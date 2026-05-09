@@ -678,6 +678,8 @@ class ToolRegistry:
         self._root = workspace_root.resolve()
         self._read_only = read_only
         self._mode: RegistryMode = mode
+        self._dynamic_cache: dict[str, Path] = {}
+        self._dynamic_cache_mtimes: dict[str, float] = {}
 
     @property
     def workspace_root(self) -> Path:
@@ -685,6 +687,8 @@ class ToolRegistry:
 
     def set_workspace_root(self, root: Path) -> None:
         self._root = root.resolve()
+        self._dynamic_cache.clear()
+        self._dynamic_cache_mtimes.clear()
 
     @property
     def read_only(self) -> bool:
@@ -729,24 +733,54 @@ class ToolRegistry:
     # ---- dynamic tools -----------------------------------------------------
 
     def _scan_dynamic_tools(self) -> dict[str, Path]:
-        """Scan .aura/tools/ for .py files and map tool names to file paths."""
+        """Scan .aura/tools/ for .py files and map tool names to file paths.
+
+        Uses per-file mtime caching to avoid re-parsing unchanged files.
+        """
         tools_dir = self._root / ".aura" / "tools"
         if not tools_dir.is_dir():
+            self._dynamic_cache.clear()
+            self._dynamic_cache_mtimes.clear()
             return {}
-        mapping: dict[str, Path] = {}
+
+        current_files: set[str] = set()
         for entry in sorted(tools_dir.iterdir()):
             if not entry.is_file() or entry.suffix != ".py":
                 continue
             if entry.name.startswith("_"):
                 continue
+
+            key = str(entry)
+            current_files.add(key)
+            mtime = entry.stat().st_mtime
+
+            # Skip if unchanged since last parse
+            if key in self._dynamic_cache_mtimes and self._dynamic_cache_mtimes[key] == mtime:
+                continue
+
             try:
                 schema = parse_tool_schema(entry)
                 name = schema["function"]["name"]
-                mapping[name] = entry
+                # Remove any old mapping for this file path (name may have changed)
+                for old_name, old_path in list(self._dynamic_cache.items()):
+                    if str(old_path) == key:
+                        del self._dynamic_cache[old_name]
+                        break
+                self._dynamic_cache[name] = entry
+                self._dynamic_cache_mtimes[key] = mtime
             except (ValueError, SyntaxError):
-                # Skip malformed tools silently; they won't be offered.
                 pass
-        return mapping
+
+        # Remove entries for files that no longer exist
+        stale_keys = set(self._dynamic_cache_mtimes.keys()) - current_files
+        for key in stale_keys:
+            for name, path in list(self._dynamic_cache.items()):
+                if str(path) == key:
+                    del self._dynamic_cache[name]
+                    break
+            del self._dynamic_cache_mtimes[key]
+
+        return dict(self._dynamic_cache)
 
     # ---- path resolution ---------------------------------------------------
 
