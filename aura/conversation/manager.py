@@ -120,9 +120,17 @@ class ConversationManager:
                 # If we have some content but no tool calls, we can keep it.
                 # If it's empty or has orphaned tool calls, we must strip it.
                 if full_message is not None:
-                    has_content = bool(full_message.get("content") or full_message.get("reasoning_content"))
-                    if has_content:
+                    # DeepSeek/OpenRouter specific: reasoning_content is NOT 'content' for the API.
+                    # Standard APIs REQUIRE 'content' (string) or 'tool_calls' (list).
+                    content = full_message.get("content")
+                    reasoning = full_message.get("reasoning_content")
+                    
+                    has_any_text = bool(content or reasoning)
+                    if has_any_text:
                         full_message.pop("tool_calls", None)
+                        # Normalize content to string so API doesn't reject it
+                        if full_message.get("content") is None:
+                            full_message["content"] = ""
                         self._history.append_assistant(full_message)
                     else:
                         self._cleanup_cancelled(on_event)

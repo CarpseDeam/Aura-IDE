@@ -239,9 +239,11 @@ class DeepSeekClient:
 
         full_message: dict[str, Any] = {
             "role": "assistant",
-            "content": "".join(content_buf) if content_buf else None,
-            "reasoning_content": "".join(reasoning_buf) if reasoning_buf else None,
+            "content": "".join(content_buf),
+            "reasoning_content": "".join(reasoning_buf),
         }
+        if not full_message["reasoning_content"]:
+            full_message.pop("reasoning_content")
         if tool_calls:
             full_message["tool_calls"] = [
                 tool_calls[i] for i in sorted(tool_calls)

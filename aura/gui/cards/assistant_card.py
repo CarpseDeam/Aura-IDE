@@ -239,6 +239,7 @@ class AssistantCard(QFrame):
     def finalize_content(self) -> None:
         """Replace the streaming label with a rich layout that renders code
         blocks as CodeBlockCard widgets instead of inline HTML pre blocks."""
+        self._stop_thinking_animation()
         text = self._content_label.text_buffer()
         if not text:
             return
