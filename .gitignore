@@ -1,35 +1,67 @@
-# === Universal ===
-.DS_Store
-Thumbs.db
-*.log
+# --- Python bytecode ---
+__pycache__/
+*.py[cod]
+*.pyo
+*$py.class
+
+# --- Virtual environments ---
+.venv/
+venv/
+env/
 .env
-.env.local
+*.env.local
+*.env.*.local
 
-# === Windows artifacts (reserved names) ===
-nul
-con
-aux
-prn
+# --- Build / Packaging ---
+dist/
+build/
+*.egg-info/
+*.egg
+*.whl
 
-# === IDE ===
+# --- IDE & editors ---
 .idea/
 .vscode/
 *.swp
 *.swo
+*~
+.project
+.pydevproject
+.settings/
+*.sublime-project
+*.sublime-workspace
 
-# === Claude Code Bridge ===
-_claude_prompt.txt
+# --- OS files ---
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+ehthumbs.db
+Desktop.ini
 
-# === Python ===
-__pycache__/
-*.py[cod]
-*$py.class
-.venv/
-venv/
-*.egg-info/
-dist/
-build/
+# --- Coverage & profiling ---
+htmlcov/
+.coverage
+.coverage.*
+*.lcov
+*.prof
+
+# --- pytest ---
 .pytest_cache/
+.tox/
+
+# --- mypy ---
 .mypy_cache/
-/.aura/
+.dmypy.json
+dmypy.json
+
+# --- ruff ---
+.ruff_cache/
+
+# --- Jupyter ---
+.ipynb_checkpoints/
+
+# --- Project-specific ---
+.aura/
+*.log
 /docs/god_files_report.md

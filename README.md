@@ -8,7 +8,7 @@
 
 **Desktop AI Orchestration IDE — pair programming with full workspace awareness.**
 
-Aura is a desktop chat application that helps you troubleshoot and modify your codebase. You chat with an AI agent that can read your project files, search your codebase, propose code changes, and — when you approve — apply those changes directly to disk. It supports **DeepSeek**, **OpenAI**, **Google Gemini**, and **OpenRouter** as AI backends, with a local [Ollama](https://ollama.com/) vision model for screenshot preprocessing.
+Aura is a desktop chat application that helps you troubleshoot and modify your codebase. You chat with an AI agent that can read your project files, search your codebase, propose code changes, and — when you approve — apply those changes directly to disk. It supports **DeepSeek**, **OpenAI**, **Anthropic**, **Google Gemini**, and **OpenRouter** as AI backends, with a local [Ollama](https://ollama.com/) vision model for screenshot preprocessing.
 
 Built with [PySide6](https://pypi.org/project/PySide6/) (Qt for Python).
 
@@ -39,6 +39,13 @@ Built with [PySide6](https://pypi.org/project/PySide6/) (Qt for Python).
 
 *Left: Main interface with three-pane layout — workspace tree, chat view, and worker activity panel. Right: Diff approval dialog — every file change is reviewed before being applied.*
 
+<p align="center">
+  <video src="media/Aura-Working.mp4" controls muted loop width="90%">
+    Your browser does not support the video tag. <a href="media/Aura-Working.mp4">Download demo</a>
+  </video>
+</p>
+<p align="center"><em>Demo: A full Planner → Worker cycle — spec writing, dispatch, code editing with diff approval, and auto-commit.</em></p>
+
 ---
 
 ## Key Features
@@ -49,7 +56,7 @@ A two-agent system inspired by pair programming. The **Planner** reads your code
 
 ### Multi-Provider Support
 
-Choose between **DeepSeek**, **OpenAI**, **Google Gemini**, or **OpenRouter** as your AI provider. Each provider exposes multiple models with independent pricing. The Planner and Worker can use different models — for example, a fast model for the Planner and a more capable model for the Worker. See [Supported Providers](#supported-providers) for details.
+Choose between **DeepSeek**, **OpenAI**, **Anthropic**, **Google Gemini**, or **OpenRouter** as your AI provider. Each provider exposes multiple models with independent pricing. The Planner and Worker can use different models — for example, a fast model for the Planner and a more capable model for the Worker. See [Supported Providers](#supported-providers) for details.
 
 ### Filesystem Tools
 
@@ -123,13 +130,14 @@ The Worker has its own temperature setting (default 0.1) separate from the Plann
 
 ## Supported Providers
 
-Aura supports four AI providers. You choose one per session via the toolbar dropdown, then select any model from that provider's catalogue that the app exposes. The Planner and Worker always use the same provider but can be assigned different models and thinking modes.
+Aura supports five AI providers. You choose one per session via the toolbar dropdown, then select any model from that provider's catalogue that the app exposes. The Planner and Worker always use the same provider but can be assigned different models and thinking modes.
 
 | Provider | Base URL | Env Var |
 |----------|----------|---------|
 | **DeepSeek** | `https://api.deepseek.com` | `DEEPSEEK_API_KEY` |
 | **OpenAI** | `https://api.openai.com/v1` | `OPENAI_API_KEY` |
 | **Google Gemini** | `https://generativelanguage.googleapis.com/v1beta/openai/` | `GEMINI_API_KEY` |
+| **Anthropic** | `https://api.anthropic.com/v1` | `ANTHROPIC_API_KEY` |
 | **OpenRouter** | `https://openrouter.ai/api/v1` | `OPENROUTER_API_KEY` |
 
 > **Tip:** Model availability and pricing change frequently. The app embeds a current model catalogue and pricing table that you can inspect in `aura/config.py`. For the latest pricing, refer to each provider's official documentation.
@@ -169,6 +177,11 @@ export DEEPSEEK_API_KEY="sk-..."
 **OpenAI:**
 ```bash
 export OPENAI_API_KEY="sk-..."
+```
+
+**Anthropic:**
+```bash
+export ANTHROPIC_API_KEY="sk-ant-..."
 ```
 
 **Google Gemini:**
@@ -225,7 +238,7 @@ python -m aura
 
 Use the dropdowns in the input panel to configure:
 
-- **Provider** — DeepSeek, OpenAI, Google Gemini, or OpenRouter
+- **Provider** — DeepSeek, OpenAI, Anthropic, Google Gemini, or OpenRouter
 - **Planner Model** — Reads code and writes specs
 - **Planner Thinking** — Reasoning depth (Off / High / Max)
 - **Worker Model** — Executes file edits
@@ -246,7 +259,7 @@ Settings are stored at `~/.config/Aura/config.json` (or the platform-appropriate
 
 | Setting | Description |
 |---------|-------------|
-| **Provider** | Select the AI provider (DeepSeek / OpenAI / Google Gemini / OpenRouter) |
+| **Provider** | Select the AI provider (DeepSeek / OpenAI / Anthropic / Google Gemini / OpenRouter) |
 | **API Key Status** | Shows whether the required environment variable is set (green = found, red = missing) |
 | **Default Model** | Model used in Single mode |
 | **Default Thinking** | Reasoning depth for Single mode |
