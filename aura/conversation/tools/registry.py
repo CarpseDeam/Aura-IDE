@@ -33,6 +33,7 @@ from aura.conversation.tools.git_tools import (
     git_status,
 )
 from aura.conversation.tools.grep import grep_files
+from aura.conversation.tools.fs_edit_structured import propose_edit_symbol
 from aura.conversation.tools.fs_write import propose_edit, propose_write
 from aura.conversation.tools.web import web_fetch, web_search
 ApprovalAction = Literal["approve", "reject", "reject_all", "approve_all"]
@@ -515,6 +516,48 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "edit_symbol",
+            "description": (
+                "Replace a named function, class, or method in a Python (.py) file by specifying its name "
+                "instead of providing exact old code. Uses AST parsing to locate the symbol and replace its "
+                "entire definition. This is the preferred way to edit Python code when you know the function "
+                "or class name — it avoids indentation and whitespace matching issues. "
+                "You must include all original decorators in your new_definition, as the replacement will overwrite "
+                "the existing decorators. "
+                "For non-Python files or partial replacements within a function, use edit_file instead."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Workspace-relative path to the Python file.",
+                    },
+                    "symbol_type": {
+                        "type": "string",
+                        "enum": ["function", "class", "method"],
+                        "description": "Type of symbol to replace: 'function' (top-level), 'class' (top-level), or 'method' (requires class_name).",
+                    },
+                    "symbol_name": {
+                        "type": "string",
+                        "description": "Name of the function, class, or method to replace.",
+                    },
+                    "new_definition": {
+                        "type": "string",
+                        "description": "The complete new definition including decorators, signature, docstring, and body. It will replace the entire existing definition.",
+                    },
+                    "class_name": {
+                        "type": "string",
+                        "description": "Required when symbol_type is 'method' — the name of the class containing the method.",
+                    },
+                },
+                "required": ["path", "symbol_type", "symbol_name", "new_definition"],
+            },
+        },
+    },
 ]
 
 RESEARCH_TOOL_DEFS: list[dict[str, Any]] = [
@@ -916,7 +959,7 @@ class ToolRegistry:
                 url = args.get("url", "")
                 return ToolExecResult(ok=True, payload=web_fetch(url))
 
-            if name in ("write_file", "edit_file"):
+            if name in ("write_file", "edit_file", "edit_symbol"):
                 if self._read_only:
                     return ToolExecResult(
                         ok=False,
@@ -999,7 +1042,7 @@ class ToolRegistry:
                 new_content=proposal["new_content"],
                 is_new_file=proposal["is_new_file"],
             )
-        else:  # edit_file
+        elif name == "edit_file":
             old_str = args.get("old_str", "")
             new_str = args.get("new_str", "")
             if not isinstance(old_str, str) or not isinstance(new_str, str):
@@ -1012,6 +1055,28 @@ class ToolRegistry:
                 return ToolExecResult(ok=False, payload=proposal)
             req = ApprovalRequest(
                 tool_name="edit_file",
+                rel_path=proposal["rel_path"],
+                old_content=proposal["old_content"],
+                new_content=proposal["new_content"],
+                is_new_file=False,
+            )
+        else:  # edit_symbol
+            symbol_type = args.get("symbol_type", "")
+            symbol_name = args.get("symbol_name", "")
+            new_definition = args.get("new_definition", "")
+            class_name = args.get("class_name")
+            if not isinstance(symbol_type, str) or not isinstance(symbol_name, str) or not isinstance(new_definition, str):
+                return ToolExecResult(
+                    ok=False,
+                    payload={"ok": False, "error": "symbol_type, symbol_name, and new_definition must be strings"},
+                )
+            proposal = propose_edit_symbol(
+                self._root, target, symbol_type, symbol_name, new_definition, class_name
+            )
+            if not proposal.get("ok", False):
+                return ToolExecResult(ok=False, payload=proposal)
+            req = ApprovalRequest(
+                tool_name="edit_symbol",
                 rel_path=proposal["rel_path"],
                 old_content=proposal["old_content"],
                 new_content=proposal["new_content"],

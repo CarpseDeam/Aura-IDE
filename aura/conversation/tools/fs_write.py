@@ -2,8 +2,53 @@
 from __future__ import annotations
 
 import difflib
+import re
 from pathlib import Path
 from typing import Any
+
+
+def _sanitize_edit_strings(old_str: str, new_str: str) -> tuple[str, str, bool]:
+    """Strip markdown fences and normalize whitespace on edit strings.
+
+    Strips leading/trailing whitespace from both strings, then detects and
+    removes a single pair of surrounding markdown fences (``` ... ```) from
+    *old_str* only. After fence removal, trailing newlines are stripped from
+    *old_str* (not *new_str* — the caller may intend a specific trailing
+    newline in the replacement).
+
+    Returns:
+        (sanitized_old, sanitized_new, was_sanitized):
+        - sanitized_old:  old_str after whitespace / fence stripping.
+        - sanitized_new:  new_str after leading/trailing whitespace strip.
+        - was_sanitized:  True if any modification was applied.
+    """
+    sanitized = False
+
+    old = old_str.strip()
+    new = new_str.strip()
+
+    if old != old_str:
+        sanitized = True
+    if new != new_str:
+        sanitized = True
+
+    # Detect and remove a single pair of outermost markdown fences from old_str.
+    # A fence line: optional whitespace, then 3+ backticks, optionally followed
+    # by a language tag (for opening) or nothing (for closing).
+    lines = old.split("\n")
+    if len(lines) >= 2:
+        first = lines[0]
+        last = lines[-1]
+        open_match = re.match(r"^(\s*)(`{3,})(?:\s*\w*)?\s*$", first)
+        close_match = re.match(r"^(\s*)(`{3,})\s*$", last)
+        if open_match and close_match and open_match.group(2) == close_match.group(2):
+            old = "\n".join(lines[1:-1])
+            sanitized = True
+
+    # Re-strip trailing newlines from old_str only.
+    old = old.rstrip("\n")
+
+    return old, new, sanitized
 
 
 def propose_write(workspace_root: Path, target: Path, content: str) -> dict[str, Any]:
@@ -31,7 +76,7 @@ def propose_write(workspace_root: Path, target: Path, content: str) -> dict[str,
     }
 
 
-def _replace_line_range(
+def replace_line_range(
     original: str, file_lines_with_newlines: list[str], start_line: int, end_line: int, new_str: str
 ) -> str:
     """Replace lines [start_line, end_line) in original with new_str.
@@ -58,11 +103,14 @@ def propose_edit(
 
     rel = target.relative_to(workspace_root).as_posix()
 
+    # Sanitize inputs: strip markdown fences, normalize whitespace.
+    old_str, new_str, sanitized = _sanitize_edit_strings(old_str, new_str)
+
     # ---- Tier 1: Exact string match (fast path, backward compatible) ----
     occurrences = original.count(old_str)
     if occurrences == 1:
         proposed = original.replace(old_str, new_str, 1)
-        return {
+        result: dict[str, Any] = {
             "ok": True,
             "rel_path": rel,
             "old_content": original,
@@ -70,6 +118,9 @@ def propose_edit(
             "is_new_file": False,
             "match_tier": "exact",
         }
+        if sanitized:
+            result["sanitized"] = True
+        return result
 
     # Prepare line-based structures for Tiers 2 & 3.
     lines_with_nl = original.splitlines(keepends=True)
@@ -96,8 +147,8 @@ def propose_edit(
 
     if len(line_matches) == 1:
         start_idx = line_matches[0]
-        proposed = _replace_line_range(original, lines_with_nl, start_idx, start_idx + window_len, new_str)
-        return {
+        proposed = replace_line_range(original, lines_with_nl, start_idx, start_idx + window_len, new_str)
+        result = {
             "ok": True,
             "rel_path": rel,
             "old_content": original,
@@ -105,6 +156,9 @@ def propose_edit(
             "is_new_file": False,
             "match_tier": "line_exact",
         }
+        if sanitized:
+            result["sanitized"] = True
+        return result
 
     # ---- Tier 3: Whitespace-agnostic fuzzy line matching ----
     if len(old_lines) > len(file_lines):
@@ -130,10 +184,10 @@ def propose_edit(
                 best_start = i
 
         if best_ratio >= 0.75:
-            proposed = _replace_line_range(
+            proposed = replace_line_range(
                 original, lines_with_nl, best_start, best_start + len(old_lines), new_str
             )
-            return {
+            result = {
                 "ok": True,
                 "rel_path": rel,
                 "old_content": original,
@@ -142,6 +196,9 @@ def propose_edit(
                 "match_tier": "fuzzy",
                 "fuzzy_ratio": round(best_ratio, 3),
             }
+            if sanitized:
+                result["sanitized"] = True
+            return result
 
     # ---- All tiers failed ----
     error_msg = (

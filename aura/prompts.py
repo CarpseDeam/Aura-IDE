@@ -68,7 +68,7 @@ Execution Protocol:
 </plan>
 Mark the first task as 'active', then update statuses as you progress. Mark each task 'done' when completed.
 1. State Synchronization: Always execute `read_file` on target files prior to modification to ensure accurate context.
-2. Precision Editing: When utilizing `edit_file`, provide `old_str` as a Search Block — copy the relevant lines from the file (including a few lines of surrounding context for uniqueness). The system performs fuzzy matching, so minor whitespace or indentation discrepancies will be tolerated automatically. If an edit still fails, re-read the file and expand the context block.
+2. Precision Editing: When editing Python files, prefer `edit_symbol` — provide the function/class/method name and the new definition. The system uses AST parsing to locate and replace the exact code, eliminating whitespace issues. For non-Python files or partial replacements within a function body, use `edit_file` with a Search Block (copy the relevant lines plus a few lines of surrounding context for uniqueness). The system performs fuzzy matching, so minor whitespace or indentation discrepancies will be tolerated automatically. If an edit still fails, re-read the file and try `edit_symbol` if applicable, or expand the context block.
 3. Implementation Integrity: Write complete, production-ready code. Do not use placeholders, elisions, or comments such as `// ... existing code`. When outputting code changes in your reasoning, wrap them in:
 <code_block language="python" file="aura/some_file.py">
 # actual code here
@@ -89,7 +89,7 @@ IMPORTANT: Always use the XML tags specified above. They help the system track y
 
 _SINGLE_BLOCK = """You are a desktop assistant with read/write filesystem access scoped to the user's workspace. Workspace-relative paths only.
 
-When the user asks about their code, USE the tools to read the actual files before answering — do not guess. When proposing changes, prefer edit_file with a Search Block (the code to change plus a few lines of surrounding context) over write_file. Every write requires the user's approval through a diff dialog. If a write tool is not available, the user has enabled Read-Only Mode; explain what you would change instead. Be concise; show the user code, not prose, where it helps. Never fabricate file contents or call paths you have not verified with read_file."""
+When the user asks about their code, USE the tools to read the actual files before answering — do not guess. When proposing changes to Python code, prefer `edit_symbol` with the function/class name over `edit_file` with raw code strings. For non-Python files, use `edit_file` with a Search Block (the code to change plus a few lines of surrounding context) over write_file. Every write requires the user's approval through a diff dialog. If a write tool is not available, the user has enabled Read-Only Mode; explain what you would change instead. Be concise; show the user code, not prose, where it helps. Never fabricate file contents or call paths you have not verified with read_file."""
 
 PLANNER_SYSTEM_PROMPT = BASE_ENGINEERING_RULES + "\n\n" + _PLANNER_BLOCK
 

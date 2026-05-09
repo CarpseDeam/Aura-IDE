@@ -3,38 +3,39 @@
 from __future__ import annotations
 
 from pathlib import Path
-from aura.conversation.tools.fs_write import propose_write, propose_edit, _replace_line_range
+from aura.conversation.tools.fs_edit_structured import propose_edit_symbol
+from aura.conversation.tools.fs_write import propose_write, propose_edit, replace_line_range, _sanitize_edit_strings
 
 
 # ---------------------------------------------------------------------------
-# _replace_line_range
+# replace_line_range
 # ---------------------------------------------------------------------------
 
 def test_replace_line_range_single_line():
     original = "line0\nline1\nline2\n"
     lines_with_nl = original.splitlines(keepends=True)
-    result = _replace_line_range(original, lines_with_nl, 1, 2, "REPLACED\n")
+    result = replace_line_range(original, lines_with_nl, 1, 2, "REPLACED\n")
     assert result == "line0\nREPLACED\nline2\n"
 
 
 def test_replace_line_range_multi_line():
     original = "a\nb\nc\nd\n"
     lines_with_nl = original.splitlines(keepends=True)
-    result = _replace_line_range(original, lines_with_nl, 1, 3, "X\nY\n")
+    result = replace_line_range(original, lines_with_nl, 1, 3, "X\nY\n")
     assert result == "a\nX\nY\nd\n"
 
 
 def test_replace_line_range_start_of_file():
     original = "one\ntwo\nthree\n"
     lines_with_nl = original.splitlines(keepends=True)
-    result = _replace_line_range(original, lines_with_nl, 0, 1, "FIRST\n")
+    result = replace_line_range(original, lines_with_nl, 0, 1, "FIRST\n")
     assert result == "FIRST\ntwo\nthree\n"
 
 
 def test_replace_line_range_end_of_file():
     original = "one\ntwo\nthree\n"
     lines_with_nl = original.splitlines(keepends=True)
-    result = _replace_line_range(original, lines_with_nl, 2, 3, "LAST\n")
+    result = replace_line_range(original, lines_with_nl, 2, 3, "LAST\n")
     assert result == "one\ntwo\nLAST\n"
 
 
@@ -42,9 +43,8 @@ def test_replace_line_range_no_trailing_newline():
     """Handle files that don't end with a newline."""
     original = "line0\nline1\nline2"  # no trailing newline on last line
     lines_with_nl = original.splitlines(keepends=True)
-    result = _replace_line_range(original, lines_with_nl, 1, 2, "CHANGED\n")
+    result = replace_line_range(original, lines_with_nl, 1, 2, "CHANGED\n")
     assert result == "line0\nCHANGED\nline2"
-
 
 # ---------------------------------------------------------------------------
 # propose_write
@@ -112,12 +112,13 @@ def test_edit_file_not_found(tmp_workspace: Path):
 # ---------------------------------------------------------------------------
 
 def test_edit_line_exact_match(sample_py_file: Path, tmp_workspace: Path):
-    """Replace a full line block via line-exact matching."""
+    """Replace a full line block — matches exactly since it's a unique substring."""
     old_str = "def goodbye():\n    print('goodbye world')"
     new_str = "def farewell():\n    print('farewell world')"
     result = propose_edit(tmp_workspace, sample_py_file, old_str, new_str)
     assert result["ok"] is True
-    assert result["match_tier"] == "line_exact"
+    # Unique substring → exact match (Tier 1) catches it first
+    assert result["match_tier"] == "exact"
     assert "farewell" in result["new_content"]
     assert "goodbye" not in result["new_content"]
 
@@ -134,12 +135,13 @@ def test_edit_line_exact_multiple_identical_lines(tmp_workspace: Path):
 
 
 def test_edit_line_exact_single_line(sample_py_file: Path, tmp_workspace: Path):
-    """A single unique line should match via line-exact."""
+    """A single unique line — matches exactly since it's a unique substring."""
     old_str = "class Greeter:"
     new_str = "class AdvancedGreeter:"
     result = propose_edit(tmp_workspace, sample_py_file, old_str, new_str)
     assert result["ok"] is True
-    assert result["match_tier"] == "line_exact"
+    # Unique substring → exact match (Tier 1) catches it first
+    assert result["match_tier"] == "exact"
 
 
 # ---------------------------------------------------------------------------
@@ -213,3 +215,132 @@ def test_edit_replacement_is_exact(tmp_workspace: Path):
     result = propose_edit(tmp_workspace, f, old_str, new_str)
     assert result["ok"] is True
     assert result["new_content"] == "first\n2nd\n3rd\nfourth\n"
+
+
+# ---------------------------------------------------------------------------
+# _sanitize_edit_strings (tested via propose_edit)
+# ---------------------------------------------------------------------------
+
+
+def test_edit_strips_markdown_fence_python(sample_py_file: Path, tmp_workspace: Path):
+    """old_str wrapped in ```python ... ``` should be stripped before matching."""
+    old_str = "```python\ndef hello():\n    print('hello world')\n```"
+    new_str = "def hello():\n    print('hola mundo')"
+    result = propose_edit(tmp_workspace, sample_py_file, old_str, new_str)
+    assert result["ok"] is True
+    assert "hola mundo" in result["new_content"]
+
+
+def test_edit_strips_markdown_fence_no_lang(sample_py_file: Path, tmp_workspace: Path):
+    """old_str wrapped in ``` ... ``` (no language tag) should be stripped."""
+    old_str = "```\ndef hello():\n    print('hello world')\n```"
+    new_str = "def hello():\n    print('bonjour')"
+    result = propose_edit(tmp_workspace, sample_py_file, old_str, new_str)
+    assert result["ok"] is True
+    assert "bonjour" in result["new_content"]
+
+
+def test_edit_preserves_internal_code_blocks(tmp_workspace: Path):
+    """Only outermost fences are stripped; internal ``` must stay."""
+    f = tmp_workspace / "internal_fence.py"
+    f.write_text("line1\nline2\nline3\n")
+    # old_str has a fake internal ``` that should NOT be stripped
+    old_str = "some text\n```\nmore text"
+    new_str = "replaced"
+    # This should just fall through to matching — the point is no crash/over-strip
+    result = propose_edit(tmp_workspace, f, old_str, new_str)
+    assert result["ok"] is False  # won't match, but shouldn't error from sanitizer
+
+
+def test_edit_fence_with_trailing_newlines(tmp_workspace: Path):
+    """Fence with trailing whitespace/newlines after closing ``` should be handled."""
+    f = tmp_workspace / "trailing.py"
+    f.write_text("def foo():\n    return 1\n")
+    old_str = "```python\ndef foo():\n    return 1\n```\n"
+    new_str = "def bar():\n    return 2"
+    result = propose_edit(tmp_workspace, f, old_str, new_str)
+    assert result["ok"] is True
+    assert "def bar()" in result["new_content"]
+    assert result.get("sanitized") is True
+
+
+# ---------------------------------------------------------------------------
+# propose_edit_symbol
+# ---------------------------------------------------------------------------
+
+
+def test_edit_symbol_replace_function(sample_py_file: Path, tmp_workspace: Path):
+    result = propose_edit_symbol(
+        tmp_workspace, sample_py_file, "function", "hello",
+        "def hello():\n    print('new hello')",
+    )
+    assert result["ok"] is True
+    assert result["match_tier"] == "symbol"
+    assert "def hello():" in result["new_content"]
+    assert "new hello" in result["new_content"]
+    assert "hello world" not in result["new_content"]
+
+
+def test_edit_symbol_replace_class(sample_py_file: Path, tmp_workspace: Path):
+    result = propose_edit_symbol(
+        tmp_workspace, sample_py_file, "class", "Greeter",
+        "class Greeter:\n    def greet(self, name):\n        return f'Hey, {name}'",
+    )
+    assert result["ok"] is True
+    assert result["match_tier"] == "symbol"
+    assert "Hey" in result["new_content"]
+
+
+def test_edit_symbol_replace_method(sample_py_file: Path, tmp_workspace: Path):
+    result = propose_edit_symbol(
+        tmp_workspace, sample_py_file, "method", "greet",
+        "def greet(self, name):\n    return f'Yo, {name}'",
+        class_name="Greeter",
+    )
+    assert result["ok"] is True
+    assert result["match_tier"] == "symbol"
+    assert "Yo" in result["new_content"]
+
+
+def test_edit_symbol_not_found(sample_py_file: Path, tmp_workspace: Path):
+    result = propose_edit_symbol(
+        tmp_workspace, sample_py_file, "function", "nonexistent",
+        "def foo(): pass",
+    )
+    assert result["ok"] is False
+    assert "not found" in result["error"]
+
+
+def test_edit_symbol_non_python_file(tmp_workspace: Path):
+    f = tmp_workspace / "script.js"
+    f.write_text("function hello() { console.log('hi'); }")
+    result = propose_edit_symbol(
+        tmp_workspace, f, "function", "hello", "function hello() {}",
+    )
+    assert result["ok"] is False
+    assert "only supports python" in result["error"].lower()
+
+
+def test_edit_symbol_decorated_function(tmp_workspace: Path):
+    """Replace a decorated function — lineno should include decorator."""
+    f = tmp_workspace / "deco.py"
+    f.write_text("@app.route('/')\ndef index():\n    return 'hi'\n")
+    result = propose_edit_symbol(
+        tmp_workspace, f, "function", "index",
+        "@app.route('/')\ndef index():\n    return 'hello'",
+    )
+    assert result["ok"] is True
+    assert result["match_tier"] == "symbol"
+    assert "hello" in result["new_content"]
+
+
+def test_edit_symbol_function_as_method_with_class_name(sample_py_file: Path, tmp_workspace: Path):
+    """symbol_type='function' with class_name should be treated as method."""
+    result = propose_edit_symbol(
+        tmp_workspace, sample_py_file, "function", "greet",
+        "def greet(self, name):\n    return f'Yo, {name}'",
+        class_name="Greeter",
+    )
+    assert result["ok"] is True
+    assert result["match_tier"] == "symbol"
+    assert "Yo" in result["new_content"]
