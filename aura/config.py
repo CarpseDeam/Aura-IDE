@@ -305,8 +305,14 @@ def list_stored_providers() -> list[ProviderId]:
 
 
 def get_tavily_api_key() -> str | None:
-    """Read TAVILY_API_KEY from environment. Returns None if not set."""
-    return os.environ.get(TAVILY_API_KEY_ENV) or None
+    """Read the Tavily key from the environment or saved app settings."""
+    env_key = os.environ.get(TAVILY_API_KEY_ENV)
+    if env_key:
+        return env_key
+    try:
+        return load_settings().tavily_api_key or None
+    except Exception:
+        return None
 
 
 def fetch_provider_models(provider_id: ProviderId) -> tuple[dict[str, ModelInfo], dict[str, dict[str, float]], str | None]:

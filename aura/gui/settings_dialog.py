@@ -31,6 +31,7 @@ from aura.config import (
     AppSettings,
     ProviderId,
     fetch_provider_models,
+    get_api_key,
     get_provider,
     save_dynamic_catalog,
     save_settings,
@@ -442,38 +443,6 @@ class SettingsDialog(QDialog):
         backup_label.setWordWrap(True)
         form.addRow("Backups:", backup_label)
 
-        # ---- Search (Tavily) API Key ----
-        search_sep = QLabel("Web Search (Tavily)")
-        search_sep.setStyleSheet(
-            f"color: {FG_DIM}; font-weight: 600; font-size: 11px;"
-            " text-transform: uppercase; letter-spacing: 0.04em;"
-        )
-        form.addRow("", search_sep)
-
-        tavily_key_row = QHBoxLayout()
-        tavily_key_row.setSpacing(6)
-        self._tavily_key_input = QLineEdit()
-        self._tavily_key_input.setEchoMode(QLineEdit.EchoMode.Password)
-        self._tavily_key_input.setPlaceholderText("Paste Tavily API key here...")
-        tavily_key_row.addWidget(self._tavily_key_input, 1)
-
-        self._save_tavily_btn = QPushButton("Save")
-        self._save_tavily_btn.clicked.connect(self._on_save_tavily_key)
-        tavily_key_row.addWidget(self._save_tavily_btn)
-
-        self._clear_tavily_btn = QPushButton("Clear")
-        self._clear_tavily_btn.clicked.connect(self._on_clear_tavily_key)
-        tavily_key_row.addWidget(self._clear_tavily_btn)
-
-        tavily_widget = QWidget()
-        tavily_widget.setLayout(tavily_key_row)
-        form.addRow("Tavily Key:", tavily_widget)
-
-        self._tavily_status = QLabel("")
-        self._tavily_status.setWordWrap(True)
-        form.addRow("", self._tavily_status)
-        self._refresh_tavily_status()
-
         outer.addLayout(form)
 
         # Buttons
@@ -483,6 +452,148 @@ class SettingsDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         outer.addWidget(buttons)
+
+    def _on_provider_changed(self) -> None:
+        provider_id: ProviderId = self._provider_combo.currentData()
+        self._populate_model_combos(provider_id)
+        self._refresh_api_key_status(provider_id)
+
+    def _populate_model_combos(self, provider_id: ProviderId) -> None:
+        cfg = get_provider(provider_id)
+        same_provider = provider_id == self._settings.provider
+
+        default_model = (
+            self._settings.default_model if same_provider else cfg.default_model
+        )
+        planner_model = (
+            self._settings.default_planner_model if same_provider else cfg.default_model
+        )
+        worker_model = (
+            self._settings.default_worker_model if same_provider else cfg.default_model
+        )
+
+        for combo, current in (
+            (self._model_combo, default_model),
+            (self._planner_model_combo, planner_model),
+            (self._worker_model_combo, worker_model),
+        ):
+            combo.blockSignals(True)
+            combo.clear()
+            for info in cfg.models.values():
+                combo.addItem(info.label, info.id)
+            if current and combo.findData(current) < 0:
+                combo.addItem(current, current)
+            idx = combo.findData(current)
+            if idx >= 0:
+                combo.setCurrentIndex(idx)
+            combo.blockSignals(False)
+
+        self._set_combo_to_data(self._thinking_combo, self._settings.default_thinking)
+        self._set_combo_to_data(
+            self._planner_thinking_combo, self._settings.default_planner_thinking
+        )
+        self._set_combo_to_data(
+            self._worker_thinking_combo, self._settings.default_worker_thinking
+        )
+
+    def _set_combo_to_data(self, combo: QComboBox, value: str) -> None:
+        idx = combo.findData(value)
+        if idx >= 0:
+            combo.setCurrentIndex(idx)
+
+    def _refresh_api_key_status(self, provider_id: ProviderId) -> None:
+        cfg = get_provider(provider_id)
+        if os.environ.get(cfg.env_key):
+            text = f"{cfg.label} key loaded from {cfg.env_key}."
+            color = SUCCESS
+        elif get_api_key(provider_id):
+            text = f"{cfg.label} key is stored locally."
+            color = SUCCESS
+        else:
+            text = f"No {cfg.label} key found. Set {cfg.env_key} or save one here."
+            color = WARN
+        self._api_key_status.setText(text)
+        self._api_key_status.setStyleSheet(f"color: {color};")
+
+    def _on_save_api_key(self) -> None:
+        provider_id: ProviderId = self._provider_combo.currentData()
+        key = self._api_key_input.text().strip()
+        if not key:
+            QMessageBox.information(self, APP_NAME, "Paste an API key before saving.")
+            return
+        set_api_key(provider_id, key)
+        self._api_key_input.clear()
+        self._refresh_api_key_status(provider_id)
+
+    def _on_clear_api_key(self) -> None:
+        provider_id: ProviderId = self._provider_combo.currentData()
+        from aura.key_manager import get_key_manager
+
+        get_key_manager().delete_key(provider_id)
+        self._refresh_api_key_status(provider_id)
+
+    def _refresh_tavily_status(self) -> None:
+        if os.environ.get("TAVILY_API_KEY"):
+            text = "Tavily key loaded from TAVILY_API_KEY."
+            color = SUCCESS
+        elif self._settings.tavily_api_key:
+            text = "Tavily key is saved in settings."
+            color = SUCCESS
+        else:
+            text = "No Tavily key saved. Web search will be unavailable."
+            color = WARN
+        self._tavily_status.setText(text)
+        self._tavily_status.setStyleSheet(f"color: {color};")
+
+    def _on_save_tavily_key(self) -> None:
+        key = self._tavily_key_input.text().strip()
+        if not key:
+            QMessageBox.information(self, APP_NAME, "Paste a Tavily key before saving.")
+            return
+        self._settings.tavily_api_key = key
+        self._tavily_key_input.clear()
+        save_settings(self.result_settings())
+        self._refresh_tavily_status()
+
+    def _on_clear_tavily_key(self) -> None:
+        self._settings.tavily_api_key = ""
+        save_settings(self.result_settings())
+        self._refresh_tavily_status()
+
+    def _on_refresh_models(self) -> None:
+        provider_id: ProviderId = self._provider_combo.currentData()
+        self._refresh_btn.setEnabled(False)
+        self._refresh_btn.setText("Refreshing...")
+
+        self._discovery_thread = QThread(self)
+        self._discovery_worker = DiscoveryWorker(provider_id)
+        self._discovery_worker.moveToThread(self._discovery_thread)
+        self._discovery_thread.started.connect(self._discovery_worker.run)
+        self._discovery_worker.finished.connect(self._on_models_refreshed)
+        self._discovery_worker.finished.connect(self._discovery_thread.quit)
+        self._discovery_worker.finished.connect(self._discovery_worker.deleteLater)
+        self._discovery_thread.finished.connect(self._discovery_thread.deleteLater)
+        self._discovery_thread.start()
+
+    def _on_models_refreshed(
+        self,
+        provider_id: str,
+        models: dict,
+        pricing: dict,
+        error: str,
+    ) -> None:
+        self._refresh_btn.setEnabled(True)
+        self._refresh_btn.setText("Refresh")
+        if error:
+            QMessageBox.warning(self, APP_NAME, f"Could not refresh models:\n{error}")
+            return
+
+        cfg = get_provider(provider_id)  # type: ignore[arg-type]
+        cfg.models.update(models)
+        cfg.pricing.update(pricing)
+        save_dynamic_catalog(provider_id, models, pricing)  # type: ignore[arg-type]
+        self._populate_model_combos(provider_id)  # type: ignore[arg-type]
+        QMessageBox.information(self, APP_NAME, "Model list refreshed.")
 
     def _on_change_root_clicked(self) -> None:
         self._on_change_root()

@@ -337,15 +337,14 @@ class MainWindow(QMainWindow):
         # Group 4: auto toggles
         self._auto_dispatch_switch = GlassSwitch("Dispatch", self._settings.auto_dispatch, vertical=True)
         self._auto_dispatch_switch.toggled.connect(self._on_auto_dispatch_toggled)
-        self._auto_dispatch_switch.setToolTip("Auto-approve dispatch spec cards")
         self._toolbar.addWidget(self._auto_dispatch_switch)
 
         self._toolbar.addWidget(_toolbar_separator())
 
         self._auto_approve_switch = GlassSwitch("Approve", self._settings.auto_approve, vertical=True)
         self._auto_approve_switch.toggled.connect(self._on_auto_approve_toggled)
-        self._auto_approve_switch.setToolTip("Auto-approve file modification diffs")
         self._toolbar.addWidget(self._auto_approve_switch)
+        self._refresh_auto_toggle_tooltips()
 
         # Icon-only style.
         self._toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
@@ -705,14 +704,26 @@ class MainWindow(QMainWindow):
     def _on_auto_dispatch_toggled(self, checked: bool) -> None:
         self._settings.auto_dispatch = checked
         self._bridge.set_auto_dispatch(checked)
+        self._refresh_auto_toggle_tooltips()
         from aura.config import save_settings
         save_settings(self._settings)
 
     def _on_auto_approve_toggled(self, checked: bool) -> None:
         self._settings.auto_approve = checked
         self._bridge.set_auto_approve(checked)
+        self._refresh_auto_toggle_tooltips()
         from aura.config import save_settings
         save_settings(self._settings)
+
+    def _refresh_auto_toggle_tooltips(self) -> None:
+        dispatch_state = "ON" if self._settings.auto_dispatch else "OFF"
+        approve_state = "ON" if self._settings.auto_approve else "OFF"
+        self._auto_dispatch_switch.setToolTip(
+            f"Auto-dispatch worker specs: {dispatch_state}"
+        )
+        self._auto_approve_switch.setToolTip(
+            f"Auto-approve file modification diffs: {approve_state}"
+        )
 
     def _on_new_conversation(self) -> None:
         if self._bridge.is_running():
@@ -795,6 +806,7 @@ class MainWindow(QMainWindow):
             self._bridge.set_auto_approve(self._settings.auto_approve)
             self._auto_dispatch_switch.setChecked(self._settings.auto_dispatch)
             self._auto_approve_switch.setChecked(self._settings.auto_approve)
+            self._refresh_auto_toggle_tooltips()
             self._refresh_status_bar()
 
     def _apply_planner_worker_mode_to_bridge(self, enabled: bool) -> None:

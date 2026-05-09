@@ -67,6 +67,7 @@ class GlassSwitch(QWidget):
         super().__init__(parent)
         self._checked = checked
         self._label_text = label
+        self._label: QLabel | None = None
         
         if vertical:
             layout = QVBoxLayout(self)
@@ -97,10 +98,10 @@ class GlassSwitch(QWidget):
         
         if label:
             self._label = QLabel(label)
-            self._label.setStyleSheet(f"color: {FG}; font-size: 10px; font-weight: 600;")
             self._label.setCursor(Qt.CursorShape.PointingHandCursor)
             self._label.installEventFilter(self)
             layout.addWidget(self._label, 0, Qt.AlignmentFlag.AlignCenter)
+            self._refresh_label_style()
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
         if event.type() == QEvent.Type.MouseButtonPress:
@@ -115,6 +116,15 @@ class GlassSwitch(QWidget):
         border = ACCENT if self._checked else BORDER
         return f"background: {bg}; border: 1px solid {border}; border-radius: 8px;"
 
+    def _refresh_label_style(self) -> None:
+        if self._label is None:
+            return
+        color = ACCENT if self._checked else FG_DIM
+        weight = 700 if self._checked else 600
+        self._label.setStyleSheet(
+            f"color: {color}; font-size: 10px; font-weight: {weight};"
+        )
+
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
             self.setChecked(not self._checked)
@@ -123,6 +133,7 @@ class GlassSwitch(QWidget):
     def setChecked(self, checked: bool):
         self._checked = checked
         self._track.setStyleSheet(self._get_track_style())
+        self._refresh_label_style()
         # Animate thumb position
         self._anim = QPropertyAnimation(self._thumb, b"pos")
         self._anim.setDuration(120)
