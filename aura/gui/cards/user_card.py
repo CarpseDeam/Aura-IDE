@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import base64
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QPixmap
+from PySide6.QtCore import Qt, QBuffer, QByteArray
+from PySide6.QtGui import QPixmap, QMovie
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout
 
 from aura.gui.cards._helpers import _wrap_body_text
@@ -22,6 +22,8 @@ class UserCard(QFrame):
         header = QLabel("You")
         header.setObjectName("userHeader")
         layout.addWidget(header)
+
+        self._movies: list[QMovie] = []
 
         if image_b64s:
             row = QHBoxLayout()
@@ -43,16 +45,36 @@ class UserCard(QFrame):
     def _make_thumb(self, b64: str) -> QLabel:
         try:
             data = base64.b64decode(b64)
-            pix = QPixmap()
-            pix.loadFromData(data)
-            scaled = pix.scaled(
-                160, 120,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
+            byte_array = QByteArray(data)
+            
+            # Use QMovie for potentially animated images (GIF)
+            buffer = QBuffer(byte_array)
+            buffer.open(QBuffer.OpenModeFlag.ReadOnly)
+            movie = QMovie(buffer)
+            movie.setParent(self) # Keep buffer/movie alive
+            
             label = QLabel()
-            label.setPixmap(scaled)
             label.setStyleSheet(f"border: 1px solid {BORDER}; border-radius: 4px;")
+            
+            if movie.isValid() and movie.frameCount() > 1:
+                # It's an animated image. 
+                # We need to preserve the aspect ratio, which QMovie doesn't handle natively 
+                # in setScaledSize easily. We'll let it play at original size or scale 
+                # if we really want to, but for now let's just show it.
+                movie.setScaledSize(Qt.Size(160, 120)) 
+                label.setMovie(movie)
+                movie.start()
+                self._movies.append(movie)
+            else:
+                pix = QPixmap()
+                pix.loadFromData(data)
+                scaled = pix.scaled(
+                    160, 120,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                label.setPixmap(scaled)
+            
             return label
         except Exception as exc:
             label = QLabel(f"[image: {exc}]")

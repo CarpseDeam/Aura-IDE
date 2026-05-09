@@ -313,10 +313,16 @@ class MainWindow(QMainWindow):
 
         self._toolbar.addWidget(_toolbar_separator())
 
-        # Group 3: settings
+        # Group 3: settings + about
         settings_act = QAction(QIcon(str(media_path("settings_24dp.svg"))), "Settings", self)
         settings_act.triggered.connect(self._on_open_settings)
         self._toolbar.addAction(settings_act)
+
+        from aura import __version__
+        about_act = QAction("\u24d8", self)  # ⓘ
+        about_act.setToolTip("About Aura")
+        about_act.triggered.connect(self._on_about)
+        self._toolbar.addAction(about_act)
 
         # Icon-only style.
         self._toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
@@ -654,6 +660,17 @@ class MainWindow(QMainWindow):
         full = str(self._workspace_root)
         self._workspace_label.setText(full)
         self._toolbar_workspace_label.setText(self._workspace_root.name)
+
+    def _on_about(self) -> None:
+        from aura import __version__
+        QMessageBox.about(
+            self,
+            f"About {APP_NAME}",
+            f"<b>{APP_NAME}</b> v{__version__}<br><br>"
+            "Desktop AI Orchestration IDE<br>"
+            "Pair programming with full workspace awareness.<br><br>"
+            "Built with PySide6 (Qt for Python)."
+        )
 
     def _on_read_only_toggled(self, checked: bool) -> None:
         self._bridge.set_read_only(checked)

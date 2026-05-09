@@ -1,67 +1,27 @@
-# --- Python bytecode ---
+# Python
 __pycache__/
 *.py[cod]
-*.pyo
-*$py.class
-
-# --- Virtual environments ---
-.venv/
-venv/
-env/
-.env
-*.env.local
-*.env.*.local
-
-# --- Build / Packaging ---
+*.egg-info/
 dist/
 build/
-*.egg-info/
 *.egg
 *.whl
 
-# --- IDE & editors ---
-.idea/
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Aura user data (per-workspace)
+.aura/
+
+# IDE
 .vscode/
+.idea/
 *.swp
 *.swo
 *~
-.project
-.pydevproject
-.settings/
-*.sublime-project
-*.sublime-workspace
 
-# --- OS files ---
+# OS
 .DS_Store
-.DS_Store?
-._*
 Thumbs.db
-ehthumbs.db
-Desktop.ini
-
-# --- Coverage & profiling ---
-htmlcov/
-.coverage
-.coverage.*
-*.lcov
-*.prof
-
-# --- pytest ---
-.pytest_cache/
-.tox/
-
-# --- mypy ---
-.mypy_cache/
-.dmypy.json
-dmypy.json
-
-# --- ruff ---
-.ruff_cache/
-
-# --- Jupyter ---
-.ipynb_checkpoints/
-
-# --- Project-specific ---
-.aura/
-*.log
-/docs/god_files_report.md
