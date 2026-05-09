@@ -67,9 +67,14 @@ QSS = f"""
     font-size: 13px;
 }}
 
-QMainWindow, QWidget {{
+QMainWindow {
+    background: {BG};
+}
+
+QWidget {
     background: transparent;
-}}
+}
+
 
 QSplitter::handle {{
     background: {BORDER};

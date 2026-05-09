@@ -31,9 +31,9 @@ class _CollapsibleSection(QFrame):
         self._title = title
         self._body = body
         self._open = start_open
-        body.setVisible(start_open)
         layout.addWidget(self._toggle)
         layout.addWidget(body)
+        body.setVisible(start_open)
         self._refresh_text()
 
     def _refresh_text(self) -> None:

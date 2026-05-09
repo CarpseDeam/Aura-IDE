@@ -326,7 +326,7 @@ class ArtifactCard(QFrame):
             self._highlighter = PygmentsHighlighter(self._code_view.document(), language)
 
         # Page 1 — Preview View (QWebEngineView)
-        self._preview_view = QWebEngineView()
+        self._preview_view = QWebEngineView(self)
         self._preview_view.setMinimumHeight(100)
         self._preview_view.setStyleSheet("background: transparent; border: none;")
         self._stack.addWidget(self._preview_view)  # index 1

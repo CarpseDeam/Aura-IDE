@@ -101,8 +101,8 @@ class AssistantCard(QFrame):
     def append_reasoning(self, text: str) -> None:
         self._start_thinking_animation()
         if self._reasoning_label is None:
-            self._reasoning_label = _StreamLabel(italic=True)
-            scroll_area = QScrollArea()
+            self._reasoning_label = _StreamLabel(italic=True, parent=self)
+            scroll_area = QScrollArea(self)
             scroll_area.setWidgetResizable(True)
             scroll_area.setWidget(self._reasoning_label)
             scroll_area.setMaximumHeight(500)
@@ -189,7 +189,7 @@ class AssistantCard(QFrame):
         if self._compact_tools:
             self.notify_compact_tool_start(name)
             return None
-        card = ToolCallCard(name)
+        card = ToolCallCard(name, parent=self)
         self._tool_cards[tool_call_id] = card
         if not self._tool_cluster.isVisible():
             self._tool_cluster.setVisible(True)
