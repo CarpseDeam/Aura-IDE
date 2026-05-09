@@ -14,7 +14,8 @@ from PySide6.QtCore import (
     QPoint, 
     QPropertyAnimation,
     QTimer,
-    QObject
+    QObject,
+    QEvent
 )
 from PySide6.QtGui import (
     QColor, 
@@ -93,12 +94,22 @@ class GlassSwitch(QWidget):
         self._thumb.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
 
         layout.addWidget(self._track, 0, Qt.AlignmentFlag.AlignCenter)
+        self._track.installEventFilter(self)
         
         if label:
             self._label = QLabel(label)
             self._label.setStyleSheet(f"color: {FG}; font-size: 10px; font-weight: 600;")
             self._label.setCursor(Qt.CursorShape.PointingHandCursor)
+            self._label.installEventFilter(self)
             layout.addWidget(self._label, 0, Qt.AlignmentFlag.AlignCenter)
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if event.type() == QEvent.Type.MouseButtonPress:
+            if event.button() == Qt.MouseButton.LeftButton:
+                self.setChecked(not self._checked)
+                self.toggled.emit(self._checked)
+                return True
+        return super().eventFilter(watched, event)
 
     def _get_track_style(self) -> str:
         bg = ACCENT if self._checked else BG_RAISED
@@ -532,11 +543,12 @@ class AuraPlayground(QWidget):
         self._scroll.setWidget(self._container); self._scroll.setWidgetResizable(True)
         layout.addWidget(self._scroll, 1)
 
-        self._artifacts, self._controllers, self._auras, self._log_card = {}, {}, {}, None
+        self._artifacts, self._controllers, self._auras, self._terminal_cards, self._log_card = {}, {}, {}, {}, None
 
     def begin_assistant(self):
         for w in list(self._auras.values()): w.deleteLater()
-        self._artifacts.clear(); self._auras.clear(); self._controllers.clear()
+        for w in list(self._terminal_cards.values()): w.deleteLater()
+        self._artifacts.clear(); self._auras.clear(); self._controllers.clear(); self._terminal_cards.clear()
         if self._log_card: self._log_card.clear(); self._log_card.setVisible(False)
 
     def _ensure_log_card(self):
@@ -550,6 +562,7 @@ class AuraPlayground(QWidget):
     def append_content(self, text: str): self._ensure_log_card().append_text(text)
 
     def add_tool_call(self, worker_tool_id: str, name: str):
+        from aura.gui.cards import TerminalCard
         c = ToolStreamController(name, self)
         self._controllers[worker_tool_id] = c
         if name == "update_todo_list": c.todo_updated.connect(self.update_todo_list)
@@ -563,6 +576,14 @@ class AuraPlayground(QWidget):
             c.path_resolved.connect(card.set_target_path)
             c.content_updated.connect(card.update_content)
             card.set_streaming(True); aura.start_aura()
+        
+        if name == "run_terminal_command":
+            # Create the terminal card immediately with a placeholder.
+            # MainWindow will route output here via append_terminal_output.
+            card = TerminalCard(command="...")
+            self._terminal_cards[worker_tool_id] = card
+            self._card_layout.insertWidget(self._card_layout.count() - 1, card)
+            c.command_resolved.connect(card.set_command)
 
     def append_tool_args(self, worker_tool_id: str, fragment: str):
         if worker_tool_id in self._controllers: self._controllers[worker_tool_id].append_fragment(fragment)
@@ -573,6 +594,18 @@ class AuraPlayground(QWidget):
         if aid in self._artifacts:
             self._artifacts[aid].set_streaming(False)
             self._auras[aid].stop_aura()
+        
+        if worker_tool_id in self._terminal_cards:
+            # For terminal results, we want to set the final state based on exit_code
+            exit_code = 0
+            try:
+                import json
+                parsed = json.loads(result)
+                if isinstance(parsed, dict):
+                    exit_code = parsed.get("exit_code", 0)
+            except Exception:
+                pass
+            self._terminal_cards[worker_tool_id].set_result(exit_code)
 
     def update_todo_list(self, tasks: list): self._todo_widget.update_tasks(tasks)
 
@@ -603,10 +636,12 @@ class AuraPlayground(QWidget):
     def append_terminal_output(self, worker_tool_id: str, text: str) -> None:
         from aura.gui.cards import TerminalCard
         # Find existing terminal card for this tool call or create new
-        # For simplicity in Playground, we just append to the most recent or create
-        card = TerminalCard()
-        self._card_layout.insertWidget(self._card_layout.count() - 1, card)
-        card.append_text(text)
+        if worker_tool_id not in self._terminal_cards:
+            card = TerminalCard(command="...")
+            self._terminal_cards[worker_tool_id] = card
+            self._card_layout.insertWidget(self._card_layout.count() - 1, card)
+        
+        self._terminal_cards[worker_tool_id].append_output(text)
 
     def worker_finished(self, ok: bool, s: str): pass
     def worker_cancelled(self): pass
