@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Callable, Literal
 
 from aura.conversation.tools.backup import backup_existing
+from aura.conversation.tools.dynamic import execute_dynamic_tool, parse_tool_schema
 from aura.conversation.tools.find_usages import find_usages
 from aura.conversation.tools.fs_read import glob_files, list_directory, read_file, read_file_outline
 from aura.conversation.tools.git_tools import (
@@ -702,15 +703,50 @@ class ToolRegistry:
     def tool_defs(self) -> list[dict[str, Any]]:
         # Read-only is the safety floor — strips writes AND dispatch (since
         # there's nothing for a worker to do without writes).
+        tools: list[dict[str, Any]] = []
         if self._read_only:
-            return list(READ_TOOL_DEFS) + list(GIT_TOOL_DEFS)
-        if self._mode == "researcher":
-            return list(WEB_TOOL_DEFS)
-        if self._mode == "planner":
-            return list(READ_TOOL_DEFS) + [dict(DISPATCH_TOOL_DEF)] + list(RESEARCH_TOOL_DEFS) + list(GIT_TOOL_DEFS)
-        if self._mode == "worker":
-            return list(READ_TOOL_DEFS) + list(WRITE_TOOL_DEFS) + [dict(WORKER_TODO_TOOL_DEF)] + [dict(TERMINAL_TOOL_DEF)] + list(GIT_TOOL_DEFS)
-        return list(READ_TOOL_DEFS) + list(WRITE_TOOL_DEFS) + [dict(TERMINAL_TOOL_DEF)] + list(GIT_TOOL_DEFS)
+            tools = list(READ_TOOL_DEFS) + list(GIT_TOOL_DEFS)
+        elif self._mode == "researcher":
+            tools = list(WEB_TOOL_DEFS)
+        elif self._mode == "planner":
+            tools = list(READ_TOOL_DEFS) + [dict(DISPATCH_TOOL_DEF)] + list(RESEARCH_TOOL_DEFS) + list(GIT_TOOL_DEFS)
+        elif self._mode == "worker":
+            tools = list(READ_TOOL_DEFS) + list(WRITE_TOOL_DEFS) + [dict(WORKER_TODO_TOOL_DEF)] + [dict(TERMINAL_TOOL_DEF)] + list(GIT_TOOL_DEFS)
+        else:
+            tools = list(READ_TOOL_DEFS) + list(WRITE_TOOL_DEFS) + [dict(TERMINAL_TOOL_DEF)] + list(GIT_TOOL_DEFS)
+
+        # Append dynamic tools (only when not read-only)
+        if not self._read_only:
+            for file_path in self._scan_dynamic_tools().values():
+                try:
+                    schema = parse_tool_schema(file_path)
+                    tools.append(schema)
+                except (ValueError, SyntaxError):
+                    pass
+
+        return tools
+
+    # ---- dynamic tools -----------------------------------------------------
+
+    def _scan_dynamic_tools(self) -> dict[str, Path]:
+        """Scan .aura/tools/ for .py files and map tool names to file paths."""
+        tools_dir = self._root / ".aura" / "tools"
+        if not tools_dir.is_dir():
+            return {}
+        mapping: dict[str, Path] = {}
+        for entry in sorted(tools_dir.iterdir()):
+            if not entry.is_file() or entry.suffix != ".py":
+                continue
+            if entry.name.startswith("_"):
+                continue
+            try:
+                schema = parse_tool_schema(entry)
+                name = schema["function"]["name"]
+                mapping[name] = entry
+            except (ValueError, SyntaxError):
+                # Skip malformed tools silently; they won't be offered.
+                pass
+        return mapping
 
     # ---- path resolution ---------------------------------------------------
 
@@ -884,6 +920,12 @@ class ToolRegistry:
                     payload={"ok": True, "message": "TODO list updated", "tasks": tasks},
                     extras={"is_todo_update": True, "tasks": tasks},
                 )
+            # Check dynamic tools before giving up
+            dynamic = self._scan_dynamic_tools()
+            if name in dynamic:
+                result = execute_dynamic_tool(dynamic[name], name, args, self._root)
+                return ToolExecResult(ok=result.get("ok", False), payload=result)
+
             return ToolExecResult(
                 ok=False, payload={"ok": False, "error": f"unknown tool: {name}"}
             )

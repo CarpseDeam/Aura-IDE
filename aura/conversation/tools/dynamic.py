@@ -1,0 +1,279 @@
+"""Self-extending tools: AST-based schema parsing and subprocess execution.
+
+Dynamic tools are user-created Python scripts in ``.aura/tools/``. This module
+parses their signatures into OpenAI tool definitions and executes them in
+isolated subprocesses so bugs cannot crash the IDE.
+"""
+
+from __future__ import annotations
+
+import ast
+import json
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+from aura.config import get_subprocess_kwargs
+
+
+def _annotation_to_json_type(ann_node: ast.expr | None) -> str:
+    """Convert an AST annotation node to a JSON Schema type string.
+
+    Mapping:
+        str  → "string"
+        int  → "integer"
+        float → "number"
+        bool → "boolean"
+        None → "null"
+        list[...] → "array"
+        dict[...] → "object"
+        No annotation → "string" (default)
+        Any other → "string" (conservative fallback)
+    """
+    if ann_node is None:
+        return "string"
+
+    # ast.Name: e.g. str, int, float, bool, None
+    if isinstance(ann_node, ast.Name):
+        mapping = {
+            "str": "string",
+            "int": "integer",
+            "float": "number",
+            "bool": "boolean",
+            "None": "null",
+        }
+        return mapping.get(ann_node.id, "string")
+
+    # ast.Constant(value=None): e.g. None literal
+    if isinstance(ann_node, ast.Constant) and ann_node.value is None:
+        return "null"
+
+    # ast.Subscript: e.g. list[str], dict[str, int]
+    if isinstance(ann_node, ast.Subscript):
+        if isinstance(ann_node.value, ast.Name):
+            if ann_node.value.id == "list":
+                return "array"
+            if ann_node.value.id == "dict":
+                return "object"
+
+    # Conservative fallback
+    return "string"
+
+
+def _parse_docstring_args(docstring: str | None) -> dict[str, str]:
+    """Extract parameter descriptions from a Google-style docstring Args block.
+
+    Parses lines of the form ``param_name: description text`` within an
+    ``Args:`` section. Returns a dict mapping parameter names to their
+    descriptions.
+    """
+    if not docstring:
+        return {}
+
+    descriptions: dict[str, str] = {}
+    in_args = False
+    for line in docstring.splitlines():
+        stripped = line.strip()
+        if stripped == "Args:":
+            in_args = True
+            continue
+        if in_args:
+            # Stop at the next section (a non-indented line that isn't a
+            # continuation of the Args block).
+            if stripped == "":
+                continue
+            if not line.startswith(" ") and not line.startswith("\t"):
+                # A non-indented, non-empty line ends the Args block.
+                in_args = False
+                continue
+            # Parse "param_name: description"
+            if ":" in stripped:
+                param_name, _, desc = stripped.partition(":")
+                param_name = param_name.strip()
+                desc = desc.strip()
+                if param_name:
+                    descriptions[param_name] = desc
+
+    return descriptions
+
+
+def parse_tool_schema(file_path: Path) -> dict[str, Any]:
+    """Parse a Python source file and return an OpenAI tool definition dict.
+
+    Uses the ``ast`` module to find the first top-level function definition,
+    extract its name, docstring, and typed parameters, and build a JSON Schema
+    ``parameters`` block.
+
+    Args:
+        file_path: Path to a ``.py`` file containing a top-level function.
+
+    Returns:
+        An OpenAI tool definition dict with ``type``, ``function`` (name,
+        description, parameters).
+
+    Raises:
+        ValueError: If the file has no top-level function or cannot be parsed.
+    """
+    # Parse the source
+    try:
+        source = file_path.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(file_path))
+    except SyntaxError as exc:
+        raise ValueError(f"Syntax error in {file_path}: {exc}") from exc
+
+    # Find the first top-level function definition
+    func_node: ast.FunctionDef | ast.AsyncFunctionDef | None = None
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            func_node = node
+            break
+
+    if func_node is None:
+        raise ValueError(f"No top-level function found in {file_path}")
+
+    # --- Name ---
+    func_name = func_node.name
+
+    # --- Docstring / description ---
+    docstring = ast.get_docstring(func_node)
+    if docstring:
+        # Use the first paragraph (up to the first blank line) as the
+        # description, or the full docstring if it's a single paragraph.
+        paragraphs = docstring.strip().split("\n\n")
+        description = paragraphs[0].replace("\n", " ").strip()
+    else:
+        description = f"Dynamic tool: {func_name}"
+
+    # --- Parameters ---
+    arg_descriptions = _parse_docstring_args(docstring)
+
+    # Build the set of argument indices that have defaults.
+    # Defaults are aligned to the *last* N positional args.
+    num_defaults = len(func_node.args.defaults)
+    num_args = len(func_node.args.args)
+    # The first (num_args - num_defaults) args have no default → required.
+    default_offset = num_args - num_defaults
+
+    properties: dict[str, Any] = {}
+    required: list[str] = []
+
+    for i, arg in enumerate(func_node.args.args):
+        arg_name = arg.arg
+        json_type = _annotation_to_json_type(arg.annotation)
+        arg_desc = arg_descriptions.get(arg_name, "")
+
+        properties[arg_name] = {
+            "type": json_type,
+            "description": arg_desc,
+        }
+
+        if i < default_offset:
+            required.append(arg_name)
+
+    # Handle *args (vararg)
+    if func_node.args.vararg:
+        vararg_name = func_node.args.vararg.arg
+        vararg_desc = arg_descriptions.get(vararg_name, "")
+        properties[vararg_name] = {
+            "type": "array",
+            "description": vararg_desc,
+        }
+        # vararg is never required
+
+    # Handle **kwargs (kwarg)
+    if func_node.args.kwarg:
+        kwarg_name = func_node.args.kwarg.arg
+        kwarg_desc = arg_descriptions.get(kwarg_name, "")
+        properties[kwarg_name] = {
+            "type": "object",
+            "description": kwarg_desc,
+        }
+        # kwarg is never required
+
+    return {
+        "type": "function",
+        "function": {
+            "name": func_name,
+            "description": description,
+            "parameters": {
+                "type": "object",
+                "properties": properties,
+                "required": required,
+            },
+        },
+    }
+
+
+def execute_dynamic_tool(
+    file_path: Path,
+    function_name: str,
+    arguments: dict[str, Any],
+    workspace_root: Path,
+) -> dict[str, Any]:
+    """Execute a dynamic tool function in an isolated subprocess.
+
+    The function at ``file_path`` is loaded via ``importlib`` in a fresh
+    Python process.  Arguments are passed as JSON on stdin, and the result
+    (or error) is returned as JSON on stdout.
+
+    Args:
+        file_path: Path to the ``.py`` file containing the function.
+        function_name: Name of the function to call.
+        arguments: Keyword arguments to pass to the function.
+        workspace_root: Working directory for the subprocess.
+
+    Returns:
+        A dict with ``ok`` (bool) and either ``result`` or ``error`` (str).
+    """
+    # Self-contained runner script.  We use sys.executable -c to avoid
+    # creating temporary files on disk.
+    runner_script = r"""
+import sys, json, importlib.util
+
+file_path = sys.argv[1]
+function_name = sys.argv[2]
+
+try:
+    raw_args = sys.stdin.read()
+    parsed_args = json.loads(raw_args) if raw_args.strip() else {}
+except json.JSONDecodeError as exc:
+    print(json.dumps({"ok": False, "error": f"Invalid JSON arguments: {exc}"}))
+    sys.exit(0)
+
+try:
+    spec = importlib.util.spec_from_file_location("dynamic_tool", file_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    func = getattr(module, function_name)
+    result = func(**parsed_args)
+    print(json.dumps({"ok": True, "result": result}, ensure_ascii=False, default=str))
+except Exception as exc:
+    print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
+"""
+
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", runner_script, str(file_path), function_name],
+            input=json.dumps(arguments),
+            capture_output=True,
+            text=True,
+            timeout=30,
+            cwd=str(workspace_root),
+            **get_subprocess_kwargs(),
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "Dynamic tool timed out after 30s."}
+
+    stdout = proc.stdout.strip()
+    stderr = proc.stderr.strip()
+
+    try:
+        result = json.loads(stdout)
+    except json.JSONDecodeError:
+        return {
+            "ok": False,
+            "error": f"Dynamic tool output parse error: {stderr or stdout}",
+        }
+
+    return result
