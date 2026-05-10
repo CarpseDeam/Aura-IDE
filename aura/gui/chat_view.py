@@ -415,10 +415,12 @@ class ChatView(QScrollArea):
 
         # Summary
         if summary:
-            body = QLabel(summary)
+            from aura.gui.markdown_renderer import _render_markdown_with_code
+            body = QLabel()
             body.setWordWrap(True)
+            body.setTextFormat(Qt.TextFormat.RichText)
             body.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-            body.setStyleSheet(f"color: {FG};")
+            body.setText(_render_markdown_with_code(summary))
             layout.addWidget(body)
 
         self._add_card(card)

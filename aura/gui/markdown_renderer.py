@@ -106,7 +106,11 @@ def _render_markdown_with_code(text: str) -> str:
         html = html.replace(token, replacement, 1)
 
     # Inject body color + line-height directly into the <body> tag of the
-    # full HTML document produced by QTextDocument.toHtml(), instead of
-    # wrapping it in a <div> (which would create invalid nested <html>/<body>).
-    html = html.replace("<body ", f'<body style="color: {FG}; line-height: 145%;" ', 1)
+    # full HTML document produced by QTextDocument.toHtml().
+    # We must merge our styles into the existing style attribute if present.
+    style_payload = f"color: {FG}; line-height: 145%;"
+    if 'style="' in html.lower():
+        html = re.sub(r'(<body[^>]*style=")', r'\1' + style_payload + " ", html, count=1, flags=re.IGNORECASE)
+    else:
+        html = html.replace("<body ", f'<body style="{style_payload}" ', 1)
     return html

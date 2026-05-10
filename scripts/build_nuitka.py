@@ -10,6 +10,11 @@ ENTRY_POINT = "aura/__main__.py"
 ICON_PATH = "media/AurA.ico"
 MEDIA_DIR = "media"
 
+# Signing Configuration (Set these in your environment)
+# For example: $env:AURA_SIGN_CERT="C:\path\to\cert.pfx"; $env:AURA_SIGN_PASS="password"
+SIGN_CERT = os.environ.get("AURA_SIGN_CERT")
+SIGN_PASS = os.environ.get("AURA_SIGN_PASS")
+
 def build():
     print(f"Starting Nuitka build for {APP_NAME}...")
     
@@ -18,13 +23,6 @@ def build():
     os.chdir(root)
 
     # Nuitka command construction
-    # --standalone: produce a folder with all dependencies
-    # --enable-plugin=pyside6: critical for Qt apps
-    # --windows-console-mode=disable: hide console
-    # --windows-icon-from-ico: set app icon
-    # --include-data-dir: bundle media/ folder
-    # --follow-imports: compile all dependencies
-    
     cmd = [
         sys.executable, "-m", "nuitka",
         "--standalone",
@@ -39,6 +37,17 @@ def build():
         "--python-flag=-m",
         "aura"
     ]
+
+    # Add signing flags if credentials are provided
+    if SIGN_CERT:
+        print(f"Adding code signing using certificate: {SIGN_CERT}")
+        cmd.append(f"--windows-sign-certificate={SIGN_CERT}")
+        if SIGN_PASS:
+            cmd.append(f"--windows-sign-certificate-password={SIGN_PASS}")
+        # Optionally specify the path to signtool.exe if not in PATH
+        # cmd.append("--windows-sign-tool-path=C:/Path/To/signtool.exe")
+    else:
+        print("Warning: No signing certificate found in environment (AURA_SIGN_CERT). EXE will be unsigned.")
 
     print(f"Running: {' '.join(cmd)}")
     

@@ -63,8 +63,9 @@ class SpecCard(QFrame):
         outer.addWidget(self._goal_label)
 
         # Files section
+        outer.addSpacing(6)
         self._files_header = QLabel("FILES")
-        self._files_header.setStyleSheet(f"color: {FG_MUTED}; font-weight: 700; font-size: 10px; margin-top: 4px;")
+        self._files_header.setStyleSheet(f"color: {FG_MUTED}; font-weight: 700; font-size: 10px;")
         outer.addWidget(self._files_header)
         
         self._files_container = QWidget()
@@ -76,8 +77,9 @@ class SpecCard(QFrame):
         self._refresh_files_list(files_layout)
 
         # Spec section
+        outer.addSpacing(12)
         spec_header = QLabel("SPECIFICATION")
-        spec_header.setStyleSheet(f"color: {FG_MUTED}; font-weight: 700; font-size: 10px; margin-top: 8px;")
+        spec_header.setStyleSheet(f"color: {FG_MUTED}; font-weight: 700; font-size: 10px;")
         outer.addWidget(spec_header)
 
         # Spec body (collapsible if long).
@@ -98,8 +100,9 @@ class SpecCard(QFrame):
             outer.addWidget(self._spec_label)
 
         # Acceptance section
+        outer.addSpacing(12)
         acc_header = QLabel("ACCEPTANCE CRITERIA")
-        acc_header.setStyleSheet(f"color: {FG_MUTED}; font-weight: 700; font-size: 10px; margin-top: 8px;")
+        acc_header.setStyleSheet(f"color: {FG_MUTED}; font-weight: 700; font-size: 10px;")
         outer.addWidget(acc_header)
 
         self._acceptance_label = QLabel()
