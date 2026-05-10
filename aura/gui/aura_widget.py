@@ -445,6 +445,7 @@ class ArtifactCard(QFrame):
         self._code_view.setReadOnly(True)
         self._code_view.setFont(QFont("Geist Mono", 9))
         self._code_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        self._code_view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._code_view.setStyleSheet(f"background: {BG}; border: none; padding: 8px;")
         self._stack.addWidget(self._code_view)
 
@@ -538,6 +539,8 @@ class WorkerLogCard(QFrame):
         self._content_view = QPlainTextEdit()
         self._content_view.setReadOnly(True)
         self._content_view.setFont(QFont("Geist Mono", 10))
+        self._content_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        self._content_view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._content_view.setStyleSheet("background: transparent; border: none;")
         layout.addWidget(self._content_view)
         self._full, self._visible, self._timer = "", "", QTimer(self)
@@ -564,15 +567,34 @@ class AuraPlayground(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("Playground"))
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        # Header for the playground
+        header_container = QWidget()
+        header_layout = QVBoxLayout(header_container)
+        header_layout.setContentsMargins(12, 8, 12, 4)
+        header_label = QLabel("PLAYGROUND")
+        header_label.setObjectName("paneTitle")
+        header_layout.addWidget(header_label)
+        layout.addWidget(header_container)
+
         self._todo_widget = TodoListWidget()
         layout.addWidget(self._todo_widget)
         
         self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+
         self._container = QWidget()
         self._card_layout = QVBoxLayout(self._container)
+        # Increase margins to accommodate the AuraWidget glow spread (20px)
+        self._card_layout.setContentsMargins(24, 16, 24, 16)
+        self._card_layout.setSpacing(20)
         self._card_layout.addStretch(1)
-        self._scroll.setWidget(self._container); self._scroll.setWidgetResizable(True)
+
+        self._scroll.setWidget(self._container)
         layout.addWidget(self._scroll, 1)
 
         self._artifacts, self._controllers, self._auras, self._terminal_cards, self._log_card = {}, {}, {}, {}, None

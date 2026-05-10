@@ -58,6 +58,7 @@ class TerminalCard(QFrame):
         self._output_view.setReadOnly(True)
         self._output_view.setFont(_mono_font(9))
         self._output_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        self._output_view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._output_view.setStyleSheet(
             f"background: {TERMINAL_BG}; color: {FG}; border: 1px solid {BORDER}; "
             "border-radius: 4px; padding: 6px; "

@@ -1,6 +1,7 @@
 """Read-only inline diff display, after the user has decided."""
 from __future__ import annotations
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QFrame, QLabel, QPlainTextEdit, QVBoxLayout
 
 from aura.gui.cards._helpers import _HAVE_PYGMENTS, _mono_font
@@ -47,6 +48,7 @@ class DiffCard(QFrame):
         diff_view.setReadOnly(True)
         diff_view.setFont(_mono_font(9))
         diff_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        diff_view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         diff_view.setStyleSheet(
             f"background: {BG}; color: {FG}; border: 1px solid {BORDER}; "
             "border-radius: 4px; padding: 6px;"
