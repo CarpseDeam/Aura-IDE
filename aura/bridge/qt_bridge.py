@@ -309,6 +309,11 @@ class _DispatchProxy(QObject):
     def set_auto_commit_enabled(self, enabled: bool) -> None:
         self._auto_commit_enabled = enabled
 
+    def set_auto_approve(self, enabled: bool) -> None:
+        # The actual logic is handled by _ApprovalProxy.request_approval,
+        # but we keep this for consistency if needed later.
+        pass
+
     def records(self) -> list[WorkerDispatchRecord]:
         return list(self._records)
 
@@ -783,6 +788,7 @@ class ConversationBridge(QObject):
 
     def set_auto_approve(self, enabled: bool) -> None:
         self._approval_proxy._approve_all_session = enabled
+        self._dispatch_proxy.set_auto_approve(enabled)
 
     def set_provider(self, provider: ProviderId) -> None:
         """Recreate the internal client for a new provider."""

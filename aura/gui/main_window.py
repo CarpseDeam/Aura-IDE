@@ -274,11 +274,16 @@ class MainWindow(QMainWindow):
         if event.button() == Qt.MouseButton.LeftButton:
             tb_geo = self._toolbar.geometry()
             if tb_geo.contains(event.position().toPoint()):
-                # Don't drag if clicking on a toolbar button
+                # Don't drag if clicking on interactive toolbar widgets
                 child = self._toolbar.childAt(self._toolbar.mapFrom(self, event.position().toPoint()))
-                if child is not None and isinstance(child, QToolButton):
-                    super().mousePressEvent(event)
-                    return
+                if child is not None:
+                    # Allow clicks to pass through to buttons, switches, and other interactive elements
+                    from aura.gui.aura_widget import GlassSwitch
+                    if isinstance(child, (QToolButton, GlassSwitch)) or \
+                       isinstance(child.parent(), GlassSwitch):
+                        super().mousePressEvent(event)
+                        return
+                
                 self._drag_start_pos = event.globalPosition().toPoint()
                 self._dragging = True
                 event.accept()
