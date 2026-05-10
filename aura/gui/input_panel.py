@@ -57,7 +57,8 @@ class _AttachmentChip(QFrame):
         self.attachment = attachment
         self.setStyleSheet(
             f"QFrame {{ background: {BG_RAISED}; border: 1px solid {BORDER}; "
-            "border-radius: 4px; padding: 2px 6px; }}"
+            "border-radius: 4px; padding: 2px 6px; }} "
+            f"QFrame:hover {{ background: {BORDER}; border-color: {FG_DIM}; }}"
         )
         layout = QHBoxLayout(self)
         layout.setContentsMargins(4, 2, 4, 2)

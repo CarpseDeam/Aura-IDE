@@ -286,6 +286,10 @@ QFrame#card {{
     border-left: 1px solid rgba(255, 255, 255, 0.04);
     border-radius: 10px;
 }}
+QFrame#card:hover {{
+    background: rgba(35, 35, 42, 0.65);
+    border-top-color: rgba(255, 255, 255, 0.12);
+}}
 QFrame#userCard {{
     background: rgba(21, 27, 40, 0.60);
     border-top: 1px solid rgba(255, 255, 255, 0.09);
@@ -309,6 +313,10 @@ QFrame#toolCard {{
     border-bottom: 1px solid rgba(0, 0, 0, 0.22);
     border-left: 1px solid rgba(255, 255, 255, 0.04);
     border-radius: 8px;
+}}
+QFrame#toolCard:hover {{
+    background: rgba(25, 30, 38, 0.70);
+    border-top-color: rgba(255, 255, 255, 0.12);
 }}
 QFrame#toolCluster {{
     background: transparent;
