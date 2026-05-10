@@ -47,13 +47,12 @@ class _StreamLabel(QLabel):
             return
         self._dirty = False
         if self._italic:
-            escaped = _html.escape(self._buf).replace("\n", "<br/>")
-            self.setText(
-                f'<div style="color: {FG_ITALIC}; line-height: 145%; font-style: italic;">'
-                f"{escaped}</div>"
-            )
+            # For reasoning, we still want to show it as it streams, but now
+            # we can use the proper markdown renderer with reasoning styles.
+            self.setText(_render_markdown_with_code(self._buf, color=FG_ITALIC, italic=True))
         else:
             self.setText(_render_markdown_with_code(self._buf))
+
 
     def stop_timer(self) -> None:
         try:

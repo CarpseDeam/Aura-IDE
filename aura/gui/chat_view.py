@@ -420,7 +420,10 @@ class ChatView(QScrollArea):
             body.setWordWrap(True)
             body.setTextFormat(Qt.TextFormat.RichText)
             body.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-            body.setText(_render_markdown_with_code(summary))
+            # Use FG_BODY_USER or FG? The summary is from the worker (assistant-like).
+            # Let's use FG which is the default for assistant.
+            body.setText(_render_markdown_with_code(summary, color=FG))
             layout.addWidget(body)
+
 
         self._add_card(card)

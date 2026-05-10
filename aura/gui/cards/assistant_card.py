@@ -21,7 +21,7 @@ from aura.gui.cards._stream_label import _StreamLabel
 from aura.gui.cards.code_block_card import CodeBlockCard
 from aura.gui.cards.tool_call_card import ToolCallCard
 from aura.gui.markdown_renderer import _render_markdown_with_code
-from aura.gui.theme import FG, SUCCESS_DIM, WARN
+from aura.gui.theme import FG, FG_ITALIC, SUCCESS_DIM, WARN
 
 if TYPE_CHECKING:
     from aura.gui.chat_view import ChatView
@@ -185,18 +185,19 @@ class AssistantCard(QFrame):
         # If no fenced code blocks, just render markdown in the existing label
         if not _CODE_FENCE_RE.search(text):
             self._reasoning_label.stop_timer()
-            html = _render_markdown_with_code(text)
+            html = _render_markdown_with_code(text, color=FG_ITALIC, italic=True)
             self._reasoning_label.setTextFormat(Qt.TextFormat.RichText)
             self._reasoning_label.setText(html)
             return
 
         # Otherwise, build a rich container
-        container = self._build_rich_container(text)
+        container = self._build_rich_container(text, color=FG_ITALIC, italic=True)
         self._reasoning_label.stop_timer()
         self._reasoning_scroll_area.setWidget(container)
         self._reasoning_label = None
 
     # ---- compact tool status --------------------------------------------
+
 
     def notify_compact_tool_start(self, name: str) -> None:
         self._compact_tool_active += 1
@@ -301,7 +302,9 @@ class AssistantCard(QFrame):
             # owns the text buffer and is referenced by append_content etc.)
             self._outer.removeWidget(self._content_label)
 
-    def _build_rich_container(self, text: str) -> QWidget:
+    def _build_rich_container(
+        self, text: str, color: str | None = None, italic: bool = False
+    ) -> QWidget:
         """Build a container widget with interleaved text (markdown) and code cards."""
         segments = self._parse_content(text)
         container = QWidget()
@@ -313,9 +316,11 @@ class AssistantCard(QFrame):
         for seg_type, content, lang in segments:
             if seg_type == "text":
                 if content.strip():
-                    html = _render_markdown_with_code(content)
+                    html = _render_markdown_with_code(content, color=color, italic=italic)
                     block = _MarkdownTextBlock(html)
-                    block.setStyleSheet(f"background: transparent; border: none; color: {FG};")
+                    # Use the provided color or the theme FG.
+                    c = color if color else FG
+                    block.setStyleSheet(f"background: transparent; border: none; color: {c};")
                     container_layout.addWidget(block)
             elif seg_type == "code":
                 card = CodeBlockCard(lang, content)
@@ -323,6 +328,7 @@ class AssistantCard(QFrame):
                 if lang == "mermaid" and self._chat_view is not None:
                     self._chat_view.mermaid_detected.emit(content)
         return container
+
 
     def _parse_content(self, text: str) -> list[tuple[str, str, str]]:
         """Split text into a list of segments around fenced code blocks.
