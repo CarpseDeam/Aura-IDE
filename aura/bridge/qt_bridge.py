@@ -833,7 +833,8 @@ class ConversationBridge(QObject):
         self._index_to_id.clear()
         self._index_to_name.clear()
         self._dispatch_proxy.clear_records()
-        self._approval_proxy.reset_approve_all()
+        # We do NOT reset _approve_all_session here, as it is managed by the 
+        # persistent toolbar toggle.
 
     def is_running(self) -> bool:
         return self._thread is not None and self._thread.isRunning()
