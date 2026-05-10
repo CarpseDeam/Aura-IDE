@@ -17,6 +17,11 @@ Aura is a desktop chat application where you talk to an AI agent that reads your
 
 <p align="center"><em>Demo: A full Planner -> Worker cycle - spec writing, dispatch, code editing with diff approval, and auto-commit.</em></p>
 
+**Real-world cost:** 161 million tokens processed for $11.36 USD across 6,346 API requests (DeepSeek, May 2026).
+<p align="center">
+  <img src="media/token-cost.png" alt="DeepSeek API usage dashboard showing 161M tokens for $11.36" width="600">
+</p>
+
 ---
 
 ## Table of Contents
