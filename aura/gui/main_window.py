@@ -56,20 +56,14 @@ from aura.gui.input_panel import InputPanel, SendPayload
 from aura.gui.settings_dialog import SettingsDialog
 from aura.gui.spec_edit_dialog import SpecApprovalDialog, SpecEditDialog
 from aura.gui.onboarding_dialog import OnboardingDialog
+from aura.gui.status_bar import AuraStatusBar
+from aura.gui.left_pane import LeftPane
+from aura.gui.main_window_toolbar import MainWindowToolbar
 from aura.gui.theme import BORDER, FG_DIM, FG, BG_RAISED, ACCENT
 from aura.gui.aura_widget import AuraPlayground, GlassSwitch
 from aura.gui.workspace_tree import WorkspaceTree
 
 _THINKING_LABEL = {"off": "Off", "high": "High", "max": "Max"}
-
-
-def _toolbar_separator() -> QFrame:
-    sep = QFrame()
-    sep.setObjectName("toolbarSeparator")
-    sep.setFrameShape(QFrame.Shape.VLine)
-    sep.setFrameShadow(QFrame.Shadow.Plain)
-    sep.setFixedWidth(1)
-    return sep
 
 
 class MainWindow(QMainWindow):
@@ -125,20 +119,36 @@ class MainWindow(QMainWindow):
         self._message_queue: list[SendPayload] = []
 
         # ----- toolbar ----
-        self._toolbar = QToolBar("Main")
-        self._toolbar.setMovable(False)
+        self._toolbar = MainWindowToolbar(self._settings, self)
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self._toolbar)
-        self._build_toolbar()
+        self._toolbar.new_conversation_requested.connect(self._on_new_conversation)
+        self._toolbar.open_conversation_requested.connect(self._on_open_conversation)
+        self._toolbar.read_only_toggled.connect(self._on_read_only_toggled)
+        self._toolbar.about_requested.connect(self._on_about)
+        self._toolbar.auto_dispatch_toggled.connect(self._on_auto_dispatch_toggled)
+        self._toolbar.auto_approve_toggled.connect(self._on_auto_approve_toggled)
+        self._toolbar.settings_requested.connect(self._on_open_settings)
+        self._toolbar.minimize_requested.connect(self.showMinimized)
+        self._toolbar.maximize_requested.connect(self._toggle_maximize)
+        self._toolbar.close_requested.connect(self.close)
 
         # ----- status bar -----
-        self._build_status_bar()
+        self._status_bar = AuraStatusBar(self)
+        self.setStatusBar(self._status_bar)
 
         # ----- splitter ----
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setHandleWidth(3)
 
-        # Left pane: workspace label + change root + tree.
-        self._left_pane = self._build_left_pane()
+        # Left pane: workspace label + change root + tree + model config.
+        self._left_pane = LeftPane(self._workspace_root, parent=self)
+        self._left_pane.populate_models(self._settings.provider)
+        self._left_pane.change_root_requested.connect(self._on_change_root)
+        self._left_pane.planner_model_changed.connect(lambda: self._refresh_status_bar())
+        self._left_pane.planner_thinking_changed.connect(lambda: self._refresh_status_bar())
+        self._left_pane.worker_model_changed.connect(self._on_sidebar_worker_model_changed)
+        self._left_pane.worker_thinking_changed.connect(self._on_sidebar_worker_thinking_changed)
+        self._tree = self._left_pane.tree()
         splitter.addWidget(self._left_pane)
 
         # Middle pane: chat + input
@@ -313,232 +323,22 @@ class MainWindow(QMainWindow):
             return
         super().mouseReleaseEvent(event)
 
-    # ----- toolbar build --------------------------------------------------
-
-    def _build_toolbar(self) -> None:
-        # Group 1: conversation actions
-        new_act = QAction(QIcon(str(media_path("new_conv.svg"))), "New Conversation", self)
-        new_act.triggered.connect(self._on_new_conversation)
-        self._toolbar.addAction(new_act)
-
-        open_act = QAction(QIcon(str(media_path("open_conversation.svg"))), "Open Conversation...", self)
-        open_act.triggered.connect(self._on_open_conversation)
-        self._toolbar.addAction(open_act)
-
-        self._toolbar.addWidget(_toolbar_separator())
-
-        # Group 2: read-only
-        self._read_only_act = QAction(QIcon(str(media_path("read_only.svg"))), "Read-Only Mode", self)
-        self._read_only_act.setCheckable(True)
-        self._read_only_act.setChecked(False)
-        self._read_only_act.triggered.connect(self._on_read_only_toggled)
-        self._toolbar.addAction(self._read_only_act)
-
-        self._read_only_badge = QLabel("")
-        self._read_only_badge.setObjectName("readOnlyBadge")
-        self._toolbar.addWidget(self._read_only_badge)
-
-        self._toolbar.addWidget(_toolbar_separator())
-
-        # Group 3: about
-        about_act = QAction("\u24d8", self)  # ⓘ
-        about_act.setToolTip("About Aura")
-        about_act.triggered.connect(self._on_about)
-        self._toolbar.addAction(about_act)
-
-        # Group 4: auto toggles
-        self._auto_dispatch_switch = GlassSwitch("Dispatch", self._settings.auto_dispatch, vertical=True)
-        self._auto_dispatch_switch.toggled.connect(self._on_auto_dispatch_toggled)
-        self._toolbar.addWidget(self._auto_dispatch_switch)
-
-        self._toolbar.addWidget(_toolbar_separator())
-
-        self._auto_approve_switch = GlassSwitch("Approve", self._settings.auto_approve, vertical=True)
-        self._auto_approve_switch.toggled.connect(self._on_auto_approve_toggled)
-        self._toolbar.addWidget(self._auto_approve_switch)
-        self._refresh_auto_toggle_tooltips()
-
-        # Icon-only style.
-        self._toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-
-        # Spacer.
-        spacer = QWidget()
-        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        self._toolbar.addWidget(spacer)
-
-        # Settings button on the right side
-        settings_act = QAction(QIcon(str(media_path("settings_24dp.svg"))), "Settings", self)
-        settings_act.triggered.connect(self._on_open_settings)
-        self._toolbar.addAction(settings_act)
-
-        # Small spacer before window controls.
-        win_spacer = QWidget()
-        win_spacer.setFixedWidth(8)
-        self._toolbar.addWidget(win_spacer)
-
-        # Window control buttons.
-        min_btn = QToolButton()
-        min_btn.setText("\u2500")  # ─
-        min_btn.setObjectName("winMinBtn")
-        min_btn.clicked.connect(self.showMinimized)
-        self._toolbar.addWidget(min_btn)
-
-        self._max_btn = QToolButton()
-        self._max_btn.setText("\u25a1")  # □
-        self._max_btn.setObjectName("winMaxBtn")
-        self._max_btn.clicked.connect(self._toggle_maximize)
-        self._toolbar.addWidget(self._max_btn)
-
-        close_btn = QToolButton()
-        close_btn.setText("\u2715")  # ✕
-        close_btn.setObjectName("winCloseBtn")
-        close_btn.clicked.connect(self.close)
-        self._toolbar.addWidget(close_btn)
-
     # ----- window state helpers -------------------------------------------
 
     def _toggle_maximize(self) -> None:
         if self.isMaximized():
             self.showNormal()
-            self._max_btn.setText("\u25a1")  # □
         else:
             self.showMaximized()
-            self._max_btn.setText("\u2750")  # ❐
+        self._toolbar.update_maximize_icon(self.isMaximized())
 
     def changeEvent(self, event) -> None:
         if event.type() == event.Type.WindowStateChange:
-            if hasattr(self, '_max_btn'):
-                if self.isMaximized():
-                    self._max_btn.setText("\u2750")  # ❐
-                else:
-                    self._max_btn.setText("\u25a1")  # □
+            if hasattr(self, '_toolbar'):
+                self._toolbar.update_maximize_icon(self.isMaximized())
         super().changeEvent(event)
 
-    # ----- left pane ------------------------------------------------------
-
-    def _build_left_pane(self) -> QFrame:
-        frame = QFrame()
-        frame.setObjectName("leftPane")
-        frame.setMinimumWidth(160)
-        layout = QVBoxLayout(frame)
-        layout.setContentsMargins(0, 8, 0, 8)
-        layout.setSpacing(4)
-
-        title = QLabel("Workspace")
-        title.setObjectName("paneTitle")
-        layout.addWidget(title)
-
-        self._workspace_label = QLabel("")
-        self._workspace_label.setObjectName("workspaceLabel")
-        self._workspace_label.setWordWrap(True)
-        layout.addWidget(self._workspace_label)
-
-        change_btn = QPushButton("Change Root...")
-        change_btn.clicked.connect(self._on_change_root)
-        # Bit of margin so the button doesn't hug the wall.
-        change_row = QHBoxLayout()
-        change_row.setContentsMargins(8, 0, 8, 6)
-        change_row.addWidget(change_btn)
-        layout.addLayout(change_row)
-
-        self._tree = WorkspaceTree(self._workspace_root)
-        layout.addWidget(self._tree, 1)
-
-        # --- Model Config section ---
-        sep = QFrame()
-        sep.setFrameShape(QFrame.Shape.HLine)
-        sep.setStyleSheet(f"QFrame {{ color: {BORDER}; }}")
-        layout.addWidget(sep)
-
-        model_label = QLabel("Model Configuration")
-        model_label.setObjectName("paneTitle")
-        layout.addWidget(model_label)
-
-        # Planner model
-        planner_model_row = QHBoxLayout()
-        planner_model_row.setSpacing(4)
-        planner_model_label = QLabel("Planner:")
-        planner_model_label.setStyleSheet(f"color: {FG_DIM};")
-        planner_model_row.addWidget(planner_model_label)
-        self._planner_model_combo = QComboBox()
-        self._worker_model_combo = QComboBox()
-        self._populate_model_combos(self._settings.provider)
-        self._planner_model_combo.setCurrentIndex(-1)  # will be set below
-        self._planner_model_combo.currentIndexChanged.connect(self._refresh_status_bar)
-        planner_model_row.addWidget(self._planner_model_combo, 1)
-        layout.addLayout(planner_model_row)
-
-        # Planner thinking
-        planner_think_row = QHBoxLayout()
-        planner_think_row.setSpacing(4)
-        planner_think_label = QLabel("Thinking:")
-        planner_think_label.setStyleSheet(f"color: {FG_DIM};")
-        planner_think_row.addWidget(planner_think_label)
-        self._planner_thinking_combo = QComboBox()
-        self._planner_thinking_combo.addItem("Off", "off")
-        self._planner_thinking_combo.addItem("High", "high")
-        self._planner_thinking_combo.addItem("Max", "max")
-        self._planner_thinking_combo.setCurrentIndex(["off", "high", "max"].index(DEFAULT_THINKING))
-        self._planner_thinking_combo.currentIndexChanged.connect(self._refresh_status_bar)
-        planner_think_row.addWidget(self._planner_thinking_combo, 1)
-        layout.addLayout(planner_think_row)
-
-        # Worker model
-        worker_model_row = QHBoxLayout()
-        worker_model_row.setSpacing(4)
-        self._worker_model_label = QLabel("Worker:")
-        self._worker_model_label.setStyleSheet(f"color: {FG_DIM};")
-        worker_model_row.addWidget(self._worker_model_label)
-        self._worker_model_combo.setCurrentIndex(-1)  # will be set below
-        self._worker_model_combo.currentIndexChanged.connect(self._on_sidebar_worker_model_changed)
-        worker_model_row.addWidget(self._worker_model_combo, 1)
-        layout.addLayout(worker_model_row)
-
-        # Worker thinking
-        worker_think_row = QHBoxLayout()
-        worker_think_row.setSpacing(4)
-        self._worker_thinking_label = QLabel("Thinking:")
-        self._worker_thinking_label.setStyleSheet(f"color: {FG_DIM};")
-        worker_think_row.addWidget(self._worker_thinking_label)
-        self._worker_thinking_combo = QComboBox()
-        self._worker_thinking_combo.addItem("Off", "off")
-        self._worker_thinking_combo.addItem("High", "high")
-        self._worker_thinking_combo.addItem("Max", "max")
-        self._worker_thinking_combo.setCurrentIndex(["off", "high", "max"].index(DEFAULT_WORKER_THINKING))
-        self._worker_thinking_combo.currentIndexChanged.connect(self._on_sidebar_worker_thinking_changed)
-        worker_think_row.addWidget(self._worker_thinking_combo, 1)
-        layout.addLayout(worker_think_row)
-
-        return frame
-
     # ----- provider-aware model combo helpers -----------------------------
-
-    def _populate_model_combos(
-        self,
-        provider_id: ProviderId,
-        combo: QComboBox | None = None,
-    ) -> None:
-        """Fill a model combo (or both planner & worker) from the provider's catalog."""
-        cfg = PROVIDERS[provider_id]
-        if combo is not None:
-            combo.blockSignals(True)
-            combo.clear()
-            for mid, info in cfg.models.items():
-                combo.addItem(info.label, mid)
-            combo.blockSignals(False)
-        else:
-            # Fill both combos
-            self._planner_model_combo.blockSignals(True)
-            self._planner_model_combo.clear()
-            for mid, info in cfg.models.items():
-                self._planner_model_combo.addItem(info.label, mid)
-            self._planner_model_combo.blockSignals(False)
-
-            self._worker_model_combo.blockSignals(True)
-            self._worker_model_combo.clear()
-            for mid, info in cfg.models.items():
-                self._worker_model_combo.addItem(info.label, mid)
-            self._worker_model_combo.blockSignals(False)
 
     def _model_label(self, model_id: str) -> str:
         """Look up a model's human-readable label from any provider."""
@@ -550,97 +350,50 @@ class MainWindow(QMainWindow):
     # ----- model / thinking accessors ------------------------------------
 
     def current_model(self) -> str:
-        return self._planner_model_combo.currentData()
+        return self._left_pane.current_planner_model()
 
     def current_thinking(self) -> ThinkingMode:
-        return self._planner_thinking_combo.currentData()
+        return self._left_pane.current_planner_thinking()
 
     def current_worker_model(self) -> str:
-        return self._worker_model_combo.currentData()
+        return self._left_pane.current_worker_model()
 
     def current_worker_thinking(self) -> ThinkingMode:
-        return self._worker_thinking_combo.currentData()
+        return self._left_pane.current_worker_thinking()
 
     def set_model(self, model: str) -> None:
-        idx = self._planner_model_combo.findData(model)
-        if idx >= 0:
-            self._planner_model_combo.setCurrentIndex(idx)
+        self._left_pane.set_planner_model(model)
 
     def set_thinking(self, thinking: ThinkingMode) -> None:
-        keys = ["off", "high", "max"]
-        if thinking in keys:
-            self._planner_thinking_combo.setCurrentIndex(keys.index(thinking))
+        self._left_pane.set_planner_thinking(thinking)
 
     def set_worker_model(self, model: str) -> None:
-        idx = self._worker_model_combo.findData(model)
-        if idx >= 0:
-            self._worker_model_combo.setCurrentIndex(idx)
+        self._left_pane.set_worker_model(model)
 
     def set_worker_thinking(self, thinking: ThinkingMode) -> None:
-        keys = ["off", "high", "max"]
-        if thinking in keys:
-            self._worker_thinking_combo.setCurrentIndex(keys.index(thinking))
+        self._left_pane.set_worker_thinking(thinking)
 
-    def _on_sidebar_worker_model_changed(self, _index: int) -> None:
-        self._bridge.set_worker_model(self.current_worker_model())
+    def _on_sidebar_worker_model_changed(self, model: str) -> None:
+        self._bridge.set_worker_model(model)
         self._refresh_status_bar()
 
-    def _on_sidebar_worker_thinking_changed(self, _index: int) -> None:
-        self._bridge.set_worker_thinking(self.current_worker_thinking())
+    def _on_sidebar_worker_thinking_changed(self, thinking: str) -> None:
+        self._bridge.set_worker_thinking(thinking)  # type: ignore[arg-type]
         self._refresh_status_bar()
 
     def _set_sidebar_planner_worker_mode(self, enabled: bool) -> None:
-        self._worker_model_label.setVisible(enabled)
-        self._worker_model_combo.setVisible(enabled)
-        self._worker_thinking_label.setVisible(enabled)
-        self._worker_thinking_combo.setVisible(enabled)
+        self._left_pane.set_planner_worker_mode(enabled)
 
     # ----- status bar -----------------------------------------------------
 
-    def _build_status_bar(self) -> None:
-        bar = QStatusBar()
-        self.setStatusBar(bar)
-        # Left side
-        self._status_left = QLabel("")
-        bar.addWidget(self._status_left, 1)
-        # Right side
-        self._status_tokens = QLabel("0 hit · 0 miss · 0 out")
-        bar.addPermanentWidget(self._status_tokens)
-
-        self._status_cost = QLabel("$0.0000")
-        self._status_cost.setObjectName("statusCost")
-        bar.addPermanentWidget(self._status_cost)
-
-        # Monospace for numbers — prevents jitter as digit widths change.
-        mono_font = QFont("Geist Mono, JetBrains Mono, Consolas, monospace")
-        mono_font.setStyleHint(QFont.StyleHint.Monospace)
-        mono_font.setPointSize(11)
-        self._status_tokens.setFont(mono_font)
-        self._status_cost.setFont(mono_font)
-
     def _refresh_status_bar(self) -> None:
-        # Left: workspace path (truncated), model, thinking
         ws = str(self._workspace_root) if self._workspace_root else "(none)"
-        if len(ws) > 64:
-            ws = "…" + ws[-63:]
-        model_label = self._model_label(self.current_model())
-        thinking_label = _THINKING_LABEL.get(self.current_thinking(), "Off")
-        self._status_left.setText(f"{ws}    ·    {model_label}    ·    Thinking: {thinking_label}")
-
-        # Right: totals + cost (sum across models)
-        total_hit = sum(u["hit"] for u in self._session_usage.values())
-        total_miss = sum(u["miss"] for u in self._session_usage.values())
-        total_out = sum(u["out"] for u in self._session_usage.values())
-        total_cost = 0.0
-        for model_id, u in self._session_usage.items():
-            try:
-                total_cost += cost_usd(model_id, u["hit"], u["miss"], u["out"])
-            except KeyError:
-                pass
-        self._status_tokens.setText(
-            f"{total_hit:,} hit · {total_miss:,} miss · {total_out:,} out"
+        self._status_bar.refresh(
+            workspace_root=ws,
+            model_id=self.current_model(),
+            thinking=self.current_thinking(),
+            session_usage=self._session_usage
         )
-        self._status_cost.setText(f"${total_cost:.4f}")
 
     def _reset_session_usage(self) -> None:
         self._session_usage.clear()
@@ -687,11 +440,7 @@ class MainWindow(QMainWindow):
                     )
 
     def _update_workspace_label(self) -> None:
-        if self._workspace_root is None:
-            self._workspace_label.setText("(none)")
-            return
-        full = str(self._workspace_root)
-        self._workspace_label.setText(full)
+        self._left_pane.update_workspace_label(self._workspace_root)
 
     def _on_about(self) -> None:
         from aura import __version__
@@ -789,7 +538,7 @@ class MainWindow(QMainWindow):
             self._settings = dlg.result_settings()
             
             # Always refresh combos to pick up dynamically fetched models
-            self._populate_model_combos(self._settings.provider)
+            self._left_pane.populate_models(self._settings.provider)
             
             if self._settings.provider != old_provider:
                 self._bridge.set_provider(self._settings.provider)
@@ -816,9 +565,8 @@ class MainWindow(QMainWindow):
             self._bridge.set_auto_commit_enabled(self._settings.auto_commit_enabled)
             self._bridge.set_auto_dispatch(self._settings.auto_dispatch)
             self._bridge.set_auto_approve(self._settings.auto_approve)
-            self._auto_dispatch_switch.setChecked(self._settings.auto_dispatch)
-            self._auto_approve_switch.setChecked(self._settings.auto_approve)
-            self._refresh_auto_toggle_tooltips()
+            self._toolbar.set_auto_dispatch(self._settings.auto_dispatch)
+            self._toolbar.set_auto_approve(self._settings.auto_approve)
             self._refresh_status_bar()
 
     def _apply_planner_worker_mode_to_bridge(self, enabled: bool) -> None:
@@ -1318,7 +1066,7 @@ class MainWindow(QMainWindow):
         if loaded.provider != self._settings.provider:
             self._settings.provider = loaded.provider
             self._bridge.set_provider(loaded.provider)
-            self._populate_model_combos(loaded.provider)
+            self._left_pane.populate_models(loaded.provider)
 
         # Sync mode (without overwriting the system prompt we just set).
         self._bridge.set_planner_worker_mode(pwm)
@@ -1425,3 +1173,4 @@ class MainWindow(QMainWindow):
                     self._chat.end_bulk_update()
 
         process_chunk()
+

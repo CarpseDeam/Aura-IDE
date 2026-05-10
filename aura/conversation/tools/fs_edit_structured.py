@@ -63,6 +63,8 @@ def find_symbol_range(
                 for child in ast.iter_child_nodes(node):
                     if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and child.name == symbol_name:
                         start = child.lineno - 1
+                        if hasattr(child, "decorator_list") and child.decorator_list:
+                            start = child.decorator_list[0].lineno - 1
                         end = child.end_lineno  # end_lineno is already 1-indexed inclusive
                         return (start, end, {"warning": warning})
                 # Method not found in class.
@@ -96,6 +98,8 @@ def find_symbol_range(
 
     if found is not None:
         start = found.lineno - 1
+        if hasattr(found, "decorator_list") and found.decorator_list:
+            start = found.decorator_list[0].lineno - 1
         end = found.end_lineno  # end_lineno is 1-indexed inclusive
         return (start, end, {"warning": warning})
 
