@@ -560,14 +560,14 @@ class TestWebSearch:
     """Tests for the web_search tool."""
 
     def test_valid(self, registry: ToolRegistry, approve_cb: MagicMock):
-        with patch("aura.conversation.tools.registry.web_search") as mock_ws:
+        with patch("aura.conversation.tools.web_handler.web_search") as mock_ws:
             mock_ws.return_value = {"ok": True, "results": []}
             result = _handler("web_search")(registry, {"query": "python 3.13"}, approve_cb, False)
 
         assert result.ok is True
 
     def test_valid_with_max_results(self, registry: ToolRegistry, approve_cb: MagicMock):
-        with patch("aura.conversation.tools.registry.web_search") as mock_ws:
+        with patch("aura.conversation.tools.web_handler.web_search") as mock_ws:
             mock_ws.return_value = {"ok": True, "results": []}
             result = _handler("web_search")(
                 registry, {"query": "python 3.13", "max_results": 3}, approve_cb, False
@@ -577,7 +577,7 @@ class TestWebSearch:
         mock_ws.assert_called_once_with("python 3.13", 3)
 
     def test_missing_query(self, registry: ToolRegistry, approve_cb: MagicMock):
-        with patch("aura.conversation.tools.registry.web_search") as mock_ws:
+        with patch("aura.conversation.tools.web_handler.web_search") as mock_ws:
             mock_ws.return_value = {"ok": True, "results": []}
             result = _handler("web_search")(registry, {}, approve_cb, False)
 
@@ -589,7 +589,7 @@ class TestWebFetch:
     """Tests for the web_fetch tool."""
 
     def test_valid(self, registry: ToolRegistry, approve_cb: MagicMock):
-        with patch("aura.conversation.tools.registry.web_fetch") as mock_wf:
+        with patch("aura.conversation.tools.web_handler.web_fetch") as mock_wf:
             mock_wf.return_value = {"ok": True, "url": "https://example.com", "content": "text"}
             result = _handler("web_fetch")(
                 registry, {"url": "https://example.com"}, approve_cb, False
@@ -598,7 +598,7 @@ class TestWebFetch:
         assert result.ok is True
 
     def test_missing_url(self, registry: ToolRegistry, approve_cb: MagicMock):
-        with patch("aura.conversation.tools.registry.web_fetch") as mock_wf:
+        with patch("aura.conversation.tools.web_handler.web_fetch") as mock_wf:
             mock_wf.return_value = {"ok": True, "content": ""}
             result = _handler("web_fetch")(registry, {}, approve_cb, False)
 

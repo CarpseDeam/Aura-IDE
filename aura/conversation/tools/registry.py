@@ -30,7 +30,7 @@ from aura.conversation.tools.fs_write import propose_edit, propose_write
 from aura.codebase_index.tool import search_codebase as _search_codebase
 from aura.codebase_index.indexer import CodebaseIndex
 from aura.config import SEARCH_CODEBASE_TOP_K
-from aura.conversation.tools.web import web_fetch, web_search
+from aura.conversation.tools.web_handler import WebHandler
 from aura.mcp_client import MCPClient, _convert_tool_to_openai_schema
 ApprovalAction = Literal["approve", "reject", "reject_all", "approve_all"]
 RegistryMode = Literal["single", "planner", "worker", "researcher"]
@@ -797,6 +797,7 @@ class ToolRegistry:
         self._codebase_index: CodebaseIndex | None = None
         self._fs_handler = FsReadHandler(self._root, self._resolve_in_root)
         self._git_handler = GitHandler(self._root)
+        self._web_handler = WebHandler()
         self._mcp_clients: dict[str, MCPClient] = {}
         self._mcp_schemas: list[dict[str, Any]] = []
 
@@ -1067,13 +1068,12 @@ class ToolRegistry:
         return ToolExecResult(ok=payload.get("ok", True), payload=payload)
 
     def _handle_web_search(self, args, approval_cb, reject_all) -> ToolExecResult:
-        query = args.get("query", "")
-        max_results = int(args.get("max_results", 5))
-        return ToolExecResult(ok=True, payload=web_search(query, max_results))
+        payload = self._web_handler.handle_web_search(args)
+        return ToolExecResult(ok=payload.get("ok", True), payload=payload)
 
     def _handle_web_fetch(self, args, approval_cb, reject_all) -> ToolExecResult:
-        url = args.get("url", "")
-        return ToolExecResult(ok=True, payload=web_fetch(url))
+        payload = self._web_handler.handle_web_fetch(args)
+        return ToolExecResult(ok=payload.get("ok", True), payload=payload)
 
     def _handle_write_file(self, args, approval_cb, reject_all) -> ToolExecResult:
         if self._read_only:
