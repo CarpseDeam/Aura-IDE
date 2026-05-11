@@ -31,7 +31,6 @@ from PySide6.QtWidgets import (
     QFrame, 
     QLabel,
     QApplication,
-    QFileDialog,
     QGraphicsOpacityEffect,
     QPlainTextEdit,
     QScrollArea,
@@ -47,11 +46,11 @@ from aura.gui.theme import (
     FG_DIM, 
     BG, 
     SUCCESS, 
-    WARN, 
-    DANGER
+    WARN
 )
 from aura.gui.controllers import ToolStreamController
 from aura.gui.syntax import PygmentsHighlighter, language_from_path as _language_from_path
+from aura.resources import get_resource_path
 
 
 # ===========================================================================
@@ -305,7 +304,7 @@ class AuraWidget(QWidget):
 # Artifact/Worker Components (Moved from worker_window.py)
 # ===========================================================================
 
-from aura.resources import get_resource_path
+
 _MERMAID_JS_PATH = get_resource_path("media/mermaid.min.js")
 _MERMAID_JS: str = ""
 try:
@@ -389,8 +388,11 @@ class TodoListWidget(QFrame):
                 effect = QGraphicsOpacityEffect(label)
                 label.setGraphicsEffect(effect)
                 pulse = QVariantAnimation(label)
-                pulse.setStartValue(0.55); pulse.setEndValue(1.0); pulse.setDuration(900)
-                pulse.setLoopCount(-1); pulse.setEasingCurve(QEasingCurve.Type.InOutSine)
+                pulse.setStartValue(0.55)
+                pulse.setEndValue(1.0)
+                pulse.setDuration(900)
+                pulse.setLoopCount(-1)
+                pulse.setEasingCurve(QEasingCurve.Type.InOutSine)
                 pulse.valueChanged.connect(lambda v, e=effect: e.setOpacity(v))
                 pulse.start()
                 self._pulse_anims.append(pulse)
@@ -414,7 +416,8 @@ class ArtifactCard(QFrame):
         self.setStyleSheet(f"QFrame#artifactCard {{ background: rgba(28, 28, 34, 0.5); border: 1px solid {BORDER}; border-radius: 10px; }}")
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0); outer.setSpacing(0)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
 
         header = QWidget()
         h_layout = QHBoxLayout(header)
@@ -462,13 +465,15 @@ class ArtifactCard(QFrame):
         idx = 1 - self._stack.currentIndex()
         self._stack.setCurrentIndex(idx)
         self._toggle_btn.setText("Code" if idx == 1 else "Preview")
-        if idx == 1: self._refresh_preview()
+        if idx == 1:
+            self._refresh_preview()
 
     def set_target_path(self, path: str):
         self._label = path
         self._header_label.setText(self._label)
         self._language = _language_from_path(path)
-        if self._highlighter: self._highlighter.deleteLater()
+        if self._highlighter:
+            self._highlighter.deleteLater()
         self._highlighter = PygmentsHighlighter(self._code_view.document(), self._language)
 
     def update_content(self, content: str):
@@ -483,7 +488,8 @@ class ArtifactCard(QFrame):
     def set_streaming(self, active: bool):
         self._streaming = active
         self._status_label.setText("● streaming" if active else "✓ done")
-        if not active: self._flush_typing()
+        if not active:
+            self._flush_typing()
 
     def _start_typing(self, target: str):
         if not self._typing_timer:
@@ -492,17 +498,23 @@ class ArtifactCard(QFrame):
         self._typing_target = target
         if self._typing_position > len(target):
             self._typing_position = 0
-        if not self._typing_timer.isActive(): self._typing_timer.start(33)
+        if not self._typing_timer.isActive():
+            self._typing_timer.start(33)
 
     def _on_typing_tick(self):
         if self._typing_position >= len(self._typing_target):
-            self._typing_timer.stop(); return
+            self._typing_timer.stop()
+            return
         self._typing_position += 5
         self._code_view.setPlainText(self._typing_target[:self._typing_position])
         self._auto_size()
+        # Auto-scroll to bottom
+        sb = self._code_view.verticalScrollBar()
+        sb.setValue(sb.maximum())
 
     def _flush_typing(self):
-        if self._typing_timer: self._typing_timer.stop()
+        if self._typing_timer:
+            self._typing_timer.stop()
         self._typing_position = len(self._content)
         self._refresh_code_view()
 
@@ -516,9 +528,13 @@ class ArtifactCard(QFrame):
     def _refresh_code_view(self):
         self._code_view.setPlainText(self._content)
         self._auto_size()
+        # Auto-scroll to bottom
+        sb = self._code_view.verticalScrollBar()
+        sb.setValue(sb.maximum())
 
     def _refresh_preview(self):
-        if self._language == "html": self._preview_view.setHtml(self._content)
+        if self._language == "html":
+            self._preview_view.setHtml(self._content)
         elif self._language == "mermaid":
             mermaid_include = f"<script>{_MERMAID_JS}</script>" if _MERMAID_JS else ""
             html = f"<html><body>{mermaid_include}<div class='mermaid'>{self._content}</div><script>mermaid.initialize({{startOnLoad:true}})</script></body></html>"
@@ -544,21 +560,31 @@ class WorkerLogCard(QFrame):
         self._content_view.setStyleSheet("background: transparent; border: none;")
         layout.addWidget(self._content_view)
         self._full, self._visible, self._timer = "", "", QTimer(self)
-        self._timer.timeout.connect(self._on_tick); self._timer.setInterval(20)
+        self._timer.timeout.connect(self._on_tick)
+        self._timer.setInterval(20)
 
     def append_text(self, text: str, is_reasoning=False):
         self._full += text
-        if not self._timer.isActive(): self._timer.start()
+        if not self._timer.isActive():
+            self._timer.start()
 
     def _on_tick(self):
-        if len(self._visible) >= len(self._full): self._timer.stop(); return
+        if len(self._visible) >= len(self._full):
+            self._timer.stop()
+            return
         self._visible += self._full[len(self._visible):len(self._visible)+2]
         self._content_view.setPlainText(self._visible)
         h = self._content_view.document().size().height() + 15
         self._content_view.setFixedHeight(int(max(120, min(h, 600))))
+        # Auto-scroll to bottom
+        sb = self._content_view.verticalScrollBar()
+        sb.setValue(sb.maximum())
 
     def clear(self):
-        self._timer.stop(); self._full = ""; self._visible = ""; self._content_view.setPlainText("")
+        self._timer.stop()
+        self._full = ""
+        self._visible = ""
+        self._content_view.setPlainText("")
 
 
 class AuraPlayground(QWidget):
@@ -629,10 +655,17 @@ class AuraPlayground(QWidget):
                 QTimer.singleShot(delay, self._set_scrollbar_to_bottom)
 
     def begin_assistant(self):
-        for w in list(self._auras.values()): w.deleteLater()
-        for w in list(self._terminal_cards.values()): w.deleteLater()
-        self._artifacts.clear(); self._auras.clear(); self._controllers.clear(); self._terminal_cards.clear()
-        if self._log_card: self._log_card.clear(); self._log_card.setVisible(False)
+        for w in list(self._auras.values()):
+            w.deleteLater()
+        for w in list(self._terminal_cards.values()):
+            w.deleteLater()
+        self._artifacts.clear()
+        self._auras.clear()
+        self._controllers.clear()
+        self._terminal_cards.clear()
+        if self._log_card:
+            self._log_card.clear()
+            self._log_card.setVisible(False)
         self._last_scroll_max = 0
         self._scroll_to_bottom(force=True)
 
@@ -655,7 +688,8 @@ class AuraPlayground(QWidget):
         from aura.gui.cards import TerminalCard
         c = ToolStreamController(name, self)
         self._controllers[worker_tool_id] = c
-        if name == "update_todo_list": c.todo_updated.connect(self.update_todo_list)
+        if name == "update_todo_list":
+            c.todo_updated.connect(self.update_todo_list)
         if name in ("write_file", "edit_file"):
             aid = f"file-{worker_tool_id}"
             card = ArtifactCard(aid, "Targeting...", "text", "", self)
@@ -665,7 +699,8 @@ class AuraPlayground(QWidget):
             self._card_layout.insertWidget(self._card_layout.count()-1, aura)
             c.path_resolved.connect(card.set_target_path)
             c.content_updated.connect(card.update_content)
-            card.set_streaming(True); aura.start_aura()
+            card.set_streaming(True)
+            aura.start_aura()
         
         if name == "run_terminal_command":
             # Create the terminal card immediately with a placeholder.
@@ -685,7 +720,8 @@ class AuraPlayground(QWidget):
         self._scroll_to_bottom()
 
     def set_tool_result(self, worker_tool_id: str, ok: bool, result: str):
-        if worker_tool_id in self._controllers: self._controllers.pop(worker_tool_id).finalize(ok, result)
+        if worker_tool_id in self._controllers:
+            self._controllers.pop(worker_tool_id).finalize(ok, result)
         aid = f"file-{worker_tool_id}"
         if aid in self._artifacts:
             self._artifacts[aid].set_streaming(False)
@@ -705,7 +741,8 @@ class AuraPlayground(QWidget):
         
         self._scroll_to_bottom()
 
-    def update_todo_list(self, tasks: list): self._todo_widget.update_tasks(tasks)
+    def update_todo_list(self, tasks: list):
+        self._todo_widget.update_tasks(tasks)
 
     def add_diff_card(
         self,
