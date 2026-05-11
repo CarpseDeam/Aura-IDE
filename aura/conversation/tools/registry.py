@@ -14,6 +14,7 @@ Modes:
 from __future__ import annotations
 
 import json
+import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Literal
@@ -39,6 +40,7 @@ from aura.codebase_index.tool import search_codebase as _search_codebase
 from aura.codebase_index.indexer import CodebaseIndex
 from aura.config import SEARCH_CODEBASE_TOP_K
 from aura.conversation.tools.web import web_fetch, web_search
+from aura.mcp_client import MCPClient, _convert_tool_to_openai_schema
 ApprovalAction = Literal["approve", "reject", "reject_all", "approve_all"]
 RegistryMode = Literal["single", "planner", "worker", "researcher"]
 
@@ -755,6 +757,23 @@ TERMINAL_TOOL_DEF: dict[str, Any] = {
 # Maps tool name -> unbound method that accepts (self, args, approval_cb, reject_all).
 TOOL_HANDLERS: dict[str, Any] = {}
 
+def _make_mcp_handler(mcp_client: MCPClient, tool_name: str):
+    """Create a handler closure for an MCP tool.
+
+    Args:
+        mcp_client: The MCPClient instance connected to the server.
+        tool_name: Name of the tool on the MCP server.
+
+    Returns:
+        A handler function with signature (self, args, approval_cb, reject_all)
+        suitable for registration in TOOL_HANDLERS.
+    """
+    def handler(self, args, approval_cb, reject_all):
+        result = mcp_client.call_tool(tool_name, args)
+        return ToolExecResult(ok=result.get("ok", False), payload=result)
+    return handler
+
+
 @dataclass
 class ToolExecResult:
     ok: bool
@@ -784,6 +803,8 @@ class ToolRegistry:
         self._dynamic_cache: dict[str, Path] = {}
         self._dynamic_cache_mtimes: dict[str, float] = {}
         self._codebase_index: CodebaseIndex | None = None
+        self._mcp_clients: dict[str, MCPClient] = {}
+        self._mcp_schemas: list[dict[str, Any]] = []
 
     @property
     def workspace_root(self) -> Path:
@@ -834,7 +855,42 @@ class ToolRegistry:
                 except (ValueError, SyntaxError):
                     pass
 
+        # Append MCP tool schemas (available in all modes)
+        tools.extend(self._mcp_schemas)
+
         return tools
+
+    # ---- MCP server support ------------------------------------------------
+
+    def connect_mcp_server(self, server_command: str) -> int:
+        """Launch an MCP server, fetch its tools, and register them.
+
+        Args:
+            server_command: Shell command to launch the MCP server, e.g.
+                            "python -m my_mcp_server" or "node server.js".
+
+        Returns:
+            Number of tools registered from this server.
+
+        Raises:
+            RuntimeError: If the server fails to launch or initialize.
+        """
+        import os as _os
+        parsed = shlex.split(server_command, posix=(_os.name != "nt"))
+        client = MCPClient(parsed)
+        client.connect()
+        tool_defs = client.list_tools()
+
+        count = 0
+        for tool_def in tool_defs:
+            schema = _convert_tool_to_openai_schema(tool_def)
+            tool_name = tool_def["name"]
+            self._mcp_schemas.append(schema)
+            self._mcp_clients[tool_name] = client
+            TOOL_HANDLERS[tool_name] = _make_mcp_handler(client, tool_name)
+            count += 1
+
+        return count
 
     # ---- dynamic tools -----------------------------------------------------
 

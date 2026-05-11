@@ -11,6 +11,7 @@ dependencies = [
     "beautifulsoup4>=4.12",
     "cryptography>=41.0",
     "httpx",
+    "mcp>=1.0",
     "openai>=1.40",
     "pillow>=10.0",
     "platformdirs>=4.0",
