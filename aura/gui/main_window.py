@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal, QTimer
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QDialog,
@@ -22,7 +22,6 @@ from aura.config import (
     APP_NAME,
     PROVIDERS,
     AppSettings,
-    ModelInfo,
     ThinkingMode,
     icon_path,
     load_settings,
@@ -32,7 +31,8 @@ from aura.config import (
 from aura.gui.conv_persistence import ConversationPersistence
 from aura.git_ops import git_init, is_git_repo
 from aura.gui.chat_view import ChatView
-from aura.gui.input_panel import InputPanel, SendPayload
+from aura.gui.input_panel import InputPanel
+from aura.gui.send_handler import SendHandler
 from aura.gui.settings_dialog import SettingsDialog
 from aura.gui.onboarding_dialog import OnboardingDialog
 from aura.gui.status_bar import AuraStatusBar
@@ -46,8 +46,6 @@ _THINKING_LABEL = {"off": "Off", "high": "High", "max": "Max"}
 
 
 class MainWindow(WindowChromeMixin, QMainWindow):
-    # Thread-safe signals for cross-thread communication.
-    _vision_done = Signal(object, list, object)   # SendPayload, list[str], str|None
 
     def __init__(self) -> None:
         super().__init__()
@@ -82,9 +80,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._bridge.set_auto_commit_enabled(self._settings.auto_commit_enabled)
         self._bridge.set_auto_dispatch(self._settings.auto_dispatch)
         self._bridge.set_auto_approve(self._settings.auto_approve)
-
-        # Queued messages sent while worker is running.
-        self._message_queue: list[SendPayload] = []
 
         # ----- toolbar ----
         self._toolbar = MainWindowToolbar(self._settings, self)
@@ -131,6 +126,16 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         center_layout.addWidget(self._chat, 1)
 
         self._input = InputPanel(self._workspace_root, parent=self)
+
+        # Send handler — owns message queue, vision routing, undo logic.
+        self._send_handler = SendHandler(
+            bridge=self._bridge,
+            chat=self._chat,
+            input_panel=self._input,
+            settings=self._settings,
+            workspace_root=self._workspace_root,
+            parent=self,
+        )
 
         # Right pane: worker activity (embedded, not a separate window)
         self._playground = AuraPlayground(parent=self)
@@ -204,16 +209,14 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._bridge.apiError.connect(self._on_api_error)
         self._bridge.usageWithModel.connect(self._on_usage)
 
-        self._input.sent.connect(self._on_send)
-        self._input.stop_requested.connect(self._on_stop)
+        self._input.sent.connect(lambda p: self._send_handler.handle_send(p, self.current_model(), self.current_thinking()))
+        self._input.stop_requested.connect(self._send_handler.handle_stop)
 
         # Worker signal wiring (delegated to WorkerEventHandler).
         self._worker_handler.connect_bridge_signals()
 
         # Mermaid diagram detection from chat → playground
         self._chat.mermaid_detected.connect(self._playground.add_mermaid_artifact)
-
-        self._vision_done.connect(self._on_vision_done)
 
         self._update_workspace_label()
         self._refresh_status_bar()
@@ -308,6 +311,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._workspace_root = path
         self._bridge.set_workspace_root(path)
         self._input.set_workspace_root(path)
+        self._send_handler.set_workspace_root(path)
         self._tree.set_root(path)
         save_workspace_root(path)
         # New workspace — drop any current conversation pointer (different .aura/).
@@ -365,7 +369,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             )
             return
         self._persistence.new_conversation()
-        self._message_queue.clear()
+        self._send_handler.clear_queue()
         self._input.set_queued_messages(0)
         self._reset_session_usage()
 
@@ -377,7 +381,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             return
         loaded = self._persistence.open_conversation(self._workspace_root, self)
         if loaded is not None:
-            self._message_queue.clear()
+            self._send_handler.clear_queue()
             self._input.set_queued_messages(0)
             self._reset_session_usage()
 
@@ -442,156 +446,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._bridge.set_worker_thinking(thinking)  # type: ignore[arg-type]
         self._refresh_status_bar()
 
-    def _get_current_model_info(self) -> ModelInfo | None:
-        """Helper to get metadata for the currently selected planner model."""
-        cfg = PROVIDERS.get(self._settings.provider)
-        if not cfg:
-            return None
-        return cfg.models.get(self.current_model())
-
-    def _on_send(self, payload: SendPayload) -> None:
-        # Intercept /undo command
-        if payload.text.strip().lower() == "/undo":
-            self._chat.add_user("/undo")
-            self._on_undo()
-            return
-
-        if self._bridge.is_running():
-            self._message_queue.append(payload)
-            self._input.set_queued_messages(len(self._message_queue))
-            return
-
-        # Check if the current model supports native vision
-        m_info = self._get_current_model_info()
-        native_vision = m_info.supports_vision if m_info else False
-
-        # Prepare history append: image attachments go via multimodal content array.
-        text = payload.text
-        # Add text refs from non-image attachments to the text body so the model knows.
-        text_refs = [a.text_ref for a in payload.attachments if a.text_ref]
-        if text_refs:
-            ref_block = "\n".join(text_refs)
-            text = f"{text}\n\n{ref_block}".strip() if text else ref_block
-        image_atts = [a for a in payload.attachments if a.kind == "image" and a.b64]
-
-        # --- Vision routing ---
-        vision_descriptions: list[str] = []
-        vision_error: str | None = None
-
-        if image_atts and not native_vision and self._settings.vision_enabled:
-            # Fall back to local vision model for descriptive middleman
-            self._input.set_placeholder("Analyzing images (local fallback)...")
-            self._input.setEnabled(False)
-            
-            def _run_vision():
-                nonlocal vision_error
-                try:
-                    from aura.vision import VisionClient
-                    client = VisionClient(
-                        endpoint=self._settings.vision_endpoint,
-                        model=self._settings.vision_model,
-                    )
-                    for a in image_atts:
-                        desc = client.describe(a.b64)
-                        vision_descriptions.append(desc)
-                except Exception as exc:
-                    vision_error = (
-                        f"Local vision model unavailable "
-                        f"({self._settings.vision_model}): {exc}"
-                    )
-                
-                # Marshal back to GUI thread to actually send the message
-                self._vision_done.emit(payload, vision_descriptions, vision_error)
-
-            import threading
-            threading.Thread(target=_run_vision, daemon=True).start()
-            return  # Wait for _on_vision_done
-
-        # Either no images, native vision supported, or local vision disabled
-        self._finalize_send(payload, vision_descriptions, vision_error)
-
-    def _on_vision_done(self, payload: SendPayload, descriptions: list[str], error: str | None) -> None:
-        self._input.setEnabled(True)
-        self._input.set_placeholder("")
-        self._finalize_send(payload, descriptions, error)
-
-    def _finalize_send(self, payload: SendPayload, vision_descriptions: list[str], vision_error: str | None) -> None:
-        image_atts = [a for a in payload.attachments if a.kind == "image" and a.b64]
-        text = payload.text
-        text_refs = [a.text_ref for a in payload.attachments if a.text_ref]
-        if text_refs:
-            ref_block = "\n".join(text_refs)
-            text = f"{text}\n\n{ref_block}".strip() if text else ref_block
-
-        # Determine if we should send a native multimodal payload
-        m_info = self._get_current_model_info()
-        native_vision = m_info.supports_vision if m_info else False
-
-        if native_vision and image_atts:
-            # Construct native multimodal parts
-            parts = []
-            if text:
-                parts.append({"type": "text", "text": text})
-            for a in image_atts:
-                # Note: PySide6 QWebEngine/Base64 handling ensures valid PNG/JPG data
-                parts.append({
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/png;base64,{a.b64}"}
-                })
-            self._bridge.history.append_user_multimodal(parts)
-            display_text = text
-        elif vision_descriptions:
-            # Build vision block from local fallback
-            vision_block_parts = []
-            for i, desc in enumerate(vision_descriptions):
-                vision_block_parts.append(
-                    f"[Image {i + 1} description via local vision model:]\n{desc}"
-                )
-            vision_block = "\n\n---\n\n".join(vision_block_parts)
-
-            if vision_error:
-                vision_block += f"\n\n[Vision error: {vision_error}]"
-
-            # Final text for the model
-            final_text = f"{vision_block}\n\n[User's question:]\n{text}" if text else vision_block
-            display_text = final_text
-            self._bridge.history.append_user_text(final_text)
-        elif vision_error and not vision_descriptions:
-            # Vision completely failed — fall back to sending text-only with error note
-            final_text = f"{text}\n\n[Note: {vision_error}]" if text else f"[Vision error: {vision_error}]"
-            display_text = final_text
-            self._bridge.history.append_user_text(final_text)
-        else:
-            # No images or vision disabled (keep old multimodal-400-fallback behavior for safety)
-            if image_atts and not self._settings.vision_enabled:
-                parts = []
-                if text:
-                    parts.append({"type": "text", "text": text})
-                for a in image_atts:
-                    parts.append({
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/png;base64,{a.b64}"}
-                    })
-                self._bridge.history.append_user_multimodal(parts)
-                display_text = text
-            else:
-                display_text = text
-                self._bridge.history.append_user_text(text)
-
-        self._chat.add_user(display_text, [a.b64 for a in image_atts] or None)
-        self._chat.scroll_to_bottom(force=True)
-        self._chat.begin_assistant()
-
-        self._bridge.send(
-            model=self.current_model(),
-            thinking=self.current_thinking(),
-        )
-
-    def _on_stop(self) -> None:
-        self._bridge.request_cancel()
-        self._message_queue.clear()
-        self._input.set_queued_messages(0)
-
     def _on_started(self) -> None:
         self._input.set_streaming(True)
 
@@ -600,15 +454,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._chat.assistant_done()
         self._chat.stop_current_aura()
         self._input.focus_editor()
-        self._process_message_queue()
-
-    def _process_message_queue(self) -> None:
-        """Send the next queued message, if any."""
-        if not self._message_queue:
-            return
-        payload = self._message_queue.pop(0)
-        self._input.set_queued_messages(len(self._message_queue))
-        self._on_send(payload)
+        self._send_handler._process_message_queue(self.current_model(), self.current_thinking())
 
     def _on_stream_done(self, finish_reason: str, full_message: dict) -> None:
         # If the model produced tool calls, it's not actually done — the bridge
@@ -653,42 +499,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         is_new_file: bool,
     ) -> None:
         self._chat.add_diff_card(tool_call_id, rel_path, old, new, decision, is_new_file)
-
-    def _on_undo(self) -> None:
-        """Handle /undo command — restore to pre-worker snapshot or git reset last commit."""
-        from aura.git_ops import undo_last_commit, restore_to_snapshot
-
-        ws_root = self._workspace_root
-        if ws_root is None:
-            self._chat.add_error("Undo", "No workspace root set.")
-            return
-
-        # Check for pre-worker snapshot first (more reliable)
-        snapshot_sha = self._bridge.get_pre_worker_snapshot()
-        if snapshot_sha is not None:
-            # Confirm destructive restore
-            reply = QMessageBox.question(
-                self,
-                "Restore to Pre-Worker State",
-                "This will discard ALL changes since the worker started "
-                "(including any intervening commits). Continue?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
-            )
-            if reply == QMessageBox.Yes:
-                ok, message = restore_to_snapshot(ws_root, snapshot_sha)
-                self._bridge.clear_pre_worker_snapshot()
-                if ok:
-                    self._chat.add_info("Undo", message)
-                else:
-                    self._chat.add_error("Undo", message)
-        else:
-            # Fall back to simple undo_last_commit
-            ok, message = undo_last_commit(ws_root)
-            if ok:
-                self._chat.add_info("Undo", message)
-            else:
-                self._chat.add_error("Undo", message)
 
     def _on_api_error(self, status: int, message: str) -> None:
         title = f"API Error {status}" if status > 0 else "Error"
