@@ -26,3 +26,4 @@ env/
 .DS_Store
 Thumbs.db
 /GEMINI.md
+/build/
