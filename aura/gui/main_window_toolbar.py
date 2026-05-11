@@ -26,7 +26,6 @@ class MainWindowToolbar(QToolBar):
     new_conversation_requested = Signal()
     open_conversation_requested = Signal()
     read_only_toggled = Signal(bool)
-    about_requested = Signal()
     auto_dispatch_toggled = Signal(bool)
     auto_approve_toggled = Signal(bool)
     settings_requested = Signal()
@@ -63,13 +62,7 @@ class MainWindowToolbar(QToolBar):
 
         self.addWidget(_toolbar_separator())
 
-        # Group 3: about
-        about_act = QAction("\u24d8", self)  # ⓘ
-        about_act.setToolTip("About Aura")
-        about_act.triggered.connect(self.about_requested.emit)
-        self.addAction(about_act)
-
-        # Group 4: auto toggles
+        # Group 3: auto toggles
         self._auto_dispatch_switch = GlassSwitch("Dispatch", self._settings.auto_dispatch, vertical=True)
         self._auto_dispatch_switch.toggled.connect(self.auto_dispatch_toggled.emit)
         self.addWidget(self._auto_dispatch_switch)

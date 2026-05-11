@@ -109,7 +109,6 @@ class MainWindow(QMainWindow):
         self._toolbar.new_conversation_requested.connect(self._on_new_conversation)
         self._toolbar.open_conversation_requested.connect(self._on_open_conversation)
         self._toolbar.read_only_toggled.connect(self._on_read_only_toggled)
-        self._toolbar.about_requested.connect(self._on_about)
         self._toolbar.auto_dispatch_toggled.connect(self._on_auto_dispatch_toggled)
         self._toolbar.auto_approve_toggled.connect(self._on_auto_approve_toggled)
         self._toolbar.settings_requested.connect(self._on_open_settings)
@@ -426,17 +425,6 @@ class MainWindow(QMainWindow):
 
     def _update_workspace_label(self) -> None:
         self._left_pane.update_workspace_label(self._workspace_root)
-
-    def _on_about(self) -> None:
-        from aura import __version__
-        QMessageBox.about(
-            self,
-            f"About {APP_NAME}",
-            f"<b>{APP_NAME}</b> v{__version__}<br><br>"
-            "Desktop AI Orchestration IDE<br>"
-            "Pair programming with full workspace awareness.<br><br>"
-            "Built with PySide6 (Qt for Python)."
-        )
 
     def _on_read_only_toggled(self, checked: bool) -> None:
         self._bridge.set_read_only(checked)
