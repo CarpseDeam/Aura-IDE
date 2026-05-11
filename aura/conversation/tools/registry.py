@@ -727,6 +727,10 @@ TERMINAL_TOOL_DEF: dict[str, Any] = {
     },
 }
 
+# Tool handler dispatch table.
+# Maps tool name -> unbound method that accepts (self, args, approval_cb, reject_all).
+TOOL_HANDLERS: dict[str, Any] = {}
+
 @dataclass
 class ToolExecResult:
     ok: bool
@@ -888,6 +892,157 @@ class ToolRegistry:
             raise ValueError(f"path '{raw}' escapes workspace root")
         return candidate
 
+    # ---- handler methods (one per tool) -----------------------------------
+
+    def _handle_read_file(self, args, approval_cb, reject_all) -> ToolExecResult:
+        target = self._resolve_in_root(args.get("path", ""))
+        return ToolExecResult(ok=True, payload=read_file(self._root, target))
+
+    def _handle_list_directory(self, args, approval_cb, reject_all) -> ToolExecResult:
+        target = self._resolve_in_root(args.get("path", "."))
+        return ToolExecResult(ok=True, payload=list_directory(self._root, target))
+
+    def _handle_glob(self, args, approval_cb, reject_all) -> ToolExecResult:
+        pattern = str(args.get("pattern", "")).strip()
+        if not pattern:
+            return ToolExecResult(ok=False, payload={"ok": False, "error": "pattern is required"})
+        if ".." in Path(pattern).parts or Path(pattern).is_absolute():
+            return ToolExecResult(ok=False, payload={"ok": False, "error": "glob pattern must be workspace-relative"})
+        return ToolExecResult(ok=True, payload=glob_files(self._root, pattern))
+
+    def _handle_grep_search(self, args, approval_cb, reject_all) -> ToolExecResult:
+        pattern = args.get("pattern", "")
+        if not pattern:
+            return ToolExecResult(ok=False, payload={"ok": False, "error": "pattern is required"})
+        return ToolExecResult(
+            ok=True,
+            payload=grep_files(
+                workspace_root=self._root,
+                pattern=pattern,
+                regex_mode=bool(args.get("regex_mode", False)),
+                case_sensitive=bool(args.get("case_sensitive", False)),
+                max_results=int(args.get("max_results", 50)),
+                include_pattern=args.get("include_pattern"),
+            ),
+        )
+
+    def _handle_read_file_outline(self, args, approval_cb, reject_all) -> ToolExecResult:
+        target = self._resolve_in_root(args.get("path", ""))
+        return ToolExecResult(ok=True, payload=read_file_outline(self._root, target))
+
+    def _handle_find_usages(self, args, approval_cb, reject_all) -> ToolExecResult:
+        symbol = args.get("symbol", "")
+        if not symbol:
+            return ToolExecResult(ok=False, payload={"ok": False, "error": "symbol is required"})
+        return ToolExecResult(
+            ok=True,
+            payload=find_usages(
+                workspace_root=self._root,
+                symbol=symbol,
+                include_pattern=args.get("include_pattern"),
+                max_results=int(args.get("max_results", 100)),
+                case_sensitive=bool(args.get("case_sensitive", False)),
+            ),
+        )
+
+    def _handle_search_codebase(self, args, approval_cb, reject_all) -> ToolExecResult:
+        query = str(args.get("query", "")).strip()
+        if not query:
+            return ToolExecResult(ok=False, payload={"ok": False, "error": "query is required"})
+        top_k = int(args.get("top_k", SEARCH_CODEBASE_TOP_K))
+        if self._codebase_index is None:
+            self._codebase_index = CodebaseIndex(self._root)
+        result = _search_codebase(
+            workspace_root=self._root,
+            query=query,
+            top_k=top_k,
+            _index=self._codebase_index,
+        )
+        return ToolExecResult(ok=result.get("ok", False), payload=result)
+
+    def _handle_git_status(self, args, approval_cb, reject_all) -> ToolExecResult:
+        return ToolExecResult(ok=True, payload=git_status(self._root))
+
+    def _handle_git_diff(self, args, approval_cb, reject_all) -> ToolExecResult:
+        staged = bool(args.get("staged", False))
+        path = args.get("path")
+        return ToolExecResult(ok=True, payload=git_diff(self._root, staged=staged, path=path))
+
+    def _handle_git_log(self, args, approval_cb, reject_all) -> ToolExecResult:
+        max_count = int(args.get("max_count", 10))
+        path = args.get("path")
+        return ToolExecResult(ok=True, payload=git_log(self._root, max_count=max_count, path=path))
+
+    def _handle_git_show(self, args, approval_cb, reject_all) -> ToolExecResult:
+        commit_sha = args.get("commit_sha", "")
+        if not commit_sha:
+            return ToolExecResult(ok=False, payload="Missing required parameter: commit_sha")
+        return ToolExecResult(ok=True, payload=git_show(self._root, commit_sha))
+
+    def _handle_git_log_file(self, args, approval_cb, reject_all) -> ToolExecResult:
+        path = args.get("path", "")
+        if not path:
+            return ToolExecResult(ok=False, payload="Missing required parameter: path")
+        max_count = int(args.get("max_count", 10))
+        return ToolExecResult(ok=True, payload=git_log_file(self._root, path, max_count=max_count))
+
+    def _handle_git_branch_list(self, args, approval_cb, reject_all) -> ToolExecResult:
+        return ToolExecResult(ok=True, payload=git_branch_list(self._root))
+
+    def _handle_git_stash_list(self, args, approval_cb, reject_all) -> ToolExecResult:
+        return ToolExecResult(ok=True, payload=git_stash_list(self._root))
+
+    def _handle_git_stash_show(self, args, approval_cb, reject_all) -> ToolExecResult:
+        index = int(args.get("index", 0))
+        return ToolExecResult(ok=True, payload=git_stash_show(self._root, index=index))
+
+    def _handle_web_search(self, args, approval_cb, reject_all) -> ToolExecResult:
+        query = args.get("query", "")
+        max_results = int(args.get("max_results", 5))
+        return ToolExecResult(ok=True, payload=web_search(query, max_results))
+
+    def _handle_web_fetch(self, args, approval_cb, reject_all) -> ToolExecResult:
+        url = args.get("url", "")
+        return ToolExecResult(ok=True, payload=web_fetch(url))
+
+    def _handle_write_file(self, args, approval_cb, reject_all) -> ToolExecResult:
+        if self._read_only:
+            return ToolExecResult(ok=False, payload={"ok": False, "error": "Read-Only Mode is enabled — write tools are disabled."})
+        if self._mode == "planner":
+            return ToolExecResult(ok=False, payload={"ok": False, "error": "Planner cannot write directly — call dispatch_to_worker with a spec instead."})
+        return self._handle_write("write_file", args, approval_cb, reject_all)
+
+    def _handle_edit_file(self, args, approval_cb, reject_all) -> ToolExecResult:
+        if self._read_only:
+            return ToolExecResult(ok=False, payload={"ok": False, "error": "Read-Only Mode is enabled — write tools are disabled."})
+        if self._mode == "planner":
+            return ToolExecResult(ok=False, payload={"ok": False, "error": "Planner cannot write directly — call dispatch_to_worker with a spec instead."})
+        return self._handle_write("edit_file", args, approval_cb, reject_all)
+
+    def _handle_edit_symbol(self, args, approval_cb, reject_all) -> ToolExecResult:
+        if self._read_only:
+            return ToolExecResult(ok=False, payload={"ok": False, "error": "Read-Only Mode is enabled — write tools are disabled."})
+        if self._mode == "planner":
+            return ToolExecResult(ok=False, payload={"ok": False, "error": "Planner cannot write directly — call dispatch_to_worker with a spec instead."})
+        return self._handle_write("edit_symbol", args, approval_cb, reject_all)
+
+    def _handle_update_todo_list(self, args, approval_cb, reject_all) -> ToolExecResult:
+        tasks = args.get("tasks", [])
+        if not isinstance(tasks, list):
+            return ToolExecResult(ok=False, payload={"ok": False, "error": "tasks must be an array"})
+        for t in tasks:
+            if not isinstance(t, dict):
+                return ToolExecResult(ok=False, payload={"ok": False, "error": "each task must be an object"})
+            if "description" not in t or "status" not in t:
+                return ToolExecResult(ok=False, payload={"ok": False, "error": "each task must have description and status"})
+            if t["status"] not in ("pending", "active", "done"):
+                return ToolExecResult(ok=False, payload={"ok": False, "error": f"invalid status: {t['status']}"})
+        return ToolExecResult(
+            ok=True,
+            payload={"ok": True, "message": "TODO list updated", "tasks": tasks},
+            extras={"is_todo_update": True, "tasks": tasks},
+        )
+
     # ---- main dispatch -----------------------------------------------------
 
     def execute(
@@ -898,157 +1053,10 @@ class ToolRegistry:
         reject_all: bool = False,
     ) -> ToolExecResult:
         try:
-            if name == "read_file":
-                target = self._resolve_in_root(args.get("path", ""))
-                return ToolExecResult(ok=True, payload=read_file(self._root, target))
-            if name == "list_directory":
-                target = self._resolve_in_root(args.get("path", "."))
-                return ToolExecResult(ok=True, payload=list_directory(self._root, target))
-            if name == "glob":
-                pattern = str(args.get("pattern", "")).strip()
-                if not pattern:
-                    return ToolExecResult(
-                        ok=False, payload={"ok": False, "error": "pattern is required"}
-                    )
-                if ".." in Path(pattern).parts or Path(pattern).is_absolute():
-                    return ToolExecResult(
-                        ok=False,
-                        payload={"ok": False, "error": "glob pattern must be workspace-relative"},
-                    )
-                return ToolExecResult(ok=True, payload=glob_files(self._root, pattern))
-            if name == "grep_search":
-                pattern = args.get("pattern", "")
-                if not pattern:
-                    return ToolExecResult(
-                        ok=False, payload={"ok": False, "error": "pattern is required"}
-                    )
-                return ToolExecResult(
-                    ok=True,
-                    payload=grep_files(
-                        workspace_root=self._root,
-                        pattern=pattern,
-                        regex_mode=bool(args.get("regex_mode", False)),
-                        case_sensitive=bool(args.get("case_sensitive", False)),
-                        max_results=int(args.get("max_results", 50)),
-                        include_pattern=args.get("include_pattern"),
-                    ),
-                )
-            if name == "read_file_outline":
-                target = self._resolve_in_root(args.get("path", ""))
-                return ToolExecResult(ok=True, payload=read_file_outline(self._root, target))
-            if name == "find_usages":
-                symbol = args.get("symbol", "")
-                if not symbol:
-                    return ToolExecResult(
-                        ok=False, payload={"ok": False, "error": "symbol is required"}
-                    )
-                return ToolExecResult(
-                    ok=True,
-                    payload=find_usages(
-                        workspace_root=self._root,
-                        symbol=symbol,
-                        include_pattern=args.get("include_pattern"),
-                        max_results=int(args.get("max_results", 100)),
-                        case_sensitive=bool(args.get("case_sensitive", False)),
-                    ),
-                )
-            if name == "git_status":
-                return ToolExecResult(ok=True, payload=git_status(self._root))
-            if name == "git_diff":
-                staged = bool(args.get("staged", False))
-                path = args.get("path")
-                return ToolExecResult(ok=True, payload=git_diff(self._root, staged=staged, path=path))
-            if name == "git_log":
-                max_count = int(args.get("max_count", 10))
-                path = args.get("path")
-                return ToolExecResult(ok=True, payload=git_log(self._root, max_count=max_count, path=path))
-
-            if name == "git_show":
-                commit_sha = args.get("commit_sha", "")
-                if not commit_sha:
-                    return ToolExecResult(ok=False, payload="Missing required parameter: commit_sha")
-                return ToolExecResult(ok=True, payload=git_show(self._root, commit_sha))
-
-            if name == "git_log_file":
-                path = args.get("path", "")
-                if not path:
-                    return ToolExecResult(ok=False, payload="Missing required parameter: path")
-                max_count = int(args.get("max_count", 10))
-                return ToolExecResult(ok=True, payload=git_log_file(self._root, path, max_count=max_count))
-
-            if name == "git_branch_list":
-                return ToolExecResult(ok=True, payload=git_branch_list(self._root))
-
-            if name == "git_stash_list":
-                return ToolExecResult(ok=True, payload=git_stash_list(self._root))
-
-            if name == "git_stash_show":
-                index = int(args.get("index", 0))
-                return ToolExecResult(ok=True, payload=git_stash_show(self._root, index=index))
-
-            if name == "web_search":
-                query = args.get("query", "")
-                max_results = int(args.get("max_results", 5))
-                return ToolExecResult(ok=True, payload=web_search(query, max_results))
-            if name == "web_fetch":
-                url = args.get("url", "")
-                return ToolExecResult(ok=True, payload=web_fetch(url))
-
-            if name in ("write_file", "edit_file", "edit_symbol"):
-                if self._read_only:
-                    return ToolExecResult(
-                        ok=False,
-                        payload={
-                            "ok": False,
-                            "error": "Read-Only Mode is enabled — write tools are disabled.",
-                        },
-                    )
-                if self._mode == "planner":
-                    return ToolExecResult(
-                        ok=False,
-                        payload={
-                            "ok": False,
-                            "error": (
-                                "Planner cannot write directly — call dispatch_to_worker with "
-                                "a spec instead."
-                            ),
-                        },
-                    )
-                return self._handle_write(name, args, approval_cb, reject_all)
-            if name == "update_todo_list":
-                tasks = args.get("tasks", [])
-                if not isinstance(tasks, list):
-                    return ToolExecResult(ok=False, payload={"ok": False, "error": "tasks must be an array"})
-                # Validate each task has required fields
-                for t in tasks:
-                    if not isinstance(t, dict):
-                        return ToolExecResult(ok=False, payload={"ok": False, "error": "each task must be an object"})
-                    if "description" not in t or "status" not in t:
-                        return ToolExecResult(ok=False, payload={"ok": False, "error": "each task must have description and status"})
-                    if t["status"] not in ("pending", "active", "done"):
-                        return ToolExecResult(ok=False, payload={"ok": False, "error": f"invalid status: {t['status']}"})
-                return ToolExecResult(
-                    ok=True,
-                    payload={"ok": True, "message": "TODO list updated", "tasks": tasks},
-                    extras={"is_todo_update": True, "tasks": tasks},
-                )
-            if name == "search_codebase":
-                query = str(args.get("query", "")).strip()
-                if not query:
-                    return ToolExecResult(
-                        ok=False, payload={"ok": False, "error": "query is required"}
-                    )
-                top_k = int(args.get("top_k", SEARCH_CODEBASE_TOP_K))
-                # Lazily create or reuse the codebase index
-                if self._codebase_index is None:
-                    self._codebase_index = CodebaseIndex(self._root)
-                result = _search_codebase(
-                    workspace_root=self._root,
-                    query=query,
-                    top_k=top_k,
-                    _index=self._codebase_index,
-                )
-                return ToolExecResult(ok=result.get("ok", False), payload=result)
+            # Static dispatch via TOOL_HANDLERS
+            handler = TOOL_HANDLERS.get(name)
+            if handler is not None:
+                return handler(self, args, approval_cb, reject_all)
 
             # Check dynamic tools before giving up
             dynamic = self._scan_dynamic_tools()
@@ -1172,3 +1180,27 @@ class ToolRegistry:
             },
             extras={"approval": "approve", "rel_path": req.rel_path},
         )
+
+
+# Populate the dispatch table after ToolRegistry is defined
+TOOL_HANDLERS["read_file"] = ToolRegistry._handle_read_file
+TOOL_HANDLERS["list_directory"] = ToolRegistry._handle_list_directory
+TOOL_HANDLERS["glob"] = ToolRegistry._handle_glob
+TOOL_HANDLERS["grep_search"] = ToolRegistry._handle_grep_search
+TOOL_HANDLERS["read_file_outline"] = ToolRegistry._handle_read_file_outline
+TOOL_HANDLERS["find_usages"] = ToolRegistry._handle_find_usages
+TOOL_HANDLERS["search_codebase"] = ToolRegistry._handle_search_codebase
+TOOL_HANDLERS["git_status"] = ToolRegistry._handle_git_status
+TOOL_HANDLERS["git_diff"] = ToolRegistry._handle_git_diff
+TOOL_HANDLERS["git_log"] = ToolRegistry._handle_git_log
+TOOL_HANDLERS["git_show"] = ToolRegistry._handle_git_show
+TOOL_HANDLERS["git_log_file"] = ToolRegistry._handle_git_log_file
+TOOL_HANDLERS["git_branch_list"] = ToolRegistry._handle_git_branch_list
+TOOL_HANDLERS["git_stash_list"] = ToolRegistry._handle_git_stash_list
+TOOL_HANDLERS["git_stash_show"] = ToolRegistry._handle_git_stash_show
+TOOL_HANDLERS["web_search"] = ToolRegistry._handle_web_search
+TOOL_HANDLERS["web_fetch"] = ToolRegistry._handle_web_fetch
+TOOL_HANDLERS["write_file"] = ToolRegistry._handle_write_file
+TOOL_HANDLERS["edit_file"] = ToolRegistry._handle_edit_file
+TOOL_HANDLERS["edit_symbol"] = ToolRegistry._handle_edit_symbol
+TOOL_HANDLERS["update_todo_list"] = ToolRegistry._handle_update_todo_list
