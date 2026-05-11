@@ -1052,6 +1052,10 @@ class MainWindow(QMainWindow):
             self.set_thinking(loaded.thinking)
         self._set_sidebar_planner_worker_mode(pwm)
         self._chat.reset()
+        self._playground.clear()
+        self._message_queue.clear()
+        self._input.set_queued_messages(0)
+        self._bridge.clear_pre_worker_snapshot()
         self._replay_history_into_view()
         self._refresh_status_bar()
 

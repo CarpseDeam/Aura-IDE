@@ -655,17 +655,29 @@ class AuraPlayground(QWidget):
                 QTimer.singleShot(delay, self._set_scrollbar_to_bottom)
 
     def begin_assistant(self):
-        for w in list(self._auras.values()):
-            w.deleteLater()
-        for w in list(self._terminal_cards.values()):
-            w.deleteLater()
+        # 1. Reset TODO list
+        self._todo_widget.update_tasks([])
+
+        # 2. Clear ALL widgets from the card layout (except the stretch at the end)
+        # This handles DiffCards, ErrorCards, and anything else that wasn't tracked in dicts.
+        while self._card_layout.count() > 1:
+            item = self._card_layout.takeAt(0)
+            if item:
+                w = item.widget()
+                if w:
+                    w.deleteLater()
+
+        # 3. Clear tracking structures
         self._artifacts.clear()
         self._auras.clear()
         self._controllers.clear()
         self._terminal_cards.clear()
+        
+        # 4. Reset the log card
         if self._log_card:
-            self._log_card.clear()
-            self._log_card.setVisible(False)
+            # It was already deleted in the layout clear loop above if it was in the layout.
+            self._log_card = None
+
         self._last_scroll_max = 0
         self._scroll_to_bottom(force=True)
 
