@@ -103,7 +103,7 @@ class WorkerEventHandler(QObject):
         from PySide6.QtWidgets import QDialog
         from aura.gui.spec_edit_dialog import SpecApprovalDialog
 
-        dlg = SpecApprovalDialog(goal, list(files), spec, acceptance, parent=self)
+        dlg = SpecApprovalDialog(goal, list(files), spec, acceptance, parent=self.parent())
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self._bridge.user_dispatched(
                 tool_call_id, dlg.goal(), dlg.files(), dlg.spec(), dlg.acceptance()
@@ -127,7 +127,7 @@ class WorkerEventHandler(QObject):
         if card is None:
             return
         goal, files, spec, acceptance = card.current_spec()
-        dlg = SpecEditDialog(goal, files, spec, acceptance, parent=self)
+        dlg = SpecEditDialog(goal, files, spec, acceptance, parent=self.parent())
         if dlg.exec() == SpecEditDialog.DialogCode.Accepted:
             card.update_spec(dlg.goal(), dlg.files(), dlg.spec(), dlg.acceptance())
 
