@@ -135,6 +135,9 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
         self._input = InputPanel(self._workspace_root, parent=self)
 
+        # Right pane: worker activity (embedded, not a separate window)
+        self._playground = AuraPlayground(parent=self)
+
         # Conversation persistence (auto-save, load, restore, replay).
         self._persistence = ConversationPersistence(
             bridge=self._bridge,
@@ -160,9 +163,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         center_layout.addWidget(self._input)
 
         splitter.addWidget(center)
-
-        # Right pane: worker activity (embedded, not a separate window)
-        self._playground = AuraPlayground(parent=self)
         splitter.addWidget(self._playground)
 
         w = self.width()
