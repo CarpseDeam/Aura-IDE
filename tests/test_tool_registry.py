@@ -378,7 +378,7 @@ class TestGitStatus:
     """Tests for the git_status tool."""
 
     def test_valid(self, registry: ToolRegistry, approve_cb: MagicMock):
-        with patch("aura.conversation.tools.registry.git_status") as mock_gs:
+        with patch("aura.conversation.tools.git_handler.git_status") as mock_gs:
             mock_gs.return_value = {"ok": True, "branch": "main"}
             result = _handler("git_status")(registry, {}, approve_cb, False)
 
@@ -386,7 +386,7 @@ class TestGitStatus:
         mock_gs.assert_called_once_with(registry.workspace_root)
 
     def test_extra_args_ignored(self, registry: ToolRegistry, approve_cb: MagicMock):
-        with patch("aura.conversation.tools.registry.git_status") as mock_gs:
+        with patch("aura.conversation.tools.git_handler.git_status") as mock_gs:
             mock_gs.return_value = {"ok": True, "branch": "main"}
             result = _handler("git_status")(registry, {"unknown_key": 123}, approve_cb, False)
 
@@ -397,7 +397,7 @@ class TestGitDiff:
     """Tests for the git_diff tool."""
 
     def test_valid_default(self, registry: ToolRegistry, approve_cb: MagicMock):
-        with patch("aura.conversation.tools.registry.git_diff") as mock_gd:
+        with patch("aura.conversation.tools.git_handler.git_diff") as mock_gd:
             mock_gd.return_value = {"ok": True, "diff": ""}
             result = _handler("git_diff")(registry, {}, approve_cb, False)
 
@@ -405,7 +405,7 @@ class TestGitDiff:
         mock_gd.assert_called_once_with(registry.workspace_root, staged=False, path=None)
 
     def test_valid_with_options(self, registry: ToolRegistry, approve_cb: MagicMock):
-        with patch("aura.conversation.tools.registry.git_diff") as mock_gd:
+        with patch("aura.conversation.tools.git_handler.git_diff") as mock_gd:
             mock_gd.return_value = {"ok": True, "diff": ""}
             result = _handler("git_diff")(
                 registry, {"staged": True, "path": "foo.py"}, approve_cb, False
@@ -419,7 +419,7 @@ class TestGitLog:
     """Tests for the git_log tool."""
 
     def test_valid_default(self, registry: ToolRegistry, approve_cb: MagicMock):
-        with patch("aura.conversation.tools.registry.git_log") as mock_gl:
+        with patch("aura.conversation.tools.git_handler.git_log") as mock_gl:
             mock_gl.return_value = {"ok": True, "commits": []}
             result = _handler("git_log")(registry, {}, approve_cb, False)
 
@@ -427,7 +427,7 @@ class TestGitLog:
         mock_gl.assert_called_once_with(registry.workspace_root, max_count=10, path=None)
 
     def test_valid_with_options(self, registry: ToolRegistry, approve_cb: MagicMock):
-        with patch("aura.conversation.tools.registry.git_log") as mock_gl:
+        with patch("aura.conversation.tools.git_handler.git_log") as mock_gl:
             mock_gl.return_value = {"ok": True, "commits": []}
             result = _handler("git_log")(
                 registry, {"max_count": 5, "path": "foo.py"}, approve_cb, False
@@ -441,7 +441,7 @@ class TestGitShow:
     """Tests for the git_show tool."""
 
     def test_valid(self, registry: ToolRegistry, approve_cb: MagicMock):
-        with patch("aura.conversation.tools.registry.git_show") as mock_gsh:
+        with patch("aura.conversation.tools.git_handler.git_show") as mock_gsh:
             mock_gsh.return_value = {"ok": True, "output": "diff"}
             result = _handler("git_show")(registry, {"commit_sha": "abc123"}, approve_cb, False)
 
@@ -461,7 +461,7 @@ class TestGitLogFile:
     """Tests for the git_log_file tool."""
 
     def test_valid_default(self, registry: ToolRegistry, approve_cb: MagicMock):
-        with patch("aura.conversation.tools.registry.git_log_file") as mock_glf:
+        with patch("aura.conversation.tools.git_handler.git_log_file") as mock_glf:
             mock_glf.return_value = {"ok": True, "commits": []}
             result = _handler("git_log_file")(registry, {"path": "foo.py"}, approve_cb, False)
 
@@ -469,7 +469,7 @@ class TestGitLogFile:
         mock_glf.assert_called_once_with(registry.workspace_root, "foo.py", max_count=10)
 
     def test_valid_with_max_count(self, registry: ToolRegistry, approve_cb: MagicMock):
-        with patch("aura.conversation.tools.registry.git_log_file") as mock_glf:
+        with patch("aura.conversation.tools.git_handler.git_log_file") as mock_glf:
             mock_glf.return_value = {"ok": True, "commits": []}
             result = _handler("git_log_file")(
                 registry, {"path": "foo.py", "max_count": 3}, approve_cb, False
@@ -491,14 +491,14 @@ class TestGitBranchList:
     """Tests for the git_branch_list tool."""
 
     def test_valid(self, registry: ToolRegistry, approve_cb: MagicMock):
-        with patch("aura.conversation.tools.registry.git_branch_list") as mock_gbl:
+        with patch("aura.conversation.tools.git_handler.git_branch_list") as mock_gbl:
             mock_gbl.return_value = {"ok": True, "branches": []}
             result = _handler("git_branch_list")(registry, {}, approve_cb, False)
 
         assert result.ok is True
 
     def test_extra_args_ignored(self, registry: ToolRegistry, approve_cb: MagicMock):
-        with patch("aura.conversation.tools.registry.git_branch_list") as mock_gbl:
+        with patch("aura.conversation.tools.git_handler.git_branch_list") as mock_gbl:
             mock_gbl.return_value = {"ok": True, "branches": []}
             result = _handler("git_branch_list")(registry, {"extra": "value"}, approve_cb, False)
 
@@ -509,14 +509,14 @@ class TestGitStashList:
     """Tests for the git_stash_list tool."""
 
     def test_valid(self, registry: ToolRegistry, approve_cb: MagicMock):
-        with patch("aura.conversation.tools.registry.git_stash_list") as mock_gsl:
+        with patch("aura.conversation.tools.git_handler.git_stash_list") as mock_gsl:
             mock_gsl.return_value = {"ok": True, "stashes": []}
             result = _handler("git_stash_list")(registry, {}, approve_cb, False)
 
         assert result.ok is True
 
     def test_extra_args_ignored(self, registry: ToolRegistry, approve_cb: MagicMock):
-        with patch("aura.conversation.tools.registry.git_stash_list") as mock_gsl:
+        with patch("aura.conversation.tools.git_handler.git_stash_list") as mock_gsl:
             mock_gsl.return_value = {"ok": True, "stashes": []}
             result = _handler("git_stash_list")(registry, {"extra": "x"}, approve_cb, False)
 
@@ -527,7 +527,7 @@ class TestGitStashShow:
     """Tests for the git_stash_show tool."""
 
     def test_valid_default(self, registry: ToolRegistry, approve_cb: MagicMock):
-        with patch("aura.conversation.tools.registry.git_stash_show") as mock_gss:
+        with patch("aura.conversation.tools.git_handler.git_stash_show") as mock_gss:
             mock_gss.return_value = {"ok": True, "diff": ""}
             result = _handler("git_stash_show")(registry, {}, approve_cb, False)
 
@@ -535,7 +535,7 @@ class TestGitStashShow:
         mock_gss.assert_called_once_with(registry.workspace_root, index=0)
 
     def test_valid_with_index(self, registry: ToolRegistry, approve_cb: MagicMock):
-        with patch("aura.conversation.tools.registry.git_stash_show") as mock_gss:
+        with patch("aura.conversation.tools.git_handler.git_stash_show") as mock_gss:
             mock_gss.return_value = {"ok": True, "diff": ""}
             result = _handler("git_stash_show")(registry, {"index": 2}, approve_cb, False)
 
@@ -544,7 +544,7 @@ class TestGitStashShow:
 
     def test_non_int_index(self, registry: ToolRegistry, approve_cb: MagicMock):
         """Non-integer index raises ValueError which is caught by execute()."""
-        with patch("aura.conversation.tools.registry.git_stash_show") as mock_gss:
+        with patch("aura.conversation.tools.git_handler.git_stash_show") as mock_gss:
             mock_gss.side_effect = ValueError("invalid literal for int")
             result = registry.execute("git_stash_show", {"index": "bad"}, approve_cb, False)
 

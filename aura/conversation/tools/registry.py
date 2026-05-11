@@ -23,16 +23,7 @@ from aura.conversation.tools.backup import backup_existing
 from aura.conversation.tools.dynamic import execute_dynamic_tool, parse_tool_schema
 from aura.conversation.tools.find_usages import find_usages
 from aura.conversation.tools.fs_handler import FsReadHandler
-from aura.conversation.tools.git_tools import (
-    git_branch_list,
-    git_diff,
-    git_log,
-    git_log_file,
-    git_show,
-    git_stash_list,
-    git_stash_show,
-    git_status,
-)
+from aura.conversation.tools.git_handler import GitHandler
 from aura.conversation.tools.grep import grep_files
 from aura.conversation.tools.fs_edit_structured import propose_edit_symbol
 from aura.conversation.tools.fs_write import propose_edit, propose_write
@@ -805,6 +796,7 @@ class ToolRegistry:
         self._dynamic_cache_mtimes: dict[str, float] = {}
         self._codebase_index: CodebaseIndex | None = None
         self._fs_handler = FsReadHandler(self._root, self._resolve_in_root)
+        self._git_handler = GitHandler(self._root)
         self._mcp_clients: dict[str, MCPClient] = {}
         self._mcp_schemas: list[dict[str, Any]] = []
 
@@ -1043,40 +1035,36 @@ class ToolRegistry:
         return ToolExecResult(ok=result.get("ok", False), payload=result)
 
     def _handle_git_status(self, args, approval_cb, reject_all) -> ToolExecResult:
-        return ToolExecResult(ok=True, payload=git_status(self._root))
+        payload = self._git_handler.handle_git_status(args)
+        return ToolExecResult(ok=payload.get("ok", True), payload=payload)
 
     def _handle_git_diff(self, args, approval_cb, reject_all) -> ToolExecResult:
-        staged = bool(args.get("staged", False))
-        path = args.get("path")
-        return ToolExecResult(ok=True, payload=git_diff(self._root, staged=staged, path=path))
+        payload = self._git_handler.handle_git_diff(args)
+        return ToolExecResult(ok=payload.get("ok", True), payload=payload)
 
     def _handle_git_log(self, args, approval_cb, reject_all) -> ToolExecResult:
-        max_count = int(args.get("max_count", 10))
-        path = args.get("path")
-        return ToolExecResult(ok=True, payload=git_log(self._root, max_count=max_count, path=path))
+        payload = self._git_handler.handle_git_log(args)
+        return ToolExecResult(ok=payload.get("ok", True), payload=payload)
 
     def _handle_git_show(self, args, approval_cb, reject_all) -> ToolExecResult:
-        commit_sha = args.get("commit_sha", "")
-        if not commit_sha:
-            return ToolExecResult(ok=False, payload="Missing required parameter: commit_sha")
-        return ToolExecResult(ok=True, payload=git_show(self._root, commit_sha))
+        payload = self._git_handler.handle_git_show(args)
+        return ToolExecResult(ok=payload.get("ok", False), payload=payload)
 
     def _handle_git_log_file(self, args, approval_cb, reject_all) -> ToolExecResult:
-        path = args.get("path", "")
-        if not path:
-            return ToolExecResult(ok=False, payload="Missing required parameter: path")
-        max_count = int(args.get("max_count", 10))
-        return ToolExecResult(ok=True, payload=git_log_file(self._root, path, max_count=max_count))
+        payload = self._git_handler.handle_git_log_file(args)
+        return ToolExecResult(ok=payload.get("ok", False), payload=payload)
 
     def _handle_git_branch_list(self, args, approval_cb, reject_all) -> ToolExecResult:
-        return ToolExecResult(ok=True, payload=git_branch_list(self._root))
+        payload = self._git_handler.handle_git_branch_list(args)
+        return ToolExecResult(ok=payload.get("ok", True), payload=payload)
 
     def _handle_git_stash_list(self, args, approval_cb, reject_all) -> ToolExecResult:
-        return ToolExecResult(ok=True, payload=git_stash_list(self._root))
+        payload = self._git_handler.handle_git_stash_list(args)
+        return ToolExecResult(ok=payload.get("ok", True), payload=payload)
 
     def _handle_git_stash_show(self, args, approval_cb, reject_all) -> ToolExecResult:
-        index = int(args.get("index", 0))
-        return ToolExecResult(ok=True, payload=git_stash_show(self._root, index=index))
+        payload = self._git_handler.handle_git_stash_show(args)
+        return ToolExecResult(ok=payload.get("ok", True), payload=payload)
 
     def _handle_web_search(self, args, approval_cb, reject_all) -> ToolExecResult:
         query = args.get("query", "")
