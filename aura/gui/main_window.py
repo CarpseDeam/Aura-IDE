@@ -710,7 +710,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         # Some servers don't surface the cache split — fall back so we still meter cost.
         if hit == 0 and miss == 0:
             miss = prompt
-        bucket = self._worker_handler._session_usage.setdefault(
+        bucket = self._worker_handler.session_usage.setdefault(
             model_id, {"hit": 0, "miss": 0, "out": 0}
         )
         bucket["hit"] += hit
