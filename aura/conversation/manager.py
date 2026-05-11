@@ -523,18 +523,49 @@ class ConversationManager:
 
     def _cleanup_cancelled(self, on_event: EventCallback) -> None:
         """Call this when a turn is cancelled while waiting for model or tool.
-        Ensure history doesn't contain an assistant message with pending tool calls."""
-        # If the last message is an assistant message with tool calls but no 
-        # results yet, we MUST remove it before the next turn, otherwise the 
-        # API will error (each tool_call must have a tool_result).
-        # Also remove empty assistant messages.
-        if self._history.messages:
-            last = self._history.messages[-1]
-            if last.get("role") == "assistant":
-                has_tool_calls = bool(last.get("tool_calls"))
-                has_content = bool(last.get("content") or last.get("reasoning_content"))
-                if has_tool_calls or not has_content:
-                    self._history.messages.pop()
+        Ensure history doesn't contain an assistant message with pending tool calls
+        that haven't been followed by tool result messages.
+        """
+        if not self._history.messages:
+            on_event(ApiError(status_code=None, message="Cancelled."))
+            return
+
+        # We look for the MOST RECENT assistant message.
+        # If it has tool calls that are missing results, we MUST clean it up.
+        for i in range(len(self._history.messages) - 1, -1, -1):
+            msg = self._history.messages[i]
+            if msg.get("role") == "user":
+                # If we hit a user message first, it means the turn was cancelled
+                # before the assistant even started responding.
+                break
+
+            if msg.get("role") == "assistant":
+                tool_calls = msg.get("tool_calls")
+                if tool_calls:
+                    # Check if all tool calls have results in history.
+                    call_ids = {tc["id"] for tc in tool_calls}
+                    # Look at messages following this one.
+                    for j in range(i + 1, len(self._history.messages)):
+                        m = self._history.messages[j]
+                        if m.get("role") == "tool":
+                            call_ids.discard(m.get("tool_call_id"))
+
+                    if call_ids:
+                        # Incomplete! Truncate history back to BEFORE this assistant message.
+                        # We find the user message that preceded it.
+                        user_idx = -1
+                        for k in range(i - 1, -1, -1):
+                            if self._history.messages[k].get("role") == "user":
+                                user_idx = k
+                                break
+                        if user_idx != -1:
+                            self._history.truncate_after(user_idx + 1)
+                        else:
+                            self._history.truncate_after(i)
+                elif not msg.get("content") and not msg.get("reasoning_content"):
+                    # Empty assistant message — strip it.
+                    self._history.truncate_after(i)
+                break
 
         on_event(ApiError(status_code=None, message="Cancelled."))
 
