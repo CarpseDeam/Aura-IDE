@@ -197,6 +197,23 @@ def parse_tool_schema(file_path: Path) -> dict[str, Any]:
         if i < default_offset:
             required.append(arg_name)
 
+    # --- Keyword-only args (after *) ---
+    # kw_defaults is aligned 1:1 with kwonlyargs; None means no default.
+    for i, arg in enumerate(func_node.args.kwonlyargs):
+        arg_name = arg.arg
+        json_type = _annotation_to_json_type(arg.annotation)
+        arg_desc = arg_descriptions.get(arg_name, "")
+
+        properties[arg_name] = {
+            "type": json_type,
+            "description": arg_desc,
+        }
+
+        # A kwonlyarg is required only if it has no default.
+        kw_default = func_node.args.kw_defaults[i]
+        if kw_default is None:
+            required.append(arg_name)
+
     # Handle *args (vararg)
     if func_node.args.vararg:
         vararg_name = func_node.args.vararg.arg

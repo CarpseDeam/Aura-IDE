@@ -690,7 +690,7 @@ class TestParseToolSchema:
         assert params["properties"]["ratio"]["type"] == "number"
 
     def test_kwonly_args_omitted(self, tmp_path: Path):
-        """Keyword-only args (after *) are silently omitted (current behavior gap)."""
+        """Keyword-only args (after *) are parsed correctly."""
         src = (
             "def format(*, indent: int = 2, color: bool = True) -> str:\n"
             '    """Format output."""\n'
@@ -700,8 +700,34 @@ class TestParseToolSchema:
         fp.write_text(src, encoding="utf-8")
         schema = parse_tool_schema(fp)
         params = schema["function"]["parameters"]
-        assert params["properties"] == {}
-        assert params["required"] == []
+        # Both kwonlyargs should appear in properties
+        assert "indent" in params["properties"]
+        assert "color" in params["properties"]
+        assert params["properties"]["indent"]["type"] == "integer"
+        assert params["properties"]["color"]["type"] == "boolean"
+        # Both have defaults, so neither should be required
+        assert "indent" not in params["required"]
+        assert "color" not in params["required"]
+
+    def test_kwonly_arg_required_when_no_default(self, tmp_path: Path):
+        """Keyword-only arg without a default is included in required."""
+        src = (
+            "def render(*, title: str, width: int = 800) -> None:\n"
+            '    """Render content."""\n'
+            "    pass\n"
+        )
+        fp = tmp_path / "render.py"
+        fp.write_text(src, encoding="utf-8")
+        schema = parse_tool_schema(fp)
+        params = schema["function"]["parameters"]
+        # Both appear in properties
+        assert "title" in params["properties"]
+        assert "width" in params["properties"]
+        assert params["properties"]["title"]["type"] == "string"
+        assert params["properties"]["width"]["type"] == "integer"
+        # Only title (no default) is required; width (has default) is not
+        assert "title" in params["required"]
+        assert "width" not in params["required"]
 
     def test_empty_args_list(self, tmp_path: Path):
         """Function with no parameters → empty properties and required."""
