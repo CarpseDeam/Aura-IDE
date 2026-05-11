@@ -34,12 +34,12 @@ from aura.git_ops import git_init, is_git_repo
 from aura.gui.chat_view import ChatView
 from aura.gui.input_panel import InputPanel, SendPayload
 from aura.gui.settings_dialog import SettingsDialog
-from aura.gui.spec_edit_dialog import SpecApprovalDialog, SpecEditDialog
 from aura.gui.onboarding_dialog import OnboardingDialog
 from aura.gui.status_bar import AuraStatusBar
 from aura.gui.left_pane import LeftPane
 from aura.gui.main_window_toolbar import MainWindowToolbar
 from aura.gui.aura_widget import AuraPlayground
+from aura.gui.worker_handler import WorkerEventHandler
 from aura.gui.window_chrome import WindowChromeMixin
 
 _THINKING_LABEL = {"off": "Off", "high": "High", "max": "Max"}
@@ -82,9 +82,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._bridge.set_auto_commit_enabled(self._settings.auto_commit_enabled)
         self._bridge.set_auto_dispatch(self._settings.auto_dispatch)
         self._bridge.set_auto_approve(self._settings.auto_approve)
-
-        # Session usage accumulators (per-model so cost is exact when mixing).
-        self._session_usage: dict[str, dict[str, int]] = {}
 
         # Queued messages sent while worker is running.
         self._message_queue: list[SendPayload] = []
@@ -137,6 +134,18 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
         # Right pane: worker activity (embedded, not a separate window)
         self._playground = AuraPlayground(parent=self)
+
+        # Worker event handler — owns session usage, forwards bridge signals
+        # to chat / playground UI components.
+        self._worker_handler = WorkerEventHandler(
+            bridge=self._bridge,
+            chat=self._chat,
+            playground=self._playground,
+            settings=self._settings,
+            parent=self,
+        )
+        self._worker_handler.usage_updated.connect(self._refresh_status_bar)
+        self._worker_handler.worker_started.connect(lambda: self._input.set_streaming(False))
 
         # Conversation persistence (auto-save, load, restore, replay).
         self._persistence = ConversationPersistence(
@@ -198,23 +207,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._input.sent.connect(self._on_send)
         self._input.stop_requested.connect(self._on_stop)
 
-        # Planner / worker dispatch flow.
-        self._bridge.workerDispatchRequested.connect(self._on_worker_dispatch_requested)
-        self._bridge.workerStarted.connect(self._on_worker_started)
-        self._bridge.workerFinished.connect(self._on_worker_finished)
-        self._bridge.workerCancelled.connect(self._on_worker_cancelled)
-        self._bridge.workerReasoningDelta.connect(self._on_worker_reasoning)
-        self._bridge.workerContentDelta.connect(self._on_worker_content)
-        self._bridge.workerToolCallStart.connect(self._on_worker_tool_call_start)
-        self._bridge.workerToolCallArgs.connect(self._on_worker_tool_args)
-        self._bridge.workerToolCallEnd.connect(lambda _t, _w: None)
-        self._bridge.workerToolResult.connect(self._on_worker_tool_result)
-        self._bridge.workerDiffDecided.connect(self._on_worker_diff_decided)
-        self._bridge.workerApiError.connect(self._on_worker_api_error)
-        self._bridge.workerUsage.connect(self._on_worker_usage)
-        self._bridge.workerTodoListUpdated.connect(self._on_worker_todo_list_updated)
-        self._bridge.workerTerminalOutput.connect(self._on_worker_terminal_output)
-        self._bridge.terminalOutput.connect(self._on_terminal_output)
+        # Worker signal wiring (delegated to WorkerEventHandler).
+        self._worker_handler.connect_bridge_signals()
 
         # Mermaid diagram detection from chat → playground
         self._chat.mermaid_detected.connect(self._playground.add_mermaid_artifact)
@@ -297,12 +291,11 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             workspace_root=ws,
             model_id=self.current_model(),
             thinking=self.current_thinking(),
-            session_usage=self._session_usage
+            session_usage=self._worker_handler.session_usage
         )
 
     def _reset_session_usage(self) -> None:
-        self._session_usage.clear()
-        self._refresh_status_bar()
+        self._worker_handler.reset_session_usage()
 
     # ----- handlers -------------------------------------------------------
 
@@ -661,133 +654,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
     ) -> None:
         self._chat.add_diff_card(tool_call_id, rel_path, old, new, decision, is_new_file)
 
-    # ---- planner/worker dispatch slots -----------------------------------
-
-    def _on_worker_dispatch_requested(
-        self,
-        tool_call_id: str,
-        goal: str,
-        files: list,
-        spec: str,
-        acceptance: str,
-    ) -> None:
-        if self._bridge.auto_dispatch:
-            self._bridge.user_dispatched(tool_call_id, goal, list(files), spec, acceptance)
-            return
-        dlg = SpecApprovalDialog(goal, list(files), spec, acceptance, parent=self)
-        if dlg.exec() == QDialog.DialogCode.Accepted:
-            self._bridge.user_dispatched(
-                tool_call_id, dlg.goal(), dlg.files(), dlg.spec(), dlg.acceptance()
-            )
-        else:
-            self._bridge.user_cancelled_dispatch(tool_call_id)
-
-    def _on_dispatch_clicked(self, tool_call_id: str) -> None:
-        card = self._chat.get_spec_card(tool_call_id)
-        if card is None:
-            return
-        goal, files, spec, acceptance = card.current_spec()
-        self._bridge.user_dispatched(tool_call_id, goal, files, spec, acceptance)
-
-    def _on_edit_spec_clicked(self, tool_call_id: str) -> None:
-        card = self._chat.get_spec_card(tool_call_id)
-        if card is None:
-            return
-        goal, files, spec, acceptance = card.current_spec()
-        dlg = SpecEditDialog(goal, files, spec, acceptance, parent=self)
-        if dlg.exec() == SpecEditDialog.DialogCode.Accepted:
-            card.update_spec(dlg.goal(), dlg.files(), dlg.spec(), dlg.acceptance())
-
-    def _on_cancel_dispatch_clicked(self, tool_call_id: str) -> None:
-        self._bridge.user_cancelled_dispatch(tool_call_id)
-
-    def _on_worker_started(self, tool_call_id: str) -> None:
-        # Baton pass: stop the planner's aura so the worker's playground
-        # takes over the visual pulse. The planner aura was held alive by
-        # finalize_markdown_only() + hold_aura_coding() in _on_stream_done.
-        self._chat.stop_current_aura()
-        self._playground.begin_assistant()
-        self._input.set_streaming(False)
-
-    def _on_worker_finished(self, tool_call_id: str, ok: bool, summary: str) -> None:
-        self._playground.worker_finished(ok, summary)
-
-    def _on_worker_cancelled(self, tool_call_id: str) -> None:
-        self._playground.worker_cancelled()
-
-    def _on_worker_reasoning(self, tool_call_id: str, text: str) -> None:
-        self._playground.append_reasoning(text)
-
-    def _on_worker_content(self, tool_call_id: str, text: str) -> None:
-        self._playground.append_content(text)
-
-    def _on_worker_tool_call_start(self, tool_call_id: str, worker_tool_id: str, name: str) -> None:
-        self._playground.add_tool_call(worker_tool_id, name)
-
-    def _on_worker_tool_args(self, tool_call_id: str, worker_tool_id: str, fragment: str) -> None:
-        self._playground.append_tool_args(worker_tool_id, fragment)
-
-    def _on_worker_tool_result(
-        self,
-        parent_tool_id: str,
-        worker_tool_id: str,
-        name: str,
-        ok: bool,
-        result: str,
-        extras: dict,
-    ) -> None:
-        self._playground.set_tool_result(worker_tool_id, ok, result)
-
-    def _on_worker_diff_decided(
-        self,
-        parent_tool_id: str,
-        worker_tool_id: str,
-        decision: str,
-        rel_path: str,
-        old: str,
-        new: str,
-        is_new_file: bool,
-    ) -> None:
-        self._playground.add_diff_card(worker_tool_id, rel_path, old, new, decision, is_new_file)
-
-    def _on_worker_api_error(self, tool_call_id: str, status: int, message: str) -> None:
-        title = f"API Error {status}" if status > 0 else "Worker Error"
-        self._playground.add_error(f"{title}: {message}")
-
-    def _on_view_worker_clicked(self, tool_call_id: str) -> None:
-        pass
-
-    def _on_worker_usage(
-        self,
-        _tool_call_id: str,
-        model_id: str,
-        prompt: int,
-        completion: int,
-        hit: int,
-        miss: int,
-    ) -> None:
-        if hit == 0 and miss == 0:
-            miss = prompt
-        bucket = self._session_usage.setdefault(
-            model_id, {"hit": 0, "miss": 0, "out": 0}
-        )
-        bucket["hit"] += hit
-        bucket["miss"] += miss
-        bucket["out"] += completion
-        self._refresh_status_bar()
-
-    def _on_worker_todo_list_updated(self, tool_call_id: str, tasks: list) -> None:
-        """Route the worker's TODO list update to the Playground's pinned widget."""
-        self._playground.update_todo_list(tasks)
-
-    def _on_terminal_output(self, tool_call_id: str, text: str) -> None:
-        """Route terminal output (single mode) to the ChatView's TerminalCard."""
-        self._chat.append_terminal_output(tool_call_id, text)
-
-    def _on_worker_terminal_output(self, parent_tool_id: str, worker_tool_id: str, text: str) -> None:
-        """Route terminal output (worker mode) to the Playground's TerminalCard."""
-        self._playground.append_terminal_output(worker_tool_id, text)
-
     def _on_undo(self) -> None:
         """Handle /undo command — restore to pre-worker snapshot or git reset last commit."""
         from aura.git_ops import undo_last_commit, restore_to_snapshot
@@ -844,7 +710,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         # Some servers don't surface the cache split — fall back so we still meter cost.
         if hit == 0 and miss == 0:
             miss = prompt
-        bucket = self._session_usage.setdefault(
+        bucket = self._worker_handler._session_usage.setdefault(
             model_id, {"hit": 0, "miss": 0, "out": 0}
         )
         bucket["hit"] += hit
