@@ -225,7 +225,16 @@ class ChatView(QScrollArea):
     def add_tool_call(self, tool_call_id: str, name: str) -> None:
         if self._current_aura is not None:
             self._current_aura.set_glow_state("coding")
-        if self._compact_tools:
+
+        # Heavy tools that should always show a card, even in compact mode.
+        is_heavy = name in (
+            "run_terminal_command",
+            "write_file",
+            "edit_file",
+            "dispatch_to_worker",
+        )
+
+        if self._compact_tools and not is_heavy:
             ac = self.current_assistant()
             ac.notify_compact_tool_start(name)
             self._compact_tool_names[tool_call_id] = name
