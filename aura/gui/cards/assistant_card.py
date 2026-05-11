@@ -9,8 +9,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QScrollArea,
-    QSizePolicy,
-    QTextBrowser,
     QVBoxLayout,
     QWidget,
 )
@@ -25,32 +23,6 @@ from aura.gui.theme import FG, FG_ITALIC, SUCCESS_DIM, WARN
 
 if TYPE_CHECKING:
     from aura.gui.chat_view import ChatView
-
-
-class _MarkdownTextBlock(QTextBrowser):
-    """Auto-height rich text block for finalized assistant markdown."""
-
-    def __init__(self, html: str, parent=None) -> None:
-        super().__init__(parent)
-        self.setFrameShape(QFrame.Shape.NoFrame)
-        self.setOpenExternalLinks(True)
-        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.setStyleSheet("background: transparent; border: none;")
-        self.document().setDocumentMargin(0)
-        self.setHtml(html)
-        self._sync_height()
-
-    def resizeEvent(self, event) -> None:
-        super().resizeEvent(event)
-        self._sync_height()
-
-    def _sync_height(self) -> None:
-        width = max(1, self.viewport().width())
-        self.document().setTextWidth(width)
-        height = int(self.document().size().height() + 4)
-        self.setFixedHeight(max(1, height))
 
 
 class AssistantCard(QFrame):
@@ -274,7 +246,11 @@ class AssistantCard(QFrame):
 
     def finalize_content(self) -> None:
         """Replace the streaming label with a rich layout that renders code
-        blocks as CodeBlockCard widgets instead of inline HTML pre blocks."""
+        blocks as CodeBlockCard widgets instead of inline HTML pre blocks.
+        
+        Supports multiple turns by appending a new rich container each time
+        the stream finishes a round.
+        """
         self._stop_thinking_animation()
         text = self._content_label.text_buffer()
         if not text:
@@ -298,9 +274,12 @@ class AssistantCard(QFrame):
             self._content_label.hide()
             # Insert new container at the same position
             self._outer.insertWidget(idx, container)
-            # Remove old label from layout (but keep the object — it still
-            # owns the text buffer and is referenced by append_content etc.)
+            # We keep the label in the layout so subsequent turns can re-show it 
+            # and append to it. We just move it to the end of the current content.
             self._outer.removeWidget(self._content_label)
+            self._outer.insertWidget(idx + 1, self._content_label)
+            # Reset the label buffer so the next turn starts fresh
+            self._content_label.reset_buffer()
 
     def _build_rich_container(
         self, text: str, color: str | None = None, italic: bool = False

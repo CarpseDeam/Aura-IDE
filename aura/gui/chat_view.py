@@ -228,7 +228,6 @@ class ChatView(QScrollArea):
 
         # Heavy tools that should always show a card, even in compact mode.
         is_heavy = name in (
-            "run_terminal_command",
             "write_file",
             "edit_file",
             "edit_symbol",
@@ -250,21 +249,7 @@ class ChatView(QScrollArea):
             self._controllers[tool_call_id] = controller
 
         ac = self.current_assistant()
-        if name == "run_terminal_command":
-            card = TerminalCard(command="...", parent=self)
-            self._terminal_cards[tool_call_id] = card
-            if not ac._tool_cluster.isVisible():
-                ac._tool_cluster.setVisible(True)
-            ac._tool_cluster_layout.addWidget(card)
-            _fade_in_widget(card)
-            self._tool_owner[tool_call_id] = ac
-
-            # Wire terminal signals
-            controller.command_resolved.connect(card.set_command)
-            controller.args_updated.connect(lambda text: card.append_output(f"\n[args updated: {text}]\n") if False else None) # Terminal card usually doesn't show args in body
-            controller.result_finalized.connect(lambda d: card.set_result(d.get("exit_code", -1)))
-
-        elif name in ("write_file", "edit_file", "edit_symbol"):
+        if name in ("write_file", "edit_file", "edit_symbol"):
             card = CodeWriterCard(name, parent=self)
             if not ac._tool_cluster.isVisible():
                 ac._tool_cluster.setVisible(True)
