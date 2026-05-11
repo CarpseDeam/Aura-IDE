@@ -116,6 +116,8 @@ class ToolStreamController(QObject):
                 content = parsed.get("new_definition", "")
             elif self._tool_name == "dispatch_to_worker":
                 content = parsed.get("spec", "")
+            elif self._tool_name == "run_research":
+                content = parsed.get("objective", "")
 
             if content and content != self._last_content:
                 self._last_content = content

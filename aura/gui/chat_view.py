@@ -231,7 +231,9 @@ class ChatView(QScrollArea):
             "run_terminal_command",
             "write_file",
             "edit_file",
+            "edit_symbol",
             "dispatch_to_worker",
+            "run_research",
         )
 
         if self._compact_tools and not is_heavy:
@@ -262,7 +264,7 @@ class ChatView(QScrollArea):
             controller.args_updated.connect(lambda text: card.append_output(f"\n[args updated: {text}]\n") if False else None) # Terminal card usually doesn't show args in body
             controller.result_finalized.connect(lambda d: card.set_result(d.get("exit_code", -1)))
 
-        elif name in ("write_file", "edit_file"):
+        elif name in ("write_file", "edit_file", "edit_symbol"):
             card = CodeWriterCard(name, parent=self)
             if not ac._tool_cluster.isVisible():
                 ac._tool_cluster.setVisible(True)
@@ -274,7 +276,7 @@ class ChatView(QScrollArea):
             controller.content_updated.connect(card.update_content)
             controller.state_changed.connect(lambda s: card.set_result(s == "done"))
 
-        elif name == "dispatch_to_worker":
+        elif name == "dispatch_to_worker" or name == "run_research":
             card = PlanWriterCard(parent=self)
             if not ac._tool_cluster.isVisible():
                 ac._tool_cluster.setVisible(True)

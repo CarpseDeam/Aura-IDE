@@ -722,11 +722,12 @@ class MainWindow(QMainWindow):
             self._chat.finalize_markdown_only()
             # If any call is a dispatch, transition to "coding" (cyan)
             has_dispatch = any(
-                tc.get("function", {}).get("name") == "dispatch_to_worker"
+                tc.get("function", {}).get("name") in ("dispatch_to_worker", "run_research")
                 for tc in tool_calls
             )
             if has_dispatch:
                 self._chat.hold_aura_coding()
+
             # Note: For non-dispatch tool calls, we keep the current aura state
             # (which is usually already "coding" if a tool call was emitted).
         else:
