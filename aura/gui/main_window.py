@@ -5,14 +5,13 @@ import json
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal, Slot, QTimer
-from PySide6.QtGui import QColor, QIcon, QPainter, QRadialGradient
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
     QMainWindow,
     QMessageBox,
     QSplitter,
-    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -46,12 +45,13 @@ from aura.gui.onboarding_dialog import OnboardingDialog
 from aura.gui.status_bar import AuraStatusBar
 from aura.gui.left_pane import LeftPane
 from aura.gui.main_window_toolbar import MainWindowToolbar
-from aura.gui.aura_widget import AuraPlayground, GlassSwitch
+from aura.gui.aura_widget import AuraPlayground
+from aura.gui.window_chrome import WindowChromeMixin
 
 _THINKING_LABEL = {"off": "Off", "high": "High", "max": "Max"}
 
 
-class MainWindow(QMainWindow):
+class MainWindow(WindowChromeMixin, QMainWindow):
     # Thread-safe signals for cross-thread communication.
     _vision_done = Signal(object, list, object)   # SendPayload, list[str], str|None
     _save_succeeded = Signal(Path)                # Path
@@ -62,10 +62,6 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(APP_NAME)
         self.setWindowIcon(QIcon(str(icon_path())))
         self.resize(1400, 900)
-
-        # Drag-to-move state
-        self._dragging = False
-        self._drag_start_pos = None
 
         # Settings.
         self._settings: AppSettings = load_settings()
@@ -245,82 +241,6 @@ class MainWindow(QMainWindow):
             self._settings.first_launch_done = True
             from aura.config import save_settings
             save_settings(self._settings)
-
-    # ----- paintEvent: radial gradient background --------------------------
-
-    def paintEvent(self, event) -> None:
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        center = self.rect().center()
-        center.setY(int(self.height() * 0.15))
-        radius = max(self.width(), self.height()) * 0.8
-        gradient = QRadialGradient(center, radius)
-        gradient.setColorAt(0.0, QColor(30, 34, 46, 255))
-        gradient.setColorAt(0.4, QColor(18, 20, 26, 255))
-        gradient.setColorAt(1.0, QColor(6, 8, 12, 255))
-        painter.fillRect(self.rect(), gradient)
-        painter.end()
-        super().paintEvent(event)
-
-    # ----- drag-to-move on toolbar -----------------------------------------
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            tb_geo = self._toolbar.geometry()
-            if tb_geo.contains(event.position().toPoint()):
-                # Don't drag if clicking on interactive toolbar widgets (buttons, switches, etc.)
-                pos = self._toolbar.mapFrom(self, event.position().toPoint())
-                child = self._toolbar.childAt(pos)
-                if child is not None:
-                    # Check ancestors to see if we've clicked inside an interactive widget
-                    curr = child
-                    is_interactive = False
-                    while curr and curr != self._toolbar:
-                        if isinstance(curr, (QToolButton, GlassSwitch)):
-                            is_interactive = True
-                            break
-                        curr = curr.parent()
-                    
-                    if is_interactive:
-                        super().mousePressEvent(event)
-                        return
-                
-                self._drag_start_pos = event.globalPosition().toPoint()
-                self._dragging = True
-                event.accept()
-                return
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event):
-        if getattr(self, '_dragging', False):
-            delta = event.globalPosition().toPoint() - self._drag_start_pos
-            self.move(self.pos() + delta)
-            self._drag_start_pos = event.globalPosition().toPoint()
-            event.accept()
-            return
-        super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event):
-        if getattr(self, '_dragging', False):
-            self._dragging = False
-            event.accept()
-            return
-        super().mouseReleaseEvent(event)
-
-    # ----- window state helpers -------------------------------------------
-
-    def _toggle_maximize(self) -> None:
-        if self.isMaximized():
-            self.showNormal()
-        else:
-            self.showMaximized()
-        self._toolbar.update_maximize_icon(self.isMaximized())
-
-    def changeEvent(self, event) -> None:
-        if event.type() == event.Type.WindowStateChange:
-            if hasattr(self, '_toolbar'):
-                self._toolbar.update_maximize_icon(self.isMaximized())
-        super().changeEvent(event)
 
     # ----- provider-aware model combo helpers -----------------------------
 
