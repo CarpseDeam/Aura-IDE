@@ -143,13 +143,22 @@ class ToolStreamController(QObject):
                 key = "spec"
                 
             if key:
+                # To avoid O(N^2) on very large buffers, we only process the tail
+                # but we need enough context to find the key and handle escapes.
+                # However, for simplicity and since these buffers are rarely > 100KB,
+                # we'll just do a more efficient check.
                 match = re.search(r'"' + key + r'"\s*:\s*"(.*)', self._buffer, re.DOTALL)
                 if match:
                     raw_tail = match.group(1)
-                    content = re.sub(r'\\([n"t\\])', lambda m: {'n':'\n', '"':'"', 't':'\t', '\\':'\\'}[m.group(1)], raw_tail)
-                    if content and content != self._last_content:
-                        self._last_content = content
-                        self.content_updated.emit(content)
+                    # Optimization: If the tail hasn't changed, don't re-process
+                    if raw_tail != getattr(self, "_last_raw_tail", ""):
+                        self._last_raw_tail = raw_tail
+                        # We still need to unescape, but we can't easily do it partially.
+                        # At least we avoid emission if nothing changed.
+                        content = re.sub(r'\\([n"t\\])', lambda m: {'n':'\n', '"':'"', 't':'\t', '\\':'\\'}[m.group(1)], raw_tail)
+                        if content != self._last_content:
+                            self._last_content = content
+                            self.content_updated.emit(content)
 
 
     def finalize(self, ok: bool, result_text: str) -> None:

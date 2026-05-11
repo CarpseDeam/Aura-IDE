@@ -241,9 +241,11 @@ class ChatView(QScrollArea):
             self._scroll_to_bottom()
             return
 
-        # Instantiate controller
-        controller = ToolStreamController(name, parent=self)
-        self._controllers[tool_call_id] = controller
+        # Reuse existing controller if this ID was already started (uncommon but possible in replay/retry)
+        controller = self._controllers.get(tool_call_id)
+        if controller is None:
+            controller = ToolStreamController(name, parent=self)
+            self._controllers[tool_call_id] = controller
 
         ac = self.current_assistant()
         if name == "run_terminal_command":
@@ -391,6 +393,18 @@ class ChatView(QScrollArea):
         spec: str,
         acceptance: str,
     ) -> SpecCard:
+        # Hide any in-flight plan writer card for this call ID (baton pass).
+        controller = self._controllers.get(tool_call_id)
+        if controller:
+            # We don't delete it, just hide it from the assistant card cluster.
+            # The AssistantCard holds the actual widget via the layout.
+            ac = self._tool_owner.get(tool_call_id)
+            if ac:
+                for i in range(ac._tool_cluster_layout.count()):
+                    w = ac._tool_cluster_layout.itemAt(i).widget()
+                    if isinstance(w, PlanWriterCard):
+                        w.hide()
+
         existing = self._spec_cards.get(tool_call_id)
         if existing is not None:
             existing.update_spec(goal, files, spec, acceptance)
