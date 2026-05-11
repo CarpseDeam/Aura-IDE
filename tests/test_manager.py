@@ -1176,6 +1176,7 @@ class TestEdgeCases:
         mock_client.stream.return_value = [
             _make_done(content="", tool_calls=[tc1, tc2]),
         ]
+        history.append_user_text("hello")
 
         # Set cancel after first tool call — the second is never processed
         def _execute_and_cancel(**kwargs):
@@ -1195,13 +1196,11 @@ class TestEdgeCases:
         # Only one tool call processed (the first one)
         assert mock_tools.execute.call_count == 1
 
-        # History has assistant + tool_result for the first tool call.
-        # The cancel check happens before the second tool call is processed.
-        # _cleanup_cancelled only pops if last msg is assistant with tool_calls,
-        # but the last msg is a tool_result, so it stays.
-        assert len(history.messages) == 2
-        assert history.messages[0]["role"] == "assistant"
-        assert history.messages[1]["role"] == "tool"
+        # _cleanup_cancelled now identifies that some tool calls are missing results
+        # and truncates the history back to before the assistant message.
+        # It keeps the user message that started the turn.
+        assert len(history.messages) == 1
+        assert history.messages[0]["role"] == "user"
 
     def test_full_message_none(self, manager, mock_client, on_event,
                                captured_events, cancel_event, history):

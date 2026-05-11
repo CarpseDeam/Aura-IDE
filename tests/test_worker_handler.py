@@ -286,7 +286,7 @@ class TestDispatch:
             )
 
         mock_dlg.assert_called_once_with(
-            "goal text", ["f.py"], "spec text", "acc text", parent=handler,
+            "goal text", ["f.py"], "spec text", "acc text", parent=handler.parent(),
         )
         bridge.user_dispatched.assert_called_once_with(
             "tc1", "edited goal", ["f1.py", "f2.py"], "edited spec", "edited acceptance",
@@ -401,8 +401,9 @@ class TestDispatchActions:
         chat.get_spec_card.return_value = card
 
         with patch("aura.gui.spec_edit_dialog.SpecEditDialog") as mock_dlg:
-            dlg_instance = mock_dlg.return_value
             from PySide6.QtWidgets import QDialog
+            mock_dlg.DialogCode.Accepted = QDialog.DialogCode.Accepted
+            dlg_instance = mock_dlg.return_value
             dlg_instance.exec.return_value = QDialog.DialogCode.Accepted
             dlg_instance.goal.return_value = "new goal"
             dlg_instance.files.return_value = ["new.py"]
