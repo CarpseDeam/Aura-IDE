@@ -269,7 +269,7 @@ class ChatView(QScrollArea):
             self._tool_owner[tool_call_id] = ac
 
             # Wire plan writer signals
-            controller.goal_resolved.connect(card.set_goal)
+            controller.goal_updated.connect(card.set_goal)
             controller.content_updated.connect(card.update_spec)
             controller.state_changed.connect(lambda s: card.set_result(s == "done"))
 

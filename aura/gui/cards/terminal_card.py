@@ -5,6 +5,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QFrame, QPlainTextEdit, QToolButton, QVBoxLayout, QWidget
 
 from aura.gui.cards._helpers import _mono_font
+from aura.gui.cards.terminal_highlighter import TerminalHighlighter
 from aura.gui.theme import ACCENT, BG, BORDER, DANGER, FG, SUCCESS, TERMINAL_BG, WARN
 
 
@@ -72,9 +73,8 @@ class TerminalCard(QFrame):
         layout.addWidget(self._body)
 
         # Attach semantic highlighter
-        from aura.gui.cards.terminal_highlighter import TerminalHighlighter
-
-        self._highlighter = TerminalHighlighter(self._output_view.document())
+        self._highlighter = TerminalHighlighter(self)
+        self._highlighter.setDocument(self._output_view.document())
 
         self._refresh_header()
 

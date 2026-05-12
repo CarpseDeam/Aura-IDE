@@ -15,6 +15,8 @@ class ToolStreamController(QObject):
 
     # Emitted once when "path" is found in partial or full JSON
     path_resolved = Signal(str)
+    # Emitted whenever "goal" is found or grows (streaming)
+    goal_updated = Signal(str)
     # Emitted once when "goal" is found (for dispatch_to_worker)
     goal_resolved = Signal(str)
     # Emitted once when "command" is found (for run_terminal_command)
@@ -40,11 +42,11 @@ class ToolStreamController(QObject):
         self._goal: str | None = None
         self._command: str | None = None
         self._last_content: str = ""
+        self._last_goal_stream: str = ""
         self._state = "running"
 
         # Regex for early extraction from partial JSON
         self._path_re = re.compile(r'"path"\s*:\s*"([^"]+)"')
-        self._goal_re = re.compile(r'"goal"\s*:\s*"([^"]+)"')
         self._command_re = re.compile(r'"command"\s*:\s*"([^"]+)"')
 
     @property
@@ -65,12 +67,6 @@ class ToolStreamController(QObject):
             if m_path:
                 self._path = m_path.group(1)
                 self.path_resolved.emit(self._path)
-
-        if self._goal is None:
-            m_goal = self._goal_re.search(self._buffer)
-            if m_goal:
-                self._goal = m_goal.group(1)
-                self.goal_resolved.emit(self._goal)
 
         if self._command is None:
             m_cmd = self._command_re.search(self._buffer)
@@ -99,6 +95,7 @@ class ToolStreamController(QObject):
             if goal and goal != self._goal:
                 self._goal = goal
                 self.goal_resolved.emit(goal)
+                self.goal_updated.emit(goal)
 
             # Update command if we haven't already
             cmd = parsed.get("command")
@@ -122,6 +119,9 @@ class ToolStreamController(QObject):
             if content and content != self._last_content:
                 self._last_content = content
                 self.content_updated.emit(content)
+                # For run_research, the objective is also the goal
+                if self._tool_name == "run_research" and content != self._goal:
+                    self.goal_updated.emit(content)
 
             # Update tasks for update_todo_list
             if self._tool_name == "update_todo_list":
@@ -133,7 +133,15 @@ class ToolStreamController(QObject):
             # Buffer is still incomplete JSON — emit raw buffer for now
             self.args_updated.emit(self._buffer)
             
-            # Fallback regex extraction for streaming code
+            # Streaming goal updates (for dispatch_to_worker / run_research)
+            if self._goal is None:
+                goal_key = "goal" if self._tool_name != "run_research" else "objective"
+                goal = self._extract_partial_string(goal_key)
+                if goal and goal != self._last_goal_stream:
+                    self._last_goal_stream = goal
+                    self.goal_updated.emit(goal)
+
+            # Fallback extraction for streaming content
             key = None
             if self._tool_name == "write_file":
                 key = "content"
@@ -143,24 +151,48 @@ class ToolStreamController(QObject):
                 key = "new_definition"
             elif self._tool_name == "dispatch_to_worker":
                 key = "spec"
+            elif self._tool_name == "run_research":
+                key = "objective"
                 
             if key:
-                # To avoid O(N^2) on very large buffers, we only process the tail
-                # but we need enough context to find the key and handle escapes.
-                # However, for simplicity and since these buffers are rarely > 100KB,
-                # we'll just do a more efficient check.
-                match = re.search(r'"' + key + r'"\s*:\s*"(.*)', self._buffer, re.DOTALL)
-                if match:
-                    raw_tail = match.group(1)
-                    # Optimization: If the tail hasn't changed, don't re-process
-                    if raw_tail != getattr(self, "_last_raw_tail", ""):
-                        self._last_raw_tail = raw_tail
-                        # We still need to unescape, but we can't easily do it partially.
-                        # At least we avoid emission if nothing changed.
-                        content = re.sub(r'\\([n"t\\])', lambda m: {'n':'\n', '"':'"', 't':'\t', '\\':'\\'}[m.group(1)], raw_tail)
-                        if content != self._last_content:
-                            self._last_content = content
-                            self.content_updated.emit(content)
+                content = self._extract_partial_string(key)
+                if content is not None and content != self._last_content:
+                    self._last_content = content
+                    self.content_updated.emit(content)
+
+    def _extract_partial_string(self, key: str) -> str | None:
+        """Surgically extract a JSON string value from the buffer, handling escapes."""
+        # Find "key": "
+        pattern = r'"' + key + r'"\s*:\s*"'
+        match = re.search(pattern, self._buffer)
+        if not match:
+            return None
+        
+        start_idx = match.end()
+        raw_tail = self._buffer[start_idx:]
+        
+        # Walk the tail to find the closing quote, respecting escapes
+        content_chars = []
+        escaped = False
+        for char in raw_tail:
+            if escaped:
+                if char == 'n': content_chars.append('\n')
+                elif char == 't': content_chars.append('\t')
+                elif char == 'r': content_chars.append('\r')
+                elif char == '"': content_chars.append('"')
+                elif char == '\\': content_chars.append('\\')
+                else: content_chars.append('\\' + char)
+                escaped = False
+            elif char == '\\':
+                escaped = True
+            elif char == '"':
+                # Found the REAL closing quote
+                return "".join(content_chars)
+            else:
+                content_chars.append(char)
+        
+        # Still open
+        return "".join(content_chars)
 
 
     def finalize(self, ok: bool, result_text: str) -> None:

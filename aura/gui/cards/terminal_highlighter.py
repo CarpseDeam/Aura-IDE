@@ -35,8 +35,6 @@ class TerminalHighlighter(QSyntaxHighlighter):
     """
 
     def __init__(self, parent) -> None:
-        super().__init__(parent)
-
         # Pre-build formats for speed
         self._cmd_fmt = QTextCharFormat()
         self._cmd_fmt.setForeground(QColor(ACCENT))
@@ -53,6 +51,8 @@ class TerminalHighlighter(QSyntaxHighlighter):
 
         self._dim_fmt = QTextCharFormat()
         self._dim_fmt.setForeground(QColor(FG_DIM))
+
+        super().__init__(parent)
 
     def highlightBlock(self, text: str) -> None:
         """Apply semantic highlighting to a single line of terminal output."""
