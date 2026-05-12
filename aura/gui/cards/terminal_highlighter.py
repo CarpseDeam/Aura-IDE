@@ -12,13 +12,21 @@ from PySide6.QtGui import QColor, QFont, QSyntaxHighlighter, QTextCharFormat
 from aura.gui.theme import ACCENT, DANGER, FG_DIM, SUCCESS, WARN
 
 
+def _word_boundary_ok(lower: str) -> bool:
+    """Check if ``lower`` contains ``ok`` as a whole word (word-boundary match).
+
+    This avoids false positives on substrings like ``okay`` or ``cook``.
+    """
+    return " ok " in lower or lower.startswith("ok ") or lower.endswith(" ok") or lower == "ok"
+
+
 class TerminalHighlighter(QSyntaxHighlighter):
     """Semantic pattern-based highlighter for terminal output.
 
     Applies colour formatting per line:
-    - Lines starting with ``$ `` (commands) → accent colour + bold.
-    - Lines mentioning "error", "failed", "fail", or "✗" → danger colour.
-    - Lines mentioning "success", "done", or "✓" → success colour.
+    - Lines starting with ``$ `` or ``> `` (commands/prompts) → accent colour + bold.
+    - Lines mentioning "error", "failed", "fail", "✗", or "Traceback" → danger colour.
+    - Lines mentioning "success", "done", "✓", "passed", or word-boundary "ok" → success colour.
     - Lines mentioning "warning" or "warn" → warn colour.
     - Everything else → dim foreground.
 
@@ -52,19 +60,19 @@ class TerminalHighlighter(QSyntaxHighlighter):
             return
 
         # Command line — highest priority
-        if text.startswith("$ "):
+        if text.startswith("$ ") or text.startswith("> "):
             self.setFormat(0, len(text), self._cmd_fmt)
             return
 
         lower = text.lower()
 
         # Error / failure keywords
-        if "error" in lower or "failed" in lower or "fail" in lower or "✗" in text:
+        if "error" in lower or "failed" in lower or "fail" in lower or "✗" in text or "Traceback" in text:
             self.setFormat(0, len(text), self._danger_fmt)
             return
 
         # Success keywords
-        if "success" in lower or "✓" in text or "done" in lower:
+        if "success" in lower or "✓" in text or "done" in lower or "passed" in lower or _word_boundary_ok(lower):
             self.setFormat(0, len(text), self._success_fmt)
             return
 
