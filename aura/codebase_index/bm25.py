@@ -73,11 +73,13 @@ class BM25Scorer:
     """BM25 scoring engine with an in-memory inverted index.
 
     Supports incremental add/remove of documents and fast top-k search.
+    Supports ``to_dict()`` / ``from_dict()`` for disk serialization.
 
     Test cases:
     - Two documents, one shared term: query that term, expect both ranked by BM25.
     - Empty index: search returns [].
     - Re-index a doc ID: the old version is fully replaced.
+    - ``to_dict()`` then ``from_dict()`` yields an identical scorer.
     """
 
     def __init__(self, k1: float = 1.5, b: float = 0.75) -> None:
@@ -97,6 +99,39 @@ class BM25Scorer:
         self._N: int = 0
         # Average document length (cached)
         self._avgdl: float = 0.0
+
+    def to_dict(self) -> dict:
+        """Serialize scorer state for disk caching.
+
+        Returns:
+            A JSON-serializable dict with all mutable state.
+        """
+        return {
+            "k1": self._k1,
+            "b": self._b,
+            "index": self._index,
+            "doc_lengths": self._doc_lengths,
+            "N": self._N,
+            "avgdl": self._avgdl,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "BM25Scorer":
+        """Reconstruct a BM25Scorer from a dict produced by :meth:`to_dict`.
+
+        Args:
+            data: Dict with keys ``k1``, ``b``, ``index``, ``doc_lengths``,
+                  ``N``, ``avgdl``.
+
+        Returns:
+            A fully restored BM25Scorer instance.
+        """
+        scorer = cls(k1=data["k1"], b=data["b"])
+        scorer._index = data["index"]
+        scorer._doc_lengths = data["doc_lengths"]
+        scorer._N = data["N"]
+        scorer._avgdl = data["avgdl"]
+        return scorer
 
     def add_document(self, doc_id: str, tokens: list[str]) -> None:
         """Index or re-index a document.

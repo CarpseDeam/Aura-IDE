@@ -112,6 +112,7 @@ class SandboxExecutor:
         timeout: int = 120,
         cancel_event: Any = None,
         on_output: Any = None,
+        input_data: str | None = None,
     ) -> SandboxResult:
         """Execute a shell command in the sandbox, with optional streaming.
 
@@ -120,12 +121,13 @@ class SandboxExecutor:
             timeout: Maximum seconds before killing.
             cancel_event: Optional threading.Event for cancellation.
             on_output: Optional callable(str) for streaming output chunks.
+            input_data: Optional string to pass to stdin.
 
         Returns:
             SandboxResult with ok, stdout, stderr, exit_code.
         """
         if self._mode == "host":
-            return self._run_host_terminal(command, timeout, cancel_event, on_output)
+            return self._run_host_terminal(command, timeout, cancel_event, on_output, input_data)
         elif self._mode == "docker":
             if not self.docker_available:
                 return SandboxResult(
@@ -134,7 +136,7 @@ class SandboxExecutor:
                     stderr="Docker is not available. Install Docker or switch sandbox_mode to 'host'.",
                     exit_code=-1,
                 )
-            return self._run_docker_terminal(command, timeout, cancel_event, on_output)
+            return self._run_docker_terminal(command, timeout, cancel_event, on_output, input_data)
         elif self._mode == "wasm":
             return SandboxResult(
                 ok=False,
@@ -235,6 +237,7 @@ class SandboxExecutor:
         timeout: int,
         cancel_event: Any = None,
         on_output: Any = None,
+        input_data: str | None = None,
     ) -> SandboxResult:
         """Direct Popen execution (current behavior, no sandbox)."""
         from aura.config import get_subprocess_kwargs
@@ -242,6 +245,7 @@ class SandboxExecutor:
         popen_kwargs: dict[str, Any] = {
             "shell": True,
             "cwd": str(self._workspace_root),
+            "stdin": subprocess.PIPE if input_data else None,
             "stdout": subprocess.PIPE,
             "stderr": subprocess.STDOUT,
             "text": True,
@@ -254,6 +258,11 @@ class SandboxExecutor:
         output_lines: list[str] = []
         try:
             proc = subprocess.Popen(command, **popen_kwargs)
+            
+            if input_data and proc.stdin:
+                proc.stdin.write(input_data)
+                proc.stdin.close()
+
             assert proc.stdout is not None
 
             for line in iter(proc.stdout.readline, ""):
@@ -428,6 +437,7 @@ class SandboxExecutor:
         timeout: int,
         cancel_event: Any = None,
         on_output: Any = None,
+        input_data: str | None = None,
     ) -> SandboxResult:
         """Run a terminal command inside a Docker container with streaming.
 
@@ -444,6 +454,7 @@ class SandboxExecutor:
         try:
             proc = subprocess.Popen(
                 cmd,
+                stdin=subprocess.PIPE if input_data else None,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -451,6 +462,11 @@ class SandboxExecutor:
                 bufsize=1,
                 **({} if sys.platform != "win32" else {"creationflags": subprocess.CREATE_NO_WINDOW}),
             )
+            
+            if input_data and proc.stdin:
+                proc.stdin.write(input_data)
+                proc.stdin.close()
+
             assert proc.stdout is not None
 
             for line in iter(proc.stdout.readline, ""):

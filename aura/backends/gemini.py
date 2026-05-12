@@ -68,11 +68,17 @@ class GeminiCLIBackend(CLIAgentBackend):
 
         prompt_text = self._build_prompt(messages)
         
-        # --skip-trust to avoid interactive prompts in headless mode
-        command = f"gemini -p {shlex.quote(prompt_text)} --skip-trust"
+        # We pass the prompt via stdin to avoid command-line length limits.
+        # --skip-trust to avoid interactive prompts in headless mode.
+        command = "gemini --skip-trust"
         
         sandbox = SandboxExecutor(mode="host", workspace_root=self._workspace_root)
-        result = sandbox.run_terminal_command(command=command, timeout=120, cancel_event=cancel_event)
+        result = sandbox.run_terminal_command(
+            command=command,
+            timeout=120,
+            cancel_event=cancel_event,
+            input_data=prompt_text,
+        )
 
         if cancel_event and cancel_event.is_set():
             yield ApiError(status_code=None, message="Cancelled.")
