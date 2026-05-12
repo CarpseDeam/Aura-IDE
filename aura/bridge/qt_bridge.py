@@ -291,6 +291,7 @@ class _DispatchProxy(QObject):
         self._worker_temperature: float = 0.7
         self._worker_system_prompt: str = ""
         self._auto_commit_enabled: bool = True
+        self._tier1_context: str = ""
 
         # Per-call state — guarded by a lock so concurrent dispatches (which
         # shouldn't happen, but be safe) don't trample each other.
@@ -318,6 +319,9 @@ class _DispatchProxy(QObject):
 
     def set_auto_commit_enabled(self, enabled: bool) -> None:
         self._auto_commit_enabled = enabled
+
+    def set_tier1_context(self, context: str) -> None:
+        self._tier1_context = context
 
     def set_auto_approve(self, enabled: bool) -> None:
         # The actual logic is handled by _ApprovalProxy.request_approval,
@@ -412,7 +416,9 @@ class _DispatchProxy(QObject):
         pending: "_DispatchPending",
     ) -> WorkerDispatchResult:
         worker_history = History()
-        worker_history.set_system(self._worker_system_prompt if self._worker_system_prompt else WORKER_SYSTEM_PROMPT)
+        base_prompt = self._worker_system_prompt if self._worker_system_prompt else WORKER_SYSTEM_PROMPT
+        from aura.prompts import inject_tier1_context
+        worker_history.set_system(inject_tier1_context(base_prompt, self._tier1_context))
         worker_history.append_user_text(_format_spec_as_user_message(req))
 
         worker_registry = self._registry_factory("worker")
@@ -769,6 +775,7 @@ class ConversationBridge(QObject):
         workspace_root = self._registry.workspace_root
         if workspace_root is not None:
             self._tier1_context = build_tier1_context(workspace_root)
+        self._dispatch_proxy.set_tier1_context(self._tier1_context)
 
     def set_planner_worker_mode(self, enabled: bool) -> None:
         self._planner_worker_mode = enabled
