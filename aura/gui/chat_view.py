@@ -294,7 +294,7 @@ class ChatView(QScrollArea):
             self._scroll_to_bottom()
 
     def set_tool_result(self, tool_call_id: str, ok: bool, result_text: str) -> None:
-        if self._compact_tools:
+        if self._compact_tools and tool_call_id in self._compact_tool_names:
             name = self._compact_tool_names.pop(tool_call_id, "tool")
             ac = self.current_assistant()
             ac.notify_compact_tool_done(name)

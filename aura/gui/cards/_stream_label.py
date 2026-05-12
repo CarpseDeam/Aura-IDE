@@ -40,6 +40,10 @@ class _StreamLabel(QLabel):
     def append(self, text: str) -> None:
         self._buf += text
         self._dirty = True
+        # Ensure timer is running (it might have been stopped by finalize_content
+        # in a previous turn of a multi-turn assistant response).
+        if not self._timer.isActive():
+            self._timer.start()
         # Don't call setText here — let the timer flush it
 
     def _flush(self) -> None:

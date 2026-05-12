@@ -511,6 +511,15 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
     def _on_tool_result(self, tool_id: str, name: str, ok: bool, result: str, extras: dict) -> None:
         self._chat.set_tool_result(tool_id, ok, result)
+        if name == "dispatch_to_worker" and not extras.get("cancelled"):
+            summary = extras.get("summary", "")
+            if summary:
+                # Try to get the goal from the spec card if it exists
+                goal = ""
+                spec_card = self._chat.get_spec_card(tool_id)
+                if spec_card:
+                    goal, _, _, _ = spec_card.current_spec()
+                self._chat.add_worker_summary(tool_id, goal, ok, summary)
 
     def _on_diff_decided(
         self,
