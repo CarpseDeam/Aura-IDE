@@ -21,10 +21,8 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import (
-    QMetaObject,
     QObject,
     QThread,
-    Qt,
     Signal,
     Slot,
 )
@@ -35,6 +33,7 @@ from aura.backends import (
     CodexBackend,
     GeminiCLIBackend,
 )
+from aura.bridge.approval_proxy import _ApprovalProxy
 from aura.client import (
     ApiError,
     ContentDelta,
@@ -65,11 +64,8 @@ from aura.conversation import (
 )
 from aura.conversation.persistence import WorkerDispatchRecord
 from aura.conversation.tools import (
-    ApprovalDecision,
-    ApprovalRequest,
     ToolRegistry,
 )
-from aura.gui.diff_dialog import DiffApprovalDialog
 from aura.prompts import (
     PLANNER_SYSTEM_PROMPT,
     WORKER_SYSTEM_PROMPT,
@@ -199,54 +195,6 @@ class _Worker(QObject):
             self.terminalOutput.emit(ev.tool_call_id, ev.text)
 
 
-class _ApprovalProxy(QObject):
-    """Marshals approval requests from any worker thread onto the GUI thread."""
-
-    def __init__(self, parent_widget) -> None:
-        super().__init__()
-        self._parent_widget = parent_widget
-        self._lock = threading.Lock()
-        self._last_decision: ApprovalDecision = ApprovalDecision(action="reject")
-        self._last_request: ApprovalRequest | None = None
-        self.last_event: dict[str, Any] | None = None
-        self._approve_all_session: bool = False
-
-    def request_approval(self, request: ApprovalRequest) -> ApprovalDecision:
-        if self._approve_all_session:
-            return ApprovalDecision(action="approve")
-        with self._lock:
-            self._last_request = request
-            QMetaObject.invokeMethod(
-                self,
-                "_open_dialog",
-                Qt.ConnectionType.BlockingQueuedConnection,
-            )
-            return self._last_decision
-
-    @Slot()
-    def _open_dialog(self) -> None:
-        req = self._last_request
-        if req is None:
-            self._last_decision = ApprovalDecision(action="reject")
-            return
-        dlg = DiffApprovalDialog(req, parent=self._parent_widget)
-        dlg.exec()
-        self._last_decision = dlg.decision()
-        if self._last_decision.action == "approve_all":
-            self._approve_all_session = True
-            self._last_decision = ApprovalDecision(action="approve")
-        self.last_event = {
-            "rel_path": req.rel_path,
-            "old_content": req.old_content,
-            "new_content": req.new_content,
-            "is_new_file": req.is_new_file,
-            "decision": self._last_decision.action,
-        }
-
-    def reset_approve_all(self) -> None:
-        self._approve_all_session = False
-
-
 class _DispatchProxy(QObject):
     """Routes dispatch_to_worker calls through the GUI (SpecCard) and runs
     the worker manager when the user clicks Dispatch.
@@ -327,9 +275,7 @@ class _DispatchProxy(QObject):
         self._tier1_context = context
 
     def set_auto_approve(self, enabled: bool) -> None:
-        # The actual logic is handled by _ApprovalProxy.request_approval,
-        # but we keep this for consistency if needed later.
-        pass
+        self._approval_proxy.set_approve_all_session(enabled)
 
     def records(self) -> list[WorkerDispatchRecord]:
         return list(self._records)
@@ -475,18 +421,18 @@ class _DispatchProxy(QObject):
                 )
             elif isinstance(ev, ToolResult):
                 approval = (ev.extras or {}).get("approval")
-                if approval and self._approval_proxy.last_event is not None:
-                    last = self._approval_proxy.last_event
-                    self.workerDiffDecided.emit(
-                        tool_call_id,
-                        ev.tool_call_id,
-                        str(approval),
-                        str(last["rel_path"]),
-                        str(last["old_content"]),
-                        str(last["new_content"]),
-                        bool(last["is_new_file"]),
-                    )
-                    self._approval_proxy.last_event = None
+                if approval:
+                    last = self._approval_proxy.consume_last_event()
+                    if last is not None:
+                        self.workerDiffDecided.emit(
+                            tool_call_id,
+                            ev.tool_call_id,
+                            str(approval),
+                            str(last["rel_path"]),
+                            str(last["old_content"]),
+                            str(last["new_content"]),
+                            bool(last["is_new_file"]),
+                        )
                 self.workerToolResult.emit(
                     tool_call_id, ev.tool_call_id, ev.name, ev.ok, ev.result, ev.extras or {}
                 )
@@ -829,7 +775,7 @@ class ConversationBridge(QObject):
         self._auto_dispatch = enabled
 
     def set_auto_approve(self, enabled: bool) -> None:
-        self._approval_proxy._approve_all_session = enabled
+        self._approval_proxy.set_approve_all_session(enabled)
         self._dispatch_proxy.set_auto_approve(enabled)
 
     def set_provider(self, provider: ProviderId) -> None:
@@ -1062,17 +1008,17 @@ class ConversationBridge(QObject):
         self, tool_id: str, name: str, ok: bool, result: str, extras: dict
     ) -> None:
         approval = extras.get("approval")
-        if approval and self._approval_proxy.last_event is not None:
-            ev = self._approval_proxy.last_event
-            self.diffDecided.emit(
-                tool_id,
-                str(approval),
-                str(ev["rel_path"]),
-                str(ev["old_content"]),
-                str(ev["new_content"]),
-                bool(ev["is_new_file"]),
-            )
-            self._approval_proxy.last_event = None
+        if approval:
+            ev = self._approval_proxy.consume_last_event()
+            if ev is not None:
+                self.diffDecided.emit(
+                    tool_id,
+                    str(approval),
+                    str(ev["rel_path"]),
+                    str(ev["old_content"]),
+                    str(ev["new_content"]),
+                    bool(ev["is_new_file"]),
+                )
         self.toolResult.emit(tool_id, name, ok, result, extras)
 
     @Slot(str, str, list, str, str)
