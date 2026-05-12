@@ -5,13 +5,13 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QFrame, QPlainTextEdit, QToolButton, QVBoxLayout, QWidget
 
 from aura.gui.cards._helpers import _mono_font
-from aura.gui.theme import BORDER, DANGER, FG, SUCCESS, TERMINAL_BG, WARN
+from aura.gui.theme import ACCENT, BG, BORDER, DANGER, FG, SUCCESS, TERMINAL_BG, WARN
 
 
 class TerminalCard(QFrame):
     """Collapsible card showing streaming terminal output from run_terminal_command.
 
-    Header: "> $ command" with state indicator: (running), (done ✓), (failed ✗)
+    Header: "$ command" with state indicator: (running), (done ✓), (failed ✗)
     Body: dark monospace output area that auto-scrolls.
     """
 
@@ -32,7 +32,7 @@ class TerminalCard(QFrame):
             f"QFrame#terminalCard {{"
             f"  background: {TERMINAL_BG};"
             f"  border: 1px solid rgba(255, 255, 255, 0.06);"
-            f"  border-left: 3px solid {SUCCESS};"
+            f"  border-left: 3px solid rgba(255, 255, 255, 0.08);"
             f"  border-radius: 8px;"
             f"}}"
         )
@@ -61,14 +61,20 @@ class TerminalCard(QFrame):
         self._output_view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._output_view.setStyleSheet(
             f"background: {TERMINAL_BG}; color: {FG}; border: 1px solid {BORDER}; "
-            "border-radius: 4px; padding: 6px; "
+            "border-radius: 4px; padding: 8px; "
             "font-family: 'Geist Mono', 'JetBrains Mono', monospace;"
+            f"selection-background-color: {ACCENT}; selection-color: {BG};"
         )
         self._output_view.setFixedHeight(120)
         body_layout.addWidget(self._output_view)
 
         self._body.setVisible(True)  # Open by default for streaming
         layout.addWidget(self._body)
+
+        # Attach semantic highlighter
+        from aura.gui.cards.terminal_highlighter import TerminalHighlighter
+
+        self._highlighter = TerminalHighlighter(self._output_view.document())
 
         self._refresh_header()
 
@@ -94,9 +100,13 @@ class TerminalCard(QFrame):
             self.STATE_DONE: SUCCESS,
             self.STATE_FAILED: DANGER,
         }[self._state]
-        self._header.setText(f"{chev} > $ {self._command}  {state_str}")
+        self._header.setText(f"{chev}  $ {self._command}  {state_str}")
         self._header.setStyleSheet(
-            f"QToolButton#sectionToggle {{ color: {state_color}; }}"
+            f"QToolButton#sectionToggle {{"
+            f"  color: {state_color};"
+            f"  font-family: 'Geist Mono', 'JetBrains Mono', monospace;"
+            f"  font-weight: 600;"
+            f"}}"
         )
 
     def set_command(self, command: str) -> None:
@@ -131,7 +141,8 @@ class TerminalCard(QFrame):
 
     def set_result(self, exit_code: int) -> None:
         """Set the final state based on the exit code."""
-        self._timer.stop()  # No more output coming
+        self._flush()  # Flush any buffered output before stopping the timer
+        self._timer.stop()
         self._state = self.STATE_DONE if exit_code == 0 else self.STATE_FAILED
         if exit_code != 0:
             # Auto-expand on failure
