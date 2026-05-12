@@ -63,3 +63,9 @@ class _StreamLabel(QLabel):
 
     def text_buffer(self) -> str:
         return self._buf
+
+    def reset_buffer(self) -> None:
+        """Clear the internal buffer and the displayed text."""
+        self._buf = ""
+        self._dirty = False
+        self.setText("")
