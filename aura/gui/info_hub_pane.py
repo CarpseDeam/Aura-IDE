@@ -12,6 +12,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QPlainTextEdit,
     QTabWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -53,6 +54,15 @@ class InfoHubPane(QWidget):
         self._tabs = QTabWidget(self)
         self._tabs.setStyleSheet(self._tab_widget_style())
         layout.addWidget(self._tabs)
+
+        # Corner widget: Close All Terminals button
+        self._close_all_btn = QToolButton(self)
+        self._close_all_btn.setText("Close Terminals")
+        self._close_all_btn.setObjectName("closeTerminalsBtn")
+        self._close_all_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._close_all_btn.clicked.connect(self.close_all_terminal_tabs)
+        self._tabs.setCornerWidget(self._close_all_btn, Qt.TopRightCorner)
+        self._close_all_btn.setVisible(False)
 
         # ---- Worker Log tab (permanent, index 0) ----
         self._log_tab = QWidget(self)
@@ -188,6 +198,7 @@ class InfoHubPane(QWidget):
 
         self._terminal_tabs[tool_id] = card
         self._tab_index_to_tool_id[idx] = tool_id
+        self._close_all_btn.setVisible(True)
 
     def append_terminal_output(self, tool_id: str, text: str) -> None:
         """Route output text to the terminal tab for *tool_id*.
@@ -225,6 +236,8 @@ class InfoHubPane(QWidget):
             idx = self._tabs.indexOf(card)
             if idx >= 0:
                 self._tab_index_to_tool_id[idx] = tid
+        
+        self._close_all_btn.setVisible(False)
 
     # ------------------------------------------------------------------
     # Internal helpers

@@ -383,7 +383,7 @@ QToolButton#reasoningToggle:hover {{
     color: {FG};
 }}
 
-QToolButton#closeAllBtn {{
+QToolButton#closeAllBtn, QToolButton#closeTerminalsBtn {{
     background: transparent;
     color: {FG_DIM};
     border: 1px solid transparent;
@@ -392,7 +392,7 @@ QToolButton#closeAllBtn {{
     font-weight: 600;
     font-size: 11px;
 }}
-QToolButton#closeAllBtn:hover {{
+QToolButton#closeAllBtn:hover, QToolButton#closeTerminalsBtn:hover {{
     background: {BG_RAISED};
     border-color: {BORDER};
     color: {FG};
