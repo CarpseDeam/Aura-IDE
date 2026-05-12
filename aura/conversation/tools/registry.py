@@ -32,6 +32,7 @@ from aura.codebase_index.indexer import CodebaseIndex
 from aura.config import SEARCH_CODEBASE_TOP_K
 from aura.conversation.tools.web_handler import WebHandler
 from aura.mcp_client import MCPClient, _convert_tool_to_openai_schema
+from aura.memory_db import ProjectMemoryDB
 ApprovalAction = Literal["approve", "reject", "reject_all", "approve_all"]
 RegistryMode = Literal["single", "planner", "worker", "researcher"]
 
@@ -664,6 +665,62 @@ WORKER_TODO_TOOL_DEF: dict[str, Any] = {
     },
 }
 
+PROJECT_MEMORY_TOOL_DEFS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "search_project_memory",
+            "description": (
+                "Search the project's archival memory for past dispatch records "
+                "and saved documentation. Use this when you need context from "
+                "previous work."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Natural language search query.",
+                    },
+                    "top_k": {
+                        "type": "integer",
+                        "description": "Maximum number of results to return. Default: 5.",
+                        "default": 5,
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "save_to_project_memory",
+            "description": (
+                "Save important information to the project's long-term memory "
+                "for future retrieval."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "content": {
+                        "type": "string",
+                        "description": "The content to save.",
+                    },
+                    "metadata": {
+                        "type": "object",
+                        "description": (
+                            "Optional structured metadata "
+                            "(e.g., {'type': 'architecture_decision', 'tags': ['auth']})."
+                        ),
+                    },
+                },
+                "required": ["content"],
+            },
+        },
+    },
+]
+
 WEB_TOOL_DEFS: list[dict[str, Any]] = [
     {
         "type": "function",
@@ -838,7 +895,7 @@ class ToolRegistry:
         elif self._mode == "researcher":
             tools = list(WEB_TOOL_DEFS)
         elif self._mode == "planner":
-            tools = list(READ_TOOL_DEFS) + [dict(DISPATCH_TOOL_DEF)] + list(RESEARCH_TOOL_DEFS) + list(GIT_TOOL_DEFS)
+            tools = list(READ_TOOL_DEFS) + [dict(DISPATCH_TOOL_DEF)] + list(RESEARCH_TOOL_DEFS) + list(PROJECT_MEMORY_TOOL_DEFS) + list(GIT_TOOL_DEFS)
         elif self._mode == "worker":
             tools = list(READ_TOOL_DEFS) + list(WRITE_TOOL_DEFS) + [dict(WORKER_TODO_TOOL_DEF)] + [dict(TERMINAL_TOOL_DEF)] + list(GIT_TOOL_DEFS)
         else:
@@ -1116,6 +1173,74 @@ class ToolRegistry:
             extras={"is_todo_update": True, "tasks": tasks},
         )
 
+    # ---- project memory tools (Tier 2) ------------------------------------
+
+    def _handle_search_project_memory(self, args, approval_cb, reject_all) -> ToolExecResult:
+        """Handle search_project_memory tool call."""
+        query = str(args.get("query", "")).strip()
+        if not query:
+            return ToolExecResult(
+                ok=False,
+                payload={"ok": False, "error": "query is required."},
+            )
+        top_k = int(args.get("top_k", 5))
+        try:
+            db = ProjectMemoryDB(self._root / ".aura" / "memory.db")
+            results = db.search(query, top_k)
+            if not results:
+                return ToolExecResult(
+                    ok=True,
+                    payload={"ok": True, "message": "No matching memories found.", "results": []},
+                )
+            # Format results clearly
+            lines: list[str] = []
+            lines.append(f"Found {len(results)} result(s):\n")
+            for r in results:
+                lines.append(f"--- Memory #{r['id']} [{r.get('created_at', '?')}] ---")
+                if r.get("metadata"):
+                    lines.append(f"Metadata: {r['metadata']}")
+                lines.append(r["content"])
+                lines.append("")
+            return ToolExecResult(
+                ok=True,
+                payload={
+                    "ok": True,
+                    "message": "\n".join(lines),
+                    "results": results,
+                },
+            )
+        except Exception as exc:
+            return ToolExecResult(
+                ok=False,
+                payload={"ok": False, "error": f"Memory search failed: {exc}"},
+            )
+
+    def _handle_save_to_project_memory(self, args, approval_cb, reject_all) -> ToolExecResult:
+        """Handle save_to_project_memory tool call."""
+        content = str(args.get("content", "")).strip()
+        if not content:
+            return ToolExecResult(
+                ok=False,
+                payload={"ok": False, "error": "content is required and must be non-empty."},
+            )
+        metadata = args.get("metadata")
+        try:
+            db = ProjectMemoryDB(self._root / ".aura" / "memory.db")
+            memory_id = db.insert(content, metadata)
+            return ToolExecResult(
+                ok=True,
+                payload={
+                    "ok": True,
+                    "message": f"Memory saved with ID #{memory_id}.",
+                    "memory_id": memory_id,
+                },
+            )
+        except Exception as exc:
+            return ToolExecResult(
+                ok=False,
+                payload={"ok": False, "error": f"Failed to save memory: {exc}"},
+            )
+
     # ---- main dispatch -----------------------------------------------------
 
     def execute(
@@ -1290,3 +1415,5 @@ TOOL_HANDLERS["write_file"] = ToolRegistry._handle_write_file
 TOOL_HANDLERS["edit_file"] = ToolRegistry._handle_edit_file
 TOOL_HANDLERS["edit_symbol"] = ToolRegistry._handle_edit_symbol
 TOOL_HANDLERS["update_todo_list"] = ToolRegistry._handle_update_todo_list
+TOOL_HANDLERS["search_project_memory"] = ToolRegistry._handle_search_project_memory
+TOOL_HANDLERS["save_to_project_memory"] = ToolRegistry._handle_save_to_project_memory

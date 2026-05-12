@@ -274,6 +274,45 @@ def most_recent_conversation(workspace_root: Path) -> Path | None:
     return files[0] if files else None
 
 
+def save_dispatch_record_to_memory(record: WorkerDispatchRecord, workspace_root: Path) -> int | None:
+    """Persist a ``WorkerDispatchRecord`` into the project memory DB.
+
+    This is called automatically after a dispatch completes so that past
+    dispatch records are available via the ``search_project_memory`` tool.
+
+    Args:
+        record: The completed dispatch record.
+        workspace_root: The workspace root (used to locate ``.aura/memory.db``).
+
+    Returns:
+        The inserted memory ID, or ``None`` if the insert failed.
+    """
+    try:
+        from aura.memory_db import ProjectMemoryDB
+
+        spec = record.spec or {}
+        goal = spec.get("goal", "")
+        acceptance = spec.get("acceptance", "")
+        files_list = spec.get("files", [])
+
+        content = (
+            f"Goal: {goal}\n"
+            f"Spec: {spec}\n"
+            f"Acceptance: {acceptance}\n"
+            f"Files: {', '.join(files_list) if isinstance(files_list, list) else files_list}\n"
+            f"Outcome: {record.result_summary or 'N/A'}"
+        )
+        metadata: dict[str, object] = {
+            "type": "dispatch_record",
+            "goal": str(goal)[:100],
+            "timestamp": _utc_iso(),
+        }
+        db = ProjectMemoryDB(workspace_root / ".aura" / "memory.db")
+        return db.insert(content, metadata)
+    except Exception:
+        return None
+
+
 # ---- helpers --------------------------------------------------------------
 
 

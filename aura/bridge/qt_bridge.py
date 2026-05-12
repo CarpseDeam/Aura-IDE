@@ -70,7 +70,12 @@ from aura.conversation.tools import (
     ToolRegistry,
 )
 from aura.gui.diff_dialog import DiffApprovalDialog
-from aura.prompts import PLANNER_SYSTEM_PROMPT, WORKER_SYSTEM_PROMPT
+from aura.prompts import (
+    PLANNER_SYSTEM_PROMPT,
+    WORKER_SYSTEM_PROMPT,
+    build_tier1_context,
+    inject_tier1_context,
+)
 
 
 class _Worker(QObject):
@@ -529,6 +534,11 @@ class _DispatchProxy(QObject):
         )
         self._records.append(record)
 
+        # Auto-save this dispatch record to project memory (Tier 2).
+        if self._workspace_root is not None:
+            from aura.conversation.persistence import save_dispatch_record_to_memory
+            save_dispatch_record_to_memory(record, self._workspace_root)
+
         # Auto-commit if worker made changes — fire in background so dispatch isn't blocked.
         if self._auto_commit_enabled and self._workspace_root is not None and write_results:
             try:
@@ -692,6 +702,7 @@ class ConversationBridge(QObject):
         self._single_system_prompt: str = ""
         self._planner_system_prompt: str = ""
         self._auto_commit_enabled: bool = True
+        self._tier1_context: str = ""
         self._auto_dispatch: bool = False
         self._pre_worker_sha: str | None = None
 
@@ -740,29 +751,40 @@ class ConversationBridge(QObject):
     def set_workspace_root(self, root) -> None:
         self._registry.set_workspace_root(root)
         self._dispatch_proxy.set_workspace_root(root)
+        self._compute_and_cache_tier1()
 
     def set_read_only(self, value: bool) -> None:
         self._registry.set_read_only(value)
 
     def set_system_prompt(self, prompt: str) -> None:
-        self._history.set_system(prompt)
+        # Inject Tier 1 core context (project rules + repo map) into the system prompt.
+        workspace_root = self._registry.workspace_root
+        if workspace_root is not None:
+            self._tier1_context = build_tier1_context(workspace_root)
+        enriched = inject_tier1_context(prompt, self._tier1_context)
+        self._history.set_system(enriched)
+
+    def _compute_and_cache_tier1(self) -> None:
+        """Recompute Tier 1 context from the current workspace root and cache it."""
+        workspace_root = self._registry.workspace_root
+        if workspace_root is not None:
+            self._tier1_context = build_tier1_context(workspace_root)
 
     def set_planner_worker_mode(self, enabled: bool) -> None:
         self._planner_worker_mode = enabled
+        self._compute_and_cache_tier1()
         if enabled:
             self._registry.set_mode("planner")
             if not self._history.system_prompt or self._history.system_prompt == "":
-                self._history.set_system(
-                    self._planner_system_prompt if self._planner_system_prompt else PLANNER_SYSTEM_PROMPT
-                )
+                sys_prompt = self._planner_system_prompt if self._planner_system_prompt else PLANNER_SYSTEM_PROMPT
+                self._history.set_system(inject_tier1_context(sys_prompt, self._tier1_context))
         else:
             self._registry.set_mode("single")
             if not self._history.system_prompt or self._history.system_prompt == "":
                 # Lazy import to avoid circular dependency at module level.
                 from aura.prompts import SINGLE_SYSTEM_PROMPT as _SYS_PROMPT
-                self._history.set_system(
-                    self._single_system_prompt if self._single_system_prompt else _SYS_PROMPT
-                )
+                sys_prompt = self._single_system_prompt if self._single_system_prompt else _SYS_PROMPT
+                self._history.set_system(inject_tier1_context(sys_prompt, self._tier1_context))
 
     def set_temperature(self, temperature: float) -> None:
         self._temperature = temperature
@@ -771,13 +793,14 @@ class ConversationBridge(QObject):
         self._single_system_prompt = single
         self._planner_system_prompt = planner
         self._dispatch_proxy.set_worker_system_prompt(worker)
+        self._compute_and_cache_tier1()
         # Apply to current history if appropriate
         if self._planner_worker_mode:
             if planner:
-                self._history.set_system(planner)
+                self._history.set_system(inject_tier1_context(planner, self._tier1_context))
         else:
             if single:
-                self._history.set_system(single)
+                self._history.set_system(inject_tier1_context(single, self._tier1_context))
 
     def set_worker_model(self, model: ModelId) -> None:
         self._dispatch_proxy.set_worker_model(model)
