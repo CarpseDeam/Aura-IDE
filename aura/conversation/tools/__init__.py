@@ -5,8 +5,10 @@ from aura.conversation.tools._types import (
     RegistryMode,
     ToolExecResult,
 )
-from aura.conversation.tools.registry import (
+from aura.conversation.tools._schemas import (
     DISPATCH_TOOL_DEF,
+)
+from aura.conversation.tools.registry import (
     ToolRegistry,
 )
 
