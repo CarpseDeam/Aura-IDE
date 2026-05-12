@@ -811,6 +811,9 @@ class ToolRegistry:
         self._dynamic_cache_mtimes.clear()
         # Reset codebase index for the new workspace
         self._codebase_index = None
+        # Refresh handlers with the new root
+        self._fs_handler = FsReadHandler(self._root, self._resolve_in_root)
+        self._git_handler = GitHandler(self._root)
 
     @property
     def read_only(self) -> bool:
