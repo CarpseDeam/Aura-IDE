@@ -227,7 +227,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
         # Restore most recent conversation if enabled.
         if self._settings.restore_last_conversation:
-            self._persistence.restore_last(self._workspace_root)
+            # Defer restoration so the UI paints and becomes interactive first.
+            QTimer.singleShot(100, lambda: self._persistence.restore_last(self._workspace_root))
 
     def showEvent(self, event) -> None:
         """Triggered when the window is shown. Used for first-launch onboarding."""

@@ -255,7 +255,18 @@ def list_conversations(workspace_root: Path) -> list[Path]:
     target_dir = conversations_dir(workspace_root)
     if not target_dir.is_dir():
         return []
-    return sorted(target_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    # Faster stat-based sort using os.scandir
+    import os
+    files = []
+    try:
+        for entry in os.scandir(str(target_dir)):
+            if entry.is_file() and entry.name.endswith(".json"):
+                files.append((entry.path, entry.stat().st_mtime))
+    except OSError:
+        return []
+    
+    files.sort(key=lambda x: x[1], reverse=True)
+    return [Path(f[0]) for f in files]
 
 
 def most_recent_conversation(workspace_root: Path) -> Path | None:

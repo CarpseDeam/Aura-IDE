@@ -332,4 +332,5 @@ class ConversationPersistence(QObject):
                 if self._active_replay_id == my_id:
                     self._chat.end_bulk_update()
 
-        process_chunk()
+        # Defer the first chunk as well to keep the UI thread moving.
+        QTimer.singleShot(0, process_chunk)
