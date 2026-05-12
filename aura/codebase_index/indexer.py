@@ -5,6 +5,8 @@ workspace on first search, then incrementally refreshes on subsequent calls.
 """
 
 from __future__ import annotations
+import hashlib
+import json
 from pathlib import Path
 
 from aura.codebase_index.bm25 import BM25Scorer, tokenize
@@ -15,6 +17,25 @@ from aura.config import (
     SKIP_DIRS,
     SKIP_FILE_SUFFIXES,
 )
+from aura.paths import config_dir
+
+
+def _cache_path(workspace_root: Path) -> Path:
+    """Return the cache file path for a given workspace root.
+
+    The file path is deterministic based on a SHA-256 hash of the
+    resolved workspace root, truncated to 16 hex characters.
+
+    Args:
+        workspace_root: Absolute path to the workspace root directory.
+
+    Returns:
+        Absolute ``Path`` to the cache JSON file.
+    """
+    h = hashlib.sha256(str(workspace_root.resolve()).encode()).hexdigest()[:16]
+    cache_dir = config_dir() / "bm25_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir / f"{h}.json"
 
 
 class CodebaseIndex:
@@ -37,6 +58,9 @@ class CodebaseIndex:
     def __init__(self, workspace_root: Path) -> None:
         """Initialise the indexer.
 
+        Attempts to load a cached BM25 index from disk. If the cache is
+        missing or stale, the index will be built lazily on first search.
+
         Args:
             workspace_root: Absolute path to the workspace root directory.
         """
@@ -49,6 +73,8 @@ class CodebaseIndex:
         self._max_files: int = MAX_CODEBASE_INDEX_FILES
         self._max_file_bytes: int = CODEBASE_INDEX_MAX_FILE_BYTES
         self._built: bool = False
+        # Attempt to restore from disk cache (sets self._built = True on success)
+        self._loaded_from_cache = self._load_cache()
 
     @property
     def built(self) -> bool:
@@ -157,12 +183,98 @@ class CodebaseIndex:
 
         return collected
 
+    # ---- cache layer -------------------------------------------------------
+
+    def _load_cache(self) -> bool:
+        """Restore the index from a disk cache if available and fresh.
+
+        Reads the cache file for this workspace, validates it, restores
+        files whose mtime matches, and cleans stale doc_ids from the scorer.
+
+        Returns:
+            True if the cache was successfully loaded; False otherwise.
+        """
+        cache_path = _cache_path(self._root)
+        if not cache_path.is_file():
+            return False
+
+        try:
+            raw = cache_path.read_text(encoding="utf-8")
+            data = json.loads(raw)
+        except (OSError, json.JSONDecodeError):
+            return False
+
+        # Validate expected top-level keys
+        if not all(k in data for k in ("workspace_root", "files", "scorer")):
+            return False
+
+        # Verify workspace root match
+        if data.get("workspace_root") != str(self._root):
+            return False
+
+        files_data: dict[str, list] = data.get("files", {})
+        scorer_data: dict = data.get("scorer", {})
+
+        # Restore files whose mtime still matches
+        restored_files: dict[str, tuple[Path, float]] = {}
+        for rel_str, (abs_path_str, cached_mtime) in files_data.items():
+            abs_path = Path(abs_path_str)
+            if not abs_path.is_file():
+                continue
+            try:
+                current_mtime = abs_path.stat().st_mtime
+            except OSError:
+                continue
+            if abs(current_mtime - cached_mtime) < 0.001:
+                restored_files[rel_str] = (abs_path, cached_mtime)
+
+        # Reconstruct the scorer
+        try:
+            self._scorer = BM25Scorer.from_dict(scorer_data)
+        except (KeyError, TypeError):
+            return False
+
+        self._files = restored_files
+
+        # Remove stale doc_ids from the scorer (files that existed when the
+        # cache was saved but whose mtime has since changed).
+        cached_keys = set(files_data.keys())
+        restored_keys = set(restored_files.keys())
+        for stale_rel in cached_keys - restored_keys:
+            self._scorer.remove_document(stale_rel)
+
+        self._built = True
+        return True
+
+    def _save_cache(self) -> None:
+        """Persist the current index state to disk.
+
+        Writes atomically via a temp file + rename. Failures are silently
+        ignored — the cache is purely an optimisation.
+        """
+        cache_path = _cache_path(self._root)
+        data = {
+            "workspace_root": str(self._root),
+            "files": {
+                rel: [str(abs_path), mtime]
+                for rel, (abs_path, mtime) in self._files.items()
+            },
+            "scorer": self._scorer.to_dict(),
+        }
+        tmp_path = cache_path.with_suffix(".tmp")
+        try:
+            tmp_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            tmp_path.replace(cache_path)
+        except OSError:
+            pass  # cache saves must NEVER crash the caller
+
     # ---- build / refresh ---------------------------------------------------
 
     def build(self) -> None:
         """Build (or rebuild) the index from scratch.
 
         Idempotent — calling this again fully replaces the index.
+        The resulting index is persisted to disk.
         """
         self._scorer = BM25Scorer()
         self._files = {}
@@ -180,11 +292,13 @@ class CodebaseIndex:
             self._files[rel_str] = (abs_path, _mtime)
 
         self._built = True
+        self._save_cache()
 
     def refresh(self) -> None:
         """Incrementally update the index based on mtime changes.
 
         Called on every search after the first build. Fast for small changes.
+        The updated index is persisted to disk.
         """
         current = self._walk_and_collect()
         current_keys = set(current.keys())
@@ -216,6 +330,8 @@ class CodebaseIndex:
                 continue
             self._scorer.add_document(rel_str, tokens)
             self._files[rel_str] = (abs_path, new_mtime)
+
+        self._save_cache()
 
     # ---- search ------------------------------------------------------------
 
