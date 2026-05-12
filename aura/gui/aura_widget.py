@@ -635,6 +635,7 @@ class AuraPlayground(QWidget):
         self._splitter.addWidget(self._info_hub)
         self._splitter.setStretchFactor(0, 6)
         self._splitter.setStretchFactor(1, 4)
+        self._splitter.setSizes([600, 400])
 
         layout.addWidget(self._splitter, 1)
 
