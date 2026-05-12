@@ -334,6 +334,15 @@ class ChatView(QScrollArea):
             card.retry_clicked.connect(self.retry_requested.emit)
         self._add_card(card)
 
+    def stop_current_aura(self) -> None:
+        if self._current_aura is not None:
+            self._current_aura.stop_aura()
+
+    def hold_aura_coding(self) -> None:
+        """Keep the current aura alive in coding state (for dispatch transitions)."""
+        if self._current_aura is not None:
+            self._current_aura.set_glow_state("coding")
+
     def assistant_done(self) -> None:
         ac = self._current_assistant
         if ac is None:

@@ -206,8 +206,9 @@ class AuraWidget(QWidget):
         self._cached_ring_path = outer_path.subtracted(inner_path)
 
     def _on_breath_changed(self, value: float) -> None:
-        # Sine shaping: 0 -> 1 -> 0 for smooth breathe-in / breathe-out
-        self._breath = math.sin(value * math.pi)
+        # Use a steeper curve for a more "pulsating heartbeat" feel
+        # Sine shaped to 0->1->0, then powered up for snappy falloff
+        self._breath = math.pow(math.sin(value * math.pi), 1.4)
         self.update()
 
     def start_aura(self) -> None:
@@ -264,7 +265,7 @@ class AuraWidget(QWidget):
             return
 
         b = self._breath
-        if b < 0.005:
+        if b < 0.001:
             painter.end()
             return
 
@@ -276,13 +277,15 @@ class AuraWidget(QWidget):
         # Radial gradient centered on the widget - still pulses with breath
         center = rect.center()
         max_r = max(rect.width(), rect.height()) * 0.5
-        radius = max_r * (0.3 + 0.7 * b)  # expands/contracts with breath
+        # More dramatic radius range: 0.1 to 1.0
+        radius = max_r * (0.1 + 0.9 * b)
 
-        alpha = int(220 * b)  # fades in/out with breath
+        # Higher max alpha for more vibrancy
+        alpha = int(240 * b)
 
         c = self._glow_color
         inner = QColor(c.red(), c.green(), c.blue(), alpha)
-        mid = QColor(c.red(), c.green(), c.blue(), alpha // 2)
+        mid = QColor(c.red(), c.green(), c.blue(), int(alpha * 0.4))
         outer = QColor(0, 0, 0, 0)
 
         gradient = QRadialGradient(center, radius)
@@ -294,7 +297,7 @@ class AuraWidget(QWidget):
             inner_pos = max(0.0, (min(rect.width(), rect.height()) * 0.5 - s) / max_r)
         inner_pos = min(inner_pos, 0.99)
         gradient.setColorAt(inner_pos, inner)
-        gradient.setColorAt(inner_pos + (1.0 - inner_pos) * 0.5, mid)
+        gradient.setColorAt(inner_pos + (1.0 - inner_pos) * 0.3, mid)
         gradient.setColorAt(1.0, outer)
 
         painter.fillRect(rect, gradient)
@@ -654,6 +657,20 @@ class AuraPlayground(QWidget):
 
         # Tool stream controllers keyed by worker_tool_id
         self._controllers: dict[str, ToolStreamController] = {}
+        
+        # Aura wrapper reference for atmospheric synchronization
+        self._aura_wrapper: AuraWidget | None = None
+
+    def set_aura_wrapper(self, wrapper: AuraWidget) -> None:
+        self._aura_wrapper = wrapper
+
+    def set_glow_state(self, state: str) -> None:
+        if self._aura_wrapper:
+            self._aura_wrapper.set_glow_state(state)
+        
+    def stop_aura(self) -> None:
+        if self._aura_wrapper:
+            self._aura_wrapper.stop_aura()
 
     # ------------------------------------------------------------------
     # Public API (backward-compatible with worker_handler.py)

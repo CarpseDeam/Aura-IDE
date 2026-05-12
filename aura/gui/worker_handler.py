@@ -140,15 +140,18 @@ class WorkerEventHandler(QObject):
     def _on_worker_started(self, tool_call_id: str) -> None:
         """Stop the planner aura and start the playground's assistant aura."""
         self._chat.stop_current_aura()
+        self._playground.set_glow_state("coding")
         self._playground.begin_assistant()
         self.worker_started.emit()
 
     def _on_worker_finished(self, tool_call_id: str, ok: bool, summary: str) -> None:
         """Forward worker finished to playground."""
+        self._playground.stop_aura()
         self._playground.worker_finished(ok, summary)
 
     def _on_worker_cancelled(self, tool_call_id: str) -> None:
-        """Forward worker cancelled to playground."""
+        """Stop worker aura and forward cancel to playground."""
+        self._playground.stop_aura()
         self._playground.worker_cancelled()
 
     # ---- worker content slots --------------------------------------------------

@@ -38,7 +38,7 @@ from aura.gui.onboarding_dialog import OnboardingDialog
 from aura.gui.status_bar import AuraStatusBar
 from aura.gui.left_pane import LeftPane
 from aura.gui.main_window_toolbar import MainWindowToolbar
-from aura.gui.aura_widget import AuraPlayground
+from aura.gui.aura_widget import AuraPlayground, AuraWidget
 from aura.gui.worker_handler import WorkerEventHandler
 from aura.gui.window_chrome import WindowChromeMixin
 
@@ -139,6 +139,10 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
         # Right pane: worker activity (embedded, not a separate window)
         self._playground = AuraPlayground(parent=self)
+        self._playground_aura = AuraWidget(
+            self._playground, glow_color="#00e5ff", glow_spread=24, parent=self
+        )
+        self._playground.set_aura_wrapper(self._playground_aura)
 
         # Worker event handler — owns session usage, forwards bridge signals
         # to chat / playground UI components.
@@ -177,7 +181,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         center_layout.addWidget(self._input)
 
         splitter.addWidget(center)
-        splitter.addWidget(self._playground)
+        splitter.addWidget(self._playground_aura)
 
         w = self.width()
         splitter.setSizes([min(200, w // 8), (w - min(200, w // 8)) // 2, (w - min(200, w // 8)) // 2])

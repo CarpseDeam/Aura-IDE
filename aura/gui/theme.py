@@ -377,13 +377,13 @@ QToolButton#reasoningToggle {{
     font-weight: 600;
     font-size: 12px;
 }}
-QToolButton#reasoningToggle:hover {
+QToolButton#reasoningToggle:hover {{
     background: {BG_RAISED};
     border-color: {BORDER};
     color: {FG};
-}
+}}
 
-QToolButton#closeAllBtn {
+QToolButton#closeAllBtn {{
     background: transparent;
     color: {FG_DIM};
     border: 1px solid transparent;
@@ -391,12 +391,12 @@ QToolButton#closeAllBtn {
     padding: 2px 8px;
     font-weight: 600;
     font-size: 11px;
-}
-QToolButton#closeAllBtn:hover {
+}}
+QToolButton#closeAllBtn:hover {{
     background: {BG_RAISED};
     border-color: {BORDER};
     color: {FG};
-}
+}}
 
 
 QLabel#readOnlyBadge {{
