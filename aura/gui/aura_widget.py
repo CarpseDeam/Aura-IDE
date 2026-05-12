@@ -1,6 +1,7 @@
 """Shared UI components for the Aura glass theme."""
 from __future__ import annotations
 
+import json
 import math
 
 from PySide6.QtCore import (
@@ -33,7 +34,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QGraphicsOpacityEffect,
     QPlainTextEdit,
-    QScrollArea,
+    QSplitter,
     QStackedWidget,
     QPushButton
 )
@@ -402,7 +403,11 @@ class TodoListWidget(QFrame):
 
 
 class ArtifactCard(QFrame):
-    """Interactive card with Code/Preview toggle."""
+    """[DEPRECATED] Interactive card with Code/Preview toggle.
+
+    Replaced by CodeEditorPane for the two-pane workspace.  Kept for
+    backward compatibility with any external importers.
+    """
 
     def __init__(self, artifact_id: str, label: str, language: str, content: str, parent=None):
         super().__init__(parent)
@@ -542,7 +547,11 @@ class ArtifactCard(QFrame):
 
 
 class WorkerLogCard(QFrame):
-    """Card for typewriter worker activity log."""
+    """[DEPRECATED] Card for typewriter worker activity log.
+
+    Replaced by InfoHubPane for the two-pane workspace.  Kept for
+    backward compatibility with any external importers.
+    """
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -588,7 +597,11 @@ class WorkerLogCard(QFrame):
 
 
 class AuraPlayground(QWidget):
-    """Right-side panel for worker output."""
+    """Right-side workspace panel with code editor (top) and info hub (bottom).
+
+    Uses a vertical QSplitter to divide the space between a tabbed code editor
+    pane and a tabbed info hub pane (Worker Log + terminal tabs).
+    """
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -596,165 +609,100 @@ class AuraPlayground(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # Header for the playground
+        # Header
         header_container = QWidget(self)
         header_layout = QVBoxLayout(header_container)
         header_layout.setContentsMargins(12, 8, 12, 4)
-        header_label = QLabel("PLAYGROUND", self)
+        header_label = QLabel("WORKSPACE", self)
         header_label.setObjectName("paneTitle")
         header_layout.addWidget(header_label)
         layout.addWidget(header_container)
 
-        self._todo_widget = TodoListWidget(self)
-        layout.addWidget(self._todo_widget)
-        
-        self._scroll = QScrollArea(self)
-        self._scroll.setWidgetResizable(True)
-        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self._scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        # Vertical splitter: code editor (top) / info hub (bottom)
+        self._splitter = QSplitter(Qt.Orientation.Vertical, self)
+        self._splitter.setHandleWidth(3)
+        self._splitter.setStyleSheet(
+            f"QSplitter::handle {{ background: {BORDER}; }}"
+        )
 
-        self._container = QWidget(self)
-        self._card_layout = QVBoxLayout(self._container)
-        # Increase margins to accommodate the AuraWidget glow spread (20px)
-        self._card_layout.setContentsMargins(24, 16, 24, 16)
-        self._card_layout.setSpacing(20)
-        self._card_layout.addStretch(1)
+        from aura.gui.code_editor_pane import CodeEditorPane
+        from aura.gui.info_hub_pane import InfoHubPane
 
-        self._scroll.setWidget(self._container)
-        layout.addWidget(self._scroll, 1)
+        self._code_editor = CodeEditorPane(self._splitter)
+        self._info_hub = InfoHubPane(self._splitter)
 
-        self._artifacts, self._controllers, self._auras, self._terminal_cards, self._log_card = {}, {}, {}, {}, None
-        
-        # Follow active worker output unless the user scrolls away from the bottom.
-        self._auto_follow_bottom = True
-        self._last_scroll_max = 0
-        self._scroll.verticalScrollBar().rangeChanged.connect(self._on_scroll_range_changed)
-        self._scroll.verticalScrollBar().valueChanged.connect(self._on_scroll_value_changed)
+        self._splitter.addWidget(self._code_editor)
+        self._splitter.addWidget(self._info_hub)
+        self._splitter.setStretchFactor(0, 6)
+        self._splitter.setStretchFactor(1, 4)
 
-    def _on_scroll_range_changed(self, min_val: int, max_val: int) -> None:
-        """If we were at the bottom before the range increased, stay at the bottom."""
-        if max_val > self._last_scroll_max and self._auto_follow_bottom:
-            self._set_scrollbar_to_bottom()
-        self._last_scroll_max = max_val
+        layout.addWidget(self._splitter, 1)
 
-    def _on_scroll_value_changed(self, value: int) -> None:
-        bar = self._scroll.verticalScrollBar()
-        self._auto_follow_bottom = bar.maximum() - value <= 60
+        # Tool stream controllers keyed by worker_tool_id
+        self._controllers: dict[str, ToolStreamController] = {}
 
-    def _set_scrollbar_to_bottom(self):
-        self._scroll.verticalScrollBar().setValue(self._scroll.verticalScrollBar().maximum())
-
-    def _scroll_to_bottom(self, force: bool = False):
-        """Keep the newest worker output visible when following the stream."""
-        if not force and not self._auto_follow_bottom:
-            return
-        self._auto_follow_bottom = True
-        self._set_scrollbar_to_bottom()
-        if force:
-            for delay in (0, 50, 150):
-                QTimer.singleShot(delay, self._set_scrollbar_to_bottom)
+    # ------------------------------------------------------------------
+    # Public API (backward-compatible with worker_handler.py)
+    # ------------------------------------------------------------------
 
     def begin_assistant(self):
-        # 1. Reset TODO list
-        self._todo_widget.update_tasks([])
-
-        # 2. Clear ALL widgets from the card layout (except the stretch at the end)
-        # This handles DiffCards, ErrorCards, and anything else that wasn't tracked in dicts.
-        while self._card_layout.count() > 1:
-            item = self._card_layout.takeAt(0)
-            if item:
-                w = item.widget()
-                if w:
-                    w.deleteLater()
-
-        # 3. Clear tracking structures
-        self._artifacts.clear()
-        self._auras.clear()
+        """Reset the workspace for a new assistant run."""
+        self._code_editor.close_all_tabs()
+        self._info_hub.clear()
         self._controllers.clear()
-        self._terminal_cards.clear()
-        
-        # 4. Reset the log card
-        if self._log_card:
-            # It was already deleted in the layout clear loop above if it was in the layout.
-            self._log_card = None
 
-        self._last_scroll_max = 0
-        self._scroll_to_bottom(force=True)
+    def append_reasoning(self, text: str):
+        self._info_hub.append_reasoning(text)
 
-    def _ensure_log_card(self):
-        if not self._log_card:
-            self._log_card = WorkerLogCard(self)
-            self._card_layout.insertWidget(self._card_layout.count()-1, self._log_card)
-        self._log_card.setVisible(True)
-        return self._log_card
-
-    def append_reasoning(self, text: str): 
-        self._ensure_log_card().append_text(text)
-        self._scroll_to_bottom()
-
-    def append_content(self, text: str): 
-        self._ensure_log_card().append_text(text)
-        self._scroll_to_bottom()
+    def append_content(self, text: str):
+        self._info_hub.append_content(text)
 
     def add_tool_call(self, worker_tool_id: str, name: str):
-        from aura.gui.cards import TerminalCard
         c = ToolStreamController(name, self)
         self._controllers[worker_tool_id] = c
+
         if name == "update_todo_list":
             c.todo_updated.connect(self.update_todo_list)
+
         if name in ("write_file", "edit_file"):
-            aid = f"file-{worker_tool_id}"
-            card = ArtifactCard(aid, "Targeting...", "text", "", self)
-            self._artifacts[aid] = card
-            aura = AuraWidget(card, parent=self)
-            self._auras[aid] = aura
-            self._card_layout.insertWidget(self._card_layout.count()-1, aura)
-            c.path_resolved.connect(card.set_target_path)
-            c.content_updated.connect(card.update_content)
-            card.set_streaming(True)
-            aura.start_aura()
-        
+            c.path_resolved.connect(
+                lambda path, tid=worker_tool_id: self._code_editor.open_or_focus_tab(tid, path)
+            )
+            c.content_updated.connect(
+                lambda content, tid=worker_tool_id: self._code_editor.stream_content(tid, content)
+            )
+
         if name == "run_terminal_command":
-            # Create the terminal card immediately with a placeholder.
-            # MainWindow will route output here via append_terminal_output.
-            card = TerminalCard(command="...", parent=self)
-            self._terminal_cards[worker_tool_id] = card
-            self._card_layout.insertWidget(self._card_layout.count() - 1, card)
-            c.command_resolved.connect(card.set_command)
-        
-        self._scroll_to_bottom()
+            c.command_resolved.connect(
+                lambda cmd, tid=worker_tool_id: self._info_hub.open_terminal_tab(tid, cmd)
+            )
 
     def append_tool_args(self, worker_tool_id: str, fragment: str) -> None:
         controller = self._controllers.get(worker_tool_id)
         if controller is None:
             return
         controller.append_fragment(fragment)
-        self._scroll_to_bottom()
 
     def set_tool_result(self, worker_tool_id: str, ok: bool, result: str):
-        if worker_tool_id in self._controllers:
-            self._controllers.pop(worker_tool_id).finalize(ok, result)
-        aid = f"file-{worker_tool_id}"
-        if aid in self._artifacts:
-            self._artifacts[aid].set_streaming(False)
-            self._auras[aid].stop_aura()
-        
-        if worker_tool_id in self._terminal_cards:
-            # For terminal results, we want to set the final state based on exit_code
-            exit_code = 0
-            try:
-                import json
-                parsed = json.loads(result)
-                if isinstance(parsed, dict):
-                    exit_code = parsed.get("exit_code", 0)
-            except Exception:
-                pass
-            self._terminal_cards[worker_tool_id].set_result(exit_code)
-        
-        self._scroll_to_bottom()
+        controller = self._controllers.pop(worker_tool_id, None)
+        if controller is not None:
+            controller.finalize(ok, result)
+
+        # Finalize code editor tab if this was a file tool
+        self._code_editor.finalize_tab(worker_tool_id)
+
+        # Finalize terminal tab if this was a terminal tool
+        exit_code = 0
+        try:
+            parsed = json.loads(result)
+            if isinstance(parsed, dict):
+                exit_code = parsed.get("exit_code", 0)
+        except Exception:
+            pass
+        self._info_hub.finalize_terminal(worker_tool_id, exit_code)
 
     def update_todo_list(self, tasks: list):
-        self._todo_widget.update_tasks(tasks)
+        self._info_hub.update_todo_list(tasks)
 
     def add_diff_card(
         self,
@@ -765,35 +713,25 @@ class AuraPlayground(QWidget):
         decision: str,
         is_new_file: bool,
     ) -> None:
-        from aura.gui.cards import DiffCard
-        card = DiffCard(rel_path, old, new, decision, is_new_file, parent=self)
-        # Use AuraWidget for visual consistency with streaming cards
-        wrapper = AuraWidget(card, parent=self)
-        self._card_layout.insertWidget(self._card_layout.count() - 1, wrapper)
-        # Scroll to bottom
-        QTimer.singleShot(50, lambda: self._scroll.verticalScrollBar().setValue(
-            self._scroll.verticalScrollBar().maximum()
-        ))
+        self._info_hub.add_diff_card(rel_path, old, new, decision, is_new_file)
 
     def add_error(self, message: str) -> None:
-        from aura.gui.cards import ErrorCard
-        card = ErrorCard("Worker Error", message, parent=self)
-        self._card_layout.insertWidget(self._card_layout.count() - 1, card)
-        self._scroll_to_bottom()
+        self._info_hub.add_error(message)
 
     def append_terminal_output(self, worker_tool_id: str, text: str) -> None:
-        from aura.gui.cards import TerminalCard
-        # Find existing terminal card for this tool call or create new
-        if worker_tool_id not in self._terminal_cards:
-            card = TerminalCard(command="...", parent=self)
-            self._terminal_cards[worker_tool_id] = card
-            self._card_layout.insertWidget(self._card_layout.count() - 1, card)
+        self._info_hub.append_terminal_output(worker_tool_id, text)
 
-        
-        self._terminal_cards[worker_tool_id].append_output(text)
-        self._scroll_to_bottom()
+    def worker_finished(self, ok: bool, summary: str):
+        self._code_editor.close_all_tabs()
+        self._info_hub.close_all_terminal_tabs()
+        self._info_hub.show_final_summary(ok, summary)
 
-    def worker_finished(self, ok: bool, s: str): pass
-    def worker_cancelled(self): pass
-    def clear(self): self.begin_assistant()
-    def add_mermaid_artifact(self, code: str): pass
+    def worker_cancelled(self):
+        self._code_editor.close_all_tabs()
+        self._info_hub.close_all_terminal_tabs()
+
+    def clear(self):
+        self.begin_assistant()
+
+    def add_mermaid_artifact(self, code: str):
+        pass
