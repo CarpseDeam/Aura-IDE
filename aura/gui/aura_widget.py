@@ -611,11 +611,24 @@ class AuraPlayground(QWidget):
 
         # Header
         header_container = QWidget(self)
-        header_layout = QVBoxLayout(header_container)
+        header_layout = QHBoxLayout(header_container)
         header_layout.setContentsMargins(12, 8, 12, 4)
+        header_layout.setSpacing(8)
+
         header_label = QLabel("WORKSPACE", self)
         header_label.setObjectName("paneTitle")
         header_layout.addWidget(header_label)
+
+        header_layout.addStretch(1)
+
+        from PySide6.QtWidgets import QToolButton
+        close_all_btn = QToolButton(self)
+        close_all_btn.setText("Close All")
+        close_all_btn.setObjectName("closeAllBtn")
+        close_all_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        close_all_btn.clicked.connect(self.clear)
+        header_layout.addWidget(close_all_btn)
+
         layout.addWidget(header_container)
 
         # Vertical splitter: code editor (top) / info hub (bottom)
@@ -723,13 +736,14 @@ class AuraPlayground(QWidget):
         self._info_hub.append_terminal_output(worker_tool_id, text)
 
     def worker_finished(self, ok: bool, summary: str):
-        self._code_editor.close_all_tabs()
-        self._info_hub.close_all_terminal_tabs()
+        # self._code_editor.close_all_tabs()
+        # self._info_hub.close_all_terminal_tabs()
         self._info_hub.show_final_summary(ok, summary)
 
     def worker_cancelled(self):
-        self._code_editor.close_all_tabs()
-        self._info_hub.close_all_terminal_tabs()
+        # self._code_editor.close_all_tabs()
+        # self._info_hub.close_all_terminal_tabs()
+        pass
 
     def clear(self):
         self.begin_assistant()
