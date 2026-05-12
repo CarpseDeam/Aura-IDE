@@ -10,6 +10,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+from aura.ast_utils import parse_python_ast
+
 # Directories and file suffixes to skip when generating the repo map.
 SKIP_DIRS: set[str] = {
     ".git", ".aura", "__pycache__", "node_modules", "build", "dist",
@@ -67,7 +69,7 @@ def _get_max_mtime(root: Path) -> float:
     return latest
 
 
-def _outline_python(text: str) -> dict[str, Any]:
+def _outline_python(text: str, filename: str = "<unknown>") -> dict[str, Any]:
     """AST-based outline for Python files.
 
     Returns dict with keys: language, imports, classes, functions.
@@ -77,7 +79,7 @@ def _outline_python(text: str) -> dict[str, Any]:
     functions: list[dict[str, Any]] = []
 
     try:
-        tree = ast.parse(text)
+        tree = parse_python_ast(text, filename=filename)
     except SyntaxError:
         return {"language": "python", "imports": [], "classes": [], "functions": []}
 
@@ -213,7 +215,7 @@ def generate_repo_map(workspace_root: Path) -> str:
             file_count += 1
 
             if suffix == ".py":
-                outline = _outline_python(text)
+                outline = _outline_python(text, filename=fpath)
             else:
                 # For non-Python files, just record the file name
                 tree_lines.append(rel_path)

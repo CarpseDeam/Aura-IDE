@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from aura.ast_utils import parse_python_ast
 from aura.config import MAX_GLOB_RESULTS, MAX_READ_BYTES, SKIP_DIRS, SKIP_FILE_SUFFIXES
 
 
@@ -67,7 +68,7 @@ def read_file_outline(workspace_root: Path, target: Path) -> dict[str, Any]:
     total_lines = len(lines) + (0 if not truncated else 0)  # line count from what we read
 
     if suffix == ".py":
-        result = _outline_python(text, lines)
+        result = _outline_python(text, lines, filename=str(target))
     else:
         result = _outline_generic(lines)
 
@@ -127,14 +128,14 @@ def read_file_outline(workspace_root: Path, target: Path) -> dict[str, Any]:
 _PY_FUNC_TYPES = (ast.FunctionDef, ast.AsyncFunctionDef)
 
 
-def _outline_python(text: str, lines: list[str]) -> dict[str, Any]:
+def _outline_python(text: str, lines: list[str], filename: str = "<unknown>") -> dict[str, Any]:
     """AST-based outline for Python files."""
     imports: list[str] = []
     classes: list[dict[str, Any]] = []
     functions: list[dict[str, Any]] = []
 
     try:
-        tree = ast.parse(text)
+        tree = parse_python_ast(text, filename=filename)
     except SyntaxError:
         return {"language": "python", "imports": [], "classes": [], "functions": []}
 

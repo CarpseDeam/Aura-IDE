@@ -9,6 +9,7 @@ import ast
 from pathlib import Path
 from typing import Any
 
+from aura.ast_utils import parse_python_ast
 from aura.conversation.tools.fs_write import replace_line_range
 
 
@@ -17,6 +18,7 @@ def find_symbol_range(
     symbol_type: str,
     symbol_name: str,
     class_name: str | None = None,
+    filename: str = "<unknown>",
 ) -> tuple[int, int, dict[str, Any]]:
     """Locate a Python symbol in *source* and return its 0-indexed line range.
 
@@ -39,7 +41,7 @@ def find_symbol_range(
     Raises:
         SyntaxError: If *source* cannot be parsed.
     """
-    tree = ast.parse(source)
+    tree = parse_python_ast(source, filename=filename)
     warning = None
 
     # If symbol_type is "function" but class_name is provided, treat as method.
@@ -202,7 +204,7 @@ def propose_edit_symbol(
     # --- Parse and locate symbol ----------------------------------------------
     try:
         start_line, end_line, info = find_symbol_range(
-            original, symbol_type, symbol_name, class_name
+            original, symbol_type, symbol_name, class_name, filename=str(target)
         )
     except SyntaxError as exc:
         return {
