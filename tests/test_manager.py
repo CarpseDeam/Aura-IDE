@@ -23,6 +23,7 @@ from aura.client.events import (
     TerminalOutput,
     WorkerDispatchRequested,
 )
+from aura.hooks import hooks
 from aura.conversation.dispatch import (
     WorkerDispatchRequest,
     WorkerDispatchResult,
@@ -107,9 +108,16 @@ def history() -> History:
 
 @pytest.fixture
 def mock_client():
-    """A MagicMock for DeepSeekClient.  Override stream() per test."""
-    client = MagicMock()
-    return client
+    """A MagicMock used as the backend handler registered on the hook."""
+    return MagicMock()
+
+
+@pytest.fixture(autouse=True)
+def registered_backend(mock_client):
+    """Register mock_client as the 'generate_worker_code' hook handler."""
+    hooks.register('generate_worker_code', mock_client)
+    yield
+    hooks.unregister('generate_worker_code')
 
 
 @pytest.fixture
@@ -123,10 +131,9 @@ def mock_tools(tmp_path):
 
 
 @pytest.fixture
-def manager(mock_client, history, mock_tools) -> ConversationManager:
+def manager(history, mock_tools) -> ConversationManager:
     """A ConversationManager with all three deps mocked/real."""
     return ConversationManager(
-        client=mock_client,
         history=history,
         tool_registry=mock_tools,
     )
@@ -141,7 +148,7 @@ class TestNormalFlow:
 
     def test_simple_response(self, manager, mock_client, on_event,
                              captured_events, cancel_event, history):
-        mock_client.stream.return_value = [
+        mock_client.return_value = [
             ContentDelta(text="Hello"),
             Done(finish_reason="stop", full_message={
                 "role": "assistant",
@@ -181,7 +188,7 @@ class TestSingleToolCall:
         tc = _tool_call(tool_id, "write_file", {"path": "test.py", "content": "ok"})
 
         # First stream: tool call
-        mock_client.stream.side_effect = [
+        mock_client.side_effect = [
             iter([
                 ToolCallStart(index=0, id=tool_id, name="write_file"),
                 ToolCallArgsDelta(index=0, args_chunk='{"path":'),
@@ -251,7 +258,7 @@ class TestMaxToolRounds:
             side_effects.append(iter([
                 _make_done(content="", tool_calls=[tc_template(i)]),
             ]))
-        mock_client.stream.side_effect = side_effects
+        mock_client.side_effect = side_effects
 
         mock_tools.execute.return_value = ToolExecResult(
             ok=True, payload={"ok": True}
@@ -280,14 +287,14 @@ class TestCancelDuringStream:
 
     def test_cancel_with_content(self, manager, mock_client, on_event,
                                  captured_events, cancel_event, history):
-        mock_client.stream.return_value = [
+        mock_client.return_value = [
             ContentDelta(text="Partial "),
             # After yielding ContentDelta, we set cancel_event
         ]
 
         # We need to set cancel_event *after* the stream starts yielding.
         # Wrap stream to inject the set() call.
-        original_iter = iter(mock_client.stream.return_value)
+        original_iter = iter(mock_client.return_value)
 
         def _controlled_stream(**kwargs):
             for ev in original_iter:
@@ -296,8 +303,8 @@ class TestCancelDuringStream:
                     cancel_event.set()
             yield _make_done(content="Partial ")
 
-        mock_client.stream.side_effect = None
-        mock_client.stream.side_effect = _controlled_stream
+        mock_client.side_effect = None
+        mock_client.side_effect = _controlled_stream
 
         manager.send(
             on_event=on_event,
@@ -331,7 +338,7 @@ class TestCancelBeforeStream:
         # Set cancel before sending
         cancel_event.set()
 
-        mock_client.stream.return_value = [
+        mock_client.return_value = [
             _make_done(content="Should not appear"),
         ]
 
@@ -374,8 +381,7 @@ class TestCancelWithToolCalls:
             # After yielding Done, set cancel_event
             cancel_event.set()
 
-        mock_client.stream.side_effect = _controlled
-
+mock_client.side_effect = _controlled
         manager.send(
             on_event=on_event,
             approval_cb=_make_approval_cb(),
@@ -412,7 +418,7 @@ class TestDispatchToWorker:
             "acceptance": "Tests pass",
         })
 
-        mock_client.stream.return_value = [
+        mock_client.return_value = [
             _make_done(content="", tool_calls=[tc]),
         ]
 
@@ -422,8 +428,8 @@ class TestDispatchToWorker:
         )
 
         # Need a second stream call for the follow-up round
-        mock_client.stream.side_effect = [
-            iter(mock_client.stream.return_value),  # first round (dispatch)
+        mock_client.side_effect = [
+            iter(mock_client.return_value),  # first round (dispatch)
             iter([                                 # second round (result)
                 ContentDelta(text="All done"),
                 _make_done(content="All done"),
@@ -465,7 +471,7 @@ class TestDispatchToWorker:
         })
 
         # Stream first yields the tool call, then yields a content-only response
-        mock_client.stream.side_effect = [
+        mock_client.side_effect = [
             iter([_make_done(content="", tool_calls=[tc])]),
             iter([ContentDelta(text="Done"), _make_done(content="Done")]),
         ]
@@ -498,15 +504,14 @@ class TestDispatchToWorker:
         def _raising_cb(tool_call_id, req):
             raise RuntimeError("boom")
 
-        mock_client.stream.return_value = [
+mock_client.return_value = [
             _make_done(content="", tool_calls=[tc]),
         ]
 
-        mock_client.stream.side_effect = [
-            iter(mock_client.stream.return_value),
+        mock_client.side_effect = [
+            iter(mock_client.return_value),
             iter([ContentDelta(text="Done"), _make_done(content="Done")]),
         ]
-
         manager.send(
             on_event=on_event,
             approval_cb=_make_approval_cb(),
@@ -551,8 +556,7 @@ class TestRunTerminalCommand:
 
         tc = _tool_call("term1", "run_terminal_command",
                         {"command": "echo hello", "timeout": 30})
-
-        mock_client.stream.side_effect = [
+mock_client.side_effect = [
             iter([_make_done(content="", tool_calls=[tc])]),
             iter([ContentDelta(text="Done"), _make_done(content="Done")]),
         ]
@@ -565,8 +569,7 @@ class TestRunTerminalCommand:
             thinking="off",
         )
 
-        # SandboxExecutor was created with correct args
-        mock_sandbox_cls.assert_called_once()
+        # SandboxExecutor was created with correct args        mock_sandbox_cls.assert_called_once()
         _, kwargs = mock_sandbox_cls.call_args
         assert kwargs["mode"] == "host"
         assert kwargs["workspace_root"] == tmp_path
@@ -592,7 +595,7 @@ class TestRunTerminalCommand:
 
         tc = _tool_call("term1", "run_terminal_command", {})  # no command
 
-        mock_client.stream.side_effect = [
+        mock_client.side_effect = [
             iter([_make_done(content="", tool_calls=[tc])]),
             iter([ContentDelta(text="Done"), _make_done(content="Done")]),
         ]
@@ -636,7 +639,7 @@ class TestRunResearch:
         # First stream: outer loop yields research tool call
         # Second stream: research loop yields content directly (no tool calls)
         # Third stream: outer loop's next round yields content -> loop ends
-        mock_client.stream.side_effect = [
+        mock_client.side_effect = [
             iter([_make_done(content="", tool_calls=[tc])]),
             iter([ContentDelta(text="Report content"),
                   _make_done(content="Research complete. Here is the report.")]),
@@ -686,7 +689,7 @@ class TestRunResearch:
         # Outer stream: tool call
         # Research stream: tool call (web_search) -> content
         # Outer stream: content
-        mock_client.stream.side_effect = [
+        mock_client.side_effect = [
             iter([_make_done(content="", tool_calls=[tc])]),
             iter([
                 _make_done(content="", tool_calls=[
@@ -734,7 +737,7 @@ class TestRunResearch:
 
         # Research stream raises ApiError -> caught by try/except in _handle_research
         # Third stream: outer loop's next round
-        mock_client.stream.side_effect = [
+        mock_client.side_effect = [
             iter([_make_done(content="", tool_calls=[tc])]),
             iter([ApiError(status_code=500, message="API failure")]),
             iter([ContentDelta(text="Done"), _make_done(content="Done")]),
@@ -767,7 +770,7 @@ class TestRunResearch:
         tc = _tool_call("res1", "run_research", {})  # no objective
 
         # Only needs one stream — error path returns immediately
-        mock_client.stream.side_effect = [
+        mock_client.side_effect = [
             iter([_make_done(content="", tool_calls=[tc])]),
             iter([ContentDelta(text="Done"), _make_done(content="Done")]),
         ]
@@ -796,7 +799,7 @@ class TestApiError:
 
     def test_api_error_from_stream(self, manager, mock_client, on_event,
                                    captured_events, cancel_event, history):
-        mock_client.stream.return_value = [
+        mock_client.return_value = [
             ApiError(status_code=500, message="Server error"),
         ]
 
@@ -830,7 +833,7 @@ class TestCircuitBreaker:
         tc = _tool_call("cb1", "write_file", {"path": "test.py", "content": "data"})
 
         # Each round returns another tool call
-        mock_client.stream.side_effect = [
+        mock_client.side_effect = [
             iter([_make_done(content="", tool_calls=[tc])]),
             iter([_make_done(content="", tool_calls=[tc])]),
             iter([_make_done(content="", tool_calls=[tc])]),
@@ -868,7 +871,7 @@ class TestCircuitBreaker:
         # Round 1: tool call -> fail
         # Round 2: tool call (different args) -> succeed (resets counter for the original key)
         # Round 3: original tool call -> fail (count=1, no circuit breaker)
-        mock_client.stream.side_effect = [
+        mock_client.side_effect = [
             iter([_make_done(content="", tool_calls=[tc_fail])]),
             iter([_make_done(content="", tool_calls=[tc_success])]),
             iter([_make_done(content="", tool_calls=[tc_fail])]),
@@ -913,13 +916,12 @@ class TestCircuitBreaker:
         """Three identical failures trigger circuit breaker."""
         tc = _tool_call("cb1", "write_file", {"path": "test.py", "content": "data"})
 
-        mock_client.stream.side_effect = [
+mock_client.side_effect = [
             iter([_make_done(content="", tool_calls=[tc])]),
             iter([_make_done(content="", tool_calls=[tc])]),
             iter([_make_done(content="", tool_calls=[tc])]),
             iter([ContentDelta(text="Done"), _make_done(content="Done")]),
         ]
-
         mock_tools.execute.return_value = ToolExecResult(
             ok=False, payload={"ok": False, "error": "fail"}
         )
@@ -957,7 +959,7 @@ class TestRejectAll:
         tc2 = _tool_call("w2", "write_file", {"path": "b.py", "content": "2"})
 
         # First stream returns two tool calls
-        mock_client.stream.return_value = [
+        mock_client.return_value = [
             _make_done(content="", tool_calls=[tc1, tc2]),
         ]
 
@@ -968,8 +970,8 @@ class TestRejectAll:
             extras={"approval": "reject_all", "rel_path": "a.py"},
         )
 
-        mock_client.stream.side_effect = [
-            iter(mock_client.stream.return_value),
+        mock_client.side_effect = [
+            iter(mock_client.return_value),
             iter([ContentDelta(text="Done"), _make_done(content="Done")]),
         ]
 
@@ -1010,12 +1012,12 @@ class TestJsonParseError:
             },
         }
 
-        mock_client.stream.return_value = [
+        mock_client.return_value = [
             _make_done(content="", tool_calls=[tc]),
         ]
 
-        mock_client.stream.side_effect = [
-            iter(mock_client.stream.return_value),
+        mock_client.side_effect = [
+            iter(mock_client.return_value),
             iter([ContentDelta(text="Done"), _make_done(content="Done")]),
         ]
 
@@ -1102,7 +1104,7 @@ class TestEdgeCases:
     def test_empty_tool_calls_list(self, manager, mock_client, on_event,
                                    captured_events, cancel_event, history):
         """An assistant message with an empty tool_calls list should not loop."""
-        mock_client.stream.return_value = [
+        mock_client.return_value = [
             _make_done(content="No tools", tool_calls=[]),
         ]
         manager.send(
@@ -1118,7 +1120,7 @@ class TestEdgeCases:
     def test_done_with_reasoning(self, manager, mock_client, on_event,
                                  captured_events, cancel_event, history):
         """Assistant response with reasoning_content is stored correctly."""
-        mock_client.stream.return_value = [
+        mock_client.return_value = [
             ReasoningDelta(text="Thinking..."),
             ContentDelta(text="Answer"),
             _make_done(content="Answer", reasoning="Thinking..."),
@@ -1141,11 +1143,11 @@ class TestEdgeCases:
         tc1 = _tool_call("c1", "write_file", {"path": "a.py", "content": "1"})
         tc2 = _tool_call("c2", "edit_file", {"path": "b.py", "old_str": "x", "new_str": "y"})
 
-        mock_client.stream.return_value = [
+        mock_client.return_value = [
             _make_done(content="", tool_calls=[tc1, tc2]),
         ]
-        mock_client.stream.side_effect = [
-            iter(mock_client.stream.return_value),
+        mock_client.side_effect = [
+            iter(mock_client.return_value),
             iter([ContentDelta(text="Done"), _make_done(content="Done")]),
         ]
 

@@ -22,7 +22,6 @@ from typing import Any, Callable
 from aura.client import (
     ApiError,
     ContentDelta,
-    DeepSeekClient,
     Done,
     Event,
     ReasoningDelta,
@@ -34,6 +33,7 @@ from aura.client import (
     Usage,
     WorkerDispatchRequested,
 )
+from aura.hooks import hooks
 from aura.config import MAX_TOOL_ROUNDS, ModelId, ThinkingMode
 from aura.conversation.dispatch import (
     DispatchCallback,
@@ -55,11 +55,9 @@ EventCallback = Callable[[Event], None]
 class ConversationManager:
     def __init__(
         self,
-        client: DeepSeekClient,
         history: History,
         tool_registry: ToolRegistry,
     ) -> None:
-        self._client = client
         self._history = history
         self._tools = tool_registry
         # Tracks repetitive tool failures: (tool_name, args_json) -> (last_result, count)
@@ -102,7 +100,8 @@ class ConversationManager:
             full_message: dict[str, Any] | None = None
             tool_defs = self._tools.tool_defs()
 
-            for ev in self._client.stream(
+            for ev in hooks.trigger(
+                'generate_worker_code',
                 messages=self._history.for_api(),
                 tools=tool_defs,
                 model=model,
@@ -348,7 +347,8 @@ class ConversationManager:
                     break
                 
                 full_msg = None
-                for ev in self._client.stream(
+                for ev in hooks.trigger(
+                    'generate_worker_code',
                     messages=res_history.for_api(),
                     tools=res_tools.tool_defs(),
                     model=model,

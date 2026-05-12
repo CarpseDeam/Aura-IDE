@@ -29,10 +29,10 @@ from PySide6.QtCore import (
     Slot,
 )
 
+from aura.backends import APIAgentBackend
 from aura.client import (
     ApiError,
     ContentDelta,
-    DeepSeekClient,
     Done,
     Event,
     ReasoningDelta,
@@ -44,6 +44,7 @@ from aura.client import (
     Usage,
     WorkerDispatchRequested,
 )
+from aura.hooks import hooks
 from aura.config import (
     DEFAULT_WORKER_MODEL,
     DEFAULT_WORKER_THINKING,
@@ -262,7 +263,6 @@ class _DispatchProxy(QObject):
     def __init__(
         self,
         parent_widget,
-        client: DeepSeekClient,
         registry_factory,
         approval_proxy: _ApprovalProxy,
         workspace_root: Path | None = None,
@@ -270,7 +270,6 @@ class _DispatchProxy(QObject):
     ) -> None:
         super().__init__()
         self._parent_widget = parent_widget
-        self._client = client
         self._registry_factory = registry_factory
         self._approval_proxy = approval_proxy
         self._workspace_root = workspace_root
@@ -406,7 +405,7 @@ class _DispatchProxy(QObject):
         worker_history.append_user_text(_format_spec_as_user_message(req))
 
         worker_registry = self._registry_factory("worker")
-        worker_manager = ConversationManager(self._client, worker_history, worker_registry)
+        worker_manager = ConversationManager(worker_history, worker_registry)
 
         self.workerStarted.emit(tool_call_id)
         cancel_event = threading.Event()
@@ -653,17 +652,18 @@ class ConversationBridge(QObject):
     ) -> None:
         super().__init__()
         self._provider = provider
-        self._client = DeepSeekClient(provider=provider)
+        self._backend = APIAgentBackend(provider=provider)
+        self._client = self._backend.client  # kept for backward compat / dispatch proxy if needed
+        hooks.register('generate_worker_code', self._backend.stream)
         self._history = History()
         self._registry = ToolRegistry(workspace_root=_dummy_root(), mode="single")
-        self._manager = ConversationManager(self._client, self._history, self._registry)
+        self._manager = ConversationManager(self._history, self._registry)
         self._parent_widget = parent_widget
         self._approval_proxy = _ApprovalProxy(parent_widget)
 
         # Dispatch proxy (used only when planner_worker_mode is on).
         self._dispatch_proxy = _DispatchProxy(
             parent_widget=parent_widget,
-            client=self._client,
             registry_factory=self._make_worker_registry,
             approval_proxy=self._approval_proxy,
             workspace_root=self._registry.workspace_root,
@@ -797,11 +797,13 @@ class ConversationBridge(QObject):
         old_worker_prompt = self._dispatch_proxy._worker_system_prompt
         old_auto_commit = self._dispatch_proxy._auto_commit_enabled
         self._provider = provider
-        self._client = DeepSeekClient(provider=provider)
-        self._manager = ConversationManager(self._client, self._history, self._registry)
+        self._backend = APIAgentBackend(provider=provider)
+        self._client = self._backend.client
+        hooks.unregister('generate_worker_code')
+        hooks.register('generate_worker_code', self._backend.stream)
+        self._manager = ConversationManager(self._history, self._registry)
         self._dispatch_proxy = _DispatchProxy(
             parent_widget=self._parent_widget,
-            client=self._client,
             registry_factory=self._make_worker_registry,
             approval_proxy=self._approval_proxy,
             workspace_root=self._registry.workspace_root,
