@@ -649,9 +649,12 @@ class AuraPlayground(QWidget):
 
         self._splitter.addWidget(self._code_editor)
         self._splitter.addWidget(self._info_hub)
-        self._splitter.setStretchFactor(0, 6)
-        self._splitter.setStretchFactor(1, 4)
-        self._splitter.setSizes([600, 400])
+
+        # Stretch factors: code editor (top) gets all the vertical stretch.
+        # This keeps the info hub (log) from "exploding" when the window height increases.
+        self._splitter.setStretchFactor(0, 1)
+        self._splitter.setStretchFactor(1, 0)
+        self._splitter.setSizes([700, 300])
 
         layout.addWidget(self._splitter, 1)
 

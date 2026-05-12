@@ -185,11 +185,18 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         splitter.addWidget(center)
         splitter.addWidget(self._playground_aura)
 
+        # Sensible initial distribution: left is narrow, right is side-panel width, chat gets rest.
         w = self.width()
-        splitter.setSizes([min(200, w // 8), (w - min(200, w // 8)) // 2, (w - min(200, w // 8)) // 2])
-        splitter.setStretchFactor(0, 0)  # workspace tree doesn't stretch
-        splitter.setStretchFactor(1, 1)  # chat gets 1/2 of stretch
-        splitter.setStretchFactor(2, 1)  # worker gets 1/2 of stretch
+        left_w = 220
+        right_w = 400
+        center_w = w - left_w - right_w
+        splitter.setSizes([left_w, center_w, right_w])
+
+        # Stretch factors: Only the chat (index 1) should grow when the window is resized.
+        # This prevents the worker panel from "exploding" in size.
+        splitter.setStretchFactor(0, 0)  # workspace tree: fixed
+        splitter.setStretchFactor(1, 1)  # chat: expands to fill space
+        splitter.setStretchFactor(2, 0)  # worker: fixed (but still user-resizable)
 
         self.setCentralWidget(splitter)
 

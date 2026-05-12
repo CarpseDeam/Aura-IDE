@@ -16,6 +16,9 @@ class AgentBackend(ABC):
 
     Every backend must implement `stream()`, which yields events as the model
     generates a response. This is the only method the conversation loop needs.
+
+    Optionally override `check_auth()` and `run_cli_auth()` for CLI-based
+    backends that require interactive authentication.
     """
 
     @abstractmethod
@@ -44,3 +47,25 @@ class AgentBackend(ABC):
             ToolCallArgsDelta, ToolCallEnd, Usage, Done, ApiError).
         """
         ...
+
+    def check_auth(self) -> bool:
+        """Return True if the backend is authenticated and ready to use.
+
+        Default implementation returns True (API-based backends are always
+        considered authenticated as long as an API key is configured).
+
+        CLI-based backends should override this to probe actual credential
+        state (e.g., by running a token check subprocess).
+        """
+        return True
+
+    def run_cli_auth(self) -> bool:
+        """Run an interactive CLI authentication flow.
+
+        Default implementation is a no-op that returns True (API backends
+        do not need CLI auth). Override in CLIAgentBackend subclasses.
+
+        Returns:
+            True if authentication succeeded, False otherwise.
+        """
+        return True
