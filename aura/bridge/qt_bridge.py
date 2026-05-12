@@ -29,7 +29,12 @@ from PySide6.QtCore import (
     Slot,
 )
 
-from aura.backends import APIAgentBackend, GeminiCLIAgentBackend
+from aura.backends import (
+    APIAgentBackend,
+    ClaudeCodeBackend,
+    CodexBackend,
+    GeminiCLIBackend,
+)
 from aura.client import (
     ApiError,
     ContentDelta,
@@ -840,39 +845,51 @@ class ConversationBridge(QObject):
         """Check if the named backend is authenticated.
 
         Args:
-            backend_name: 'default_api' or 'gemini_cli'.
+            backend_name: 'default_api', 'gemini_cli', 'claude_code', or 'codex'.
 
         Returns:
             True if the backend is authenticated, False otherwise.
         """
+        root = self._registry.workspace_root
         if backend_name == 'gemini_cli':
-            backend = GeminiCLIAgentBackend(workspace_root=self._registry.workspace_root)
-            return backend.check_auth()
+            return GeminiCLIBackend(workspace_root=root).check_auth()
+        if backend_name == 'claude_code':
+            return ClaudeCodeBackend(workspace_root=root).check_auth()
+        if backend_name == 'codex':
+            return CodexBackend(workspace_root=root).check_auth()
         return True  # 'default_api' is always authenticated
 
     def run_backend_auth(self, backend_name: str) -> bool:
         """Run the CLI auth flow for the given backend. Blocks until complete.
 
         Args:
-            backend_name: 'default_api' or 'gemini_cli'.
+            backend_name: 'default_api', 'gemini_cli', 'claude_code', or 'codex'.
 
         Returns:
             True if authentication succeeded, False otherwise.
         """
+        root = self._registry.workspace_root
         if backend_name == 'gemini_cli':
-            backend = GeminiCLIAgentBackend(workspace_root=self._registry.workspace_root)
-            return backend.run_cli_auth()
+            return GeminiCLIBackend(workspace_root=root).run_cli_auth()
+        if backend_name == 'claude_code':
+            return ClaudeCodeBackend(workspace_root=root).run_cli_auth()
+        if backend_name == 'codex':
+            return CodexBackend(workspace_root=root).run_cli_auth()
         return True
 
     def set_planner_backend(self, backend_name: str) -> None:
         """Swap the planner backend hook handler.
 
         Args:
-            backend_name: 'default_api' or 'gemini_cli'
+            backend_name: 'default_api', 'gemini_cli', 'claude_code', or 'codex'
         """
         hooks.unregister('generate_planner_code')
         if backend_name == 'gemini_cli':
-            hooks.register('generate_planner_code', GeminiCLIAgentBackend().stream)
+            hooks.register('generate_planner_code', GeminiCLIBackend().stream)
+        elif backend_name == 'claude_code':
+            hooks.register('generate_planner_code', ClaudeCodeBackend().stream)
+        elif backend_name == 'codex':
+            hooks.register('generate_planner_code', CodexBackend().stream)
         else:
             hooks.register('generate_planner_code', self._backend.stream)
 
@@ -880,11 +897,15 @@ class ConversationBridge(QObject):
         """Swap the worker backend hook handler.
 
         Args:
-            backend_name: 'default_api' or 'gemini_cli'
+            backend_name: 'default_api', 'gemini_cli', 'claude_code', or 'codex'
         """
         hooks.unregister('generate_worker_code')
         if backend_name == 'gemini_cli':
-            hooks.register('generate_worker_code', GeminiCLIAgentBackend().stream)
+            hooks.register('generate_worker_code', GeminiCLIBackend().stream)
+        elif backend_name == 'claude_code':
+            hooks.register('generate_worker_code', ClaudeCodeBackend().stream)
+        elif backend_name == 'codex':
+            hooks.register('generate_worker_code', CodexBackend().stream)
         else:
             hooks.register('generate_worker_code', self._backend.stream)
 

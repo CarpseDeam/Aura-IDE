@@ -147,6 +147,8 @@ class LeftPane(QFrame):
         self._planner_backend_combo = QComboBox()
         self._planner_backend_combo.addItem("Default API", "default_api")
         self._planner_backend_combo.addItem("Gemini CLI", "gemini_cli")
+        self._planner_backend_combo.addItem("Claude Code", "claude_code")
+        self._planner_backend_combo.addItem("Codex", "codex")
         self._planner_backend_combo.currentIndexChanged.connect(
             lambda: self.planner_backend_changed.emit(self._planner_backend_combo.currentData())
         )
@@ -162,6 +164,8 @@ class LeftPane(QFrame):
         self._worker_backend_combo = QComboBox()
         self._worker_backend_combo.addItem("Default API", "default_api")
         self._worker_backend_combo.addItem("Gemini CLI", "gemini_cli")
+        self._worker_backend_combo.addItem("Claude Code", "claude_code")
+        self._worker_backend_combo.addItem("Codex", "codex")
         self._worker_backend_combo.currentIndexChanged.connect(
             lambda: self.worker_backend_changed.emit(self._worker_backend_combo.currentData())
         )

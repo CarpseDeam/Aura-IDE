@@ -25,7 +25,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from aura.backends import GeminiCLIAgentBackend
+from aura.backends import (
+    ClaudeCodeBackend,
+    CodexBackend,
+    GeminiCLIBackend,
+)
 from aura.config import (
     APP_NAME,
     PROVIDERS,
@@ -78,11 +82,40 @@ class AuthWorker(QObject):
         ok = False
         try:
             if self._backend_name == "gemini_cli":
-                backend = GeminiCLIAgentBackend()
+                backend = GeminiCLIBackend()
+                ok = backend.run_cli_auth()
+            elif self._backend_name == "claude_code":
+                backend = ClaudeCodeBackend()
+                ok = backend.run_cli_auth()
+            elif self._backend_name == "codex":
+                backend = CodexBackend()
                 ok = backend.run_cli_auth()
         except Exception:
             ok = False
         self.finished.emit(ok)
+
+
+class AuthStatusWorker(QObject):
+    """Background worker for checking CLI auth status without blocking."""
+
+    finished = Signal(dict)
+
+    def run(self) -> None:
+        """Check all CLI backends and emit results."""
+        results = {}
+        try:
+            results["gemini_cli"] = GeminiCLIBackend().check_auth()
+        except Exception:
+            results["gemini_cli"] = False
+        try:
+            results["claude_code"] = ClaudeCodeBackend().check_auth()
+        except Exception:
+            results["claude_code"] = False
+        try:
+            results["codex"] = CodexBackend().check_auth()
+        except Exception:
+            results["codex"] = False
+        self.finished.emit(results)
 
 
 class SettingsDialog(QDialog):
@@ -371,19 +404,47 @@ class SettingsDialog(QDialog):
         backend_note.setWordWrap(True)
         form.addRow("", backend_note)
 
-        # Gemini CLI
-        gemini_label = QLabel("Gemini CLI")
-        self._gemini_auth_status = QLabel("Checking...")
-        self._gemini_auth_btn = QPushButton("Login")
-        self._gemini_auth_btn.clicked.connect(self._on_gemini_cli_auth)
-        gemini_row = QHBoxLayout()
-        gemini_row.setSpacing(6)
-        gemini_row.addWidget(gemini_label, 1)
-        gemini_row.addWidget(self._gemini_auth_status)
-        gemini_row.addWidget(self._gemini_auth_btn)
-        gemini_widget = QWidget()
-        gemini_widget.setLayout(gemini_row)
-        form.addRow("", gemini_widget)
+        # Gemini CLI (npm)
+        gemini_cli_label = QLabel("Gemini CLI")
+        self._gemini_cli_auth_status = QLabel("Checking...")
+        self._gemini_cli_auth_btn = QPushButton("Login")
+        self._gemini_cli_auth_btn.clicked.connect(self._on_gemini_cli_auth)
+        gemini_cli_row = QHBoxLayout()
+        gemini_cli_row.setSpacing(6)
+        gemini_cli_row.addWidget(gemini_cli_label, 1)
+        gemini_cli_row.addWidget(self._gemini_cli_auth_status)
+        gemini_cli_row.addWidget(self._gemini_cli_auth_btn)
+        gemini_cli_widget = QWidget()
+        gemini_cli_widget.setLayout(gemini_cli_row)
+        form.addRow("", gemini_cli_widget)
+
+        # Claude Code
+        claude_label = QLabel("Claude Code")
+        self._claude_auth_status = QLabel("Checking...")
+        self._claude_auth_btn = QPushButton("Login")
+        self._claude_auth_btn.clicked.connect(self._on_claude_auth)
+        claude_row = QHBoxLayout()
+        claude_row.setSpacing(6)
+        claude_row.addWidget(claude_label, 1)
+        claude_row.addWidget(self._claude_auth_status)
+        claude_row.addWidget(self._claude_auth_btn)
+        claude_widget = QWidget()
+        claude_widget.setLayout(claude_row)
+        form.addRow("", claude_widget)
+
+        # Codex
+        codex_label = QLabel("Codex CLI")
+        self._codex_auth_status = QLabel("Checking...")
+        self._codex_auth_btn = QPushButton("Login")
+        self._codex_auth_btn.clicked.connect(self._on_codex_auth)
+        codex_row = QHBoxLayout()
+        codex_row.setSpacing(6)
+        codex_row.addWidget(codex_label, 1)
+        codex_row.addWidget(self._codex_auth_status)
+        codex_row.addWidget(self._codex_auth_btn)
+        codex_widget = QWidget()
+        codex_widget.setLayout(codex_row)
+        form.addRow("", codex_widget)
 
         # --- Sandbox ---
         sandbox_sep = QLabel("Execution Sandbox")
@@ -517,8 +578,16 @@ class SettingsDialog(QDialog):
         buttons.rejected.connect(self.reject)
         outer.addWidget(buttons)
 
-        # Check initial auth status for CLI backends
-        self._check_gemini_cli_auth()
+        # Check initial auth status for CLI backends asynchronously
+        self._auth_status_thread = QThread(self)
+        self._auth_status_worker = AuthStatusWorker()
+        self._auth_status_worker.moveToThread(self._auth_status_thread)
+        self._auth_status_thread.started.connect(self._auth_status_worker.run)
+        self._auth_status_worker.finished.connect(self._on_auth_status_finished)
+        self._auth_status_worker.finished.connect(self._auth_status_thread.quit)
+        self._auth_status_worker.finished.connect(self._auth_status_worker.deleteLater)
+        self._auth_status_thread.finished.connect(self._auth_status_thread.deleteLater)
+        self._auth_status_thread.start()
 
     def _on_provider_changed(self) -> None:
         provider_id: ProviderId = self._provider_combo.currentData()
@@ -681,59 +750,118 @@ class SettingsDialog(QDialog):
         self._worker_thinking_combo.setEnabled(enabled)
         self._worker_temperature_spin.setEnabled(enabled)
 
+    def _on_auth_status_finished(self, results: dict[str, bool]) -> None:
+        """Update UI labels based on background auth checks."""
+        self._update_auth_ui(
+            "gemini_cli",
+            self._gemini_cli_auth_status,
+            self._gemini_cli_auth_btn,
+            results.get("gemini_cli", False),
+        )
+        self._update_auth_ui(
+            "claude_code",
+            self._claude_auth_status,
+            self._claude_auth_btn,
+            results.get("claude_code", False),
+        )
+        self._update_auth_ui(
+            "codex",
+            self._codex_auth_status,
+            self._codex_auth_btn,
+            results.get("codex", False),
+        )
+
+    def _update_auth_ui(
+        self, name: str, label: QLabel, btn: QPushButton, authed: bool
+    ) -> None:
+        if authed:
+            label.setText("\u2713 Authenticated")
+            label.setStyleSheet(f"color: {SUCCESS};")
+            btn.hide()
+        else:
+            label.setText("\u2717 Login Required")
+            label.setStyleSheet(f"color: {WARN};")
+            btn.show()
+            btn.setText("Login")
+            btn.setEnabled(True)
+
     def _check_gemini_cli_auth(self) -> None:
-        """Query gcloud credential state and update the UI accordingly."""
+        """Query gemini CLI credential state and update the UI accordingly."""
         try:
-            backend = GeminiCLIAgentBackend()
-            authed = backend.check_auth()
+            authed = GeminiCLIBackend().check_auth()
         except Exception:
             authed = False
-
-        if authed:
-            self._gemini_auth_status.setText("\u2713 Authenticated")
-            self._gemini_auth_status.setStyleSheet(f"color: {SUCCESS};")
-            self._gemini_auth_btn.hide()
-        else:
-            self._gemini_auth_status.setText("\u2717 Login Required")
-            self._gemini_auth_status.setStyleSheet(f"color: {WARN};")
-            self._gemini_auth_btn.show()
-            self._gemini_auth_btn.setText("Login")
-            self._gemini_auth_btn.setEnabled(True)
+        self._update_auth_ui(
+            "gemini_cli", self._gemini_cli_auth_status, self._gemini_cli_auth_btn, authed
+        )
 
     def _on_gemini_cli_auth(self) -> None:
         """Launch the CLI auth flow in a background thread."""
-        self._gemini_auth_btn.setEnabled(False)
-        self._gemini_auth_btn.setText("Waiting for browser login...")
-        self._gemini_auth_status.setText("Opening browser...")
-        self._gemini_auth_status.setStyleSheet(f"color: {FG_DIM};")
+        self._run_auth_flow(
+            "gemini_cli", self._gemini_cli_auth_btn, self._gemini_cli_auth_status
+        )
+
+    def _check_claude_auth(self) -> None:
+        try:
+            authed = ClaudeCodeBackend().check_auth()
+        except Exception:
+            authed = False
+        self._update_auth_ui(
+            "claude_code", self._claude_auth_status, self._claude_auth_btn, authed
+        )
+
+    def _on_claude_auth(self) -> None:
+        self._run_auth_flow(
+            "claude_code", self._claude_auth_btn, self._claude_auth_status
+        )
+
+    def _check_codex_auth(self) -> None:
+        try:
+            authed = CodexBackend().check_auth()
+        except Exception:
+            authed = False
+        self._update_auth_ui("codex", self._codex_auth_status, self._codex_auth_btn, authed)
+
+    def _on_codex_auth(self) -> None:
+        self._run_auth_flow("codex", self._codex_auth_btn, self._codex_auth_status)
+
+    def _run_auth_flow(self, backend_name: str, btn: QPushButton, status_label: QLabel) -> None:
+        btn.setEnabled(False)
+        btn.setText("Waiting for login...")
+        status_label.setText("Authenticating...")
+        status_label.setStyleSheet(f"color: {FG_DIM};")
 
         self._auth_thread = QThread(self)
-        self._auth_worker = AuthWorker("gemini_cli")
+        self._auth_worker = AuthWorker(backend_name)
         self._auth_worker.moveToThread(self._auth_thread)
         self._auth_thread.started.connect(self._auth_worker.run)
-        self._auth_worker.finished.connect(self._on_auth_finished)
+        
+        # We use a lambda to pass the backend_name back to the finished handler
+        self._auth_worker.finished.connect(lambda ok: self._on_auth_finished(backend_name, ok))
+        
         self._auth_worker.finished.connect(self._auth_thread.quit)
         self._auth_worker.finished.connect(self._auth_worker.deleteLater)
         self._auth_thread.finished.connect(self._auth_thread.deleteLater)
         self._auth_thread.start()
 
-    def _on_auth_finished(self, ok: bool) -> None:
+    def _on_auth_finished(self, backend_name: str, ok: bool) -> None:
         """Callback when the CLI auth thread completes."""
-        if ok:
-            self._gemini_auth_status.setText("\u2713 Authenticated")
-            self._gemini_auth_status.setStyleSheet(f"color: {SUCCESS};")
-            self._gemini_auth_btn.hide()
-        else:
-            self._gemini_auth_status.setText("\u2717 Login Required")
-            self._gemini_auth_status.setStyleSheet(f"color: {WARN};")
-            self._gemini_auth_btn.setText("Login")
-            self._gemini_auth_btn.setEnabled(True)
+        if backend_name == "gemini_cli":
+            self._check_gemini_cli_auth()
+        elif backend_name == "claude_code":
+            self._check_claude_auth()
+        elif backend_name == "codex":
+            self._check_codex_auth()
+
+        if not ok:
             QMessageBox.warning(
                 self,
                 APP_NAME,
-                "Authentication failed. Please ensure gcloud is installed and try again.",
+                f"Authentication failed for {backend_name}. Please ensure the CLI is installed and try again.",
             )
+
     def result_settings(self) -> AppSettings:
+
         """Read the current widget values and return a fresh AppSettings."""
         provider_id: ProviderId = self._provider_combo.currentData()
 

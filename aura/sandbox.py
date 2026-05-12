@@ -143,6 +143,55 @@ class SandboxExecutor:
                 exit_code=-1,
             )
 
+    @staticmethod
+    def _run_interactive_command(
+        command: str,
+        workspace_root: Path,
+    ) -> SandboxResult:
+        """Run a command in a new interactive terminal window.
+        
+        This is used for authentication flows (gcloud auth, gemini login, etc.)
+        where the user needs to interact with a TUI or browser.
+        """
+        import sys
+        import subprocess
+
+        try:
+            if sys.platform == "win32":
+                # Use 'start' to launch in a new cmd window.
+                # /wait ensures we block until the user finishes.
+                # The first quoted argument to 'start' is the window title.
+                title = f"Aura Auth: {command}"
+                proc = subprocess.run(
+                    ["cmd.exe", "/c", "start", "/wait", title, "cmd.exe", "/c", command],
+                    cwd=str(workspace_root),
+                    check=False,
+                )
+                return SandboxResult(
+                    ok=proc.returncode == 0,
+                    stdout="Interactive session finished.",
+                    stderr="",
+                    exit_code=proc.returncode,
+                )
+            else:
+                # Unix: This is trickier as terminal emulators vary.
+                # For now, we'll try common ones or just run in-place if possible.
+                # A better approach would be to prompt the user to run it themselves
+                # or use a specific terminal emulator.
+                return SandboxResult(
+                    ok=False,
+                    stdout="",
+                    stderr="Interactive auth not yet supported on this platform.",
+                    exit_code=-1,
+                )
+        except Exception as exc:
+            return SandboxResult(
+                ok=False,
+                stdout="",
+                stderr=f"Failed to launch interactive terminal: {exc}",
+                exit_code=-1,
+            )
+
     # ---- host execution (current behavior) ----------------------------------
 
     def _run_host_dynamic_tool(
