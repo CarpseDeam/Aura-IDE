@@ -226,6 +226,9 @@ class TerminalDrawer(QWidget):
 
         if self._terminal_card is not None:
             self._terminal_card.set_result(exit_code)
+            # If drawer is open, keep card expanded (counteract auto-collapse on success)
+            if self._is_open:
+                self._terminal_card.expand()
 
         if exit_code == 0:
             # Success: flash green, then reset after 2s
@@ -321,20 +324,12 @@ class TerminalDrawer(QWidget):
             self._terminal_card = None
 
     def _update_launcher_state(self) -> None:
-        """Update launcher colour based on drawer open state and last exit code.
+        """Update launcher colour based on last exit code.
 
-        When open: brighter.
-        When closed: restore to last state (success green, failure red, or default dim).
+        Failure → DANGER (persistent). Success/unknown → FG_DIM.
+        The green flash is set directly by set_result and reset by timer.
         """
-        if self._last_exit_code is not None and self._last_exit_code != 0:
-            # Persistent failure red
-            color = DANGER
-        elif self._last_exit_code == 0 and not self._is_open:
-            # Success — dim again
-            color = FG_DIM
-        else:
-            color = FG_DIM
-
+        color = DANGER if (self._last_exit_code is not None and self._last_exit_code != 0) else FG_DIM
         self._launcher_btn.setStyleSheet(
             f"QToolButton {{"
             f"  background: transparent;"
