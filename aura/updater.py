@@ -269,6 +269,16 @@ def install_packaged_update(
                 if member_path.is_absolute() or ".." in member_path.parts:
                     logger.warning("Skipping unsafe zip member: %s", member.filename)
                     continue
+                
+                target = (extract_dir / member.filename).resolve()
+                try:
+                    if not target.is_relative_to(extract_dir.resolve()):
+                        logger.warning("Skipping zip member escaping extract_dir: %s", member.filename)
+                        continue
+                except ValueError:
+                    logger.warning("Skipping zip member escaping extract_dir: %s", member.filename)
+                    continue
+                    
                 zip_ref.extract(member, extract_dir)
 
         # Locate the new app folder/executable
@@ -300,6 +310,13 @@ def install_packaged_update(
             return PullResult(False, None, message="Current app directory does not exist.")
         if not (current_app_dir / "Aura.exe").exists() or not (current_app_dir / "media").exists():
             return PullResult(False, None, message="Current app is missing critical files (Aura.exe or media folder).")
+            
+        has_runtime_marker = any(
+            (current_app_dir / marker).exists()
+            for marker in ("PySide6", "qt.conf", "python3.dll", "python310.dll")
+        )
+        if not has_runtime_marker:
+            return PullResult(False, None, message="Current app directory lacks expected packaged runtime markers.")
             
         current_name = current_app_dir.name.lower()
         if current_name != "aura.dist" and "aura" not in current_name:
@@ -376,6 +393,7 @@ rmdir /s /q "{temp_update_dir}"
 
 echo Relaunching Aura...
 start "" "{current_app_dir}\\Aura.exe"
+del "%~f0"
 exit
 """
     temp_script = Path(tempfile.gettempdir()) / f"aura_finish_update_{os.getpid()}.cmd"
