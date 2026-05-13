@@ -343,5 +343,10 @@ class InputPanel(QFrame):
         self._clear_attachments()
         self.sent.emit(payload)
 
+    def set_text(self, text: str) -> None:
+        """Set the editor text, replacing any current content."""
+        self._editor.setPlainText(text)
+        self._editor.setFocus()
+
     def focus_editor(self) -> None:
         self._editor.setFocus()

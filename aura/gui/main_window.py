@@ -427,11 +427,35 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         )
 
     def _show_onboarding(self) -> None:
-        dlg = OnboardingDialog(self)
+        dlg = OnboardingDialog(
+            self,
+            workspace_path=str(self._workspace_root) if self._workspace_root else "",
+            on_change_workspace=self._onboarding_change_workspace,
+        )
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self._settings.first_launch_done = True
             from aura.config import save_settings
             save_settings(self._settings)
+            if dlg.selected_mission_text:
+                self._input.set_text(dlg.selected_mission_text)
+
+    def _onboarding_change_workspace(self) -> str | None:
+        """Called from onboarding dialog to change workspace. Returns new path or None."""
+        start = str(self._workspace_root) if self._workspace_root else str(Path.home())
+        chosen = QFileDialog.getExistingDirectory(self, "Choose workspace root", start)
+        if not chosen:
+            return None
+        path = Path(chosen)
+        self._workspace_root = path
+        self._bridge.set_workspace_root(path)
+        self._input.set_workspace_root(path)
+        self._send_handler.set_workspace_root(path)
+        self._playground.set_workspace_root(path)
+        self._tree.set_root(path)
+        save_workspace_root(path)
+        self._update_workspace_label()
+        self._refresh_status_bar()
+        return str(path)
 
     # ----- provider-aware model combo helpers -----------------------------
 

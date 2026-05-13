@@ -50,6 +50,8 @@ class AppSettings:
     max_tool_rounds: int = 50
     tavily_api_key: str = ""
     first_launch_done: bool = False
+    onboarding_checklist: dict = field(default_factory=dict)
+    onboarding_version: int = 1
 
     @classmethod
     def from_dict(cls, data: dict) -> "AppSettings":
@@ -114,6 +116,11 @@ class AppSettings:
             s.auto_approve = data["auto_approve"]
         if isinstance(data.get("sandbox_mode"), str) and data["sandbox_mode"] in ("host", "docker", "wasm"):
             s.sandbox_mode = data["sandbox_mode"]
+        # Onboarding fields (backward-compatible)
+        if isinstance(data.get("onboarding_checklist"), dict):
+            s.onboarding_checklist = data["onboarding_checklist"]
+        if isinstance(data.get("onboarding_version"), int):
+            s.onboarding_version = data["onboarding_version"]
         return s
 
 def settings_path() -> Path:
