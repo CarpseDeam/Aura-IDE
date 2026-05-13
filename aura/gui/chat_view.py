@@ -66,6 +66,7 @@ class ChatView(QScrollArea):
         self._pending_code_results: dict[str, bool] = {}
         self._empty_hint: QLabel | None = None
         self._scroll_anim: QPropertyAnimation | None = None
+        self._plan_writer_cards: dict[str, PlanWriterCard] = {}
         self._compact_tools: bool = False
         self._compact_tool_names: dict[str, str] = {}
         self._is_bulk_updating: bool = False
@@ -170,6 +171,7 @@ class ChatView(QScrollArea):
         self._current_aura = None
         self._tool_owner.clear()
         self._spec_cards.clear()
+        self._plan_writer_cards.clear()
         self._terminal_cards.clear()
         self._controllers.clear()
         self._clear_code_card_routes()
@@ -215,6 +217,20 @@ class ChatView(QScrollArea):
         self._code_card_paths_by_tool.clear()
         self._pending_code_content.clear()
         self._pending_code_results.clear()
+
+    def _remove_plan_writer_card(self, tool_call_id: str) -> None:
+        """Remove and delete the PlanWriterCard associated with *tool_call_id*."""
+        card = self._plan_writer_cards.pop(tool_call_id, None)
+        if card is None:
+            return
+        parent = card.parentWidget()
+        if parent is not None:
+            layout = parent.layout()
+            if layout is not None:
+                layout.removeWidget(card)
+        # Reparent to None so findChildren() stops finding it immediately
+        card.setParent(None)
+        card.deleteLater()
 
     def _code_card_key(self, path: str) -> str:
         return path.strip()
@@ -337,6 +353,7 @@ class ChatView(QScrollArea):
 
         elif name == "dispatch_to_worker" or name == "run_research":
             card = PlanWriterCard(parent=self)
+            self._plan_writer_cards[tool_call_id] = card
             if not ac._tool_cluster.isVisible():
                 ac._tool_cluster.setVisible(True)
             ac._tool_cluster_layout.addWidget(card)
@@ -449,17 +466,8 @@ class ChatView(QScrollArea):
         acceptance: str,
         summary: str = "",
     ) -> SpecCard:
-        # Hide any in-flight plan writer card for this call ID (baton pass).
-        controller = self._controllers.get(tool_call_id)
-        if controller:
-            # We don't delete it, just hide it from the assistant card cluster.
-            # The AssistantCard holds the actual widget via the layout.
-            ac = self._tool_owner.get(tool_call_id)
-            if ac:
-                for i in range(ac._tool_cluster_layout.count()):
-                    w = ac._tool_cluster_layout.itemAt(i).widget()
-                    if isinstance(w, PlanWriterCard):
-                        w.hide()
+        # Remove the in-flight plan writer card for this call ID (baton pass).
+        self._remove_plan_writer_card(tool_call_id)
 
         existing = self._spec_cards.get(tool_call_id)
         if existing is not None:
@@ -479,5 +487,6 @@ class ChatView(QScrollArea):
         self, tool_call_id: str, goal: str, ok: bool, summary: str
     ) -> None:
         """Add a summary card to the chat after a worker completes."""
+        self._remove_plan_writer_card(tool_call_id)
         card = WorkerSummaryCard(tool_call_id, goal, ok, summary, parent=self)
         self._add_card(card)

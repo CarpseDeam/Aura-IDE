@@ -153,6 +153,7 @@ class ConversationManager:
             if not tool_calls:
                 return
 
+            _terminal_dispatch = False
             for tc in tool_calls:
                 if cancel_event.is_set():
                     self._cleanup_cancelled(on_event)
@@ -179,16 +180,18 @@ class ConversationManager:
                     continue
 
                 if name == "dispatch_to_worker":
-                    self._handle_dispatch(
+                    result = self._handle_dispatch(
                         tool_call_id=tool_call_id,
                         args=args,
                         on_event=on_event,
                         dispatch_cb=dispatch_cb,
                     )
+                    if result is not None and not result.cancelled:
+                        _terminal_dispatch = True
                     continue
 
                 if name == "run_research":
-                    self._handle_research(
+                    ok = self._handle_research(
                         tool_call_id=tool_call_id,
                         args=args,
                         on_event=on_event,
@@ -196,6 +199,8 @@ class ConversationManager:
                         cancel_event=cancel_event,
                         temperature=temperature,
                     )
+                    if ok:
+                        _terminal_dispatch = True
                     continue
 
                 if name == "run_terminal_command":
@@ -248,6 +253,11 @@ class ConversationManager:
                     )
                 )
 
+            # If any dispatch_to_worker or run_research completed, stop the loop.
+            # The Worker Completed card is the final user-facing result.
+            if _terminal_dispatch:
+                return
+
         on_event(
             ApiError(
                 status_code=None,
@@ -263,7 +273,7 @@ class ConversationManager:
         args: dict[str, Any],
         on_event: EventCallback,
         dispatch_cb: DispatchCallback | None,
-    ) -> None:
+    ) -> WorkerDispatchResult | None:
         if dispatch_cb is None:
             err = (
                 "dispatch_to_worker is not enabled for this manager — "
@@ -316,6 +326,7 @@ class ConversationManager:
                 },
             )
         )
+        return result
 
     def _handle_research(
         self,
@@ -325,13 +336,13 @@ class ConversationManager:
         model: ModelId,
         cancel_event: threading.Event,
         temperature: float = 0.7,
-    ) -> None:
+    ) -> bool:
         objective = args.get("objective") or args.get("goal") or args.get("spec") or ""
         if not objective:
             payload = json.dumps({"ok": False, "error": f"objective is required. Got args: {args}"})
             self._history.append_tool_result(tool_call_id, payload)
             on_event(ToolResult(tool_call_id=tool_call_id, name="run_research", ok=False, result=payload))
-            return
+            return False
         
         # Web research loop using a sub-agent
         res_tools = ToolRegistry(self._tools.workspace_root, mode="researcher")
@@ -398,11 +409,13 @@ class ConversationManager:
             payload = json.dumps({"ok": True, "report": final_report}, ensure_ascii=False)
             self._history.append_tool_result(tool_call_id, payload)
             on_event(ToolResult(tool_call_id=tool_call_id, name="run_research", ok=True, result=payload))
+            return True
 
         except Exception as exc:
             payload = json.dumps({"ok": False, "error": str(exc)})
             self._history.append_tool_result(tool_call_id, payload)
             on_event(ToolResult(tool_call_id=tool_call_id, name="run_research", ok=False, result=payload))
+            return False
 
     def _apply_circuit_breaker(self, name: str, args: dict, ok: bool, result_payload: str) -> str:
         """Track tool failures and inject warnings if they repeat consecutively."""

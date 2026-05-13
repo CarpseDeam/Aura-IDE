@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from aura.gui.cards.code_writer_card import CodeWriterCard
+from aura.gui.cards.plan_writer_card import PlanWriterCard
 from aura.gui.chat_view import ChatView
 
 
@@ -89,3 +90,27 @@ class TestComputeChangedRegion:
         # prefix_len=1, suffix_len=1, old_mid="b", new_mid="c"
         result = CodeWriterCard._compute_changed_region("aba", "aca")
         assert result == (1, 1, "b", "c"), f"Got {result}"
+
+
+def test_removes_plan_writer_card_on_spec_card(qapp) -> None:
+    chat = ChatView()
+    chat.begin_assistant()
+
+    chat.add_tool_call("dispatch-1", "dispatch_to_worker")
+    assert len(chat.findChildren(PlanWriterCard)) == 1
+
+    chat.add_spec_card("dispatch-1", "goal", ["f.py"], "spec", "accept", "summary")
+    assert len(chat.findChildren(PlanWriterCard)) == 0
+    assert len(chat._plan_writer_cards) == 0
+
+
+def test_removes_plan_writer_card_on_worker_summary(qapp) -> None:
+    chat = ChatView()
+    chat.begin_assistant()
+
+    chat.add_tool_call("dispatch-1", "dispatch_to_worker")
+    assert len(chat.findChildren(PlanWriterCard)) == 1
+
+    chat.add_worker_summary("dispatch-1", "goal", True, "done")
+    assert len(chat.findChildren(PlanWriterCard)) == 0
+    assert len(chat._plan_writer_cards) == 0
