@@ -9,7 +9,14 @@
 
 **Desktop AI Orchestration IDE - pair programming with full workspace awareness.**
 
-Aura is a desktop chat application where you talk to an AI agent that reads your project, searches your codebase, proposes changes, and applies them with diff approval. It supports **DeepSeek**, **OpenAI**, **Anthropic**, **Google Gemini**, and **OpenRouter** as API backends, plus **Gemini CLI**, **Claude Code**, and **Codex CLI** as CLI-based backends, with a local [Ollama](https://ollama.com/) vision model for screenshot preprocessing. Built with [PySide6](https://pypi.org/project/PySide6/) (Qt for Python).
+## Why Aura?
+
+Aura is for developers who want AI coding help without looking away.
+- The Planner reads your code and writes a spec.
+- You review or edit the spec.
+- The Worker applies changes.
+- Every file write shows a diff before it touches disk.
+- Backups and git commits make experiments reversible.
 
 <p align="center">
   <img src="media/plan_and_code.gif" alt="Aura planning and coding workflow demo" width="900">
