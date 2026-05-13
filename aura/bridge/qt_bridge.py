@@ -86,7 +86,7 @@ class _Worker(QObject):
     apiError = Signal(int, str)
     streamDone = Signal(str, dict)
     toolResultEmitted = Signal(str, str, bool, str, dict)
-    workerDispatchRequested = Signal(str, str, list, str, str)
+    workerDispatchRequested = Signal(str, str, list, str, str, str)
     terminalOutput = Signal(str, str)  # (tool_call_id, text)
     finished = Signal()
 
@@ -189,7 +189,7 @@ class _Worker(QObject):
                     pass
         elif isinstance(ev, WorkerDispatchRequested):
             self.workerDispatchRequested.emit(
-                ev.tool_call_id, ev.goal, list(ev.files), ev.spec, ev.acceptance
+                ev.tool_call_id, ev.goal, list(ev.files), ev.spec, ev.acceptance, ev.summary
             )
         elif isinstance(ev, TerminalOutput):
             self.terminalOutput.emit(ev.tool_call_id, ev.text)
@@ -205,7 +205,7 @@ class _DispatchProxy(QObject):
     signal back) or Cancel (we just return immediately).
     """
 
-    showSpecCard = Signal(str, str, list, str, str)  # tool_id, goal, files, spec, acceptance
+    showSpecCard = Signal(str, str, list, str, str, str)  # tool_id, goal, files, spec, acceptance, summary
     workerStarted = Signal(str)  # tool_id
     workerFinished = Signal(str, bool, str)  # tool_id, ok, summary
     workerCancelled = Signal(str)
@@ -296,7 +296,7 @@ class _DispatchProxy(QObject):
         # Tell GUI thread to render the spec card; user will call user_dispatched
         # or user_cancelled, which will set decision_event.
         self.showSpecCard.emit(
-            tool_call_id, req.goal, list(req.files), req.spec, req.acceptance
+            tool_call_id, req.goal, list(req.files), req.spec, req.acceptance, req.summary
         )
 
         pending.decision_event.wait()
@@ -560,22 +560,31 @@ def _build_worker_summary(
     errors: list[str],
 ) -> str:
     lines: list[str] = []
+    
+    # 1. Errors first
     if errors:
         lines.append("Worker encountered errors:")
         for err in errors:
             lines.append(f"  - {err}")
+            
+    # 2. Planner's intended summary (if no errors, or as context)
+    if req.summary:
+        if lines:
+            lines.append("")
+        lines.append(req.summary.strip())
+        
+    # 3. List of modified files
     if writes:
+        if lines:
+            lines.append("")
         lines.append("Files modified:")
         for w in writes:
             tag = "(new)" if w.get("is_new_file") else f"({w.get('tool')})"
             lines.append(f"  - {w.get('path')} {tag}")
-    final = _last_assistant_content(history)
-    if final:
-        lines.append("")
-        lines.append("Worker's final report:")
-        lines.append(final.strip())
+            
     if not lines:
-        lines.append("Worker finished with no changes and no final report.")
+        lines.append("Worker finished with no changes.")
+        
     return "\n".join(lines).strip()
 
 
@@ -599,7 +608,7 @@ class ConversationBridge(QObject):
 
     # Planner / worker signals (re-exposed from the dispatch proxy so the GUI
     # binds to a single object).
-    workerDispatchRequested = Signal(str, str, list, str, str)
+    workerDispatchRequested = Signal(str, str, list, str, str, str)
     workerStarted = Signal(str)
     workerFinished = Signal(str, bool, str)
     workerCancelled = Signal(str)
@@ -925,8 +934,9 @@ class ConversationBridge(QObject):
         files: list[str],
         spec: str,
         acceptance: str,
+        summary: str,
     ) -> None:
-        self._dispatch_proxy.user_dispatched(tool_call_id, goal, files, spec, acceptance)
+        self._dispatch_proxy.user_dispatched(tool_call_id, goal, files, spec, acceptance, summary)
 
     def user_cancelled_dispatch(self, tool_call_id: str) -> None:
         self._dispatch_proxy.user_cancelled(tool_call_id)
@@ -1022,7 +1032,7 @@ class ConversationBridge(QObject):
                 )
         self.toolResult.emit(tool_id, name, ok, result, extras)
 
-    @Slot(str, str, list, str, str)
+    @Slot(str, str, list, str, str, str)
     def _on_worker_dispatch_requested(
         self,
         tool_call_id: str,
@@ -1030,6 +1040,7 @@ class ConversationBridge(QObject):
         files: list,
         spec: str,
         acceptance: str,
+        summary: str,
     ) -> None:
         # The proxy's showSpecCard is the GUI's source of truth for spec
         # cards — the manager event arrives milliseconds earlier on the same
@@ -1051,12 +1062,6 @@ class ConversationBridge(QObject):
         if self._worker is not None:
             self._worker.deleteLater()
         self._thread = None
-        self._worker = None
-        self.finished.emit()
-
-
-def _dummy_root():
-    return Path.home()
         self._worker = None
         self.finished.emit()
 
