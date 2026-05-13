@@ -6,12 +6,15 @@ Provides true OS-level isolation so AI-generated code cannot harm the host.
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
+
+logger = logging.getLogger(__name__)
 
 SandboxMode = Literal["host", "docker", "wasm"]
 
@@ -146,53 +149,69 @@ class SandboxExecutor:
             )
 
     @staticmethod
-    def _run_interactive_command(
+    def _launch_interactive_terminal(
         command: str,
         workspace_root: Path,
-    ) -> SandboxResult:
-        """Run a command in a new interactive terminal window.
-        
-        This is used for authentication flows (gcloud auth, gemini login, etc.)
-        where the user needs to interact with a TUI or browser.
-        """
-        import sys
-        import subprocess
+    ) -> bool:
+        """Launch a command in a new interactive terminal window (fire-and-forget).
 
+        Returns immediately after launching — does NOT wait for the process to exit.
+
+        Args:
+            command: The shell command to run in the new terminal.
+            workspace_root: Working directory for the terminal process.
+
+        Returns:
+            True if the terminal was launched successfully, False otherwise.
+        """
         try:
             if sys.platform == "win32":
-                # Use 'start' to launch in a new cmd window.
-                # /wait ensures we block until the user finishes.
+                # Use 'start' without /wait to launch in a new window without blocking.
                 # The first quoted argument to 'start' is the window title.
                 title = f"Aura Auth: {command}"
-                proc = subprocess.run(
-                    ["cmd.exe", "/c", "start", "/wait", title, "cmd.exe", "/c", command],
+                subprocess.Popen(
+                    ["cmd.exe", "/c", "start", "", title, "cmd.exe", "/c", command],
                     cwd=str(workspace_root),
-                    check=False,
+                    shell=True,
                 )
-                return SandboxResult(
-                    ok=proc.returncode == 0,
-                    stdout="Interactive session finished.",
-                    stderr="",
-                    exit_code=proc.returncode,
+            elif sys.platform == "darwin":
+                # macOS: use 'open' with Terminal.app
+                subprocess.Popen(
+                    ["open", "-a", "Terminal", command],
+                    cwd=str(workspace_root),
                 )
             else:
-                # Unix: This is trickier as terminal emulators vary.
-                # For now, we'll try common ones or just run in-place if possible.
-                # A better approach would be to prompt the user to run it themselves
-                # or use a specific terminal emulator.
-                return SandboxResult(
-                    ok=False,
-                    stdout="",
-                    stderr="Interactive auth not yet supported on this platform.",
-                    exit_code=-1,
-                )
+                # Linux: try common terminal emulators
+                terminal_candidates = [
+                    ["x-terminal-emulator", "-e"],
+                    ["gnome-terminal", "--"],
+                    ["xterm", "-e"],
+                    ["konsole", "-e"],
+                ]
+                launched = False
+                for term_cmd in terminal_candidates:
+                    try:
+                        subprocess.Popen(
+                            term_cmd + [command],
+                            cwd=str(workspace_root),
+                        )
+                        launched = True
+                        break
+                    except FileNotFoundError:
+                        continue
+                if not launched:
+                    logger.warning(
+                        "Could not launch interactive terminal. "
+                        "No known terminal emulator found."
+                    )
+                    return False
+
+            logger.info("Launched interactive terminal for command: %s", command)
+            return True
+
         except Exception as exc:
-            return SandboxResult(
-                ok=False,
-                stdout="",
-                stderr=f"Failed to launch interactive terminal: {exc}",
-                exit_code=-1,
-            )
+            logger.warning("Failed to launch interactive terminal: %s", exc)
+            return False
 
     # ---- host execution (current behavior) ----------------------------------
 

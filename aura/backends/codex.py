@@ -5,6 +5,7 @@ Authentication: relies on `codex login`.
 
 from __future__ import annotations
 
+import logging
 import shlex
 import shutil
 import threading
@@ -17,11 +18,17 @@ from aura.client.events import ApiError, ContentDelta, Done, Event
 from aura.config import ThinkingMode
 from aura.sandbox import SandboxExecutor
 
+logger = logging.getLogger(__name__)
+
 
 class CodexBackend(CLIAgentBackend):
     """Agent backend that calls Codex via the `codex` CLI."""
 
     auth_command = "codex login"
+
+    # --- Additional auth command variants ---
+    device_auth_command = "codex login --device-auth"
+    api_key_auth_command = "codex login --with-api-key"  # Takes stdin; for manual use only
 
     def __init__(self, workspace_root: Path | None = None) -> None:
         super().__init__(workspace_root=workspace_root)
@@ -46,6 +53,46 @@ class CodexBackend(CLIAgentBackend):
             return result.returncode == 0 and "Logged in" in result.stdout
         except Exception:
             return False
+
+    def run_device_auth(self) -> bool:
+        """Launch device-code auth flow and poll for completion.
+
+        Returns:
+            True if authentication succeeded within the timeout, False otherwise.
+        """
+        launched = SandboxExecutor._launch_interactive_terminal(
+            command=self.device_auth_command,
+            workspace_root=self._workspace_root,
+        )
+
+        if not launched:
+            logger.warning("Failed to launch device auth terminal for codex.")
+            return False
+
+        import time
+
+        deadline = time.monotonic() + self.auth_timeout_seconds
+        while time.monotonic() < deadline:
+            try:
+                if self.check_auth():
+                    logger.info("Codex device auth succeeded.")
+                    return True
+            except Exception as exc:
+                logger.exception("check_auth() raised during device auth polling: %s", exc)
+                return False
+            time.sleep(2)
+
+        logger.warning("Codex device auth timed out after %d seconds.", self.auth_timeout_seconds)
+        return False
+
+    @staticmethod
+    def get_manual_auth_instructions() -> str:
+        """Return human-readable fallback auth instructions."""
+        return (
+            "Codex login did not complete inside Aura. You can authenticate manually "
+            "by opening a terminal and running:\n  codex login\nor:\n  codex login --device-auth\n"
+            "Then return to Aura and click Recheck Status."
+        )
 
     def stream(
         self,

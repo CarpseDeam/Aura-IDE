@@ -3,6 +3,7 @@ read-only environment / workspace facts.
 """
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import Callable
@@ -46,6 +47,8 @@ from aura.config import (
 from aura.gui.theme import FG_DIM, SUCCESS, WARN
 from aura.gui.aura_widget import GlassSwitch
 
+logger = logging.getLogger(__name__)
+
 _THINKING_ITEMS: list[tuple[str, str]] = [
     ("Off", "off"),
     ("High", "high"),
@@ -72,7 +75,7 @@ class DiscoveryWorker(QObject):
 class AuthWorker(QObject):
     """Background worker for CLI authentication."""
 
-    finished = Signal(bool)  # True if auth succeeded
+    finished = Signal(str, bool, str, str)  # backend_name, success, message, error
 
     def __init__(self, backend_name: str) -> None:
         super().__init__()
@@ -81,6 +84,8 @@ class AuthWorker(QObject):
     def run(self) -> None:
         """Run the CLI auth flow and emit finished with the result."""
         ok = False
+        message = ""
+        error = ""
         try:
             if self._backend_name == "gemini_cli":
                 backend = GeminiCLIBackend()
@@ -91,9 +96,18 @@ class AuthWorker(QObject):
             elif self._backend_name == "codex":
                 backend = CodexBackend()
                 ok = backend.run_cli_auth()
-        except Exception:
+            elif self._backend_name == "codex_device":
+                backend = CodexBackend()
+                ok = backend.run_device_auth()
+            if ok:
+                message = f"{self._backend_name} authenticated successfully."
+            else:
+                message = f"{self._backend_name} authentication did not complete."
+        except Exception as exc:
+            error = f"{type(exc).__name__}: {exc}"
+            logger.exception("AuthWorker failed for %s: %s", self._backend_name, exc)
             ok = False
-        self.finished.emit(ok)
+        self.finished.emit(self._backend_name, ok, message, error)
 
 
 class AuthStatusWorker(QObject):
@@ -107,16 +121,54 @@ class AuthStatusWorker(QObject):
         try:
             results["gemini_cli"] = GeminiCLIBackend().check_auth()
         except Exception:
+            logger.exception("check_auth failed for gemini_cli")
             results["gemini_cli"] = False
         try:
             results["claude_code"] = ClaudeCodeBackend().check_auth()
         except Exception:
+            logger.exception("check_auth failed for claude_code")
             results["claude_code"] = False
         try:
             results["codex"] = CodexBackend().check_auth()
         except Exception:
+            logger.exception("check_auth failed for codex")
             results["codex"] = False
         self.finished.emit(results)
+
+
+class AuthPollingWorker(QObject):
+    """Poll check_auth() for a single backend until auth succeeds or timeout."""
+
+    finished = Signal(str, bool)  # backend_name, authed
+
+    def __init__(self, backend_name: str, max_seconds: int = 120) -> None:
+        super().__init__()
+        self._backend_name = backend_name
+        self._max_seconds = max_seconds
+
+    def run(self) -> None:
+        """Poll check_auth() every 2 seconds until authed or timeout."""
+        import time
+
+        deadline = time.monotonic() + self._max_seconds
+        authed = False
+        while time.monotonic() < deadline:
+            try:
+                if self._backend_name == "gemini_cli":
+                    authed = GeminiCLIBackend().check_auth()
+                elif self._backend_name == "claude_code":
+                    authed = ClaudeCodeBackend().check_auth()
+                elif self._backend_name == "codex":
+                    authed = CodexBackend().check_auth()
+                else:
+                    break
+                if authed:
+                    break
+            except Exception:
+                logger.exception("AuthPollingWorker check_auth failed for %s", self._backend_name)
+                break
+            time.sleep(2)
+        self.finished.emit(self._backend_name, authed)
 
 
 class SettingsDialog(QDialog):
@@ -164,6 +216,11 @@ class SettingsDialog(QDialog):
             tavily_api_key=settings.tavily_api_key,
         )
         self._on_change_root = on_change_root
+
+        # Thread tracking for safe cleanup
+        self._auth_thread: QThread | None = None
+        self._auth_polling_thread: QThread | None = None
+        self._auth_polling_worker: AuthPollingWorker | None = None
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(20, 18, 20, 14)
@@ -413,47 +470,102 @@ class SettingsDialog(QDialog):
         backend_note.setWordWrap(True)
         form.addRow("", backend_note)
 
-        # Gemini CLI (npm)
+        # ---- Gemini CLI (npm) ----
+        gemini_cli_container = QWidget()
+        gemini_cli_layout = QVBoxLayout(gemini_cli_container)
+        gemini_cli_layout.setContentsMargins(0, 0, 0, 0)
+        gemini_cli_layout.setSpacing(2)
+
+        gemini_cli_row = QHBoxLayout()
+        gemini_cli_row.setSpacing(6)
         gemini_cli_label = QLabel("Gemini CLI")
         self._gemini_cli_auth_status = QLabel("Checking...")
         self._gemini_cli_auth_btn = QPushButton("Login")
         self._gemini_cli_auth_btn.clicked.connect(self._on_gemini_cli_auth)
-        gemini_cli_row = QHBoxLayout()
-        gemini_cli_row.setSpacing(6)
+        self._gemini_cli_recheck_btn = QPushButton("Recheck Status")
+        self._gemini_cli_recheck_btn.clicked.connect(
+            lambda: self._on_recheck_status("gemini_cli")
+        )
+        self._gemini_cli_recheck_btn.hide()
         gemini_cli_row.addWidget(gemini_cli_label, 1)
         gemini_cli_row.addWidget(self._gemini_cli_auth_status)
         gemini_cli_row.addWidget(self._gemini_cli_auth_btn)
-        gemini_cli_widget = QWidget()
-        gemini_cli_widget.setLayout(gemini_cli_row)
-        form.addRow("", gemini_cli_widget)
+        gemini_cli_row.addWidget(self._gemini_cli_recheck_btn)
+        gemini_cli_layout.addLayout(gemini_cli_row)
 
-        # Claude Code
+        self._gemini_cli_auth_msg = QLabel("")
+        self._gemini_cli_auth_msg.setWordWrap(True)
+        self._gemini_cli_auth_msg.setStyleSheet(f"color: {WARN}; font-size: 10px;")
+        self._gemini_cli_auth_msg.hide()
+        gemini_cli_layout.addWidget(self._gemini_cli_auth_msg)
+
+        form.addRow("", gemini_cli_container)
+
+        # ---- Claude Code ----
+        claude_container = QWidget()
+        claude_layout = QVBoxLayout(claude_container)
+        claude_layout.setContentsMargins(0, 0, 0, 0)
+        claude_layout.setSpacing(2)
+
+        claude_row = QHBoxLayout()
+        claude_row.setSpacing(6)
         claude_label = QLabel("Claude Code")
         self._claude_auth_status = QLabel("Checking...")
         self._claude_auth_btn = QPushButton("Login")
         self._claude_auth_btn.clicked.connect(self._on_claude_auth)
-        claude_row = QHBoxLayout()
-        claude_row.setSpacing(6)
+        self._claude_recheck_btn = QPushButton("Recheck Status")
+        self._claude_recheck_btn.clicked.connect(
+            lambda: self._on_recheck_status("claude_code")
+        )
+        self._claude_recheck_btn.hide()
         claude_row.addWidget(claude_label, 1)
         claude_row.addWidget(self._claude_auth_status)
         claude_row.addWidget(self._claude_auth_btn)
-        claude_widget = QWidget()
-        claude_widget.setLayout(claude_row)
-        form.addRow("", claude_widget)
+        claude_row.addWidget(self._claude_recheck_btn)
+        claude_layout.addLayout(claude_row)
 
-        # Codex
+        self._claude_auth_msg = QLabel("")
+        self._claude_auth_msg.setWordWrap(True)
+        self._claude_auth_msg.setStyleSheet(f"color: {WARN}; font-size: 10px;")
+        self._claude_auth_msg.hide()
+        claude_layout.addWidget(self._claude_auth_msg)
+
+        form.addRow("", claude_container)
+
+        # ---- Codex ----
+        codex_container = QWidget()
+        codex_layout = QVBoxLayout(codex_container)
+        codex_layout.setContentsMargins(0, 0, 0, 0)
+        codex_layout.setSpacing(2)
+
+        codex_row = QHBoxLayout()
+        codex_row.setSpacing(6)
         codex_label = QLabel("Codex CLI")
         self._codex_auth_status = QLabel("Checking...")
         self._codex_auth_btn = QPushButton("Login")
         self._codex_auth_btn.clicked.connect(self._on_codex_auth)
-        codex_row = QHBoxLayout()
-        codex_row.setSpacing(6)
+        self._codex_recheck_btn = QPushButton("Recheck Status")
+        self._codex_recheck_btn.clicked.connect(
+            lambda: self._on_recheck_status("codex")
+        )
+        self._codex_recheck_btn.hide()
+        self._codex_device_auth_btn = QPushButton("Use Device Auth")
+        self._codex_device_auth_btn.clicked.connect(self._on_codex_device_auth)
+        self._codex_device_auth_btn.hide()
         codex_row.addWidget(codex_label, 1)
         codex_row.addWidget(self._codex_auth_status)
         codex_row.addWidget(self._codex_auth_btn)
-        codex_widget = QWidget()
-        codex_widget.setLayout(codex_row)
-        form.addRow("", codex_widget)
+        codex_row.addWidget(self._codex_recheck_btn)
+        codex_row.addWidget(self._codex_device_auth_btn)
+        codex_layout.addLayout(codex_row)
+
+        self._codex_auth_msg = QLabel("")
+        self._codex_auth_msg.setWordWrap(True)
+        self._codex_auth_msg.setStyleSheet(f"color: {WARN}; font-size: 10px;")
+        self._codex_auth_msg.hide()
+        codex_layout.addWidget(self._codex_auth_msg)
+
+        form.addRow("", codex_container)
 
         # --- Sandbox ---
         sandbox_sep = QLabel("Execution Sandbox")
@@ -597,6 +709,19 @@ class SettingsDialog(QDialog):
         self._auth_status_worker.finished.connect(self._auth_status_worker.deleteLater)
         self._auth_status_thread.finished.connect(self._auth_status_thread.deleteLater)
         self._auth_status_thread.start()
+
+    # --- closeEvent override for safe thread cleanup ---
+
+    def closeEvent(self, event):  # type: ignore[override]
+        """Clean up any running auth/polling threads when the dialog is closed."""
+        for thread_attr in ("_auth_thread", "_auth_polling_thread", "_auth_status_thread"):
+            thread = getattr(self, thread_attr, None)
+            if thread is not None and thread.isRunning():
+                thread.quit()
+                thread.wait(1000)
+        super().closeEvent(event)
+
+    # --- Provider / Model helpers ---
 
     def _on_provider_changed(self) -> None:
         provider_id: ProviderId = self._provider_combo.currentData()
@@ -759,6 +884,8 @@ class SettingsDialog(QDialog):
         self._worker_thinking_combo.setEnabled(enabled)
         self._worker_temperature_spin.setEnabled(enabled)
 
+    # --- Auth UI helpers ---
+
     def _on_auth_status_finished(self, results: dict[str, bool]) -> None:
         """Update UI labels based on background auth checks."""
         self._update_auth_ui(
@@ -766,33 +893,101 @@ class SettingsDialog(QDialog):
             self._gemini_cli_auth_status,
             self._gemini_cli_auth_btn,
             results.get("gemini_cli", False),
+            recheck_btn=self._gemini_cli_recheck_btn,
+            msg_label=self._gemini_cli_auth_msg,
         )
         self._update_auth_ui(
             "claude_code",
             self._claude_auth_status,
             self._claude_auth_btn,
             results.get("claude_code", False),
+            recheck_btn=self._claude_recheck_btn,
+            msg_label=self._claude_auth_msg,
         )
         self._update_auth_ui(
             "codex",
             self._codex_auth_status,
             self._codex_auth_btn,
             results.get("codex", False),
+            recheck_btn=self._codex_recheck_btn,
+            msg_label=self._codex_auth_msg,
+            device_auth_btn=self._codex_device_auth_btn,
         )
 
     def _update_auth_ui(
-        self, name: str, label: QLabel, btn: QPushButton, authed: bool
+        self,
+        name: str,
+        label: QLabel,
+        btn: QPushButton,
+        authed: bool,
+        message: str = "",
+        recheck_btn: QPushButton | None = None,
+        msg_label: QLabel | None = None,
+        device_auth_btn: QPushButton | None = None,
     ) -> None:
         if authed:
             label.setText("\u2713 Authenticated")
             label.setStyleSheet(f"color: {SUCCESS};")
             btn.hide()
+            if recheck_btn:
+                recheck_btn.hide()
+            if device_auth_btn:
+                device_auth_btn.hide()
+            if msg_label:
+                msg_label.hide()
         else:
             label.setText("\u2717 Login Required")
             label.setStyleSheet(f"color: {WARN};")
             btn.show()
             btn.setText("Login")
             btn.setEnabled(True)
+            if recheck_btn:
+                recheck_btn.show()
+            if device_auth_btn:
+                device_auth_btn.show()
+            if msg_label:
+                if message:
+                    msg_label.setText(message)
+                    msg_label.show()
+                else:
+                    msg_label.hide()
+
+    def _get_msg_label(self, backend_name: str) -> QLabel | None:
+        mapping = {
+            "gemini_cli": self._gemini_cli_auth_msg,
+            "claude_code": self._claude_auth_msg,
+            "codex": self._codex_auth_msg,
+        }
+        return mapping.get(backend_name)
+
+    def _get_recheck_btn(self, backend_name: str) -> QPushButton | None:
+        mapping = {
+            "gemini_cli": self._gemini_cli_recheck_btn,
+            "claude_code": self._claude_recheck_btn,
+            "codex": self._codex_recheck_btn,
+        }
+        return mapping.get(backend_name)
+
+    def _get_device_auth_btn(self, backend_name: str) -> QPushButton | None:
+        if backend_name == "codex":
+            return self._codex_device_auth_btn
+        return None
+
+    def _get_status_label(self, backend_name: str) -> QLabel | None:
+        mapping = {
+            "gemini_cli": self._gemini_cli_auth_status,
+            "claude_code": self._claude_auth_status,
+            "codex": self._codex_auth_status,
+        }
+        return mapping.get(backend_name)
+
+    def _get_auth_btn(self, backend_name: str) -> QPushButton | None:
+        mapping = {
+            "gemini_cli": self._gemini_cli_auth_btn,
+            "claude_code": self._claude_auth_btn,
+            "codex": self._codex_auth_btn,
+        }
+        return mapping.get(backend_name)
 
     def _check_gemini_cli_auth(self) -> None:
         """Query gemini CLI credential state and update the UI accordingly."""
@@ -801,13 +996,20 @@ class SettingsDialog(QDialog):
         except Exception:
             authed = False
         self._update_auth_ui(
-            "gemini_cli", self._gemini_cli_auth_status, self._gemini_cli_auth_btn, authed
+            "gemini_cli", self._gemini_cli_auth_status, self._gemini_cli_auth_btn, authed,
+            recheck_btn=self._gemini_cli_recheck_btn,
+            msg_label=self._gemini_cli_auth_msg,
         )
 
     def _on_gemini_cli_auth(self) -> None:
         """Launch the CLI auth flow in a background thread."""
-        self._run_auth_flow(
-            "gemini_cli", self._gemini_cli_auth_btn, self._gemini_cli_auth_status
+        self._launch_cli_auth(
+            "gemini_cli",
+            self._gemini_cli_auth_btn,
+            self._gemini_cli_auth_status,
+            self._gemini_cli_recheck_btn,
+            self._gemini_cli_auth_msg,
+            device_auth_btn=None,
         )
 
     def _check_claude_auth(self) -> None:
@@ -816,12 +1018,19 @@ class SettingsDialog(QDialog):
         except Exception:
             authed = False
         self._update_auth_ui(
-            "claude_code", self._claude_auth_status, self._claude_auth_btn, authed
+            "claude_code", self._claude_auth_status, self._claude_auth_btn, authed,
+            recheck_btn=self._claude_recheck_btn,
+            msg_label=self._claude_auth_msg,
         )
 
     def _on_claude_auth(self) -> None:
-        self._run_auth_flow(
-            "claude_code", self._claude_auth_btn, self._claude_auth_status
+        self._launch_cli_auth(
+            "claude_code",
+            self._claude_auth_btn,
+            self._claude_auth_status,
+            self._claude_recheck_btn,
+            self._claude_auth_msg,
+            device_auth_btn=None,
         )
 
     def _check_codex_auth(self) -> None:
@@ -829,45 +1038,233 @@ class SettingsDialog(QDialog):
             authed = CodexBackend().check_auth()
         except Exception:
             authed = False
-        self._update_auth_ui("codex", self._codex_auth_status, self._codex_auth_btn, authed)
+        self._update_auth_ui(
+            "codex", self._codex_auth_status, self._codex_auth_btn, authed,
+            recheck_btn=self._codex_recheck_btn,
+            msg_label=self._codex_auth_msg,
+            device_auth_btn=self._codex_device_auth_btn,
+        )
 
     def _on_codex_auth(self) -> None:
-        self._run_auth_flow("codex", self._codex_auth_btn, self._codex_auth_status)
+        self._launch_cli_auth(
+            "codex",
+            self._codex_auth_btn,
+            self._codex_auth_status,
+            self._codex_recheck_btn,
+            self._codex_auth_msg,
+            device_auth_btn=self._codex_device_auth_btn,
+        )
 
-    def _run_auth_flow(self, backend_name: str, btn: QPushButton, status_label: QLabel) -> None:
+    def _launch_cli_auth(
+        self,
+        backend_name: str,
+        btn: QPushButton,
+        status_label: QLabel,
+        recheck_btn: QPushButton,
+        msg_label: QLabel,
+        device_auth_btn: QPushButton | None = None,
+    ) -> None:
+        """Launch CLI auth in a background thread with new signal signature."""
         btn.setEnabled(False)
-        btn.setText("Waiting for login...")
+        btn.setText("Launching terminal...")
         status_label.setText("Authenticating...")
         status_label.setStyleSheet(f"color: {FG_DIM};")
+
+        # Show recheck button; hide device auth initially
+        recheck_btn.show()
+        if device_auth_btn:
+            device_auth_btn.show()
+        msg_label.hide()
 
         self._auth_thread = QThread(self)
         self._auth_worker = AuthWorker(backend_name)
         self._auth_worker.moveToThread(self._auth_thread)
         self._auth_thread.started.connect(self._auth_worker.run)
-        
-        # We use a lambda to pass the backend_name back to the finished handler
-        self._auth_worker.finished.connect(lambda ok: self._on_auth_finished(backend_name, ok))
-        
+
+        self._auth_worker.finished.connect(
+            lambda name, ok, message, error: self._on_auth_finished(
+                name, ok, message, error,
+                btn, status_label, recheck_btn, msg_label, device_auth_btn,
+            )
+        )
+
         self._auth_worker.finished.connect(self._auth_thread.quit)
         self._auth_worker.finished.connect(self._auth_worker.deleteLater)
         self._auth_thread.finished.connect(self._auth_thread.deleteLater)
         self._auth_thread.start()
 
-    def _on_auth_finished(self, backend_name: str, ok: bool) -> None:
+    def _on_auth_finished(
+        self,
+        backend_name: str,
+        ok: bool,
+        message: str,
+        error: str,
+        btn: QPushButton | None = None,
+        status_label: QLabel | None = None,
+        recheck_btn: QPushButton | None = None,
+        msg_label: QLabel | None = None,
+        device_auth_btn: QPushButton | None = None,
+    ) -> None:
         """Callback when the CLI auth thread completes."""
-        if backend_name == "gemini_cli":
-            self._check_gemini_cli_auth()
-        elif backend_name == "claude_code":
-            self._check_claude_auth()
-        elif backend_name == "codex":
-            self._check_codex_auth()
+        if btn is None:
+            btn = self._get_auth_btn(backend_name)
+        if status_label is None:
+            status_label = self._get_status_label(backend_name)
+        if recheck_btn is None:
+            recheck_btn = self._get_recheck_btn(backend_name)
+        if msg_label is None:
+            msg_label = self._get_msg_label(backend_name)
+        if device_auth_btn is None:
+            device_auth_btn = self._get_device_auth_btn(backend_name)
 
-        if not ok:
-            QMessageBox.warning(
-                self,
-                APP_NAME,
-                f"Authentication failed for {backend_name}. Please ensure the CLI is installed and try again.",
+        if ok:
+            # Re-check auth status to confirm
+            if backend_name == "gemini_cli":
+                self._check_gemini_cli_auth()
+            elif backend_name == "claude_code":
+                self._check_claude_auth()
+            elif backend_name == "codex":
+                self._check_codex_auth()
+        else:
+            # Show error/message in the message label
+            display_msg = ""
+            if error:
+                display_msg = f"Error: {error}"
+            elif message:
+                display_msg = message
+            else:
+                display_msg = "Authentication did not complete."
+
+            # For codex, append manual instructions
+            if backend_name == "codex":
+                display_msg += "\n\n" + CodexBackend.get_manual_auth_instructions()
+
+            if msg_label:
+                msg_label.setText(display_msg)
+                msg_label.show()
+
+            # Restore Login button so user can retry
+            if btn:
+                btn.setEnabled(True)
+                btn.setText("Login")
+
+            if error:
+                QMessageBox.warning(
+                    self,
+                    APP_NAME,
+                    f"Authentication failed for {backend_name}:\n{error}",
+                )
+
+        # Clean up thread reference
+        self._auth_thread = None
+
+    def _on_recheck_status(self, backend_name: str) -> None:
+        """Re-check auth status using a polling worker with a short timeout."""
+        status_label = self._get_status_label(backend_name)
+        if status_label:
+            status_label.setText("Checking...")
+            status_label.setStyleSheet(f"color: {FG_DIM};")
+
+        recheck_btn = self._get_recheck_btn(backend_name)
+        if recheck_btn:
+            recheck_btn.setEnabled(False)
+
+        self._auth_polling_thread = QThread(self)
+        self._auth_polling_worker = AuthPollingWorker(backend_name, max_seconds=15)
+        self._auth_polling_worker.moveToThread(self._auth_polling_thread)
+        self._auth_polling_thread.started.connect(self._auth_polling_worker.run)
+
+        self._auth_polling_worker.finished.connect(
+            lambda name, authed: self._on_polling_finished(name, authed)
+        )
+        self._auth_polling_worker.finished.connect(self._auth_polling_thread.quit)
+        self._auth_polling_worker.finished.connect(self._auth_polling_worker.deleteLater)
+        self._auth_polling_thread.finished.connect(self._auth_polling_thread.deleteLater)
+        self._auth_polling_thread.start()
+
+    def _on_polling_finished(self, backend_name: str, authed: bool) -> None:
+        """Callback when the polling worker completes."""
+        status_label = self._get_status_label(backend_name)
+        auth_btn = self._get_auth_btn(backend_name)
+        recheck_btn = self._get_recheck_btn(backend_name)
+        msg_label = self._get_msg_label(backend_name)
+        device_auth_btn = self._get_device_auth_btn(backend_name)
+
+        self._update_auth_ui(
+            backend_name,
+            status_label,
+            auth_btn,
+            authed,
+            recheck_btn=recheck_btn,
+            msg_label=msg_label,
+            device_auth_btn=device_auth_btn,
+        )
+
+        if recheck_btn:
+            recheck_btn.setEnabled(True)
+
+        self._auth_polling_thread = None
+        self._auth_polling_worker = None
+
+    def _on_codex_device_auth(self) -> None:
+        """Launch codex device-auth (--device-auth) flow."""
+        backend_name = "codex_device"
+        btn = self._codex_auth_btn
+        status_label = self._codex_auth_status
+        recheck_btn = self._codex_recheck_btn
+        msg_label = self._codex_auth_msg
+
+        btn.setEnabled(False)
+        btn.setText("Launching device auth...")
+        status_label.setText("Authenticating...")
+        status_label.setStyleSheet(f"color: {FG_DIM};")
+        recheck_btn.show()
+        msg_label.hide()
+
+        self._auth_thread = QThread(self)
+        self._auth_worker = AuthWorker(backend_name)
+        self._auth_worker.moveToThread(self._auth_thread)
+        self._auth_thread.started.connect(self._auth_worker.run)
+
+        self._auth_worker.finished.connect(
+            lambda name, ok, message, error: self._on_auth_finished(
+                "codex", ok, message, error,
+                btn, status_label, recheck_btn, msg_label, self._codex_device_auth_btn,
             )
+        )
+
+        self._auth_worker.finished.connect(self._auth_thread.quit)
+        self._auth_worker.finished.connect(self._auth_worker.deleteLater)
+        self._auth_thread.finished.connect(self._auth_thread.deleteLater)
+        self._auth_thread.start()
+
+    def _cancel_auth_waiting(self, backend_name: str) -> None:
+        """Cancel any waiting auth state and restore the UI for a given backend."""
+        logger.info("User cancelled auth waiting for %s", backend_name)
+
+        btn = self._get_auth_btn(backend_name)
+        if btn:
+            btn.setEnabled(True)
+            btn.setText("Login")
+
+        status_label = self._get_status_label(backend_name)
+        if status_label:
+            status_label.setText("\u2717 Login Required")
+            status_label.setStyleSheet(f"color: {WARN};")
+
+        recheck_btn = self._get_recheck_btn(backend_name)
+        if recheck_btn:
+            recheck_btn.hide()
+
+        device_auth_btn = self._get_device_auth_btn(backend_name)
+        if device_auth_btn:
+            device_auth_btn.hide()
+
+        msg_label = self._get_msg_label(backend_name)
+        if msg_label:
+            msg_label.hide()
+
+    # --- Result ---
 
     def result_settings(self) -> AppSettings:
 

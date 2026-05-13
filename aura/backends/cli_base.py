@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from abc import abstractmethod
 from typing import Any
 
 from aura.backends.base import AgentBackend
 from aura.sandbox import SandboxExecutor
+
+logger = logging.getLogger(__name__)
 
 
 class CLIAgentBackend(AgentBackend):
@@ -26,6 +29,9 @@ class CLIAgentBackend(AgentBackend):
 
     # Override in subclasses — the shell command for interactive auth.
     auth_command: str | None = None
+
+    # Maximum seconds to wait for auth to complete after launching terminal.
+    auth_timeout_seconds: int = 120
 
     def __init__(self, workspace_root: Path | None = None) -> None:
         """Initialise the CLI backend.
@@ -47,28 +53,52 @@ class CLIAgentBackend(AgentBackend):
         return False
 
     def run_cli_auth(self) -> bool:
-        """Launch the auth_command in an interactive terminal subprocess.
+        """Launch the auth_command in an interactive terminal, then poll for auth.
 
-        Blocks until the command exits. After success, calls check_auth()
-        to verify credentials are now valid.
+        Launches the terminal detached (fire-and-forget via
+        :meth:`SandboxExecutor._launch_interactive_terminal`), then polls
+        :meth:`check_auth` every 2 seconds until the timeout expires.
 
         Returns:
-            True if authentication succeeded (exit code 0 and check_auth
-            returns True), False otherwise.
+            True if authentication succeeded (check_auth returns True within
+            the timeout), False otherwise.
         """
         if not self.auth_command:
             return True  # No auth command configured; assume already authed
 
-        result = SandboxExecutor._run_interactive_command(
+        # Launch the terminal (non-blocking, fire-and-forget)
+        launched = SandboxExecutor._launch_interactive_terminal(
             command=self.auth_command,
             workspace_root=self._workspace_root,
         )
 
-        if not result.ok:
+        if not launched:
+            logger.warning(
+                "Failed to launch interactive terminal for auth command: %s",
+                self.auth_command,
+            )
             return False
 
-        # Re-check auth after the command succeeds
-        return self.check_auth()
+        # Poll check_auth() until success or timeout
+        import time
+
+        deadline = time.monotonic() + self.auth_timeout_seconds
+        while time.monotonic() < deadline:
+            try:
+                if self.check_auth():
+                    logger.info("Auth succeeded for command: %s", self.auth_command)
+                    return True
+            except Exception as exc:
+                logger.exception("check_auth() raised during polling: %s", exc)
+                return False
+            time.sleep(2)
+
+        logger.warning(
+            "Auth timed out after %d seconds for command: %s",
+            self.auth_timeout_seconds,
+            self.auth_command,
+        )
+        return False
 
     @abstractmethod
     def stream(
