@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QDialog,
@@ -28,6 +28,7 @@ from aura.config import (
     icon_path,
     load_settings,
     load_workspace_root,
+    media_path,
     save_workspace_root,
 )
 from aura.gui.conv_persistence import ConversationPersistence
@@ -64,6 +65,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self._terminal_tab_state = "dim"
+        self._checkpoint_dialog: CheckpointDialog | None = None
         self.setWindowTitle(APP_NAME)
         self.setWindowIcon(QIcon(str(icon_path())))
         self.resize(1400, 900)
@@ -249,11 +251,11 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._input.stop_requested.connect(self._send_handler.handle_stop)
         self._tree.file_activated.connect(self._playground.open_file)
         self._playground.focused_action_requested.connect(self._on_focused_action_requested)
-        terminal_drawer = self._playground.terminal_drawer()
-        terminal_drawer.terminal_started.connect(self._on_terminal_started)
-        terminal_drawer.terminal_finished.connect(self._on_terminal_finished)
-        terminal_drawer.visibility_changed.connect(self._on_terminal_visibility_changed)
-        terminal_drawer.terminal_cleared.connect(self._on_terminal_cleared)
+        terminal_window = self._playground.terminal_window()
+        terminal_window.terminal_started.connect(self._on_terminal_started)
+        terminal_window.terminal_finished.connect(self._on_terminal_finished)
+        terminal_window.visibility_changed.connect(self._on_terminal_visibility_changed)
+        terminal_window.terminal_cleared.connect(self._on_terminal_cleared)
 
         # Worker signal wiring (delegated to WorkerEventHandler).
         self._worker_handler.connect_bridge_signals()
@@ -286,7 +288,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
     def _create_edge_tab_rail(self) -> None:
         self._edge_tab_rail = QFrame(self)
         self._edge_tab_rail.setObjectName("edgeTabRail")
-        self._edge_tab_rail.setFixedWidth(38)
+        self._edge_tab_rail.setFixedWidth(40)
         self._edge_tab_rail.setStyleSheet(
             "QFrame#edgeTabRail { background: transparent; border: none; }"
         )
@@ -301,16 +303,18 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._terminal_tab.setToolTip("Toggle terminal output")
         self._terminal_tab.setCursor(Qt.CursorShape.PointingHandCursor)
         self._terminal_tab.setCheckable(True)
-        self._terminal_tab.setFixedSize(38, 42)
+        self._terminal_tab.setFixedSize(40, 44)
         self._terminal_tab.clicked.connect(lambda: self._on_edge_terminal_clicked())
         rail_layout.addWidget(self._terminal_tab)
 
         self._checkpoint_tab = QToolButton(self._edge_tab_rail)
         self._checkpoint_tab.setObjectName("edgeCheckpointTab")
-        self._checkpoint_tab.setText("☰")
-        self._checkpoint_tab.setToolTip("Open checkpoints")
+        self._checkpoint_tab.setToolTip("Checkpoint Timeline")
+        self._checkpoint_tab.setIcon(QIcon(str(media_path("account_tree_.svg"))))
+        self._checkpoint_tab.setIconSize(QSize(22, 22))
+        self._checkpoint_tab.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
         self._checkpoint_tab.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._checkpoint_tab.setFixedSize(38, 42)
+        self._checkpoint_tab.setFixedSize(40, 44)
         self._checkpoint_tab.clicked.connect(lambda: self._on_open_checkpoints())
         self._checkpoint_tab.setStyleSheet(self._checkpoint_tab_style())
         rail_layout.addWidget(self._checkpoint_tab)
@@ -326,7 +330,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
         rail_w = rail.width()
         rail_h = rail.sizeHint().height()
-        margin_bottom = 96
+        margin_bottom = self.statusBar().height() + 28
         x = self.width() - rail_w
         y = max(0, self.height() - rail_h - margin_bottom)
         rail.setFixedHeight(rail_h)
@@ -334,7 +338,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         rail.raise_()
 
     def _on_edge_terminal_clicked(self) -> None:
-        self._playground.toggle_terminal_drawer()
+        self._playground.toggle_terminal_window()
         self._sync_terminal_checked_state()
         self._position_edge_tabs()
 
@@ -361,7 +365,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             self._set_terminal_tab_state("dim")
 
     def _sync_terminal_checked_state(self) -> None:
-        self._terminal_tab.setChecked(self._playground.is_terminal_drawer_open())
+        self._terminal_tab.setChecked(self._playground.is_terminal_window_open())
 
     def _set_terminal_tab_state(self, state: str) -> None:
         self._terminal_tab_state = state
@@ -376,7 +380,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             "failure": ("#3a151b", DANGER, DANGER),
         }
         bg, fg, border = palette.get(state, palette["dim"])
-        if state == "dim" and self._playground.is_terminal_drawer_open():
+        if state == "dim" and self._playground.is_terminal_window_open():
             bg, fg, border = ("#18243a", FG, ACCENT)
 
         return (
@@ -507,6 +511,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             return
         path = Path(chosen)
         self._workspace_root = path
+        self._checkpoint_dialog = None
         self._bridge.set_workspace_root(path)
         self._input.set_workspace_root(path)
         self._send_handler.set_workspace_root(path)
@@ -654,8 +659,23 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             )
             return
 
-        dlg = CheckpointDialog(self._workspace_root, self)
-        dlg.exec()
+        if (
+            self._checkpoint_dialog is None
+            or self._checkpoint_dialog.workspace_root() != self._workspace_root
+        ):
+            self._checkpoint_dialog = CheckpointDialog(self._workspace_root, self)
+            self._checkpoint_dialog.setModal(False)
+            self._checkpoint_dialog.setWindowModality(Qt.WindowModality.NonModal)
+            self._checkpoint_dialog.setWindowFlag(Qt.WindowType.Tool, True)
+
+        if self._checkpoint_dialog.isVisible():
+            self._checkpoint_dialog.hide()
+            return
+
+        self._checkpoint_dialog.refresh()
+        self._checkpoint_dialog.show()
+        self._checkpoint_dialog.raise_()
+        self._checkpoint_dialog.activateWindow()
         self._tree.set_root(self._workspace_root)
 
     def _apply_planner_worker_mode_to_bridge(self, enabled: bool) -> None:

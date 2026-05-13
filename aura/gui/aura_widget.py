@@ -604,12 +604,11 @@ class WorkerLogCard(QFrame):
 
 class AuraPlayground(QWidget):
     """Right-side workspace panel with code editor (top), info hub (middle),
-    and terminal drawer (bottom).
+    and worker log.
 
     Uses a vertical QSplitter to divide the space between a tabbed code editor
-    pane and a tabbed info hub pane (Worker Log). A TerminalDrawer sits below
-    the splitter. MainWindow owns the floating edge launcher tabs so they do
-    not participate in this widget's layout.
+    pane and a tabbed info hub pane (Worker Log). Terminal output is routed to
+    a floating TerminalWindow so it does not participate in this layout.
     """
 
     focused_action_requested = Signal(str)
@@ -654,7 +653,7 @@ class AuraPlayground(QWidget):
 
         from aura.gui.code_editor_pane import CodeEditorPane
         from aura.gui.info_hub_pane import InfoHubPane
-        from aura.gui.terminal_drawer import TerminalDrawer
+        from aura.gui.terminal_window import TerminalWindow
 
         self._code_editor = CodeEditorPane(self._splitter)
         self._info_hub = InfoHubPane(self._splitter)
@@ -675,9 +674,9 @@ class AuraPlayground(QWidget):
 
         layout.addWidget(self._splitter, 1)
 
-        # Terminal drawer (below splitter)
-        self._terminal_drawer = TerminalDrawer(self)
-        layout.addWidget(self._terminal_drawer)
+        # Floating terminal window. It is intentionally not added to this
+        # layout, so terminal output never consumes worker/workspace space.
+        self._terminal_window = TerminalWindow(self.window())
 
         # Tool stream controllers keyed by worker_tool_id
         self._controllers: dict[str, ToolStreamController] = {}
@@ -707,14 +706,14 @@ class AuraPlayground(QWidget):
     def open_file(self, path: Path) -> None:
         self._code_editor.open_file(path)
 
-    def terminal_drawer(self):
-        return self._terminal_drawer
+    def terminal_window(self):
+        return self._terminal_window
 
-    def toggle_terminal_drawer(self) -> None:
-        self._terminal_drawer.toggle()
+    def toggle_terminal_window(self) -> None:
+        self._terminal_window.toggle()
 
-    def is_terminal_drawer_open(self) -> bool:
-        return self._terminal_drawer.is_open()
+    def is_terminal_window_open(self) -> bool:
+        return self._terminal_window.is_open()
 
     # ------------------------------------------------------------------
     # Public API (backward-compatible with worker_handler.py)
@@ -724,7 +723,7 @@ class AuraPlayground(QWidget):
         """Reset the workspace for a new assistant run."""
         self._code_editor.close_worker_tabs()
         self._info_hub.clear()
-        self._terminal_drawer.clear()
+        self._terminal_window.clear()
         self._controllers.clear()
         self._worker_code_paths.clear()
         self._pending_worker_code_content.clear()
@@ -756,7 +755,7 @@ class AuraPlayground(QWidget):
 
         if name == "run_terminal_command":
             c.command_resolved.connect(
-                lambda cmd, tid=worker_tool_id: self._terminal_drawer.set_command(tid, cmd)
+                lambda cmd, tid=worker_tool_id: self._terminal_window.set_command(tid, cmd)
             )
 
     def append_tool_args(self, worker_tool_id: str, fragment: str) -> None:
@@ -775,7 +774,7 @@ class AuraPlayground(QWidget):
         self._worker_code_paths.pop(worker_tool_id, None)
         self._pending_worker_code_content.pop(worker_tool_id, None)
 
-        # Finalize terminal drawer if this was a terminal tool
+        # Finalize terminal window if this was a terminal tool.
         exit_code = 0
         try:
             parsed = json.loads(result)
@@ -783,7 +782,7 @@ class AuraPlayground(QWidget):
                 exit_code = parsed.get("exit_code", 0)
         except Exception:
             pass
-        self._terminal_drawer.set_result(worker_tool_id, exit_code)
+        self._terminal_window.set_result(worker_tool_id, exit_code)
 
     def update_todo_list(self, tasks: list):
         self._info_hub.update_todo_list(tasks)
@@ -816,7 +815,7 @@ class AuraPlayground(QWidget):
         self._info_hub.add_error(message)
 
     def append_terminal_output(self, worker_tool_id: str, text: str) -> None:
-        self._terminal_drawer.append_output(worker_tool_id, text)
+        self._terminal_window.append_output(worker_tool_id, text)
 
     def worker_finished(self, ok: bool, summary: str):
         # self._code_editor.close_all_tabs()
@@ -831,7 +830,7 @@ class AuraPlayground(QWidget):
     def clear(self):
         self._code_editor.close_all_tabs()
         self._info_hub.clear()
-        self._terminal_drawer.clear()
+        self._terminal_window.clear()
         self._controllers.clear()
         self._worker_code_paths.clear()
         self._pending_worker_code_content.clear()

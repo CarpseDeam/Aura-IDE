@@ -1,9 +1,4 @@
-"""Info hub pane — permanent Worker Log tab with TODO list, reasoning/content
-stream, and diff/error cards.
-
-Previously housed dynamic terminal tabs; those have been migrated to
-TerminalDrawer (bottom-right drawer).
-"""
+"""Info hub pane: Worker Log tab with TODO list, reasoning, and diff/error cards."""
 
 from __future__ import annotations
 
@@ -51,7 +46,7 @@ class InfoHubPane(QWidget):
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
         self._tabs.setStyleSheet(self._tab_widget_style())
-        # No corner widget — terminal tabs have moved to TerminalDrawer
+        # No corner widget; terminal output lives in the floating TerminalWindow.
         layout.addWidget(self._tabs)
 
         # ---- Worker Log tab (permanent, index 0) ----

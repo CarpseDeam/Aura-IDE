@@ -113,6 +113,9 @@ class CheckpointDialog(QDialog):
 
         self.refresh()
 
+    def workspace_root(self) -> Path:
+        return self._workspace_root
+
     def refresh(self) -> None:
         """Reload recent commits and rebuild the row list."""
         self._clear_rows()
