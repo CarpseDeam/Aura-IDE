@@ -182,3 +182,13 @@ class TerminalCard(QFrame):
         else:
             self._set_body_visible(False)
         self._refresh_header()
+
+    def expand(self) -> None:
+        """Expand the card body to reveal terminal output."""
+        self._set_body_visible(True)
+        self._refresh_header()
+
+    def collapse(self) -> None:
+        """Collapse the card body."""
+        self._set_body_visible(False)
+        self._refresh_header()
