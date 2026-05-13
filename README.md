@@ -38,6 +38,7 @@ If you find Aura useful, consider starring the repo to help others discover it.
 - [Screenshots](#screenshots)
 - [Features](#features)
   - [Planner / Worker Architecture](#planner--worker-architecture)
+  - [Guided First-Launch Onboarding](#guided-first-launch-onboarding)
   - [Comprehensive Tools Suite](#comprehensive-tools-suite)
   - [Diff Approval & Backups](#diff-approval--backups)
   - [Git Integration](#git-integration)
@@ -68,7 +69,7 @@ If you find Aura useful, consider starring the repo to help others discover it.
 - [CLI Agent Backends](#cli-agent-backends)
 - [MCP Tool Integration](#mcp-tool-integration)
 - [Installation](#installation)
-- [First Launch Checklist](#first-launch-checklist)
+- [First Launch Onboarding](#first-launch-onboarding)
 - [Usage](#usage)
 - [Configuration](#configuration)
 - [Safety Model](#safety-model)
@@ -90,6 +91,8 @@ If you find Aura useful, consider starring the repo to help others discover it.
 
 *Left: Main interface with three-pane layout - workspace tree, chat view, and worker activity panel. Right: Diff approval dialog - every file change is reviewed before being applied.*
 
+> **Note:** Screenshots may reflect an earlier version of the UI. The current interface includes a floating terminal window and a guided onboarding wizard not shown above.
+
 ---
 
 ## Features
@@ -104,6 +107,18 @@ Aura uses a **two-agent system** inspired by pair programming:
 Both agents can use **different models** and **different reasoning depths** from the same provider. For example, use a fast/cheap model for the Planner and a more capable model for the Worker.
 
 The Planner is tuned for speed: it keeps visible planning brief and puts the important implementation detail into the `dispatch_to_worker` spec. This architecture acts as a **spec-as-token-firewall**: the Planner's output is a structured specification, not raw code edits, so the Worker starts from a clean, unambiguous target rather than inheriting the Planner's reasoning noise. The **Spec Edit dialog** lets you modify that spec before handing it to the Worker - giving you full control over what gets implemented and how.
+
+### Guided First-Launch Onboarding
+
+New users are greeted with a polished **5-step wizard** on first launch (Welcome → Workspace → Safety → Provider → First Mission):
+
+- **Welcome** — Introduces the Planner → Worker workflow and Aura's core philosophy.
+- **Workspace** — Confirms or changes the project folder where Aura will operate.
+- **Safety** — Explains diff approval (default), Auto-Approve, Auto-Dispatch, and git checkpoints. Safety defaults are emphasised; advanced speed features are flagged as optional.
+- **Provider** — Checks API key status and points users to Settings if no key is found.
+- **First Mission** — Offers three selectable safe first prompts. The chosen prompt is placed in the chat input — the user decides when to send it.
+
+The onboarding records progress via `onboarding_checklist` and `onboarding_version` in AppSettings, allowing future extension. Existing users who have already completed onboarding are not interrupted.
 
 ### Comprehensive Tools Suite
 
@@ -212,6 +227,8 @@ Perfect for looking up documentation, debugging unfamiliar error messages, or re
 - **Real-time streaming output** - See output as it's produced, not just when the command finishes
 - **Cancellation support** - Stop long-running commands mid-execution
 - **Timeout** - Configurable max execution time
+
+Terminal output appears in a **floating, non-modal terminal window** opened from the **`$` edge tab** — it no longer consumes space in the main workspace or worker panel. The window can be moved, resized, or closed independently.
 
 Unlike a regular terminal, the AI is instructed to run **linters, type checkers, and test suites** after making changes - closing the loop between edit and validation.
 
@@ -526,14 +543,22 @@ python -m aura
 
 ---
 
-## First Launch Checklist
+## First Launch Onboarding
 
-1. Choose a workspace folder. Aura scopes file tools to this directory.
-2. Open **Settings** (gear icon) and add at least one provider API key, or set the matching environment variable.
-3. Optional: add a Tavily key for `web_search` and `run_research`.
-4. Optional: install Ollama and pull `llama3.2-vision` for local screenshot preprocessing.
-5. Keep **Auto-Approve** off until you trust the workflow on that project.
-6. For git-backed projects, check `git status` before and after a Worker run so you can review changes cleanly.
+On first launch, Aura presents a **5-step onboarding wizard** that walks you through:
+
+1. **Welcome** — An introduction to Aura's Planner / Worker architecture.
+2. **Workspace** — Choose and confirm your project directory.
+3. **Safety & Control** — Understand diff approval (on by default), Auto-Approve (off by default), Auto-Dispatch (off by default), and git checkpoints.
+4. **AI Provider Setup** — Verify your API key is configured. If not, you can open Settings from the wizard to add one.
+5. **Your First Mission** — Pick from three safe starter prompts. The selected prompt is placed in the chat input — you choose when to send it.
+
+After completing the wizard, the onboarding is not shown again. You can always change any setting later via the gear icon in the toolbar.
+
+If you skipped onboarding or want to revisit concepts:
+- Add API keys via **Settings** (gear icon) or environment variables (see [API Key Setup](#api-key-setup)).
+- Keep **Auto-Approve** off until you trust the workflow on that project.
+- For git-backed projects, check `git status` before and after a Worker run so you can review changes cleanly.
 
 ---
 
