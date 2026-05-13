@@ -11,6 +11,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QPlainTextEdit,
+    QSizePolicy,
     QTabWidget,
     QToolButton,
     QVBoxLayout,
@@ -46,12 +47,18 @@ class InfoHubPane(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.setMinimumSize(0, 0)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
         self._tabs = QTabWidget(self)
+        self._tabs.setMinimumSize(0, 0)
+        self._tabs.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
         self._tabs.setStyleSheet(self._tab_widget_style())
         layout.addWidget(self._tabs)
 
@@ -77,6 +84,7 @@ class InfoHubPane(QWidget):
         # Typewriter log text area
         self._log_view = QPlainTextEdit(self._log_tab)
         self._log_view.setReadOnly(True)
+        self._log_view.setMinimumSize(0, 0)
         self._log_view.setFont(_mono_font(10))
         self._log_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
         self._log_view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -191,9 +199,10 @@ class InfoHubPane(QWidget):
                 self._tabs.setCurrentIndex(idx)
             return
 
-        label = command if command and command != "..." else "Terminal"
-        card = TerminalCard(command=command, parent=self)
+        label = self._terminal_tab_label(command)
+        card = TerminalCard(command=command, parent=self, start_collapsed=True)
         idx = self._tabs.addTab(card, label)
+        self._tabs.setTabToolTip(idx, command if command and command != "..." else "Terminal")
         self._tabs.setCurrentIndex(idx)
 
         self._terminal_tabs[tool_id] = card
@@ -238,6 +247,17 @@ class InfoHubPane(QWidget):
                 self._tab_index_to_tool_id[idx] = tid
         
         self._close_all_btn.setVisible(False)
+
+    @staticmethod
+    def _terminal_tab_label(command: str) -> str:
+        if not command or command == "...":
+            return "Terminal"
+        one_line = " ".join(command.split())
+        if one_line.startswith("python -c"):
+            return "python -c"
+        if len(one_line) <= 28:
+            return one_line
+        return f"{one_line[:25]}..."
 
     # ------------------------------------------------------------------
     # Internal helpers

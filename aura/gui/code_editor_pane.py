@@ -13,6 +13,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QPlainTextEdit,
+    QSizePolicy,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -35,12 +36,18 @@ class CodeEditorPane(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.setMinimumSize(0, 0)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
         self._tabs = QTabWidget(self)
+        self._tabs.setMinimumSize(0, 0)
+        self._tabs.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
         self._tabs.setTabsClosable(True)
         self._tabs.tabCloseRequested.connect(self._on_tab_close_requested)
         self._tabs.setStyleSheet(self._tab_widget_style())
@@ -75,6 +82,7 @@ class CodeEditorPane(QWidget):
 
         editor = QPlainTextEdit(self)
         editor.setReadOnly(True)
+        editor.setMinimumSize(0, 0)
         editor.setFont(_mono_font(10))
         editor.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
         editor.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)

@@ -1,7 +1,17 @@
 """Card for showing code being written/edited in real time."""
 from __future__ import annotations
 
-from PySide6.QtWidgets import QFrame, QLabel, QPlainTextEdit, QToolButton, QVBoxLayout, QWidget
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QFontMetrics
+from PySide6.QtWidgets import (
+    QFrame,
+    QLabel,
+    QPlainTextEdit,
+    QSizePolicy,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 from aura.gui.cards._helpers import _HAVE_PYGMENTS, _fade_in_widget, _mono_font
 from aura.gui.syntax import PygmentsHighlighter, language_from_path
@@ -22,6 +32,7 @@ class CodeWriterCard(QFrame):
     def __init__(self, name: str, parent=None) -> None:
         super().__init__(parent)
         self.setObjectName("toolCard")
+        self.setMinimumWidth(0)
         self._name = name
         self._path: str = ""
         self._state = self.STATE_RUNNING
@@ -33,6 +44,10 @@ class CodeWriterCard(QFrame):
         # Header
         self._header = QToolButton(self)
         self._header.setObjectName("sectionToggle")
+        self._header.setMinimumWidth(0)
+        self._header.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed
+        )
         self._header.setStyleSheet(
             f"QToolButton#sectionToggle {{ color: {FG_DIM}; }} "
             f"QToolButton#sectionToggle:hover {{ color: {FG}; }}"
@@ -48,6 +63,7 @@ class CodeWriterCard(QFrame):
 
         # File path subtitle
         self._path_label = QLabel("", self)
+        self._path_label.setMinimumWidth(0)
         self._path_label.setStyleSheet(
             f"color: {FG_DIM}; font-family: 'Geist Mono', 'JetBrains Mono', monospace; "
             "font-size: 10px;"
@@ -58,6 +74,7 @@ class CodeWriterCard(QFrame):
         # Code view
         self._code_view = QPlainTextEdit(self)
         self._code_view.setReadOnly(True)
+        self._code_view.setMinimumWidth(0)
         self._code_view.setFont(_mono_font(10))
         self._code_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
         self._code_view.setStyleSheet(
@@ -95,11 +112,22 @@ class CodeWriterCard(QFrame):
             self.STATE_FAILED: DANGER,
         }[self._state]
         label = self._path if self._path else "Writing code…"
-        text = f"{chev} 📝 {label}  {state_str}"
+        prefix = f"{chev} 📝 "
+        suffix = f"  {state_str}"
+        metrics = QFontMetrics(self._header.font())
+        available = max(40, self._header.width() - 10)
+        label_width = max(24, available - metrics.horizontalAdvance(prefix + suffix))
+        label = metrics.elidedText(label, Qt.TextElideMode.ElideRight, label_width)
+        text = f"{prefix}{label}{suffix}"
         self._header.setText(text)
+        self._header.setToolTip(self._path or self._name)
         self._header.setStyleSheet(
             f"QToolButton#sectionToggle {{ color: {state_color}; }}"
         )
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._refresh_header()
 
     def set_target_path(self, path: str) -> None:
         """Update path, labels, and highlighter from file extension."""

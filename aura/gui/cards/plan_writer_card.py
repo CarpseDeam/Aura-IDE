@@ -1,7 +1,17 @@
 """Card for showing a worker plan being written in real time."""
 from __future__ import annotations
 
-from PySide6.QtWidgets import QFrame, QLabel, QPlainTextEdit, QToolButton, QVBoxLayout, QWidget
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QFontMetrics
+from PySide6.QtWidgets import (
+    QFrame,
+    QLabel,
+    QPlainTextEdit,
+    QSizePolicy,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 from aura.gui.cards._helpers import _fade_in_widget, _mono_font
 from aura.gui.theme import BG, BORDER, DANGER, FG, FG_DIM, SUCCESS, WARN
@@ -21,6 +31,7 @@ class PlanWriterCard(QFrame):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setObjectName("toolCard")
+        self.setMinimumWidth(0)
         self._goal: str = ""
         self._state = self.STATE_RUNNING
 
@@ -31,6 +42,10 @@ class PlanWriterCard(QFrame):
         # Header
         self._header = QToolButton(self)
         self._header.setObjectName("sectionToggle")
+        self._header.setMinimumWidth(0)
+        self._header.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed
+        )
         self._header.setStyleSheet(
             f"QToolButton#sectionToggle {{ color: {FG_DIM}; }} "
             f"QToolButton#sectionToggle:hover {{ color: {FG}; }}"
@@ -46,6 +61,7 @@ class PlanWriterCard(QFrame):
 
         # Goal subtitle
         self._goal_label = QLabel("", self)
+        self._goal_label.setMinimumWidth(0)
         self._goal_label.setWordWrap(True)
         self._goal_label.setStyleSheet(
             f"color: {FG_DIM}; font-style: italic; font-size: 11px; padding-bottom: 4px;"
@@ -56,6 +72,7 @@ class PlanWriterCard(QFrame):
         # Spec view
         self._spec_view = QPlainTextEdit(self)
         self._spec_view.setReadOnly(True)
+        self._spec_view.setMinimumWidth(0)
         self._spec_view.setFont(_mono_font(10))
         self._spec_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
         self._spec_view.setStyleSheet(
@@ -87,16 +104,23 @@ class PlanWriterCard(QFrame):
             self.STATE_FAILED: DANGER,
         }[self._state]
         
-        # In header, show the goal if it fits, otherwise a generic label.
         label = self._goal if self._goal else "Writing plan…"
-        if len(label) > 60:
-            label = label[:57] + "..."
-            
-        text = f"{chev} ⚡ {label}  {state_str}"
+        prefix = f"{chev} ⚡ "
+        suffix = f"  {state_str}"
+        metrics = QFontMetrics(self._header.font())
+        available = max(40, self._header.width() - 10)
+        label_width = max(24, available - metrics.horizontalAdvance(prefix + suffix))
+        label = metrics.elidedText(label, Qt.TextElideMode.ElideRight, label_width)
+        text = f"{prefix}{label}{suffix}"
         self._header.setText(text)
+        self._header.setToolTip(self._goal or "Writing plan")
         self._header.setStyleSheet(
             f"QToolButton#sectionToggle {{ color: {state_color}; }}"
         )
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._refresh_header()
 
     def set_goal(self, goal: str) -> None:
         self._goal = goal

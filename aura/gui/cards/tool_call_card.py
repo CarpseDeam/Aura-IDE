@@ -3,7 +3,16 @@ from __future__ import annotations
 
 import re
 
-from PySide6.QtWidgets import QFrame, QPlainTextEdit, QToolButton, QVBoxLayout, QWidget
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QFontMetrics
+from PySide6.QtWidgets import (
+    QFrame,
+    QPlainTextEdit,
+    QSizePolicy,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 from aura.gui.cards._helpers import _HAVE_PYGMENTS, _mono_font
 from aura.gui.syntax import PygmentsHighlighter
@@ -24,6 +33,7 @@ class ToolCallCard(QFrame):
     def __init__(self, name: str, parent=None) -> None:
         super().__init__(parent)
         self.setObjectName("toolCard")
+        self.setMinimumWidth(0)
         self._name = name
         self._args_text = ""
         self._state = self.STATE_RUNNING
@@ -35,6 +45,10 @@ class ToolCallCard(QFrame):
 
         self._header = QToolButton(self)
         self._header.setObjectName("sectionToggle")
+        self._header.setMinimumWidth(0)
+        self._header.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed
+        )
         self._header.setStyleSheet(
             f"QToolButton#sectionToggle {{ color: {FG_DIM}; }} "
             f"QToolButton#sectionToggle:hover {{ color: {FG}; }}"
@@ -49,6 +63,7 @@ class ToolCallCard(QFrame):
 
         self._args_view = QPlainTextEdit(self._body)
         self._args_view.setReadOnly(True)
+        self._args_view.setMinimumWidth(0)
         self._args_view.setFont(_mono_font(9))
         self._args_view.setStyleSheet(
             f"background: {BG}; color: {FG_DIM}; border: 1px solid {BORDER}; "
@@ -65,6 +80,7 @@ class ToolCallCard(QFrame):
 
         self._result_view = QPlainTextEdit(self._body)
         self._result_view.setReadOnly(True)
+        self._result_view.setMinimumWidth(0)
         self._result_view.setFont(_mono_font(9))
         self._result_view.setStyleSheet(
             f"background: {BG}; color: {FG}; border: 1px solid {BORDER}; "
@@ -105,13 +121,22 @@ class ToolCallCard(QFrame):
         }[self._state]
         # Prefer a short args summary in the header for readability.
         summary = self._summarize_args()
-        text = f"{chev} {self._name}({summary})  "
-        self._header.setText(text)
-        # Style the state suffix via a separate stylesheet snippet on the QToolButton:
-        self._header.setText(text + state_str)
+        raw_text = f"{self._name}({summary})"
+        prefix = f"{chev} "
+        suffix = f"  {state_str}"
+        metrics = QFontMetrics(self._header.font())
+        available = max(40, self._header.width() - 10)
+        raw_width = max(24, available - metrics.horizontalAdvance(prefix + suffix))
+        text = metrics.elidedText(raw_text, Qt.TextElideMode.ElideRight, raw_width)
+        self._header.setText(f"{prefix}{text}{suffix}")
+        self._header.setToolTip(raw_text)
         self._header.setStyleSheet(
             f"QToolButton#sectionToggle {{ color: {color}; }}"
         )
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._refresh_header()
 
     def _summarize_args(self) -> str:
         if not self._args_text:

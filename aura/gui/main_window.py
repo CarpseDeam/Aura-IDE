@@ -117,6 +117,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
         # Middle pane: chat + input
         center = QWidget(self)
+        center.setMinimumWidth(360)
         center_layout = QVBoxLayout(center)
         center_layout.setContentsMargins(20, 0, 20, 16)
         center_layout.setSpacing(0)
@@ -188,15 +189,15 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         # Sensible initial distribution: left is narrow, right is side-panel width, chat gets rest.
         w = self.width()
         left_w = 220
-        right_w = 400
+        right_w = 460
         center_w = w - left_w - right_w
         splitter.setSizes([left_w, center_w, right_w])
 
-        # Stretch factors: Only the chat (index 1) should grow when the window is resized.
-        # This prevents the worker panel from "exploding" in size.
+        # Keep the sidebar stable while allowing both the chat and worker panel
+        # to gain space as the window grows.
         splitter.setStretchFactor(0, 0)  # workspace tree: fixed
-        splitter.setStretchFactor(1, 1)  # chat: expands to fill space
-        splitter.setStretchFactor(2, 0)  # worker: fixed (but still user-resizable)
+        splitter.setStretchFactor(1, 2)  # chat: primary content
+        splitter.setStretchFactor(2, 1)  # worker: resizable workspace
 
         self.setCentralWidget(splitter)
 

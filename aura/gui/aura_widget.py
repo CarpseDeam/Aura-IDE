@@ -36,7 +36,8 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QSplitter,
     QStackedWidget,
-    QPushButton
+    QPushButton,
+    QSizePolicy,
 )
 
 from aura.gui.theme import (
@@ -608,6 +609,8 @@ class AuraPlayground(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setMinimumWidth(320)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
@@ -646,15 +649,17 @@ class AuraPlayground(QWidget):
 
         self._code_editor = CodeEditorPane(self._splitter)
         self._info_hub = InfoHubPane(self._splitter)
+        self._code_editor.setMinimumHeight(96)
+        self._info_hub.setMinimumHeight(48)
 
         self._splitter.addWidget(self._code_editor)
         self._splitter.addWidget(self._info_hub)
 
-        # Stretch factors: code editor (top) gets all the vertical stretch.
-        # This keeps the info hub (log) from "exploding" when the window height increases.
-        self._splitter.setStretchFactor(0, 1)
-        self._splitter.setStretchFactor(1, 0)
-        self._splitter.setSizes([700, 300])
+        # Let the terminal/log pane participate in vertical resizing instead of
+        # being treated as a fixed-height footer.
+        self._splitter.setStretchFactor(0, 2)
+        self._splitter.setStretchFactor(1, 1)
+        self._splitter.setSizes([560, 300])
 
         layout.addWidget(self._splitter, 1)
 
