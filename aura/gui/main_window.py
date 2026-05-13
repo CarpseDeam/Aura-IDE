@@ -106,7 +106,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._toolbar.read_only_toggled.connect(self._on_read_only_toggled)
         self._toolbar.auto_dispatch_toggled.connect(self._on_auto_dispatch_toggled)
         self._toolbar.auto_approve_toggled.connect(self._on_auto_approve_toggled)
-        self._toolbar.checkpoints_requested.connect(self._on_open_checkpoints)
         self._toolbar.update_requested.connect(self._on_open_update)
         self._toolbar.settings_requested.connect(self._on_open_settings)
         self._toolbar.minimize_requested.connect(self.showMinimized)

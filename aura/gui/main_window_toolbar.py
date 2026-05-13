@@ -28,7 +28,6 @@ class MainWindowToolbar(QToolBar):
     read_only_toggled = Signal(bool)
     auto_dispatch_toggled = Signal(bool)
     auto_approve_toggled = Signal(bool)
-    checkpoints_requested = Signal()
     update_requested = Signal()
     settings_requested = Signal()
     minimize_requested = Signal()
@@ -83,12 +82,6 @@ class MainWindowToolbar(QToolBar):
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.addWidget(spacer)
-
-        checkpoints_btn = QToolButton()
-        checkpoints_btn.setText("Checkpoints")
-        checkpoints_btn.setToolTip("Show git checkpoint history for this workspace")
-        checkpoints_btn.clicked.connect(self.checkpoints_requested.emit)
-        self.addWidget(checkpoints_btn)
 
         update_btn = QToolButton()
         update_btn.setText("Update")
