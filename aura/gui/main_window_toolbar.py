@@ -28,6 +28,7 @@ class MainWindowToolbar(QToolBar):
     read_only_toggled = Signal(bool)
     auto_dispatch_toggled = Signal(bool)
     auto_approve_toggled = Signal(bool)
+    update_requested = Signal()
     settings_requested = Signal()
     minimize_requested = Signal()
     maximize_requested = Signal()
@@ -81,6 +82,12 @@ class MainWindowToolbar(QToolBar):
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.addWidget(spacer)
+
+        update_btn = QToolButton()
+        update_btn.setText("Update")
+        update_btn.setToolTip("Update Aura from GitHub")
+        update_btn.clicked.connect(self.update_requested.emit)
+        self.addWidget(update_btn)
 
         # Settings button on the right side
         settings_act = QAction(QIcon(str(media_path("settings_24dp.svg"))), "Settings", self)

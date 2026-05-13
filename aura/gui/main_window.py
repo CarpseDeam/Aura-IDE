@@ -34,6 +34,7 @@ from aura.gui.chat_view import ChatView
 from aura.gui.input_panel import InputPanel, SendPayload
 from aura.gui.send_handler import SendHandler
 from aura.gui.settings_dialog import SettingsDialog
+from aura.gui.update_dialog import UpdateDialog
 from aura.gui.onboarding_dialog import OnboardingDialog
 from aura.gui.status_bar import AuraStatusBar
 from aura.gui.left_pane import LeftPane
@@ -89,6 +90,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._toolbar.read_only_toggled.connect(self._on_read_only_toggled)
         self._toolbar.auto_dispatch_toggled.connect(self._on_auto_dispatch_toggled)
         self._toolbar.auto_approve_toggled.connect(self._on_auto_approve_toggled)
+        self._toolbar.update_requested.connect(self._on_open_update)
         self._toolbar.settings_requested.connect(self._on_open_settings)
         self._toolbar.minimize_requested.connect(self.showMinimized)
         self._toolbar.maximize_requested.connect(self._toggle_maximize)
@@ -461,6 +463,10 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             self._toolbar.set_auto_dispatch(self._settings.auto_dispatch)
             self._toolbar.set_auto_approve(self._settings.auto_approve)
             self._refresh_status_bar()
+
+    def _on_open_update(self) -> None:
+        dlg = UpdateDialog(self)
+        dlg.exec()
 
     def _apply_planner_worker_mode_to_bridge(self, enabled: bool) -> None:
         self._bridge.set_planner_worker_mode(enabled)
