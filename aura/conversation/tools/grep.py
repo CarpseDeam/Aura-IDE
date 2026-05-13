@@ -38,9 +38,77 @@ def grep_files(
 
     rg_path = shutil.which("rg")
     if rg_path:
-        return _grep_ripgrep(workspace_root, pattern, regex_mode, case_sensitive, max_results, include_pattern)
-    
-    return _grep_python(workspace_root, pattern, regex_mode, case_sensitive, max_results, include_pattern)
+        result = _grep_ripgrep(
+            workspace_root,
+            pattern,
+            regex_mode,
+            case_sensitive,
+            max_results,
+            include_pattern,
+        )
+        return _maybe_retry_as_regex(
+            result,
+            _grep_ripgrep,
+            workspace_root,
+            pattern,
+            regex_mode,
+            case_sensitive,
+            max_results,
+            include_pattern,
+        )
+
+    result = _grep_python(
+        workspace_root,
+        pattern,
+        regex_mode,
+        case_sensitive,
+        max_results,
+        include_pattern,
+    )
+    return _maybe_retry_as_regex(
+        result,
+        _grep_python,
+        workspace_root,
+        pattern,
+        regex_mode,
+        case_sensitive,
+        max_results,
+        include_pattern,
+    )
+
+
+def _looks_like_regex(pattern: str) -> bool:
+    """Return true for regex syntax models commonly emit by accident."""
+    regex_tokens = ("|", r"\b", r"\d", r"\s", r"\w", ".*", ".+", "[", "(?")
+    return any(token in pattern for token in regex_tokens)
+
+
+def _maybe_retry_as_regex(
+    result: dict[str, Any],
+    grep_fn: Any,
+    workspace_root: Path,
+    pattern: str,
+    regex_mode: bool,
+    case_sensitive: bool,
+    max_results: int,
+    include_pattern: str | None,
+) -> dict[str, Any]:
+    if regex_mode or not result.get("ok") or result.get("matches") or not _looks_like_regex(pattern):
+        return result
+
+    retry = grep_fn(
+        workspace_root,
+        pattern,
+        True,
+        case_sensitive,
+        max_results,
+        include_pattern,
+    )
+    if retry.get("ok") and retry.get("matches"):
+        retry["auto_regex_retry"] = True
+        retry["original_regex_mode"] = False
+        return retry
+    return result
 
 
 def _grep_ripgrep(

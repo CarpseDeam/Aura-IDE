@@ -97,6 +97,14 @@ class TestGrepPython:
         assert len(result["matches"]) >= 1
         assert any("hello" in m["line"] for m in result["matches"])
 
+    def test_auto_regex_retry_for_alternation(self, tmp_workspace: Path) -> None:
+        """Pipe-delimited searches are retried as regex when plain text has no hits."""
+        result = grep_files(tmp_workspace, "VALUE|hello")
+        assert result["ok"] is True
+        assert result["auto_regex_retry"] is True
+        assert len(result["matches"]) >= 1
+        assert any("VALUE" in m["line"] or "hello" in m["line"] for m in result["matches"])
+
     def test_invalid_regex(self, tmp_workspace: Path) -> None:
         """Malformed regex returns an error."""
         result = grep_files(tmp_workspace, r"[invalid", regex_mode=True)
@@ -217,6 +225,32 @@ class TestGrepRipgrep:
         result = grep_files(tmp_workspace, "nonexistent")
         assert result["ok"] is True
         assert len(result["matches"]) == 0
+
+    def test_auto_regex_retry_for_alternation(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_workspace: Path
+    ) -> None:
+        """An accidental alternation regex is retried without --fixed-strings."""
+        stdout_lines = [
+            self._rg_json_match("aura/config.py", 1, "VALUE = 42", 0),
+        ]
+        captured: list[list[str]] = []
+
+        def _capture_run(*args: object, **kwargs: object) -> MockResult:
+            cmd = args[0] if args else kwargs.get("cmd", [])
+            captured.append(list(cmd))  # type: ignore[arg-type]
+            if len(captured) == 1:
+                return MockResult(returncode=1, stdout="")
+            return MockResult(stdout="\n".join(stdout_lines) + "\n")
+
+        monkeypatch.setattr(subprocess, "run", _capture_run)
+
+        result = grep_files(tmp_workspace, "VALUE|hello")
+
+        assert result["ok"] is True
+        assert result["auto_regex_retry"] is True
+        assert len(result["matches"]) == 1
+        assert "--fixed-strings" in captured[0]
+        assert "--fixed-strings" not in captured[1]
 
     def test_non_zero_returncode(self, monkeypatch: pytest.MonkeyPatch,
                                  tmp_workspace: Path) -> None:
