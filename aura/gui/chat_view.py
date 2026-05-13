@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from PySide6.QtCore import QEasingCurve, QPropertyAnimation, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
-    QFrame,
     QHBoxLayout,
     QLabel,
     QScrollArea,
@@ -21,15 +20,11 @@ from aura.gui.cards.plan_writer_card import PlanWriterCard
 from aura.gui.cards.spec_card import SpecCard
 from aura.gui.cards.terminal_card import TerminalCard
 from aura.gui.cards.user_card import UserCard
+from aura.gui.cards.worker_summary_card import WorkerSummaryCard
 from aura.gui.controllers import ToolStreamController
 from aura.gui.theme import (
     ACCENT,
-    BG_ALT,
-    DANGER,
-    FG,
-    FG_DIM,
     FG_ITALIC,
-    SUCCESS,
 )
 
 
@@ -364,21 +359,6 @@ class ChatView(QScrollArea):
             ac.finalize_content()
             self._scroll_to_bottom()
 
-    def hold_aura_coding(self) -> None:
-        """Transition the current aura to 'coding' color and ensure it stays alive.
-
-        Call after finalize_markdown_only() when the pending work involves
-        tool execution (dispatch_to_worker or other tool calls).
-        Safe to call when _current_aura is None (no-op).
-        """
-        if self._current_aura is not None:
-            self._current_aura.set_glow_state("coding")
-
-    def stop_current_aura(self) -> None:
-        """Stop the breathing glow on the current assistant card without finalizing content."""
-        if self._current_aura is not None:
-            self._current_aura.stop_aura()
-
     # ---- spec card / worker dispatch ------------------------------------
 
     def add_spec_card(
@@ -419,43 +399,5 @@ class ChatView(QScrollArea):
         self, tool_call_id: str, goal: str, ok: bool, summary: str
     ) -> None:
         """Add a summary card to the chat after a worker completes."""
-        card = QFrame(self)
-        card.setObjectName("card")
-        card.setStyleSheet(
-            f"QFrame#card {{ background: {BG_ALT}; "
-            f"border: 1px solid rgba(255, 255, 255, 0.08); "
-            f"border-left: 3px solid {SUCCESS if ok else DANGER}; border-radius: 8px; }}"
-        )
-        layout = QVBoxLayout(card)
-        layout.setContentsMargins(16, 14, 16, 14)
-        layout.setSpacing(8)
-
-        # Header
-        status_icon = "✅" if ok else "⚠️"
-        header = QLabel(f"{status_icon} Worker completed")
-        header.setStyleSheet(
-            f"color: {SUCCESS if ok else DANGER}; font-weight: 700; font-size: 12px;"
-        )
-        layout.addWidget(header)
-
-        # Goal (dim)
-        if goal:
-            goal_label = QLabel(goal)
-            goal_label.setWordWrap(True)
-            goal_label.setStyleSheet(f"color: {FG_DIM}; font-style: italic;")
-            layout.addWidget(goal_label)
-
-        # Summary
-        if summary:
-            from aura.gui.markdown_renderer import _render_markdown_with_code
-            body = QLabel()
-            body.setWordWrap(True)
-            body.setTextFormat(Qt.TextFormat.RichText)
-            body.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-            # Use FG_BODY_USER or FG? The summary is from the worker (assistant-like).
-            # Let's use FG which is the default for assistant.
-            body.setText(_render_markdown_with_code(summary, color=FG))
-            layout.addWidget(body)
-
-
+        card = WorkerSummaryCard(tool_call_id, goal, ok, summary, parent=self)
         self._add_card(card)

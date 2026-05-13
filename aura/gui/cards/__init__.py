@@ -8,6 +8,7 @@ from aura.gui.cards.diff_card import DiffCard
 from aura.gui.cards.spec_card import SpecCard
 from aura.gui.cards.terminal_card import TerminalCard
 from aura.gui.cards.error_card import ErrorCard
+from aura.gui.cards.worker_summary_card import WorkerSummaryCard
 
 __all__ = [
     "UserCard",
@@ -19,4 +20,5 @@ __all__ = [
     "SpecCard",
     "TerminalCard",
     "ErrorCard",
+    "WorkerSummaryCard",
 ]
