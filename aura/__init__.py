@@ -1,2 +1,2 @@
 """Aura — Desktop AI Orchestration IDE."""
-__version__ = "1.0.0"
+from aura.version import __version__ as __version__

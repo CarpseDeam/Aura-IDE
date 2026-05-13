@@ -174,7 +174,7 @@ def normalize_dist_dir(root: Path, created_dist_dir: Path) -> Path:
         print(f"Removing existing final dist folder: {final_dist_dir}")
         shutil.rmtree(final_dist_dir, ignore_errors=True)
 
-    print(f"Renaming dist folder:")
+    print("Renaming dist folder:")
     print(f"  From: {created_dist_dir}")
     print(f"  To:   {final_dist_dir}")
     created_dist_dir.rename(final_dist_dir)
@@ -203,6 +203,18 @@ def validate_built_distribution(final_dist_dir: Path) -> None:
 
     print(f"Validated packaged executable: {exe_path}")
     print(f"Validated packaged media files: {len(REQUIRED_MEDIA_FILES)}")
+
+
+def zip_distribution(root: Path, final_dist_dir: Path) -> None:
+    """Package the Aura.dist folder into Aura-Windows-x64.zip."""
+    zip_name = "Aura-Windows-x64"
+    zip_path = root / OUTPUT_DIR / zip_name
+
+    print(f"Creating release archive: {zip_path}.zip")
+    # We want the ZIP to contain the Aura.dist folder.
+    # The updater script will locate Aura.dist inside the zip.
+    shutil.make_archive(str(zip_path), "zip", root_dir=str(root / OUTPUT_DIR), base_dir=FINAL_DIST_NAME)
+    print(f"Release archive created: {zip_path}.zip")
 
 
 # ---------------------------------------------------------------------------
@@ -265,7 +277,8 @@ def build() -> None:
     print("\nBuild successful.")
     print(f"Distribution folder: {final_dist_dir}")
     print(f"Executable:          {exe_path}")
-    print("To distribute, zip the entire Aura.dist directory.")
+    zip_distribution(root, final_dist_dir)
+    print("\nTo distribute, upload build/Aura-Windows-x64.zip to GitHub Releases.")
 
 
 if __name__ == "__main__":

@@ -410,12 +410,12 @@ Aura stores a searchable history of past tasks and saved notes in a local SQLite
 
 ### Self-Updater
 
-Aura can update itself from the GitHub repository:
+Aura can update itself automatically:
 
-- **Fast-forward safety** — only fast-forward pulls are allowed by default; no merge conflicts or force pushes
-- **Update status check** — the toolbar shows when a newer version is available on the remote
-- **One-click update** — the update dialog shows the commit history between your version and the latest, then pulls and prompts you to restart
-- **Source-only** — designed for source installs; packaged releases use their own update mechanisms
+- **Packaged Windows Builds** — Aura checks GitHub Releases on startup. If a newer version is available, the "Update" button in the toolbar is highlighted. One click downloads the latest release ZIP and installs it via an external updater script.
+- **Source Installations** — If running from a git checkout, Aura can pull the latest changes directly from the repository using a fast-forward merge.
+- **Update status check** — The toolbar shows when a newer version is available.
+- **Safety** — The updater never touches your workspaces, `.aura` project folders, or user configuration.
 
 ---
 

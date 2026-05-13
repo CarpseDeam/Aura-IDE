@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QSize, Qt, QTimer
+from PySide6.QtCore import QSize, Qt, QThread, QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QDialog,
@@ -38,7 +38,8 @@ from aura.gui.chat_view import ChatView
 from aura.gui.input_panel import InputPanel, SendPayload
 from aura.gui.send_handler import SendHandler
 from aura.gui.settings_dialog import SettingsDialog
-from aura.gui.update_dialog import UpdateDialog
+from aura.gui.update_dialog import UpdateDialog, UpdateWorker
+from aura.updater import UpdateStatus
 from aura.gui.onboarding_dialog import OnboardingDialog
 from aura.gui.status_bar import AuraStatusBar
 from aura.gui.left_pane import LeftPane
@@ -270,6 +271,26 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         if self._settings.restore_last_conversation:
             # Defer restoration so the UI paints and becomes interactive first.
             QTimer.singleShot(100, lambda: self._persistence.restore_last(self._workspace_root))
+
+        # Check for updates in the background.
+        QTimer.singleShot(2000, self._check_for_updates)
+
+    def _check_for_updates(self) -> None:
+        """Run a background update check."""
+        self._update_worker = UpdateWorker("check")
+        self._update_thread = QThread(self)
+        self._update_worker.moveToThread(self._update_thread)
+        self._update_thread.started.connect(self._update_worker.run)
+        self._update_worker.finished.connect(self._on_background_update_finished)
+        self._update_worker.finished.connect(self._update_thread.quit)
+        self._update_worker.finished.connect(self._update_worker.deleteLater)
+        self._update_thread.finished.connect(self._update_thread.deleteLater)
+        self._update_thread.start()
+
+    def _on_background_update_finished(self, status: UpdateStatus) -> None:
+        if status.state == "behind":
+            # Visually mark the Update button
+            self._toolbar.set_update_available(True)
 
     def showEvent(self, event) -> None:
         """Triggered when the window is shown. Used for first-launch onboarding."""

@@ -13,6 +13,7 @@ dependencies = [
     "httpx",
     "mcp>=1.0",
     "openai>=1.40",
+    "packaging",
     "pillow>=10.0",
     "platformdirs>=4.0",
     "pygments>=2.17",

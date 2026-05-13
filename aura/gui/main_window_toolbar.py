@@ -83,11 +83,11 @@ class MainWindowToolbar(QToolBar):
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.addWidget(spacer)
 
-        update_btn = QToolButton()
-        update_btn.setText("Update")
-        update_btn.setToolTip("Update Aura from GitHub")
-        update_btn.clicked.connect(self.update_requested.emit)
-        self.addWidget(update_btn)
+        self._update_btn = QToolButton()
+        self._update_btn.setText("Update")
+        self._update_btn.setToolTip("Update Aura from GitHub")
+        self._update_btn.clicked.connect(self.update_requested.emit)
+        self.addWidget(self._update_btn)
 
         # Settings button on the right side
         settings_act = QAction(QIcon(str(media_path("settings_24dp.svg"))), "Settings", self)
@@ -150,3 +150,11 @@ class MainWindowToolbar(QToolBar):
             self._max_btn.setText("\u2750")  # ❐
         else:
             self._max_btn.setText("\u25a1")  # □
+
+    def set_update_available(self, available: bool) -> None:
+        if available:
+            self._update_btn.setStyleSheet("QToolButton { color: #ff9800; font-weight: bold; }")
+            self._update_btn.setToolTip("A new version of Aura is available! Click to update.")
+        else:
+            self._update_btn.setStyleSheet("")
+            self._update_btn.setToolTip("Update Aura from GitHub")
