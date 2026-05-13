@@ -51,7 +51,6 @@ from aura.gui.theme import (
     BG, 
     SUCCESS, 
     WARN,
-    DANGER,
 )
 from aura.gui.controllers import ToolStreamController
 from aura.gui.syntax import PygmentsHighlighter, language_from_path as _language_from_path
@@ -605,16 +604,15 @@ class WorkerLogCard(QFrame):
 
 class AuraPlayground(QWidget):
     """Right-side workspace panel with code editor (top), info hub (middle),
-    terminal drawer (bottom), and a right-side tab rail with launchers.
+    and terminal drawer (bottom).
 
     Uses a vertical QSplitter to divide the space between a tabbed code editor
     pane and a tabbed info hub pane (Worker Log). A TerminalDrawer sits below
-    the splitter, and a side tab rail on the right edge provides "$" terminal
-    launcher and checkpoints placeholder tabs.
+    the splitter. MainWindow owns the floating edge launcher tabs so they do
+    not participate in this widget's layout.
     """
 
     focused_action_requested = Signal(str)
-    checkpoints_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -709,6 +707,15 @@ class AuraPlayground(QWidget):
     def open_file(self, path: Path) -> None:
         self._code_editor.open_file(path)
 
+    def terminal_drawer(self):
+        return self._terminal_drawer
+
+    def toggle_terminal_drawer(self) -> None:
+        self._terminal_drawer.toggle()
+
+    def is_terminal_drawer_open(self) -> bool:
+        return self._terminal_drawer.is_open()
+
     # ------------------------------------------------------------------
     # Public API (backward-compatible with worker_handler.py)
     # ------------------------------------------------------------------
@@ -718,7 +725,6 @@ class AuraPlayground(QWidget):
         self._code_editor.close_worker_tabs()
         self._info_hub.clear()
         self._terminal_drawer.clear()
-        self._terminal_tab.setStyleSheet(self._tab_style("dim"))
         self._controllers.clear()
         self._worker_code_paths.clear()
         self._pending_worker_code_content.clear()
@@ -826,7 +832,6 @@ class AuraPlayground(QWidget):
         self._code_editor.close_all_tabs()
         self._info_hub.clear()
         self._terminal_drawer.clear()
-        self._terminal_tab.setStyleSheet(self._tab_style("dim"))
         self._controllers.clear()
         self._worker_code_paths.clear()
         self._pending_worker_code_content.clear()

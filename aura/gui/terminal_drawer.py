@@ -38,6 +38,8 @@ class TerminalDrawer(QWidget):
 
     terminal_started = Signal()
     terminal_finished = Signal(int)  # exit_code: 0=success, nonzero=failure
+    visibility_changed = Signal(bool)
+    terminal_cleared = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -176,17 +178,23 @@ class TerminalDrawer(QWidget):
 
     def open(self) -> None:
         """Show the drawer panel and expand the TerminalCard."""
+        was_open = self._is_open
         self._is_open = True
         self._drawer.setVisible(True)
         if self._terminal_card is not None:
             self._terminal_card.expand()
+        if not was_open:
+            self.visibility_changed.emit(True)
 
     def close(self) -> None:
         """Hide the drawer panel and collapse the TerminalCard."""
+        was_open = self._is_open
         self._is_open = False
         self._drawer.setVisible(False)
         if self._terminal_card is not None:
             self._terminal_card.collapse()
+        if was_open:
+            self.visibility_changed.emit(False)
 
     def toggle(self) -> None:
         """Toggle between open and closed states."""
@@ -195,13 +203,21 @@ class TerminalDrawer(QWidget):
         else:
             self.open()
 
+    def is_open(self) -> bool:
+        """Return whether the drawer panel is currently visible."""
+        return self._is_open
+
     def clear(self) -> None:
         """Delete the TerminalCard, reset all state, and hide panel."""
+        was_open = self._is_open
         self._current_tool_id = None
         self._last_exit_code = None
         self._remove_card()
         self._drawer.setVisible(False)
         self._is_open = False
+        if was_open:
+            self.visibility_changed.emit(False)
+        self.terminal_cleared.emit()
 
     # ------------------------------------------------------------------
     # Internal helpers
