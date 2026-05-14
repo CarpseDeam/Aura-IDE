@@ -511,8 +511,8 @@ def test_dispatch_no_callback(manager, mock_client, mock_tools, on_event,
         assert dispatch_results[0].ok is False
         assert "not enabled" in dispatch_results[0].result.lower()
 
-def test_dispatch_rejects_weak_spec_before_worker(manager, mock_client, mock_tools, on_event,
-                                                  captured_events, cancel_event, history):
+def test_dispatch_allows_specs_without_quality_sections(manager, mock_client, mock_tools, on_event,
+                                                        captured_events, cancel_event, history):
         type(mock_tools).mode = PropertyMock(return_value="planner")
         tc = _tool_call("dispatch1", "dispatch_to_worker", {
             "goal": "Fix bug",
@@ -520,11 +520,10 @@ def test_dispatch_rejects_weak_spec_before_worker(manager, mock_client, mock_too
             "spec": "Change X to Y",
             "acceptance": "Done",
         })
-        dispatch_cb = MagicMock()
+        dispatch_cb = MagicMock(return_value=WorkerDispatchResult(ok=True, summary="done"))
 
         mock_client.side_effect = [
             iter([_make_done(content="", tool_calls=[tc])]),
-            iter([ContentDelta(text="Retrying"), _make_done(content="Retrying")]),
         ]
 
         manager.send(
@@ -536,17 +535,15 @@ def test_dispatch_rejects_weak_spec_before_worker(manager, mock_client, mock_too
             dispatch_cb=dispatch_cb,
         )
 
-        dispatch_cb.assert_not_called()
-        assert not any(isinstance(e, WorkerDispatchRequested) for e in captured_events)
+        dispatch_cb.assert_called_once()
+        assert any(isinstance(e, WorkerDispatchRequested) for e in captured_events)
 
         tool_results = [e for e in captured_events if isinstance(e, ToolResult)]
         dispatch_results = [tr for tr in tool_results if tr.name == "dispatch_to_worker"]
         assert len(dispatch_results) == 1
-        assert dispatch_results[0].ok is False
+        assert dispatch_results[0].ok is True
         parsed = json.loads(dispatch_results[0].result)
-        assert parsed["ok"] is False
-        assert parsed["extras"]["dispatch_spec_rejected"] is True
-        assert "dispatch rejected" in parsed["summary"].lower()
+        assert parsed["ok"] is True
 
 def test_dispatch_cb_raises(manager, mock_client, mock_tools, on_event,
                                 captured_events, cancel_event, history):

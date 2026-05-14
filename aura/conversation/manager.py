@@ -379,11 +379,11 @@ class ConversationManager:
         dispatch_cb: DispatchCallback | None,
     ) -> WorkerDispatchResult | None:
         req = WorkerDispatchRequest.from_dict(args)
-        quality = validate_worker_dispatch_spec(req.spec, req.acceptance)
+        quality = validate_worker_dispatch_spec(req.spec, req.acceptance, goal=req.goal)
         if not quality.ok:
             error_message = (
-                "Planner dispatch rejected: Worker specs must include a concrete "
-                "implementation contract before Worker runs. Missing quality items:\n"
+                "Planner dispatch rejected: goal, spec, and acceptance are required before Worker runs. "
+                "Missing required fields:\n"
                 + "\n".join(f"- {item}" for item in quality.errors)
             )
             result = WorkerDispatchResult(
