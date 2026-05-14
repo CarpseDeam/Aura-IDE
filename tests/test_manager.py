@@ -86,7 +86,7 @@ def _valid_dispatch_args(goal: str = "Fix bug", files: list[str] | None = None, 
             "Code Shape\n"
             "Implement the smallest complete change. Use direct app/tool code with no module summary "
             "docstrings or Args/Returns/Raises docstrings.\n\n"
-            "Implementation Steps\n"
+            "File-by-File Implementation Plan\n"
             "- Read the listed files before editing.\n"
             "- Make only the requested change.\n\n"
             "Acceptance Checks\n"

@@ -446,7 +446,7 @@ DISPATCH_TOOL_DEF: dict[str, Any] = {
                     "description": (
                         "Full self-contained Markdown implementation contract. It must "
                         "include these exact sections as headings: Core Behavior, Failure "
-                        "Behavior, Code Shape, Implementation Steps, Acceptance Checks, "
+                        "Behavior, Code Shape, File-by-File Implementation Plan, Acceptance Checks, "
                         "and Non-Goals. Be specific about function names, line behavior, "
                         "error cases, smallest complete implementation scope, and "
                         "no-ceremony/docstring constraints. The worker has not seen the "

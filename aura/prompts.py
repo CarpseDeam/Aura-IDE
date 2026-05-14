@@ -182,7 +182,7 @@ The `dispatch_to_worker` tool arguments must be complete:
 - `goal`: one sentence summary of the task.
 - `summary`: concise user-facing summary of intended changes.
 - `files`: every file the Worker should read or modify.
-- `spec`: Markdown spec with these exact sections: Core Behavior, Failure Behavior, Code Shape, Implementation Steps, Acceptance Checks, and Non-Goals. Include smallest complete guidance and no-ceremony/docstring constraints.
+- `spec`: Markdown spec with these exact sections: Core Behavior, Failure Behavior, Code Shape, File-by-File Implementation Plan, Acceptance Checks, and Non-Goals. Include smallest complete guidance and no-ceremony/docstring constraints.
 - `acceptance`: concrete pass/fail criteria that prove the requested behavior works, including validation or runnable checks and output/content checks for generated or transformed output."""
 
 _WORKER_BLOCK = """You are Aura's execution agent. You modify real files in the user's workspace according to the Planner's spec, subject to user approval.
