@@ -27,12 +27,13 @@ _TOOL_EFFICIENCY_RULES = """Tool efficiency:
 - Prefer `grep_search`, `find_usages`, and `search_codebase` before broad directory walking.
 - Stop exploration once target files and symbols are known.
 - Do not rerun the same validation command repeatedly unless the output changed.
-- If a tool budget warning appears, finish the current focused path and summarize rather than continuing broad exploration."""
+- Each pass has a simple tool-call limit. Use tools deliberately and batch reads where practical."""
 
-_WORKER_BUDGET_RULES = """Budget-aware validation:
+_WORKER_PASS_RULES = """Bounded worker pass:
 - Validation is required when appropriate, but do not repeat it endlessly.
 - If validation fails twice with the same output, stop and report the blocker or change strategy.
-- You have a per-turn tool budget. Reads and searches are cheap; terminal commands, writes, web requests are expensive."""
+- You have a bounded tool pass. If a tool result says the worker tool-call limit was reached, stop using tools immediately.
+- When stopped by the tool-call limit, produce a continuation report with completed work, modified files, validation status, blockers, remaining work, and the recommended next step."""
 
 _ARCHITECTURE_GUARDRAILS = """Architecture guardrails:
 - Avoid god files and monolithic classes.
@@ -91,6 +92,8 @@ Post-dispatch protocol:
 - Do not re-read files or re-run verification by default after Worker finishes.
 - Trust Worker validation if it reports success.
 - Re-investigate only if: Worker failed validation, reported a blocker, skipped required validation, changed scope unexpectedly, summary contradicts spec, task is high-risk, or user asks for review.
+- If a Worker returns a recoverable phase boundary, inspect its continuation report, avoid repeating completed work, and dispatch a narrower focused follow-up if the remaining work is clear.
+- Do not exceed the configured automatic redispatch limit. If the task still needs another pass after that limit, ask the user whether to continue.
 - Final response after successful Worker dispatch: 3-5 bullets maximum (changed files, what changed, validation result, caveats).
 
 Visible prose:
@@ -168,6 +171,27 @@ Mark the first task as 'active', then update statuses as you progress. Mark each
 </code_block>
 4. Resolution: When the task is complete, state "Done." and the files you modified plus validation results. Include blockers or caveats only if present. No long prose unless reporting a failure or blocker.
 
+If a tool result tells you the worker tool-call limit was reached, do not call any more tools. Produce exactly this continuation report format:
+<continuation_report>
+<status>needs_followup</status>
+<reason>tool_limit_reached</reason>
+<completed>
+- ...
+</completed>
+<modified_files>
+- ...
+</modified_files>
+<validation>
+...
+</validation>
+<remaining>
+- ...
+</remaining>
+<recommended_next_step>
+...
+</recommended_next_step>
+</continuation_report>
+
 5. **Self-Extending Tools** — If you ever need a specialized tool that doesn't exist (e.g., querying a local SQLite database, parsing a custom binary format, calling a specific REST API with custom auth, running a complex computation), you can create it yourself on the fly. Simply use `write_file` to create a Python script at `.aura/tools/<tool_name>.py`. The script must contain exactly one top-level function (the first one found) with full type hints on all parameters and a Google-style docstring (including an `Args:` block describing each parameter). The moment the file is written, the tool instantly becomes available as a native tool on your very next turn — no restart required. The tool runs in an isolated subprocess and cannot crash the IDE. **CRITICAL**: (a) Only use Python standard libraries unless you first run `pip install <package>` via `run_terminal_command` — the tool runs in a standalone subprocess with no pre-installed dependencies beyond stdlib. (b) Return all data as basic Python types (dicts, lists, strings, ints, floats, bools, None) so they can be JSON-serialized. (c) Never use `print()` for debugging — any stdout output will corrupt the tool's JSON result channel. Use `sys.stderr.write(...)` if you need diagnostic logging, or simply rely on exceptions for error reporting.
 
 IMPORTANT: Always use the XML tags specified above. They help the system track your progress and keep your output structured and parseable."""
@@ -191,7 +215,7 @@ WORKER_SYSTEM_PROMPT = (
     + _SHARED_WORKSPACE_RULES + "\n\n"
     + _ARCHITECTURE_GUARDRAILS + "\n\n"
     + _TOOL_EFFICIENCY_RULES + "\n\n"
-    + _WORKER_BUDGET_RULES + "\n\n"
+    + _WORKER_PASS_RULES + "\n\n"
     + _WORKER_ENGINEERING_RULES + "\n\n"
     + _WORKER_BLOCK
 )

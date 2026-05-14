@@ -87,3 +87,42 @@ def test_dispatch_result_to_tool_payload_empty_extras():
     result = WorkerDispatchResult(ok=True, summary="Done", cancelled=False, extras={})
     payload = result.to_tool_payload()
     assert "extras" not in payload
+
+
+def test_dispatch_result_followup_fields_roundtrip():
+    result = WorkerDispatchResult(
+        ok=False,
+        summary="Worker reached the pass limit.",
+        needs_followup=True,
+        phase_boundary=True,
+        followup_reason="worker_tool_call_limit_reached",
+        recoverable=True,
+        completed=["Read target files"],
+        remaining=["Run validation"],
+        modified_files=["aura/example.py"],
+        validation="Not run",
+        suggested_next_spec="Run a validation-only pass.",
+    )
+
+    payload = result.to_tool_payload()
+    restored = WorkerDispatchResult.from_tool_payload(payload)
+
+    assert payload["needs_followup"] is True
+    assert payload["phase_boundary"] is True
+    assert restored.recoverable is True
+    assert restored.completed == ["Read target files"]
+    assert restored.remaining == ["Run validation"]
+    assert restored.modified_files == ["aura/example.py"]
+    assert restored.validation == "Not run"
+    assert restored.suggested_next_spec == "Run a validation-only pass."
+
+
+def test_dispatch_result_from_legacy_payload():
+    restored = WorkerDispatchResult.from_tool_payload(
+        {"ok": True, "cancelled": False, "summary": "Done"}
+    )
+
+    assert restored.ok is True
+    assert restored.summary == "Done"
+    assert restored.needs_followup is False
+    assert restored.completed == []

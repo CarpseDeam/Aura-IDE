@@ -35,19 +35,17 @@ from aura.client import (
 )
 from aura.hooks import hooks
 from aura.config import ModelId, ThinkingMode
-from aura.conversation.tool_budget import (
-    ToolBudgetManager,
-    ToolBudgetConfig,
-    ToolBudgetExceeded,
-    budget_exceeded_payload,
-    ROLE_BUDGETS,
-)
 from aura.conversation.dispatch import (
     DispatchCallback,
     WorkerDispatchRequest,
     WorkerDispatchResult,
 )
 from aura.conversation.history import History
+from aura.conversation.tool_limits import (
+    MAX_WORKER_REDISPATCHES_PER_USER_TURN,
+    ToolLimitState,
+    limit_reached_payload,
+)
 from aura.conversation.tools._types import (
     ApprovalCallback,
     ApprovalDecision,
@@ -103,45 +101,25 @@ class ConversationManager:
         The planner uses `generate_planner_code`; workers use `generate_worker_code`.
         """
         reject_all_for_turn = False
-
-        # Determine budget config — honour explicit max_tool_rounds override
-        base_config = ROLE_BUDGETS.get(
-            self._tools.mode, ROLE_BUDGETS["single"]
-        )
-        if max_tool_rounds is not None:
-            budget_config = ToolBudgetConfig(
-                max_rounds=max_tool_rounds,
-                max_total_cost=base_config.max_total_cost,
-                max_tool_calls=base_config.max_tool_calls,
-                max_reads=base_config.max_reads,
-                max_searches=base_config.max_searches,
-                max_writes=base_config.max_writes,
-                max_terminal=base_config.max_terminal,
-                max_git=base_config.max_git,
-                max_web=base_config.max_web,
-                max_research=base_config.max_research,
-                max_dispatches=base_config.max_dispatches,
-                max_memory=base_config.max_memory,
-                max_todo=base_config.max_todo,
-                warn_at_ratio=base_config.warn_at_ratio,
-            )
-        else:
-            budget_config = base_config
-
-        budget = ToolBudgetManager(budget_config)
+        mode = getattr(self._tools, "mode", "single")
+        limits = ToolLimitState(mode=mode)
+        rounds_used = 0
+        worker_needs_final_report = False
+        worker_redispatches = 0
 
         while True:
-            try:
-                budget.record_round()
-            except ToolBudgetExceeded as exc:
-                on_event(ApiError(status_code=None, message=exc.reason))
+            rounds_used += 1
+            if max_tool_rounds is not None and rounds_used > max_tool_rounds:
+                on_event(ApiError(status_code=None, message=f"Exceeded max tool rounds ({max_tool_rounds})."))
                 return
+
+            limits.begin_model_round()
             if cancel_event.is_set():
                 self._cleanup_cancelled(on_event)
                 return
 
             full_message: dict[str, Any] | None = None
-            tool_defs = self._tools.tool_defs()
+            tool_defs = [] if worker_needs_final_report else self._tools.tool_defs()
 
             for ev in hooks.trigger(
                 hook_name,
@@ -187,10 +165,32 @@ class ConversationManager:
             self._history.append_assistant(full_message)
 
             tool_calls = full_message.get("tool_calls") or []
+            if worker_needs_final_report:
+                for tc in tool_calls:
+                    fn = tc["function"]
+                    name = fn["name"]
+                    tool_call_id = tc["id"]
+                    info = {
+                        "ok": False,
+                        "limit_reached": True,
+                        "recoverable": True,
+                        "phase_boundary": True,
+                        "reason": "worker_tool_call_limit_reached",
+                        "tool": name,
+                        "message": (
+                            "Worker tool call limit reached for this pass. Do not call more tools. "
+                            "Produce the continuation report now."
+                        ),
+                        "counts": limits.to_dict(),
+                    }
+                    self._append_limit_tool_result(tool_call_id, name, info, on_event)
+                return
+
             if not tool_calls:
                 return
 
             _terminal_dispatch = False
+            _worker_phase_boundary = False
             for tc in tool_calls:
                 if cancel_event.is_set():
                     self._cleanup_cancelled(on_event)
@@ -216,21 +216,15 @@ class ConversationManager:
                     )
                     continue
 
+                allowed, limit_info = limits.check(name)
+                if not allowed:
+                    self._append_limit_tool_result(tool_call_id, name, limit_info, on_event)
+                    if self._is_worker_total_phase_boundary(limit_info):
+                        _worker_phase_boundary = True
+                    continue
+                limits.record(name)
+
                 if name == "dispatch_to_worker":
-                    try:
-                        budget.reserve_tool(name)
-                    except ToolBudgetExceeded as exc:
-                        payload = budget_exceeded_payload(exc)
-                        self._history.append_tool_result(tool_call_id, payload)
-                        on_event(
-                            ToolResult(
-                                tool_call_id=tool_call_id,
-                                name=name,
-                                ok=False,
-                                result=payload,
-                            )
-                        )
-                        continue
                     result = self._handle_dispatch(
                         tool_call_id=tool_call_id,
                         args=args,
@@ -238,24 +232,16 @@ class ConversationManager:
                         dispatch_cb=dispatch_cb,
                     )
                     if result is not None and not result.cancelled:
-                        _terminal_dispatch = True
+                        if result.recoverable and result.phase_boundary:
+                            if worker_redispatches >= MAX_WORKER_REDISPATCHES_PER_USER_TURN:
+                                self._append_redispatch_limit_message(result, on_event)
+                                return
+                            worker_redispatches += 1
+                        else:
+                            _terminal_dispatch = True
                     continue
 
                 if name == "run_research":
-                    try:
-                        budget.reserve_tool(name)
-                    except ToolBudgetExceeded as exc:
-                        payload = budget_exceeded_payload(exc)
-                        self._history.append_tool_result(tool_call_id, payload)
-                        on_event(
-                            ToolResult(
-                                tool_call_id=tool_call_id,
-                                name=name,
-                                ok=False,
-                                result=payload,
-                            )
-                        )
-                        continue
                     ok = self._handle_research(
                         tool_call_id=tool_call_id,
                         args=args,
@@ -269,20 +255,6 @@ class ConversationManager:
                     continue
 
                 if name == "run_terminal_command":
-                    try:
-                        budget.reserve_tool(name)
-                    except ToolBudgetExceeded as exc:
-                        payload = budget_exceeded_payload(exc)
-                        self._history.append_tool_result(tool_call_id, payload)
-                        on_event(
-                            ToolResult(
-                                tool_call_id=tool_call_id,
-                                name=name,
-                                ok=False,
-                                result=payload,
-                            )
-                        )
-                        continue
                     self._handle_terminal_command(
                         tool_call_id=tool_call_id,
                         args=args,
@@ -292,24 +264,9 @@ class ConversationManager:
                     continue
 
                 if reject_all_for_turn and name in ("write_file", "edit_file"):
-                    try:
-                        budget.reserve_tool(name)
-                    except ToolBudgetExceeded as exc:
-                        payload = budget_exceeded_payload(exc)
-                        self._history.append_tool_result(tool_call_id, payload)
-                        on_event(
-                            ToolResult(
-                                tool_call_id=tool_call_id,
-                                name=name,
-                                ok=False,
-                                result=payload,
-                            )
-                        )
-                        continue
                     payload = json.dumps(
                         {"ok": False, "error": "User rejected all writes in this turn."}
                     )
-                    payload = budget.check_warning(payload)
                     self._history.append_tool_result(tool_call_id, payload)
                     on_event(
                         ToolResult(
@@ -318,21 +275,6 @@ class ConversationManager:
                             ok=False,
                             result=payload,
                             extras={"approval": "reject_all"},
-                        )
-                    )
-                    continue
-
-                try:
-                    budget.reserve_tool(name)
-                except ToolBudgetExceeded as exc:
-                    payload = budget_exceeded_payload(exc)
-                    self._history.append_tool_result(tool_call_id, payload)
-                    on_event(
-                        ToolResult(
-                            tool_call_id=tool_call_id,
-                            name=name,
-                            ok=False,
-                            result=payload,
                         )
                     )
                     continue
@@ -351,9 +293,6 @@ class ConversationManager:
                 # Apply circuit breaker
                 tool_msg_content = self._apply_circuit_breaker(name, args, exec_result.ok, tool_msg_content)
 
-                # Apply budget warning
-                tool_msg_content = budget.check_warning(tool_msg_content)
-
                 self._history.append_tool_result(tool_call_id, tool_msg_content)
                 on_event(
                     ToolResult(
@@ -365,10 +304,67 @@ class ConversationManager:
                     )
                 )
 
+            if _worker_phase_boundary:
+                worker_needs_final_report = True
+                continue
+
             # If any dispatch_to_worker or run_research completed, stop the loop.
             # The Worker Completed card is the final user-facing result.
             if _terminal_dispatch:
                 return
+
+    def _append_limit_tool_result(
+        self,
+        tool_call_id: str,
+        name: str,
+        info: dict[str, Any],
+        on_event: EventCallback,
+    ) -> None:
+        payload = limit_reached_payload(info)
+        self._history.append_tool_result(tool_call_id, payload)
+        on_event(
+            ToolResult(
+                tool_call_id=tool_call_id,
+                name=name,
+                ok=False,
+                result=payload,
+                extras={
+                    "limit_reached": bool(info.get("limit_reached")),
+                    "recoverable": bool(info.get("recoverable")),
+                    "phase_boundary": bool(info.get("phase_boundary")),
+                    "reason": str(info.get("reason", "")),
+                },
+            )
+        )
+
+    @staticmethod
+    def _is_worker_total_phase_boundary(info: dict[str, Any]) -> bool:
+        return (
+            bool(info.get("recoverable"))
+            and bool(info.get("phase_boundary"))
+            and info.get("reason") == "worker_tool_call_limit_reached"
+        )
+
+    def _append_redispatch_limit_message(
+        self,
+        result: WorkerDispatchResult,
+        on_event: EventCallback,
+    ) -> None:
+        completed = "; ".join(result.completed) if result.completed else result.summary
+        remaining = "; ".join(result.remaining) if result.remaining else "additional focused work"
+        message = (
+            "The task needs another pass. "
+            f"I completed {completed or 'part of the requested work'} and still need "
+            f"{remaining}. Continue?"
+        )
+        on_event(ContentDelta(text=message))
+        full_message = {
+            "role": "assistant",
+            "content": message,
+            "reasoning_content": None,
+        }
+        self._history.append_assistant(full_message)
+        on_event(Done(finish_reason="stop", full_message=full_message))
 
     # ---- dispatch_to_worker ------------------------------------------------
 
@@ -428,6 +424,10 @@ class ConversationManager:
                     "dispatch": True,
                     "cancelled": result.cancelled,
                     "summary": result.summary,
+                    "recoverable": result.recoverable,
+                    "phase_boundary": result.phase_boundary,
+                    "needs_followup": result.needs_followup,
+                    "followup_reason": result.followup_reason,
                 },
             )
         )
@@ -463,10 +463,11 @@ class ConversationManager:
 
         final_report = "Research failed to produce a report."
         thinking: ThinkingMode = "off" # Keep researcher fast
+        res_limits = ToolLimitState(mode="researcher")
         
         try:
-            # TODO: could adopt ToolBudgetManager for researcher sub-agent.
             for _round in range(5):  # Max 5 research steps
+                res_limits.begin_model_round()
                 if cancel_event.is_set():
                     break
                 
@@ -507,6 +508,12 @@ class ConversationManager:
                         t_args = json.loads(fn.get("arguments") or "{}")
                     except json.JSONDecodeError:
                         t_args = {}
+
+                    allowed, limit_info = res_limits.check(name)
+                    if not allowed:
+                        res_history.append_tool_result(tc_id, limit_reached_payload(limit_info))
+                        continue
+                    res_limits.record(name)
                     
                     # Execute web tool (no approval needed for search/fetch)
                     res = res_tools.execute(name, t_args, approval_cb=lambda r: ApprovalDecision("approve"))

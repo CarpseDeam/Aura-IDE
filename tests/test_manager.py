@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import threading
-from pathlib import Path
 from unittest.mock import MagicMock, PropertyMock, patch
 
 import pytest
@@ -19,8 +18,6 @@ from aura.client.events import (
     ToolCallEnd,
     ToolCallStart,
     ToolResult,
-    Usage,
-    TerminalOutput,
     WorkerDispatchRequested,
 )
 from aura.hooks import hooks
@@ -32,7 +29,6 @@ from aura.conversation.history import History
 from aura.conversation.manager import ConversationManager
 from aura.conversation.tools._types import (
     ApprovalDecision,
-    ApprovalRequest,
     ToolExecResult,
 )
 from aura.conversation.tools.registry import ToolRegistry
@@ -249,10 +245,11 @@ class TestMaxToolRounds:
                                 on_event, captured_events, cancel_event,
                                 history):
         tool_id_template = "call{}"
-        tc_template = lambda i: _tool_call(
-            tool_id_template.format(i), "write_file",
-            {"path": f"test_{i}.py", "content": "data"}
-        )
+        def tc_template(i):
+            return _tool_call(
+                tool_id_template.format(i), "write_file",
+                {"path": f"test_{i}.py", "content": "data"}
+            )
 
         # Return tool calls for each round
         side_effects = []
@@ -464,7 +461,7 @@ class TestDispatchToWorker:
         payload = json.loads(tool_msgs[0]["content"])
         assert payload["ok"] is True
 
-def test_dispatch_no_callback(self, manager, mock_client, mock_tools, on_event,
+def test_dispatch_no_callback(manager, mock_client, mock_tools, on_event,
                                   captured_events, cancel_event, history):
         type(mock_tools).mode = PropertyMock(return_value="planner")
         tc = _tool_call("dispatch1", "dispatch_to_worker", {            "goal": "Fix bug",
@@ -495,7 +492,7 @@ def test_dispatch_no_callback(self, manager, mock_client, mock_tools, on_event,
         assert dispatch_results[0].ok is False
         assert "not enabled" in dispatch_results[0].result.lower()
 
-def test_dispatch_cb_raises(self, manager, mock_client, mock_tools, on_event,
+def test_dispatch_cb_raises(manager, mock_client, mock_tools, on_event,
                                 captured_events, cancel_event, history):
         type(mock_tools).mode = PropertyMock(return_value="planner")
         tc = _tool_call("dispatch1", "dispatch_to_worker", {            "goal": "Fix bug",
@@ -530,6 +527,90 @@ def test_dispatch_cb_raises(self, manager, mock_client, mock_tools, on_event,
         assert len(dispatch_results) >= 1
         assert dispatch_results[-1].ok is False
         assert "RuntimeError" in dispatch_results[-1].result
+
+def test_recoverable_worker_phase_boundary_allows_planner_to_continue(
+    manager, mock_client, mock_tools, on_event, captured_events, cancel_event, history
+):
+    type(mock_tools).mode = PropertyMock(return_value="planner")
+    tc = _tool_call("dispatch1", "dispatch_to_worker", {
+        "goal": "Fix bug",
+        "files": ["test.py"],
+        "spec": "Change X to Y",
+        "acceptance": "Tests pass",
+    })
+    mock_client.side_effect = [
+        iter([_make_done(content="", tool_calls=[tc])]),
+        iter([ContentDelta(text="Continuing"), _make_done(content="Continuing")]),
+    ]
+    dispatch_cb = MagicMock(return_value=WorkerDispatchResult(
+        ok=False,
+        summary="Worker pass limit reached.",
+        needs_followup=True,
+        phase_boundary=True,
+        recoverable=True,
+        followup_reason="worker_tool_call_limit_reached",
+        completed=["Read files"],
+        remaining=["Finish change"],
+    ))
+
+    manager.send(
+        on_event=on_event,
+        approval_cb=_make_approval_cb(),
+        cancel_event=cancel_event,
+        model="deepseek-chat",
+        thinking="off",
+        dispatch_cb=dispatch_cb,
+    )
+
+    assert dispatch_cb.call_count == 1
+    assert mock_client.call_count == 2
+    api_errors = [e for e in captured_events if isinstance(e, ApiError)]
+    assert api_errors == []
+    assert history.messages[-1]["content"] == "Continuing"
+
+
+def test_redispatch_counter_stops_runaway_followups(
+    manager, mock_client, mock_tools, on_event, captured_events, cancel_event, history
+):
+    type(mock_tools).mode = PropertyMock(return_value="planner")
+    dispatches = [
+        _tool_call(f"dispatch{i}", "dispatch_to_worker", {
+            "goal": f"Pass {i}",
+            "files": ["test.py"],
+            "spec": f"Do pass {i}",
+            "acceptance": "Done",
+        })
+        for i in range(3)
+    ]
+    mock_client.side_effect = [
+        iter([_make_done(content="", tool_calls=[dispatches[0]])]),
+        iter([_make_done(content="", tool_calls=[dispatches[1]])]),
+        iter([_make_done(content="", tool_calls=[dispatches[2]])]),
+    ]
+    dispatch_cb = MagicMock(return_value=WorkerDispatchResult(
+        ok=False,
+        summary="Worker pass limit reached.",
+        needs_followup=True,
+        phase_boundary=True,
+        recoverable=True,
+        followup_reason="worker_tool_call_limit_reached",
+        completed=["Some work"],
+        remaining=["More work"],
+    ))
+
+    manager.send(
+        on_event=on_event,
+        approval_cb=_make_approval_cb(),
+        cancel_event=cancel_event,
+        model="deepseek-chat",
+        thinking="off",
+        dispatch_cb=dispatch_cb,
+    )
+
+    assert dispatch_cb.call_count == 3
+    final_content = history.messages[-1]["content"]
+    assert "Continue?" in final_content
+    assert "still need More work" in final_content
 
 
 # ===================================================================
@@ -1346,22 +1427,33 @@ class TestEdgeCases:
 
 
 # ===================================================================
-# Budget integration tests
+# Tool limit integration tests
 # ===================================================================
 
 
-class TestBudgetIntegration:
-    """Test that tool budget rejects tools and creates proper tool results."""
+class TestToolLimitIntegration:
+    """Test that tool limits reject tools and create proper tool results."""
 
-    def test_budget_rejects_write_for_planner(self, manager, mock_client, mock_tools,
-                                               on_event, captured_events, cancel_event,
-                                               history):
-        """Planner budget (max_writes=0) rejects write_file with proper tool result."""
+    def test_planner_rejects_second_dispatch_in_same_round(self, manager, mock_client, mock_tools,
+                                                           on_event, captured_events, cancel_event,
+                                                           history):
+        """Planner dispatch cap rejects a second dispatch_to_worker in one model round."""
         type(mock_tools).mode = PropertyMock(return_value="planner")
-        tc = _tool_call("w1", "write_file", {"path": "a.py", "content": "x"})
+        tc1 = _tool_call("d1", "dispatch_to_worker", {
+            "goal": "Fix A",
+            "files": ["a.py"],
+            "spec": "Change A",
+            "acceptance": "Done",
+        })
+        tc2 = _tool_call("d2", "dispatch_to_worker", {
+            "goal": "Fix B",
+            "files": ["b.py"],
+            "spec": "Change B",
+            "acceptance": "Done",
+        })
+        dispatch_cb = MagicMock(return_value=WorkerDispatchResult(ok=True, summary="done"))
         mock_client.side_effect = [
-            iter([_make_done(content="", tool_calls=[tc])]),
-            iter([ContentDelta(text="Done"), _make_done(content="Done")]),
+            iter([_make_done(content="", tool_calls=[tc1, tc2])]),
         ]
         manager.send(
             on_event=on_event,
@@ -1369,21 +1461,24 @@ class TestBudgetIntegration:
             cancel_event=cancel_event,
             model="deepseek-chat",
             thinking="off",
+            dispatch_cb=dispatch_cb,
         )
-        # Should have a tool result with ok=False and budget_exceeded
+        assert dispatch_cb.call_count == 1
         tool_results = [e for e in captured_events if isinstance(e, ToolResult)]
-        write_results = [tr for tr in tool_results if tr.name == "write_file"]
-        assert len(write_results) >= 1
-        assert write_results[0].ok is False
-        assert "budget" in write_results[0].result.lower() or "exceeded" in write_results[0].result.lower()
-        # Tool result must be in history
+        dispatch_results = [tr for tr in tool_results if tr.name == "dispatch_to_worker"]
+        assert len(dispatch_results) == 2
+        assert dispatch_results[0].ok is True
+        assert dispatch_results[1].ok is False
+        parsed = json.loads(dispatch_results[1].result)
+        assert parsed["limit_reached"] is True
+        assert parsed["reason"] == "planner_dispatch_call_limit_reached"
         tool_msgs = [m for m in history.messages if m["role"] == "tool"]
-        assert len(tool_msgs) >= 1
+        assert len(tool_msgs) == 2
 
-    def test_budget_allows_many_reads(self, manager, mock_client, mock_tools,
-                                       on_event, captured_events, cancel_event,
-                                       history):
-        """Worker budget allows many read_file calls."""
+    def test_worker_limit_allows_many_reads(self, manager, mock_client, mock_tools,
+                                            on_event, captured_events, cancel_event,
+                                            history):
+        """Worker tool limit allows many read_file calls below the cap."""
         type(mock_tools).mode = PropertyMock(return_value="worker")
         # Build 30 tool calls (all read_file) in one round
         tcs = [_tool_call(f"r{i}", "read_file", {"path": f"file{i}.py"}) for i in range(30)]
@@ -1404,3 +1499,54 @@ class TestBudgetIntegration:
         tool_results = [e for e in captured_events if isinstance(e, ToolResult)]
         assert len(tool_results) == 30
         assert all(tr.ok for tr in tool_results)
+
+    def test_worker_total_limit_produces_phase_boundary_without_dangling_tools(
+        self, manager, mock_client, mock_tools, on_event, captured_events, cancel_event, history
+    ):
+        """Worker total tool cap rejects cleanly and allows a final no-tool report."""
+        type(mock_tools).mode = PropertyMock(return_value="worker")
+        tcs = [_tool_call(f"r{i}", "read_file", {"path": f"file{i}.py"}) for i in range(101)]
+        mock_client.side_effect = [
+            iter([_make_done(content="", tool_calls=tcs)]),
+            iter([
+                ContentDelta(text="<continuation_report>"),
+                _make_done(content=(
+                    "<continuation_report>\n"
+                    "<status>needs_followup</status>\n"
+                    "<reason>tool_limit_reached</reason>\n"
+                    "<completed>\n- Read many files\n</completed>\n"
+                    "<modified_files>\n</modified_files>\n"
+                    "<validation>Not run</validation>\n"
+                    "<remaining>\n- Continue work\n</remaining>\n"
+                    "<recommended_next_step>Dispatch a narrower pass</recommended_next_step>\n"
+                    "</continuation_report>"
+                )),
+            ]),
+        ]
+        mock_tools.execute.return_value = ToolExecResult(ok=True, payload={"ok": True})
+
+        manager.send(
+            on_event=on_event,
+            approval_cb=_make_approval_cb(),
+            cancel_event=cancel_event,
+            model="deepseek-chat",
+            thinking="off",
+        )
+
+        assert mock_tools.execute.call_count == 100
+        tool_results = [e for e in captured_events if isinstance(e, ToolResult)]
+        rejected = [tr for tr in tool_results if tr.ok is False]
+        assert len(rejected) == 1
+        parsed = json.loads(rejected[0].result)
+        assert parsed["recoverable"] is True
+        assert parsed["phase_boundary"] is True
+        assistant_tool_calls = [
+            tc["id"]
+            for msg in history.messages
+            if msg.get("role") == "assistant"
+            for tc in (msg.get("tool_calls") or [])
+        ]
+        tool_result_ids = [
+            msg.get("tool_call_id") for msg in history.messages if msg.get("role") == "tool"
+        ]
+        assert set(assistant_tool_calls).issubset(set(tool_result_ids))

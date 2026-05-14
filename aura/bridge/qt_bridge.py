@@ -16,6 +16,7 @@ Planner / worker mode:
 from __future__ import annotations
 
 import json
+import re
 import threading
 from pathlib import Path
 from typing import Any
@@ -385,8 +386,10 @@ class _DispatchProxy(QObject):
         index_to_id: dict[int, str] = {}
         write_results: list[dict[str, Any]] = []
         api_errors: list[str] = []
+        phase_boundary_info: dict[str, Any] | None = None
 
         def on_event(ev: Event) -> None:
+            nonlocal phase_boundary_info
             if isinstance(ev, ReasoningDelta):
                 self.workerReasoningDelta.emit(tool_call_id, ev.text)
             elif isinstance(ev, ContentDelta):
@@ -449,6 +452,12 @@ class _DispatchProxy(QObject):
                 except (json.JSONDecodeError, TypeError):
                     parsed = {}
                 if (
+                    isinstance(parsed, dict)
+                    and parsed.get("recoverable")
+                    and parsed.get("phase_boundary")
+                ):
+                    phase_boundary_info = parsed
+                if (
                     ev.name in ("write_file", "edit_file")
                     and isinstance(parsed, dict)
                     and parsed.get("ok")
@@ -480,8 +489,17 @@ class _DispatchProxy(QObject):
         if cancel_event.is_set():
             worker_history.pop_if_empty_assistant_message()
 
-        summary = _build_worker_summary(req, worker_history, write_results, api_errors)
-        ok = not api_errors and bool(write_results or _last_assistant_content(worker_history))
+        continuation = _parse_continuation_report(_last_assistant_content(worker_history))
+        summary = _build_worker_summary(req, worker_history, write_results, api_errors, continuation)
+        phase_boundary = phase_boundary_info is not None
+        ok = (
+            not api_errors
+            and not phase_boundary
+            and bool(write_results or _last_assistant_content(worker_history))
+        )
+        modified_files = continuation.get("modified_files") or [
+            str(w["path"]) for w in write_results if isinstance(w.get("path"), str) and w.get("path")
+        ]
 
         record = WorkerDispatchRecord(
             after_message_index=-1,
@@ -519,7 +537,22 @@ class _DispatchProxy(QObject):
             ok=ok,
             summary=summary,
             cancelled=False,
-            extras={"writes": write_results, "errors": api_errors},
+            needs_followup=phase_boundary,
+            phase_boundary=phase_boundary,
+            followup_reason=(
+                str(phase_boundary_info.get("reason")) if phase_boundary_info else None
+            ),
+            recoverable=phase_boundary,
+            completed=continuation.get("completed", []),
+            remaining=continuation.get("remaining", []),
+            modified_files=modified_files,
+            validation=continuation.get("validation_text"),
+            suggested_next_spec=continuation.get("recommended_next_step"),
+            extras={
+                "writes": write_results,
+                "errors": api_errors,
+                "limit": phase_boundary_info or {},
+            },
         )
 
 
@@ -560,8 +593,10 @@ def _build_worker_summary(
     history: History,
     writes: list[dict[str, Any]],
     errors: list[str],
+    continuation: dict[str, Any] | None = None,
 ) -> str:
     lines: list[str] = []
+    continuation = continuation or {}
     
     # 1. Errors first
     if errors:
@@ -583,11 +618,62 @@ def _build_worker_summary(
         for w in writes:
             tag = "(new)" if w.get("is_new_file") else f"({w.get('tool')})"
             lines.append(f"  - {w.get('path')} {tag}")
+
+    if continuation.get("remaining"):
+        if lines:
+            lines.append("")
+        lines.append("Worker pass limit reached. Remaining work:")
+        for item in continuation["remaining"]:
+            lines.append(f"  - {item}")
+
+    if continuation.get("validation_text"):
+        if lines:
+            lines.append("")
+        lines.append("Validation:")
+        lines.append(str(continuation["validation_text"]).strip())
             
     if not lines:
         lines.append("Worker finished with no changes.")
         
     return "\n".join(lines).strip()
+
+
+def _parse_continuation_report(content: str) -> dict[str, Any]:
+    """Extract the worker continuation report fields from its final text."""
+    if not content:
+        return {}
+
+    def section(name: str) -> str:
+        match = re.search(
+            rf"<{name}>\s*(.*?)\s*</{name}>",
+            content,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        return match.group(1).strip() if match else ""
+
+    def list_section(name: str) -> list[str]:
+        raw = section(name)
+        if not raw:
+            return []
+        items: list[str] = []
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            if line.startswith(("-", "*")):
+                line = line[1:].strip()
+            items.append(line)
+        return items
+
+    return {
+        "status": section("status"),
+        "reason": section("reason"),
+        "completed": list_section("completed"),
+        "modified_files": list_section("modified_files"),
+        "validation_text": section("validation"),
+        "remaining": list_section("remaining"),
+        "recommended_next_step": section("recommended_next_step"),
+    }
 
 
 class ConversationBridge(QObject):

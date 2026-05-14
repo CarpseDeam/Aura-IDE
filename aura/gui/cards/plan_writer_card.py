@@ -1,6 +1,8 @@
 """Compact status card for a worker plan being written."""
 from __future__ import annotations
 
+import json
+
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import (
@@ -20,6 +22,7 @@ class PlanWriterCard(QFrame):
     STATE_RUNNING = "running"
     STATE_DONE = "done"
     STATE_FAILED = "failed"
+    STATE_PHASE = "phase"
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -53,6 +56,7 @@ class PlanWriterCard(QFrame):
             self.STATE_RUNNING: WARN,
             self.STATE_DONE: SUCCESS,
             self.STATE_FAILED: DANGER,
+            self.STATE_PHASE: WARN,
         }[self._state]
 
         text = {
@@ -61,6 +65,7 @@ class PlanWriterCard(QFrame):
             ),
             self.STATE_DONE: "⚡ Plan ready ✓",
             self.STATE_FAILED: "⚡ Plan failed ✗",
+            self.STATE_PHASE: "⚡ Phase complete — preparing follow-up",
         }[self._state]
 
         metrics = QFontMetrics(self._status.font())
@@ -107,6 +112,15 @@ class PlanWriterCard(QFrame):
         self._latest_spec = spec
         self._refresh()
 
-    def set_result(self, ok: bool) -> None:
+    def set_result(self, ok: bool, result_text: str | None = None) -> None:
+        if result_text:
+            try:
+                parsed = json.loads(result_text)
+            except (json.JSONDecodeError, TypeError):
+                parsed = {}
+            if isinstance(parsed, dict) and parsed.get("phase_boundary"):
+                self._state = self.STATE_PHASE
+                self._refresh()
+                return
         self._state = self.STATE_DONE if ok else self.STATE_FAILED
         self._refresh()

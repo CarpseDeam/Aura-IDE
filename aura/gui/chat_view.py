@@ -363,6 +363,9 @@ class ChatView(QScrollArea):
             controller.goal_updated.connect(card.set_goal)
             controller.content_updated.connect(card.update_spec)
             controller.state_changed.connect(lambda s: card.set_result(s == "done"))
+            controller.result_finalized_text.connect(
+                lambda text, c=controller, card=card: card.set_result(c._state == "done", text)
+            )
 
         else:
             card = ac.add_tool_card(tool_call_id, name)
