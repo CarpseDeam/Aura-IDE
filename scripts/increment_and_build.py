@@ -74,8 +74,16 @@ def update_readme(root: Path, new_version: str) -> None:
 def run_build(root: Path) -> None:
     """Run the Nuitka build script."""
     build_script = root / "scripts" / "build_nuitka.py"
-    print(f"Running build: {build_script}")
+    print("\n" + "="*60)
+    print(f"BUILD START: {build_script}")
+    print("="*60 + "\n")
+    
+    # This will stream output directly to your terminal in real-time
     subprocess.run([sys.executable, str(build_script)], cwd=root, check=True)
+    
+    print("\n" + "="*60)
+    print("BUILD COMPLETE")
+    print("="*60 + "\n")
 
 
 def main() -> None:
