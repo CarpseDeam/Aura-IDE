@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import sys
 from pathlib import Path
 
 import pytest
@@ -186,8 +185,8 @@ class TestToolRegistryMCP:
             # Cleanup TOOL_HANDLERS
             TOOL_HANDLERS.pop("echo", None)
             TOOL_HANDLERS.pop("add", None)
-            registry._mcp_clients.clear()
-            registry._mcp_schemas.clear()
+            registry._mcp_tools._clients.clear()
+            registry._mcp_tools._schemas.clear()
 
     def test_execute_mcp_tool(
         self, mock_mcp_server_script: Path
@@ -216,8 +215,8 @@ class TestToolRegistryMCP:
         finally:
             TOOL_HANDLERS.pop("echo", None)
             TOOL_HANDLERS.pop("add", None)
-            registry._mcp_clients.clear()
-            registry._mcp_schemas.clear()
+            registry._mcp_tools._clients.clear()
+            registry._mcp_tools._schemas.clear()
 
     def test_connect_mcp_server_invalid_command(self):
         """Connecting with a non-existent command should raise RuntimeError."""

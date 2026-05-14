@@ -1,19 +1,19 @@
-"""Tool registry — workspace-jailed dispatch and OpenAI tool definitions.
+"""Tool registry — compatibility facade that coordinates focused sub-modules.
 
-The registry is the only place that:
-- builds the API tool list (mode + read_only swap which tools are exposed)
-- resolves and validates filesystem paths against workspace_root
-- calls the GUI approval callback for writes
-- creates timestamped backups before approved writes
+This module remains the public API entry point. Internals are delegated to:
+- ToolCatalog      — schema/mode/read-only tool-definition building
+- DynamicToolRegistry — .aura/tools scanning, caching, and dynamic tool lookup
+- MCPToolRegistry  — MCP server connections, schemas, and execution
+- ToolExecutor     — execution dispatch across static/MCP/dynamic handlers
 
 Modes:
-- "single"  — legacy / planner-worker disabled: read + write tools.
-- "planner" — read tools + dispatch_to_worker; the planner cannot write.
-- "worker"  — read + write tools, no dispatch (workers don't dispatch).
+- "single"     — legacy / planner-worker disabled: read + write tools.
+- "planner"    — read tools + dispatch_to_worker; the planner cannot write.
+- "worker"     — read + write tools, no dispatch (workers don't dispatch).
+- "researcher" — web tools only.
 """
 from __future__ import annotations
 
-import shlex
 from pathlib import Path
 from typing import Any
 
@@ -32,7 +32,6 @@ from aura.conversation.tools._memory_mixin import MemoryHandlersMixin
 # Imports kept for test-patch compatibility (patching
 # aura.conversation.tools.registry.<name> in test_tool_registry.py).
 from aura.conversation.tools.backup import backup_existing  # noqa: F401
-from aura.conversation.tools.dynamic import execute_dynamic_tool, parse_tool_schema
 from aura.conversation.tools.find_usages import find_usages  # noqa: F401
 from aura.conversation.tools.fs_handler import FsReadHandler
 from aura.conversation.tools.git_handler import GitHandler
@@ -42,41 +41,15 @@ from aura.conversation.tools.fs_write import propose_edit, propose_write  # noqa
 from aura.codebase_index.tool import search_codebase as _search_codebase  # noqa: F401
 from aura.codebase_index.indexer import CodebaseIndex  # noqa: F401
 from aura.conversation.tools.web_handler import WebHandler
-from aura.mcp_client import MCPClient, _convert_tool_to_openai_schema
 
 from aura.conversation.tools.catalog import ToolCatalog
-from aura.conversation.tools._schemas import (
-    DISPATCH_TOOL_DEF,
-    GIT_TOOL_DEFS,
-    PROJECT_MEMORY_TOOL_DEFS,
-    READ_TOOL_DEFS,
-    RESEARCH_TOOL_DEFS,
-    TERMINAL_TOOL_DEF,
-    WEB_TOOL_DEFS,
-    WORKER_TODO_TOOL_DEF,
-    WRITE_TOOL_DEFS,
-)
+from aura.conversation.tools.dynamic_registry import DynamicToolRegistry
+from aura.conversation.tools.mcp_registry import MCPToolRegistry
+from aura.conversation.tools.executor import ToolExecutor
 
 # Tool handler dispatch table.
 # Maps tool name -> unbound method that accepts (self, args, approval_cb, reject_all).
 TOOL_HANDLERS: dict[str, Any] = {}
-
-
-def _make_mcp_handler(mcp_client: MCPClient, tool_name: str):
-    """Create a handler closure for an MCP tool.
-
-    Args:
-        mcp_client: The MCPClient instance connected to the server.
-        tool_name: Name of the tool on the MCP server.
-
-    Returns:
-        A handler function with signature (self, args, approval_cb, reject_all)
-        suitable for registration in TOOL_HANDLERS.
-    """
-    def handler(self, args, approval_cb, reject_all):
-        result = mcp_client.call_tool(tool_name, args)
-        return ToolExecResult(ok=result.get("ok", False), payload=result)
-    return handler
 
 
 class ToolRegistry(
@@ -102,15 +75,18 @@ class ToolRegistry(
         self._root = workspace_root.resolve()
         self._read_only = read_only
         self._mode: RegistryMode = mode
-        self._dynamic_cache: dict[str, Path] = {}
-        self._dynamic_cache_mtimes: dict[str, float] = {}
         self._codebase_index: CodebaseIndex | None = None
         self._fs_handler = FsReadHandler(self._root, self._resolve_in_root)
         self._git_handler = GitHandler(self._root)
         self._web_handler = WebHandler()
-        self._mcp_clients: dict[str, MCPClient] = {}
-        self._mcp_schemas: list[dict[str, Any]] = []
         self._catalog = ToolCatalog()
+        self._dynamic_tools = DynamicToolRegistry(self._root)
+        self._mcp_tools = MCPToolRegistry()
+        self._executor = ToolExecutor(
+            owner=self,
+            dynamic_tools=self._dynamic_tools,
+            mcp_tools=self._mcp_tools,
+        )
 
     @property
     def workspace_root(self) -> Path:
@@ -118,8 +94,7 @@ class ToolRegistry(
 
     def set_workspace_root(self, root: Path) -> None:
         self._root = root.resolve()
-        self._dynamic_cache.clear()
-        self._dynamic_cache_mtimes.clear()
+        self._dynamic_tools.set_workspace_root(self._root)
         # Reset codebase index for the new workspace
         self._codebase_index = None
         # Refresh handlers with the new root
@@ -141,20 +116,13 @@ class ToolRegistry(
         self._mode = mode
 
     def tool_defs(self) -> list[dict[str, Any]]:
-        dynamic_schemas: list[dict[str, Any]] = []
-        if not self._read_only:
-            for file_path in self._scan_dynamic_tools().values():
-                try:
-                    schema = parse_tool_schema(file_path)
-                    dynamic_schemas.append(schema)
-                except (ValueError, SyntaxError):
-                    pass
+        dynamic_schemas = self._dynamic_tools.schemas() if not self._read_only else []
 
         return self._catalog.build_tool_defs(
             mode=self._mode,
             read_only=self._read_only,
             dynamic_schemas=dynamic_schemas or None,
-            mcp_schemas=self._mcp_schemas or None,
+            mcp_schemas=self._mcp_tools.schemas or None,
         )
 
     # ---- MCP server support ------------------------------------------------
@@ -172,74 +140,7 @@ class ToolRegistry(
         Raises:
             RuntimeError: If the server fails to launch or initialize.
         """
-        import os as _os
-        parsed = shlex.split(server_command, posix=(_os.name != "nt"))
-        client = MCPClient(parsed)
-        client.connect()
-        tool_defs = client.list_tools()
-
-        count = 0
-        for tool_def in tool_defs:
-            schema = _convert_tool_to_openai_schema(tool_def)
-            tool_name = tool_def["name"]
-            self._mcp_schemas.append(schema)
-            self._mcp_clients[tool_name] = client
-            TOOL_HANDLERS[tool_name] = _make_mcp_handler(client, tool_name)
-            count += 1
-
-        return count
-
-    # ---- dynamic tools -----------------------------------------------------
-
-    def _scan_dynamic_tools(self) -> dict[str, Path]:
-        """Scan .aura/tools/ for .py files and map tool names to file paths.
-
-        Uses per-file mtime caching to avoid re-parsing unchanged files.
-        """
-        tools_dir = self._root / ".aura" / "tools"
-        if not tools_dir.is_dir():
-            self._dynamic_cache.clear()
-            self._dynamic_cache_mtimes.clear()
-            return {}
-
-        current_files: set[str] = set()
-        for entry in sorted(tools_dir.iterdir()):
-            if not entry.is_file() or entry.suffix != ".py":
-                continue
-            if entry.name.startswith("_"):
-                continue
-
-            key = str(entry)
-            current_files.add(key)
-            mtime = entry.stat().st_mtime
-
-            # Skip if unchanged since last parse
-            if key in self._dynamic_cache_mtimes and self._dynamic_cache_mtimes[key] == mtime:
-                continue
-
-            try:
-                schema = parse_tool_schema(entry)
-                name = schema["function"]["name"]
-                # Remove any old mapping for this file path (name may have changed)
-                for old_name, old_path in list(self._dynamic_cache.items()):
-                    if str(old_path) == key:
-                        del self._dynamic_cache[old_name]
-                        break
-                self._dynamic_cache[name] = entry
-                self._dynamic_cache_mtimes[key] = mtime
-            except (ValueError, SyntaxError):
-                pass
-
-        # Remove entries for files that no longer exist
-        stale_keys = set(self._dynamic_cache_mtimes.keys()) - current_files
-        for key in stale_keys:
-            for name, path in list(self._dynamic_cache.items()):
-                if str(path) == key:
-                    del self._dynamic_cache[name]
-                    break
-            del self._dynamic_cache_mtimes[key]
-
-        return dict(self._dynamic_cache)
+        return self._mcp_tools.connect_server(server_command)
 
     # ---- path resolution ---------------------------------------------------
 
@@ -278,23 +179,7 @@ class ToolRegistry(
         approval_cb: ApprovalCallback,
         reject_all: bool = False,
     ) -> ToolExecResult:
-        try:
-            # Static dispatch via TOOL_HANDLERS
-            handler = TOOL_HANDLERS.get(name)
-            if handler is not None:
-                return handler(self, args, approval_cb, reject_all)
-
-            # Check dynamic tools before giving up
-            dynamic = self._scan_dynamic_tools()
-            if name in dynamic:
-                result = execute_dynamic_tool(dynamic[name], name, args, self._root)
-                return ToolExecResult(ok=result.get("ok", False), payload=result)
-
-            return ToolExecResult(
-                ok=False, payload={"ok": False, "error": f"unknown tool: {name}"}
-            )
-        except (ValueError, OSError) as exc:
-            return ToolExecResult(ok=False, payload={"ok": False, "error": str(exc)})
+        return self._executor.execute(name, args, approval_cb, reject_all)
 
 
 # Populate the dispatch table after ToolRegistry is defined
