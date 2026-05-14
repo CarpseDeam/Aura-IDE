@@ -133,10 +133,10 @@ class TestGrepPython:
 
     def test_skip_dirs_and_hidden(self, tmp_workspace: Path) -> None:
         """Hidden files and .git/ contents are not searched."""
-        # .hidden_file contains "secret" but should be skipped
+        # .hidden_file contains "secret" but SHOULD be searched now
         result = grep_files(tmp_workspace, "secret")
         assert result["ok"] is True
-        assert len(result["matches"]) == 0
+        assert len(result["matches"]) == 1
 
     def test_binary_file_skipped(self, tmp_path: Path) -> None:
         """Binary files that can't be decoded as UTF-8 are silently skipped."""
@@ -150,6 +150,49 @@ class TestGrepPython:
         assert result["ok"] is True
         assert len(result["matches"]) == 1
         assert result["matches"][0]["path"] == "readable.txt"
+
+    def test_grep_finds_private_method_names(self, tmp_path: Path) -> None:
+        target = tmp_path / "gui"
+        target.mkdir()
+        file_path = target / "main_window.py"
+        file_path.write_text(
+            "class MainWindow:\n"
+            "    def _on_send(self):\n"
+            "        pass\n"
+            "\n"
+            "    def _handle_send_text(self):\n"
+            "        pass\n",
+            encoding="utf-8",
+        )
+
+        result = grep_files(
+            workspace_root=tmp_path,
+            pattern="_on_send",
+            include_pattern="**/*.py",
+        )
+
+        assert result["ok"] is True
+        assert result["matches"]
+        assert result["matches"][0]["path"] == "gui/main_window.py"
+
+    def test_python_grep_does_not_skip_arbitrary_dot_paths(self, tmp_path: Path) -> None:
+        dot_dir = tmp_path / ".custom"
+        dot_dir.mkdir()
+        file_path = dot_dir / "example.py"
+        file_path.write_text("needle = True\n", encoding="utf-8")
+
+        result = grep_files(
+            workspace_root=tmp_path,
+            pattern="needle",
+            regex_mode=False,
+            case_sensitive=False,
+            max_results=10,
+            include_pattern="**/*.py",
+        )
+
+        assert result["ok"] is True
+        assert result["matches"]
+        assert result["matches"][0]["path"] == ".custom/example.py"
 
 
 # ===================================================================

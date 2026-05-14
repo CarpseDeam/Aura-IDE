@@ -14,7 +14,6 @@ import pytest
 
 from aura.conversation.tools._types import (
     ApprovalDecision,
-    ApprovalRequest,
 )
 from aura.conversation.tools.registry import (
     TOOL_HANDLERS,
@@ -286,6 +285,15 @@ class TestGrepSearch:
     def test_empty_pattern(self, registry: ToolRegistry, approve_cb: MagicMock):
         result = _handler("grep_search")(registry, {"pattern": ""}, approve_cb, False)
         assert result.ok is False
+
+    def test_grep_handler_propagates_failure(self, registry: ToolRegistry, approve_cb: MagicMock):
+        with patch("aura.conversation.tools.registry.grep_files") as mock_gf:
+            mock_gf.return_value = {"ok": False, "error": "boom"}
+            result = _handler("grep_search")(registry, {"pattern": "anything"}, approve_cb, False)
+
+        assert result.ok is False
+        assert result.payload["ok"] is False
+        assert result.payload["error"] == "boom"
 
 
 # ===================================================================
@@ -957,6 +965,8 @@ class TestHandlerRegistration:
         "edit_file",
         "edit_symbol",
         "update_todo_list",
+        "search_project_memory",
+        "save_to_project_memory",
     }
 
     def test_all_expected_tools_present(self):

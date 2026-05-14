@@ -14,8 +14,6 @@ def _should_skip(path: Path) -> bool:
     parts = set(path.parts)
     if parts & SKIP_DIRS:
         return True
-    if any(p.startswith(".") for p in path.parts):
-        return True
     if path.suffix in SKIP_FILE_SUFFIXES:
         return True
     return False
