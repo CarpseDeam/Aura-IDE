@@ -62,3 +62,20 @@ def test_tool_schema_matches_planner_instructions():
     
     for section in required_sections:
         assert section in spec_desc
+
+
+def test_snappy_planner_worker_rules():
+    """Ensure snappy workflow and execution rules are present."""
+    # Planner
+    assert "Snappy workflow" in PLANNER_SYSTEM_PROMPT
+    assert "Planner tempo" in PLANNER_SYSTEM_PROMPT
+    assert "inspect only the minimum files needed" in PLANNER_SYSTEM_PROMPT
+    
+    # Worker
+    assert "Snappy execution" in WORKER_SYSTEM_PROMPT
+    assert "update_todo_list" in WORKER_SYSTEM_PROMPT
+    assert "The TODO list is the visible execution plan" in WORKER_SYSTEM_PROMPT
+    assert "Do not emit prose or XML planning" in WORKER_SYSTEM_PROMPT
+    
+    # Continuation report still exists
+    assert "continuation_report" in WORKER_SYSTEM_PROMPT
