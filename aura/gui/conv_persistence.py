@@ -14,6 +14,7 @@ from PySide6.QtCore import QObject, Signal, Slot, QTimer
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 
 from aura.config import APP_NAME
+from aura.settings import AppSettings
 from aura.conversation.persistence import (
     LoadedConversation,
     load_conversation,
@@ -69,6 +70,10 @@ class ConversationPersistence(QObject):
     def current_conversation_path(self) -> Path | None:
         """The file path of the most recently saved/loaded conversation."""
         return self._current_conversation_path
+
+    def update_settings(self, settings: AppSettings) -> None:
+        """Use the latest settings object for future restore/replay operations."""
+        self._settings = settings
 
     # ---- internal slots ----------------------------------------------------
 

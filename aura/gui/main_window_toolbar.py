@@ -127,6 +127,13 @@ class MainWindowToolbar(QToolBar):
             self._read_only_act.setText("Read-Only Mode")
             self._read_only_badge.setText("")
 
+    def update_settings(self, settings) -> None:
+        """Use the latest settings object and refresh setting-backed controls."""
+        self._settings = settings
+        self.set_auto_dispatch(settings.auto_dispatch)
+        self.set_auto_approve(settings.auto_approve)
+        self.refresh_auto_toggle_tooltips()
+
     def set_auto_dispatch(self, checked: bool) -> None:
         self._auto_dispatch_switch.setChecked(checked)
         self.refresh_auto_toggle_tooltips()

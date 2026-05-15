@@ -116,6 +116,7 @@ class OnboardingDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.selected_mission_text: str = _MISSION_TEXTS[0]
+        self.open_settings_requested = False
         self._workspace_path = workspace_path
         self._on_change_workspace = on_change_workspace
 
@@ -412,7 +413,7 @@ class OnboardingDialog(QDialog):
         layout.addSpacing(8)
 
         open_settings_btn = QPushButton("Open Settings")
-        open_settings_btn.clicked.connect(lambda: self.reject())
+        open_settings_btn.clicked.connect(self._on_open_settings)
         layout.addWidget(open_settings_btn, 0, Qt.AlignmentFlag.AlignCenter)
 
         layout.addStretch(1)
@@ -451,6 +452,10 @@ class OnboardingDialog(QDialog):
         self.selected_mission_text = mission_text
         for card in self._mission_cards:
             card.set_selected(card.mission_text == mission_text)
+
+    def _on_open_settings(self) -> None:
+        self.open_settings_requested = True
+        self.reject()
 
     # ---- navigation -------------------------------------------------------
 

@@ -63,6 +63,10 @@ class WorkerEventHandler(QObject):
         self._session_usage.clear()
         self.usage_updated.emit()
 
+    def update_settings(self, settings: AppSettings) -> None:
+        """Use the latest settings object after Settings is accepted."""
+        self._settings = settings
+
     def connect_bridge_signals(self) -> None:
         """Wire all bridge worker signals to the corresponding handler slots.
 
@@ -103,16 +107,24 @@ class WorkerEventHandler(QObject):
         if self._bridge.auto_dispatch:
             self._bridge.user_dispatched(tool_call_id, goal, list(files), spec, acceptance, summary)
             return
+        card = self._chat.add_spec_card(tool_call_id, goal, list(files), spec, acceptance, summary)
+        card.dispatch_clicked.connect(self._on_dispatch_clicked)
+        card.edit_clicked.connect(self._on_edit_spec_clicked)
+        card.cancel_clicked.connect(self._on_cancel_dispatch_clicked)
+        card.view_worker_clicked.connect(self._on_view_worker_clicked)
         # Delayed import to avoid circular dependency at module level.
         from PySide6.QtWidgets import QDialog
         from aura.gui.spec_edit_dialog import SpecApprovalDialog
 
         dlg = SpecApprovalDialog(goal, list(files), spec, acceptance, summary, parent=self.parent())
         if dlg.exec() == QDialog.DialogCode.Accepted:
+            card.update_spec(dlg.goal(), dlg.files(), dlg.spec(), dlg.acceptance(), dlg.summary())
+            card.mark_dispatched()
             self._bridge.user_dispatched(
                 tool_call_id, dlg.goal(), dlg.files(), dlg.spec(), dlg.acceptance(), dlg.summary()
             )
         else:
+            card.mark_cancelled()
             self._bridge.user_cancelled_dispatch(tool_call_id)
 
     def _on_dispatch_clicked(self, tool_call_id: str) -> None:

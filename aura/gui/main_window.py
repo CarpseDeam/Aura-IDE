@@ -468,7 +468,14 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             workspace_path=str(self._workspace_root) if self._workspace_root else "",
             on_change_workspace=self._onboarding_change_workspace,
         )
-        if dlg.exec() == QDialog.DialogCode.Accepted:
+        result = dlg.exec()
+        if dlg.open_settings_requested:
+            self._settings.first_launch_done = True
+            from aura.config import save_settings
+            save_settings(self._settings)
+            self._on_open_settings()
+            return
+        if result == QDialog.DialogCode.Accepted:
             self._settings.first_launch_done = True
             from aura.config import save_settings
             save_settings(self._settings)
@@ -662,6 +669,10 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         )
         if dlg.exec() == SettingsDialog.DialogCode.Accepted:
             self._settings = dlg.result_settings()
+            self._send_handler.update_settings(self._settings)
+            self._persistence.update_settings(self._settings)
+            self._worker_handler.update_settings(self._settings)
+            self._toolbar.update_settings(self._settings)
             
             # Always refresh combos to pick up dynamically fetched models
             self._left_pane.populate_models(

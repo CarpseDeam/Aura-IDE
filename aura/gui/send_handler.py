@@ -64,6 +64,10 @@ class SendHandler(QObject):
         """Update the workspace root path (called when user changes root)."""
         self._workspace_root = root
 
+    def update_settings(self, settings: AppSettings) -> None:
+        """Use the latest settings object after Settings is accepted."""
+        self._settings = settings
+
     def clear_queue(self) -> None:
         """Clear any queued messages (called on new/open conversation)."""
         self._message_queue.clear()
@@ -99,6 +103,13 @@ class SendHandler(QObject):
         # --- Vision routing ---
         vision_descriptions: list[str] = []
         vision_error: str | None = None
+
+        if image_atts and not native_vision and not self._settings.vision_enabled:
+            self._chat.add_error(
+                "Images not supported",
+                "The selected model cannot read images. Enable local vision fallback or choose a vision-capable model.",
+            )
+            return
 
         if image_atts and not native_vision and self._settings.vision_enabled:
             # Fall back to local vision model for descriptive middleman
@@ -269,24 +280,21 @@ class SendHandler(QObject):
             final_text = f"{vision_block}\n\n[User's question:]\n{text}" if text else vision_block
             display_text = final_text
             self._bridge.history.append_user_text(final_text)
+        elif vision_error and not vision_descriptions and image_atts:
+            self._chat.add_error("Vision fallback failed", vision_error)
+            return
         elif vision_error and not vision_descriptions:
-            # Vision completely failed — fall back to sending text-only with error note
             final_text = f"{text}\n\n[Note: {vision_error}]" if text else f"[Vision error: {vision_error}]"
             display_text = final_text
             self._bridge.history.append_user_text(final_text)
         else:
             # No images or vision disabled
-            if image_atts and not self._settings.vision_enabled:
-                parts = []
-                if text:
-                    parts.append({"type": "text", "text": text})
-                for a in image_atts:
-                    parts.append({
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/png;base64,{a.b64}"},
-                    })
-                self._bridge.history.append_user_multimodal(parts)
-                display_text = text
+            if image_atts:
+                self._chat.add_error(
+                    "Images not supported",
+                    "The selected model cannot read images. Enable local vision fallback or choose a vision-capable model.",
+                )
+                return
             else:
                 display_text = text
                 self._bridge.history.append_user_text(text)
@@ -304,8 +312,8 @@ class SendHandler(QObject):
     # ---- model info lookup -------------------------------------------------
 
     def _get_current_model_info(self, model: str) -> ModelInfo | None:
-        """Look up metadata for the given model from the current provider."""
-        cfg = PROVIDERS.get(self._settings.provider)
+        """Look up metadata for the model from the provider used for chat sends."""
+        cfg = PROVIDERS.get(self._settings.planner_provider)
         if not cfg:
             return None
         return cfg.models.get(model)

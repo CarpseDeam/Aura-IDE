@@ -3,6 +3,7 @@ read-only environment / workspace facts.
 """
 from __future__ import annotations
 
+import copy
 import logging
 import os
 from pathlib import Path
@@ -191,37 +192,7 @@ class SettingsDialog(QDialog):
         self.setModal(True)
         self.resize(580, 0)
 
-        self._settings = AppSettings(
-            provider=settings.provider,
-            planner_provider=settings.planner_provider,
-            worker_provider=settings.worker_provider,
-            default_model=settings.default_model,
-            default_thinking=settings.default_thinking,
-            restore_last_conversation=settings.restore_last_conversation,
-            planner_worker_mode=settings.planner_worker_mode,
-            show_planner_reasoning=settings.show_planner_reasoning,
-            default_planner_model=settings.default_planner_model,
-            default_worker_model=settings.default_worker_model,
-            default_planner_thinking=settings.default_planner_thinking,
-            default_worker_thinking=settings.default_worker_thinking,
-            vision_enabled=settings.vision_enabled,
-            vision_model=settings.vision_model,
-            vision_endpoint=settings.vision_endpoint,
-            temperature=settings.temperature,
-            worker_temperature=settings.worker_temperature,
-            system_prompt=settings.system_prompt,
-            planner_system_prompt=settings.planner_system_prompt,
-            worker_system_prompt=settings.worker_system_prompt,
-            auto_commit_enabled=settings.auto_commit_enabled,
-            auto_dispatch=settings.auto_dispatch,
-            auto_approve=settings.auto_approve,
-            sandbox_mode=settings.sandbox_mode,
-            tavily_api_key=settings.tavily_api_key,
-            terminal_window_geometry=settings.terminal_window_geometry,
-            first_launch_done=settings.first_launch_done,
-            onboarding_checklist=dict(settings.onboarding_checklist),
-            onboarding_version=settings.onboarding_version,
-        )
+        self._settings = copy.deepcopy(settings)
         self._on_change_root = on_change_root
 
         # Thread tracking for safe cleanup
@@ -728,7 +699,10 @@ class SettingsDialog(QDialog):
         buttons.rejected.connect(self.reject)
         outer.addWidget(buttons)
 
-        # Check initial auth status for CLI backends asynchronously
+        self._start_auth_status_check()
+
+    def _start_auth_status_check(self) -> None:
+        """Check initial CLI auth status asynchronously."""
         self._auth_status_thread = QThread(self)
         self._auth_status_worker = AuthStatusWorker()
         self._auth_status_worker.moveToThread(self._auth_status_thread)
@@ -1317,7 +1291,7 @@ class SettingsDialog(QDialog):
         """Read the current widget values and return a fresh AppSettings."""
         provider_id: ProviderId = self._provider_combo.currentData()
 
-        return AppSettings(
+        result = AppSettings(
             provider=provider_id,
             planner_provider=self._planner_provider_combo.currentData(),
             worker_provider=self._worker_provider_combo.currentData(),
@@ -1349,6 +1323,11 @@ class SettingsDialog(QDialog):
             onboarding_checklist=dict(self._settings.onboarding_checklist),
             onboarding_version=self._settings.onboarding_version,
         )
+        if not result.planner_worker_mode:
+            result.planner_provider = result.provider
+            result.default_planner_model = result.default_model
+            result.default_planner_thinking = result.default_thinking
+        return result
 
     def accept(self) -> None:  # type: ignore[override]
         # Persist on OK.

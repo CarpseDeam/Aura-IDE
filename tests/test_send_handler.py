@@ -45,6 +45,7 @@ def input_panel() -> Mock:
 def settings() -> Mock:
     s = Mock()
     s.provider = "deepseek"
+    s.planner_provider = "deepseek"
     s.vision_enabled = False
     s.vision_endpoint = "http://localhost:5000"
     s.vision_model = "local-vision"
@@ -261,9 +262,9 @@ class TestVisionRouting:
         mock_thread.assert_not_called()
 
     def test_no_vision_when_disabled(
-        self, handler: SendHandler, bridge: Mock, settings: Mock
+        self, handler: SendHandler, bridge: Mock, settings: Mock, chat: Mock
     ) -> None:
-        """When vision is disabled, multimodal should be used even without native support."""
+        """When vision is disabled, images are not sent to non-vision models."""
         settings.vision_enabled = False
         with patch.dict(
             "aura.gui.send_handler.PROVIDERS",
@@ -298,9 +299,12 @@ class TestVisionRouting:
                 "off",
             )
 
-        # Should use multimodal since vision is disabled but images exist
-        bridge.history.append_user_multimodal.assert_called_once()
-        bridge.send.assert_called_once()
+        bridge.history.append_user_multimodal.assert_not_called()
+        bridge.send.assert_not_called()
+        chat.add_error.assert_called_once_with(
+            "Images not supported",
+            "The selected model cannot read images. Enable local vision fallback or choose a vision-capable model.",
+        )
 
     def test_vision_fallback_thread_spawned(
         self, handler: SendHandler, settings: Mock, input_panel: Mock
@@ -493,9 +497,9 @@ class TestMultimodalAssembly:
         assert "Note" in call_args
 
     def test_vision_disabled_with_images_uses_multimodal(
-        self, handler: SendHandler, bridge: Mock, settings: Mock
+        self, handler: SendHandler, bridge: Mock, settings: Mock, chat: Mock
     ) -> None:
-        """When vision is disabled but images exist, use multimodal parts."""
+        """When vision is disabled, do not send multimodal to an unknown model."""
         settings.vision_enabled = False
         handler._finalize_send(
             SendPayload(
@@ -515,13 +519,44 @@ class TestMultimodalAssembly:
             vision_error=None,
         )
 
-        bridge.history.append_user_multimodal.assert_called_once_with([
-            {"type": "text", "text": "describe this"},
+        bridge.history.append_user_multimodal.assert_not_called()
+        bridge.send.assert_not_called()
+        chat.add_error.assert_called_once_with(
+            "Images not supported",
+            "The selected model cannot read images. Enable local vision fallback or choose a vision-capable model.",
+        )
+
+    def test_model_info_uses_planner_provider(self, handler: SendHandler, settings: Mock) -> None:
+        settings.provider = "deepseek"
+        settings.planner_provider = "openai"
+        with patch.dict(
+            "aura.gui.send_handler.PROVIDERS",
             {
-                "type": "image_url",
-                "image_url": {"url": "data:image/png;base64,abc123"},
+                "deepseek": Mock(models={}),
+                "openai": Mock(models={"gpt-4o": Mock(supports_vision=True)}),
             },
-        ])
+        ):
+            info = handler._get_current_model_info("gpt-4o")
+
+        assert info is not None
+        assert info.supports_vision is True
+
+    def test_update_settings_replaces_settings_object(
+        self, handler: SendHandler, bridge: Mock
+    ) -> None:
+        new_settings = Mock()
+        new_settings.planner_provider = "deepseek"
+        new_settings.vision_enabled = False
+        new_settings.max_tool_rounds = 123
+
+        handler.update_settings(new_settings)
+        handler.handle_send(SendPayload(text="hello", attachments=[]), "model", "off")
+
+        bridge.send.assert_called_once_with(
+            model="model",
+            thinking="off",
+            max_tool_rounds=123,
+        )
 
 
 # ---------------------------------------------------------------------------

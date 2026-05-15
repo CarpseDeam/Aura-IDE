@@ -451,6 +451,24 @@ class SpecCard(QFrame):
         self._status_label.setVisible(True)
         self.cancel_clicked.emit(self._tool_call_id)
 
+    def mark_dispatched(self) -> None:
+        """Reflect a modal approval without emitting another dispatch signal."""
+        self._dispatched = True
+        self._worker_running = True
+        self._buttons_row.setVisible(False)
+        self._status_label.setText("Worker running...")
+        self._status_label.setStyleSheet(f"color: {FG_DIM}; font-size: 11px;")
+        self._status_label.setVisible(True)
+        self._view_worker_btn.setVisible(True)
+
+    def mark_cancelled(self) -> None:
+        """Reflect a modal cancellation without emitting another cancel signal."""
+        self._cancelled = True
+        self._buttons_row.setVisible(False)
+        self._status_label.setText("Cancelled")
+        self._status_label.setStyleSheet(f"color: {DANGER}; font-size: 11px;")
+        self._status_label.setVisible(True)
+
     def disable_buttons(self) -> None:
         """Disable all buttons on the card."""
         self._dispatch_btn.setEnabled(False)
