@@ -152,9 +152,6 @@ class TerminalWindow(QDialog):
             if self.isVisible():
                 self._terminal_card.expand()
 
-        if exit_code != 0:
-            self.show_and_raise()
-
         self.terminal_finished.emit(exit_code)
 
     def show_and_raise(self) -> None:
