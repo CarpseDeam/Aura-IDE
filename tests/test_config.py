@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
 from aura.config import (
@@ -55,10 +54,13 @@ def test_anthropic_provider_config():
     assert anthropic.base_url == "https://api.anthropic.com/v1"
     assert anthropic.env_key == "ANTHROPIC_API_KEY"
     assert anthropic.default_thinking == "high"
-    assert anthropic.default_model == "claude-sonnet-4-20250514"
-    # Models and pricing should be empty dicts (dynamically fetched)
-    assert anthropic.models == {}
-    assert anthropic.pricing == {}
+    assert anthropic.default_model == "claude-sonnet-4-6"
+    assert "claude-sonnet-4-6" in anthropic.models
+    assert anthropic.pricing["claude-sonnet-4-6"] == {
+        "in_miss": 3.00,
+        "in_hit": 0.30,
+        "out": 15.00,
+    }
 
 
 def test_deepseek_provider_config():
@@ -128,6 +130,9 @@ def test_app_settings_to_from_dict_roundtrip():
 
     original = AppSettings(
         provider="openai",
+        planner_provider="openai",
+        worker_provider="openai",
+        default_model="gpt-4o",
         default_planner_model="gpt-4o",
         default_planner_thinking="off",
         default_worker_model="gpt-4o-mini",
@@ -138,6 +143,9 @@ def test_app_settings_to_from_dict_roundtrip():
     data = asdict(original)
     restored = AppSettings.from_dict(data)
     assert restored.provider == original.provider
+    assert restored.planner_provider == original.planner_provider
+    assert restored.worker_provider == original.worker_provider
+    assert restored.default_model == original.default_model
     assert restored.default_planner_model == original.default_planner_model
     assert restored.default_planner_thinking == original.default_planner_thinking
     assert restored.default_worker_model == original.default_worker_model
@@ -148,13 +156,53 @@ def test_app_settings_to_from_dict_roundtrip():
 
 def test_app_settings_from_dict_partial():
     """from_dict should fill in defaults for missing keys."""
-    partial = {"provider": "google", "default_planner_model": "gemini-2.0-flash"}
+    partial = {
+        "provider": "google",
+        "planner_provider": "google",
+        "default_planner_model": "gemini-2.0-flash",
+    }
     s = AppSettings.from_dict(partial)
     assert s.provider == "google"
+    assert s.default_model == "gemini-2.0-flash"
     assert s.default_planner_model == "gemini-2.0-flash"
     # Defaults for unspecified fields
     assert s.default_planner_thinking == "off"
-    assert s.default_worker_model == "deepseek-v4-pro"
+    assert s.default_worker_model == "deepseek-v4-flash"
+
+
+def test_app_settings_from_dict_invalid_providers_fall_back(caplog):
+    """Invalid provider IDs should not survive into runtime settings."""
+    data = {
+        "provider": "not-a-provider",
+        "planner_provider": "bad-planner",
+        "worker_provider": "bad-worker",
+    }
+
+    s = AppSettings.from_dict(data)
+
+    assert s.provider == "deepseek"
+    assert s.planner_provider == "deepseek"
+    assert s.worker_provider == "deepseek"
+    assert "Invalid provider value" in caplog.text
+
+
+def test_app_settings_from_dict_invalid_models_fall_back(caplog):
+    """Model defaults should be valid for their selected providers."""
+    data = {
+        "provider": "openai",
+        "planner_provider": "google",
+        "worker_provider": "anthropic",
+        "default_model": "deepseek-v4-pro",
+        "default_planner_model": "gpt-4o",
+        "default_worker_model": "gpt-4o-mini",
+    }
+
+    s = AppSettings.from_dict(data)
+
+    assert s.default_model == "gpt-4o"
+    assert s.default_planner_model == "gemini-2.0-flash"
+    assert s.default_worker_model == "claude-sonnet-4-6"
+    assert "Invalid model value" in caplog.text
 
 
 # ---------------------------------------------------------------------------

@@ -315,7 +315,14 @@ def install_packaged_update(
             
         has_runtime_marker = any(
             (current_app_dir / marker).exists()
-            for marker in ("PySide6", "qt.conf", "python3.dll", "python310.dll")
+            for marker in (
+                "PySide6",
+                "qt.conf",
+                "python3.dll",
+                "python310.dll",
+                "python311.dll",
+                "python312.dll",
+            )
         )
         if not has_runtime_marker:
             return PullResult(False, None, message="Current app directory lacks expected packaged runtime markers.")

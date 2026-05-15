@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import logging
+import os
 import platform
 import sys
+import argparse
 from pathlib import Path
 
 from aura.startup_logging import configure_startup_logging
@@ -13,9 +15,10 @@ logger = logging.getLogger(__name__)
 
 def main() -> int:
     log_path = configure_startup_logging()
+    args, qt_argv = _parse_args(sys.argv[1:])
 
     try:
-        return _run_app(log_path)
+        return _run_app(log_path, args, qt_argv)
     except Exception as exc:
         logger.critical("Aura failed to start", exc_info=True)
         if _qapplication_exists():
@@ -29,13 +32,19 @@ def main() -> int:
         return 1
 
 
-def _run_app(log_path: Path) -> int:
+def _run_app(log_path: Path, args: argparse.Namespace, qt_argv: list[str]) -> int:
     # Force UTF-8 stdout for any console output.
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
+    if args.profile_dir is not None:
+        profile_dir = Path(args.profile_dir).expanduser()
+        os.environ["AURA_CONFIG_DIR"] = str(profile_dir)
+        os.environ["AURA_DATA_DIR"] = str(profile_dir)
+
     logger.info("app start")
     logger.info("argv: %r", sys.argv)
+    logger.info("qt argv: %r", qt_argv)
     logger.info("Python: %s", sys.version.replace("\n", " "))
     logger.info("platform: %s", platform.platform())
 
@@ -45,16 +54,14 @@ def _run_app(log_path: Path) -> int:
     logger.info("data path: %s", data_dir())
     logger.info("startup log path: %s", log_path)
 
-    from PySide6.QtCore import QCoreApplication, Qt
+    from PySide6.QtCore import QCoreApplication, QTimer, Qt
     from PySide6.QtGui import QGuiApplication, QIcon
     from PySide6.QtWidgets import QApplication, QMessageBox
 
-    from aura.config import APP_NAME, PROVIDERS, get_api_key, icon_path, load_settings
-    from aura.gui.main_window import MainWindow
-    from aura.gui.theme import apply_theme
+    app_name = "Aura"
 
-    QCoreApplication.setApplicationName(APP_NAME)
-    QCoreApplication.setOrganizationName(APP_NAME)
+    QCoreApplication.setApplicationName(app_name)
+    QCoreApplication.setOrganizationName(app_name)
     QGuiApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
@@ -63,8 +70,11 @@ def _run_app(log_path: Path) -> int:
     QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_UseSoftwareOpenGL, True)
 
     logger.info("QApplication creation start")
-    app = QApplication(sys.argv)
+    app = QApplication(qt_argv)
     logger.info("QApplication creation end")
+
+    from aura.config import APP_NAME, PROVIDERS, get_api_key, icon_path, load_settings
+    from aura.gui.theme import apply_theme
 
     app.setWindowIcon(QIcon(str(icon_path())))
 
@@ -81,7 +91,9 @@ def _run_app(log_path: Path) -> int:
     has_any_key = any(get_api_key(pid) is not None for pid in PROVIDERS)
     has_selected_key = get_api_key(selected_provider) is not None
 
-    if not has_any_key:
+    if args.startup_smoke:
+        logger.info("startup smoke mode: skipping API key warnings")
+    elif not has_any_key:
         # No provider at all has a key — show a warning but don't block.
         logger.info("API key warning start")
         QMessageBox.warning(
@@ -109,6 +121,8 @@ def _run_app(log_path: Path) -> int:
         )
         logger.info("API key warning end")
 
+    from aura.gui.main_window import MainWindow
+
     logger.info("MainWindow construction start")
     win = MainWindow()
     logger.info("MainWindow construction end")
@@ -117,10 +131,29 @@ def _run_app(log_path: Path) -> int:
     win.show()
     logger.info("win.show end")
 
+    if args.startup_smoke:
+        logger.info("startup smoke mode: scheduling quit")
+        QTimer.singleShot(500, QApplication.quit)
+
     logger.info("app.exec start")
     exit_code = app.exec()
     logger.info("app.exec end: %s", exit_code)
-    return exit_code
+    return 0 if args.startup_smoke else exit_code
+
+
+def _parse_args(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
+    parser = argparse.ArgumentParser(add_help=True)
+    parser.add_argument(
+        "--profile-dir",
+        help="Use PATH for both Aura config and data during this run.",
+    )
+    parser.add_argument(
+        "--startup-smoke",
+        action="store_true",
+        help="Open Aura briefly, then quit with a startup success/failure code.",
+    )
+    args, qt_args = parser.parse_known_args(argv)
+    return args, [sys.argv[0], *qt_args]
 
 
 def _show_crash_dialog(log_path: Path, exc: Exception) -> None:

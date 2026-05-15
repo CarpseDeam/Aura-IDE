@@ -112,9 +112,65 @@ GOOGLE_PRICING: dict[str, dict[str, float]] = {
     "gemini-2.0-pro-exp-02-05": {"in_miss": 0.00, "in_hit": 0.00, "out": 0.00},
 }
 
-ANTHROPIC_MODELS: dict[str, ModelInfo] = {}
+ANTHROPIC_MODELS: dict[str, ModelInfo] = {
+    "claude-opus-4-7": ModelInfo(
+        id="claude-opus-4-7",
+        label="Claude Opus 4.7",
+        input_per_m_usd=5.00,
+        output_per_m_usd=25.00,
+        cache_hit_per_m_usd=0.50,
+        supports_vision=True,
+    ),
+    "claude-sonnet-4-6": ModelInfo(
+        id="claude-sonnet-4-6",
+        label="Claude Sonnet 4.6",
+        input_per_m_usd=3.00,
+        output_per_m_usd=15.00,
+        cache_hit_per_m_usd=0.30,
+        supports_vision=True,
+    ),
+    "claude-haiku-4-5-20251001": ModelInfo(
+        id="claude-haiku-4-5-20251001",
+        label="Claude Haiku 4.5",
+        input_per_m_usd=1.00,
+        output_per_m_usd=5.00,
+        cache_hit_per_m_usd=0.10,
+        supports_vision=True,
+    ),
+    "claude-sonnet-4-20250514": ModelInfo(
+        id="claude-sonnet-4-20250514",
+        label="Claude Sonnet 4",
+        input_per_m_usd=3.00,
+        output_per_m_usd=15.00,
+        cache_hit_per_m_usd=0.30,
+        supports_vision=True,
+    ),
+    "claude-3-7-sonnet-20250219": ModelInfo(
+        id="claude-3-7-sonnet-20250219",
+        label="Claude Sonnet 3.7",
+        input_per_m_usd=3.00,
+        output_per_m_usd=15.00,
+        cache_hit_per_m_usd=0.30,
+        supports_vision=True,
+    ),
+    "claude-3-5-haiku-20241022": ModelInfo(
+        id="claude-3-5-haiku-20241022",
+        label="Claude Haiku 3.5",
+        input_per_m_usd=0.80,
+        output_per_m_usd=4.00,
+        cache_hit_per_m_usd=0.08,
+        supports_vision=True,
+    ),
+}
 
-ANTHROPIC_PRICING: dict[str, dict[str, float]] = {}
+ANTHROPIC_PRICING: dict[str, dict[str, float]] = {
+    mid: {
+        "in_miss": model.input_per_m_usd,
+        "in_hit": model.cache_hit_per_m_usd,
+        "out": model.output_per_m_usd,
+    }
+    for mid, model in ANTHROPIC_MODELS.items()
+}
 
 OPENROUTER_MODELS: dict[str, ModelInfo] = {
     "openai/gpt-4o": ModelInfo(
@@ -212,7 +268,7 @@ PROVIDERS: dict[ProviderId, ProviderConfig] = {
         label="Anthropic",
         base_url="https://api.anthropic.com/v1",
         env_key="ANTHROPIC_API_KEY",
-        default_model="claude-sonnet-4-20250514",
+        default_model="claude-sonnet-4-6",
         default_thinking="high",
         models=ANTHROPIC_MODELS,
         pricing=ANTHROPIC_PRICING,

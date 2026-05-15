@@ -661,14 +661,15 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             parent=self,
         )
         if dlg.exec() == SettingsDialog.DialogCode.Accepted:
-            old_provider = self._settings.provider
             self._settings = dlg.result_settings()
             
             # Always refresh combos to pick up dynamically fetched models
-            self._left_pane.populate_models(self._settings.provider)
-            
-            if self._settings.provider != old_provider:
-                self._bridge.set_provider(self._settings.provider)
+            self._left_pane.populate_models(
+                self._settings.planner_provider,
+                self._settings.worker_provider,
+            )
+            self._bridge.set_planner_provider(self._settings.planner_provider)
+            self._bridge.set_worker_provider(self._settings.worker_provider)
             # Apply to current widgets.
             if self._settings.planner_worker_mode:
                 self.set_model(self._settings.default_planner_model)

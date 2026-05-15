@@ -1,0 +1,92 @@
+name: Windows Release
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  build:
+    name: Build and Release Windows App
+    runs-on: windows-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install Dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Validate Version and Tag Match
+        shell: pwsh
+        run: |
+          $versionText = Get-Content "aura/version.py" -Raw
+          $match = [regex]::Match($versionText, '__version__\s*=\s*["'']([^"'']+)["'']')
+
+          if (-not $match.Success) {
+            Write-Error "Could not find __version__ in aura/version.py"
+            exit 1
+          }
+
+          $fileVersion = $match.Groups[1].Value
+          $tagVersion = "${{ github.event.release.tag_name }}"
+          $cleanTag = $tagVersion -replace '^v', ''
+
+          Write-Host "File version: $fileVersion"
+          Write-Host "Tag version:  $tagVersion"
+          Write-Host "Clean tag:    $cleanTag"
+
+          if ($fileVersion -ne $cleanTag) {
+            Write-Error "Version mismatch! aura/version.py ($fileVersion) does not match release tag ($tagVersion)"
+            exit 1
+          }
+
+          Write-Host "Version match confirmed."
+
+      - name: Build with Nuitka
+        shell: pwsh
+        run: python scripts/build_nuitka.py --skip-version-update --no-copy-desktop
+
+      - name: Verify Build Artifacts
+        shell: pwsh
+        run: |
+          if (!(Test-Path "build/Aura.dist/Aura.exe")) {
+            Write-Error "Aura.exe not found in build/Aura.dist/"
+            exit 1
+          }
+
+          if (!(Test-Path "build/Aura-Windows-x64.zip")) {
+            Write-Error "Aura-Windows-x64.zip not found in build/"
+            exit 1
+          }
+
+          Write-Host "Build artifacts verified."
+
+      - name: Upload Release Asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+        shell: pwsh
+        run: |
+          Write-Host "Uploading Aura-Windows-x64.zip to release $env:TAG..."
+          gh release upload "$env:TAG" "build/Aura-Windows-x64.zip" --clobber
+
+      - name: Upload Workflow Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Aura-Windows-x64
+          path: build/Aura-Windows-x64.zip
+          if-no-files-found: error

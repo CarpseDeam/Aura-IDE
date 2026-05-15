@@ -10,8 +10,11 @@ import pytest
 from scripts.build_nuitka import (
     FINAL_DIST_NAME,
     OUTPUT_DIR,
+    REQUIRED_MEDIA_FILES,
     normalize_version,
+    parse_args,
     read_current_version,
+    validate_project_paths,
     zip_distribution,
 )
 
@@ -36,6 +39,38 @@ def test_read_current_version_extracts_string_literal(tmp_path: Path) -> None:
     )
 
     assert read_current_version(tmp_path) == "1.3.4"
+
+
+def test_parse_args_supports_noninteractive_flags() -> None:
+    args = parse_args(["--skip-version-update", "--no-copy-desktop"])
+
+    assert args.skip_version_update is True
+    assert args.no_copy_desktop is True
+    assert args.interactive_version is False
+
+
+def test_validate_project_paths_requires_all_media_files(tmp_path: Path) -> None:
+    (tmp_path / "aura").mkdir()
+    (tmp_path / "aura" / "__main__.py").write_text("", encoding="utf-8")
+    media_dir = tmp_path / "media"
+    media_dir.mkdir()
+    for filename in REQUIRED_MEDIA_FILES:
+        if filename != "working.png":
+            (media_dir / filename).write_text("media", encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="working.png"):
+        validate_project_paths(tmp_path)
+
+
+def test_validate_project_paths_accepts_complete_media_set(tmp_path: Path) -> None:
+    (tmp_path / "aura").mkdir()
+    (tmp_path / "aura" / "__main__.py").write_text("", encoding="utf-8")
+    media_dir = tmp_path / "media"
+    media_dir.mkdir()
+    for filename in REQUIRED_MEDIA_FILES:
+        (media_dir / filename).write_text("media", encoding="utf-8")
+
+    validate_project_paths(tmp_path)
 
 
 def test_zip_distribution_flattens_dist_contents(tmp_path: Path) -> None:

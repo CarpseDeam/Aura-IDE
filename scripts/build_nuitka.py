@@ -145,10 +145,22 @@ def ensure_build_dependencies() -> None:
 
 def validate_project_paths(root: Path) -> None:
     """Validate required project paths before starting."""
-    for path in [root / PACKAGE_NAME, root / PACKAGE_NAME / "__main__.py", root / ICON_PATH, root / MEDIA_DIR]:
-        if not path.exists():
-            print(f"Missing required path: {path}")
-            sys.exit(1)
+    required_paths = [
+        root / PACKAGE_NAME,
+        root / PACKAGE_NAME / "__main__.py",
+        root / ICON_PATH,
+        root / MEDIA_DIR,
+    ]
+    missing = [path for path in required_paths if not path.exists()]
+    media_dir = root / MEDIA_DIR
+    missing.extend(
+        media_dir / filename
+        for filename in REQUIRED_MEDIA_FILES
+        if not (media_dir / filename).is_file()
+    )
+    if missing:
+        details = "\n".join(f"  - {path}" for path in missing)
+        raise SystemExit(f"Missing required build files:\n{details}")
 
 
 def clean_previous_dist_dirs(root: Path) -> None:
@@ -216,24 +228,57 @@ def copy_to_desktop(zip_path: Path) -> None:
 # Main Build Flow
 # ---------------------------------------------------------------------------
 
-def resolve_build_version(root: Path, requested_version: str | None) -> str:
+def resolve_build_version(
+    root: Path,
+    requested_version: str | None,
+    *,
+    skip_version_update: bool = False,
+    interactive_version: bool = False,
+) -> str:
     """Resolve the build version, updating files only when explicitly requested."""
-    if requested_version is None:
+    if requested_version is not None and skip_version_update:
+        raise SystemExit("--version and --skip-version-update cannot be used together.")
+
+    if requested_version is not None:
+        version = normalize_version(requested_version)
+        update_files(root, version)
+        return version
+
+    if interactive_version:
+        current = read_current_version(root)
+        raw = input(
+            f"Enter release version X.Y.Z or leave blank to keep {current}: "
+        ).strip()
+        if raw:
+            version = normalize_version(raw)
+            update_files(root, version)
+            return version
+        print(f"Using current version: {current}")
+        return current
+
+    if skip_version_update or requested_version is None:
         version = read_current_version(root)
         print(f"Using current version: {version}")
         return version
 
-    version = normalize_version(requested_version)
-    update_files(root, version)
-    return version
 
-
-def build(version: str | None = None) -> None:
+def build(
+    version: str | None = None,
+    *,
+    skip_version_update: bool = False,
+    copy_desktop: bool = True,
+    interactive_version: bool = False,
+) -> None:
     root = Path(__file__).resolve().parent.parent
     os.chdir(root)
 
     # 1. Versioning
-    new_version = resolve_build_version(root, version)
+    new_version = resolve_build_version(
+        root,
+        version,
+        skip_version_update=skip_version_update,
+        interactive_version=interactive_version,
+    )
 
     # 2. Validation & Cleanup
     validate_project_paths(root)
@@ -249,7 +294,8 @@ def build(version: str | None = None) -> None:
     ]
     if SIGN_CERT:
         cmd.extend([f"--windows-sign-certificate={SIGN_CERT}"])
-        if SIGN_PASS: cmd.extend([f"--windows-sign-certificate-password={SIGN_PASS}"])
+        if SIGN_PASS:
+            cmd.extend([f"--windows-sign-certificate-password={SIGN_PASS}"])
 
     # 4. Run Build
     print(f"\nStarting Nuitka build for version {new_version}...")
@@ -263,7 +309,8 @@ def build(version: str | None = None) -> None:
     dist_dir = find_created_dist_dir(root)
     final_dist_dir = normalize_dist_dir(root, dist_dir)
     zip_path = zip_distribution(root, final_dist_dir)
-    copy_to_desktop(zip_path)
+    if copy_desktop:
+        copy_to_desktop(zip_path)
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -276,10 +323,30 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             "version in aura/version.py is used without prompting."
         ),
     )
+    parser.add_argument(
+        "--skip-version-update",
+        action="store_true",
+        help="Use the current project version without prompting or editing files.",
+    )
+    parser.add_argument(
+        "--interactive-version",
+        action="store_true",
+        help="Prompt for a version before building.",
+    )
+    parser.add_argument(
+        "--no-copy-desktop",
+        action="store_true",
+        help="Do not copy the release ZIP to the Desktop after packaging.",
+    )
     return parser.parse_args(argv)
 
 
 if __name__ == "__main__":
     args = parse_args(sys.argv[1:])
     ensure_build_dependencies()
-    build(args.version)
+    build(
+        args.version,
+        skip_version_update=args.skip_version_update,
+        copy_desktop=not args.no_copy_desktop,
+        interactive_version=args.interactive_version,
+    )

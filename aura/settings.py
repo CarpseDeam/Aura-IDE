@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from aura.paths import config_dir
 from aura.models import (
@@ -23,6 +24,8 @@ DEFAULT_SANDBOX_MODE: str = "host"
 DEFAULT_VISION_ENABLED = True
 DEFAULT_VISION_MODEL = "llama3.2-vision"
 DEFAULT_VISION_ENDPOINT = "http://localhost:11434/v1"
+
+logger = logging.getLogger(__name__)
 
 @dataclass
 class AppSettings:
@@ -73,15 +76,15 @@ class AppSettings:
         if isinstance(data.get("terminal_window_geometry"), str):
             s.terminal_window_geometry = data["terminal_window_geometry"]
         # Provider
-        if isinstance(data.get("provider"), str):
-            s.provider = data["provider"]  # type: ignore[assignment]
-        if isinstance(data.get("planner_provider"), str):
-            s.planner_provider = data["planner_provider"]  # type: ignore[assignment]
-        if isinstance(data.get("worker_provider"), str):
-            s.worker_provider = data["worker_provider"]  # type: ignore[assignment]
-        # Models — accept any string now
-        if isinstance(data.get("default_model"), str):
-            s.default_model = data["default_model"]
+        s.provider = _provider_from_data(data, "provider", s.provider)
+        s.planner_provider = _provider_from_data(
+            data, "planner_provider", s.planner_provider
+        )
+        s.worker_provider = _provider_from_data(
+            data, "worker_provider", s.worker_provider
+        )
+        # Models
+        s.default_model = _model_from_data(data, "default_model", s.provider)
         if isinstance(data.get("default_thinking"), str) and data["default_thinking"] in ("off", "high", "max"):
             s.default_thinking = data["default_thinking"]  # type: ignore[assignment]
         if isinstance(data.get("restore_last_conversation"), bool):
@@ -90,10 +93,12 @@ class AppSettings:
             s.planner_worker_mode = data["planner_worker_mode"]
         if isinstance(data.get("show_planner_reasoning"), bool):
             s.show_planner_reasoning = data["show_planner_reasoning"]
-        if isinstance(data.get("default_planner_model"), str):
-            s.default_planner_model = data["default_planner_model"]
-        if isinstance(data.get("default_worker_model"), str):
-            s.default_worker_model = data["default_worker_model"]
+        s.default_planner_model = _model_from_data(
+            data, "default_planner_model", s.planner_provider
+        )
+        s.default_worker_model = _model_from_data(
+            data, "default_worker_model", s.worker_provider
+        )
         if isinstance(data.get("default_planner_thinking"), str) and data["default_planner_thinking"] in ("off", "high", "max"):
             s.default_planner_thinking = data["default_planner_thinking"]  # type: ignore[assignment]
         if isinstance(data.get("default_worker_thinking"), str) and data["default_worker_thinking"] in ("off", "high", "max"):
@@ -134,6 +139,50 @@ class AppSettings:
         if isinstance(data.get("onboarding_version"), int):
             s.onboarding_version = data["onboarding_version"]
         return s
+
+
+def _provider_from_data(
+    data: dict[str, Any], key: str, current: ProviderId
+) -> ProviderId:
+    raw = data.get(key)
+    if not isinstance(raw, str):
+        return current
+    if raw in PROVIDERS:
+        return cast(ProviderId, raw)
+
+    logger.warning(
+        "Invalid provider value for %s: %r; falling back to %s",
+        key,
+        raw,
+        DEFAULT_PROVIDER,
+    )
+    return DEFAULT_PROVIDER
+
+
+def _model_from_data(data: dict[str, Any], key: str, provider: ProviderId) -> str:
+    provider_cfg = PROVIDERS[provider]
+    raw = data.get(key)
+    if isinstance(raw, str) and raw in provider_cfg.models:
+        return raw
+
+    if isinstance(raw, str):
+        logger.warning(
+            "Invalid model value for %s: %r is not available for provider %s; "
+            "falling back to %s",
+            key,
+            raw,
+            provider,
+            provider_cfg.default_model,
+        )
+    elif key in data:
+        logger.warning(
+            "Invalid model value for %s: %r; falling back to %s",
+            key,
+            raw,
+            provider_cfg.default_model,
+        )
+
+    return provider_cfg.default_model
 
 def settings_path() -> Path:
     return config_dir() / "config.json"
