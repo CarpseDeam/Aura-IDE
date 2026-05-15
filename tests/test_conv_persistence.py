@@ -189,7 +189,9 @@ def test_apply_loaded_replays_history(persistence, mock_bridge, mock_chat,
         },
     ]
 
-    persistence.apply_loaded(mock_loaded)
+    with patch("aura.gui.conv_persistence.QTimer.singleShot") as mock_timer:
+        mock_timer.side_effect = lambda ms, func: func()
+        persistence.apply_loaded(mock_loaded)
 
     mock_chat.reset.assert_called_once()
     mock_chat.add_user.assert_called_with("Hello")

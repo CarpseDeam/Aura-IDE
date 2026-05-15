@@ -11,8 +11,8 @@ from aura.conversation.tools._schemas import DISPATCH_TOOL_DEF
 
 
 def test_planner_worker_contract_consistency():
-    """Ensure Planner and Worker agree on the spec format."""
-    plan_nomenclature = "File-by-File Implementation Plan"
+    """Ensure Planner and Worker agree on the handoff format."""
+    plan_nomenclature = "Builder Note"
     
     # 1. Planner must be instructed to provide this section
     assert plan_nomenclature in PLANNER_SYSTEM_PROMPT
@@ -22,18 +22,16 @@ def test_planner_worker_contract_consistency():
     
     # 3. The dispatch_to_worker tool schema must require it
     spec_desc = DISPATCH_TOOL_DEF["function"]["parameters"]["properties"]["spec"]["description"]
-    assert plan_nomenclature in spec_desc
+    assert "implementation handoff" in spec_desc
 
 
 def test_planner_required_spec_sections():
     """Ensure Planner is instructed to include all required spec headings."""
     required_sections = [
-        "Core Behavior",
-        "Failure Behavior",
-        "Code Shape",
-        "File-by-File Implementation Plan",
-        "Acceptance Checks",
-        "Non-Goals",
+        "Goal",
+        "Files",
+        "Builder Note",
+        "Acceptance",
     ]
     
     for section in required_sections:
@@ -42,8 +40,7 @@ def test_planner_required_spec_sections():
 
 def test_worker_adherence_protocol():
     """Ensure Worker has a clear adherence protocol for the Planner's spec."""
-    assert "Spec Adherence Protocol" in WORKER_SYSTEM_PROMPT
-    assert "File-by-File Implementation Plan" in WORKER_SYSTEM_PROMPT
+    assert "Handoff Adherence Protocol" in WORKER_SYSTEM_PROMPT
     assert "Acceptance Verification" in WORKER_SYSTEM_PROMPT
 
 

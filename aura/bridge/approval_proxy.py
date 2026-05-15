@@ -26,6 +26,8 @@ class _ApprovalProxy(QObject):
 
     def request_approval(self, request: ApprovalRequest) -> ApprovalDecision:
         if self._approve_all_session:
+            with self._lock:
+                self._last_event = self._event_from_request(request, "approve")
             return ApprovalDecision(action="approve")
         with self._lock:
             self._last_request = request
@@ -61,10 +63,16 @@ class _ApprovalProxy(QObject):
         if self._last_decision.action == "approve_all":
             self._approve_all_session = True
             self._last_decision = ApprovalDecision(action="approve")
-        self._last_event = {
+        self._last_event = self._event_from_request(req, self._last_decision.action)
+
+    @staticmethod
+    def _event_from_request(
+        req: ApprovalRequest, decision: str
+    ) -> dict[str, Any]:
+        return {
             "rel_path": req.rel_path,
             "old_content": req.old_content,
             "new_content": req.new_content,
             "is_new_file": req.is_new_file,
-            "decision": self._last_decision.action,
+            "decision": decision,
         }

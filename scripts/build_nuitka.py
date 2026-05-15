@@ -184,12 +184,27 @@ def zip_distribution(root: Path, final_dist_dir: Path) -> Path:
 
 
 def copy_to_desktop(zip_path: Path) -> None:
-    """Copy the final ZIP to the user's desktop."""
-    desktop = Path.home() / "Desktop"
-    if desktop.exists():
-        target = desktop / ZIP_NAME
+    """Copy the final ZIP to the user's desktop, handling OneDrive redirects."""
+    home = Path.home()
+    
+    # Try common desktop locations, prioritizing OneDrive
+    candidates = [
+        home / "OneDrive" / "Desktop",
+        home / "Desktop",
+    ]
+    
+    target_desktop = None
+    for cand in candidates:
+        if cand.exists():
+            target_desktop = cand
+            break
+            
+    if target_desktop:
+        target = target_desktop / ZIP_NAME
         shutil.copy2(zip_path, target)
         print(f"Success! Release ZIP copied to: {target}")
+    else:
+        print("Could not find Desktop folder to copy the release ZIP.")
 
 
 # ---------------------------------------------------------------------------

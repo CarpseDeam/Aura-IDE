@@ -230,7 +230,7 @@ class TestRunTerminalCommand:
                 on_output=None,
             )
         assert result.ok is True
-        mock_method.assert_called_once_with("echo hello", 30, None, None)
+        mock_method.assert_called_once_with("echo hello", 30, None, None, ANY)
 
     def test_docker_mode_available_dispatches_to_docker_method(self):
         executor = SandboxExecutor(mode="docker")
@@ -246,7 +246,7 @@ class TestRunTerminalCommand:
                 on_output=None,
             )
         assert result.ok is True
-        mock_method.assert_called_once_with("ls", 60, None, None)
+        mock_method.assert_called_once_with("ls", 60, None, None, ANY)
 
     def test_docker_mode_unavailable_returns_error(self):
         executor = SandboxExecutor(mode="docker")

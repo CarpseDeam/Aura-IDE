@@ -287,6 +287,24 @@ class ChatView(QScrollArea):
             return
         card.set_result(ok)
 
+    def show_code_diff(
+        self,
+        tool_call_id: str,
+        rel_path: str,
+        old: str,
+        new: str,
+        decision: str,
+    ) -> None:
+        card = self._tool_to_code_card.get(tool_call_id)
+        if card is None:
+            return
+        card.set_target_path(rel_path)
+        if decision in ("approve", "approve_all"):
+            card.show_content_transition(old, new)
+        else:
+            card.update_content(old)
+        self._scroll_to_bottom()
+
     def append_reasoning(self, text: str) -> None:
         self.current_assistant().append_reasoning(text)
         if self._current_aura is not None:
@@ -369,8 +387,6 @@ class ChatView(QScrollArea):
 
         else:
             card = ac.add_tool_card(tool_call_id, name)
-            if card is not None:
-                card.setParent(self) # Ensure it has a parent before layout
             self._tool_owner[tool_call_id] = ac
             if card is not None:
                 # Wire generic tool card signals

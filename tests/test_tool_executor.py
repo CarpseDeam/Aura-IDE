@@ -10,6 +10,7 @@ from aura.conversation.tools._types import ToolExecResult
 from aura.conversation.tools.dynamic_registry import DynamicToolRegistry
 from aura.conversation.tools.executor import ToolExecutor
 from aura.conversation.tools.mcp_registry import MCPToolRegistry
+from aura.sandbox import SandboxResult
 
 
 class FakeOwner:
@@ -99,9 +100,13 @@ class TestToolExecutor:
             '    return {"ok": True, "result": x * 2}\n'
         )
 
-        result = executor.execute("test_dynamic", {"x": 5}, None)
+        mock_res = SandboxResult(ok=True, stdout='{"ok": true, "result": 10}', stderr="", exit_code=0)
+        with patch("aura.sandbox.SandboxExecutor.run_dynamic_tool", return_value=mock_res):
+            result = executor.execute("test_dynamic", {"x": 5}, None)
+
         assert result.ok is True
-        assert result.payload.get("result") == 10
+        assert result.payload["result"] == 10
+
 
     def test_unknown_tool_returns_error(self, executor):
         """Unknown tool names return ok=False with an error message."""

@@ -211,6 +211,16 @@ class CodeWriterCard(QFrame):
         if not self._body.isVisible():
             self._body.setVisible(True)
 
+    def show_content_transition(self, old_text: str, new_text: str) -> None:
+        """Show a full-file old -> new transition."""
+        if self._pending_content is not None:
+            self._pending_content = None
+            self._content_timer.stop()
+        self._force_finish_animation()
+        if self._code_view.toPlainText() != old_text:
+            self._apply_text_immediately(old_text)
+        self._animate_to_content(old_text, new_text)
+
     def _set_code_text(self, text: str) -> None:
         """Set code view text without triggering auto-size (for animation frames)."""
         self._code_view.setPlainText(text)
@@ -338,7 +348,8 @@ class CodeWriterCard(QFrame):
             self._content_timer.stop()
             self._apply_pending_content()
 
-        self._force_finish_animation()
+        if not ok:
+            self._force_finish_animation()
 
         if ok:
             self._completed_operations += 1

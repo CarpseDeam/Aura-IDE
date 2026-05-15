@@ -6,6 +6,7 @@ import pytest
 
 from aura.gui.cards.code_writer_card import CodeWriterCard
 from aura.gui.cards.plan_writer_card import PlanWriterCard
+from aura.gui.cards.tool_call_card import ToolCallCard
 from aura.gui.chat_view import ChatView
 
 
@@ -53,6 +54,17 @@ def test_buffers_code_content_until_path_resolves(qapp) -> None:
 
     assert len(cards) == 1
     assert chat._pending_code_content == {}
+
+
+def test_generic_tool_card_stays_owned_by_assistant_card(qapp) -> None:
+    chat = ChatView()
+    chat.begin_assistant()
+
+    chat.add_tool_call("tool-1", "read_file")
+
+    cards = chat.findChildren(ToolCallCard)
+    assert len(cards) == 1
+    assert cards[0].parentWidget() is chat._current_assistant._tool_cluster
 
 
 class TestComputeChangedRegion:

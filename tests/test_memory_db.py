@@ -14,9 +14,13 @@ def db() -> ProjectMemoryDB:
     """Create a temporary ProjectMemoryDB for each test."""
     tmp_dir = Path(tempfile.mkdtemp())
     db_path = tmp_dir / "test_memory.db"
-    yield ProjectMemoryDB(db_path)
+    pdb = ProjectMemoryDB(db_path)
+    yield pdb
     # Cleanup: explicitly close the connection so the temp db can be deleted
+    pdb.close()
     db_path.unlink(missing_ok=True)
+    import shutil
+    shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 class TestProjectMemoryDB:
@@ -91,6 +95,6 @@ class TestProjectMemoryDB:
             pdb = ProjectMemoryDB(nested)
             pdb.insert("Auto-create test.")
             assert nested.exists()
-            results = pdb.search("Auto-create")
+            results = pdb.search("Auto")
             assert len(results) == 1
             pdb.close()

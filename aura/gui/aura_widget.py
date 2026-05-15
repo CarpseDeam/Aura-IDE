@@ -681,7 +681,9 @@ class AuraPlayground(QWidget):
         # Tool stream controllers keyed by worker_tool_id
         self._controllers: dict[str, ToolStreamController] = {}
         self._worker_code_paths: dict[str, str] = {}
+        self._worker_code_tool_names: dict[str, str] = {}
         self._pending_worker_code_content: dict[str, str] = {}
+        self._workspace_root: Path | None = None
         
         # Aura wrapper reference for atmospheric synchronization
         self._aura_wrapper: AuraWidget | None = None
@@ -698,6 +700,7 @@ class AuraPlayground(QWidget):
             self._aura_wrapper.stop_aura()
 
     def set_workspace_root(self, root: Path | None) -> None:
+        self._workspace_root = root
         self._code_editor.set_workspace_root(root)
 
     def set_read_only_mode(self, enabled: bool) -> None:
@@ -726,6 +729,7 @@ class AuraPlayground(QWidget):
         self._terminal_window.clear()
         self._controllers.clear()
         self._worker_code_paths.clear()
+        self._worker_code_tool_names.clear()
         self._pending_worker_code_content.clear()
 
     def append_reasoning(self, text: str):
@@ -742,6 +746,7 @@ class AuraPlayground(QWidget):
             c.todo_updated.connect(self.update_todo_list)
 
         if name in ("write_file", "edit_file", "edit_symbol"):
+            self._worker_code_tool_names[worker_tool_id] = name
             c.path_resolved.connect(
                 lambda path, tid=worker_tool_id: self._on_code_path_resolved(
                     tid, path
@@ -772,6 +777,7 @@ class AuraPlayground(QWidget):
         # Finalize code editor tab if this was a file tool
         self._code_editor.finalize_tab(worker_tool_id)
         self._worker_code_paths.pop(worker_tool_id, None)
+        self._worker_code_tool_names.pop(worker_tool_id, None)
         self._pending_worker_code_content.pop(worker_tool_id, None)
 
         # Finalize terminal window if this was a terminal tool.
@@ -790,15 +796,50 @@ class AuraPlayground(QWidget):
     def _on_code_path_resolved(self, worker_tool_id: str, path: str) -> None:
         self._worker_code_paths[worker_tool_id] = path
         self._code_editor.open_or_focus_tab(worker_tool_id, path)
+        tool_name = self._worker_code_tool_names.get(worker_tool_id)
+        if tool_name in ("edit_file", "edit_symbol"):
+            current_content = self._read_workspace_text(path)
+            if current_content is not None:
+                self._code_editor.set_content(worker_tool_id, current_content)
         pending_content = self._pending_worker_code_content.pop(worker_tool_id, None)
-        if pending_content is not None:
+        if pending_content is not None and tool_name not in ("edit_file", "edit_symbol"):
             self._code_editor.stream_content(worker_tool_id, pending_content)
 
     def _on_code_content_updated(self, worker_tool_id: str, content: str) -> None:
+        tool_name = self._worker_code_tool_names.get(worker_tool_id)
+        if tool_name in ("edit_file", "edit_symbol"):
+            return
         if worker_tool_id not in self._worker_code_paths:
             self._pending_worker_code_content[worker_tool_id] = content
             return
         self._code_editor.stream_content(worker_tool_id, content)
+
+    def show_code_diff(
+        self,
+        worker_tool_id: str,
+        rel_path: str,
+        old: str,
+        new: str,
+        decision: str,
+    ) -> None:
+        path = self._worker_code_paths.get(worker_tool_id, rel_path)
+        self._worker_code_paths[worker_tool_id] = path
+        self._code_editor.open_or_focus_tab(worker_tool_id, path)
+        if decision in ("approve", "approve_all"):
+            self._code_editor.animate_content_transition(worker_tool_id, old, new)
+        else:
+            self._code_editor.set_content(worker_tool_id, old)
+
+    def _read_workspace_text(self, path: str) -> str | None:
+        candidate = Path(path)
+        if not candidate.is_absolute() and self._workspace_root is not None:
+            candidate = self._workspace_root / candidate
+        try:
+            if candidate.exists() and candidate.is_file():
+                return candidate.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return None
+        return None
 
     def add_diff_card(
         self,
@@ -839,6 +880,7 @@ class AuraPlayground(QWidget):
         self._terminal_window.clear()
         self._controllers.clear()
         self._worker_code_paths.clear()
+        self._worker_code_tool_names.clear()
         self._pending_worker_code_content.clear()
 
     def add_mermaid_artifact(self, code: str):

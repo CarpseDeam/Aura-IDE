@@ -82,6 +82,7 @@ class TestDynamicToolRegistry:
 
     def test_updates_cached_name_on_change(self, tmp_workspace: Path):
         """When a tool file's function name changes, the cache updates."""
+        import os
         tools_dir = tmp_workspace / ".aura" / "tools"
         tools_dir.mkdir(parents=True)
         tool_path = tools_dir / "renamed_tool.py"
@@ -108,6 +109,9 @@ class TestDynamicToolRegistry:
             '    """\n'
             '    return {"ok": True}\n'
         )
+        # Force mtime update to ensure the registry sees the change
+        new_mtime = tool_path.stat().st_mtime + 1.0
+        os.utime(tool_path, (new_mtime, new_mtime))
 
         result = registry.scan()
         assert "old_name" not in result

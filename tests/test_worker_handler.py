@@ -180,9 +180,10 @@ class TestWorkerDiffError:
         handler._on_worker_diff_decided(
             "p1", "w1", "accept", "src/main.py", "old", "new", True,
         )
-        playground.add_diff_card.assert_called_once_with(
-            "w1", "src/main.py", "old", "new", "accept", True,
+        playground.show_code_diff.assert_called_once_with(
+            "w1", "src/main.py", "old", "new", "accept",
         )
+        playground.add_diff_card.assert_not_called()
 
     def test_worker_api_error_formats_title(
         self, handler: WorkerEventHandler, playground: Mock,

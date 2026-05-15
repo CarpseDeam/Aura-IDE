@@ -205,7 +205,7 @@ class WorkerEventHandler(QObject):
         is_new_file: bool,
     ) -> None:
         """Forward diff decision to playground."""
-        self._playground.add_diff_card(worker_tool_id, rel_path, old, new, decision, is_new_file)
+        self._playground.show_code_diff(worker_tool_id, rel_path, old, new, decision)
 
     def _on_worker_api_error(self, tool_call_id: str, status: int, message: str) -> None:
         """Forward API error to playground with a formatted title."""

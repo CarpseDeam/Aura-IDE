@@ -803,6 +803,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         new: str,
         is_new_file: bool,
     ) -> None:
+        self._chat.show_code_diff(tool_call_id, rel_path, old, new, decision)
         self._chat.add_diff_card(tool_call_id, rel_path, old, new, decision, is_new_file)
 
     def _on_api_error(self, status: int, message: str) -> None:

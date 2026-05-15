@@ -6,7 +6,7 @@ All Qt dependencies are mocked; no QApplication needed.
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, patch, ANY
 
 import pytest
 
@@ -48,6 +48,7 @@ def settings() -> Mock:
     s.vision_enabled = False
     s.vision_endpoint = "http://localhost:5000"
     s.vision_model = "local-vision"
+    s.max_tool_rounds = 10
     return s
 
 
@@ -252,7 +253,11 @@ class TestVisionRouting:
 
         # Native vision path should append multimodal, no thread spawned
         bridge.history.append_user_multimodal.assert_called_once()
-        bridge.send.assert_called_once_with(model="vision-model", thinking="off")
+        bridge.send.assert_called_once_with(
+            model="vision-model",
+            thinking="off",
+            max_tool_rounds=ANY,
+        )
         mock_thread.assert_not_called()
 
     def test_no_vision_when_disabled(
@@ -363,10 +368,38 @@ class TestMultimodalAssembly:
             SendPayload(text="hello world", attachments=[]), "model", "off"
         )
         bridge.history.append_user_text.assert_called_once_with("hello world")
-        bridge.send.assert_called_once_with(model="model", thinking="off")
+        bridge.send.assert_called_once_with(
+            model="model",
+            thinking="off",
+            max_tool_rounds=ANY,
+        )
 
-    def test_native_multimodal_parts(
-        self, handler: SendHandler, bridge: Mock, settings: Mock
+    def test_text_with_non_image_attachments(
+        self, handler: SendHandler, bridge: Mock
+    ) -> None:
+        """File attachments with text_ref should be appended to the text."""
+        handler.handle_send(
+            SendPayload(
+                text="check this file",
+                attachments=[
+                    Attachment(
+                        kind="file",
+                        name="src/main.py",
+                        b64=None,
+                        text_ref="[user attached: src/main.py]",
+                    )
+                ],
+            ),
+            "model",
+            "off",
+        )
+
+        call_args = bridge.history.append_user_text.call_args[0][0]
+        assert "[user attached: src/main.py]" in call_args
+        assert "check this file" in call_args
+
+    def test_native_multimodal_assembly(
+        self, handler: SendHandler, bridge: Mock
     ) -> None:
         """Native vision model should use append_user_multimodal with parts."""
         with patch.dict(
@@ -442,30 +475,6 @@ class TestMultimodalAssembly:
         call_args = bridge.history.append_user_text.call_args[0][0]
         assert "Note" in call_args
         assert "Local vision model unavailable" in call_args
-
-    def test_text_refs_from_file_attachments(
-        self, handler: SendHandler, bridge: Mock
-    ) -> None:
-        """File attachments with text_ref should be appended to the text."""
-        handler.handle_send(
-            SendPayload(
-                text="check this file",
-                attachments=[
-                    Attachment(
-                        kind="file",
-                        name="src/main.py",
-                        b64=None,
-                        text_ref="[user attached: src/main.py]",
-                    )
-                ],
-            ),
-            "model",
-            "off",
-        )
-
-        call_args = bridge.history.append_user_text.call_args[0][0]
-        assert "[user attached: src/main.py]" in call_args
-        assert "check this file" in call_args
 
     def test_vision_error_without_descriptions_fallback(
         self, handler: SendHandler, bridge: Mock
