@@ -252,6 +252,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
         self._input.sent.connect(lambda p: self._send_handler.handle_send(p, self.current_model(), self.current_thinking()))
         self._input.stop_requested.connect(self._send_handler.handle_stop)
+        self._input.retry_requested.connect(self._on_retry)
         self._tree.file_activated.connect(self._playground.open_file)
         self._playground.focused_action_requested.connect(self._on_focused_action_requested)
         terminal_window = self._playground.terminal_window()
@@ -816,13 +817,10 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._chat.stop_current_aura()
 
     def _on_retry(self) -> None:
-        if self._bridge.is_running():
-            return
-        self._chat.begin_assistant()
-        self._bridge.send(
-            model=self.current_model(),
-            thinking=self.current_thinking(),
-            max_tool_rounds=self._settings.max_tool_rounds,
+        self._send_handler.handle_retry_last(
+            self.current_model(),
+            self.current_thinking(),
+            replay_cb=lambda: self._persistence.replay_history(synchronous=True),
         )
 
     def _on_usage(

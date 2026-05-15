@@ -542,3 +542,57 @@ class TestQueueHelpers:
         new_root = Path("/new/root")
         handler.set_workspace_root(new_root)
         assert handler._workspace_root == new_root
+
+
+# ---------------------------------------------------------------------------
+# Retry last message
+# ---------------------------------------------------------------------------
+
+
+class TestRetryLastMessage:
+    def test_retry_last_rewinds_replays_and_sends(
+        self,
+        handler: SendHandler,
+        bridge: Mock,
+        chat: Mock,
+        input_panel: Mock,
+        settings: Mock,
+    ) -> None:
+        bridge.history.rewind_to_last_user_turn.return_value = True
+        replay_cb = Mock()
+
+        ok = handler.handle_retry_last("model", "off", replay_cb=replay_cb)
+
+        assert ok is True
+        bridge.history.rewind_to_last_user_turn.assert_called_once_with()
+        input_panel.set_queued_messages.assert_called_once_with(0)
+        chat.reset.assert_called_once_with()
+        replay_cb.assert_called_once_with()
+        chat.begin_assistant.assert_called_once_with()
+        bridge.send.assert_called_once_with(
+            model="model",
+            thinking="off",
+            max_tool_rounds=settings.max_tool_rounds,
+        )
+
+    def test_retry_last_does_nothing_while_running(
+        self, handler: SendHandler, bridge: Mock
+    ) -> None:
+        bridge.is_running.return_value = True
+
+        ok = handler.handle_retry_last("model", "off")
+
+        assert ok is False
+        bridge.history.rewind_to_last_user_turn.assert_not_called()
+        bridge.send.assert_not_called()
+
+    def test_retry_last_shows_error_without_user_message(
+        self, handler: SendHandler, bridge: Mock, chat: Mock
+    ) -> None:
+        bridge.history.rewind_to_last_user_turn.return_value = False
+
+        ok = handler.handle_retry_last("model", "off")
+
+        assert ok is False
+        chat.add_error.assert_called_once_with("Retry", "No user message to retry.")
+        bridge.send.assert_not_called()

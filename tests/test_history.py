@@ -42,10 +42,155 @@ def test_for_api_preserves_reasoning_content_with_tool_calls():
             }
         ],
     })
+    h.append_tool_result("call_1", "file contents")
     api_msgs = h.for_api()
     assistant = api_msgs[1]  # no system prompt, so index 1 = first assistant
     assert assistant["reasoning_content"] == "Let me read that file."
     assert assistant["tool_calls"] == h.messages[1]["tool_calls"]
+    assert api_msgs[2]["role"] == "tool"
+
+
+def test_for_api_repairs_orphaned_assistant_tool_call_before_user():
+    """Interrupted turns must not replay assistant tool_calls with no tool result."""
+    h = History()
+    h.append_user_text("Read config.py")
+    h.append_assistant({
+        "role": "assistant",
+        "content": None,
+        "reasoning_content": "Let me read that file.",
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "read_file", "arguments": '{"path":"config.py"}'},
+            }
+        ],
+    })
+    h.append_user_text("Actually, do something else")
+
+    api_msgs = h.for_api()
+
+    assert [m["role"] for m in api_msgs] == ["user", "user"]
+    assert h.messages == api_msgs
+
+
+def test_for_api_repairs_partial_tool_call_results():
+    """If one tool call in a multi-call assistant block is missing, drop the block."""
+    h = History()
+    h.append_user_text("Write two files")
+    h.append_assistant({
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "write_file", "arguments": '{"path":"a.py"}'},
+            },
+            {
+                "id": "call_2",
+                "type": "function",
+                "function": {"name": "write_file", "arguments": '{"path":"b.py"}'},
+            },
+        ],
+    })
+    h.append_tool_result("call_1", '{"ok": true}')
+    h.append_user_text("Continue")
+
+    api_msgs = h.for_api()
+
+    assert [m["role"] for m in api_msgs] == ["user", "user"]
+    assert all(m.get("tool_call_id") != "call_1" for m in api_msgs)
+
+
+def test_for_api_keeps_complete_multi_tool_call_block():
+    h = History()
+    h.append_user_text("Write two files")
+    h.append_assistant({
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "write_file", "arguments": '{"path":"a.py"}'},
+            },
+            {
+                "id": "call_2",
+                "type": "function",
+                "function": {"name": "write_file", "arguments": '{"path":"b.py"}'},
+            },
+        ],
+    })
+    h.append_tool_result("call_1", '{"ok": true}')
+    h.append_tool_result("call_2", '{"ok": true}')
+    h.append_assistant({"role": "assistant", "content": "Done."})
+
+    api_msgs = h.for_api()
+
+    assert [m["role"] for m in api_msgs] == ["user", "assistant", "tool", "tool", "assistant"]
+    assert api_msgs[1]["tool_calls"] == h.messages[1]["tool_calls"]
+
+
+def test_for_api_drops_orphan_tool_message():
+    h = History()
+    h.append_tool_result("missing_call", "stale")
+    h.append_user_text("Hello")
+
+    api_msgs = h.for_api()
+
+    assert api_msgs == [{"role": "user", "content": "Hello"}]
+    assert h.messages == api_msgs
+
+
+def test_rewind_to_last_user_turn_removes_latest_response():
+    h = History()
+    h.append_user_text("First")
+    h.append_assistant({"role": "assistant", "content": "One"})
+    h.append_user_text("Second")
+    h.append_assistant({"role": "assistant", "content": "Two"})
+
+    assert h.rewind_to_last_user_turn() is True
+
+    assert h.messages == [
+        {"role": "user", "content": "First"},
+        {"role": "assistant", "content": "One"},
+        {"role": "user", "content": "Second"},
+    ]
+
+
+def test_rewind_to_last_user_turn_keeps_latest_user_when_no_response():
+    h = History()
+    h.append_user_text("Retry this")
+
+    assert h.rewind_to_last_user_turn() is True
+
+    assert h.messages == [{"role": "user", "content": "Retry this"}]
+
+
+def test_rewind_to_last_user_turn_repairs_broken_tool_block_first():
+    h = History()
+    h.append_user_text("First")
+    h.append_assistant({
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "read_file", "arguments": "{}"},
+            }
+        ],
+    })
+    h.append_user_text("Second")
+    h.append_assistant({"role": "assistant", "content": "Two"})
+
+    assert h.rewind_to_last_user_turn() is True
+
+    assert h.messages == [
+        {"role": "user", "content": "First"},
+        {"role": "user", "content": "Second"},
+    ]
 
 
 def test_for_api_no_reasoning_content_not_added():

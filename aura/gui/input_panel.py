@@ -167,6 +167,7 @@ class InputPanel(QFrame):
 
     sent = Signal(SendPayload)
     stop_requested = Signal()
+    retry_requested = Signal()
 
     def __init__(self, workspace_root: Path | None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -215,6 +216,13 @@ class InputPanel(QFrame):
 
         controls.addStretch(1)
 
+        self._retry_btn = QToolButton()
+        self._retry_btn.setText("↻")
+        self._retry_btn.setToolTip("Retry last message")
+        self._retry_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._retry_btn.clicked.connect(self.retry_requested.emit)
+        controls.addWidget(self._retry_btn)
+
         self._stop_btn = QPushButton("Stop")
         self._stop_btn.setObjectName("danger")
         self._stop_btn.setVisible(False)
@@ -245,6 +253,7 @@ class InputPanel(QFrame):
         self._streaming = streaming
         self._send_btn.setVisible(not streaming)
         self._stop_btn.setVisible(streaming)
+        self._retry_btn.setEnabled(not streaming)
         self._editor.setEnabled(not streaming)
 
     def set_queued_messages(self, count: int) -> None:

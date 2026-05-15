@@ -73,6 +73,72 @@ class History:
             return
         self.messages.pop()
 
+    def repair_incomplete_tool_calls(self) -> int:
+        """Remove tool-call blocks that cannot be replayed to chat APIs.
+
+        Chat APIs require every assistant message with ``tool_calls`` to be
+        followed by tool messages for exactly those call IDs. Interrupted or
+        partially persisted turns can leave an assistant tool-call message with
+        no result, or with only some results. Such a block poisons every future
+        request until it is removed.
+        """
+        removed = 0
+        i = 0
+        while i < len(self.messages):
+            msg = self.messages[i]
+
+            if msg.get("role") == "tool":
+                del self.messages[i]
+                removed += 1
+                continue
+
+            if msg.get("role") != "assistant" or not msg.get("tool_calls"):
+                i += 1
+                continue
+
+            tool_calls = msg.get("tool_calls") or []
+            expected_ids = [
+                tc.get("id")
+                for tc in tool_calls
+                if isinstance(tc, dict) and tc.get("id")
+            ]
+            expected = set(expected_ids)
+            seen: set[str] = set()
+            valid_block = bool(expected) and len(expected) == len(expected_ids)
+
+            j = i + 1
+            while j < len(self.messages) and self.messages[j].get("role") == "tool":
+                tool_call_id = self.messages[j].get("tool_call_id")
+                if tool_call_id not in expected or tool_call_id in seen:
+                    valid_block = False
+                else:
+                    seen.add(tool_call_id)
+                j += 1
+
+            if valid_block and seen == expected:
+                i = j
+                continue
+
+            removed += j - i
+            del self.messages[i:j]
+
+        return removed
+
+    def rewind_to_last_user_turn(self) -> bool:
+        """Keep history through the last user message and drop its response.
+
+        Used by retry/rerun actions. If the latest turn ended in an error,
+        cancellation, partial assistant output, or a normal assistant answer,
+        the next send should replay the same user request against the context
+        that existed at that point.
+        """
+        self.repair_incomplete_tool_calls()
+        for i in range(len(self.messages) - 1, -1, -1):
+            if self.messages[i].get("role") == "user":
+                self.truncate_after(i + 1)
+                return True
+        return False
+
     # ---- token estimation & pruning -----------------------------------------
 
     def estimate_tokens(self) -> int:
@@ -253,6 +319,7 @@ class History:
         """
         # Safety: prune before building API view so we never send a
         # context-exceeding payload.
+        self.repair_incomplete_tool_calls()
         self.prune_for_context()
 
         out: list[dict[str, Any]] = []

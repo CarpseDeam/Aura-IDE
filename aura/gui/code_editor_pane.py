@@ -669,7 +669,6 @@ class CodeEditorPane(QWidget):
         pos = min(len(target), pos + self._TYPE_CHARS_PER_TICK)
         state["position"] = pos
         self._set_editor_text(editor, target[:pos], pos)
-        self._mark_inserted_region(editor, max(0, pos - 160), pos)
 
     def _tick_hold_phase(
         self, state: dict, editor: QPlainTextEdit, next_phase: str

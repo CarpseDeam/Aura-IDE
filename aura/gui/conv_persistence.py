@@ -249,7 +249,7 @@ class ConversationPersistence(QObject):
 
     # ---- replay history into view ------------------------------------------
 
-    def replay_history(self) -> None:
+    def replay_history(self, *, synchronous: bool = False) -> None:
         """Best-effort visual replay of a loaded history into the chat view.
 
         We intentionally don't try to recreate diff cards (the underlying
@@ -283,7 +283,7 @@ class ConversationPersistence(QObject):
             if self._active_replay_id != my_id:
                 return
 
-            chunk_size = 10
+            chunk_size = max(1, len(process_msgs)) if synchronous else 10
             try:
                 for _ in range(chunk_size):
                     m = next(msg_iter)
@@ -335,10 +335,16 @@ class ConversationPersistence(QObject):
                         self._chat.assistant_done()
 
                 # Schedule next chunk
-                QTimer.singleShot(0, process_chunk)
+                if synchronous:
+                    process_chunk()
+                else:
+                    QTimer.singleShot(0, process_chunk)
             except StopIteration:
                 if self._active_replay_id == my_id:
                     self._chat.end_bulk_update()
 
-        # Defer the first chunk as well to keep the UI thread moving.
-        QTimer.singleShot(0, process_chunk)
+        if synchronous:
+            process_chunk()
+        else:
+            # Defer the first chunk as well to keep the UI thread moving.
+            QTimer.singleShot(0, process_chunk)

@@ -141,6 +141,34 @@ class SendHandler(QObject):
         self._message_queue.clear()
         self._input.set_queued_messages(0)
 
+    def handle_retry_last(
+        self,
+        model: str,
+        thinking: ThinkingMode,
+        replay_cb=None,
+    ) -> bool:
+        """Rerun the most recent user turn after discarding its response."""
+        if self._bridge.is_running():
+            return False
+
+        rewound = self._bridge.history.rewind_to_last_user_turn()
+        if not rewound:
+            self._chat.add_error("Retry", "No user message to retry.")
+            return False
+
+        self._message_queue.clear()
+        self._input.set_queued_messages(0)
+        self._chat.reset()
+        if replay_cb is not None:
+            replay_cb()
+        self._chat.begin_assistant()
+        self._bridge.send(
+            model=model,
+            thinking=thinking,
+            max_tool_rounds=self._settings.max_tool_rounds,
+        )
+        return True
+
     # ---- undo --------------------------------------------------------------
 
     def _handle_undo(self) -> None:
