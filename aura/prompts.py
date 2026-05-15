@@ -29,10 +29,13 @@ _TOOL_EFFICIENCY_RULES = """Tool efficiency:
 - Do not rerun the same validation command repeatedly unless the output changed.
 - Each pass has a simple tool-call limit. Use tools deliberately and batch reads where practical."""
 
-_WORKER_PASS_RULES = """Bounded worker pass:
+_WORKER_PASS_RULES = """Bounded worker pass & validation policy:
 - Validation is required when appropriate, but do not repeat it endlessly.
-- If validation fails twice with the same output, stop and report the blocker or change strategy.
-- You have a bounded tool pass. If a tool result says the worker tool-call limit was reached, stop using tools immediately.
+- Default maximum: 2 validation terminal commands per Worker pass.
+- A third validation command is allowed only for broad/risky tasks or after a simple fix from the second validation result.
+- If the same validation output appears twice, stop and report the blocker.
+- Do not chase unrelated existing test failures. Validate proportionally, report honestly, and stop.
+- If a tool result says the worker tool-call limit was reached, stop using tools immediately.
 - When stopped by the tool-call limit, produce a continuation report with completed work, modified files, validation status, blockers, remaining work, and the recommended next step."""
 
 _ARCHITECTURE_GUARDRAILS = """Architecture guardrails:
@@ -138,8 +141,11 @@ _WORKER_ENGINEERING_RULES = """Implementation quality — follow these rules:
 - Use `edit_symbol` for Python symbol replacement (function, class, method).
 - Use `edit_file` with a search block for non-Python files or partial replacements.
 - If an edit fails, re-read the file and retry with expanded context.
-- After implementing, run appropriate validation (ruff check, python -m py_compile, tests).
-- If validation fails, fix the issue before finishing.
+- After implementing, run focused validation. Prefer the smallest command that proves the touched behavior.
+- For small edits, `py_compile` or focused unit tests are enough.
+- For test changes, run the relevant test file/node only.
+- Broader tests are only for shared infrastructure, public APIs, packaging/build, database models, threading/async, or explicit Planner acceptance.
+- If validation fails, fix the issue or report the blocker honestly.
 - If the same fix fails more than 3 times, stop and report the error wrapped in <error> tags.
 - Keep the final response concise: list changed files, validation results, and any blockers."""
 
@@ -201,7 +207,7 @@ Execution Protocol:
 <code_block language="python" file="aura/some_file.py">
 # actual code here
 </code_block>
-4. Validation Protocol: Run the Planner's acceptance checks and any appropriate validation. If the task creates or transforms output, verify output content before reporting success. If validation fails, fix the issue before finishing or report a clear blocker.
+4. Validation Protocol: Run the Planner's acceptance checks and appropriate validation proportionally: run the smallest command that proves the behavior. If the task creates or transforms output, verify output content before reporting success. If validation fails, fix the issue, report the blocker honestly, and stop if progress stalls or the validation limit is reached.
 5. Completion Check: Before resolution, confirm: core behavior implemented; behavior validated; transformed/generated output checked when relevant; failures not swallowed; success reporting honest; ceremony removed; no premature architecture.
 6. Resolution: When the task is complete, state "Done." and the files you modified plus validation results. Include blockers or caveats only if present. No long prose unless reporting a failure or blocker.
 
