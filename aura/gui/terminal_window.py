@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QByteArray, Qt, QTimer, Signal
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QDialog,
@@ -31,17 +31,28 @@ class TerminalWindow(QDialog):
     terminal_finished = Signal(int)
     visibility_changed = Signal(bool)
     terminal_cleared = Signal()
+    geometry_saved = Signal(str)
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        initial_geometry: str = "",
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Terminal")
         self.setModal(False)
         self.setWindowFlag(Qt.WindowType.Tool, True)
+        self._geometry_restore_done = False
+        self._geometry_save_timer = QTimer(self)
+        self._geometry_save_timer.setSingleShot(True)
+        self._geometry_save_timer.setInterval(250)
+        self._geometry_save_timer.timeout.connect(self._save_geometry)
         self.resize(860, 460)
 
         self._current_tool_id: str | None = None
         self._terminal_card: TerminalCard | None = None
         self._last_exit_code: int | None = None
+        self._initial_geometry = initial_geometry.strip()
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -105,6 +116,8 @@ class TerminalWindow(QDialog):
         self.setStyleSheet(
             f"QDialog {{ background: {TERMINAL_BG}; color: {FG}; }}"
         )
+        self._restore_geometry(self._initial_geometry)
+        self._geometry_restore_done = True
 
     def set_command(self, tool_id: str, command: str) -> None:
         """Replace current terminal card for a new command."""
@@ -170,14 +183,24 @@ class TerminalWindow(QDialog):
 
     def hideEvent(self, event) -> None:
         super().hideEvent(event)
+        self._schedule_geometry_save()
         self.visibility_changed.emit(False)
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
         self.visibility_changed.emit(True)
 
+    def moveEvent(self, event) -> None:
+        super().moveEvent(event)
+        self._schedule_geometry_save()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._schedule_geometry_save()
+
     def closeEvent(self, event: QCloseEvent) -> None:
         event.ignore()
+        self._save_geometry()
         self.hide()
 
     def _remove_card(self) -> None:
@@ -186,3 +209,24 @@ class TerminalWindow(QDialog):
         self._card_layout.removeWidget(self._terminal_card)
         self._terminal_card.deleteLater()
         self._terminal_card = None
+
+    def _restore_geometry(self, geometry: str) -> None:
+        if not geometry:
+            return
+        try:
+            self.restoreGeometry(QByteArray.fromBase64(geometry.encode("ascii")))
+        except Exception:
+            return
+
+    def _schedule_geometry_save(self) -> None:
+        if not self._geometry_restore_done:
+            return
+        self._geometry_save_timer.start()
+
+    def _save_geometry(self) -> None:
+        if not self._geometry_restore_done:
+            return
+        geometry = bytes(
+            self.saveGeometry().toBase64()
+        ).decode("ascii")
+        self.geometry_saved.emit(geometry)

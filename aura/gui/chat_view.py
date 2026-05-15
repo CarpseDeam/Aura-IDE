@@ -1,7 +1,7 @@
 """Chat transcript: scrollable column of message cards."""
 from __future__ import annotations
 
-from PySide6.QtCore import QEasingCurve, QPropertyAnimation, Qt, QTimer, Signal
+from PySide6.QtCore import QEasingCurve, QEvent, QPropertyAnimation, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -34,6 +34,7 @@ class ChatView(QScrollArea):
     retry_requested = Signal()
     mermaid_detected = Signal(str)  # emits the raw mermaid code
     _CODE_TOOL_NAMES = {"write_file", "edit_file", "edit_symbol"}
+    _BOTTOM_THRESHOLD_PX = 64
 
     def __init__(self) -> None:
         super().__init__()
@@ -66,6 +67,7 @@ class ChatView(QScrollArea):
         self._pending_code_results: dict[str, bool] = {}
         self._empty_hint: QLabel | None = None
         self._scroll_anim: QPropertyAnimation | None = None
+        self._programmatic_scroll_depth = 0
         self._plan_writer_cards: dict[str, PlanWriterCard] = {}
         self._compact_tools: bool = False
         self._compact_tool_names: dict[str, str] = {}
@@ -78,16 +80,33 @@ class ChatView(QScrollArea):
         self._last_scroll_max = 0
         self.verticalScrollBar().rangeChanged.connect(self._on_scroll_range_changed)
         self.verticalScrollBar().valueChanged.connect(self._on_scroll_value_changed)
+        self.viewport().installEventFilter(self)
+        self.verticalScrollBar().installEventFilter(self)
+
+    def eventFilter(self, watched, event) -> bool:
+        if watched in (self.viewport(), self.verticalScrollBar()):
+            if event.type() in (
+                QEvent.Type.Wheel,
+                QEvent.Type.MouseButtonPress,
+                QEvent.Type.KeyPress,
+            ):
+                self._stop_scroll_animation()
+        return super().eventFilter(watched, event)
 
     def _on_scroll_range_changed(self, min_val: int, max_val: int) -> None:
         """If we were at the bottom before the range increased, stay at the bottom."""
         if max_val > self._last_scroll_max and self._auto_follow_bottom:
+            self._stop_scroll_animation()
             self._set_scrollbar_to_bottom()
         self._last_scroll_max = max_val
 
     def _on_scroll_value_changed(self, value: int) -> None:
+        if self._programmatic_scroll_depth > 0:
+            return
         bar = self.verticalScrollBar()
-        self._auto_follow_bottom = bar.maximum() - value <= 60
+        self._auto_follow_bottom = (
+            bar.maximum() - value <= self._BOTTOM_THRESHOLD_PX
+        )
 
     # ---- container management --------------------------------------------
 
@@ -124,19 +143,38 @@ class ChatView(QScrollArea):
             return
         self._auto_follow_bottom = True
         bar = self.verticalScrollBar()
-        # Stop any in-flight smooth scroll
-        if hasattr(self, '_scroll_anim') and self._scroll_anim is not None:
-            self._scroll_anim.stop()
+        if bar.value() == bar.maximum():
+            return
+        self._stop_scroll_animation()
         self._scroll_anim = QPropertyAnimation(bar, b"value")
         self._scroll_anim.setDuration(150)
         self._scroll_anim.setStartValue(bar.value())
         self._scroll_anim.setEndValue(bar.maximum())
         self._scroll_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._scroll_anim.finished.connect(self._end_programmatic_scroll)
+        self._programmatic_scroll_depth += 1
         self._scroll_anim.start()
 
-    def _set_scrollbar_to_bottom(self) -> None:
+    def _stop_scroll_animation(self) -> None:
+        if self._scroll_anim is not None:
+            self._scroll_anim.stop()
+            self._scroll_anim.deleteLater()
+            self._scroll_anim = None
+            self._programmatic_scroll_depth = 0
+
+    def _end_programmatic_scroll(self) -> None:
+        self._programmatic_scroll_depth = max(0, self._programmatic_scroll_depth - 1)
+        if self._scroll_anim is not None:
+            self._scroll_anim.deleteLater()
+            self._scroll_anim = None
+
+    def _set_scrollbar_to_bottom(self, force: bool = False) -> None:
+        if not force and not self._auto_follow_bottom:
+            return
         bar = self.verticalScrollBar()
+        self._programmatic_scroll_depth += 1
         bar.setValue(bar.maximum())
+        self._programmatic_scroll_depth = max(0, self._programmatic_scroll_depth - 1)
 
     def scroll_to_bottom(self, force: bool = False) -> None:
         """Move to the newest content, with delayed passes for late layout changes."""
@@ -144,7 +182,7 @@ class ChatView(QScrollArea):
         if force:
             self._auto_follow_bottom = True
             for delay in (0, 50, 150):
-                QTimer.singleShot(delay, self._set_scrollbar_to_bottom)
+                QTimer.singleShot(delay, lambda: self._set_scrollbar_to_bottom(force=True))
 
     def set_compact_tools(self, enabled: bool) -> None:
         self._compact_tools = enabled

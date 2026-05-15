@@ -613,7 +613,7 @@ class AuraPlayground(QWidget):
 
     focused_action_requested = Signal(str)
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, terminal_window_geometry: str = ""):
         super().__init__(parent)
         self.setMinimumWidth(320)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -676,7 +676,10 @@ class AuraPlayground(QWidget):
 
         # Floating terminal window. It is intentionally not added to this
         # layout, so terminal output never consumes worker/workspace space.
-        self._terminal_window = TerminalWindow(self.window())
+        self._terminal_window = TerminalWindow(
+            self.window(),
+            initial_geometry=terminal_window_geometry,
+        )
 
         # Tool stream controllers keyed by worker_tool_id
         self._controllers: dict[str, ToolStreamController] = {}

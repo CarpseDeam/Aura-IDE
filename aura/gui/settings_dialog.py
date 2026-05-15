@@ -217,6 +217,10 @@ class SettingsDialog(QDialog):
             auto_approve=settings.auto_approve,
             sandbox_mode=settings.sandbox_mode,
             tavily_api_key=settings.tavily_api_key,
+            terminal_window_geometry=settings.terminal_window_geometry,
+            first_launch_done=settings.first_launch_done,
+            onboarding_checklist=dict(settings.onboarding_checklist),
+            onboarding_version=settings.onboarding_version,
         )
         self._on_change_root = on_change_root
 
@@ -1340,6 +1344,10 @@ class SettingsDialog(QDialog):
             max_tool_rounds=self._max_rounds_spin.value(),
             sandbox_mode=self._sandbox_combo.currentData(),
             tavily_api_key=self._settings.tavily_api_key, # preserve if set via other means
+            terminal_window_geometry=self._settings.terminal_window_geometry,
+            first_launch_done=self._settings.first_launch_done,
+            onboarding_checklist=dict(self._settings.onboarding_checklist),
+            onboarding_version=self._settings.onboarding_version,
         )
 
     def accept(self) -> None:  # type: ignore[override]

@@ -52,6 +52,7 @@ class AppSettings:
     sandbox_mode: str = DEFAULT_SANDBOX_MODE
     max_tool_rounds: int = 50
     tavily_api_key: str = ""
+    terminal_window_geometry: str = ""
     first_launch_done: bool = False
     onboarding_checklist: dict = field(default_factory=dict)
     onboarding_version: int = 1
@@ -69,6 +70,8 @@ class AppSettings:
             s.first_launch_done = data["first_launch_done"]
         if isinstance(data.get("tavily_api_key"), str):
             s.tavily_api_key = data["tavily_api_key"]
+        if isinstance(data.get("terminal_window_geometry"), str):
+            s.terminal_window_geometry = data["terminal_window_geometry"]
         # Provider
         if isinstance(data.get("provider"), str):
             s.provider = data["provider"]  # type: ignore[assignment]

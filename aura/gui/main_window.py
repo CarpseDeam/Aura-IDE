@@ -29,6 +29,7 @@ from aura.config import (
     load_settings,
     load_workspace_root,
     media_path,
+    save_settings,
     save_workspace_root,
 )
 from aura.gui.conv_persistence import ConversationPersistence
@@ -69,7 +70,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._checkpoint_dialog: CheckpointDialog | None = None
         self.setWindowTitle(APP_NAME)
         self.setWindowIcon(QIcon(str(icon_path())))
-        self.resize(1400, 900)
+        self.resize(1500, 920)
 
         # Settings.
         self._settings: AppSettings = load_settings()
@@ -163,7 +164,10 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         )
 
         # Right pane: worker activity (embedded, not a separate window)
-        self._playground = AuraPlayground(parent=self)
+        self._playground = AuraPlayground(
+            parent=self,
+            terminal_window_geometry=self._settings.terminal_window_geometry,
+        )
         self._playground.set_workspace_root(self._workspace_root)
         self._playground.set_read_only_mode(False)
         self._playground_aura = AuraWidget(
@@ -210,18 +214,18 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         splitter.addWidget(center)
         splitter.addWidget(self._playground_aura)
 
-        # Sensible initial distribution: left is narrow, right is side-panel width, chat gets rest.
+        # Sensible initial distribution: left is narrow, chat is comfortable,
+        # and the workspace opens as the primary work surface.
         w = self.width()
         left_w = 220
-        right_w = 460
-        center_w = w - left_w - right_w
+        center_w = 520
+        right_w = max(560, w - left_w - center_w)
         splitter.setSizes([left_w, center_w, right_w])
 
-        # Keep the sidebar stable while allowing both the chat and worker panel
-        # to gain space as the window grows.
+        # Keep the sidebar stable and let the workspace receive most extra room.
         splitter.setStretchFactor(0, 0)  # workspace tree: fixed
-        splitter.setStretchFactor(1, 2)  # chat: primary content
-        splitter.setStretchFactor(2, 1)  # worker: resizable workspace
+        splitter.setStretchFactor(1, 1)  # chat: stable reading/planning column
+        splitter.setStretchFactor(2, 2)  # workspace: primary work surface
 
         self.setCentralWidget(splitter)
 
@@ -260,6 +264,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         terminal_window.terminal_finished.connect(self._on_terminal_finished)
         terminal_window.visibility_changed.connect(self._on_terminal_visibility_changed)
         terminal_window.terminal_cleared.connect(self._on_terminal_cleared)
+        terminal_window.geometry_saved.connect(self._on_terminal_geometry_saved)
 
         # Worker signal wiring (delegated to WorkerEventHandler).
         self._worker_handler.connect_bridge_signals()
@@ -383,6 +388,12 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
     def _on_terminal_cleared(self) -> None:
         self._set_terminal_tab_state("dim")
+
+    def _on_terminal_geometry_saved(self, geometry: str) -> None:
+        if self._settings.terminal_window_geometry == geometry:
+            return
+        self._settings.terminal_window_geometry = geometry
+        save_settings(self._settings)
 
     def _dim_terminal_tab_after_success(self) -> None:
         if self._terminal_tab_state == "success":
