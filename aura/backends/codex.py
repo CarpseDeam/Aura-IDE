@@ -46,6 +46,8 @@ class CodexBackend(CLIAgentBackend):
                 [path, "login", "status"],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=10,
                 **get_subprocess_kwargs(),
             )

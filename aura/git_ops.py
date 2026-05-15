@@ -21,6 +21,9 @@ def is_git_repo(workspace_root: Path) -> bool:
             ["git", "rev-parse", "--is-inside-work-tree"],
             cwd=str(workspace_root),
             capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
             check=True,
             timeout=5,
             **get_subprocess_kwargs(),
@@ -43,6 +46,9 @@ def auto_commit(workspace_root: Path, goal: str, files: list[str], summary: str)
             ["git", "add", "--"] + files,
             cwd=str(workspace_root),
             capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
             check=True,
             timeout=10,
             **get_subprocess_kwargs(),
@@ -56,6 +62,9 @@ def auto_commit(workspace_root: Path, goal: str, files: list[str], summary: str)
             ["git", "diff", "--cached", "--quiet"],
             cwd=str(workspace_root),
             capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=5,
             **get_subprocess_kwargs(),
         )
@@ -65,6 +74,9 @@ def auto_commit(workspace_root: Path, goal: str, files: list[str], summary: str)
                 ["git", "reset", "--"] + files,
                 cwd=str(workspace_root),
                 capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
                 **get_subprocess_kwargs(),
             )
             return False, "No changes to commit."
@@ -83,6 +95,9 @@ def auto_commit(workspace_root: Path, goal: str, files: list[str], summary: str)
             ["git", "commit", "-m", message],
             cwd=str(workspace_root),
             capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
             check=True,
             timeout=10,
             **get_subprocess_kwargs(),
@@ -94,6 +109,9 @@ def auto_commit(workspace_root: Path, goal: str, files: list[str], summary: str)
             ["git", "reset", "--"] + files,
             cwd=str(workspace_root),
             capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
             **get_subprocess_kwargs(),
         )
         return False, "git commit failed."
@@ -125,6 +143,8 @@ def recent_commits(workspace_root: Path, limit: int = 30) -> tuple[bool, list[di
             cwd=str(workspace_root),
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=10,
             **get_subprocess_kwargs(),
         )
@@ -184,6 +204,8 @@ def commit_changed_files(workspace_root: Path, sha: str) -> tuple[bool, list[str
             cwd=str(workspace_root),
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=10,
             **get_subprocess_kwargs(),
         )
@@ -219,6 +241,8 @@ def commit_diff(workspace_root: Path, sha: str) -> tuple[bool, str, str]:
             cwd=str(workspace_root),
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=15,
             **get_subprocess_kwargs(),
         )
@@ -245,6 +269,8 @@ def working_tree_status(workspace_root: Path) -> tuple[bool, str, str]:
             cwd=str(workspace_root),
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=10,
             **get_subprocess_kwargs(),
         )
@@ -275,6 +301,8 @@ def undo_last_commit(workspace_root: Path) -> tuple[bool, str]:
             cwd=str(workspace_root),
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             check=True,
             timeout=5,
             **get_subprocess_kwargs(),
@@ -289,13 +317,16 @@ def undo_last_commit(workspace_root: Path) -> tuple[bool, str]:
             ["git", "reset", "--soft", "HEAD~1"],
             cwd=str(workspace_root),
             capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
             check=True,
             timeout=10,
             **get_subprocess_kwargs(),
         )
         return True, "Undo complete — last commit reverted, changes are staged."
     except subprocess.CalledProcessError as e:
-        err = e.stderr.decode() if e.stderr else str(e)
+        err = e.stderr.strip() if e.stderr else str(e)
         return False, f"git reset failed: {err}"
 
 
@@ -307,6 +338,8 @@ def snapshot(workspace_root: Path) -> str | None:
             cwd=str(workspace_root),
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=5,
             **get_subprocess_kwargs(),
         )
@@ -329,6 +362,8 @@ def restore_to_snapshot(workspace_root: Path, sha: str) -> tuple[bool, str]:
             cwd=str(workspace_root),
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             check=True,
             timeout=10,
             **get_subprocess_kwargs(),
@@ -350,6 +385,8 @@ def git_init(workspace_root: Path) -> tuple[bool, str]:
             cwd=str(workspace_root),
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             check=True,
             timeout=10,
             **get_subprocess_kwargs(),
@@ -367,6 +404,8 @@ def git_init(workspace_root: Path) -> tuple[bool, str]:
             cwd=str(workspace_root),
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             check=True,
             timeout=10,
             **get_subprocess_kwargs(),
@@ -382,6 +421,8 @@ def git_init(workspace_root: Path) -> tuple[bool, str]:
             cwd=str(workspace_root),
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=10,
             **get_subprocess_kwargs(),
         )

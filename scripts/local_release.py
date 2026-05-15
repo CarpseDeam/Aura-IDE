@@ -32,6 +32,8 @@ def run(
             check=check,
             capture_output=capture_output,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
     except FileNotFoundError as exc:
         raise SystemExit(f"Required command not found: {cmd[0]}") from exc
