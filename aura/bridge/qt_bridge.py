@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import threading
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from PySide6.QtCore import (
     QObject,
@@ -24,6 +25,9 @@ from PySide6.QtCore import (
     Signal,
     Slot,
 )
+
+if TYPE_CHECKING:
+    from aura.conversation.persistence import WorkerDispatchRecord
 
 from aura.backends import (
     APIAgentBackend,
@@ -60,7 +64,6 @@ from aura.conversation import (
     ConversationManager,
     History,
 )
-from aura.conversation.persistence import WorkerDispatchRecord
 from aura.conversation.tools import (
     ToolRegistry,
 )
@@ -335,7 +338,7 @@ class ConversationBridge(QObject):
         return self._auto_dispatch
 
     @property
-    def dispatch_records(self) -> list[WorkerDispatchRecord]:
+    def dispatch_records(self) -> "list[WorkerDispatchRecord]":
         return self._dispatch_proxy.records()
 
     def clear_dispatch_records(self) -> None:

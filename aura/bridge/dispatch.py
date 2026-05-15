@@ -50,6 +50,8 @@ from aura.conversation import (
 from aura.conversation.persistence import WorkerDispatchRecord
 from aura.prompts import (
     WORKER_SYSTEM_PROMPT,
+    inject_private_worker_style,
+    inject_tier1_context,
 )
 
 __all__ = [
@@ -247,7 +249,6 @@ class _DispatchProxy(QObject):
     ) -> WorkerDispatchResult:
         worker_history = History()
         base_prompt = self._worker_system_prompt if self._worker_system_prompt else WORKER_SYSTEM_PROMPT
-        from aura.prompts import inject_private_worker_style, inject_tier1_context
         full_prompt = inject_tier1_context(base_prompt, self._tier1_context)
         full_prompt = inject_private_worker_style(full_prompt)
         worker_history.set_system(full_prompt)
