@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QFontMetrics
+from PySide6.QtGui import QFontMetrics, QTextCursor
 from PySide6.QtWidgets import (
     QFrame,
     QLabel,
@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 )
 
 from aura.gui.cards._helpers import _HAVE_PYGMENTS, _fade_in_widget, _mono_font
+from aura.gui.smooth_code_streamer import SmoothCodeStreamer
 from aura.gui.syntax import PygmentsHighlighter, language_from_path
 from aura.gui.theme import BG, BORDER, DANGER, FG, FG_DIM, SUCCESS, WARN
 
@@ -70,10 +71,15 @@ class CodeWriterCard(QFrame):
         self._completed_operations = 0
         self._active_operations = 0
         self._pending_content: str | None = None
+        self._pending_state: str | None = None
         self._content_timer = QTimer(self)
         self._content_timer.setSingleShot(True)
         self._content_timer.setInterval(35)
         self._content_timer.timeout.connect(self._apply_pending_content)
+        self._auto_size_timer = QTimer(self)
+        self._auto_size_timer.setSingleShot(True)
+        self._auto_size_timer.setInterval(100)
+        self._auto_size_timer.timeout.connect(self._auto_size_code_view)
 
         # Animation state
         self._animating = False
@@ -140,6 +146,10 @@ class CodeWriterCard(QFrame):
         self._highlighter: PygmentsHighlighter | None = None
         if _HAVE_PYGMENTS:
             self._highlighter = PygmentsHighlighter(self._code_view.document(), "text")
+        self._language = "text"
+        self._streamer = SmoothCodeStreamer(self._code_view, self)
+        self._streamer.text_changed.connect(self._schedule_auto_size)
+        self._streamer.finished.connect(self._on_streamer_finished)
 
         self._body.setVisible(False)
         layout.addWidget(self._body)
@@ -201,7 +211,8 @@ class CodeWriterCard(QFrame):
         # Update highlighter language from file extension
         if self._highlighter is not None and _HAVE_PYGMENTS:
             lang = language_from_path(path)
-            if lang:
+            if lang and lang != self._language:
+                self._language = lang
                 self._highlighter.set_language(lang)
 
     def update_content(self, content: str) -> None:
@@ -217,17 +228,17 @@ class CodeWriterCard(QFrame):
             self._pending_content = None
             self._content_timer.stop()
         self._force_finish_animation()
-        if self._code_view.toPlainText() != old_text:
+        if self._streamer.visible_text() != old_text:
             self._apply_text_immediately(old_text)
         self._animate_to_content(old_text, new_text)
 
     def _set_code_text(self, text: str) -> None:
         """Set code view text without triggering auto-size (for animation frames)."""
-        self._code_view.setPlainText(text)
+        self._streamer.set_text_immediately(text)
 
     def _apply_text_immediately(self, text: str) -> None:
         """Instantly replace code view content and auto-size."""
-        self._code_view.setPlainText(text)
+        self._streamer.set_text_immediately(text)
         self._auto_size_code_view()
 
     def _apply_pending_content(self) -> None:
@@ -242,7 +253,7 @@ class CodeWriterCard(QFrame):
             self._animation_target = new_text
             return
 
-        old_text = self._code_view.toPlainText()
+        old_text = self._streamer.visible_text()
         self._animate_to_content(old_text, new_text)
 
     def _auto_size_code_view(self) -> None:
@@ -252,6 +263,11 @@ class CodeWriterCard(QFrame):
         # Start at 120 (approx 7-8 lines), max out at 600
         clamped = max(120, min(doc_height, 600))
         self._code_view.setFixedHeight(int(clamped))
+        self.updateGeometry()
+
+    def _schedule_auto_size(self) -> None:
+        if not self._auto_size_timer.isActive():
+            self._auto_size_timer.start()
 
     def _should_animate(self, old_text: str, new_text: str) -> bool:
         """Return True if delete/retype animation should be used.
@@ -273,6 +289,10 @@ class CodeWriterCard(QFrame):
         """Animate from old_text to new_text, or instantly replace if animation is skipped."""
         if old_text == new_text:
             return
+        if new_text.startswith(old_text):
+            self._streamer.set_target(new_text)
+            self._schedule_auto_size()
+            return
         if not self._should_animate(old_text, new_text):
             self._apply_text_immediately(new_text)
             return
@@ -282,21 +302,30 @@ class CodeWriterCard(QFrame):
         """Begin the delete/retype animation from old_text to new_text."""
         prefix_len, suffix_len, old_mid, new_mid = self._compute_changed_region(old_text, new_text)
 
-        self._animation_prefix = old_text[:prefix_len]
-        self._animation_suffix = old_text[len(old_text) - suffix_len:] if suffix_len > 0 else ""
+        old_end = len(old_text) - suffix_len if suffix_len > 0 else len(old_text)
+        self._animation_prefix = new_text[:prefix_len]
+        self._animation_suffix = (
+            new_text[len(new_text) - suffix_len:] if suffix_len > 0 else ""
+        )
         self._animation_old_middle = old_mid
         self._animation_new_middle = new_mid
 
-        if old_mid:
-            self._animation_phase = "delete"
-            self._animation_char_index = len(old_mid)
-        else:
-            self._animation_phase = "retype"
-            self._animation_char_index = 0
-
         self._animation_target = None
         self._animating = True
-        self._animation_timer.start()
+        cursor = QTextCursor(self._code_view.document())
+        text_len = max(0, self._code_view.document().characterCount() - 1)
+        cursor.setPosition(max(0, min(prefix_len, text_len)))
+        cursor.setPosition(
+            max(0, min(old_end, text_len)),
+            QTextCursor.MoveMode.KeepAnchor,
+        )
+        cursor.insertText("")
+        self._streamer.start_replacement(
+            self._animation_prefix,
+            self._animation_new_middle,
+            self._animation_suffix,
+            base_already_set=True,
+        )
 
     def _tick_animation(self) -> None:
         """Process one animation frame (connected to _animation_timer.timeout)."""
@@ -322,7 +351,9 @@ class CodeWriterCard(QFrame):
     def _finish_animation(self) -> None:
         """Complete the current animation and chain to queued target if any."""
         self._animation_timer.stop()
-        final_text = self._animation_prefix + self._animation_new_middle + self._animation_suffix
+        final_text = (
+            self._animation_prefix + self._animation_new_middle + self._animation_suffix
+        )
         next_target = self._animation_target
         self._animation_target = None
         self._animating = False
@@ -334,10 +365,15 @@ class CodeWriterCard(QFrame):
 
     def _force_finish_animation(self) -> None:
         """Immediately stop any running animation and show final content."""
-        if not self._animating:
+        if not self._animating and not self._streamer.is_active():
             return
         self._animation_timer.stop()
-        final_text = self._animation_prefix + self._animation_new_middle + self._animation_suffix
+        if not self._animating:
+            self._streamer.finish(immediate=True)
+            return
+        final_text = (
+            self._animation_prefix + self._animation_new_middle + self._animation_suffix
+        )
         next_target = self._animation_target
         self._animation_target = None
         self._animating = False
@@ -348,22 +384,39 @@ class CodeWriterCard(QFrame):
             self._content_timer.stop()
             self._apply_pending_content()
 
-        if not ok:
-            self._force_finish_animation()
-
         if ok:
             self._completed_operations += 1
         if self._active_operations > 0:
             self._active_operations -= 1
 
-        if ok and self._active_operations > 0:
-            self._state = self.STATE_RUNNING
-        else:
-            self._state = self.STATE_DONE if ok else self.STATE_FAILED
         if not ok:
             # Auto-expand body on failure
+            self._force_finish_animation()
             self._body.setVisible(True)
+            self._state = self.STATE_FAILED
+        elif self._active_operations > 0:
+            self._state = self.STATE_RUNNING
+        elif self._streamer.is_active():
+            self._pending_state = self.STATE_DONE
+            self._streamer.finish()
+        else:
+            self._state = self.STATE_DONE
         self._refresh_header()
+        if not self._streamer.is_active():
+            self._auto_size_code_view()
+
+    def _on_streamer_finished(self) -> None:
+        self._animating = False
+        if self._animation_target is not None:
+            next_target = self._animation_target
+            self._animation_target = None
+            self._animate_to_content(self._streamer.visible_text(), next_target)
+            return
+        if self._pending_state is not None:
+            self._state = self._pending_state
+            self._pending_state = None
+            self._refresh_header()
+        self._auto_size_code_view()
 
     def _done_label(self) -> str:
         if self._completed_operations > 1:

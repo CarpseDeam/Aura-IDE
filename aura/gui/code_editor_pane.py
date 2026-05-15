@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
 
 from aura.focused_actions import ACTION_LABELS, build_prompt_for_action, is_edit_action
 from aura.gui.cards._helpers import _mono_font
+from aura.gui.smooth_code_streamer import SmoothCodeStreamer
 from aura.gui.syntax import PygmentsHighlighter, language_from_path
 from aura.gui.theme import ACCENT, BG, BORDER, FG
 
@@ -272,7 +273,9 @@ class CodeEditorPane(QWidget):
                 state["target"] = ""
                 state["position"] = 0
                 state["timer"].stop()
-            existing_editor.clear()
+                state["streamer"].set_text_immediately("")
+            else:
+                existing_editor.clear()
             idx = self._tabs.indexOf(existing_editor)
             if idx >= 0:
                 self._tabs.setTabText(idx, f"{basename} ●")
@@ -292,9 +295,12 @@ class CodeEditorPane(QWidget):
         self._worker_tabs_by_path[path_key] = tool_id
         self._tab_index_to_tool_id[idx] = tool_id
 
+        streamer = SmoothCodeStreamer(editor, self)
+
         # Initialise typing state
         self._typing_state[tool_id] = {
             "timer": QTimer(self),
+            "streamer": streamer,
             "target": "",
             "position": 0,
             "language": language,
@@ -314,10 +320,16 @@ class CodeEditorPane(QWidget):
             "animation_delete_line_count": 0,
             "animation_change_start": 0,
             "animation_change_line": 1,
+            "animation_old_start": 0,
+            "animation_old_end": 0,
+            "pending_done": False,
         }
         timer: QTimer = self._typing_state[tool_id]["timer"]
         timer.timeout.connect(lambda tid=tool_id: self._on_typing_tick(tid))
         timer.setInterval(self._ANIM_TICK_MS)
+        streamer.finished.connect(
+            lambda tid=tool_id: self._on_streamer_finished(tid)
+        )
 
     def set_content(self, tool_id: str, content: str) -> None:
         """Immediately show full content for an existing worker tab."""
@@ -327,10 +339,12 @@ class CodeEditorPane(QWidget):
         if state is None or editor is None:
             return
         state["timer"].stop()
+        state["streamer"].stop()
         state["target"] = content
         state["position"] = len(content)
         state["animation_phase"] = ""
-        self._set_editor_text(editor, content, len(content))
+        state["animation_new_middle"] = ""
+        state["streamer"].set_text_immediately(content)
 
     def animate_content_transition(
         self, tool_id: str, old_content: str, new_content: str
@@ -344,6 +358,8 @@ class CodeEditorPane(QWidget):
 
         timer: QTimer = state["timer"]
         timer.stop()
+        streamer: SmoothCodeStreamer = state["streamer"]
+        streamer.stop()
         state["target"] = new_content
 
         if old_content == new_content:
@@ -351,11 +367,11 @@ class CodeEditorPane(QWidget):
             return
 
         if not old_content:
-            editor.clear()
+            streamer.set_text_immediately("")
             state["position"] = 0
             state["animation_phase"] = "type"
             state["target"] = new_content
-            timer.start()
+            streamer.set_target(new_content)
             return
 
         if not self._should_edit_animate(old_content, new_content):
@@ -383,10 +399,12 @@ class CodeEditorPane(QWidget):
         state["animation_delete_line_count"] = len(old_lines)
         state["animation_change_start"] = len(state["animation_prefix"])
         state["animation_change_line"] = self._line_number_at(new_content, new_start)
+        state["animation_old_start"] = old_start
+        state["animation_old_end"] = old_end
         state["position"] = 0
-        state["animation_phase"] = "delete_hold" if old_mid else "type_hold"
+        state["animation_phase"] = "replace_hold"
 
-        self._set_editor_text(editor, old_content, old_start)
+        streamer.set_text_immediately(old_content)
         self._focus_editor_position(editor, old_start)
         self._mark_deleted_region(editor, old_start, old_end)
         self._set_tab_status(canonical_tool_id, f":{state['animation_change_line']} - editing")
@@ -407,17 +425,10 @@ class CodeEditorPane(QWidget):
         state = self._typing_state.get(canonical_tool_id)
         if state is None:
             return
-        editor = self._editors.get(canonical_tool_id)
-        if editor is not None:
-            visible_content = editor.toPlainText()
-            if visible_content and not content.startswith(visible_content):
-                state["position"] = 0
-                editor.clear()
         state["target"] = content
         state["animation_phase"] = "type"
-        timer: QTimer = state["timer"]
-        if not timer.isActive():
-            timer.start()
+        state["animation_new_middle"] = ""
+        state["streamer"].set_target(content)
 
     def finalize_tab(self, tool_id: str) -> None:
         """Flush remaining characters immediately and mark the tab as done.
@@ -431,15 +442,7 @@ class CodeEditorPane(QWidget):
             return
 
         timer: QTimer = state["timer"]
-        keep_animation_running = timer.isActive() and bool(state.get("target"))
-        if not keep_animation_running:
-            timer.stop()
-
-        editor = self._editors.get(canonical_tool_id)
-        if editor is not None and not keep_animation_running:
-            # Flush all remaining content
-            target = state["target"]
-            self._set_editor_text(editor, target, len(target))
+        streamer: SmoothCodeStreamer = state["streamer"]
 
         # Update tab label
         state["active_count"] = max(0, state.get("active_count", 1) - 1)
@@ -447,10 +450,13 @@ class CodeEditorPane(QWidget):
         if tool_id != canonical_tool_id:
             self._editors.pop(tool_id, None)
 
-        idx = self._tabs.indexOf(editor) if editor is not None else -1
-        if idx >= 0 and state["active_count"] == 0:
-            basename = state["basename"]
-            self._tabs.setTabText(idx, f"{basename} ✓")
+        if state["active_count"] == 0:
+            if timer.isActive() or streamer.is_active():
+                state["pending_done"] = True
+                if streamer.is_active():
+                    streamer.finish()
+            else:
+                self._set_tab_status(canonical_tool_id, " ✓")
 
     def close_all_tabs(self) -> None:
         """Remove every tab, disconnect timers, and clear internal tracking."""
@@ -459,6 +465,8 @@ class CodeEditorPane(QWidget):
             timer: QTimer = state["timer"]
             timer.stop()
             timer.deleteLater()
+            state["streamer"].stop()
+            state["streamer"].deleteLater()
 
         self._typing_state.clear()
         self._editors.clear()
@@ -480,6 +488,8 @@ class CodeEditorPane(QWidget):
             timer: QTimer = state["timer"]
             timer.stop()
             timer.deleteLater()
+            state["streamer"].stop()
+            state["streamer"].deleteLater()
         worker_editors = list(dict.fromkeys(self._editors.values()))
         self._typing_state.clear()
         self._editors.clear()
@@ -648,6 +658,12 @@ class CodeEditorPane(QWidget):
         if phase == "delete_hold":
             self._tick_hold_phase(state, editor, "delete")
             return
+        if phase == "replace_hold":
+            self._tick_hold_phase(state, editor, "replace")
+            return
+        if phase == "replace":
+            self._start_replacement_phase(state, editor)
+            return
         if phase == "delete":
             self._tick_delete_phase(state, editor)
             return
@@ -659,16 +675,9 @@ class CodeEditorPane(QWidget):
             return
 
         target = state["target"]
-        pos = state["position"]
-        if pos >= len(target):
-            state["timer"].stop()
-            state["animation_phase"] = ""
-            self._clear_editor_marks(editor)
-            return
-
-        pos = min(len(target), pos + self._TYPE_CHARS_PER_TICK)
-        state["position"] = pos
-        self._set_editor_text(editor, target[:pos], pos)
+        state["timer"].stop()
+        state["animation_phase"] = ""
+        state["streamer"].set_target(target)
 
     def _tick_hold_phase(
         self, state: dict, editor: QPlainTextEdit, next_phase: str
@@ -685,6 +694,36 @@ class CodeEditorPane(QWidget):
             self._set_editor_text(editor, prefix + suffix, len(prefix))
             self._focus_editor_position(editor, len(prefix))
             self._clear_editor_marks(editor)
+        elif next_phase == "replace":
+            self._start_replacement_phase(state, editor)
+
+    def _start_replacement_phase(self, state: dict, editor: QPlainTextEdit) -> None:
+        state["timer"].stop()
+        state["animation_phase"] = "replace"
+        prefix = state["animation_prefix"]
+        suffix = state["animation_suffix"]
+        new_mid = state["animation_new_middle"]
+        old_start = state.get("animation_old_start", len(prefix))
+        old_end = state.get("animation_old_end", old_start)
+        cursor = QTextCursor(editor.document())
+        text_len = max(0, editor.document().characterCount() - 1)
+        cursor.setPosition(max(0, min(old_start, text_len)))
+        cursor.setPosition(
+            max(0, min(old_end, text_len)),
+            QTextCursor.MoveMode.KeepAnchor,
+        )
+        cursor.insertText("")
+        self._clear_editor_marks(editor)
+        self._set_tab_status(
+            state.get("tool_id", ""), f":{state['animation_change_line']} - typing"
+        )
+        streamer: SmoothCodeStreamer = state["streamer"]
+        streamer.start_replacement(
+            prefix,
+            new_mid,
+            suffix,
+            base_already_set=True,
+        )
 
     def _tick_delete_phase(self, state: dict, editor: QPlainTextEdit) -> None:
         prefix = state["animation_prefix"]
@@ -769,6 +808,23 @@ class CodeEditorPane(QWidget):
             self._clear_editor_marks(editor)
         self._set_tab_status(state.get("tool_id", ""), " ✓")
 
+    def _on_streamer_finished(self, tool_id: str) -> None:
+        canonical_tool_id = self._canonical_tool_id(tool_id)
+        state = self._typing_state.get(canonical_tool_id)
+        editor = self._editors.get(canonical_tool_id)
+        if state is None or editor is None:
+            return
+        state["position"] = len(state["streamer"].visible_text())
+        state["animation_phase"] = ""
+        if state.get("animation_new_middle"):
+            change_start = state.get("animation_change_start", 0)
+            change_end = change_start + len(state.get("animation_new_middle", ""))
+            if change_end > change_start:
+                self._mark_inserted_region(editor, change_start, change_end)
+        if state.get("pending_done") and state.get("active_count", 0) == 0:
+            state["pending_done"] = False
+            self._set_tab_status(canonical_tool_id, " ✓")
+
     def _should_edit_animate(self, old_text: str, new_text: str) -> bool:
         if (
             len(old_text) > self._INSTANT_TOTAL_CHARS
@@ -847,6 +903,8 @@ class CodeEditorPane(QWidget):
                 timer: QTimer = state["timer"]
                 timer.stop()
                 timer.deleteLater()
+                state["streamer"].stop()
+                state["streamer"].deleteLater()
                 self._worker_tabs_by_path.pop(state.get("path_key", ""), None)
             aliases = [
                 tid for tid, canonical in self._tool_aliases.items()
