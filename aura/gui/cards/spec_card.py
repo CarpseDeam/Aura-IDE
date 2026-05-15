@@ -486,6 +486,12 @@ class SpecCard(QFrame):
         self._status_label.setText(verb)
         self._status_label.setStyleSheet(f"color: {color}; font-size: 11px;")
 
+    def worker_cancelled(self) -> None:
+        """Update status when worker is cancelled during execution."""
+        self._worker_running = False
+        self._status_label.setText("Cancelled")
+        self._status_label.setStyleSheet(f"color: {DANGER}; font-size: 11px;")
+
     def set_dispatched_and_finished(self, ok: bool) -> None:
         """Force the card into a read-only finished state (for history replay)."""
         self._dispatched = True

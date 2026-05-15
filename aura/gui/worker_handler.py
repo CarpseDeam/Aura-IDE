@@ -161,14 +161,22 @@ class WorkerEventHandler(QObject):
         self.worker_started.emit()
 
     def _on_worker_finished(self, tool_call_id: str, ok: bool, summary: str) -> None:
-        """Forward worker finished to playground."""
+        """Forward worker finished to playground and update spec card."""
         self._playground.stop_aura()
         self._playground.worker_finished(ok, summary)
+        
+        card = self._chat.get_spec_card(tool_call_id)
+        if card:
+            card.worker_finished(ok, summary)
 
     def _on_worker_cancelled(self, tool_call_id: str) -> None:
-        """Stop worker aura and forward cancel to playground."""
+        """Stop worker aura and forward cancel to playground/spec card."""
         self._playground.stop_aura()
         self._playground.worker_cancelled()
+
+        card = self._chat.get_spec_card(tool_call_id)
+        if card:
+            card.worker_cancelled()
 
     # ---- worker content slots --------------------------------------------------
 

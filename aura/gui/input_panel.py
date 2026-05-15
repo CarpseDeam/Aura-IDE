@@ -357,5 +357,16 @@ class InputPanel(QFrame):
         self._editor.setPlainText(text)
         self._editor.setFocus()
 
+    def set_attachments(self, attachments: list[Attachment]) -> None:
+        """Restore a list of attachments to the panel."""
+        self._clear_attachments()
+        for a in attachments:
+            self._add_attachment(a)
+
+    def restore_payload(self, payload: SendPayload) -> None:
+        """Restore a previously submitted payload to the editor and attachments."""
+        self.set_text(payload.text)
+        self.set_attachments(payload.attachments)
+
     def focus_editor(self) -> None:
         self._editor.setFocus()

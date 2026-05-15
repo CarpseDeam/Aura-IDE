@@ -109,6 +109,7 @@ class SendHandler(QObject):
                 "Images not supported",
                 "The selected model cannot read images. Enable local vision fallback or choose a vision-capable model.",
             )
+            self._input.restore_payload(payload)
             return
 
         if image_atts and not native_vision and self._settings.vision_enabled:
@@ -129,7 +130,7 @@ class SendHandler(QObject):
                         model=self._settings.vision_model,
                     )
                     for a in image_atts:
-                        desc = client.describe(a.b64)
+                        desc = client.describe(a.b64, context=payload.text)
                         vision_descriptions.append(desc)
                 except Exception as exc:
                     vision_error = (

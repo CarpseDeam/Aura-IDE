@@ -26,16 +26,21 @@ class VisionClient:
         self._client = OpenAI(base_url=endpoint, api_key="ollama")  # no auth needed
         self._model = model
 
-    def describe(self, image_b64: str) -> str:
+    def describe(self, image_b64: str, context: str | None = None) -> str:
         """Return a text description of *image_b64* (raw base64, no prefix)."""
         data_uri = f"data:image/png;base64,{image_b64}"
+        
+        prompt = DEFAULT_VISION_PROMPT
+        if context:
+            prompt = f"The user says: \"{context}\"\n\n{prompt}"
+
         response = self._client.chat.completions.create(
             model=self._model,
             messages=[
                 {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": DEFAULT_VISION_PROMPT},
+                        {"type": "text", "text": prompt},
                         {"type": "image_url", "image_url": {"url": data_uri}},
                     ],
                 }
