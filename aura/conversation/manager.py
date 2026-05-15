@@ -41,6 +41,7 @@ from aura.conversation.dispatch import (
     WorkerDispatchResult,
 )
 from aura.conversation.history import History
+from aura.conversation.loop_detection import LoopDetector
 from aura.conversation.spec_quality import validate_worker_dispatch_spec
 from aura.conversation.tool_limits import (
     MAX_WORKER_REDISPATCHES_PER_USER_TURN,
@@ -66,8 +67,7 @@ class ConversationManager:
     ) -> None:
         self._history = history
         self._tools = tool_registry
-        # Tracks repetitive tool failures: (tool_name, args_json) -> (last_result, count)
-        self._failure_tracker: dict[str, tuple[str, int]] = {}
+        self._loop_detector = LoopDetector()
 
     @property
     def history(self) -> History:
@@ -106,6 +106,7 @@ class ConversationManager:
         limits = ToolLimitState(mode=mode)
         rounds_used = 0
         worker_needs_final_report = False
+        worker_phase_boundary_info: dict[str, Any] | None = None
         worker_redispatches = 0
 
         while True:
@@ -171,17 +172,34 @@ class ConversationManager:
                     fn = tc["function"]
                     name = fn["name"]
                     tool_call_id = tc["id"]
+                    reason = (
+                        str(worker_phase_boundary_info.get("reason"))
+                        if worker_phase_boundary_info
+                        else "worker_phase_boundary"
+                    )
+                    message = (
+                        str(worker_phase_boundary_info.get("message"))
+                        if worker_phase_boundary_info
+                        else (
+                            "Worker reached a recoverable phase boundary for this pass. "
+                            "Produce the continuation report now."
+                        )
+                    )
                     info = {
                         "ok": False,
-                        "limit_reached": True,
+                        "limit_reached": bool(
+                            worker_phase_boundary_info
+                            and worker_phase_boundary_info.get("limit_reached")
+                        ),
+                        "loop_detected": bool(
+                            worker_phase_boundary_info
+                            and worker_phase_boundary_info.get("loop_detected")
+                        ),
                         "recoverable": True,
                         "phase_boundary": True,
-                        "reason": "worker_tool_call_limit_reached",
+                        "reason": reason,
                         "tool": name,
-                        "message": (
-                            "Worker tool call limit reached for this pass. Do not call more tools. "
-                            "Produce the continuation report now."
-                        ),
+                        "message": message,
                         "counts": limits.to_dict(),
                     }
                     self._append_limit_tool_result(tool_call_id, name, info, on_event)
@@ -191,7 +209,7 @@ class ConversationManager:
                 return
 
             _terminal_dispatch = False
-            _worker_phase_boundary = False
+            _worker_phase_boundary_info: dict[str, Any] | None = None
             for tc in tool_calls:
                 if cancel_event.is_set():
                     self._cleanup_cancelled(on_event)
@@ -220,8 +238,8 @@ class ConversationManager:
                 allowed, limit_info = limits.check(name)
                 if not allowed:
                     self._append_limit_tool_result(tool_call_id, name, limit_info, on_event)
-                    if self._is_worker_total_phase_boundary(limit_info):
-                        _worker_phase_boundary = True
+                    if self._is_recoverable_phase_boundary(limit_info):
+                        _worker_phase_boundary_info = limit_info
                     continue
                 limits.record(name)
 
@@ -258,12 +276,15 @@ class ConversationManager:
                     continue
 
                 if name == "run_terminal_command":
-                    self._handle_terminal_command(
+                    loop_info = self._handle_terminal_command(
                         tool_call_id=tool_call_id,
                         args=args,
                         on_event=on_event,
                         cancel_event=cancel_event,
+                        mode=mode,
                     )
+                    if self._is_recoverable_phase_boundary(loop_info):
+                        _worker_phase_boundary_info = loop_info
                     continue
 
                 if reject_all_for_turn and name in ("write_file", "edit_file"):
@@ -293,8 +314,17 @@ class ConversationManager:
 
                 tool_msg_content = exec_result.to_tool_message_content()
 
-                # Apply circuit breaker
-                tool_msg_content = self._apply_circuit_breaker(name, args, exec_result.ok, tool_msg_content)
+                loop_result = self._apply_loop_detection(
+                    mode=mode,
+                    name=name,
+                    args=args,
+                    ok=exec_result.ok,
+                    result_payload=tool_msg_content,
+                )
+                tool_msg_content = loop_result["content"]
+                loop_info = loop_result["info"]
+                if self._is_recoverable_phase_boundary(loop_info):
+                    _worker_phase_boundary_info = loop_info
 
                 self._history.append_tool_result(tool_call_id, tool_msg_content)
                 on_event(
@@ -307,7 +337,8 @@ class ConversationManager:
                     )
                 )
 
-            if _worker_phase_boundary:
+            if _worker_phase_boundary_info is not None:
+                worker_phase_boundary_info = _worker_phase_boundary_info
                 worker_needs_final_report = True
                 continue
 
@@ -341,12 +372,8 @@ class ConversationManager:
         )
 
     @staticmethod
-    def _is_worker_total_phase_boundary(info: dict[str, Any]) -> bool:
-        return (
-            bool(info.get("recoverable"))
-            and bool(info.get("phase_boundary"))
-            and info.get("reason") == "worker_tool_call_limit_reached"
-        )
+    def _is_recoverable_phase_boundary(info: dict[str, Any] | None) -> bool:
+        return bool(info and info.get("recoverable") and info.get("phase_boundary"))
 
     def _append_redispatch_limit_message(
         self,
@@ -565,49 +592,24 @@ class ConversationManager:
             on_event(ToolResult(tool_call_id=tool_call_id, name="run_research", ok=False, result=payload))
             return False
 
-    def _apply_circuit_breaker(self, name: str, args: dict, ok: bool, result_payload: str) -> str:
-        """Track tool failures and inject warnings if they repeat consecutively."""
-        if ok:
-            # Success resets the failure tracker for this tool/command
-            # (using just the name/command for terminal, or full args for others)
-            key = f"terminal:{args.get('command')}" if name == "run_terminal_command" else f"{name}:{json.dumps(args, sort_keys=True)}"
-            self._failure_tracker.pop(key, None)
-            return result_payload
-
-        tracker_key = f"terminal:{args.get('command')}" if name == "run_terminal_command" else f"{name}:{json.dumps(args, sort_keys=True)}"
-        last_output, count = self._failure_tracker.get(tracker_key, ("", 0))
-        
-        # For terminal commands, we only care if the output is identical.
-        # For others, we compare the full result payload.
-        if last_output == result_payload:
-            count += 1
-        else:
-            count = 1
-        
-        self._failure_tracker[tracker_key] = (result_payload, count)
-
-        if count >= 3:
-            warning = (
-                f"\n\n[CIRCUIT BREAKER: Consecutive failure #{count}]\n"
-                f"The tool '{name}' produced the EXACT SAME failure output {count} times in a row.\n"
-                "You are likely in a loop. STOP and re-examine your assumptions. "
-                "The error might be different than what you think, or your fix is "
-                "not being applied as expected. DO NOT repeat the same change or tool call."
-            )
-            try:
-                parsed = json.loads(result_payload)
-                if isinstance(parsed, dict):
-                    if "output" in parsed:
-                        parsed["output"] += warning
-                    elif "error" in parsed:
-                        parsed["error"] += warning
-                    else:
-                        parsed["circuit_breaker_warning"] = warning
-                    return json.dumps(parsed, ensure_ascii=False)
-            except Exception:
-                return result_payload + warning
-        
-        return result_payload
+    def _apply_loop_detection(
+        self,
+        *,
+        mode: str,
+        name: str,
+        args: dict[str, Any],
+        ok: bool,
+        result_payload: str,
+    ) -> dict[str, Any]:
+        """Track repetitive failures and return annotated content plus metadata."""
+        observed = self._loop_detector.observe(
+            mode=mode,
+            tool_name=name,
+            args=args,
+            ok=ok,
+            content=result_payload,
+        )
+        return {"content": observed.content, "info": observed.info}
 
     def _handle_terminal_command(
         self,
@@ -615,7 +617,8 @@ class ConversationManager:
         args: dict[str, Any],
         on_event: EventCallback,
         cancel_event: threading.Event,
-    ) -> None:
+        mode: str,
+    ) -> dict[str, Any] | None:
         command = args.get("command", "")
         if not command:
             payload = json.dumps({"ok": False, "error": "command is required"})
@@ -628,7 +631,7 @@ class ConversationManager:
                     result=payload,
                 )
             )
-            return
+            return None
 
         timeout = int(args.get("timeout", 120))
 
@@ -676,8 +679,15 @@ class ConversationManager:
             ensure_ascii=False,
         )
 
-        # Apply circuit breaker
-        payload = self._apply_circuit_breaker("run_terminal_command", args, ok, payload)
+        loop_result = self._apply_loop_detection(
+            mode=mode,
+            name="run_terminal_command",
+            args=args,
+            ok=ok,
+            result_payload=payload,
+        )
+        payload = loop_result["content"]
+        loop_info = loop_result["info"]
 
         self._history.append_tool_result(tool_call_id, payload)
         on_event(
@@ -688,6 +698,7 @@ class ConversationManager:
                 result=payload,
             )
         )
+        return loop_info
 
     def _cleanup_cancelled(self, on_event: EventCallback) -> None:
         """Call this when a turn is cancelled while waiting for model or tool.

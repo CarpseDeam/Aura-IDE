@@ -463,7 +463,12 @@ class _DispatchProxy(QObject):
                 "writes": write_results,
                 "errors": result_errors,
                 "caveats": result_caveats,
-                "limit": phase_boundary_info or {},
+                "phase_boundary": phase_boundary_info or {},
+                "limit": (
+                    phase_boundary_info
+                    if phase_boundary_info and phase_boundary_info.get("limit_reached")
+                    else {}
+                ),
             },
         )
 
@@ -592,7 +597,7 @@ def _build_worker_summary(
     if continuation.get("remaining"):
         if lines:
             lines.append("")
-        lines.append("Worker pass limit reached. Remaining work:")
+        lines.append("Worker returned for planner follow-up. Remaining work:")
         for item in continuation["remaining"]:
             lines.append(f"  - {item}")
 

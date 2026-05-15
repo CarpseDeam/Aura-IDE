@@ -1,4 +1,9 @@
-"""Simple count-based tool limits for conversation passes."""
+"""Emergency tool-call guardrails for conversation passes.
+
+Normal control flow is handled by loop detection and planner recovery. This
+module only keeps a high runaway guard so a broken model/tool loop cannot run
+forever.
+"""
 from __future__ import annotations
 
 import json
@@ -21,24 +26,29 @@ PLANNER_CONTEXT_TOOLS = {
     "search_codebase",
 }
 
+# High emergency brakes, not workflow budgets. These should be far above normal
+# use; repeated non-progress is handled by aura.conversation.loop_detection.
 MAX_TOOL_CALLS_BY_MODE: dict[RegistryMode, int] = {
-    "planner": 8,
-    "worker": 100,
-    "single": 80,
-    "researcher": 20,
+    "planner": 300,
+    "worker": 300,
+    "single": 300,
+    "researcher": 80,
 }
 
 MAX_WORKER_REDISPATCHES_PER_USER_TURN = 2
-MAX_CONTEXT_CALLS_PER_PLANNER_TURN = 3
-MAX_TERMINAL_CALLS_PER_WORKER_PASS = 10
-MAX_WRITE_CALLS_PER_WORKER_PASS = 30
-MAX_DISPATCH_CALLS_PER_PLANNER_TURN = 1
-MAX_RESEARCH_CALLS_PER_PLANNER_TURN = 1
+
+# Backward-compatible aliases for older imports. Category-specific hard caps are
+# intentionally disabled; ToolLimitState does not enforce these values.
+MAX_CONTEXT_CALLS_PER_PLANNER_TURN: int | None = None
+MAX_TERMINAL_CALLS_PER_WORKER_PASS: int | None = None
+MAX_WRITE_CALLS_PER_WORKER_PASS: int | None = None
+MAX_DISPATCH_CALLS_PER_PLANNER_TURN: int | None = None
+MAX_RESEARCH_CALLS_PER_PLANNER_TURN: int | None = None
 
 
 @dataclass
 class ToolLimitState:
-    """Tracks count-based tool limits for one conversation pass."""
+    """Tracks tool-call counts and enforces only high emergency totals."""
 
     mode: RegistryMode
     total_calls: int = 0
@@ -51,7 +61,7 @@ class ToolLimitState:
     round_research_calls: int = 0
 
     def begin_model_round(self) -> None:
-        """Reset caps that apply to one planner model round."""
+        """Reset per-round telemetry counters."""
         self.round_dispatch_calls = 0
         self.round_research_calls = 0
 
@@ -59,70 +69,20 @@ class ToolLimitState:
         """Return whether *tool_name* may run plus a JSON-ready reason payload."""
         max_total = MAX_TOOL_CALLS_BY_MODE.get(self.mode, MAX_TOOL_CALLS_BY_MODE["single"])
         if self.total_calls + 1 > max_total:
+            phase_boundary = self.mode == "worker"
             return False, self._payload(
                 tool_name=tool_name,
-                reason=f"{self.mode}_tool_call_limit_reached",
+                reason=f"{self.mode}_emergency_tool_call_limit_reached",
                 limit_name="total_calls",
                 limit=max_total,
                 current=self.total_calls,
-                recoverable=self.mode == "worker",
-                phase_boundary=self.mode == "worker",
+                recoverable=phase_boundary,
+                phase_boundary=phase_boundary,
             )
-
-        if self.mode == "worker" and tool_name in TERMINAL_TOOLS:
-            if self.terminal_calls + 1 > MAX_TERMINAL_CALLS_PER_WORKER_PASS:
-                return False, self._payload(
-                    tool_name=tool_name,
-                    reason="worker_terminal_call_limit_reached",
-                    limit_name="terminal_calls",
-                    limit=MAX_TERMINAL_CALLS_PER_WORKER_PASS,
-                    current=self.terminal_calls,
-                )
-
-        if self.mode == "worker" and tool_name in WRITE_TOOLS:
-            if self.write_calls + 1 > MAX_WRITE_CALLS_PER_WORKER_PASS:
-                return False, self._payload(
-                    tool_name=tool_name,
-                    reason="worker_write_call_limit_reached",
-                    limit_name="write_calls",
-                    limit=MAX_WRITE_CALLS_PER_WORKER_PASS,
-                    current=self.write_calls,
-                )
-
-        if self.mode == "planner" and tool_name in DISPATCH_TOOLS:
-            if self.round_dispatch_calls + 1 > MAX_DISPATCH_CALLS_PER_PLANNER_TURN:
-                return False, self._payload(
-                    tool_name=tool_name,
-                    reason="planner_dispatch_call_limit_reached",
-                    limit_name="dispatch_calls",
-                    limit=MAX_DISPATCH_CALLS_PER_PLANNER_TURN,
-                    current=self.round_dispatch_calls,
-                )
-
-        if self.mode == "planner" and tool_name in PLANNER_CONTEXT_TOOLS:
-            if self.planner_context_calls + 1 > MAX_CONTEXT_CALLS_PER_PLANNER_TURN:
-                return False, self._payload(
-                    tool_name=tool_name,
-                    reason="planner_context_call_limit_reached",
-                    limit_name="planner_context_calls",
-                    limit=MAX_CONTEXT_CALLS_PER_PLANNER_TURN,
-                    current=self.planner_context_calls,
-                )
-
-        if self.mode == "planner" and tool_name in RESEARCH_TOOLS:
-            if self.round_research_calls + 1 > MAX_RESEARCH_CALLS_PER_PLANNER_TURN:
-                return False, self._payload(
-                    tool_name=tool_name,
-                    reason="planner_research_call_limit_reached",
-                    limit_name="research_calls",
-                    limit=MAX_RESEARCH_CALLS_PER_PLANNER_TURN,
-                    current=self.round_research_calls,
-                )
-
         return True, {}
 
     def record(self, tool_name: str) -> None:
-        """Record one accepted tool call."""
+        """Record one accepted tool call for telemetry."""
         self.total_calls += 1
         if tool_name in TERMINAL_TOOLS:
             self.terminal_calls += 1
@@ -149,15 +109,13 @@ class ToolLimitState:
         phase_boundary: bool = False,
     ) -> dict[str, Any]:
         message = (
-            "Worker tool call limit reached for this pass. Do not call more tools. "
-            "Summarize completed work, modified files, validation status, blockers, "
-            "and remaining work."
+            "Emergency tool-call guard reached for this worker pass. Do not call more "
+            "tools. Summarize completed work, modified files, validation status, "
+            "blockers, and remaining work so the planner can adjust."
             if phase_boundary
             else (
-                "Planner context-call budget reached. Dispatch with the files already known, "
-                "or ask one concise clarifying question if dispatch would likely be wrong."
-                if reason == "planner_context_call_limit_reached"
-                else f"Tool limit reached: {limit_name} is capped at {limit}."
+                "Emergency tool-call guard reached. Stop calling tools and report the "
+                "current state or ask one concise clarifying question."
             )
         )
         return {

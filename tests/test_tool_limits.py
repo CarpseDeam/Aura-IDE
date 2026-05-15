@@ -1,21 +1,17 @@
-"""Tests for simple count-based tool limits."""
+"""Tests for emergency tool-call guardrails."""
 
 from __future__ import annotations
 
 import json
 
 from aura.conversation.tool_limits import (
-    MAX_CONTEXT_CALLS_PER_PLANNER_TURN,
-    MAX_DISPATCH_CALLS_PER_PLANNER_TURN,
-    MAX_TERMINAL_CALLS_PER_WORKER_PASS,
     MAX_TOOL_CALLS_BY_MODE,
-    MAX_WRITE_CALLS_PER_WORKER_PASS,
     ToolLimitState,
     limit_reached_payload,
 )
 
 
-def test_worker_allows_calls_up_to_total_limit():
+def test_worker_allows_calls_up_to_emergency_limit():
     state = ToolLimitState(mode="worker")
     for _ in range(MAX_TOOL_CALLS_BY_MODE["worker"]):
         allowed, info = state.check("read_file")
@@ -26,7 +22,7 @@ def test_worker_allows_calls_up_to_total_limit():
     assert state.total_calls == MAX_TOOL_CALLS_BY_MODE["worker"]
 
 
-def test_worker_rejects_after_total_limit_as_phase_boundary():
+def test_worker_emergency_limit_is_recoverable_phase_boundary():
     state = ToolLimitState(mode="worker")
     for _ in range(MAX_TOOL_CALLS_BY_MODE["worker"]):
         state.record("read_file")
@@ -38,69 +34,48 @@ def test_worker_rejects_after_total_limit_as_phase_boundary():
     assert info["limit_reached"] is True
     assert info["recoverable"] is True
     assert info["phase_boundary"] is True
-    assert info["reason"] == "worker_tool_call_limit_reached"
+    assert info["reason"] == "worker_emergency_tool_call_limit_reached"
 
 
-def test_worker_terminal_cap_rejects_terminal_command():
-    state = ToolLimitState(mode="worker")
-    for _ in range(MAX_TERMINAL_CALLS_PER_WORKER_PASS):
-        allowed, _info = state.check("run_terminal_command")
-        assert allowed is True
-        state.record("run_terminal_command")
-
-    allowed, info = state.check("run_terminal_command")
-
-    assert allowed is False
-    assert info["reason"] == "worker_terminal_call_limit_reached"
-    assert info["limit_reached"] is True
-
-
-def test_worker_write_cap_rejects_write_tool():
-    state = ToolLimitState(mode="worker")
-    for _ in range(MAX_WRITE_CALLS_PER_WORKER_PASS):
-        allowed, _info = state.check("edit_file")
-        assert allowed is True
-        state.record("edit_file")
-
-    allowed, info = state.check("write_file")
-
-    assert allowed is False
-    assert info["reason"] == "worker_write_call_limit_reached"
-    assert info["limit_reached"] is True
-
-
-def test_planner_dispatch_cap_is_per_model_round():
+def test_planner_context_reads_are_not_category_capped():
     state = ToolLimitState(mode="planner")
-    for _ in range(MAX_DISPATCH_CALLS_PER_PLANNER_TURN):
-        allowed, _info = state.check("dispatch_to_worker")
+
+    for _ in range(50):
+        allowed, info = state.check("grep_search")
         assert allowed is True
-        state.record("dispatch_to_worker")
-
-    allowed, info = state.check("dispatch_to_worker")
-    assert allowed is False
-    assert info["reason"] == "planner_dispatch_call_limit_reached"
-
-    state.begin_model_round()
-    allowed, info = state.check("dispatch_to_worker")
-    assert allowed is True
-    assert info == {}
-
-
-def test_planner_context_cap_keeps_dispatch_available():
-    state = ToolLimitState(mode="planner")
-    for _ in range(MAX_CONTEXT_CALLS_PER_PLANNER_TURN):
-        allowed, _info = state.check("grep_search")
-        assert allowed is True
+        assert info == {}
         state.record("grep_search")
 
-    allowed, info = state.check("read_file")
-    assert allowed is False
-    assert info["reason"] == "planner_context_call_limit_reached"
-    assert "Dispatch with the files already known" in info["message"]
+    assert state.planner_context_calls == 50
 
-    allowed, info = state.check("dispatch_to_worker")
-    assert allowed is True
-    assert info == {}
+
+def test_planner_dispatch_is_not_category_capped_per_round():
+    state = ToolLimitState(mode="planner")
+
+    for _ in range(5):
+        allowed, info = state.check("dispatch_to_worker")
+        assert allowed is True
+        assert info == {}
+        state.record("dispatch_to_worker")
+
+    assert state.round_dispatch_calls == 5
+    state.begin_model_round()
+    assert state.round_dispatch_calls == 0
+    assert state.dispatch_calls == 5
+
+
+def test_worker_terminal_and_write_tools_are_not_category_capped():
+    state = ToolLimitState(mode="worker")
+
+    for name in ["run_terminal_command", "edit_file"]:
+        for _ in range(40):
+            allowed, info = state.check(name)
+            assert allowed is True
+            assert info == {}
+            state.record(name)
+
+    assert state.terminal_calls == 40
+    assert state.write_calls == 40
 
 
 def test_limit_payload_is_json_with_recoverable_fields():

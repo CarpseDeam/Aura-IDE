@@ -27,6 +27,7 @@ from aura.conversation.dispatch import (
 )
 from aura.conversation.history import History
 from aura.conversation.manager import ConversationManager
+from aura.conversation.tool_limits import MAX_TOOL_CALLS_BY_MODE
 from aura.conversation.tools._types import (
     ApprovalDecision,
     ToolExecResult,
@@ -1072,6 +1073,55 @@ class TestCircuitBreaker:
         # Third should
         assert "CIRCUIT BREAKER" in tool_results[2].result
 
+    def test_worker_loop_detection_creates_phase_boundary(
+        self, manager, mock_client, mock_tools, on_event, captured_events, cancel_event, history
+    ):
+        """Worker repeated failures stop the pass and request planner recovery."""
+        type(mock_tools).mode = PropertyMock(return_value="worker")
+        tc = _tool_call("cb1", "write_file", {"path": "test.py", "content": "data"})
+
+        mock_client.side_effect = [
+            iter([_make_done(content="", tool_calls=[tc])]),
+            iter([_make_done(content="", tool_calls=[tc])]),
+            iter([_make_done(content="", tool_calls=[tc])]),
+            iter([
+                ContentDelta(text="<continuation_report>"),
+                _make_done(content=(
+                    "<continuation_report>\n"
+                    "<status>needs_followup</status>\n"
+                    "<reason>loop_detected</reason>\n"
+                    "<completed>\n- Attempted write\n</completed>\n"
+                    "<modified_files>\n</modified_files>\n"
+                    "<validation>Not run</validation>\n"
+                    "<remaining>\n- Planner should revise the approach\n</remaining>\n"
+                    "<recommended_next_step>Dispatch with a different fix strategy.</recommended_next_step>\n"
+                    "</continuation_report>"
+                )),
+            ]),
+        ]
+        mock_tools.execute.return_value = ToolExecResult(
+            ok=False, payload={"ok": False, "error": "fail"}
+        )
+
+        manager.send(
+            on_event=on_event,
+            approval_cb=_make_approval_cb(),
+            cancel_event=cancel_event,
+            model="deepseek-chat",
+            thinking="off",
+        )
+
+        assert mock_tools.execute.call_count == 3
+        tool_results = [
+            e for e in captured_events if isinstance(e, ToolResult) and e.name == "write_file"
+        ]
+        parsed = json.loads(tool_results[2].result)
+        assert parsed["loop_detected"] is True
+        assert parsed["recoverable"] is True
+        assert parsed["phase_boundary"] is True
+        assert parsed["reason"] == "loop_detected"
+        assert history.messages[-1]["content"].startswith("<continuation_report>")
+
 
 # ===================================================================
 # 16. reject_all_for_turn propagation
@@ -1477,10 +1527,10 @@ class TestEdgeCases:
 class TestToolLimitIntegration:
     """Test that tool limits reject tools and create proper tool results."""
 
-    def test_planner_rejects_second_dispatch_in_same_round(self, manager, mock_client, mock_tools,
-                                                           on_event, captured_events, cancel_event,
-                                                           history):
-        """Planner dispatch cap rejects a second dispatch_to_worker in one model round."""
+    def test_planner_allows_multiple_dispatches_in_same_round(self, manager, mock_client, mock_tools,
+                                                              on_event, captured_events, cancel_event,
+                                                              history):
+        """Planner dispatch is not category-capped."""
         type(mock_tools).mode = PropertyMock(return_value="planner")
         tc1 = _tool_call(
             "d1",
@@ -1505,15 +1555,12 @@ class TestToolLimitIntegration:
             thinking="off",
             dispatch_cb=dispatch_cb,
         )
-        assert dispatch_cb.call_count == 1
+        assert dispatch_cb.call_count == 2
         tool_results = [e for e in captured_events if isinstance(e, ToolResult)]
         dispatch_results = [tr for tr in tool_results if tr.name == "dispatch_to_worker"]
         assert len(dispatch_results) == 2
         assert dispatch_results[0].ok is True
-        assert dispatch_results[1].ok is False
-        parsed = json.loads(dispatch_results[1].result)
-        assert parsed["limit_reached"] is True
-        assert parsed["reason"] == "planner_dispatch_call_limit_reached"
+        assert dispatch_results[1].ok is True
         tool_msgs = [m for m in history.messages if m["role"] == "tool"]
         assert len(tool_msgs) == 2
 
@@ -1542,12 +1589,13 @@ class TestToolLimitIntegration:
         assert len(tool_results) == 30
         assert all(tr.ok for tr in tool_results)
 
-    def test_worker_total_limit_produces_phase_boundary_without_dangling_tools(
+    def test_worker_emergency_limit_produces_phase_boundary_without_dangling_tools(
         self, manager, mock_client, mock_tools, on_event, captured_events, cancel_event, history
     ):
-        """Worker total tool cap rejects cleanly and allows a final no-tool report."""
+        """Worker emergency guard rejects cleanly and allows a final no-tool report."""
         type(mock_tools).mode = PropertyMock(return_value="worker")
-        tcs = [_tool_call(f"r{i}", "read_file", {"path": f"file{i}.py"}) for i in range(101)]
+        limit = MAX_TOOL_CALLS_BY_MODE["worker"]
+        tcs = [_tool_call(f"r{i}", "read_file", {"path": f"file{i}.py"}) for i in range(limit + 1)]
         mock_client.side_effect = [
             iter([_make_done(content="", tool_calls=tcs)]),
             iter([
@@ -1575,13 +1623,14 @@ class TestToolLimitIntegration:
             thinking="off",
         )
 
-        assert mock_tools.execute.call_count == 100
+        assert mock_tools.execute.call_count == limit
         tool_results = [e for e in captured_events if isinstance(e, ToolResult)]
         rejected = [tr for tr in tool_results if tr.ok is False]
         assert len(rejected) == 1
         parsed = json.loads(rejected[0].result)
         assert parsed["recoverable"] is True
         assert parsed["phase_boundary"] is True
+        assert parsed["reason"] == "worker_emergency_tool_call_limit_reached"
         assistant_tool_calls = [
             tc["id"]
             for msg in history.messages

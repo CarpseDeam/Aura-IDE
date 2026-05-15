@@ -229,7 +229,8 @@ PRICING: dict[str, dict[str, float]] = dict(PROVIDERS["deepseek"].pricing)
 # ---------------------------------------------------------------------------
 
 # Hard limit on model/tool-call rounds within a single user turn.
-# Tool execution itself is bounded by aura.conversation.tool_limits.ToolLimitState.
+# Tool execution has a high emergency guard in aura.conversation.tool_limits;
+# normal recovery from repeated non-progress is handled by loop detection.
 MAX_TOOL_ROUNDS = 50
 # Cap for read_file and similar to avoid blowing the context window.
 MAX_READ_BYTES = 200 * 1024
