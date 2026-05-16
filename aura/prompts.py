@@ -83,7 +83,15 @@ _APP_TOOL_STYLE_RULES = """App/tool style contract:
 - No comments that label obvious blocks.
 - Lower-level helpers usually return values or raise errors.
 - CLI/UI/app boundaries handle user-facing printing/logging.
-- Avoid public-library cosplay, tutorial scaffolding, fake architecture, and premature abstractions."""
+- Avoid public-library cosplay, tutorial scaffolding, fake architecture, and premature abstractions.
+
+For backend repos, also prefer:
+- Imported permission constants over raw permission strings.
+- Explicit domain event names where useful.
+- Service-layer enforcement of business rules.
+- Thin routes/controllers.
+- Schemas that match the actual domain, not generic CRUD examples.
+- Comments only for non-obvious rules, temporary dev constraints, or real operational decisions."""
 
 _CODE_TASTE_BLOCK = """Code taste — generate sharp app/tool code, avoid the "AI generated" look:
 
@@ -99,7 +107,24 @@ _CODE_TASTE_BLOCK = """Code taste — generate sharp app/tool code, avoid the "A
 - No Args/Returns/Raises docstrings in normal app/tool code. Exceptions: public API, Protocol, ABC with real contracts.
 - Preserve the surrounding file's rhythm and naming style — match what is already there.
 - Comment only when explaining non-obvious behavior, constraints, or intent.
-- Keep public API/Protocol/ABC docs when they carry real contract information."""
+- Keep public API/Protocol/ABC docs when they carry real contract information.
+
+Per-file domain fit — every generated file earns its place in this app:
+- Each file should answer: why does this file belong to this specific app?
+- Foundational files (auth/models.py, config.py, permissions.py, db/session.py, schemas.py) may use normal framework concepts, but surrounding fields, constants, relationships, names, and comments should reflect the app domain where appropriate.
+- Do not overbuild. Add only domain details a practical first-pass developer would naturally include.
+- Auth, role, permission, config, and base model files should not read like generic FastAPI tutorial scaffolding.
+- Generic names like User, Role, Permission, Settings, and Base are allowed when correct, but the surrounding implementation should include project-specific context where useful.
+- Avoid bland explanatory comments such as "Dev stub — returns a demo admin user" unless the comment carries necessary operational meaning.
+- Prefer one precise comment over multiple neat tutorial-style comments.
+- Domain-shaped minimalism: do not make code messy, do not add fake quirks, do not randomize style, do not add fake enterprise architecture, do not invent unnecessary models/managers/registries/factories/providers/orchestrators. Keep code clean, boring, specific, and app-shaped.
+
+Cross-file sanity before finishing:
+- When adding constants, permissions, enum values, route names, states, or event types, quickly check related files for representation mismatches.
+- Prefer cheap grep/read checks over broad test runs.
+- Do not mix symbolic permission names and permission string values accidentally. If a permission constant exists, import and use the constant instead of repeating raw strings.
+- State rules, service checks, route dependencies, and role mappings must use the same permission representation.
+- Avoid "almost matching" names like work_order_verify versus "work_order:verify"."""
 
 _CODE_STYLE_EXAMPLES = """Examples of small app/tool code style:
 
@@ -158,6 +183,7 @@ _WORKER_ENGINEERING_RULES = """Implementation quality — follow these rules:
 - Use meaningful practical names.
 - Handle realistic failure points with specific exception types.
 - Validate inputs, config, parsed data, model/tool responses, and generated output where relevant.
+- When working across multiple files, spend 1-2 cheap grep/read checks verifying that constants, permission strings, state values, and enum members are consistent across files.
 - Escape or sanitize output where relevant.
 - Reject secrets in code; use environment variables.
 - Avoid unnecessary dependencies and repeated expensive work.
