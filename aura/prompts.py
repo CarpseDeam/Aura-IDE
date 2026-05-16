@@ -30,7 +30,9 @@ _TOOL_EFFICIENCY_RULES = """Tool efficiency:
 - Each pass has a simple tool-call limit. Use tools deliberately and batch reads where practical."""
 
 _WORKER_PASS_RULES = """Bounded worker pass & validation policy:
-- Validation is required when appropriate, but do not repeat it endlessly.
+- Validation is required when appropriate, but default to the cheapest meaningful validation.
+- Prefer py_compile/import/smoke checks over pytest unless a focused existing test directly proves the touched behavior.
+- Do not create test files as validation unless explicitly requested.
 - Count every `run_terminal_command` used for linting, tests, compile checks, import checks, type checks, build checks, or smoke checks as a validation command.
 - Default limit: 2 validation terminal commands per Worker pass.
 - **Validation Stop Rule:** After 2 validation commands, stop validating and produce the resolution report unless:
@@ -163,10 +165,11 @@ _WORKER_ENGINEERING_RULES = """Implementation quality — follow these rules:
 - Use `edit_symbol` for Python symbol replacement (function, class, method).
 - Use `edit_file` with a search block for non-Python files or partial replacements.
 - If an edit fails, re-read the file and retry with expanded context.
-- After implementing, run focused validation. Prefer the smallest command that proves the touched behavior.
-- For small edits, `py_compile` or focused unit tests are enough.
-- For test changes, run the relevant test file/node only.
-- Broader tests are only for shared infrastructure, public APIs, packaging/build, database models, threading/async, or explicit Planner acceptance.
+- Do not create or modify tests unless the user explicitly asks, the Planner explicitly asks, the task is about tests, or the touched behavior already has a directly relevant focused test that must change.
+- Do not run pytest by default. Prefer py_compile, import checks, or narrow smoke checks for small/medium implementation work.
+- For small edits, py_compile or a focused smoke check is usually enough.
+- Run focused unit tests only when they already exist and directly prove the touched behavior, or when the task explicitly concerns tests.
+- Never add tests just to satisfy validation unless requested or clearly necessary for risky shared infrastructure.
 - If validation fails, fix the issue or report the blocker honestly.
 - If the same fix fails more than 3 times, stop and report the error wrapped in <error> tags.
 - Keep the final response concise: list changed files, validation results, and any blockers."""
@@ -193,7 +196,7 @@ Default dispatch style:
 - `goal`: one sentence summary of the task.
 - `files`: workspace-relative paths the Worker should read or modify.
 - `spec`: Builder Note. Write a concise plain-English implementation note with the important behavior, constraints, and known pitfalls. Do not write a legal/spec-document style contract. Do not pad with obvious sections.
-- `acceptance`: concrete pass/fail checks proving the task is done. **Prefer focused validation.** The Planner should not ask for the full test suite by default. Only request broad/full validation for shared infrastructure, public APIs, packaging/build/release logic, database models, threading/async/subprocess behavior, broad/risky refactors, or when the user explicitly asks for it.
+- `acceptance`: concrete pass/fail checks proving the task is done. **Acceptance should prefer cheap focused validation:** `py_compile` changed Python files, narrow import checks, focused smoke checks, or exact command requested by the user. Do not ask the Worker to create tests by default. Do not request `pytest` by default. Only request tests when the task is test-related, the user asked for tests, or the change is risky enough that lighter validation is insufficient.
 - `summary`: concise user-facing summary of intended changes.
 
 Use a fuller structured spec only when the task is broad, risky, or ambiguous: cross-file refactors, auth/security, subprocess/threading/async behavior, persistence/data model changes, destructive file operations, public API/signature changes, or build/release/update system work. Even then, keep it concise.
@@ -229,7 +232,7 @@ Execution Protocol:
 <code_block language="python" file="aura/some_file.py">
 # actual code here
 </code_block>
-4. Validation Protocol: Run the Planner's acceptance checks and appropriate validation proportionally: run the smallest command that proves the behavior. If the task creates or transforms output, verify output content before reporting success. If validation fails, fix the issue, report the blocker honestly, and stop if progress stalls or the validation limit is reached.
+4. Validation Protocol: Run the Planner's acceptance checks and validate proportionally. Default to `py_compile`, import checks, or narrow smoke checks. Do not create or modify tests unless explicitly requested or clearly necessary. Do not run `pytest` by default; use it only when a focused existing test directly covers the touched behavior or the Planner/user requested it.
 5. Completion Check: Before resolution, confirm: core behavior implemented; behavior validated; transformed/generated output checked when relevant; failures not swallowed; success reporting honest; ceremony removed; no premature architecture.
 6. Resolution: When the task is complete, state "Done." and the files you modified plus validation results. Include blockers or caveats only if present. No long prose unless reporting a failure or blocker.
 
