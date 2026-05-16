@@ -175,6 +175,50 @@ def _string_list(value: Any) -> list[str]:
     return [str(item) for item in value]
 
 
+def _extract_validation_commands(text: str) -> list[str]:
+    """Extract validation commands from acceptance text.
+
+    Uses two strategies:
+    1. Backtick-quoted commands — everything between backticks that
+       starts with a known command prefix.
+    2. Full-line command forms — lines that start with a known command
+       prefix after stripping leading bullets/whitespace.
+
+    Does NOT scrape partial commands from prose sentences.
+    Deduplicates while preserving order.
+    """
+    commands: list[str] = []
+    seen: set[str] = set()
+
+    _cmd_prefix = r"(?:python -m|pytest|python|ruff|mypy|py_compile|compileall)"
+
+    # 1. Backtick-quoted commands — capture everything between backticks.
+    for m in re.finditer(
+        rf"`((?:{_cmd_prefix})\s+\S[^`]*)`",
+        text,
+    ):
+        cmd = m.group(1).strip()
+        if cmd not in seen:
+            seen.add(cmd)
+            commands.append(cmd)
+
+    # 2. Full-line command forms.
+    for line in text.splitlines():
+        stripped = line.strip()
+        while stripped and stripped[0] in "-* ":
+            stripped = stripped[1:].lstrip()
+        if re.match(rf"{_cmd_prefix}\s", stripped):
+            # Strip a single trailing sentence-ending period.
+            if stripped.endswith(".") and len(stripped) > 1 and stripped[-2].isalpha():
+                stripped = stripped[:-1]
+            cmd = stripped
+            if cmd not in seen:
+                seen.add(cmd)
+                commands.append(cmd)
+
+    return commands
+
+
 def normalize_worker_task(req: WorkerDispatchRequest) -> WorkerTaskSpec:
     """Convert a WorkerDispatchRequest into a structured WorkerTaskSpec.
 
@@ -182,23 +226,7 @@ def normalize_worker_task(req: WorkerDispatchRequest) -> WorkerTaskSpec:
     from acceptance text when possible. Leaves unknown structured fields
     empty — this is a normalization, not a full enrichment.
     """
-    validation_commands: list[str] = []
-    if req.acceptance.strip():
-        # First look for backtick-quoted shell commands.
-        for m in re.finditer(
-            r"`((?:pytest|python -m|ruff|mypy|py_compile|compileall)\s+\S[^`]*)`",
-            req.acceptance,
-        ):
-            validation_commands.append(m.group(1).strip())
-        if not validation_commands:
-            # Fallback: find command patterns in plain text.
-            for m in re.finditer(
-                r"(?:^|\s)((?:pytest|python -m|ruff|mypy|py_compile|compileall)\s+\S[^\s,;.\n)]+)",
-                req.acceptance,
-            ):
-                cmd = m.group(1).strip().rstrip(".")
-                if cmd not in validation_commands:
-                    validation_commands.append(cmd)
+    validation_commands = _extract_validation_commands(req.acceptance)
 
     # Parse non-goals from spec text: look for a "Non-Goals" section.
     non_goals: list[str] = []
