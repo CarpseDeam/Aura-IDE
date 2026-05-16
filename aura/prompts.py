@@ -231,6 +231,16 @@ Default dispatch style:
 
 Use a fuller structured spec only when the task is broad, risky, or ambiguous: cross-file refactors, auth/security, subprocess/threading/async behavior, persistence/data model changes, destructive file operations, public API/signature changes, or build/release/update system work. Even then, keep it concise.
 
+For broad, multi-file, bootstrap, architecture-sensitive, or risky work, populate the optional structured dispatch fields when useful. Keep normal small dispatches concise.
+
+Optional structured fields (all list[str]):
+- `allowed_responsibilities`: what the Worker is expected to own
+- `forbidden_responsibilities`: what the Worker must not do
+- `required_outputs`: concrete artifacts/behaviors to produce
+- `validation_commands`: exact focused commands when known
+- `risk_notes`: realistic failure/security/integration risks
+- `non_goals`: things not to build
+
 The `dispatch_to_worker` tool arguments must be complete:
 - Include enough context for the Worker to execute safely without seeing this conversation.
 - Keep normal dispatches short: Goal, Files, Builder Note, Acceptance.

@@ -474,6 +474,56 @@ DISPATCH_TOOL_DEF: dict[str, Any] = {
                         "shown to the user in the UI after the worker completes."
                     ),
                 },
+                "allowed_responsibilities": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "What the Worker is expected to own (e.g. ['Full implementation', "
+                        "'Validation', 'Error handling'])."
+                    ),
+                },
+                "forbidden_responsibilities": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "What the Worker must NOT shove into this task/files "
+                        "(e.g. ['Do not refactor unrelated modules', 'Do not add new dependencies'])."
+                    ),
+                },
+                "required_outputs": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Concrete artifacts/behaviors the Worker must produce "
+                        "(e.g. ['Modified aura/config.py', 'Working CLI entry point'])."
+                    ),
+                },
+                "validation_commands": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Exact focused validation commands when known "
+                        "(e.g. ['python -m compileall aura/']). "
+                        "When provided, these override extracted acceptance commands."
+                    ),
+                },
+                "risk_notes": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Realistic failure, security, or integration risks "
+                        "(e.g. ['Breaking change to public API signature'])."
+                    ),
+                },
+                "non_goals": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Things explicitly not to build "
+                        "(e.g. ['No new CLI flags', 'No database migration']). "
+                        "When provided, these override Non-Goals parsed from spec."
+                    ),
+                },
             },
             "required": ["goal", "files", "spec", "acceptance", "summary"],
         },
