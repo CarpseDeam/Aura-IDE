@@ -13,12 +13,53 @@ in test_tool_registry.py takes effect correctly.
 
 from __future__ import annotations
 
+import logging
+import os
+
 from aura.conversation.tools._types import ApprovalRequest, ToolExecResult
 
 # Import the registry module so we can look up functions at call time.
 # This creates a circular import, but Python handles it because
 # `registry` is already in sys.modules by the time this module is loaded.
 from aura.conversation.tools import registry as _reg
+
+_log = logging.getLogger("aura.humanizer")
+
+
+def _log_humanizer_observe(rel_path: str, result) -> None:
+    """Log what the humanizer would change for observe-only mode."""
+    if result.changed:
+        parts = []
+        if result.markdown_stripped:
+            parts.append("strip markdown")
+        if result.comments_removed > 0:
+            parts.append(f"remove {result.comments_removed} comments")
+        if result.docstrings_removed > 0:
+            parts.append(f"remove {result.docstrings_removed} docstrings")
+        _log.info("[humanizer:observe] %s: would %s", rel_path, ", ".join(parts))
+    else:
+        _log.info("[humanizer:observe] %s: no changes", rel_path)
+
+
+def _maybe_observe_humanizer(proposal: dict) -> None:
+    """Run humanizer in observe-only mode for existing .py file edits."""
+    humanizer_kill = os.environ.get("AURA_HUMANIZER", "")
+    if humanizer_kill == "0":
+        return
+    rel_path = proposal.get("rel_path", "")
+    if not rel_path.endswith(".py"):
+        return
+    try:
+        from aura.humanizer import HumanizerPipeline
+
+        result = HumanizerPipeline().humanize_code(
+            proposal["new_content"], language="python"
+        )
+        _log_humanizer_observe(rel_path, result)
+    except Exception:
+        _log.exception(
+            "HumanizerPipeline failed for %s, skipping observe", rel_path
+        )
 
 
 class WriteHandlersMixin:
@@ -101,12 +142,36 @@ class WriteHandlersMixin:
             proposal = _reg.propose_write(self._root, target, content)
             if not proposal.get("ok", False):
                 return ToolExecResult(ok=False, payload=proposal)
+
+            # Humanizer: clean new Python file content before approval
+            humanizer_kill = os.environ.get("AURA_HUMANIZER", "")
+            if humanizer_kill != "0":
+                rel_path = proposal["rel_path"]
+                is_new_file = proposal.get("is_new_file", False)
+                if rel_path.endswith(".py") and is_new_file:
+                    try:
+                        from aura.humanizer import HumanizerPipeline
+
+                        result = HumanizerPipeline().humanize_code(
+                            proposal["new_content"], language="python"
+                        )
+                        humanizer_observe = os.environ.get("AURA_HUMANIZER_OBSERVE", "") == "1"
+                        if humanizer_observe:
+                            _log_humanizer_observe(rel_path, result)
+                        else:
+                            if not result.syntax_fallback and result.error is None:
+                                proposal["new_content"] = result.text
+                    except Exception:
+                        _log.exception(
+                            "HumanizerPipeline failed for %s, using original content", rel_path
+                        )
+
             req = ApprovalRequest(
                 tool_name="write_file",
                 rel_path=proposal["rel_path"],
                 old_content=proposal["old_content"],
                 new_content=proposal["new_content"],
-                is_new_file=proposal["is_new_file"],
+                is_new_file=proposal.get("is_new_file", False),
             )
         elif name == "edit_file":
             old_str = args.get("old_str", "")
@@ -119,6 +184,10 @@ class WriteHandlersMixin:
             proposal = _reg.propose_edit(self._root, target, old_str, new_str)
             if not proposal.get("ok", False):
                 return ToolExecResult(ok=False, payload=proposal)
+
+            # Humanizer: observe-only for existing file edits
+            _maybe_observe_humanizer(proposal)
+
             req = ApprovalRequest(
                 tool_name="edit_file",
                 rel_path=proposal["rel_path"],
@@ -141,6 +210,10 @@ class WriteHandlersMixin:
             )
             if not proposal.get("ok", False):
                 return ToolExecResult(ok=False, payload=proposal)
+
+            # Humanizer: observe-only for existing file edits
+            _maybe_observe_humanizer(proposal)
+
             req = ApprovalRequest(
                 tool_name="edit_symbol",
                 rel_path=proposal["rel_path"],

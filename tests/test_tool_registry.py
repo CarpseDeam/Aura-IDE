@@ -701,6 +701,170 @@ class TestWriteFile:
 
 
 # ===================================================================
+# write_file — humanizer integration
+# ===================================================================
+
+
+class TestWriteFileHumanizer:
+    """Tests for the humanizer integration in write_file proposals."""
+
+    RAW_PYTHON = """```python
+# Initialize the list
+items = []
+# Loop through items
+for i in items:
+    # Process each item
+    print(i)
+```"""
+
+    CLEAN_PYTHON = 'items = []\nfor i in items:\n    print(i)'
+
+    def test_new_python_write_is_humanized(self, registry: ToolRegistry, approve_cb: MagicMock):
+        with (
+            patch("aura.conversation.tools.registry.propose_write") as mock_pw,
+            patch("aura.conversation.tools.registry.backup_existing", return_value=None),
+            patch("aura.humanizer.HumanizerPipeline") as mock_hp_cls,
+        ):
+            mock_pw.return_value = {
+                "ok": True,
+                "rel_path": "new.py",
+                "old_content": "",
+                "new_content": self.RAW_PYTHON,
+                "is_new_file": True,
+            }
+            mock_hp = MagicMock()
+            mock_hp.humanize_code.return_value = MagicMock(
+                text=self.CLEAN_PYTHON, syntax_fallback=False, error=None, changed=True,
+                markdown_stripped=True, comments_removed=3, docstrings_removed=0,
+            )
+            mock_hp_cls.return_value = mock_hp
+
+            result = _handler("write_file")(
+                registry,
+                {"path": "new.py", "content": self.RAW_PYTHON},
+                approve_cb,
+                False,
+            )
+
+        assert result.ok is True
+        # ApprovalRequest should contain the cleaned content
+        req = approve_cb.call_args[0][0]
+        assert req.new_content == self.CLEAN_PYTHON
+        mock_hp.humanize_code.assert_called_once()
+
+    def test_non_python_new_file_not_humanized(self, registry: ToolRegistry, approve_cb: MagicMock):
+        with (
+            patch("aura.conversation.tools.registry.propose_write") as mock_pw,
+            patch("aura.conversation.tools.registry.backup_existing", return_value=None),
+            patch("aura.humanizer.HumanizerPipeline") as mock_hp_cls,
+        ):
+            mock_pw.return_value = {
+                "ok": True,
+                "rel_path": "new.js",
+                "old_content": "",
+                "new_content": "console.log('hello');",
+                "is_new_file": True,
+            }
+
+            result = _handler("write_file")(
+                registry,
+                {"path": "new.js", "content": "console.log('hello');"},
+                approve_cb,
+                False,
+            )
+
+        assert result.ok is True
+        req = approve_cb.call_args[0][0]
+        assert req.new_content == "console.log('hello');"
+        mock_hp_cls.assert_not_called()
+
+    def test_existing_python_edit_not_humanized(self, registry: ToolRegistry, approve_cb: MagicMock):
+        """Existing .py edit_file: content is NOT replaced (observe-only at most)."""
+        with (
+            patch("aura.conversation.tools.registry.propose_edit") as mock_pe,
+            patch("aura.conversation.tools.registry.backup_existing", return_value=None),
+            patch("aura.humanizer.HumanizerPipeline") as mock_hp_cls,
+        ):
+            mock_pe.return_value = {
+                "ok": True,
+                "rel_path": "existing.py",
+                "old_content": "old code",
+                "new_content": "new code",
+                "is_new_file": False,
+            }
+
+            result = _handler("edit_file")(
+                registry,
+                {"path": "existing.py", "old_str": "old code", "new_str": "new code"},
+                approve_cb,
+                False,
+            )
+
+        assert result.ok is True
+        req = approve_cb.call_args[0][0]
+        assert req.new_content == "new code"
+        # Humanizer may be called in observe mode, but content must not change
+        # (observe mode is tested separately)
+
+    def test_observe_mode_does_not_change_content(
+        self, registry: ToolRegistry, approve_cb: MagicMock, monkeypatch
+    ):
+        monkeypatch.setenv("AURA_HUMANIZER_OBSERVE", "1")
+        with (
+            patch("aura.conversation.tools.registry.propose_write") as mock_pw,
+            patch("aura.conversation.tools.registry.backup_existing", return_value=None),
+        ):
+            mock_pw.return_value = {
+                "ok": True,
+                "rel_path": "new.py",
+                "old_content": "",
+                "new_content": self.RAW_PYTHON,
+                "is_new_file": True,
+            }
+
+            result = _handler("write_file")(
+                registry,
+                {"path": "new.py", "content": self.RAW_PYTHON},
+                approve_cb,
+                False,
+            )
+
+        assert result.ok is True
+        req = approve_cb.call_args[0][0]
+        # Content must be unchanged in observe mode
+        assert req.new_content == self.RAW_PYTHON
+
+    def test_kill_switch_disables_behavior(
+        self, registry: ToolRegistry, approve_cb: MagicMock, monkeypatch
+    ):
+        monkeypatch.setenv("AURA_HUMANIZER", "0")
+        with (
+            patch("aura.conversation.tools.registry.propose_write") as mock_pw,
+            patch("aura.conversation.tools.registry.backup_existing", return_value=None),
+            patch("aura.humanizer.HumanizerPipeline") as mock_hp_cls,
+        ):
+            mock_pw.return_value = {
+                "ok": True,
+                "rel_path": "new.py",
+                "old_content": "",
+                "new_content": self.RAW_PYTHON,
+                "is_new_file": True,
+            }
+
+            result = _handler("write_file")(
+                registry,
+                {"path": "new.py", "content": self.RAW_PYTHON},
+                approve_cb,
+                False,
+            )
+
+        assert result.ok is True
+        req = approve_cb.call_args[0][0]
+        assert req.new_content == self.RAW_PYTHON
+        mock_hp_cls.assert_not_called()
+
+
+# ===================================================================
 # edit_file
 # ===================================================================
 
