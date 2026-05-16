@@ -8,6 +8,7 @@ planner as the tool_result for that call.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -111,10 +112,118 @@ class WorkerDispatchResult:
         )
 
 
+@dataclass
+class WorkerTaskSpec:
+    """Structured task artifact — a richer, bounded handoff for the Worker.
+
+    All fields are optional/defaulted so existing dispatch_to_worker calls
+    continue working. Future Planners can populate richer fields directly.
+    """
+    goal: str = ""
+    files: list[str] = field(default_factory=list)
+    summary: str = ""
+    builder_note: str = ""
+    acceptance: str = ""
+    allowed_responsibilities: list[str] = field(default_factory=list)
+    forbidden_responsibilities: list[str] = field(default_factory=list)
+    required_outputs: list[str] = field(default_factory=list)
+    validation_commands: list[str] = field(default_factory=list)
+    risk_notes: list[str] = field(default_factory=list)
+    non_goals: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "goal": self.goal,
+            "files": list(self.files),
+            "summary": self.summary,
+            "builder_note": self.builder_note,
+            "acceptance": self.acceptance,
+            "allowed_responsibilities": list(self.allowed_responsibilities),
+            "forbidden_responsibilities": list(self.forbidden_responsibilities),
+            "required_outputs": list(self.required_outputs),
+            "validation_commands": list(self.validation_commands),
+            "risk_notes": list(self.risk_notes),
+            "non_goals": list(self.non_goals),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "WorkerTaskSpec":
+        def _str_list(key: str) -> list[str]:
+            raw = data.get(key)
+            if not isinstance(raw, list):
+                return []
+            return [str(v) for v in raw]
+
+        return cls(
+            goal=str(data.get("goal", "")),
+            files=_str_list("files"),
+            summary=str(data.get("summary", "")),
+            builder_note=str(data.get("builder_note", "")),
+            acceptance=str(data.get("acceptance", "")),
+            allowed_responsibilities=_str_list("allowed_responsibilities"),
+            forbidden_responsibilities=_str_list("forbidden_responsibilities"),
+            required_outputs=_str_list("required_outputs"),
+            validation_commands=_str_list("validation_commands"),
+            risk_notes=_str_list("risk_notes"),
+            non_goals=_str_list("non_goals"),
+        )
+
+
 def _string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(item) for item in value]
+
+
+def normalize_worker_task(req: WorkerDispatchRequest) -> WorkerTaskSpec:
+    """Convert a WorkerDispatchRequest into a structured WorkerTaskSpec.
+
+    Preserves all existing fields. Parses obvious validation commands
+    from acceptance text when possible. Leaves unknown structured fields
+    empty — this is a normalization, not a full enrichment.
+    """
+    validation_commands: list[str] = []
+    if req.acceptance.strip():
+        # First look for backtick-quoted shell commands.
+        for m in re.finditer(
+            r"`((?:pytest|python -m|ruff|mypy|py_compile|compileall)\s+\S[^`]*)`",
+            req.acceptance,
+        ):
+            validation_commands.append(m.group(1).strip())
+        if not validation_commands:
+            # Fallback: find command patterns in plain text.
+            for m in re.finditer(
+                r"(?:^|\s)((?:pytest|python -m|ruff|mypy|py_compile|compileall)\s+\S[^\s,;.\n)]+)",
+                req.acceptance,
+            ):
+                cmd = m.group(1).strip().rstrip(".")
+                if cmd not in validation_commands:
+                    validation_commands.append(cmd)
+
+    # Parse non-goals from spec text: look for a "Non-Goals" section.
+    non_goals: list[str] = []
+    if req.spec.strip():
+        match = re.search(
+            r"(?:#+\s*)?Non[- ]?Goals?\s*[:\.-]?\s*\n(.*?)(?=\n(?:#+\s|\n\n|\Z))",
+            req.spec,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if match:
+            section = match.group(1).strip()
+            for line in section.splitlines():
+                line = line.strip()
+                if line and line.startswith(("-", "*")):
+                    non_goals.append(line.lstrip("-* ").strip())
+
+    return WorkerTaskSpec(
+        goal=req.goal,
+        files=list(req.files),
+        summary=req.summary,
+        builder_note=req.spec,
+        acceptance=req.acceptance,
+        validation_commands=validation_commands,
+        non_goals=non_goals,
+    )
 
 
 DispatchCallback = Callable[[str, WorkerDispatchRequest], WorkerDispatchResult]
@@ -128,5 +237,7 @@ cancelled the dispatch and (if approved) the worker manager has finished.
 __all__ = [
     "WorkerDispatchRequest",
     "WorkerDispatchResult",
+    "WorkerTaskSpec",
     "DispatchCallback",
+    "normalize_worker_task",
 ]

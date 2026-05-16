@@ -46,6 +46,8 @@ from aura.conversation import (
     History,
     WorkerDispatchRequest,
     WorkerDispatchResult,
+    WorkerTaskSpec,
+    normalize_worker_task,
 )
 from aura.conversation.persistence import WorkerDispatchRecord
 from aura.prompts import (
@@ -64,8 +66,6 @@ __all__ = [
 
 
 class _DispatchPending:
-    """Per-dispatch state on the bridge."""
-
     def __init__(self, request: WorkerDispatchRequest) -> None:
         self.request = request
         self.edited_request: WorkerDispatchRequest | None = None
@@ -75,15 +75,6 @@ class _DispatchPending:
 
 
 class _DispatchProxy(QObject):
-    """Routes dispatch_to_worker calls through the GUI (SpecCard) and runs
-    the worker manager when the user clicks Dispatch.
-
-    The planner thread calls request_dispatch(); we marshal a "show card"
-    signal to the GUI thread, then block on a threading.Event until the user
-    clicks Dispatch (after which we run the worker on this same thread, then
-    signal back) or Cancel (we just return immediately).
-    """
-
     showSpecCard = Signal(str, str, list, str, str, str)  # tool_id, goal, files, spec, acceptance, summary
     workerStarted = Signal(str)  # tool_id
     workerFinished = Signal(str, bool, str)  # tool_id, ok, summary
@@ -252,7 +243,8 @@ class _DispatchProxy(QObject):
         full_prompt = inject_tier1_context(base_prompt, self._tier1_context)
         full_prompt = inject_private_worker_style(full_prompt)
         worker_history.set_system(full_prompt)
-        worker_history.append_user_text(_format_spec_as_user_message(req))
+        task_spec = normalize_worker_task(req)
+        worker_history.append_user_text(_format_spec_as_user_message(task_spec))
 
         worker_registry = self._registry_factory("worker")
         worker_manager = ConversationManager(worker_history, worker_registry)
@@ -412,10 +404,12 @@ class _DispatchProxy(QObject):
             str(w["path"]) for w in write_results if isinstance(w.get("path"), str) and w.get("path")
         ]
 
+        spec_dict = req.to_dict()
+        spec_dict["task_spec"] = task_spec.to_dict()
         record = WorkerDispatchRecord(
             after_message_index=-1,
             tool_call_id=tool_call_id,
-            spec=req.to_dict(),
+            spec=spec_dict,
             worker_history=list(worker_history.messages),
             result_summary=summary,
         )
@@ -473,27 +467,77 @@ class _DispatchProxy(QObject):
         )
 
 
-def _format_spec_as_user_message(req: WorkerDispatchRequest) -> str:
-    files_block = "\n".join(f"- {p}" for p in req.files) if req.files else "(none listed)"
-    return (
-        f"Goal: {req.goal}\n\n"
-        f"Files involved:\n{files_block}\n\n"
-        f"Builder note:\n{req.spec}\n\n"
-        f"Acceptance criteria:\n{req.acceptance}\n\n"
-        "Worker contract:\n"
-        "- Read every listed file before editing.\n"
-        "- Start with a TODO list and keep it updated.\n"
-        "- Build the smallest complete implementation.\n"
-        "- Own exact edits, validation, and code-quality decisions.\n"
-        "- Code must work and be easy to work on.\n"
-        "- Avoid public-library, tutorial, or demo ceremony unless requested.\n"
-        "- Avoid module summary docstrings and Args/Returns/Raises in normal app/tool code.\n"
-        "- Do not add fake architecture.\n"
-        "- Helpers return values or raise; CLI/UI/app boundary reports.\n"
-        "- Validate actual behavior when practical.\n"
-        "- Do not report Done unless acceptance passed.\n\n"
-        "Begin. Read the listed files first, then make the change(s)."
-    )
+def _format_spec_as_user_message(task: WorkerTaskSpec | WorkerDispatchRequest) -> str:
+    """Format a structured task spec (or raw dispatch request) as a user message
+    for the worker. Accepts both types for backward compatibility."""
+    if isinstance(task, WorkerDispatchRequest):
+        task = normalize_worker_task(task)
+
+    def _lines(items: list[str], default: str = "(none listed)") -> str:
+        if not items:
+            return default
+        return "\n".join(f"- {item}" for item in items)
+
+    parts = [
+        "Goal",
+        task.goal,
+        "",
+        "Files",
+        _lines(task.files),
+        "",
+        "Builder Note",
+        task.builder_note,
+        "",
+        "Allowed Responsibilities",
+        _lines(task.allowed_responsibilities),
+        "",
+        "Forbidden Responsibilities",
+        _lines(task.forbidden_responsibilities),
+        "",
+        "Required Outputs",
+        _lines(task.required_outputs),
+        "",
+        "Non-Goals",
+        _lines(task.non_goals),
+        "",
+        "Acceptance / Validation",
+        task.acceptance,
+    ]
+
+    if task.validation_commands:
+        parts.extend([
+            "",
+            "Validation Commands",
+            "```",
+            "\n".join(task.validation_commands),
+            "```",
+        ])
+
+    parts.extend([
+        "",
+        "Worker Contract",
+        "- Listed files are the expected working set. Read every one before editing.",
+        "- Do not move unrelated behavior into entry points.",
+        "- Do not create demo, prototype, or phase files unless explicitly requested.",
+        "- Do not invent broad architecture outside the task scope.",
+        "- Do not hide failure behind success-looking output.",
+        "- Do not satisfy acceptance with placeholder behavior.",
+        "- If a requested responsibility does not belong in a listed file, inspect and choose the smallest correct neighboring module, or report the mismatch.",
+        "- Start with a TODO list and keep it updated.",
+        "- Build the smallest complete implementation.",
+        "- Own exact edits, validation, and code-quality decisions.",
+        "- Code must work and be easy to work on.",
+        "- Avoid public-library, tutorial, or demo ceremony unless requested.",
+        "- Avoid module summary docstrings and Args/Returns/Raises in normal app/tool code.",
+        "- Do not add fake architecture.",
+        "- Helpers return values or raise; CLI/UI/app boundary reports.",
+        "- Validate actual behavior when practical.",
+        "- Do not report Done unless acceptance passed.",
+        "",
+        "Begin. Read the listed files first, then make the change(s).",
+    ])
+
+    return "\n".join(parts)
 
 
 def _last_assistant_content(history: History) -> str:
