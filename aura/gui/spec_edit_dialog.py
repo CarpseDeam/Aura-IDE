@@ -7,11 +7,13 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFormLayout,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -42,7 +44,21 @@ class SpecEditDialog(QDialog):
         self.setModal(True)
         self.resize(720, 620)
 
-        outer = QVBoxLayout(self)
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setStyleSheet(f"background: {BG}; border: none;")
+        main_layout.addWidget(scroll)
+
+        scroll_content = QWidget()
+        scroll_content.setStyleSheet(f"background: {BG};")
+        scroll.setWidget(scroll_content)
+
+        outer = QVBoxLayout(scroll_content)
         outer.setContentsMargins(18, 16, 18, 12)
         outer.setSpacing(10)
 
@@ -73,12 +89,19 @@ class SpecEditDialog(QDialog):
 
         outer.addLayout(form)
 
+        # Button row (outside scroll area)
+        btn_container = QWidget(self)
+        btn_container.setStyleSheet(f"background: {BG}; border-top: 1px solid {BORDER};")
+        btn_layout = QHBoxLayout(btn_container)
+        btn_layout.setContentsMargins(18, 12, 18, 12)
+
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
-        outer.addWidget(buttons)
+        btn_layout.addWidget(buttons)
+        main_layout.addWidget(btn_container)
 
     def goal(self) -> str:
         return self._goal_edit.text().strip()
@@ -123,7 +146,21 @@ class SpecApprovalDialog(QDialog):
         self._acceptance = acceptance
         self._summary = summary
 
-        outer = QVBoxLayout(self)
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setStyleSheet(f"background: {BG}; border: none;")
+        main_layout.addWidget(scroll)
+
+        scroll_content = QWidget()
+        scroll_content.setStyleSheet(f"background: {BG};")
+        scroll.setWidget(scroll_content)
+
+        outer = QVBoxLayout(scroll_content)
         outer.setContentsMargins(18, 16, 18, 12)
         outer.setSpacing(10)
 
@@ -189,8 +226,11 @@ class SpecApprovalDialog(QDialog):
         )
         outer.addWidget(self._summary_view)
 
-        # Button row
-        button_row = QHBoxLayout()
+        # Button row (outside scroll area)
+        btn_container = QWidget(self)
+        btn_container.setStyleSheet(f"background: {BG}; border-top: 1px solid {BORDER};")
+        button_row = QHBoxLayout(btn_container)
+        button_row.setContentsMargins(18, 12, 18, 12)
         button_row.setSpacing(8)
         button_row.addStretch(1)
 
@@ -209,7 +249,7 @@ class SpecApprovalDialog(QDialog):
         dispatch_btn.clicked.connect(self.accept)
         button_row.addWidget(dispatch_btn)
 
-        outer.addLayout(button_row)
+        main_layout.addWidget(btn_container)
 
     @staticmethod
     def _format_files(files: list[str]) -> str:
