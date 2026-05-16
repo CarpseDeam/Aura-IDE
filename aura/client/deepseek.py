@@ -51,7 +51,16 @@ class DeepSeekClient:
         key = api_key if api_key is not None else resolve_api_key(provider)
         self._api_key = key
         self._base_url = cfg.base_url.rstrip("/")
-        self._client = OpenAI(api_key=key, base_url=cfg.base_url)
+        # Use a generous timeout with read=None to avoid [WinError 10054] / ReadError
+        # during long thinking/streaming sessions. The OpenAI client will manage
+        # its own connection pool.
+        timeout = httpx.Timeout(120.0, connect=10.0, read=None)
+        self._client = OpenAI(
+            api_key=key,
+            base_url=cfg.base_url,
+            timeout=timeout,
+            max_retries=3,
+        )
 
     @property
     def provider(self) -> ProviderId:
@@ -508,8 +517,11 @@ def _stream_anthropic(
         "cache_miss_tokens": 0,
     }
 
+    # Use a generous timeout with read=None to avoid [WinError 10054] / ReadError
+    # during long thinking/streaming sessions.
+    timeout = httpx.Timeout(120.0, connect=10.0, read=None)
     try:
-        with httpx.Client(timeout=None) as client:
+        with httpx.Client(timeout=timeout) as client:
             with client.stream(
                 "POST",
                 f"{base_url}/messages",

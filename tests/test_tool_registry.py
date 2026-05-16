@@ -991,10 +991,10 @@ class TestHandlerRegistration:
             )
 
 
-class TestPlannerToolSurface:
-    """Verify planner mode exposes only dispatch-oriented tools."""
+class TestModeToolSurfaces:
+    """Verify tool definitions exposed to the API for different modes."""
 
-    def test_planner_tool_defs_are_small_and_non_mutating(self, tmp_path: Path):
+    def test_planner_tool_surface(self, tmp_path: Path):
         ws = tmp_path / "workspace"
         ws.mkdir()
         registry = ToolRegistry(workspace_root=ws, read_only=False, mode="planner")
@@ -1007,11 +1007,17 @@ class TestPlannerToolSurface:
         assert tool_names == {
             "read_file",
             "read_files",
+            "read_file_outline",
             "list_directory",
             "glob",
             "grep_search",
             "find_usages",
             "search_codebase",
+            "git_status",
+            "git_diff",
+            "git_log",
+            "git_show",
+            "git_log_file",
             "dispatch_to_worker",
             "run_research",
         }
@@ -1019,4 +1025,56 @@ class TestPlannerToolSurface:
         assert "edit_file" not in tool_names
         assert "edit_symbol" not in tool_names
         assert "run_terminal_command" not in tool_names
-        assert "git_status" not in tool_names
+
+    def test_researcher_tool_surface(self, tmp_path: Path):
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+        registry = ToolRegistry(workspace_root=ws, read_only=False, mode="researcher")
+
+        tool_names = {
+            tool_def["function"]["name"]
+            for tool_def in registry.tool_defs()
+        }
+
+        # Should have web tools AND read tools
+        assert "web_search" in tool_names
+        assert "web_fetch" in tool_names
+        assert "read_file" in tool_names
+        assert "read_files" in tool_names
+        assert "grep_search" in tool_names
+        # Should NOT have write or dispatch tools
+        assert "write_file" not in tool_names
+        assert "dispatch_to_worker" not in tool_names
+
+    def test_worker_tool_surface(self, tmp_path: Path):
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+        registry = ToolRegistry(workspace_root=ws, read_only=False, mode="worker")
+
+        tool_names = {
+            tool_def["function"]["name"]
+            for tool_def in registry.tool_defs()
+        }
+
+        assert "write_file" in tool_names
+        assert "edit_file" in tool_names
+        assert "update_todo_list" in tool_names
+        assert "run_terminal_command" in tool_names
+        assert "run_research" in tool_names  # Added!
+        assert "dispatch_to_worker" not in tool_names
+
+    def test_single_tool_surface(self, tmp_path: Path):
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+        registry = ToolRegistry(workspace_root=ws, read_only=False, mode="single")
+
+        tool_names = {
+            tool_def["function"]["name"]
+            for tool_def in registry.tool_defs()
+        }
+
+        assert "write_file" in tool_names
+        assert "edit_file" in tool_names
+        assert "run_terminal_command" in tool_names
+        assert "run_research" in tool_names  # Added!
+        assert "dispatch_to_worker" not in tool_names

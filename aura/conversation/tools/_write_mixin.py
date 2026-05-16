@@ -28,21 +28,51 @@ class WriteHandlersMixin:
         if self._read_only:
             return ToolExecResult(ok=False, payload={"ok": False, "error": "Read-Only Mode is enabled — write tools are disabled."})
         if self._mode == "planner":
-            return ToolExecResult(ok=False, payload={"ok": False, "error": "Planner cannot write directly — call dispatch_to_worker with a spec instead."})
+            return ToolExecResult(
+                ok=False,
+                payload={
+                    "ok": False,
+                    "error": (
+                        "Planner cannot write directly. "
+                        "You must use the 'dispatch_to_worker' tool to specify code changes. "
+                        "Include your intended edits in the 'spec' field of the dispatch."
+                    ),
+                },
+            )
         return self._handle_write("write_file", args, approval_cb, reject_all)
 
     def _handle_edit_file(self, args, approval_cb, reject_all) -> ToolExecResult:
         if self._read_only:
             return ToolExecResult(ok=False, payload={"ok": False, "error": "Read-Only Mode is enabled — write tools are disabled."})
         if self._mode == "planner":
-            return ToolExecResult(ok=False, payload={"ok": False, "error": "Planner cannot write directly — call dispatch_to_worker with a spec instead."})
+            return ToolExecResult(
+                ok=False,
+                payload={
+                    "ok": False,
+                    "error": (
+                        "Planner cannot write directly. "
+                        "You must use the 'dispatch_to_worker' tool to specify code changes. "
+                        "Include your intended edits in the 'spec' field of the dispatch."
+                    ),
+                },
+            )
         return self._handle_write("edit_file", args, approval_cb, reject_all)
 
     def _handle_edit_symbol(self, args, approval_cb, reject_all) -> ToolExecResult:
         if self._read_only:
             return ToolExecResult(ok=False, payload={"ok": False, "error": "Read-Only Mode is enabled — write tools are disabled."})
         if self._mode == "planner":
-            return ToolExecResult(ok=False, payload={"ok": False, "error": "Planner cannot write directly — call dispatch_to_worker with a spec instead."})
+            return ToolExecResult(
+                ok=False,
+                payload={
+                    "ok": False,
+                    "error": (
+                        "Planner cannot write directly. "
+                        "You must use the 'dispatch_to_worker' tool to specify code changes. "
+                        "Include your intended edits in the 'spec' field of the dispatch."
+                    ),
+                },
+            )
         return self._handle_write("edit_symbol", args, approval_cb, reject_all)
 
     def _handle_write(

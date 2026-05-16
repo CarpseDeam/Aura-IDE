@@ -19,11 +19,17 @@ from aura.conversation.tools._schemas import (
 PLANNER_TOOL_NAMES = {
     "read_file",
     "read_files",
+    "read_file_outline",
     "list_directory",
     "glob",
     "grep_search",
     "find_usages",
     "search_codebase",
+    "git_status",
+    "git_diff",
+    "git_log",
+    "git_show",
+    "git_log_file",
 }
 
 
@@ -63,13 +69,17 @@ class ToolCatalog:
         if read_only:
             tools: list[dict[str, Any]] = list(READ_TOOL_DEFS) + list(GIT_TOOL_DEFS)
         elif mode == "researcher":
-            tools = list(WEB_TOOL_DEFS)
+            tools = list(WEB_TOOL_DEFS) + list(READ_TOOL_DEFS)
         elif mode == "planner":
             planner_read_tools = [
                 tool for tool in READ_TOOL_DEFS if _tool_name(tool) in PLANNER_TOOL_NAMES
             ]
+            planner_git_tools = [
+                tool for tool in GIT_TOOL_DEFS if _tool_name(tool) in PLANNER_TOOL_NAMES
+            ]
             tools = (
                 planner_read_tools
+                + planner_git_tools
                 + [dict(DISPATCH_TOOL_DEF)]
                 + list(RESEARCH_TOOL_DEFS)
             )
@@ -80,6 +90,7 @@ class ToolCatalog:
                 + [dict(WORKER_TODO_TOOL_DEF)]
                 + [dict(TERMINAL_TOOL_DEF)]
                 + list(GIT_TOOL_DEFS)
+                + list(RESEARCH_TOOL_DEFS)
             )
         else:  # "single" or any unknown mode
             tools = (
@@ -87,6 +98,7 @@ class ToolCatalog:
                 + list(WRITE_TOOL_DEFS)
                 + [dict(TERMINAL_TOOL_DEF)]
                 + list(GIT_TOOL_DEFS)
+                + list(RESEARCH_TOOL_DEFS)
             )
 
         # Append dynamic tools (only when not read-only)
