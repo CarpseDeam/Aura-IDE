@@ -54,6 +54,86 @@ def _log_humanizer_observe(rel_path: str, result) -> None:
         )
 
 
+def _humanizer_gate_enabled() -> bool:
+    return (
+        os.environ.get("AURA_HUMANIZER_GATE", "") == "1"
+        and os.environ.get("AURA_HUMANIZER_OBSERVE", "") != "1"
+    )
+
+
+def _severity_rank(value: str) -> int:
+    order = {
+        "critical": 0,
+        "high": 1,
+        "medium": 2,
+        "low": 3,
+    }
+    return order.get(value, 99)
+
+
+def _blocking_slop_issues(result) -> list:
+    """Return blocking slop issues from a HumanizerResult, sorted by severity."""
+    report = getattr(result, "slop_report", None)
+    if report is None:
+        return []
+
+    min_severity = os.environ.get("AURA_HUMANIZER_GATE_MIN_SEVERITY", "high").strip().lower()
+
+    blocking = []
+    for issue in report.issues:
+        severity = getattr(issue.severity, "value", str(issue.severity)).lower()
+
+        if severity == "critical":
+            blocking.append(issue)
+            continue
+
+        if min_severity == "high" and severity == "high":
+            blocking.append(issue)
+
+    blocking.sort(
+        key=lambda issue: (
+            _severity_rank(getattr(issue.severity, "value", str(issue.severity)).lower()),
+            getattr(issue, "line", 0),
+            getattr(issue, "column", 0),
+            getattr(issue, "code", ""),
+        )
+    )
+    return blocking
+
+
+def _humanizer_gate_error(rel_path: str, result, blocking_issues: list) -> ToolExecResult:
+    """Build a ToolExecResult rejection for blocking slop issues."""
+    report = getattr(result, "slop_report", None)
+
+    issues_payload = []
+    for issue in blocking_issues[:8]:
+        severity = getattr(issue.severity, "value", str(issue.severity))
+        issues_payload.append(
+            {
+                "code": issue.code,
+                "line": issue.line,
+                "severity": severity,
+                "message": issue.message,
+                "suggestion": issue.suggestion,
+            }
+        )
+
+    return ToolExecResult(
+        ok=False,
+        payload={
+            "ok": False,
+            "error": "Aura humanizer rejected generated Python before approval.",
+            "humanizer_gate": True,
+            "path": rel_path,
+            "slop_score": getattr(report, "score", 0.0) if report else 0.0,
+            "slop_status": getattr(report, "status", "unknown") if report else "unknown",
+            "issue_count": getattr(report, "issue_count", 0) if report else 0,
+            "blocking_issue_count": len(blocking_issues),
+            "issues": issues_payload,
+        },
+    )
+
+
 def _maybe_observe_humanizer(proposal: dict) -> None:
     """Run humanizer in observe-only mode for existing .py file edits."""
     humanizer_kill = os.environ.get("AURA_HUMANIZER", "")
@@ -75,18 +155,19 @@ def _maybe_observe_humanizer(proposal: dict) -> None:
         )
 
 
-def _maybe_humanize_proposal(proposal: dict) -> None:
+def _maybe_humanize_proposal(proposal: dict) -> ToolExecResult | None:
     """Run humanizer on proposal content, potentially replacing it.
 
     Respects AURA_HUMANIZER kill switch and AURA_HUMANIZER_OBSERVE mode.
-    Never fails the write — all errors are logged and swallowed.
+    Returns a rejection ToolExecResult when the gate blocks slop, else None.
+    All other errors are logged and swallowed.
     """
     humanizer_kill = os.environ.get("AURA_HUMANIZER", "")
     if humanizer_kill == "0":
-        return
+        return None
     rel_path = proposal.get("rel_path", "")
     if not rel_path.endswith(".py"):
-        return
+        return None
     try:
         from aura.humanizer import HumanizerPipeline
 
@@ -100,6 +181,12 @@ def _maybe_humanize_proposal(proposal: dict) -> None:
         else:
             if not result.syntax_fallback and result.error is None:
                 proposal["new_content"] = result.text
+
+        # Gate: reject if blocking slop issues found
+        if _humanizer_gate_enabled():
+            blocking_issues = _blocking_slop_issues(result)
+            if blocking_issues:
+                return _humanizer_gate_error(rel_path, result, blocking_issues)
 
         feature_log = os.environ.get("AURA_HUMANIZER_FEATURE_LOG", "") == "1"
         if feature_log and result.feature_report and result.feature_report.has_structural_smells:
@@ -136,6 +223,7 @@ def _maybe_humanize_proposal(proposal: dict) -> None:
         _log.exception(
             "HumanizerPipeline failed for %s, using original content", rel_path
         )
+    return None
 
 
 class WriteHandlersMixin:
@@ -221,7 +309,9 @@ class WriteHandlersMixin:
 
             # Humanizer: clean new Python file content before approval
             if proposal.get("is_new_file", False):
-                _maybe_humanize_proposal(proposal)
+                gate_error = _maybe_humanize_proposal(proposal)
+                if gate_error is not None:
+                    return gate_error
 
             req = ApprovalRequest(
                 tool_name="write_file",
@@ -270,7 +360,9 @@ class WriteHandlersMixin:
                 return ToolExecResult(ok=False, payload=proposal)
 
             # Humanizer: behavior-changing for existing Python file edits
-            _maybe_humanize_proposal(proposal)
+            gate_error = _maybe_humanize_proposal(proposal)
+            if gate_error is not None:
+                return gate_error
 
             req = ApprovalRequest(
                 tool_name="edit_symbol",
