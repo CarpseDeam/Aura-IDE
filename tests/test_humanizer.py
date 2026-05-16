@@ -280,3 +280,84 @@ for i in items:
         result = pipeline.humanize_code(code, language="python")
         assert result.error is not None
         assert result.text == code
+
+
+class TestDocstringRemovalPreservesFormatting:
+    """Verify that removing internal docstrings preserves code structure."""
+
+    def test_blank_lines_before_docstring_preserved(self):
+        code = """
+def _helper():
+
+    \"\"\"Do the thing.\"\"\"
+    return 42
+"""
+        result, count = remove_internal_docstrings(code)
+        assert count == 1
+        # A blank line before the docstring should remain
+        assert '"""Do the thing."""' not in result
+        # The blank line that was before the docstring should still be there
+        lines = result.splitlines()
+        blank_idx = lines.index("") if "" in lines else -1
+        assert blank_idx >= 0
+
+    def test_comments_near_docstrings_preserved(self):
+        code = """
+def _helper():
+    # Important setup comment
+    \"\"\"Do the thing.\"\"\"
+    # Process data
+    return 42
+"""
+        result, count = remove_internal_docstrings(code)
+        assert count == 1
+        assert "# Important setup comment" in result
+        assert "# Process data" in result
+        assert '"""Do the thing."""' not in result
+        assert "return 42" in result
+
+    def test_decorators_preserved(self):
+        code = """
+@staticmethod
+def _helper():
+    \"\"\"Do the thing.\"\"\"
+    return 42
+"""
+        result, count = remove_internal_docstrings(code)
+        assert count == 1
+        assert "@staticmethod" in result
+        assert '"""Do the thing."""' not in result
+        assert "return 42" in result
+
+    def test_inline_comments_survive(self):
+        code = """
+def _helper():
+    \"\"\"Do the thing.\"\"\"
+    x = 42  # The answer
+    return x  # Return it
+"""
+        result, count = remove_internal_docstrings(code)
+        assert count == 1
+        assert '"""Do the thing."""' not in result
+        assert "# The answer" in result
+        assert "# Return it" in result
+
+
+class TestNoAstUnparseInHumanizer:
+    """Verify that aura/humanizer/ never uses ast.unparse for code generation."""
+
+    def test_no_ast_unparse_in_humanizer_modules(self):
+        import os
+
+        import aura.humanizer
+
+        humanizer_dir = os.path.dirname(aura.humanizer.__file__)
+        found = []
+        for fname in os.listdir(humanizer_dir):
+            if fname.endswith(".py"):
+                path = os.path.join(humanizer_dir, fname)
+                with open(path, encoding="utf-8") as f:
+                    source = f.read()
+                if "ast.unparse" in source:
+                    found.append(fname)
+        assert not found, f"Modules using ast.unparse: {found}"

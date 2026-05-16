@@ -863,6 +863,249 @@ for i in items:
         assert req.new_content == self.RAW_PYTHON
         mock_hp_cls.assert_not_called()
 
+    # ------------------------------------------------------------------
+    # edit_symbol humanizer integration
+    # ------------------------------------------------------------------
+
+    def test_edit_symbol_replacement_enabled(
+        self, registry: ToolRegistry, approve_cb: MagicMock
+    ):
+        """edit_symbol should replace content with humanizer result."""
+        with (
+            patch("aura.conversation.tools.registry.propose_edit_symbol") as mock_pes,
+            patch("aura.conversation.tools.registry.backup_existing", return_value=None),
+            patch("aura.humanizer.HumanizerPipeline") as mock_hp_cls,
+        ):
+            mock_pes.return_value = {
+                "ok": True,
+                "rel_path": "existing.py",
+                "old_content": "old code",
+                "new_content": self.RAW_PYTHON,
+                "is_new_file": False,
+            }
+            mock_hp = MagicMock()
+            mock_hp.humanize_code.return_value = MagicMock(
+                text=self.CLEAN_PYTHON,
+                syntax_fallback=False,
+                error=None,
+                changed=True,
+                markdown_stripped=True,
+                comments_removed=3,
+                docstrings_removed=0,
+            )
+            mock_hp_cls.return_value = mock_hp
+
+            result = _handler("edit_symbol")(
+                registry,
+                {
+                    "path": "existing.py",
+                    "symbol_type": "function",
+                    "symbol_name": "hello",
+                    "new_definition": self.RAW_PYTHON,
+                },
+                approve_cb,
+                False,
+            )
+
+        assert result.ok is True
+        req = approve_cb.call_args[0][0]
+        assert req.new_content == self.CLEAN_PYTHON
+        mock_hp.humanize_code.assert_called_once()
+
+    def test_edit_symbol_observe_mode_no_replace(
+        self, registry: ToolRegistry, approve_cb: MagicMock, monkeypatch
+    ):
+        monkeypatch.setenv("AURA_HUMANIZER_OBSERVE", "1")
+        with (
+            patch("aura.conversation.tools.registry.propose_edit_symbol") as mock_pes,
+            patch("aura.conversation.tools.registry.backup_existing", return_value=None),
+            patch("aura.humanizer.HumanizerPipeline") as mock_hp_cls,
+        ):
+            mock_pes.return_value = {
+                "ok": True,
+                "rel_path": "existing.py",
+                "old_content": "old code",
+                "new_content": self.RAW_PYTHON,
+                "is_new_file": False,
+            }
+            mock_hp = MagicMock()
+            mock_hp.humanize_code.return_value = MagicMock(
+                text=self.CLEAN_PYTHON,
+                syntax_fallback=False,
+                error=None,
+                changed=True,
+                markdown_stripped=True,
+                comments_removed=3,
+                docstrings_removed=0,
+            )
+            mock_hp_cls.return_value = mock_hp
+
+            result = _handler("edit_symbol")(
+                registry,
+                {
+                    "path": "existing.py",
+                    "symbol_type": "function",
+                    "symbol_name": "hello",
+                    "new_definition": self.RAW_PYTHON,
+                },
+                approve_cb,
+                False,
+            )
+
+        assert result.ok is True
+        req = approve_cb.call_args[0][0]
+        # Content unchanged in observe mode
+        assert req.new_content == self.RAW_PYTHON
+        mock_hp.humanize_code.assert_called_once()
+
+    def test_kill_switch_disables_edit_symbol(
+        self, registry: ToolRegistry, approve_cb: MagicMock, monkeypatch
+    ):
+        monkeypatch.setenv("AURA_HUMANIZER", "0")
+        with (
+            patch("aura.conversation.tools.registry.propose_edit_symbol") as mock_pes,
+            patch("aura.conversation.tools.registry.backup_existing", return_value=None),
+            patch("aura.humanizer.HumanizerPipeline") as mock_hp_cls,
+        ):
+            mock_pes.return_value = {
+                "ok": True,
+                "rel_path": "existing.py",
+                "old_content": "old code",
+                "new_content": "new content",
+                "is_new_file": False,
+            }
+
+            result = _handler("edit_symbol")(
+                registry,
+                {
+                    "path": "existing.py",
+                    "symbol_type": "function",
+                    "symbol_name": "hello",
+                    "new_definition": "new content",
+                },
+                approve_cb,
+                False,
+            )
+
+        assert result.ok is True
+        mock_hp_cls.assert_not_called()
+        req = approve_cb.call_args[0][0]
+        assert req.new_content == "new content"
+
+    # ------------------------------------------------------------------
+    # edit_file humanizer gate integration
+    # ------------------------------------------------------------------
+
+    def test_edit_file_humanizer_gated_by_env_var_disabled(
+        self, registry: ToolRegistry, approve_cb: MagicMock
+    ):
+        """Without AURA_HUMANIZER_EDIT_FILE=1, humanizer is NOT called."""
+        with (
+            patch("aura.conversation.tools.registry.propose_edit") as mock_pe,
+            patch("aura.conversation.tools.registry.backup_existing", return_value=None),
+            patch("aura.humanizer.HumanizerPipeline") as mock_hp_cls,
+        ):
+            mock_pe.return_value = {
+                "ok": True,
+                "rel_path": "existing.py",
+                "old_content": "old code",
+                "new_content": "new code",
+                "is_new_file": False,
+            }
+
+            result = _handler("edit_file")(
+                registry,
+                {"path": "existing.py", "old_str": "old code", "new_str": "new code"},
+                approve_cb,
+                False,
+            )
+
+        assert result.ok is True
+        mock_hp_cls.assert_not_called()
+        req = approve_cb.call_args[0][0]
+        assert req.new_content == "new code"
+
+    def test_edit_file_humanizer_gated_by_env_var_enabled(
+        self, registry: ToolRegistry, approve_cb: MagicMock, monkeypatch
+    ):
+        """With AURA_HUMANIZER_EDIT_FILE=1, humanizer IS called (observe-only)."""
+        monkeypatch.setenv("AURA_HUMANIZER_EDIT_FILE", "1")
+        with (
+            patch("aura.conversation.tools.registry.propose_edit") as mock_pe,
+            patch("aura.conversation.tools.registry.backup_existing", return_value=None),
+            patch("aura.humanizer.HumanizerPipeline") as mock_hp_cls,
+        ):
+            mock_pe.return_value = {
+                "ok": True,
+                "rel_path": "existing.py",
+                "old_content": "old code",
+                "new_content": "new code",
+                "is_new_file": False,
+            }
+            mock_hp = MagicMock()
+            mock_hp.humanize_code.return_value = MagicMock(
+                text="cleaned code",
+                syntax_fallback=False,
+                error=None,
+                changed=True,
+                markdown_stripped=True,
+                comments_removed=1,
+                docstrings_removed=0,
+            )
+            mock_hp_cls.return_value = mock_hp
+
+            result = _handler("edit_file")(
+                registry,
+                {"path": "existing.py", "old_str": "old code", "new_str": "new code"},
+                approve_cb,
+                False,
+            )
+
+        assert result.ok is True
+        mock_hp.humanize_code.assert_called_once()
+        req = approve_cb.call_args[0][0]
+        # edit_file never replaces content
+        assert req.new_content == "new code"
+
+    def test_edit_file_observe_never_changes_content(
+        self, registry: ToolRegistry, approve_cb: MagicMock, monkeypatch
+    ):
+        monkeypatch.setenv("AURA_HUMANIZER_EDIT_FILE", "1")
+        monkeypatch.setenv("AURA_HUMANIZER_OBSERVE", "1")
+        with (
+            patch("aura.conversation.tools.registry.propose_edit") as mock_pe,
+            patch("aura.conversation.tools.registry.backup_existing", return_value=None),
+            patch("aura.humanizer.HumanizerPipeline") as mock_hp_cls,
+        ):
+            mock_pe.return_value = {
+                "ok": True,
+                "rel_path": "existing.py",
+                "old_content": "old code",
+                "new_content": "new code",
+                "is_new_file": False,
+            }
+            mock_hp = MagicMock()
+            mock_hp.humanize_code.return_value = MagicMock(
+                text="cleaned code",
+                syntax_fallback=False,
+                error=None,
+                changed=True,
+            )
+            mock_hp_cls.return_value = mock_hp
+
+            result = _handler("edit_file")(
+                registry,
+                {"path": "existing.py", "old_str": "old code", "new_str": "new code"},
+                approve_cb,
+                False,
+            )
+
+        assert result.ok is True
+        req = approve_cb.call_args[0][0]
+        # edit_file never replaces content regardless of observe mode
+        assert req.new_content == "new code"
+        mock_hp.humanize_code.assert_called_once()
+
 
 # ===================================================================
 # edit_file

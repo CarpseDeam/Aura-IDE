@@ -62,6 +62,36 @@ def _maybe_observe_humanizer(proposal: dict) -> None:
         )
 
 
+def _maybe_humanize_proposal(proposal: dict) -> None:
+    """Run humanizer on proposal content, potentially replacing it.
+
+    Respects AURA_HUMANIZER kill switch and AURA_HUMANIZER_OBSERVE mode.
+    Never fails the write — all errors are logged and swallowed.
+    """
+    humanizer_kill = os.environ.get("AURA_HUMANIZER", "")
+    if humanizer_kill == "0":
+        return
+    rel_path = proposal.get("rel_path", "")
+    if not rel_path.endswith(".py"):
+        return
+    try:
+        from aura.humanizer import HumanizerPipeline
+
+        result = HumanizerPipeline().humanize_code(
+            proposal["new_content"], language="python"
+        )
+        humanizer_observe = os.environ.get("AURA_HUMANIZER_OBSERVE", "") == "1"
+        if humanizer_observe:
+            _log_humanizer_observe(rel_path, result)
+        else:
+            if not result.syntax_fallback and result.error is None:
+                proposal["new_content"] = result.text
+    except Exception:
+        _log.exception(
+            "HumanizerPipeline failed for %s, using original content", rel_path
+        )
+
+
 class WriteHandlersMixin:
     """Handlers for write tools — guards + approval + backup."""
 
@@ -144,27 +174,8 @@ class WriteHandlersMixin:
                 return ToolExecResult(ok=False, payload=proposal)
 
             # Humanizer: clean new Python file content before approval
-            humanizer_kill = os.environ.get("AURA_HUMANIZER", "")
-            if humanizer_kill != "0":
-                rel_path = proposal["rel_path"]
-                is_new_file = proposal.get("is_new_file", False)
-                if rel_path.endswith(".py") and is_new_file:
-                    try:
-                        from aura.humanizer import HumanizerPipeline
-
-                        result = HumanizerPipeline().humanize_code(
-                            proposal["new_content"], language="python"
-                        )
-                        humanizer_observe = os.environ.get("AURA_HUMANIZER_OBSERVE", "") == "1"
-                        if humanizer_observe:
-                            _log_humanizer_observe(rel_path, result)
-                        else:
-                            if not result.syntax_fallback and result.error is None:
-                                proposal["new_content"] = result.text
-                    except Exception:
-                        _log.exception(
-                            "HumanizerPipeline failed for %s, using original content", rel_path
-                        )
+            if proposal.get("is_new_file", False):
+                _maybe_humanize_proposal(proposal)
 
             req = ApprovalRequest(
                 tool_name="write_file",
@@ -185,8 +196,9 @@ class WriteHandlersMixin:
             if not proposal.get("ok", False):
                 return ToolExecResult(ok=False, payload=proposal)
 
-            # Humanizer: observe-only for existing file edits
-            _maybe_observe_humanizer(proposal)
+            # Humanizer: observe-only for existing file edits, gated by env var
+            if os.environ.get("AURA_HUMANIZER_EDIT_FILE", "") == "1":
+                _maybe_observe_humanizer(proposal)
 
             req = ApprovalRequest(
                 tool_name="edit_file",
@@ -211,8 +223,8 @@ class WriteHandlersMixin:
             if not proposal.get("ok", False):
                 return ToolExecResult(ok=False, payload=proposal)
 
-            # Humanizer: observe-only for existing file edits
-            _maybe_observe_humanizer(proposal)
+            # Humanizer: behavior-changing for existing Python file edits
+            _maybe_humanize_proposal(proposal)
 
             req = ApprovalRequest(
                 tool_name="edit_symbol",
