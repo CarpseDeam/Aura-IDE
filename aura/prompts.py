@@ -48,7 +48,7 @@ _WORKER_PASS_RULES = """Bounded worker pass & validation policy:
 
 _ARCHITECTURE_GUARDRAILS = """Architecture guardrails:
 - Avoid god files and monolithic classes.
-- Keep modules focused, but do not split prematurely.
+- Keep modules focused, but do not split prematurely. App entry points (main.py, app.py, __init__.py) should wire and launch, not contain the entire application.
 - Small app files may contain closely related setup/orchestration logic.
 - Prefer the smallest clear change.
 - Add a new file only when it keeps responsibilities clearer or avoids worsening an already-large file.
@@ -71,7 +71,7 @@ Priority order:
 Rules:
 - Simple does not mean incomplete. Human-written does not mean sloppy.
 - Never skip core behavior, validation, or realistic error handling to make code shorter.
-- Do not report success unless the operation actually succeeded.
+- Do not report success unless the operation actually succeeded. If a fallback is used, make it explicit and honest — do not silently degrade and report success.
 - If the task transforms input into output, validate that the output reflects the transformation.
 - If the task creates files, UI, artifacts, or build output, inspect or validate generated output when practical."""
 
@@ -80,7 +80,7 @@ _APP_TOOL_STYLE_RULES = """App/tool style contract:
 - No module-level summary docstrings in normal app/tool files.
 - No Args/Returns/Raises docstrings unless explicitly requested for library/API documentation.
 - For small helpers, prefer clear names over docstrings.
-- No comments that label obvious blocks.
+- No comments that label obvious blocks. No decorative section banners, milestone comments ("Phase 1 setup", "Demo implementation"), "Initialize components", "Wire everything together", "Main application logic", "Future extension point", comments that restate obvious code, comments that describe generic programming steps, or comments that make the file feel like a tutorial walkthrough. Allowed: non-obvious lifecycle constraints, important ordering dependencies, operational caveats, security-sensitive reasoning, framework quirks, and temporary dev constraints that are real and actionable. The goal: comments a competent maintainer would actually leave behind.
 - Lower-level helpers usually return values or raise errors.
 - CLI/UI/app boundaries handle user-facing printing/logging.
 - Avoid public-library cosplay, tutorial scaffolding, fake architecture, and premature abstractions.
@@ -91,12 +91,13 @@ For backend repos, also prefer:
 - Service-layer enforcement of business rules.
 - Thin routes/controllers.
 - Schemas that match the actual domain, not generic CRUD examples.
-- Comments only for non-obvious rules, temporary dev constraints, or real operational decisions."""
+- Comments only for non-obvious rules, temporary dev constraints, or real operational decisions.
 
+App entry points should stay honest. Workers should not shove UI construction, persistence, sample data, domain logic, business workflows, state management, and startup code all into main.py. Entry points should start the application, load config/settings, wire top-level dependencies, and launch the real app shell. But do not overcorrect into fake architecture — split real responsibilities only when the application shape calls for it. Do not pack everything into main.py. Do not create fake enterprise layers either. Put real responsibilities in real modules with specific names."""
 _CODE_TASTE_BLOCK = """Code taste — generate sharp app/tool code, avoid the "AI generated" look:
 
 - Do not merely translate the user's bullet list into the thinnest possible code.
-- Use domain-shaped names that reflect actual responsibility, not generic filler like data/result/items.
+- Use domain-shaped names that reflect actual responsibility, not generic filler like data/result/items. Discourage generic generated names (Manager, Processor, Handler, Helper, Utils, Demo, Sample, Base, Core) unless genuinely correct. Prefer specific names describing actual responsibility: workspace_store.py over data_manager.py, approval_queue.py over process_handler.py, settings_panel.py over config_window_demo.py, terminal_session.py over terminal_helper.py, project_index.py over index_manager.py.
 - Choose the smallest useful domain shape that makes the code easier to work with. Prefer a small named dataclass or NamedTuple over a large anonymous tuple.
 - Put facts where they are discovered. The layer that discovers counts, totals, or parsed items owns those facts — do not reconstruct them later from side effects.
 - Keep responsibilities honest: scanning/parsing owns discovered facts and structure; planning/summary owns assembly and decisions; UI/CLI owns user-facing reporting.
@@ -118,6 +119,8 @@ Per-file domain fit — every generated file earns its place in this app:
 - Avoid bland explanatory comments such as "Dev stub — returns a demo admin user" unless the comment carries necessary operational meaning.
 - Prefer one precise comment over multiple neat tutorial-style comments.
 - Domain-shaped minimalism: do not make code messy, do not add fake quirks, do not randomize style, do not add fake enterprise architecture, do not invent unnecessary models/managers/registries/factories/providers/orchestrators. Keep code clean, boring, specific, and app-shaped.
+
+Generated repos should represent the real application directly from the first pass. Workers should not leave behind names/files/classes like DemoWindow, TestWindow, temporary milestone windows, sample-only entry points, tutorial-only launch files, fake milestone modules, or prototype shell files that are not part of the real app — unless the user explicitly asked for a demo, prototype, staged milestone, or tutorial. Real development/support scripts (seed_sample_data.py, run_dev.py, import_sample_logs.py, reset_local_db.py) are fine — the distinction is fake phase/demo scaffolding vs. real dev scripts a developer would actually keep. Workers should not leave half-real files mixed with demo files, unused sample launchers, placeholder flows pretending to be features, "we'll replace this later" scaffolding, or dead-end modules that exist only because the model wanted a phase boundary.
 
 Cross-file sanity before finishing:
 - When adding constants, permissions, enum values, route names, states, or event types, quickly check related files for representation mismatches.
@@ -182,6 +185,7 @@ def build_page(path: Path, template: str) -> Path:
 _WORKER_ENGINEERING_RULES = """Implementation quality — follow these rules:
 - Use meaningful practical names.
 - Handle realistic failure points with specific exception types.
+- Do not swallow exceptions and continue as if work succeeded. Do not report success unless the requested behavior actually works. Helpers should return useful results or raise clear errors. UI/CLI boundaries may convert errors into user-facing messages. Avoid broad except blocks unless they add meaningful recovery or context. If a fallback is used, it should be explicit and honest.
 - Validate inputs, config, parsed data, model/tool responses, and generated output where relevant.
 - When working across multiple files, spend 1-2 cheap grep/read checks verifying that constants, permission strings, state values, and enum members are consistent across files.
 - Escape or sanitize output where relevant.
