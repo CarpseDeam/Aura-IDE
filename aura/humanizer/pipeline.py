@@ -11,6 +11,7 @@ from aura.humanizer.docstrings import remove_internal_docstrings
 from aura.humanizer.features import analyze_python_features
 from aura.humanizer.markdown import strip_markdown_wrapper
 from aura.humanizer.result import HumanizerResult
+from aura.humanizer.slop_scan import scan_python_slop
 
 _log = logging.getLogger("aura.humanizer")
 
@@ -93,18 +94,39 @@ class HumanizerPipeline:
             result.changed = md_stripped or comments_removed > 0 or docstrings_removed > 0
             result.elapsed_ms = (time.perf_counter() - start) * 1000
 
-            if os.environ.get("AURA_HUMANIZER_FEATURE_LOG") == "1" and result.feature_report is not None:
-                r = result.feature_report
-                if r.has_structural_smells:
+            # Step 5: Slop scan (read-only, never fails writes)
+            try:
+                report = scan_python_slop(current, path=path)
+                result.slop_report = report
+                result.slop_score = report.score
+                result.slop_issue_count = report.issue_count
+            except Exception:
+                pass  # slop scan is optional; never block the pipeline
+
+            if os.environ.get("AURA_HUMANIZER_FEATURE_LOG") == "1":
+                if result.feature_report is not None:
+                    r = result.feature_report
+                    if r.has_structural_smells:
+                        path_str = str(path) if path else "<unknown>"
+                        _log.info(
+                            "[humanizer:features] %s: %d tuple returns, %d generic names, %d narration comments, %d thin helpers",
+                            path_str, len(r.tuple_returns), len(r.generic_names),
+                            len(r.narration_comments), len(r.thin_helpers),
+                        )
+                        for t in r.tuple_returns:
+                            _log.info("[humanizer:features] %s: %s returns %d values on line %d",
+                                      path_str, t.function_name, t.size, t.line)
+                if result.slop_report is not None:
                     path_str = str(path) if path else "<unknown>"
                     _log.info(
-                        "[humanizer:features] %s: %d tuple returns, %d generic names, %d narration comments, %d thin helpers",
-                        path_str, len(r.tuple_returns), len(r.generic_names),
-                        len(r.narration_comments), len(r.thin_helpers),
+                        "[humanizer:slop] %s: score=%s issues=%s status=%s",
+                        path_str, result.slop_score, result.slop_issue_count, result.slop_report.status,
                     )
-                    for t in r.tuple_returns:
-                        _log.info("[humanizer:features] %s: %s returns %d values on line %d",
-                                  path_str, t.function_name, t.size, t.line)
+                    for issue in result.slop_report.issues:
+                        _log.info(
+                            "[humanizer:slop] %s: %s line=%s severity=%s",
+                            path_str, issue.code, issue.line, issue.severity.value,
+                        )
 
             return result
 

@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from aura.humanizer.features import CodeFeatureReport
+from aura.humanizer.slop_model import SlopReport
 
 
 @dataclass
@@ -21,3 +22,6 @@ class HumanizerResult:
     elapsed_ms: float = 0.0
     feature_report: CodeFeatureReport | None = None
     structural_smell_count: int = 0
+    slop_report: SlopReport | None = None
+    slop_score: float = 0.0
+    slop_issue_count: int = 0
