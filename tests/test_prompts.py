@@ -6,7 +6,7 @@ contract and that required sections are present.
 
 from __future__ import annotations
 
-from aura.prompts import PLANNER_SYSTEM_PROMPT, WORKER_SYSTEM_PROMPT
+from aura.prompts import PLANNER_SYSTEM_PROMPT, SINGLE_SYSTEM_PROMPT, WORKER_SYSTEM_PROMPT
 from aura.conversation.tools._schemas import DISPATCH_TOOL_DEF
 
 
@@ -88,3 +88,11 @@ def test_planner_prompt_does_not_carry_worker_quality_blocks():
     assert "Code quality contract" in WORKER_SYSTEM_PROMPT
     assert "Architecture guardrails" in WORKER_SYSTEM_PROMPT
     assert "App/tool style contract" in WORKER_SYSTEM_PROMPT
+
+
+def test_code_taste_block_present():
+    """Ensure the code taste block is in Worker and Single prompts but not Planner."""
+    marker = "AI generated"
+    assert marker in WORKER_SYSTEM_PROMPT
+    assert marker in SINGLE_SYSTEM_PROMPT
+    assert marker not in PLANNER_SYSTEM_PROMPT

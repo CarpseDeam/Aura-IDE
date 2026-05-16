@@ -83,6 +83,18 @@ _APP_TOOL_STYLE_RULES = """App/tool style contract:
 - CLI/UI/app boundaries handle user-facing printing/logging.
 - Avoid public-library cosplay, tutorial scaffolding, fake architecture, and premature abstractions."""
 
+_CODE_TASTE_BLOCK = """Code taste — avoid the "AI generated" look:
+- No tutorial comments ("Initialize x", "Loop through items", "Check if valid", "Return result").
+- No docstrings on tiny/private/internal helpers — clear names do the job.
+- No Args/Returns/Raises docstrings in normal app/tool code. Exceptions: public API, Protocol, ABC with real contracts.
+- No top-of-file summary docstrings unless the module genuinely needs one.
+- Preserve the surrounding file's rhythm and naming style — match what is already there.
+- Write direct app code, not generic public-library/demo code.
+- No fake architecture or unnecessary abstractions.
+- No "AI generated" surface polish: overly tidy, over-commented, over-structured code.
+- Comment only when explaining non-obvious behavior, constraints, or intent.
+- Keep public API/Protocol/ABC docs when they carry real contract information."""
+
 _CODE_STYLE_EXAMPLES = """Examples of small app/tool code style:
 
 Bad docstring-heavy helper:
@@ -265,6 +277,7 @@ WORKER_SYSTEM_PROMPT = (
     + _ARCHITECTURE_GUARDRAILS + "\n\n"
     + _CODE_QUALITY_CONTRACT + "\n\n"
     + _APP_TOOL_STYLE_RULES + "\n\n"
+    + _CODE_TASTE_BLOCK + "\n\n"
     + _CODE_STYLE_EXAMPLES + "\n\n"
     + _TOOL_EFFICIENCY_RULES + "\n\n"
     + _WORKER_PASS_RULES + "\n\n"
@@ -278,6 +291,7 @@ SINGLE_SYSTEM_PROMPT = (
     + _ARCHITECTURE_GUARDRAILS + "\n\n"
     + _CODE_QUALITY_CONTRACT + "\n\n"
     + _APP_TOOL_STYLE_RULES + "\n\n"
+    + _CODE_TASTE_BLOCK + "\n\n"
     + _TOOL_EFFICIENCY_RULES + "\n\n"
     + _SINGLE_BLOCK
 )
