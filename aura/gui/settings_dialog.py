@@ -716,12 +716,7 @@ class SettingsDialog(QDialog):
         self._auth_status_worker.finished.connect(self._auth_status_thread.quit)
         self._auth_status_worker.finished.connect(self._auth_status_worker.deleteLater)
         self._auth_status_thread.finished.connect(self._auth_status_thread.deleteLater)
-        self._auth_status_thread.finished.connect(self._clear_auth_status_thread)
         self._auth_status_thread.start()
-
-    def _clear_auth_status_thread(self) -> None:
-        self._auth_status_thread = None
-        self._auth_status_worker = None
 
     def _cleanup_thread(self, thread_attr: str, worker_attr: str, wait_ms: int = 15000) -> None:
         """Stop a dialog-owned QThread before Qt can destroy it."""
@@ -736,8 +731,6 @@ class SettingsDialog(QDialog):
                     thread.wait()
         except RuntimeError:
             pass
-        setattr(self, thread_attr, None)
-        setattr(self, worker_attr, None)
 
     def _cleanup_threads(self) -> None:
         for thread_attr, worker_attr in (
@@ -901,10 +894,6 @@ class SettingsDialog(QDialog):
         self._populate_model_combos(provider_id)  # type: ignore[arg-type]
         QMessageBox.information(self, APP_NAME, "Model list refreshed.")
 
-        # Clean up thread reference
-        self._discovery_thread = None
-        self._discovery_worker = None
-
     def _on_change_root_clicked(self) -> None:
         self._on_change_root()
         # Host updated the workspace root — refresh display from the host:
@@ -954,9 +943,7 @@ class SettingsDialog(QDialog):
             device_auth_btn=self._codex_device_auth_btn,
         )
 
-        # Clean up thread reference
-        self._auth_status_thread = None
-        self._auth_status_worker = None
+        pass
 
     def _update_auth_ui(
         self,
@@ -1199,8 +1186,7 @@ class SettingsDialog(QDialog):
                     f"Authentication failed for {backend_name}:\n{error}",
                 )
 
-        # Clean up thread reference
-        self._auth_thread = None
+        pass
 
     def _on_recheck_status(self, backend_name: str) -> None:
         """Re-check auth status using a polling worker with a short timeout."""
@@ -1246,9 +1232,6 @@ class SettingsDialog(QDialog):
 
         if recheck_btn:
             recheck_btn.setEnabled(True)
-
-        self._auth_polling_thread = None
-        self._auth_polling_worker = None
 
     def _on_codex_device_auth(self) -> None:
         """Launch codex device-auth (--device-auth) flow."""

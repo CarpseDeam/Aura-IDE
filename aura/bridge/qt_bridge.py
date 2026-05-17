@@ -678,8 +678,6 @@ class ConversationBridge(QObject):
             self._thread.deleteLater()
         if self._worker is not None:
             self._worker.deleteLater()
-        self._thread = None
-        self._worker = None
         self.finished.emit()
 
 

@@ -202,8 +202,7 @@ class UpdateDialog(QDialog):
         self._thread.start()
 
     def _clear_worker(self) -> None:
-        self._thread = None
-        self._worker = None
+        pass
 
     def _set_busy(self, busy: bool) -> None:
         self._check_btn.setEnabled(not busy)
