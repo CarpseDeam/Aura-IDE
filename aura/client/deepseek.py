@@ -46,6 +46,11 @@ class DeepSeekClient:
         api_key: str | None = None,
         provider: ProviderId = "deepseek",
     ) -> None:
+        if provider == "google":
+            raise RuntimeError(
+                "DeepSeekClient should not be used for Google. "
+                "Use GeminiClient instead."
+            )
         self._provider = provider
         cfg = get_provider(provider)
         key = api_key if api_key is not None else resolve_api_key(provider)

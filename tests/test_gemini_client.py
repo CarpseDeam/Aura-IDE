@@ -192,8 +192,12 @@ def test_gemini_stream_yields_text_tool_calls_usage_and_done(
     )
 
     assert captured["method"] == "POST"
-    assert captured["url"].endswith("/models/gemini-2.0-flash:streamGenerateContent")
-    assert captured["kwargs"]["params"] == {"alt": "sse", "key": "test-key"}
+    # Verify the URL has the hardcoded query string starting with '?'
+    url_str = str(captured["url"])
+    assert ":streamGenerateContent?alt=sse&key=test-key" in url_str
+    assert url_str.endswith("/models/gemini-2.0-flash:streamGenerateContent?alt=sse&key=test-key")
+    # params should be empty or not present in kwargs now
+    assert "params" not in captured["kwargs"]
     body = captured["kwargs"]["json"]
     assert body["contents"] == [{"role": "user", "parts": [{"text": "hello"}]}]
     assert body["generation_config"] == {"temperature": 0.25}
@@ -248,6 +252,8 @@ def test_gemini_model_url_normalization(monkeypatch: pytest.MonkeyPatch) -> None
     # Case 2: Prefixed model ID
     list(client.stream([], None, "models/gemini-3.1-pro-preview", "off"))
 
-    assert "/models/models/" not in captured_urls[1]
-    assert captured_urls[0].endswith("/models/gemini-3.1-pro-preview:streamGenerateContent")
-    assert captured_urls[1].endswith("/models/gemini-3.1-pro-preview:streamGenerateContent")
+    url0 = str(captured_urls[0])
+    url1 = str(captured_urls[1])
+    assert "/models/models/" not in url1
+    assert url0.endswith("/models/gemini-3.1-pro-preview:streamGenerateContent?alt=sse&key=test-key")
+    assert url1.endswith("/models/gemini-3.1-pro-preview:streamGenerateContent?alt=sse&key=test-key")

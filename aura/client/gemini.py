@@ -40,10 +40,12 @@ class GeminiClient:
 
     def fetch_raw_models(self) -> list[dict[str, Any]]:
         try:
+            headers = {"x-goog-api-key": self._api_key}
             with httpx.Client(timeout=10.0) as client:
                 resp = client.get(
                     f"{self._base_url}/models",
-                    params={"key": self._api_key, "pageSize": 1000},
+                    params={"pageSize": 1000},
+                    headers=headers,
                 )
                 resp.raise_for_status()
                 models = resp.json().get("models", [])
@@ -90,12 +92,19 @@ class GeminiClient:
 
         timeout = httpx.Timeout(120.0, connect=10.0, read=None)
         try:
+            # Use manual URL construction and x-goog-api-key header to bypass 
+            # httpx query parameter bugs with colons in the path.
+            url = f"{self._base_url}/models/{normalized_model}:streamGenerateContent?alt=sse"
+            headers = {
+                "Content-Type": "application/json",
+                "x-goog-api-key": self._api_key,
+            }
+
             with httpx.Client(timeout=timeout) as client:
                 with client.stream(
                     "POST",
-                    f"{self._base_url}/models/{normalized_model}:streamGenerateContent",
-                    params={"alt": "sse", "key": self._api_key},
-                    headers={"Content-Type": "application/json"},
+                    url,
+                    headers=headers,
                     json=body,
                 ) as response:
                     response.raise_for_status()
@@ -160,11 +169,12 @@ class GeminiClient:
                                 yield ToolCallArgsDelta(index=idx, args_chunk=args_json)
         except httpx.HTTPStatusError as exc:
             msg = _redact_api_key(str(exc), self._api_key)
-            yield ApiError(status_code=exc.response.status_code, message=msg)
+            # Add version marker [V2] to identify this fixed code
+            yield ApiError(status_code=exc.response.status_code, message=f"[V2] {msg}")
             return
         except Exception as exc:
             msg = _redact_api_key(f"{type(exc).__name__}: {exc}", self._api_key)
-            yield ApiError(status_code=None, message=msg)
+            yield ApiError(status_code=None, message=f"[V2] {msg}")
             return
 
         for idx in sorted(tool_calls):
