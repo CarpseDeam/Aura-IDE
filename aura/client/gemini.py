@@ -67,6 +67,7 @@ class GeminiClient:
             yield ApiError(status_code=None, message="Cancelled.")
             return
 
+        normalized_model = _normalize_model_name(model)
         system_instruction, contents = _to_gemini_contents(messages)
         body: dict[str, Any] = {
             "contents": contents,
@@ -92,7 +93,7 @@ class GeminiClient:
             with httpx.Client(timeout=timeout) as client:
                 with client.stream(
                     "POST",
-                    f"{self._base_url}/models/{model}:streamGenerateContent",
+                    f"{self._base_url}/models/{normalized_model}:streamGenerateContent",
                     params={"alt": "sse", "key": self._api_key},
                     headers={"Content-Type": "application/json"},
                     json=body,
@@ -134,8 +135,8 @@ class GeminiClient:
                                     yield ContentDelta(text)
 
                             function_call = (
-                                part.get("functionCall")
-                                or part.get("function_call")
+                                part.get("function_call")
+                                or part.get("functionCall")
                             )
                             if isinstance(function_call, dict):
                                 idx = len(tool_calls)
@@ -158,10 +159,12 @@ class GeminiClient:
                                 )
                                 yield ToolCallArgsDelta(index=idx, args_chunk=args_json)
         except httpx.HTTPStatusError as exc:
-            yield ApiError(status_code=exc.response.status_code, message=str(exc))
+            msg = _redact_api_key(str(exc), self._api_key)
+            yield ApiError(status_code=exc.response.status_code, message=msg)
             return
         except Exception as exc:
-            yield ApiError(status_code=None, message=f"{type(exc).__name__}: {exc}")
+            msg = _redact_api_key(f"{type(exc).__name__}: {exc}", self._api_key)
+            yield ApiError(status_code=None, message=msg)
             return
 
         for idx in sorted(tool_calls):
@@ -398,3 +401,17 @@ def _map_finish_reason(raw: Any, current: str | None) -> str | None:
         "TOO_MANY_TOOL_CALLS": "tool_calls",
     }
     return mapping.get(str(raw), str(raw).lower())
+
+
+def _normalize_model_name(name: str) -> str:
+    """Accept both 'gemini-1.5-pro' and 'models/gemini-1.5-pro'."""
+    if name.startswith("models/"):
+        return name.removeprefix("models/")
+    return name
+
+
+def _redact_api_key(message: str, api_key: str | None) -> str:
+    """Redact the API key from any error message or URL."""
+    if not api_key or not message:
+        return message
+    return message.replace(api_key, "[REDACTED]")

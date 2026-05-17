@@ -218,6 +218,32 @@ def require_tavily_api_key() -> str:
     return key
 
 
+def redact_secrets(text: str) -> str:
+    """Redact all known API keys from the given text."""
+    if not text:
+        return text
+
+    keys_to_redact = set()
+    for pid in PROVIDERS:
+        try:
+            key = get_api_key(pid)
+            if key:
+                keys_to_redact.add(key)
+        except Exception:
+            pass
+
+    tavily_key = get_tavily_api_key()
+    if tavily_key:
+        keys_to_redact.add(tavily_key)
+
+    redacted = text
+    for key in keys_to_redact:
+        if len(key) > 5:  # Avoid redacting very short strings
+            redacted = redacted.replace(key, "[REDACTED]")
+
+    return redacted
+
+
 # ---------------------------------------------------------------------------
 # Pricing helpers
 # ---------------------------------------------------------------------------

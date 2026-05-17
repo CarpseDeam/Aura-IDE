@@ -97,6 +97,30 @@ GOOGLE_MODELS: dict[str, ModelInfo] = {
         cache_hit_per_m_usd=0.01,
         supports_vision=True,
     ),
+    "gemini-1.5-pro": ModelInfo(
+        id="gemini-1.5-pro",
+        label="Gemini 1.5 Pro",
+        input_per_m_usd=1.25,
+        output_per_m_usd=5.00,
+        cache_hit_per_m_usd=0.3125,
+        supports_vision=True,
+    ),
+    "gemini-1.5-flash": ModelInfo(
+        id="gemini-1.5-flash",
+        label="Gemini 1.5 Flash",
+        input_per_m_usd=0.075,
+        output_per_m_usd=0.30,
+        cache_hit_per_m_usd=0.01875,
+        supports_vision=True,
+    ),
+    "gemini-1.5-flash-8b": ModelInfo(
+        id="gemini-1.5-flash-8b",
+        label="Gemini 1.5 Flash-8B",
+        input_per_m_usd=0.0375,
+        output_per_m_usd=0.15,
+        cache_hit_per_m_usd=0.01,
+        supports_vision=True,
+    ),
     "gemini-2.0-pro-exp-02-05": ModelInfo(
         id="gemini-2.0-pro-exp-02-05",
         label="Gemini 2.0 Pro (Exp)",
@@ -109,6 +133,9 @@ GOOGLE_MODELS: dict[str, ModelInfo] = {
 
 GOOGLE_PRICING: dict[str, dict[str, float]] = {
     "gemini-2.0-flash": {"in_miss": 0.10, "in_hit": 0.01, "out": 0.40},
+    "gemini-1.5-pro": {"in_miss": 1.25, "in_hit": 0.3125, "out": 5.00},
+    "gemini-1.5-flash": {"in_miss": 0.075, "in_hit": 0.01875, "out": 0.30},
+    "gemini-1.5-flash-8b": {"in_miss": 0.0375, "in_hit": 0.01, "out": 0.15},
     "gemini-2.0-pro-exp-02-05": {"in_miss": 0.00, "in_hit": 0.00, "out": 0.00},
 }
 

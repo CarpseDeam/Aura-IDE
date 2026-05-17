@@ -305,12 +305,13 @@ class _DispatchProxy(QObject):
                 if ev.full_message:
                     self.workerStreamDone.emit(tool_call_id, ev.finish_reason or "", ev.full_message)
             elif isinstance(ev, ApiError):
+                from aura.config import redact_secrets
                 msg = f"{ev.status_code}: {ev.message}" if ev.status_code is not None else ev.message
-                api_errors.append(msg)
+                api_errors.append(redact_secrets(msg))
                 self.workerApiError.emit(
                     tool_call_id,
                     ev.status_code if ev.status_code is not None else -1,
-                    ev.message,
+                    redact_secrets(ev.message),
                 )
             elif isinstance(ev, ToolResult):
                 approval = (ev.extras or {}).get("approval")

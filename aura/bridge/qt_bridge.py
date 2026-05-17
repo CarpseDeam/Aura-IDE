@@ -152,7 +152,8 @@ class _Worker(QObject):
                 except Exception:
                     pass  # Never block the chat on git failures
         except Exception as exc:
-            self.apiError.emit(-1, f"{type(exc).__name__}: {exc}")
+            from aura.config import redact_secrets
+            self.apiError.emit(-1, redact_secrets(f"{type(exc).__name__}: {exc}"))
         finally:
             if self._cancel.is_set():
                 self._manager.history.pop_if_empty_assistant_message()
@@ -174,7 +175,11 @@ class _Worker(QObject):
                 ev.prompt_tokens, ev.completion_tokens, ev.cache_hit_tokens, ev.cache_miss_tokens
             )
         elif isinstance(ev, ApiError):
-            self.apiError.emit(ev.status_code if ev.status_code is not None else -1, ev.message)
+            from aura.config import redact_secrets
+            self.apiError.emit(
+                ev.status_code if ev.status_code is not None else -1,
+                redact_secrets(ev.message)
+            )
         elif isinstance(ev, Done):
             if ev.full_message:
                 self.streamDone.emit(ev.finish_reason or "", ev.full_message)

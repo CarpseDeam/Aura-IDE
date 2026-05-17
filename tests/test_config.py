@@ -332,3 +332,19 @@ def test_set_api_key_public_function(tmp_path, monkeypatch):
     set_api_key("deepseek", "sk-ds-public-test")
     key = get_api_key("deepseek")
     assert key == "sk-ds-public-test"
+
+
+def test_redact_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
+    """redact_secrets should replace all known API keys with [REDACTED]."""
+    from aura.config import redact_secrets
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "SECRET_DS_123")
+    monkeypatch.setenv("GEMINI_API_KEY", "SECRET_GEMINI_456")
+    monkeypatch.setenv("TAVILY_API_KEY", "SECRET_TAVILY_789")
+
+    text = "Error with key SECRET_DS_123 and SECRET_GEMINI_456. Search key: SECRET_TAVILY_789"
+    redacted = redact_secrets(text)
+
+    assert "SECRET_DS_123" not in redacted
+    assert "SECRET_GEMINI_456" not in redacted
+    assert "SECRET_TAVILY_789" not in redacted
+    assert redacted == "Error with key [REDACTED] and [REDACTED]. Search key: [REDACTED]"

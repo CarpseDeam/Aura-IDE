@@ -220,3 +220,34 @@ def test_gemini_stream_yields_text_tool_calls_usage_and_done(
         "name": "read_file",
         "arguments": '{"path": "a.py"}',
     }
+
+
+def test_gemini_model_url_normalization(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    captured_urls = []
+
+    class FakeResponse:
+        def __enter__(self) -> "FakeResponse": return self
+        def __exit__(self, *args: object) -> None: pass
+        def raise_for_status(self) -> None: pass
+        def iter_lines(self) -> list[str]: return []
+
+    class FakeClient:
+        def __init__(self, *args: object, **kwargs: object) -> None: pass
+        def __enter__(self) -> "FakeClient": return self
+        def __exit__(self, *args: object) -> None: pass
+        def stream(self, method: str, url: str, **kwargs: Any) -> FakeResponse:
+            captured_urls.append(url)
+            return FakeResponse()
+
+    monkeypatch.setattr("aura.client.gemini.httpx.Client", FakeClient)
+
+    client = GeminiClient()
+    # Case 1: Bare model ID
+    list(client.stream([], None, "gemini-3.1-pro-preview", "off"))
+    # Case 2: Prefixed model ID
+    list(client.stream([], None, "models/gemini-3.1-pro-preview", "off"))
+
+    assert "/models/models/" not in captured_urls[1]
+    assert captured_urls[0].endswith("/models/gemini-3.1-pro-preview:streamGenerateContent")
+    assert captured_urls[1].endswith("/models/gemini-3.1-pro-preview:streamGenerateContent")
