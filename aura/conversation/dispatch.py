@@ -20,6 +20,12 @@ class WorkerDispatchRequest:
     spec: str
     acceptance: str
     summary: str = ""
+    allowed_responsibilities: list[str] = field(default_factory=list)
+    forbidden_responsibilities: list[str] = field(default_factory=list)
+    required_outputs: list[str] = field(default_factory=list)
+    validation_commands: list[str] = field(default_factory=list)
+    risk_notes: list[str] = field(default_factory=list)
+    non_goals: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -28,6 +34,12 @@ class WorkerDispatchRequest:
             "spec": self.spec,
             "acceptance": self.acceptance,
             "summary": self.summary,
+            "allowed_responsibilities": list(self.allowed_responsibilities),
+            "forbidden_responsibilities": list(self.forbidden_responsibilities),
+            "required_outputs": list(self.required_outputs),
+            "validation_commands": list(self.validation_commands),
+            "risk_notes": list(self.risk_notes),
+            "non_goals": list(self.non_goals),
         }
 
     @classmethod
@@ -41,6 +53,12 @@ class WorkerDispatchRequest:
             spec=str(data.get("spec", "")),
             acceptance=str(data.get("acceptance", "")),
             summary=str(data.get("summary", "")),
+            allowed_responsibilities=_string_list(data.get("allowed_responsibilities")),
+            forbidden_responsibilities=_string_list(data.get("forbidden_responsibilities")),
+            required_outputs=_string_list(data.get("required_outputs")),
+            validation_commands=_string_list(data.get("validation_commands")),
+            risk_notes=_string_list(data.get("risk_notes")),
+            non_goals=_string_list(data.get("non_goals")),
         )
 
 
@@ -226,22 +244,29 @@ def normalize_worker_task(req: WorkerDispatchRequest) -> WorkerTaskSpec:
     from acceptance text when possible. Leaves unknown structured fields
     empty — this is a normalization, not a full enrichment.
     """
-    validation_commands = _extract_validation_commands(req.acceptance)
+    # validation_commands: explicit overrides, else extract from acceptance
+    if req.validation_commands:
+        validation_commands = list(req.validation_commands)
+    else:
+        validation_commands = _extract_validation_commands(req.acceptance)
 
-    # Parse non-goals from spec text: look for a "Non-Goals" section.
-    non_goals: list[str] = []
-    if req.spec.strip():
-        match = re.search(
-            r"(?:#+\s*)?Non[- ]?Goals?\s*[:\.-]?\s*\n(.*?)(?=\n(?:#+\s|\n\n|\Z))",
-            req.spec,
-            flags=re.IGNORECASE | re.DOTALL,
-        )
-        if match:
-            section = match.group(1).strip()
-            for line in section.splitlines():
-                line = line.strip()
-                if line and line.startswith(("-", "*")):
-                    non_goals.append(line.lstrip("-* ").strip())
+    # non_goals: explicit overrides, else parse Non-Goals section from spec
+    if req.non_goals:
+        non_goals = list(req.non_goals)
+    else:
+        non_goals: list[str] = []
+        if req.spec.strip():
+            match = re.search(
+                r"(?:#+\s*)?Non[- ]?Goals?\s*[:\.-]?\s*\n(.*?)(?=\n(?:#+\s|\n\n|\Z))",
+                req.spec,
+                flags=re.IGNORECASE | re.DOTALL,
+            )
+            if match:
+                section = match.group(1).strip()
+                for line in section.splitlines():
+                    line = line.strip()
+                    if line and line.startswith(("-", "*")):
+                        non_goals.append(line.lstrip("-* ").strip())
 
     return WorkerTaskSpec(
         goal=req.goal,
@@ -251,6 +276,10 @@ def normalize_worker_task(req: WorkerDispatchRequest) -> WorkerTaskSpec:
         acceptance=req.acceptance,
         validation_commands=validation_commands,
         non_goals=non_goals,
+        allowed_responsibilities=list(req.allowed_responsibilities),
+        forbidden_responsibilities=list(req.forbidden_responsibilities),
+        required_outputs=list(req.required_outputs),
+        risk_notes=list(req.risk_notes),
     )
 
 
