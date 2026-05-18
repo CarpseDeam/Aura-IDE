@@ -35,16 +35,15 @@ from aura.backends import (
 )
 from aura.config import (
     APP_NAME,
-    PROVIDERS,
     AppSettings,
     ProviderId,
     fetch_provider_models,
     get_api_key,
-    get_provider,
     save_dynamic_catalog,
     save_settings,
     set_api_key,
 )
+from aura.providers.registry import provider_registry
 from aura.gui.theme import FG_DIM, SUCCESS, WARN
 from aura.gui.aura_widget import GlassSwitch
 
@@ -227,11 +226,11 @@ class SettingsDialog(QDialog):
         # ---- Provider selection ----
         provider_row = QHBoxLayout()
         self._provider_combo = QComboBox()
-        for pid in PROVIDERS:
-            cfg = PROVIDERS[pid]  # type: ignore[literal-required]
-            self._provider_combo.addItem(cfg.label, pid)
+        for pid in provider_registry.ids():
+            spec = provider_registry.get(pid)
+            self._provider_combo.addItem(spec.label, pid)
         self._provider_combo.setCurrentIndex(
-            list(PROVIDERS.keys()).index(self._settings.provider)
+            provider_registry.ids().index(self._settings.provider)
         )
         self._provider_combo.currentIndexChanged.connect(self._on_provider_changed)
         provider_row.addWidget(self._provider_combo, 1)
@@ -327,11 +326,11 @@ class SettingsDialog(QDialog):
 
         # Planner Provider
         self._planner_provider_combo = QComboBox()
-        for pid in PROVIDERS:
-            cfg = PROVIDERS[pid]  # type: ignore[literal-required]
-            self._planner_provider_combo.addItem(cfg.label, pid)
+        for pid in provider_registry.ids():
+            spec = provider_registry.get(pid)
+            self._planner_provider_combo.addItem(spec.label, pid)
         self._planner_provider_combo.setCurrentIndex(
-            list(PROVIDERS.keys()).index(self._settings.planner_provider)
+            provider_registry.ids().index(self._settings.planner_provider)
         )
         self._planner_provider_combo.currentIndexChanged.connect(self._on_planner_provider_changed)
         form.addRow("Planner provider:", self._planner_provider_combo)
@@ -346,11 +345,11 @@ class SettingsDialog(QDialog):
 
         # Worker Provider
         self._worker_provider_combo = QComboBox()
-        for pid in PROVIDERS:
-            cfg = PROVIDERS[pid]  # type: ignore[literal-required]
-            self._worker_provider_combo.addItem(cfg.label, pid)
+        for pid in provider_registry.ids():
+            spec = provider_registry.get(pid)
+            self._worker_provider_combo.addItem(spec.label, pid)
         self._worker_provider_combo.setCurrentIndex(
-            list(PROVIDERS.keys()).index(self._settings.worker_provider)
+            provider_registry.ids().index(self._settings.worker_provider)
         )
         self._worker_provider_combo.currentIndexChanged.connect(self._on_worker_provider_changed)
         form.addRow("Worker provider:", self._worker_provider_combo)
@@ -780,7 +779,7 @@ class SettingsDialog(QDialog):
         )
 
     def _populate_role_models(self, combo: QComboBox, provider_id: ProviderId, current_selection: str) -> None:
-        cfg = get_provider(provider_id)
+        cfg = provider_registry.get(provider_id)
         combo.blockSignals(True)
         combo.clear()
         for info in cfg.models.values():
@@ -802,7 +801,7 @@ class SettingsDialog(QDialog):
             combo.setCurrentIndex(idx)
 
     def _refresh_api_key_status(self, provider_id: ProviderId) -> None:
-        cfg = get_provider(provider_id)
+        cfg = provider_registry.get(provider_id)
         if os.environ.get(cfg.env_key):
             text = f"{cfg.label} key loaded from {cfg.env_key}."
             color = SUCCESS
@@ -888,7 +887,7 @@ class SettingsDialog(QDialog):
             QMessageBox.warning(self, APP_NAME, f"Could not refresh models:\n{error}")
             return
 
-        cfg = get_provider(provider_id)  # type: ignore[arg-type]
+        cfg = provider_registry.get(provider_id)  # type: ignore[arg-type]
         cfg.models.update(models)
         cfg.pricing.update(pricing)
         save_dynamic_catalog(provider_id, models, pricing)  # type: ignore[arg-type]

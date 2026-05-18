@@ -7,11 +7,11 @@ from pathlib import Path
 from typing import Any, cast
 
 from aura.paths import config_dir
+from aura.providers.registry import provider_registry
 from aura.models import (
-    ProviderId, 
-    ThinkingMode, 
-    PROVIDERS, 
-    DEFAULT_MODEL, 
+    ProviderId,
+    ThinkingMode,
+    DEFAULT_MODEL,
     DEFAULT_THINKING,
     DEFAULT_PLANNER_MODEL,
     DEFAULT_WORKER_MODEL,
@@ -178,7 +178,7 @@ def _provider_from_data(
             DEFAULT_PROVIDER,
         )
         return DEFAULT_PROVIDER
-    if raw in PROVIDERS:
+    if provider_registry.has(raw):
         return cast(ProviderId, raw)
 
     logger.warning(
@@ -191,7 +191,7 @@ def _provider_from_data(
 
 
 def _model_from_data(data: dict[str, Any], key: str, provider: ProviderId) -> str:
-    provider_cfg = PROVIDERS[provider]
+    provider_cfg = provider_registry.get(provider)
     raw = data.get(key)
     if isinstance(raw, str) and raw in provider_cfg.models:
         return raw

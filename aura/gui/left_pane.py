@@ -12,13 +12,13 @@ from PySide6.QtWidgets import (
 )
 
 from aura.config import (
-    PROVIDERS,
     DEFAULT_PLANNER_THINKING,
     DEFAULT_WORKER_THINKING,
     ModelInfo,
     ProviderId,
     ThinkingMode,
 )
+from aura.providers.registry import provider_registry
 from aura.gui.theme import BORDER, FG_DIM
 from aura.gui.workspace_tree import WorkspaceTree
 
@@ -185,9 +185,9 @@ class LeftPane(QFrame):
         self._workspace_label.setText(str(root))
 
     def populate_models(self, planner_provider: ProviderId, worker_provider: ProviderId) -> None:
-        p_cfg = PROVIDERS[planner_provider]
-        w_cfg = PROVIDERS[worker_provider]
-        
+        p_spec = provider_registry.get(planner_provider)
+        w_spec = provider_registry.get(worker_provider)
+
         # Planner
         self._planner_model_combo.blockSignals(True)
         self._planner_model_combo.clear()
@@ -258,12 +258,12 @@ class LeftPane(QFrame):
 
 
 def _models_with_default(provider: ProviderId) -> dict[str, ModelInfo]:
-    cfg = PROVIDERS[provider]
-    models = dict(cfg.models)
-    if cfg.default_model not in models:
-        models[cfg.default_model] = ModelInfo(
-            id=cfg.default_model,
-            label=cfg.default_model.split("/")[-1].replace("-", " ").title(),
+    spec = provider_registry.get(provider)
+    models = dict(spec.models)
+    if spec.default_model not in models:
+        models[spec.default_model] = ModelInfo(
+            id=spec.default_model,
+            label=spec.default_model.split("/")[-1].replace("-", " ").title(),
             input_per_m_usd=0.0,
             output_per_m_usd=0.0,
             cache_hit_per_m_usd=0.0,

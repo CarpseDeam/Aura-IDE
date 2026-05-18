@@ -31,6 +31,7 @@ from aura.config import (
 )
 from aura.conversation.history import History
 from aura.git_ops import ensure_aura_gitignored
+from aura.providers.registry import provider_registry
 
 SCHEMA_VERSION = 2
 CONVERSATIONS_SUBDIR = ".aura/conversations"
@@ -217,17 +218,17 @@ def load_conversation(path: Path) -> LoadedConversation:
     # Provider: default to "deepseek" for backward compat with v1/v2 files.
     provider_raw = data.get("provider")
     provider: ProviderId = "deepseek"
-    if isinstance(provider_raw, str) and provider_raw in ("deepseek", "openai", "openrouter", "anthropic"):
+    if isinstance(provider_raw, str) and provider_registry.has(provider_raw):
         provider = provider_raw  # type: ignore[assignment]
 
     planner_provider_raw = data.get("planner_provider")
     planner_provider: ProviderId = provider
-    if isinstance(planner_provider_raw, str) and planner_provider_raw in ("deepseek", "openai", "openrouter", "anthropic"):
+    if isinstance(planner_provider_raw, str) and provider_registry.has(planner_provider_raw):
         planner_provider = planner_provider_raw  # type: ignore[assignment]
 
     worker_provider_raw = data.get("worker_provider")
     worker_provider: ProviderId = provider
-    if isinstance(worker_provider_raw, str) and worker_provider_raw in ("deepseek", "openai", "openrouter", "anthropic"):
+    if isinstance(worker_provider_raw, str) and provider_registry.has(worker_provider_raw):
         worker_provider = worker_provider_raw  # type: ignore[assignment]
 
     version = data.get("version")

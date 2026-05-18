@@ -8,20 +8,18 @@ from typing import Any
 
 from aura.backends.base import AgentBackend
 from aura.client.events import Event
-from aura.client.deepseek import DeepSeekClient
 from aura.config import ProviderId, ThinkingMode
+from aura.providers.registry import provider_registry
 
 
 class APIAgentBackend(AgentBackend):
-    """Agent backend for API providers using the OpenAI-compatible DeepSeekClient."""
+    """Agent backend for API providers using the OpenAI-compatible client."""
 
     def __init__(self, provider: ProviderId = "deepseek") -> None:
-        # openai, openrouter, anthropic, and deepseek all use the
-        # OpenAI-compatible client.
-        self._client = DeepSeekClient(provider=provider)
+        self._client = provider_registry.create_client(provider)
 
     @property
-    def client(self) -> DeepSeekClient:
+    def client(self):
         """Access the underlying provider client."""
         return self._client
 

@@ -93,16 +93,6 @@ def sample_py_file(tmp_workspace: Path) -> Path:
 # Environment isolation
 # ---------------------------------------------------------------------------
 
-@pytest.fixture(autouse=True)
-def clear_google_env(monkeypatch):
-    """Ensure tests don't pick up real Google/Gemini keys from the developer's environment."""
-    for key in (
-        "GOOGLE_CLOUD_LOCATION",
-        "GCP_LOCATION",
-        "GCP_REGION",
-    ):
-        monkeypatch.delenv(key, raising=False)
-
 @pytest.fixture
 def mock_env_api_key(monkeypatch):
     """Set a fake ANTHROPIC_API_KEY in the environment."""

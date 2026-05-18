@@ -6,11 +6,11 @@ import json
 
 import pytest
 from aura.config import (
-    PROVIDERS,
     AppSettings,
     fetch_provider_models,
     resolve_api_key,
 )
+from aura.models import PROVIDERS
 
 
 # ---------------------------------------------------------------------------
@@ -329,3 +329,48 @@ def test_redact_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "SECRET_DS_123" not in redacted
     assert "SECRET_TAVILY_789" not in redacted
     assert redacted == "Error with key [REDACTED]. Search key: [REDACTED]"
+
+
+# ---------------------------------------------------------------------------
+# Provider architecture tests
+# ---------------------------------------------------------------------------
+
+
+def test_provider_registry_contains_exactly_four():
+    """provider_registry should contain exactly the 4 supported providers."""
+    from aura.providers.registry import provider_registry
+    assert set(provider_registry.ids()) == {"deepseek", "openai", "openrouter", "anthropic"}
+
+
+def test_provider_registry_does_not_contain_google():
+    """provider_registry must not contain google_ai or vertex_ai."""
+    from aura.providers.registry import provider_registry
+    assert not provider_registry.has("google_ai")
+    assert not provider_registry.has("vertex_ai")
+
+
+def test_provider_registry_creates_client():
+    """create_client should return a DeepSeekClient for each provider."""
+    from aura.client.deepseek import DeepSeekClient
+    from aura.providers.registry import provider_registry
+    for pid in provider_registry.ids():
+        client = provider_registry.create_client(pid)
+        assert isinstance(client, DeepSeekClient)
+
+
+def test_settings_migrates_google_ai_to_deepseek():
+    """google_ai in settings should migrate to deepseek."""
+    from aura.settings import AppSettings, DEFAULT_PROVIDER
+    data = {"provider": "google_ai"}
+    s = AppSettings.from_dict(data)
+    assert s.provider == DEFAULT_PROVIDER
+    assert s.provider == "deepseek"
+
+
+def test_settings_migrates_vertex_ai_to_deepseek():
+    """vertex_ai in settings should migrate to deepseek."""
+    from aura.settings import AppSettings, DEFAULT_PROVIDER
+    data = {"provider": "vertex_ai"}
+    s = AppSettings.from_dict(data)
+    assert s.provider == DEFAULT_PROVIDER
+    assert s.provider == "deepseek"
