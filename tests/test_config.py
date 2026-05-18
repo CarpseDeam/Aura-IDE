@@ -215,7 +215,8 @@ def test_app_settings_from_dict_invalid_models_fall_back(caplog):
 
     s = AppSettings.from_dict(data)
 
-    assert s.default_model == "gpt-4o"  # Fallback for OpenAI
+    # default_model is mirrored from planner_provider→default_planner_model
+    assert s.default_model == "claude-sonnet-4-6"
     assert s.default_planner_model == "claude-sonnet-4-6"  # Fallback for Anthropic
     assert s.default_worker_model == "claude-sonnet-4-6"  # Fallback for Anthropic
 

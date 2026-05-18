@@ -178,10 +178,11 @@ class AppSettings:
             s.onboarding_checklist = data["onboarding_checklist"]
         if isinstance(data.get("onboarding_version"), int):
             s.onboarding_version = data["onboarding_version"]
-        if not s.planner_worker_mode:
-            s.planner_provider = s.provider
-            s.default_planner_model = s.default_model
-            s.default_planner_thinking = s.default_thinking
+        # Mirror planner → legacy compatibility fields so old code paths
+        # reading provider/default_model/default_thinking get the planner values.
+        s.provider = s.planner_provider
+        s.default_model = s.default_planner_model
+        s.default_thinking = s.default_planner_thinking
         return s
 
 

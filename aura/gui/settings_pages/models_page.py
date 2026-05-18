@@ -54,8 +54,8 @@ class ModelsPage(QWidget):
         self._settings = settings
 
         self._discovery_inflight: set[str] = set()
-        self._discovery_thread: QThread | None = None
-        self._discovery_worker: DiscoveryWorker | None = None
+        self._discovery_threads: dict[str, QThread] = {}
+        self._discovery_workers: dict[str, DiscoveryWorker] = {}
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -175,22 +175,20 @@ class ModelsPage(QWidget):
     # --- Thread cleanup ---
 
     def cleanup_threads(self) -> None:
-        self._cleanup_thread("_discovery_thread", "_discovery_worker")
-
-    def _cleanup_thread(self, thread_attr: str, worker_attr: str, wait_ms: int = 15000) -> None:
-        thread = getattr(self, thread_attr, None)
-        if thread is None:
-            return
-        try:
-            if thread.isRunning():
-                thread.quit()
-                if not thread.wait(wait_ms):
-                    logger.warning(
-                        "Settings dialog thread did not stop cleanly: %s", thread_attr
-                    )
-                    thread.wait()
-        except RuntimeError:
-            pass
+        for provider_id, thread in list(self._discovery_threads.items()):
+            try:
+                if thread.isRunning():
+                    thread.quit()
+                    if not thread.wait(15000):
+                        logger.warning(
+                            "Settings dialog discovery thread did not stop cleanly: %s",
+                            provider_id,
+                        )
+                        thread.wait()
+            except RuntimeError:
+                pass
+        self._discovery_threads.clear()
+        self._discovery_workers.clear()
 
     # --- Model discovery ---
 
@@ -199,15 +197,18 @@ class ModelsPage(QWidget):
             return
         self._discovery_inflight.add(provider_id)
 
-        self._discovery_thread = QThread(self)
-        self._discovery_worker = DiscoveryWorker(provider_id)
-        self._discovery_worker.moveToThread(self._discovery_thread)
-        self._discovery_thread.started.connect(self._discovery_worker.run)
-        self._discovery_worker.finished.connect(self._on_discovery_finished)
-        self._discovery_worker.finished.connect(self._discovery_thread.quit)
-        self._discovery_worker.finished.connect(self._discovery_worker.deleteLater)
-        self._discovery_thread.finished.connect(self._discovery_thread.deleteLater)
-        self._discovery_thread.start()
+        thread = QThread(self)
+        worker = DiscoveryWorker(provider_id)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(self._on_discovery_finished)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.start()
+
+        self._discovery_threads[provider_id] = thread
+        self._discovery_workers[provider_id] = worker
 
     def _on_discovery_finished(
         self,
@@ -217,6 +218,8 @@ class ModelsPage(QWidget):
         error: str,
     ) -> None:
         self._discovery_inflight.discard(provider_id)
+        self._discovery_threads.pop(provider_id, None)
+        self._discovery_workers.pop(provider_id, None)
         if error:
             logger.warning("Model discovery failed for %s: %s", provider_id, error)
             return
@@ -346,8 +349,8 @@ class ModelsPage(QWidget):
 
     def _refresh_pw_enabled(self) -> None:
         enabled = self._pw_mode_chk.isChecked()
-        self._planner_model_combo.setEnabled(enabled)
-        self._planner_thinking_combo.setEnabled(enabled)
+        # Planner controls are always enabled — Planner is the primary brain
+        # Only Worker controls disable when planner/worker mode is off
         self._worker_model_combo.setEnabled(enabled)
         self._worker_thinking_combo.setEnabled(enabled)
         self._worker_temperature_spin.setEnabled(enabled)
@@ -364,3 +367,7 @@ class ModelsPage(QWidget):
         settings.default_worker_thinking = self._worker_thinking_combo.currentData()
         settings.temperature = self._temperature_spin.value()
         settings.worker_temperature = self._worker_temperature_spin.value()
+        # Mirror planner → legacy compatibility fields
+        settings.provider = settings.planner_provider
+        settings.default_model = settings.default_planner_model
+        settings.default_thinking = settings.default_planner_thinking

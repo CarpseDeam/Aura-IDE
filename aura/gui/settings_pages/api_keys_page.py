@@ -18,7 +18,6 @@ from aura.config import (
     APP_NAME,
     AppSettings,
     get_api_key,
-    save_settings,
     set_api_key,
 )
 from aura.providers.registry import provider_registry
@@ -173,12 +172,10 @@ class ApiKeysPage(QWidget):
             return
         self._settings.tavily_api_key = key
         self._tavily_key_input.clear()
-        save_settings(self._settings)
         self._refresh_tavily_status()
 
     def _on_clear_tavily_key(self) -> None:
         self._settings.tavily_api_key = ""
-        save_settings(self._settings)
         self._refresh_tavily_status()
 
     # --- Collect ---
