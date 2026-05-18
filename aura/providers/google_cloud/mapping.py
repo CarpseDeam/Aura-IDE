@@ -46,6 +46,15 @@ def aura_messages_to_google_contents(
     """
     system_parts: list[str] = []
     contents: list[dict] = []
+    current_tool_parts: list[dict] = []
+
+    def _flush_tools() -> None:
+        if current_tool_parts:
+            contents.append({
+                "role": "user",
+                "parts": list(current_tool_parts),
+            })
+            current_tool_parts.clear()
 
     for msg in messages:
         role = msg.get("role")
@@ -60,22 +69,18 @@ def aura_messages_to_google_contents(
             tool_call_id = msg.get("tool_call_id", "")
             tool_name = msg.get("name", tool_call_id)
             content = msg.get("content", "")
-            contents.append(
+            current_tool_parts.append(
                 {
-                    "role": "user",
-                    "parts": [
-                        {
-                            "function_response": {
-                                "name": tool_name,
-                                "response": {"result": str(content)},
-                            }
-                        }
-                    ],
+                    "function_response": {
+                        "name": tool_name,
+                        "response": {"result": str(content)},
+                    }
                 }
             )
             continue
 
         if role == "user":
+            _flush_tools()
             parts: list[dict] = []
             content = msg.get("content")
             if isinstance(content, str):
@@ -97,6 +102,7 @@ def aura_messages_to_google_contents(
             continue
 
         if role == "assistant":
+            _flush_tools()
             parts: list[dict] = []
 
             # Reasoning content → text
@@ -138,6 +144,7 @@ def aura_messages_to_google_contents(
             contents.append({"role": "model", "parts": parts})
             continue
 
+    _flush_tools()
     system_instruction = "\n\n".join(system_parts) if system_parts else None
     return system_instruction, contents
 

@@ -181,9 +181,10 @@ class GoogleCloudClient:
                         }
                         tool_calls[idx] = tc
                         seen_tool_starts.add(idx)
-                        from aura.client.events import ToolCallEnd, ToolCallStart
+                        from aura.client.events import ToolCallArgsDelta, ToolCallEnd, ToolCallStart
 
                         yield ToolCallStart(index=idx, id=tc["id"], name=name)
+                        yield ToolCallArgsDelta(index=idx, args_chunk=args_str)
                         yield ToolCallEnd(index=idx)
                         continue
 

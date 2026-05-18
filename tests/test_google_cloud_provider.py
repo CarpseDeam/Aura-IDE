@@ -543,6 +543,117 @@ def test_message_mapping_handles_reasoning_content():
     assert "answer" in texts
 
 
+def test_parallel_tool_results_mapped_correctly():
+    from aura.providers.google_cloud.mapping import aura_messages_to_google_contents
+
+    _, contents = aura_messages_to_google_contents(
+        [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "read_file",
+                            "arguments": '{"path": "test.py"}',
+                        },
+                    },
+                    {
+                        "id": "call_2",
+                        "type": "function",
+                        "function": {
+                            "name": "search_codebase",
+                            "arguments": '{"query": "foo"}',
+                        },
+                    },
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "name": "read_file",
+                "content": "print('hello')",
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_2",
+                "name": "search_codebase",
+                "content": "found 3 results",
+            },
+        ]
+    )
+    # Two entries: assistant (model) + one grouped user with two function_response parts
+    assert len(contents) == 2
+    assert contents[0]["role"] == "model"
+    assert contents[1]["role"] == "user"
+    fr_parts = [p for p in contents[1]["parts"] if "function_response" in p]
+    assert len(fr_parts) == 2
+    assert fr_parts[0]["function_response"]["name"] == "read_file"
+    assert fr_parts[0]["function_response"]["response"]["result"] == "print('hello')"
+    assert fr_parts[1]["function_response"]["name"] == "search_codebase"
+    assert fr_parts[1]["function_response"]["response"]["result"] == "found 3 results"
+
+
+def test_stream_emits_tool_call_args_delta():
+    from unittest.mock import MagicMock, patch
+
+    from aura.client.events import Done, ToolCallArgsDelta, ToolCallEnd, ToolCallStart
+    from aura.providers.google_cloud.client import GoogleCloudClient
+
+    # Build a fake streaming chunk with one function_call part
+    fc_mock = MagicMock()
+    fc_mock.name = "read_file"
+    fc_mock.args = {"path": "test.py"}
+    fc_mock.id = "call_0"
+
+    part_mock = MagicMock()
+    part_mock.text = None
+    part_mock.thought = None
+    part_mock.function_call = fc_mock
+
+    candidate_mock = MagicMock()
+    candidate_mock.finish_reason = None
+    candidate_mock.content.parts = [part_mock]
+
+    chunk = MagicMock()
+    chunk.candidates = [candidate_mock]
+    chunk.usage_metadata = None
+
+    fake_client_mock = MagicMock()
+    fake_client_mock.models.generate_content_stream.return_value = [chunk]
+
+    client = GoogleCloudClient(project="test")
+
+    with patch.object(client, "_get_client", return_value=fake_client_mock):
+        events = list(
+            client.stream(
+                messages=[{"role": "user", "content": "read test.py"}],
+                tools=None,
+                model="gemini-2.0-flash-001",
+                thinking="off",
+            )
+        )
+
+    # Find events by type
+    event_types = [type(e) for e in events]
+    assert ToolCallStart in event_types, f"Expected ToolCallStart in {event_types}"
+    assert ToolCallArgsDelta in event_types, f"Expected ToolCallArgsDelta in {event_types}"
+    assert ToolCallEnd in event_types, f"Expected ToolCallEnd in {event_types}"
+    assert Done in event_types, f"Expected Done in {event_types}"
+
+    # Verify the args_chunk content
+    args_delta = next(e for e in events if isinstance(e, ToolCallArgsDelta))
+    assert args_delta.args_chunk == '{"path": "test.py"}'
+
+    # Verify Done carries tool_calls
+    done = next(e for e in events if isinstance(e, Done))
+    assert done.full_message is not None
+    assert "tool_calls" in done.full_message
+    assert len(done.full_message["tool_calls"]) == 1
+
+
 # ---------------------------------------------------------------------------
 # Provider registry (conditional visibility)
 # ---------------------------------------------------------------------------
