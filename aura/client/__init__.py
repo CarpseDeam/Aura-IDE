@@ -1,6 +1,5 @@
 """DeepSeek streaming client and event types."""
 from aura.client.deepseek import DeepSeekClient
-from aura.client.gemini import GeminiClient
 from aura.client.events import (
     ApiError,
     AgentProcessFinished,
@@ -21,7 +20,6 @@ from aura.client.events import (
 
 __all__ = [
     "DeepSeekClient",
-    "GeminiClient",
     "Event",
     "ReasoningDelta",
     "ContentDelta",

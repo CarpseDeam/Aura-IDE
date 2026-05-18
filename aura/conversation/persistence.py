@@ -217,17 +217,17 @@ def load_conversation(path: Path) -> LoadedConversation:
     # Provider: default to "deepseek" for backward compat with v1/v2 files.
     provider_raw = data.get("provider")
     provider: ProviderId = "deepseek"
-    if isinstance(provider_raw, str) and provider_raw in ("deepseek", "openai", "google_ai", "vertex_ai", "anthropic", "openrouter"):
+    if isinstance(provider_raw, str) and provider_raw in ("deepseek", "openai", "openrouter", "anthropic"):
         provider = provider_raw  # type: ignore[assignment]
 
     planner_provider_raw = data.get("planner_provider")
     planner_provider: ProviderId = provider
-    if isinstance(planner_provider_raw, str) and planner_provider_raw in ("deepseek", "openai", "google_ai", "vertex_ai", "anthropic", "openrouter"):
+    if isinstance(planner_provider_raw, str) and planner_provider_raw in ("deepseek", "openai", "openrouter", "anthropic"):
         planner_provider = planner_provider_raw  # type: ignore[assignment]
 
     worker_provider_raw = data.get("worker_provider")
     worker_provider: ProviderId = provider
-    if isinstance(worker_provider_raw, str) and worker_provider_raw in ("deepseek", "openai", "google_ai", "vertex_ai", "anthropic", "openrouter"):
+    if isinstance(worker_provider_raw, str) and worker_provider_raw in ("deepseek", "openai", "openrouter", "anthropic"):
         worker_provider = worker_provider_raw  # type: ignore[assignment]
 
     version = data.get("version")

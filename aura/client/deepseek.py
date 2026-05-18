@@ -3,7 +3,7 @@
 Yields events; never raises. Honors thinking mode rules:
 - DeepSeek:    extra_body={"thinking":...} for thinking control
 - Anthropic:   extra_body={"thinking":{"type":"enabled","budget_tokens":N}} for thinking
-- OpenAI/Gemini: reasoning_effort at top level; no extra_body when thinking is off
+- OpenAI:      reasoning_effort at top level; no extra_body when thinking is off
 """
 from __future__ import annotations
 
@@ -46,11 +46,6 @@ class DeepSeekClient:
         api_key: str | None = None,
         provider: ProviderId = "deepseek",
     ) -> None:
-        if provider in ("google_ai", "vertex_ai"):
-            raise RuntimeError(
-                "DeepSeekClient should not be used for Google. "
-                "Use GeminiClient instead."
-            )
         self._provider = provider
         cfg = get_provider(provider)
         key = api_key if api_key is not None else resolve_api_key(provider)
@@ -151,7 +146,7 @@ class DeepSeekClient:
                 budget = 16000 if thinking == "high" else 32000
                 kwargs["extra_body"] = {"thinking": {"type": "enabled", "budget_tokens": budget}}
         else:
-            # OpenAI / Google Gemini: no extra_body thinking param.
+            # OpenAI: no extra_body thinking param.
             if thinking == "off":
                 kwargs["temperature"] = temperature
             else:

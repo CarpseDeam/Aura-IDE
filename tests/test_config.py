@@ -9,7 +9,6 @@ from aura.config import (
     PROVIDERS,
     AppSettings,
     fetch_provider_models,
-    get_google_vertex_project_credential,
     resolve_api_key,
 )
 
@@ -18,9 +17,9 @@ from aura.config import (
 # Provider registry
 # ---------------------------------------------------------------------------
 
-def test_all_six_providers_registered():
-    """The PROVIDERS dict should contain all six providers."""
-    assert set(PROVIDERS.keys()) == {"deepseek", "openai", "google_ai", "vertex_ai", "openrouter", "anthropic"}
+def test_all_providers_registered():
+    """The PROVIDERS dict should contain all four providers."""
+    assert set(PROVIDERS.keys()) == {"deepseek", "openai", "openrouter", "anthropic"}
 
 
 def test_provider_ids_are_valid():
@@ -39,7 +38,7 @@ def test_provider_has_env_key():
     """Every provider should have a non-empty primary env_key."""
     for cfg in PROVIDERS.values():
         assert cfg.env_key
-        assert cfg.env_key.startswith(("GOOGLE_", "OPEN", "DEEPSEEK", "ANTHROPIC"))
+        assert cfg.env_key.startswith(("OPEN", "DEEPSEEK", "ANTHROPIC"))
 
 
 def test_provider_has_default_model():
@@ -78,79 +77,6 @@ def test_openai_provider_config():
     assert oai.default_thinking == "off"
 
 
-def test_google_ai_provider_config_uses_gemini_api():
-    """Verify Google AI provider uses the standard Gemini API."""
-    google = PROVIDERS["google_ai"]
-    assert google.label == "Google AI (Gemini API)"
-    assert google.base_url == "https://generativelanguage.googleapis.com/v1beta"
-    assert google.env_key == "GOOGLE_API_KEY"
-    assert google.default_model == "gemini-2.0-flash"
-
-
-def test_vertex_ai_provider_config_uses_cloud_endpoint():
-    """Verify Vertex AI provider uses Google Cloud endpoints."""
-    vertex = PROVIDERS["vertex_ai"]
-    assert vertex.label == "Vertex AI (Express Mode / Cloud)"
-    assert vertex.base_url == "https://us-central1-aiplatform.googleapis.com/v1"
-    assert vertex.env_key == "GOOGLE_CLOUD_PROJECT"
-    assert vertex.default_model == "gemini-2.0-flash"
-
-
-def test_google_vertex_project_credential_uses_vertex_ai_key(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "agent-aura-496622")
-    assert get_google_vertex_project_credential() == "agent-aura-496622"
-
-
-def test_google_ai_model_refresh_uses_api_key(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    captured: dict[str, Any] = {}
-
-    class FakeGeminiClient:
-        def __init__(self, credential: str | None = None, vertexai: bool = False) -> None:
-            captured["credential"] = credential
-            captured["vertexai"] = vertexai
-
-        def fetch_raw_models(self) -> list[dict]:
-            return [{"id": "gemini-2.5-flash"}]
-
-    monkeypatch.setenv("GOOGLE_API_KEY", "AQ-test-key")
-    monkeypatch.setattr("aura.client.gemini.GeminiClient", FakeGeminiClient)
-
-    models, _pricing, error = fetch_provider_models("google_ai")
-
-    assert error is None
-    assert captured["credential"] == "AQ-test-key"
-    assert captured["vertexai"] is False
-    assert "gemini-2.5-flash" in models
-
-
-def test_vertex_ai_model_refresh_uses_project_id(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    captured: dict[str, Any] = {}
-
-    class FakeGeminiClient:
-        def __init__(self, credential: str | None = None, vertexai: bool = False) -> None:
-            captured["credential"] = credential
-            captured["vertexai"] = vertexai
-
-        def fetch_raw_models(self) -> list[dict]:
-            return [{"id": "gemini-2.0-flash"}]
-
-    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-project")
-    monkeypatch.setattr("aura.client.gemini.GeminiClient", FakeGeminiClient)
-
-    models, _pricing, error = fetch_provider_models("vertex_ai")
-
-    assert error is None
-    assert captured["credential"] == "test-project"
-    assert captured["vertexai"] is True
-    assert "gemini-2.0-flash" in models
-
-
 # ---------------------------------------------------------------------------
 # resolve_api_key
 # ---------------------------------------------------------------------------
@@ -167,10 +93,6 @@ def test_resolve_api_key_missing(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
-    monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
-    monkeypatch.delenv("GCP_PROJECT", raising=False)
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
 
     with pytest.raises(RuntimeError, match="No API key found"):
@@ -230,15 +152,15 @@ def test_app_settings_to_from_dict_roundtrip():
 def test_app_settings_from_dict_partial():
     """from_dict should fill in defaults for missing keys."""
     partial = {
-        "provider": "google_ai",
-        "planner_provider": "google_ai",
-        "default_planner_model": "gemini-2.0-flash",
+        "provider": "openai",
+        "planner_provider": "openai",
+        "default_planner_model": "gpt-4o",
     }
     s = AppSettings.from_dict(partial)
-    assert s.provider == "google_ai"
+    assert s.provider == "openai"
     # Fallback to provider default since list is empty
-    assert s.default_model == "gemini-2.0-flash"
-    assert s.default_planner_model == "gemini-2.0-flash"
+    assert s.default_model == "gpt-4o"
+    assert s.default_planner_model == "gpt-4o"
     # Defaults for unspecified fields
     assert s.default_planner_thinking == "off"
 
@@ -261,12 +183,9 @@ def test_app_settings_from_dict_invalid_providers_fall_back(caplog):
 
 def test_app_settings_from_dict_invalid_models_fall_back(caplog):
     """Model defaults should be valid for their selected providers."""
-    # Since the list is empty, any provided model is "invalid" but we fall back
-    # to the requested value if no list exists to validate against.
-    # Actually, settings.py falls back to PROVIDERS[p].default_model
     data = {
         "provider": "openai",
-        "planner_provider": "google_ai",
+        "planner_provider": "anthropic",
         "worker_provider": "anthropic",
         "default_model": "some-random-model",
     }
@@ -274,7 +193,7 @@ def test_app_settings_from_dict_invalid_models_fall_back(caplog):
     s = AppSettings.from_dict(data)
 
     assert s.default_model == "gpt-4o"  # Fallback for OpenAI
-    assert s.default_planner_model == "gemini-2.0-flash"  # Fallback for Google
+    assert s.default_planner_model == "claude-sonnet-4-6"  # Fallback for Anthropic
     assert s.default_worker_model == "claude-sonnet-4-6"  # Fallback for Anthropic
 
 
@@ -342,15 +261,15 @@ def test_legacy_plaintext_migration(tmp_path, monkeypatch):
 
     km = KeyManager()
     # Simulate old plaintext storage: write directly to file
-    km._path.write_text(json.dumps({"vertex_ai": "sk-legacy-plaintext"}), encoding="utf-8")
+    km._path.write_text(json.dumps({"deepseek": "sk-legacy-plaintext"}), encoding="utf-8")
 
     # get_key should return the plaintext
-    key = km.get_key("vertex_ai")
+    key = km.get_key("deepseek")
     assert key == "sk-legacy-plaintext"
 
     # But now the file should contain a Fernet token
     data = json.loads(km._path.read_text("utf-8"))
-    assert data["vertex_ai"].startswith("gAAAAA")
+    assert data["deepseek"].startswith("gAAAAA")
 
 
 def test_key_manager_delete(tmp_path, monkeypatch):
@@ -402,13 +321,11 @@ def test_redact_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
     """redact_secrets should replace all known API keys with [REDACTED]."""
     from aura.config import redact_secrets
     monkeypatch.setenv("DEEPSEEK_API_KEY", "SECRET_DS_123")
-    monkeypatch.setenv("GOOGLE_API_KEY", "SECRET_GEMINI_456")
     monkeypatch.setenv("TAVILY_API_KEY", "SECRET_TAVILY_789")
 
-    text = "Error with key SECRET_DS_123 and SECRET_GEMINI_456. Search key: SECRET_TAVILY_789"
+    text = "Error with key SECRET_DS_123. Search key: SECRET_TAVILY_789"
     redacted = redact_secrets(text)
 
     assert "SECRET_DS_123" not in redacted
-    assert "SECRET_GEMINI_456" not in redacted
     assert "SECRET_TAVILY_789" not in redacted
-    assert redacted == "Error with key [REDACTED] and [REDACTED]. Search key: [REDACTED]"
+    assert redacted == "Error with key [REDACTED]. Search key: [REDACTED]"

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-ProviderId = Literal["deepseek", "openai", "google_ai", "vertex_ai", "openrouter", "anthropic"]
+ProviderId = Literal["deepseek", "openai", "openrouter", "anthropic"]
 ThinkingMode = Literal["off", "high", "max"]
 ModelId = str  # Any model string from any provider
 
@@ -43,12 +43,6 @@ DEEPSEEK_PRICING: dict[str, dict[str, float]] = {}
 OPENAI_MODELS: dict[str, ModelInfo] = {}
 OPENAI_PRICING: dict[str, dict[str, float]] = {}
 
-GOOGLE_AI_MODELS: dict[str, ModelInfo] = {}
-GOOGLE_AI_PRICING: dict[str, dict[str, float]] = {}
-
-VERTEX_AI_MODELS: dict[str, ModelInfo] = {}
-VERTEX_AI_PRICING: dict[str, dict[str, float]] = {}
-
 ANTHROPIC_MODELS: dict[str, ModelInfo] = {}
 ANTHROPIC_PRICING: dict[str, dict[str, float]] = {}
 
@@ -75,26 +69,6 @@ PROVIDERS: dict[ProviderId, ProviderConfig] = {
         default_thinking="off",
         models=OPENAI_MODELS,
         pricing=OPENAI_PRICING,
-    ),
-    "google_ai": ProviderConfig(
-        id="google_ai",
-        label="Google AI (Gemini API)",
-        base_url="https://generativelanguage.googleapis.com/v1beta",
-        env_key="GOOGLE_API_KEY",
-        default_model="gemini-2.0-flash",
-        default_thinking="off",
-        models=GOOGLE_AI_MODELS,
-        pricing=GOOGLE_AI_PRICING,
-    ),
-    "vertex_ai": ProviderConfig(
-        id="vertex_ai",
-        label="Vertex AI (Express Mode / Cloud)",
-        base_url="https://us-central1-aiplatform.googleapis.com/v1",
-        env_key="GOOGLE_CLOUD_PROJECT",
-        default_model="gemini-2.0-flash",
-        default_thinking="off",
-        models=VERTEX_AI_MODELS,
-        pricing=VERTEX_AI_PRICING,
     ),
     "openrouter": ProviderConfig(
         id="openrouter",

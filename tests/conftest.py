@@ -97,11 +97,6 @@ def sample_py_file(tmp_workspace: Path) -> Path:
 def clear_google_env(monkeypatch):
     """Ensure tests don't pick up real Google/Gemini keys from the developer's environment."""
     for key in (
-        "GOOGLE_API_KEY",
-        "GEMINI_API_KEY",
-        "GOOGLE_CLOUD_PROJECT",
-        "GCP_PROJECT",
-        "VERTEX_API_KEY",
         "GOOGLE_CLOUD_LOCATION",
         "GCP_LOCATION",
         "GCP_REGION",

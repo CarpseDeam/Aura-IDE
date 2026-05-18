@@ -756,10 +756,7 @@ class SettingsDialog(QDialog):
         provider_id: ProviderId = self._provider_combo.currentData()
         self._populate_model_combos(provider_id)
         self._refresh_api_key_status(provider_id)
-        if provider_id == "vertex_ai":
-            self._api_key_input.setPlaceholderText("Paste GCP Project ID here (optional: project:location)...")
-        else:
-            self._api_key_input.setPlaceholderText("Paste API key here...")
+        self._api_key_input.setPlaceholderText("Paste API key here...")
 
     def _on_planner_provider_changed(self) -> None:
         provider_id: ProviderId = self._planner_provider_combo.currentData()
@@ -807,16 +804,13 @@ class SettingsDialog(QDialog):
     def _refresh_api_key_status(self, provider_id: ProviderId) -> None:
         cfg = get_provider(provider_id)
         if os.environ.get(cfg.env_key):
-            noun = "credential" if provider_id == "vertex_ai" else "key"
-            text = f"{cfg.label} {noun} loaded from {cfg.env_key}."
+            text = f"{cfg.label} key loaded from {cfg.env_key}."
             color = SUCCESS
         elif get_api_key(provider_id):
-            noun = "credential" if provider_id == "vertex_ai" else "key"
-            text = f"{cfg.label} {noun} is stored locally."
+            text = f"{cfg.label} key is stored locally."
             color = SUCCESS
         else:
-            noun = "credential" if provider_id == "vertex_ai" else "key"
-            text = f"No {cfg.label} {noun} found. Set {cfg.env_key} or save one here."
+            text = f"No {cfg.label} key found. Set {cfg.env_key} or save one here."
             color = WARN
         self._api_key_status.setText(text)
         self._api_key_status.setStyleSheet(f"color: {color};")

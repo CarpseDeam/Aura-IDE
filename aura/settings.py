@@ -169,6 +169,15 @@ def _provider_from_data(
     raw = data.get(key)
     if not isinstance(raw, str):
         return current
+    # Auto-migrate removed Google providers to DeepSeek.
+    if raw in ("google_ai", "vertex_ai"):
+        logger.warning(
+            "Migrating removed provider %s (%r) -> %s",
+            key,
+            raw,
+            DEFAULT_PROVIDER,
+        )
+        return DEFAULT_PROVIDER
     if raw in PROVIDERS:
         return cast(ProviderId, raw)
 
