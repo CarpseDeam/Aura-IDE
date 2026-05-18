@@ -259,6 +259,8 @@ def load_conversation(path: Path) -> LoadedConversation:
         thinking=thinking,
         path=path,
         provider=provider,
+        planner_provider=planner_provider,
+        worker_provider=worker_provider,
         planner_worker_mode=pwm,
         planner_model=planner_model,
         worker_model=worker_model,
