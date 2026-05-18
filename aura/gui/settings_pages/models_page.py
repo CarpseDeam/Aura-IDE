@@ -66,36 +66,63 @@ class ModelsPage(QWidget):
         form.setHorizontalSpacing(14)
         form.setVerticalSpacing(10)
 
+        # --- 1. Create Widgets ---
+
         # P/W mode toggle
         self._pw_mode_chk = GlassSwitch(
             "Planner/Worker mode (planner chats; worker executes code changes)",
             self._settings.planner_worker_mode,
         )
-        self._pw_mode_chk.toggled.connect(self._on_pw_toggled)
-        form.addRow("", self._pw_mode_chk)
 
         # Planner Provider
         self._planner_provider_combo = QComboBox()
         for pid in provider_registry.ids():
             spec = provider_registry.get(pid)
             self._planner_provider_combo.addItem(spec.label, pid)
-        self._planner_provider_combo.setCurrentIndex(
-            provider_registry.ids().index(self._settings.planner_provider)
-        )
-        self._planner_provider_combo.currentIndexChanged.connect(
-            self._on_planner_provider_changed
-        )
-        form.addRow("Planner provider:", self._planner_provider_combo)
 
         self._planner_model_combo = QComboBox()
-        form.addRow("Planner model:", self._planner_model_combo)
 
         self._planner_thinking_combo = QComboBox()
         for label, val in _THINKING_ITEMS:
             self._planner_thinking_combo.addItem(label, val)
+
+        # Worker Provider
+        self._worker_provider_combo = QComboBox()
+        for pid in provider_registry.ids():
+            spec = provider_registry.get(pid)
+            self._worker_provider_combo.addItem(spec.label, pid)
+
+        self._worker_model_combo = QComboBox()
+
+        self._worker_thinking_combo = QComboBox()
+        for label, val in _THINKING_ITEMS:
+            self._worker_thinking_combo.addItem(label, val)
+
+        # Temperature
+        self._temperature_spin = QDoubleSpinBox()
+        self._temperature_spin.setRange(0.0, 2.0)
+        self._temperature_spin.setSingleStep(0.1)
+        self._temperature_spin.setDecimals(1)
+        self._temperature_spin.setToolTip(
+            "Controls response randomness. 0 = deterministic, 2 = maximum creativity. "
+            "Only applied when thinking is Off."
+        )
+
+        self._worker_temperature_spin = QDoubleSpinBox()
+        self._worker_temperature_spin.setRange(0.0, 2.0)
+        self._worker_temperature_spin.setSingleStep(0.1)
+        self._worker_temperature_spin.setDecimals(1)
+        self._worker_temperature_spin.setToolTip(
+            "Controls response randomness for the worker model. Lower = more deterministic."
+        )
+
+        # --- 2. Setup Layout ---
+
+        form.addRow("", self._pw_mode_chk)
+        form.addRow("Planner provider:", self._planner_provider_combo)
+        form.addRow("Planner model:", self._planner_model_combo)
         form.addRow("Planner thinking:", self._planner_thinking_combo)
 
-        # Separator
         sep1 = QLabel("Worker")
         sep1.setStyleSheet(
             f"color: {FG_DIM}; font-weight: 600; font-size: 11px;"
@@ -103,28 +130,31 @@ class ModelsPage(QWidget):
         )
         form.addRow("", sep1)
 
-        # Worker Provider
-        self._worker_provider_combo = QComboBox()
-        for pid in provider_registry.ids():
-            spec = provider_registry.get(pid)
-            self._worker_provider_combo.addItem(spec.label, pid)
-        self._worker_provider_combo.setCurrentIndex(
-            provider_registry.ids().index(self._settings.worker_provider)
-        )
-        self._worker_provider_combo.currentIndexChanged.connect(
-            self._on_worker_provider_changed
-        )
         form.addRow("Worker provider:", self._worker_provider_combo)
-
-        self._worker_model_combo = QComboBox()
         form.addRow("Worker model:", self._worker_model_combo)
-
-        self._worker_thinking_combo = QComboBox()
-        for label, val in _THINKING_ITEMS:
-            self._worker_thinking_combo.addItem(label, val)
         form.addRow("Worker thinking:", self._worker_thinking_combo)
 
-        # Populate model combos
+        temp_sep = QLabel("Temperature")
+        temp_sep.setStyleSheet(
+            f"color: {FG_DIM}; font-weight: 600; font-size: 11px;"
+            " text-transform: uppercase; letter-spacing: 0.04em;"
+        )
+        form.addRow("", temp_sep)
+
+        form.addRow("Temperature:", self._temperature_spin)
+        form.addRow("Worker Temperature:", self._worker_temperature_spin)
+
+        layout.addLayout(form)
+        layout.addStretch()
+
+        # --- 3. Initial Values ---
+
+        planner_provider_idx = provider_registry.ids().index(self._settings.planner_provider)
+        self._planner_provider_combo.setCurrentIndex(planner_provider_idx)
+
+        worker_provider_idx = provider_registry.ids().index(self._settings.worker_provider)
+        self._worker_provider_combo.setCurrentIndex(worker_provider_idx)
+
         self._populate_all_role_models()
 
         self._set_combo_to_data(
@@ -134,41 +164,19 @@ class ModelsPage(QWidget):
             self._worker_thinking_combo, self._settings.default_worker_thinking
         )
 
-        # Temperature
-        temp_sep = QLabel("Temperature")
-        temp_sep.setStyleSheet(
-            f"color: {FG_DIM}; font-weight: 600; font-size: 11px;"
-            " text-transform: uppercase; letter-spacing: 0.04em;"
-        )
-        form.addRow("", temp_sep)
-
-        self._temperature_spin = QDoubleSpinBox()
-        self._temperature_spin.setRange(0.0, 2.0)
-        self._temperature_spin.setSingleStep(0.1)
-        self._temperature_spin.setDecimals(1)
-        self._temperature_spin.setToolTip(
-            "Controls response randomness. 0 = deterministic, 2 = maximum creativity. "
-            "Only applied when thinking is Off."
-        )
         self._temperature_spin.setValue(self._settings.temperature)
-        form.addRow("Temperature:", self._temperature_spin)
-
-        self._worker_temperature_spin = QDoubleSpinBox()
-        self._worker_temperature_spin.setRange(0.0, 2.0)
-        self._worker_temperature_spin.setSingleStep(0.1)
-        self._worker_temperature_spin.setDecimals(1)
-        self._worker_temperature_spin.setToolTip(
-            "Controls response randomness for the worker model. Lower = more deterministic."
-        )
         self._worker_temperature_spin.setValue(self._settings.worker_temperature)
-        form.addRow("Worker Temperature:", self._worker_temperature_spin)
 
         self._refresh_pw_enabled()
 
-        layout.addLayout(form)
-        layout.addStretch()
+        # --- 4. Connect Signals ---
+        # Connect AFTER initial population to avoid spurious signal firing 
+        # while some widgets might still be partially initialized.
+        self._pw_mode_chk.toggled.connect(self._on_pw_toggled)
+        self._planner_provider_combo.currentIndexChanged.connect(self._on_planner_provider_changed)
+        self._worker_provider_combo.currentIndexChanged.connect(self._on_worker_provider_changed)
 
-        # Start background discovery
+        # --- 5. Start Background Tasks ---
         self._start_discovery(self._settings.planner_provider)
         self._start_discovery(self._settings.worker_provider)
 
@@ -193,7 +201,7 @@ class ModelsPage(QWidget):
     # --- Model discovery ---
 
     def _start_discovery(self, provider_id: ProviderId) -> None:
-        if provider_id in self._discovery_inflight:
+        if not provider_id or provider_id in self._discovery_inflight:
             return
         self._discovery_inflight.add(provider_id)
 
@@ -285,10 +293,16 @@ class ModelsPage(QWidget):
     def _populate_role_models(
         self,
         combo: QComboBox,
-        provider_id: ProviderId,
+        provider_id: ProviderId | None,
         current_selection: str,
         role: str = "",
     ) -> None:
+        if not provider_id or not provider_registry.has(provider_id):
+            combo.blockSignals(True)
+            combo.clear()
+            combo.blockSignals(False)
+            return
+
         cfg = provider_registry.get(provider_id)
         combo.blockSignals(True)
         combo.clear()

@@ -130,9 +130,9 @@ class AgentBackendsPage(QWidget):
         self._workers.append(worker)
 
     def _on_check_finished(self, backend_id: str, ok: bool, detail: str) -> None:
-        row = self._backend_rows.get(backend_id)
-        if row is None:
+        if backend_id not in self._backend_rows:
             return
+        row = self._backend_rows[backend_id]
         status_label: QLabel = row["status"]  # type: ignore[assignment]
         if ok:
             status_label.setText("Authenticated ✓")
@@ -159,9 +159,13 @@ class AgentBackendsPage(QWidget):
             try:
                 if thread.isRunning():
                     thread.quit()
-                    thread.wait(5000)
+                    if not thread.wait(10000):
+                        logger.warning("Agent backends check thread did not stop cleanly; waiting...")
+                        thread.wait()
             except RuntimeError:
                 pass
+        self._threads.clear()
+        self._workers.clear()
 
     def collect_settings(self, settings: AppSettings) -> None:
         pass  # No settings to collect — purely informational

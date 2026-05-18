@@ -138,7 +138,10 @@ class GlassSwitch(QWidget):
         self._track.setStyleSheet(self._get_track_style())
         self._refresh_label_style()
         # Animate thumb position
-        self._anim = QPropertyAnimation(self._thumb, b"pos")
+        anim = getattr(self, "_anim", None)
+        if anim:
+            anim.stop()
+        self._anim = QPropertyAnimation(self._thumb, b"pos", self)
         self._anim.setDuration(120)
         self._anim.setEndValue(QPoint(19 if checked else 3, 3))
         self._anim.start()

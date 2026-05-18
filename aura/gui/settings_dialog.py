@@ -63,13 +63,24 @@ class SettingsDialog(QDialog):
         self._sandbox_page = SandboxPage(self._settings, workspace_root, on_change_root)
         self._prompts_page = PromptsPage(self._settings)
 
-        tabs.addTab(self._models_page, "Models")
-        tabs.addTab(self._api_keys_page, "API Keys")
-        tabs.addTab(self._agent_backends_page, "Agent Backends")
-        tabs.addTab(self._automation_page, "Automation")
-        tabs.addTab(self._vision_page, "Vision")
-        tabs.addTab(self._sandbox_page, "Sandbox / Workspace")
-        tabs.addTab(self._prompts_page, "Prompts")
+        self._pages = [
+            (self._models_page, "Models"),
+            (self._api_keys_page, "API Keys"),
+            (self._agent_backends_page, "Agent Backends"),
+            (self._automation_page, "Automation"),
+            (self._vision_page, "Vision"),
+            (self._sandbox_page, "Sandbox / Workspace"),
+            (self._prompts_page, "Prompts"),
+        ]
+
+        from PySide6.QtWidgets import QScrollArea
+
+        for page, label in self._pages:
+            scroll = QScrollArea(self)
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+            scroll.setWidget(page)
+            tabs.addTab(scroll, label)
 
         outer.addWidget(tabs, 1)
 
@@ -83,10 +94,9 @@ class SettingsDialog(QDialog):
     # --- Thread cleanup ---
 
     def _cleanup_threads(self) -> None:
-        if hasattr(self._models_page, "cleanup_threads"):
-            self._models_page.cleanup_threads()
-        if hasattr(self._agent_backends_page, "cleanup_threads"):
-            self._agent_backends_page.cleanup_threads()
+        for page, _ in self._pages:
+            if hasattr(page, "cleanup_threads"):
+                page.cleanup_threads()
 
     def done(self, result: int) -> None:  # type: ignore[override]
         self._cleanup_threads()
