@@ -353,6 +353,7 @@ class TodoListWidget(QFrame):
         outer.addLayout(self._tasks_layout)
 
         self._pulse_anims: list = []
+        self._task_widgets: list[QLabel] = []
         self.setVisible(False)
 
     def update_tasks(self, tasks: list[dict]) -> None:
@@ -361,20 +362,16 @@ class TodoListWidget(QFrame):
             anim.deleteLater()
         self._pulse_anims.clear()
 
-        while self._tasks_layout.count() > 0:
-            item = self._tasks_layout.takeAt(0)
-            if item and item.widget():
-                item.widget().deleteLater()
-
         if not tasks:
             self.setVisible(False)
             return
 
         self.setVisible(True)
 
-        for task in tasks:
+        for i, task in enumerate(tasks):
             description = task.get("description", "")
             status = task.get("status", "pending")
+
             if status == "done":
                 prefix, color = "✓", SUCCESS
             elif status == "active":
@@ -382,16 +379,28 @@ class TodoListWidget(QFrame):
             else:
                 prefix, color = "○", FG_DIM
 
-            label = QLabel(f"{prefix} {description}")
-            label.setWordWrap(True)
-            font = label.font()
-            font.setFamily("Geist Mono, JetBrains Mono, Consolas, monospace")
-            font.setPointSize(11)
-            label.setFont(font)
+            if i < len(self._task_widgets):
+                label = self._task_widgets[i]
+            else:
+                label = QLabel()
+                label.setWordWrap(True)
+                font = label.font()
+                font.setFamily("Geist Mono, JetBrains Mono, Consolas, monospace")
+                font.setPointSize(11)
+                label.setFont(font)
+                self._tasks_layout.addWidget(label)
+                self._task_widgets.append(label)
 
+            label.setText(f"{prefix} {description}")
+            label.setStyleSheet(f"color: {color}; padding: 1px 0;")
+
+            font = label.font()
             if status == "active":
                 font.setBold(True)
                 label.setFont(font)
+                old_effect = label.graphicsEffect()
+                if old_effect:
+                    old_effect.deleteLater()
                 effect = QGraphicsOpacityEffect(label)
                 label.setGraphicsEffect(effect)
                 pulse = QVariantAnimation(label)
@@ -403,9 +412,18 @@ class TodoListWidget(QFrame):
                 pulse.valueChanged.connect(lambda v, e=effect: e.setOpacity(v))
                 pulse.start()
                 self._pulse_anims.append(pulse)
+            else:
+                font.setBold(False)
+                label.setFont(font)
+                old_effect = label.graphicsEffect()
+                if old_effect:
+                    label.setGraphicsEffect(None)
+                    old_effect.deleteLater()
 
-            label.setStyleSheet(f"color: {color}; padding: 1px 0;")
-            self._tasks_layout.addWidget(label)
+        while len(self._task_widgets) > len(tasks):
+            widget = self._task_widgets.pop()
+            self._tasks_layout.removeWidget(widget)
+            widget.deleteLater()
 
 
 class ArtifactCard(QFrame):

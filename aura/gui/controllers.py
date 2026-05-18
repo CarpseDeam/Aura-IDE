@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from typing import Any
 
 from PySide6.QtCore import QObject, Signal
@@ -44,6 +45,10 @@ class ToolStreamController(QObject):
         self._last_content: str = ""
         self._last_goal_stream: str = ""
         self._state = "running"
+
+        # Partial TODO extraction throttle
+        self._last_todo_emit: float = 0.0
+        self._TODO_THROTTLE = 0.05  # 50ms
 
         # Regex for early extraction from partial JSON
         self._path_re = re.compile(r'"path"\s*:\s*"([^"]+)"')
@@ -160,6 +165,15 @@ class ToolStreamController(QObject):
                     self._last_content = content
                     self.content_updated.emit(content)
 
+            # Partial task extraction for update_todo_list
+            if self._tool_name == "update_todo_list":
+                now = time.monotonic()
+                if now - self._last_todo_emit >= self._TODO_THROTTLE:
+                    tasks = self._extract_partial_tasks()
+                    if tasks is not None:
+                        self._last_todo_emit = now
+                        self.todo_updated.emit(tasks)
+
     def _extract_partial_string(self, key: str) -> str | None:
         """Surgically extract a JSON string value from the buffer, handling escapes."""
         # Find "key": "
@@ -199,6 +213,64 @@ class ToolStreamController(QObject):
         
         # Still open
         return "".join(content_chars)
+
+    def _extract_partial_tasks(self) -> list[dict] | None:
+        """Extract complete task objects from a partially-streamed JSON buffer.
+
+        Searches for ``"tasks" : [``, then walks forward tracking brace depth
+        and string-escape state to find complete ``{...}`` objects.  Returns
+        ``None`` when no ``"tasks"`` key is found or no complete objects can
+        be parsed.
+        """
+        m = re.search(r'"tasks"\s*:\s*\[', self._buffer)
+        if not m:
+            return None
+
+        pos = m.end()  # right after '['
+        tasks: list[dict] = []
+        depth = 0
+        in_string = False
+        escaped = False
+        obj_start: int | None = None
+
+        while pos < len(self._buffer):
+            ch = self._buffer[pos]
+            pos += 1
+
+            if escaped:
+                escaped = False
+                continue
+
+            if ch == '\\':
+                escaped = True
+                continue
+
+            if ch == '"':
+                in_string = not in_string
+                continue
+
+            if in_string:
+                continue
+
+            if ch == '{':
+                if depth == 0:
+                    obj_start = pos - 1
+                depth += 1
+            elif ch == '}':
+                depth -= 1
+                if depth == 0 and obj_start is not None:
+                    candidate = self._buffer[obj_start:pos]
+                    try:
+                        obj = json.loads(candidate)
+                        if isinstance(obj, dict):
+                            tasks.append(obj)
+                    except json.JSONDecodeError:
+                        pass
+                    obj_start = None
+            elif ch == ']' and depth == 0:
+                break
+
+        return tasks if tasks else None
 
 
     def finalize(self, ok: bool, result_text: str) -> None:
