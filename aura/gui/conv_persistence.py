@@ -30,8 +30,9 @@ class ConversationPersistence(QObject):
     only delegates to this class via simple method calls.
     """
 
-    # Emitted when a conversation was saved successfully (with the file path).
-    save_succeeded = Signal(Path)
+    # Emitted when a conversation was saved successfully (with the file path
+    # and conversation generation active when the save started).
+    save_succeeded = Signal(Path, int)
     # Emitted when saving failed (with the error message).
     save_failed = Signal(str)
     # Emitted after apply_loaded finishes so the UI can refresh status.
@@ -56,6 +57,7 @@ class ConversationPersistence(QObject):
         self._settings = settings
         self._current_conversation_path: Path | None = None
         self._active_replay_id: int = 0
+        self._conversation_generation: int = 0
 
         self.save_succeeded.connect(self._on_save_succeeded)
         self.save_failed.connect(
@@ -77,8 +79,10 @@ class ConversationPersistence(QObject):
 
     # ---- internal slots ----------------------------------------------------
 
-    @Slot(Path)
-    def _on_save_succeeded(self, path: Path) -> None:
+    @Slot(Path, int)
+    def _on_save_succeeded(self, path: Path, generation: int) -> None:
+        if generation != self._conversation_generation:
+            return
         self._current_conversation_path = path
 
     # ---- auto-save ---------------------------------------------------------
@@ -104,6 +108,8 @@ class ConversationPersistence(QObject):
         if not self._bridge.history.messages:
             return
 
+        generation = self._conversation_generation
+
         # Deep copy data for thread safety
         history_copy = copy.deepcopy(self._bridge.history)
         dispatch_records_copy = list(self._bridge.dispatch_records)
@@ -128,7 +134,7 @@ class ConversationPersistence(QObject):
                     planner_provider=planner_provider,
                     worker_provider=worker_provider,
                 )
-                self.save_succeeded.emit(path)
+                self.save_succeeded.emit(path, generation)
             except OSError as exc:
                 self.save_failed.emit(str(exc))
 
@@ -139,6 +145,7 @@ class ConversationPersistence(QObject):
     def new_conversation(self) -> None:
         """Reset all state for a brand-new conversation."""
         self._active_replay_id += 1
+        self._conversation_generation += 1
         self._bridge.reset_history()
         self._bridge.clear_pre_worker_snapshot()
         self._chat.reset()

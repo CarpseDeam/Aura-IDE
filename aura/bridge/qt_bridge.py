@@ -525,7 +525,15 @@ class ConversationBridge(QObject):
         # persistent toolbar toggle.
 
     def is_running(self) -> bool:
-        return self._thread is not None and self._thread.isRunning()
+        thread = self._thread
+        if thread is None:
+            return False
+        try:
+            return thread.isRunning()
+        except RuntimeError:
+            self._thread = None
+            self._worker = None
+            return False
 
     def get_pre_worker_snapshot(self) -> str | None:
         return self._pre_worker_sha
@@ -678,12 +686,17 @@ class ConversationBridge(QObject):
 
     @Slot()
     def _on_finished(self) -> None:
-        if self._thread is not None:
-            self._thread.quit()
-            self._thread.wait(2000)
-            self._thread.deleteLater()
-        if self._worker is not None:
-            self._worker.deleteLater()
+        thread = self._thread
+        worker = self._worker
+        self._thread = None
+        self._worker = None
+
+        if worker is not None:
+            worker.deleteLater()
+        if thread is not None:
+            thread.quit()
+            thread.wait(2000)
+            thread.deleteLater()
         self.finished.emit()
 
 

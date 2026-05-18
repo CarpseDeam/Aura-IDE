@@ -645,6 +645,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             return
         self._persistence.new_conversation()
         self._send_handler.clear_queue()
+        self._input.set_text("")
+        self._input.set_attachments([])
         self._input.set_queued_messages(0)
         self._reset_session_usage()
 

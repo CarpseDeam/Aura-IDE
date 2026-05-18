@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pytest
@@ -13,6 +14,7 @@ from aura.client.events import ContentDelta, Done, ToolCallArgsDelta, ToolCallSt
 from aura.client.gemini import (
     GeminiClient,
     _generation_config,
+    _json_safe,
     _to_genai_contents,
     _to_genai_tools,
 )
@@ -155,11 +157,11 @@ def test_to_genai_contents_translates_history_and_tool_results() -> None:
             "role": "model",
             "parts": [
                 {
-                    "thought_signature": "skip_thought_signature_validator",
                     "function_call": {
                         "name": "read_file",
                         "args": {"path": "a.py"},
                     },
+                    "thought_signature": "skip_thought_signature_validator",
                 }
             ],
         },
@@ -206,6 +208,66 @@ def test_to_genai_contents_does_not_add_placeholder_to_plain_text() -> None:
     )
 
     assert contents == [{"role": "model", "parts": [{"text": "Done."}]}]
+
+
+def test_to_genai_contents_reuses_message_signature_for_first_unsigned_tool_call() -> None:
+    messages = [
+        {"role": "user", "content": "Use the tool."},
+        {
+            "role": "assistant",
+            "content": "",
+            "reasoning_content": "Thinking",
+            "thought_signature": "text-signature",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": '{"path":"a.py"}'},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": '{"ok":true}'},
+    ]
+
+    _system, contents = _to_genai_contents(messages)
+
+    model_parts = contents[1]["parts"]
+    assert model_parts[0]["thought_signature"] == "text-signature"
+    assert model_parts[1]["thought_signature"] == "text-signature"
+
+
+def test_gemini_byte_thought_signatures_are_json_safe_for_history_and_request() -> None:
+    raw_message = {
+        "role": "assistant",
+        "content": "",
+        "reasoning_content": "Thinking",
+        "thought_signature": b"\x00\x01abc",
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "thought_signature": b"\x02\x03def",
+                "function": {"name": "read_file", "arguments": '{"path":"a.py"}'},
+            }
+        ],
+    }
+    tool_message = {
+        "role": "tool",
+        "tool_call_id": "call_1",
+        "content": '{"ok":true}',
+    }
+
+    encoded_message = _json_safe(raw_message)
+    json.dumps(encoded_message)
+    assert encoded_message["thought_signature"] == "base64:AAFhYmM="
+    assert encoded_message["tool_calls"][0]["thought_signature"] == "base64:AgNkZWY="
+
+    _system, contents = _to_genai_contents([raw_message, tool_message])
+
+    assert _contains_bytes(contents) is False
+    assert contents[0]["parts"][0]["thought_signature"] == "AAFhYmM="
+    assert contents[0]["parts"][1]["thought_signature"] == "AgNkZWY="
+    json.dumps(contents)
 
 
 def test_to_genai_tools_uses_sdk_field_names() -> None:
@@ -343,8 +405,73 @@ def test_gemini_stream_yields_text_tool_calls_usage_and_done(
     done = next(ev for ev in events if isinstance(ev, Done))
     assert done.finish_reason == "tool_calls"
     assert done.full_message["content"] == "Hi"
+    assert done.full_message["thought_signature"] == "tool-signature"
     assert done.full_message["tool_calls"][0]["thought_signature"] == "tool-signature"
     assert done.full_message["tool_calls"][0]["function"] == {
         "name": "read_file",
         "arguments": '{"path": "a.py"}',
     }
+
+
+def test_gemini_stream_encodes_byte_signatures_before_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = GeminiClient(credential="test-key", vertexai=True)
+
+    sdk_client = _FakeClient()
+    sdk_client.stream_chunks = [
+        {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "function_call": {
+                                    "name": "read_file",
+                                    "args": {"path": "a.py", "payload": b"\x04"},
+                                    "thoughtSignature": bytearray(b"\x02\x03def"),
+                                },
+                                "thought_signature": b"\x00\x01abc",
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+    ]
+    monkeypatch.setattr(client, "_make_sdk_client", lambda: sdk_client)
+
+    events = list(
+        client.stream(
+            messages=[{"role": "user", "content": "hello"}],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {"name": "read_file", "parameters": {"type": "object"}},
+                }
+            ],
+            model="models/gemini-2.0-flash",
+            thinking="high",
+        )
+    )
+
+    done = next(ev for ev in events if isinstance(ev, Done))
+    args = json.loads(done.full_message["tool_calls"][0]["function"]["arguments"])
+
+    assert _contains_bytes(done.full_message) is False
+    assert done.full_message["thought_signature"] == "base64:AAFhYmM="
+    assert done.full_message["tool_calls"][0]["thought_signature"] == "base64:AgNkZWY="
+    assert args == {"path": "a.py", "payload": "base64:BA=="}
+    json.dumps(done.full_message)
+
+
+def _contains_bytes(value: Any) -> bool:
+    if isinstance(value, (bytes, bytearray)):
+        return True
+    if isinstance(value, dict):
+        return any(_contains_bytes(k) or _contains_bytes(v) for k, v in value.items())
+    if isinstance(value, list):
+        return any(_contains_bytes(item) for item in value)
+    if isinstance(value, tuple):
+        return any(_contains_bytes(item) for item in value)
+    return False

@@ -269,13 +269,35 @@ def test_save_succeeded_updates_path(persistence):
     """The save_succeeded slot sets current_conversation_path."""
     assert persistence.current_conversation_path is None
 
-    persistence.save_succeeded.emit(Path("/some/path.json"))
+    persistence.save_succeeded.emit(
+        Path("/some/path.json"),
+        persistence._conversation_generation,
+    )
 
     assert persistence.current_conversation_path == Path("/some/path.json")
 
 
 # ---------------------------------------------------------------------------
-# Test 10: open_conversation shows error on fail
+# Test 10: stale save_succeeded after new_conversation is ignored
+# ---------------------------------------------------------------------------
+
+
+def test_stale_save_succeeded_after_new_conversation_keeps_path_none(
+    persistence,
+):
+    """A previous autosave cannot reattach a new conversation to an old file."""
+    old_generation = persistence._conversation_generation
+    old_path = Path("/ws/.aura/conversations/old.json")
+    persistence._current_conversation_path = old_path
+
+    persistence.new_conversation()
+    persistence.save_succeeded.emit(old_path, old_generation)
+
+    assert persistence.current_conversation_path is None
+
+
+# ---------------------------------------------------------------------------
+# Test 11: open_conversation shows error on fail
 # ---------------------------------------------------------------------------
 
 

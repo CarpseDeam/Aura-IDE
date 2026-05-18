@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
@@ -126,7 +127,7 @@ class GeminiClient:
         tool_calls: dict[int, dict[str, Any]] = {}
         finish_reason: str | None = None
         usage: dict[str, int] | None = None
-        thought_signature: str | None = None
+        message_thought_signature: str | None = None
 
         try:
             for chunk in stream:
@@ -166,9 +167,11 @@ class GeminiClient:
                         continue
 
                     # Capture thought_signature for Thinking models
-                    sig = part.get("thought_signature") or part.get("thoughtSignature")
+                    sig = _encode_signature(
+                        part.get("thought_signature") or part.get("thoughtSignature")
+                    )
                     if sig:
-                        thought_signature = sig
+                        message_thought_signature = sig
 
                     text = part.get("text")
                     if isinstance(text, str) and text:
@@ -185,9 +188,9 @@ class GeminiClient:
                         name = str(function_call.get("name") or "")
                         # PRESERVE native tool call ID if present; fallback to generated
                         call_id = str(function_call.get("id") or f"gemini_call_{idx}")
-                        args = function_call.get("args") or {}
+                        args = _json_safe(function_call.get("args") or {})
                         args_json = json.dumps(args, ensure_ascii=False)
-                        call_signature = (
+                        call_signature = _encode_signature(
                             function_call.get("thought_signature")
                             or function_call.get("thoughtSignature")
                             or sig
@@ -224,8 +227,8 @@ class GeminiClient:
         }
         if reasoning_buf:
             full_message["reasoning_content"] = "".join(reasoning_buf)
-        if thought_signature:
-            full_message["thought_signature"] = thought_signature
+        if message_thought_signature:
+            full_message["thought_signature"] = message_thought_signature
         if tool_calls:
             full_message["tool_calls"] = [tool_calls[idx] for idx in sorted(tool_calls)]
             finish_reason = "tool_calls"
@@ -296,17 +299,18 @@ def _to_genai_contents(
             # on the same kind of part where it was received.
             reasoning = msg.get("reasoning_content")
             thought_sig = msg.get("thought_signature")
+            tool_calls = msg.get("tool_calls") or []
+            request_sig = _signature_for_request(thought_sig)
             
             if reasoning:
                 reasoning_part = {"text": str(reasoning), "thought": True}
-                if thought_sig:
-                    reasoning_part["thought_signature"] = thought_sig
+                if request_sig:
+                    reasoning_part["thought_signature"] = request_sig
                 model_parts.append(reasoning_part)
             
             # If no reasoning but has other parts, start with parts
             model_parts.extend(parts)
 
-            tool_calls = msg.get("tool_calls") or []
             attached_call_signature = False
             for tc in tool_calls:
                 if not isinstance(tc, dict):
@@ -329,8 +333,9 @@ def _to_genai_contents(
                     call_signature = thought_sig
                 if not call_signature and not attached_call_signature:
                     call_signature = "skip_thought_signature_validator"
-                if call_signature:
-                    call_part["thought_signature"] = str(call_signature)
+                request_call_signature = _signature_for_request(call_signature)
+                if request_call_signature:
+                    call_part["thought_signature"] = request_call_signature
                     attached_call_signature = True
                 model_parts.append(call_part)
             
@@ -517,10 +522,12 @@ def _model_to_dict(raw: Any) -> dict[str, Any]:
 
 def _to_plain_dict(raw: Any) -> dict[str, Any]:
     if isinstance(raw, dict):
-        return raw
+        converted = _convert_plain(raw)
+        return converted if isinstance(converted, dict) else {}
     if hasattr(raw, "model_dump"):
         dumped = raw.model_dump(exclude_none=True)
-        return dumped if isinstance(dumped, dict) else {}
+        converted = _convert_plain(dumped)
+        return converted if isinstance(converted, dict) else {}
     result: dict[str, Any] = {}
     for key in ("candidates", "usage_metadata", "prompt_feedback", "text"):
         value = getattr(raw, key, None)
@@ -530,6 +537,10 @@ def _to_plain_dict(raw: Any) -> dict[str, Any]:
 
 
 def _convert_plain(value: Any) -> Any:
+    if isinstance(value, bytes):
+        return "base64:" + base64.b64encode(value).decode("ascii")
+    if isinstance(value, bytearray):
+        return "base64:" + base64.b64encode(bytes(value)).decode("ascii")
     if isinstance(value, dict):
         return {k: _convert_plain(v) for k, v in value.items()}
     if isinstance(value, list):
@@ -542,6 +553,41 @@ def _convert_plain(value: Any) -> Any:
             for k, v in vars(value).items()
             if not k.startswith("_") and v is not None
         }
+    return value
+
+
+def _encode_signature(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        return "base64:" + base64.b64encode(value).decode("ascii")
+    if isinstance(value, bytearray):
+        return "base64:" + base64.b64encode(bytes(value)).decode("ascii")
+    if isinstance(value, str):
+        return value
+    return str(value)
+
+
+def _signature_for_request(value: Any) -> str | None:
+    encoded = _encode_signature(value)
+    if not encoded:
+        return None
+    if encoded.startswith("base64:"):
+        return encoded.removeprefix("base64:")
+    return encoded
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, bytes):
+        return "base64:" + base64.b64encode(value).decode("ascii")
+    if isinstance(value, bytearray):
+        return "base64:" + base64.b64encode(bytes(value)).decode("ascii")
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, tuple):
+        return [_json_safe(v) for v in value]
     return value
 
 
@@ -565,7 +611,8 @@ def _model_id(raw: dict[str, Any]) -> str:
 
 def _json_object(raw: Any) -> dict[str, Any]:
     if isinstance(raw, dict):
-        return raw
+        safe = _json_safe(raw)
+        return safe if isinstance(safe, dict) else {}
     if isinstance(raw, str) and raw:
         try:
             parsed = json.loads(raw)
@@ -577,14 +624,16 @@ def _json_object(raw: Any) -> dict[str, Any]:
 
 def _tool_response(content: Any) -> dict[str, Any]:
     if isinstance(content, dict):
-        return content
+        safe = _json_safe(content)
+        return safe if isinstance(safe, dict) else {}
     if isinstance(content, str):
         try:
             parsed = json.loads(content)
         except json.JSONDecodeError:
             return {"result": content}
-        return parsed if isinstance(parsed, dict) else {"result": parsed}
-    return {"result": content}
+        safe = _json_safe(parsed)
+        return safe if isinstance(safe, dict) else {"result": safe}
+    return {"result": _json_safe(content)}
 
 
 def _first_env(*names: str) -> str | None:

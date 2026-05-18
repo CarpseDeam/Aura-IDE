@@ -41,11 +41,11 @@ class MainWindowToolbar(QToolBar):
 
         # Group 1: conversation actions
         new_act = QAction(QIcon(str(media_path("new_conv.svg"))), "New Conversation", self)
-        new_act.triggered.connect(self.new_conversation_requested.emit)
+        new_act.triggered.connect(lambda _checked=False: self.new_conversation_requested.emit())
         self.addAction(new_act)
 
         open_act = QAction(QIcon(str(media_path("open_conversation.svg"))), "Open Conversation...", self)
-        open_act.triggered.connect(self.open_conversation_requested.emit)
+        open_act.triggered.connect(lambda _checked=False: self.open_conversation_requested.emit())
         self.addAction(open_act)
 
         self.addWidget(_toolbar_separator())
