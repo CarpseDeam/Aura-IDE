@@ -6,7 +6,6 @@ import pytest
 from PySide6.QtWidgets import QApplication
 
 from aura.config import AppSettings
-from aura.gui.left_pane import LeftPane
 from aura.gui.settings_dialog import SettingsDialog
 
 
@@ -30,7 +29,7 @@ def test_settings_dialog_preserves_max_tool_rounds(
     )
 
     assert dlg._settings.max_tool_rounds == 123
-    assert dlg._max_rounds_spin.value() == 123
+    assert dlg._automation_page._max_rounds_spin.value() == 123
     assert dlg.result_settings().max_tool_rounds == 123
     dlg.close()
 
