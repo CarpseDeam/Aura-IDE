@@ -17,14 +17,14 @@ from aura.providers.base import ModelInfo, ThinkingMode
 DEEPSEEK_MODELS: dict[str, ModelInfo] = {
     "deepseek-v4-flash": ModelInfo(
         id="deepseek-v4-flash",
-        label="deepseek-v4-flash",
+        label="DeepSeek V4 Flash",
         input_per_m_usd=0.0,
         output_per_m_usd=0.0,
         cache_hit_per_m_usd=0.0,
     ),
     "deepseek-v4-pro": ModelInfo(
         id="deepseek-v4-pro",
-        label="deepseek-v4-pro",
+        label="DeepSeek V4 Pro",
         input_per_m_usd=0.0,
         output_per_m_usd=0.0,
         cache_hit_per_m_usd=0.0,
@@ -33,9 +33,30 @@ DEEPSEEK_MODELS: dict[str, ModelInfo] = {
 DEEPSEEK_PRICING: dict[str, dict[str, float]] = {}
 
 OPENAI_MODELS: dict[str, ModelInfo] = {
-    "gpt-4o": ModelInfo(
-        id="gpt-4o",
-        label="gpt-4o",
+    "gpt-5.5": ModelInfo(
+        id="gpt-5.5",
+        label="GPT-5.5",
+        input_per_m_usd=0.0,
+        output_per_m_usd=0.0,
+        cache_hit_per_m_usd=0.0,
+    ),
+    "gpt-5.4": ModelInfo(
+        id="gpt-5.4",
+        label="GPT-5.4",
+        input_per_m_usd=0.0,
+        output_per_m_usd=0.0,
+        cache_hit_per_m_usd=0.0,
+    ),
+    "gpt-5.4-mini": ModelInfo(
+        id="gpt-5.4-mini",
+        label="GPT-5.4 Mini",
+        input_per_m_usd=0.0,
+        output_per_m_usd=0.0,
+        cache_hit_per_m_usd=0.0,
+    ),
+    "gpt-5.4-nano": ModelInfo(
+        id="gpt-5.4-nano",
+        label="GPT-5.4 Nano",
         input_per_m_usd=0.0,
         output_per_m_usd=0.0,
         cache_hit_per_m_usd=0.0,
@@ -44,9 +65,30 @@ OPENAI_MODELS: dict[str, ModelInfo] = {
 OPENAI_PRICING: dict[str, dict[str, float]] = {}
 
 ANTHROPIC_MODELS: dict[str, ModelInfo] = {
+    "claude-opus-4-7": ModelInfo(
+        id="claude-opus-4-7",
+        label="Claude Opus 4.7",
+        input_per_m_usd=0.0,
+        output_per_m_usd=0.0,
+        cache_hit_per_m_usd=0.0,
+    ),
     "claude-sonnet-4-6": ModelInfo(
         id="claude-sonnet-4-6",
-        label="claude-sonnet-4-6",
+        label="Claude Sonnet 4.6",
+        input_per_m_usd=0.0,
+        output_per_m_usd=0.0,
+        cache_hit_per_m_usd=0.0,
+    ),
+    "claude-haiku-4-5": ModelInfo(
+        id="claude-haiku-4-5",
+        label="Claude Haiku 4.5",
+        input_per_m_usd=0.0,
+        output_per_m_usd=0.0,
+        cache_hit_per_m_usd=0.0,
+    ),
+    "claude-haiku-4-5-20251001": ModelInfo(
+        id="claude-haiku-4-5-20251001",
+        label="Claude Haiku 4.5 Snapshot",
         input_per_m_usd=0.0,
         output_per_m_usd=0.0,
         cache_hit_per_m_usd=0.0,
@@ -55,9 +97,44 @@ ANTHROPIC_MODELS: dict[str, ModelInfo] = {
 ANTHROPIC_PRICING: dict[str, dict[str, float]] = {}
 
 OPENROUTER_MODELS: dict[str, ModelInfo] = {
-    "openai/gpt-4o": ModelInfo(
-        id="openai/gpt-4o",
-        label="openai/gpt-4o",
+    "deepseek/deepseek-v4-flash": ModelInfo(
+        id="deepseek/deepseek-v4-flash",
+        label="DeepSeek V4 Flash",
+        input_per_m_usd=0.0,
+        output_per_m_usd=0.0,
+        cache_hit_per_m_usd=0.0,
+    ),
+    "openai/gpt-oss-120b": ModelInfo(
+        id="openai/gpt-oss-120b",
+        label="OpenAI GPT-OSS 120B",
+        input_per_m_usd=0.0,
+        output_per_m_usd=0.0,
+        cache_hit_per_m_usd=0.0,
+    ),
+    "openai/gpt-oss-20b": ModelInfo(
+        id="openai/gpt-oss-20b",
+        label="OpenAI GPT-OSS 20B",
+        input_per_m_usd=0.0,
+        output_per_m_usd=0.0,
+        cache_hit_per_m_usd=0.0,
+    ),
+    "qwen/qwen3-coder:free": ModelInfo(
+        id="qwen/qwen3-coder:free",
+        label="Qwen3 Coder Free",
+        input_per_m_usd=0.0,
+        output_per_m_usd=0.0,
+        cache_hit_per_m_usd=0.0,
+    ),
+    "meta-llama/llama-3.3-70b-instruct:free": ModelInfo(
+        id="meta-llama/llama-3.3-70b-instruct:free",
+        label="Llama 3.3 70B Free",
+        input_per_m_usd=0.0,
+        output_per_m_usd=0.0,
+        cache_hit_per_m_usd=0.0,
+    ),
+    "openrouter/owl-alpha": ModelInfo(
+        id="openrouter/owl-alpha",
+        label="Owl Alpha",
         input_per_m_usd=0.0,
         output_per_m_usd=0.0,
         cache_hit_per_m_usd=0.0,
@@ -70,23 +147,44 @@ OPENROUTER_PRICING: dict[str, dict[str, float]] = {}
 # ---------------------------------------------------------------------------
 
 GOOGLE_CLOUD_MODELS: dict[str, ModelInfo] = {
-    "gemini-2.0-flash-001": ModelInfo(
-        id="gemini-2.0-flash-001",
-        label="Gemini 2.0 Flash",
+    "gemini-3.1-pro-preview": ModelInfo(
+        id="gemini-3.1-pro-preview",
+        label="Gemini 3.1 Pro Preview",
         input_per_m_usd=0.0,
         output_per_m_usd=0.0,
         cache_hit_per_m_usd=0.0,
     ),
-    "gemini-2.5-flash-001": ModelInfo(
-        id="gemini-2.5-flash-001",
+    "gemini-3-flash-preview": ModelInfo(
+        id="gemini-3-flash-preview",
+        label="Gemini 3 Flash Preview",
+        input_per_m_usd=0.0,
+        output_per_m_usd=0.0,
+        cache_hit_per_m_usd=0.0,
+    ),
+    "gemini-3.1-flash-lite": ModelInfo(
+        id="gemini-3.1-flash-lite",
+        label="Gemini 3.1 Flash-Lite",
+        input_per_m_usd=0.0,
+        output_per_m_usd=0.0,
+        cache_hit_per_m_usd=0.0,
+    ),
+    "gemini-2.5-pro": ModelInfo(
+        id="gemini-2.5-pro",
+        label="Gemini 2.5 Pro",
+        input_per_m_usd=0.0,
+        output_per_m_usd=0.0,
+        cache_hit_per_m_usd=0.0,
+    ),
+    "gemini-2.5-flash": ModelInfo(
+        id="gemini-2.5-flash",
         label="Gemini 2.5 Flash",
         input_per_m_usd=0.0,
         output_per_m_usd=0.0,
         cache_hit_per_m_usd=0.0,
     ),
-    "gemini-2.5-pro-001": ModelInfo(
-        id="gemini-2.5-pro-001",
-        label="Gemini 2.5 Pro",
+    "gemini-2.5-flash-lite": ModelInfo(
+        id="gemini-2.5-flash-lite",
+        label="Gemini 2.5 Flash-Lite",
         input_per_m_usd=0.0,
         output_per_m_usd=0.0,
         cache_hit_per_m_usd=0.0,
@@ -112,7 +210,7 @@ PROVIDER_CATALOG: dict[str, dict] = {
         "label": "OpenAI",
         "base_url": "https://api.openai.com/v1",
         "env_key": "OPENAI_API_KEY",
-        "default_model": "gpt-4o",
+        "default_model": "gpt-5.4-mini",
         "default_thinking": "off",
         "models": OPENAI_MODELS,
         "pricing": OPENAI_PRICING,
@@ -121,7 +219,7 @@ PROVIDER_CATALOG: dict[str, dict] = {
         "label": "OpenRouter",
         "base_url": "https://openrouter.ai/api/v1",
         "env_key": "OPENROUTER_API_KEY",
-        "default_model": "openai/gpt-4o",
+        "default_model": "deepseek/deepseek-v4-flash",
         "default_thinking": "off",
         "models": OPENROUTER_MODELS,
         "pricing": OPENROUTER_PRICING,
@@ -139,7 +237,7 @@ PROVIDER_CATALOG: dict[str, dict] = {
         "label": "Google Cloud Gemini",
         "base_url": "",
         "env_key": "GOOGLE_CLOUD_PROJECT",
-        "default_model": "gemini-2.0-flash-001",
+        "default_model": "gemini-2.5-flash",
         "default_thinking": "off",
         "models": GOOGLE_CLOUD_MODELS,
         "pricing": GOOGLE_CLOUD_PRICING,
