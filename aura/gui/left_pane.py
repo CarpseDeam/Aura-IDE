@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
 )
 
@@ -58,14 +59,20 @@ class LeftPane(QFrame):
         layout.addWidget(self._tree, 1)
 
         # --- Model Config section ---
+        self._model_config_footer = QFrame()
+        self._model_config_footer.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        footer_layout = QVBoxLayout(self._model_config_footer)
+        footer_layout.setContentsMargins(0, 0, 0, 0)
+        footer_layout.setSpacing(4)
+
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.HLine)
         sep.setStyleSheet(f"QFrame {{ color: {BORDER}; }}")
-        layout.addWidget(sep)
+        footer_layout.addWidget(sep)
 
         model_label = QLabel("Model Configuration")
         model_label.setObjectName("paneTitle")
-        layout.addWidget(model_label)
+        footer_layout.addWidget(model_label)
 
         # Planner model
         planner_model_row = QHBoxLayout()
@@ -78,7 +85,7 @@ class LeftPane(QFrame):
             lambda: self.planner_model_changed.emit(self.current_planner_model())
         )
         planner_model_row.addWidget(self._planner_model_combo, 1)
-        layout.addLayout(planner_model_row)
+        footer_layout.addLayout(planner_model_row)
 
         # Planner thinking
         planner_think_row = QHBoxLayout()
@@ -95,7 +102,7 @@ class LeftPane(QFrame):
             lambda: self.planner_thinking_changed.emit(self.current_planner_thinking())
         )
         planner_think_row.addWidget(self._planner_thinking_combo, 1)
-        layout.addLayout(planner_think_row)
+        footer_layout.addLayout(planner_think_row)
 
         # Worker model
         worker_model_row = QHBoxLayout()
@@ -108,7 +115,7 @@ class LeftPane(QFrame):
             lambda: self.worker_model_changed.emit(self.current_worker_model())
         )
         worker_model_row.addWidget(self._worker_model_combo, 1)
-        layout.addLayout(worker_model_row)
+        footer_layout.addLayout(worker_model_row)
 
         # Worker thinking
         worker_think_row = QHBoxLayout()
@@ -125,7 +132,9 @@ class LeftPane(QFrame):
             lambda: self.worker_thinking_changed.emit(self.current_worker_thinking())
         )
         worker_think_row.addWidget(self._worker_thinking_combo, 1)
-        layout.addLayout(worker_think_row)
+        footer_layout.addLayout(worker_think_row)
+
+        layout.addWidget(self._model_config_footer)
 
         self.update_workspace_label(workspace_root)
 
@@ -139,9 +148,6 @@ class LeftPane(QFrame):
         self._workspace_label.setText(str(root))
 
     def populate_models(self, planner_provider: ProviderId, worker_provider: ProviderId) -> None:
-        p_spec = provider_registry.get(planner_provider)
-        w_spec = provider_registry.get(worker_provider)
-
         # Planner
         self._planner_model_combo.blockSignals(True)
         self._planner_model_combo.clear()
