@@ -118,6 +118,7 @@ class _DispatchProxy(QObject):
         self._worker_system_prompt: str = ""
         self._auto_commit_enabled: bool = True
         self._tier1_context: str = ""
+        self._max_tool_rounds: int | None = None
 
         # Per-call state — guarded by a lock so concurrent dispatches (which
         # shouldn't happen, but be safe) don't trample each other.
@@ -151,6 +152,9 @@ class _DispatchProxy(QObject):
 
     def set_auto_approve(self, enabled: bool) -> None:
         self._approval_proxy.set_approve_all_session(enabled)
+
+    def set_max_tool_rounds(self, value: int | None) -> None:
+        self._max_tool_rounds = value
 
     def records(self) -> list[WorkerDispatchRecord]:
         return list(self._records)
@@ -381,6 +385,7 @@ class _DispatchProxy(QObject):
                 dispatch_cb=None,
                 temperature=self._worker_temperature,
                 hook_name='generate_worker_code',
+                max_tool_rounds=self._max_tool_rounds,
             )
         except Exception as exc:
             api_errors.append(f"{type(exc).__name__}: {exc}")

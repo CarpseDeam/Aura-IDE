@@ -1122,6 +1122,58 @@ class TestCircuitBreaker:
         assert parsed["reason"] == "loop_detected"
         assert history.messages[-1]["content"].startswith("<continuation_report>")
 
+    def test_worker_repeated_todo_update_creates_phase_boundary(
+        self, manager, mock_client, mock_tools, on_event, captured_events, cancel_event, history
+    ):
+        """Repeated identical TODO updates are treated as no-progress loops."""
+        type(mock_tools).mode = PropertyMock(return_value="worker")
+        args = {"tasks": [{"description": "Read files", "status": "active"}]}
+        tc = _tool_call("todo1", "update_todo_list", args)
+
+        mock_client.side_effect = [
+            iter([_make_done(content="", tool_calls=[tc])]),
+            iter([_make_done(content="", tool_calls=[tc])]),
+            iter([_make_done(content="", tool_calls=[tc])]),
+            iter([
+                ContentDelta(text="<continuation_report>"),
+                _make_done(content=(
+                    "<continuation_report>\n"
+                    "<status>needs_followup</status>\n"
+                    "<reason>repeated_no_progress</reason>\n"
+                    "<completed>\n- Updated TODO list\n</completed>\n"
+                    "<modified_files>\n</modified_files>\n"
+                    "<validation>Not run</validation>\n"
+                    "<remaining>\n- Move beyond the repeated TODO update\n</remaining>\n"
+                    "<recommended_next_step>Continue with implementation.</recommended_next_step>\n"
+                    "</continuation_report>"
+                )),
+            ]),
+        ]
+        mock_tools.execute.return_value = ToolExecResult(
+            ok=True,
+            payload={"ok": True, "message": "TODO list updated", "tasks": args["tasks"]},
+            extras={"is_todo_update": True, "tasks": args["tasks"]},
+        )
+
+        manager.send(
+            on_event=on_event,
+            approval_cb=_make_approval_cb(),
+            cancel_event=cancel_event,
+            model="deepseek-chat",
+            thinking="off",
+        )
+
+        assert mock_tools.execute.call_count == 3
+        tool_results = [
+            e for e in captured_events if isinstance(e, ToolResult) and e.name == "update_todo_list"
+        ]
+        parsed = json.loads(tool_results[2].result)
+        assert parsed["loop_detected"] is True
+        assert parsed["recoverable"] is True
+        assert parsed["phase_boundary"] is True
+        assert parsed["reason"] == "repeated_no_progress"
+        assert history.messages[-1]["content"].startswith("<continuation_report>")
+
 
 # ===================================================================
 # 16. reject_all_for_turn propagation

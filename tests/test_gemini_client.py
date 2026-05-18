@@ -177,6 +177,37 @@ def test_to_genai_contents_translates_history_and_tool_results() -> None:
     ]
 
 
+def test_to_genai_contents_preserves_function_call_thought_signature() -> None:
+    messages = [
+        {"role": "user", "content": "Use the tool."},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "thought_signature": "signed-call",
+                    "function": {"name": "read_file", "arguments": '{"path":"a.py"}'},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": '{"ok":true}'},
+    ]
+
+    _system, contents = _to_genai_contents(messages)
+
+    assert contents[1]["parts"][0]["thought_signature"] == "signed-call"
+
+
+def test_to_genai_contents_does_not_add_placeholder_to_plain_text() -> None:
+    _system, contents = _to_genai_contents(
+        [{"role": "assistant", "content": "Done."}]
+    )
+
+    assert contents == [{"role": "model", "parts": [{"text": "Done."}]}]
+
+
 def test_to_genai_tools_uses_sdk_field_names() -> None:
     tools = [
         {
@@ -226,8 +257,12 @@ def test_generation_config_uses_google_genai_field_names() -> None:
     assert config["system_instruction"] == "Be brief."
     assert config["temperature"] == 0.25
     assert config["candidate_count"] == 1
-    assert config["thinking_config"] == {"thinking_level": "HIGH"}
+    assert config["thinking_config"] == {
+        "include_thoughts": True,
+        "thinking_budget": 8192,
+    }
     assert config["tool_config"] == {"function_calling_config": {"mode": "AUTO"}}
+    assert any(s["category"] == "HARM_CATEGORY_DANGEROUS_CONTENT" for s in config["safety_settings"])
 
 
 def test_gemini_stream_yields_text_tool_calls_usage_and_done(
@@ -253,7 +288,8 @@ def test_gemini_stream_yields_text_tool_calls_usage_and_done(
                                 "function_call": {
                                     "name": "read_file",
                                     "args": {"path": "a.py"},
-                                }
+                                },
+                                "thought_signature": "tool-signature",
                             }
                         ]
                     },
@@ -307,6 +343,7 @@ def test_gemini_stream_yields_text_tool_calls_usage_and_done(
     done = next(ev for ev in events if isinstance(ev, Done))
     assert done.finish_reason == "tool_calls"
     assert done.full_message["content"] == "Hi"
+    assert done.full_message["tool_calls"][0]["thought_signature"] == "tool-signature"
     assert done.full_message["tool_calls"][0]["function"] == {
         "name": "read_file",
         "arguments": '{"path": "a.py"}',

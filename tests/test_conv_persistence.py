@@ -99,6 +99,8 @@ def mock_loaded():
 def test_new_conversation_resets_state(persistence, mock_bridge, mock_chat,
                                         mock_playground):
     """Calling new_conversation() resets bridge, chat, playground, and path."""
+    persistence._active_replay_id = 7
+
     persistence.new_conversation()
 
     mock_bridge.reset_history.assert_called_once()
@@ -106,6 +108,7 @@ def test_new_conversation_resets_state(persistence, mock_bridge, mock_chat,
     mock_chat.reset.assert_called_once()
     mock_playground.clear.assert_called_once()
     assert persistence.current_conversation_path is None
+    assert persistence._active_replay_id == 8
 
 
 # ---------------------------------------------------------------------------

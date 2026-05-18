@@ -574,6 +574,7 @@ class ConversationBridge(QObject):
         self._index_to_id.clear()
         self._index_to_name.clear()
         self._active_model = str(model)
+        self._dispatch_proxy.set_max_tool_rounds(max_tool_rounds)
         self._thread = QThread()
         self._worker = _Worker(
             manager=self._manager,

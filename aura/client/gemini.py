@@ -183,18 +183,27 @@ class GeminiClient:
                     if isinstance(function_call, dict):
                         idx = len(tool_calls)
                         name = str(function_call.get("name") or "")
+                        # PRESERVE native tool call ID if present; fallback to generated
+                        call_id = str(function_call.get("id") or f"gemini_call_{idx}")
                         args = function_call.get("args") or {}
                         args_json = json.dumps(args, ensure_ascii=False)
+                        call_signature = (
+                            function_call.get("thought_signature")
+                            or function_call.get("thoughtSignature")
+                            or sig
+                        )
                         tool_call = {
-                            "id": f"gemini_call_{idx}",
+                            "id": call_id,
                             "type": "function",
                             "function": {
                                 "name": name,
                                 "arguments": args_json,
                             },
                         }
+                        if call_signature:
+                            tool_call["thought_signature"] = call_signature
                         tool_calls[idx] = tool_call
-                        yield ToolCallStart(index=idx, id=tool_call["id"], name=name)
+                        yield ToolCallStart(index=idx, id=call_id, name=name)
                         yield ToolCallArgsDelta(index=idx, args_chunk=args_json)
         except Exception as exc:
             yield ApiError(
@@ -281,17 +290,25 @@ def _to_genai_contents(
             continue
 
         if role == "assistant":
-            model_parts = list(parts)
+            model_parts: list[dict[str, Any]] = []
             
-            # For Thinking models: if we have reasoning content or tool calls, 
-            # we must handle the thought_signature.
+            # For Thinking models, preserve the model-returned thought signature
+            # on the same kind of part where it was received.
             reasoning = msg.get("reasoning_content")
-            thought_sig = msg.get("thought_signature") or "skip_thought_signature_validator"
+            thought_sig = msg.get("thought_signature")
             
             if reasoning:
-                model_parts.insert(0, {"text": str(reasoning), "thought": True})
+                reasoning_part = {"text": str(reasoning), "thought": True}
+                if thought_sig:
+                    reasoning_part["thought_signature"] = thought_sig
+                model_parts.append(reasoning_part)
+            
+            # If no reasoning but has other parts, start with parts
+            model_parts.extend(parts)
 
-            for tc in msg.get("tool_calls") or []:
+            tool_calls = msg.get("tool_calls") or []
+            attached_call_signature = False
+            for tc in tool_calls:
                 if not isinstance(tc, dict):
                     continue
                 fn = tc.get("function") or {}
@@ -301,40 +318,64 @@ def _to_genai_contents(
                 call_id = str(tc.get("id") or "")
                 if call_id and name:
                     tool_names_by_id[call_id] = name
-                
-                # The thought_signature MUST accompany the first function_call part
-                model_parts.append(
-                    {
-                        "thought_signature": thought_sig,
-                        "function_call": {
-                            "name": name,
-                            "args": _json_object(fn.get("arguments")),
-                        }
+                call_part = {
+                    "function_call": {
+                        "name": name,
+                        "args": _json_object(fn.get("arguments")),
                     }
-                )
-            contents.append({"role": "model", "parts": model_parts or [{"text": ""}]})
+                }
+                call_signature = tc.get("thought_signature") or fn.get("thought_signature")
+                if not call_signature and thought_sig and not attached_call_signature:
+                    call_signature = thought_sig
+                if not call_signature and not attached_call_signature:
+                    call_signature = "skip_thought_signature_validator"
+                if call_signature:
+                    call_part["thought_signature"] = str(call_signature)
+                    attached_call_signature = True
+                model_parts.append(call_part)
+            
+            if not model_parts:
+                model_parts.append({"text": ""})
+
+            # Gemini strictly forbids consecutive 'model' turns. 
+            if contents and contents[-1]["role"] == "model":
+                contents[-1]["parts"].extend(model_parts)
+            else:
+                contents.append({"role": "model", "parts": model_parts})
             continue
 
         if role == "tool":
             call_id = str(msg.get("tool_call_id") or "")
             name = str(msg.get("name") or tool_names_by_id.get(call_id) or "tool")
-            contents.append(
-                {
-                    "role": "user",
-                    "parts": [
-                        {
-                            "function_response": {
-                                "name": name,
-                                "response": _tool_response(msg.get("content")),
-                            }
-                        }
-                    ],
+            
+            tool_part = {
+                "function_response": {
+                    "name": name,
+                    "response": _tool_response(msg.get("content")),
                 }
-            )
+            }
+
+            # Gemini requires ALL tool responses from a turn to be in ONE message.
+            if contents and contents[-1]["role"] == "user":
+                last_parts = contents[-1]["parts"]
+                if last_parts and "function_response" in last_parts[0]:
+                    last_parts.append(tool_part)
+                    continue
+
+            contents.append({"role": "user", "parts": [tool_part]})
             continue
 
         if role == "user":
-            contents.append({"role": "user", "parts": parts or [{"text": ""}]})
+            user_parts = parts or [{"text": ""}]
+            # Group consecutive 'user' messages
+            if contents and contents[-1]["role"] == "user":
+                # Only group if the previous was NOT a tool response Turn
+                prev_parts = contents[-1]["parts"]
+                if prev_parts and "function_response" not in prev_parts[0]:
+                    prev_parts.extend(user_parts)
+                    continue
+
+            contents.append({"role": "user", "parts": user_parts})
 
     return ("\n\n".join(system_parts) if system_parts else None), contents
 
@@ -392,10 +433,21 @@ def _generation_config(
         config["tools"] = genai_tools
         config["tool_config"] = {"function_calling_config": {"mode": "AUTO"}}
 
-    if thinking == "high":
-        config["thinking_config"] = {"thinking_level": "HIGH"}
-    elif thinking == "max":
-        config["thinking_config"] = {"thinking_budget": 8192}
+    if thinking != "off":
+        budget = 32000 if thinking == "max" else 8192
+        config["thinking_config"] = {
+            "include_thoughts": True,
+            "thinking_budget": budget
+        }
+    
+    # Minimize accidental blocks during code generation
+    config["safety_settings"] = [
+        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_CIVIC_INTEGRITY", "threshold": "BLOCK_NONE"},
+    ]
     return config
 
 

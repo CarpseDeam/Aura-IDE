@@ -138,6 +138,7 @@ class ConversationPersistence(QObject):
 
     def new_conversation(self) -> None:
         """Reset all state for a brand-new conversation."""
+        self._active_replay_id += 1
         self._bridge.reset_history()
         self._bridge.clear_pre_worker_snapshot()
         self._chat.reset()
@@ -203,6 +204,7 @@ class ConversationPersistence(QObject):
         Sets history, reconfigures provider/model/thinking, clears the view,
         then replays all messages into the chat.
         """
+        self._active_replay_id += 1
         pwm = loaded.planner_worker_mode
         from aura.prompts import PLANNER_SYSTEM_PROMPT, SINGLE_SYSTEM_PROMPT
         default_prompt = PLANNER_SYSTEM_PROMPT if pwm else SINGLE_SYSTEM_PROMPT
