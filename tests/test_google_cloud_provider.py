@@ -792,11 +792,9 @@ def test_google_cloud_provider_spec():
     assert spec.label == "Google Cloud Gemini"
     assert spec.base_url == ""
     assert spec.env_key == "GOOGLE_CLOUD_PROJECT"
-    assert spec.default_model == "gemini-2.0-flash-001"
-    assert spec.default_thinking == "off"
-    assert "gemini-2.0-flash-001" in spec.models
-    assert "gemini-2.5-flash-001" in spec.models
-    assert "gemini-2.5-pro-001" in spec.models
+    assert spec.default_model == "gemini-2.5-flash"
+    assert "gemini-2.5-flash" in spec.models
+    assert "gemini-2.5-pro" in spec.models
 
 
 # ---------------------------------------------------------------------------

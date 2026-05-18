@@ -215,6 +215,9 @@ def _grep_python(
         return {"ok": False, "error": f"invalid regex: {exc}"}
 
     matches: list[dict[str, Any]] = []
+    
+    # Import locally to avoid circular dependency if config changes
+    from aura.config import MAX_READ_BYTES
 
     # Collect candidate files via rglob with optional include_pattern filter
     candidates: list[Path] = []
@@ -229,7 +232,15 @@ def _grep_python(
             break
         rel = file_path.relative_to(workspace_root).as_posix()
         try:
-            raw = file_path.read_bytes()
+            # Prevent hanging on massive binary/log files during search fallback
+            file_size = file_path.stat().st_size
+            if file_size > MAX_READ_BYTES:
+                # Skip massive files in pure python grep to avoid memory explosion
+                continue
+                
+            with open(file_path, "rb") as f:
+                raw = f.read()
+                
             # Try UTF-8, fall back to latin-1 for binary-ish files
             try:
                 text = raw.decode("utf-8")

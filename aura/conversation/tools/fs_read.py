@@ -26,15 +26,22 @@ def read_file(workspace_root: Path, target: Path) -> dict[str, Any]:
         return {"ok": False, "error": f"file not found: {target.relative_to(workspace_root)}"}
     if not target.is_file():
         return {"ok": False, "error": f"not a regular file: {target.relative_to(workspace_root)}"}
-    raw = target.read_bytes()
+    
     truncated = False
-    if len(raw) > MAX_READ_BYTES:
-        raw = raw[:MAX_READ_BYTES]
-        truncated = True
     try:
+        file_size = target.stat().st_size
+        if file_size > MAX_READ_BYTES:
+            truncated = True
+        
+        with open(target, "rb") as f:
+            raw = f.read(MAX_READ_BYTES)
+            
         text = raw.decode("utf-8")
     except UnicodeDecodeError:
         return {"ok": False, "error": f"file cannot be decoded as UTF-8: {target.relative_to(workspace_root)}"}
+    except Exception as e:
+        return {"ok": False, "error": f"error reading file: {e}"}
+
     if truncated:
         text += f"\n\n[... truncated at {MAX_READ_BYTES} bytes ...]"
     rel = target.relative_to(workspace_root).as_posix()
@@ -52,15 +59,20 @@ def read_file_outline(workspace_root: Path, target: Path) -> dict[str, Any]:
     if not target.is_file():
         return {"ok": False, "error": f"not a regular file: {target.relative_to(workspace_root)}"}
 
-    raw = target.read_bytes()
     truncated = False
-    if len(raw) > MAX_READ_BYTES:
-        raw = raw[:MAX_READ_BYTES]
-        truncated = True
     try:
+        file_size = target.stat().st_size
+        if file_size > MAX_READ_BYTES:
+            truncated = True
+
+        with open(target, "rb") as f:
+            raw = f.read(MAX_READ_BYTES)
+
         text = raw.decode("utf-8")
     except UnicodeDecodeError:
         return {"ok": False, "error": "file cannot be decoded as UTF-8"}
+    except Exception as e:
+        return {"ok": False, "error": f"error reading file: {e}"}
 
     suffix = target.suffix.lower()
     rel = target.relative_to(workspace_root).as_posix()

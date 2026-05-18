@@ -175,6 +175,8 @@ def generate_repo_map(workspace_root: Path) -> str:
     cached_mtime, cached_text = _repo_map_cache.get(root_str, (0.0, ""))
     if current_mtime == cached_mtime and cached_text:
         return cached_text
+        
+    from aura.config import MAX_READ_BYTES
 
     # Walk workspace and collect outlines
     tree_lines: list[str] = []
@@ -201,8 +203,13 @@ def generate_repo_map(workspace_root: Path) -> str:
 
             fpath = os.path.join(dirpath, fname)
             try:
+                # Use chunked read here as well
+                file_size = os.path.getsize(fpath)
+                if file_size > MAX_READ_BYTES:
+                    continue # Skip massive files for outline
+                    
                 with open(fpath, "rb") as f:
-                    raw = f.read()
+                    raw = f.read(MAX_READ_BYTES)
             except (OSError, PermissionError):
                 continue
 

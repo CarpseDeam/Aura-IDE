@@ -101,6 +101,8 @@ class ConversationManager:
         `hook_name` controls which hook to trigger for model generation.
         The planner uses `generate_planner_code`; workers use `generate_worker_code`.
         """
+        import concurrent.futures
+
         reject_all_for_turn = False
         mode = getattr(self._tools, "mode", "single")
         limits = ToolLimitState(mode=mode)
@@ -210,11 +212,39 @@ class ConversationManager:
 
             _terminal_dispatch = False
             _worker_phase_boundary_info: dict[str, Any] | None = None
-            for tc in tool_calls:
-                if cancel_event.is_set():
-                    self._cleanup_cancelled(on_event)
-                    return
 
+            def execute_tool(tc: dict[str, Any]) -> dict[str, Any]:
+                nonlocal _terminal_dispatch, _worker_phase_boundary_info, reject_all_for_turn, worker_redispatches
+                if cancel_event.is_set():
+                    return {"cancelled": True}
+
+                fn = tc["function"]
+                name = fn["name"]
+                tool_call_id = tc["id"]
+                try:
+                    args = json.loads(fn.get("arguments") or "{}")
+                except json.JSONDecodeError as exc:
+                    err = f"failed to parse tool arguments as JSON: {exc}"
+                    return {
+                        "id": tool_call_id,
+                        "name": name,
+                        "ok": False,
+                        "result_payload": json.dumps({"ok": False, "error": err}),
+                        "event": ToolResult(
+                            tool_call_id=tool_call_id,
+                            name=name,
+                            ok=False,
+                            result=err,
+                        )
+                    }
+
+                # Limits check is not thread-safe if done concurrently without a lock,
+                # but we will only parallelize reads. Let's do limits check synchronously first.
+                return {"id": tool_call_id, "name": name, "args": args}
+
+            # Pre-process tools sequentially to handle limits check and identify parallelizable ones
+            tasks = []
+            for tc in tool_calls:
                 fn = tc["function"]
                 name = fn["name"]
                 tool_call_id = tc["id"]
@@ -242,6 +272,17 @@ class ConversationManager:
                         _worker_phase_boundary_info = limit_info
                     continue
                 limits.record(name)
+                tasks.append({"id": tool_call_id, "name": name, "args": args})
+
+            if cancel_event.is_set():
+                self._cleanup_cancelled(on_event)
+                return
+
+            def process_task(task: dict[str, Any]) -> dict[str, Any]:
+                nonlocal _terminal_dispatch, _worker_phase_boundary_info, reject_all_for_turn, worker_redispatches
+                tool_call_id = task["id"]
+                name = task["name"]
+                args = task["args"]
 
                 if name == "dispatch_to_worker":
                     result = self._handle_dispatch(
@@ -252,15 +293,15 @@ class ConversationManager:
                     )
                     if result is not None and not result.cancelled:
                         if result.extras.get("dispatch_spec_rejected"):
-                            continue
+                            return {"id": tool_call_id, "skip": True}
                         if result.recoverable and result.phase_boundary:
                             if worker_redispatches >= MAX_WORKER_REDISPATCHES_PER_USER_TURN:
-                                self._append_redispatch_limit_message(result, on_event)
-                                return
+                                # We must handle return here carefully since we're inside a function
+                                return {"id": tool_call_id, "return": True, "result": result}
                             worker_redispatches += 1
                         else:
                             _terminal_dispatch = True
-                    continue
+                    return {"id": tool_call_id, "skip": True}
 
                 if name == "run_research":
                     ok = self._handle_research(
@@ -273,7 +314,7 @@ class ConversationManager:
                     )
                     if ok:
                         _terminal_dispatch = True
-                    continue
+                    return {"id": tool_call_id, "skip": True}
 
                 if name == "run_terminal_command":
                     loop_info = self._handle_terminal_command(
@@ -285,23 +326,23 @@ class ConversationManager:
                     )
                     if self._is_recoverable_phase_boundary(loop_info):
                         _worker_phase_boundary_info = loop_info
-                    continue
+                    return {"id": tool_call_id, "skip": True}
 
                 if reject_all_for_turn and name in ("write_file", "edit_file"):
                     payload = json.dumps(
                         {"ok": False, "error": "User rejected all writes in this turn."}
                     )
-                    self._history.append_tool_result(tool_call_id, payload)
-                    on_event(
-                        ToolResult(
+                    return {
+                        "id": tool_call_id,
+                        "result_payload": payload,
+                        "event": ToolResult(
                             tool_call_id=tool_call_id,
                             name=name,
                             ok=False,
                             result=payload,
                             extras={"approval": "reject_all"},
                         )
-                    )
-                    continue
+                    }
 
                 exec_result = self._tools.execute(
                     name=name,
@@ -309,6 +350,8 @@ class ConversationManager:
                     approval_cb=approval_cb,
                     reject_all=False,
                 )
+                
+                # Check rejection state after execute (approval_cb could set it)
                 if exec_result.extras.get("approval") == "reject_all":
                     reject_all_for_turn = True
 
@@ -323,19 +366,74 @@ class ConversationManager:
                 )
                 tool_msg_content = loop_result["content"]
                 loop_info = loop_result["info"]
+                
                 if self._is_recoverable_phase_boundary(loop_info):
                     _worker_phase_boundary_info = loop_info
 
-                self._history.append_tool_result(tool_call_id, tool_msg_content)
-                on_event(
-                    ToolResult(
+                return {
+                    "id": tool_call_id,
+                    "result_payload": tool_msg_content,
+                    "event": ToolResult(
                         tool_call_id=tool_call_id,
                         name=name,
                         ok=exec_result.ok,
                         result=tool_msg_content,
                         extras=exec_result.extras,
                     )
-                )
+                }
+
+            # Only parallelize read-only tools to avoid race conditions.
+            read_only_tools = {"read_file", "read_file_outline", "list_directory", "grep_search", "glob"}
+            
+            # Execute tasks
+            results_to_append = []
+            
+            with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+                # We can map read tasks, and sequentialize others.
+                futures = {}
+                for task in tasks:
+                    if cancel_event.is_set():
+                        break
+                    
+                    if task["name"] in read_only_tools:
+                        futures[executor.submit(process_task, task)] = task
+                    else:
+                        # Ensure we wait for all pending reads before a write
+                        for fut in concurrent.futures.as_completed(futures):
+                            results_to_append.append(fut.result())
+                        futures.clear()
+                        
+                        if cancel_event.is_set():
+                            break
+                            
+                        # Process sequential task
+                        results_to_append.append(process_task(task))
+                        
+                # Wait for any remaining reads
+                for fut in concurrent.futures.as_completed(futures):
+                    results_to_append.append(fut.result())
+
+            # History is not thread-safe. Reorder results by original tool_call_id order and append.
+            results_by_id = {r.get("id"): r for r in results_to_append if r is not None}
+            
+            for task in tasks:
+                if cancel_event.is_set():
+                    self._cleanup_cancelled(on_event)
+                    return
+                    
+                res = results_by_id.get(task["id"])
+                if not res:
+                    continue
+                    
+                if res.get("return"):
+                    self._append_redispatch_limit_message(res["result"], on_event)
+                    return
+                if res.get("skip"):
+                    continue
+                    
+                if "result_payload" in res:
+                    self._history.append_tool_result(task["id"], res["result_payload"])
+                    on_event(res["event"])
 
             if _worker_phase_boundary_info is not None:
                 worker_phase_boundary_info = _worker_phase_boundary_info
