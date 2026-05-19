@@ -3,16 +3,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QSize, Qt, QThread, QTimer
+from PySide6.QtCore import Qt, QThread, QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
-    QFrame,
     QMainWindow,
     QMessageBox,
     QSplitter,
-    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -27,11 +25,11 @@ from aura.config import (
     icon_path,
     load_settings,
     load_workspace_root,
-    media_path,
     save_settings,
     save_workspace_root,
 )
 from aura.git_ops import git_init, is_git_repo
+from aura.gui.edge_rails import EdgeTabRail, TerminalTabState
 from aura.gui.playground import AuraPlayground
 from aura.gui.widgets.aura_glow import AuraWidget
 from aura.gui.chat_view import ChatView
@@ -44,16 +42,6 @@ from aura.gui.onboarding_dialog import OnboardingDialog
 from aura.gui.send_handler import SendHandler
 from aura.gui.settings_dialog import SettingsDialog
 from aura.gui.status_bar import AuraStatusBar
-from aura.gui.theme import (
-    ACCENT,
-    BG_RAISED,
-    BORDER,
-    DANGER,
-    FG,
-    FG_DIM,
-    SUCCESS,
-    WARN,
-)
 from aura.gui.update_dialog import UpdateDialog, UpdateWorker
 from aura.gui.window_chrome import WindowChromeMixin
 from aura.gui.worker_handler import WorkerEventHandler
@@ -65,7 +53,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
     def __init__(self) -> None:
         super().__init__()
-        self._terminal_tab_state = "dim"
         self._checkpoint_dialog: CheckpointDialog | None = None
         self.setWindowTitle(APP_NAME)
         self.setWindowIcon(QIcon(str(icon_path())))
@@ -231,7 +218,16 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self.centralWidget().setStyleSheet("background: transparent;")
         self.centralWidget().setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
 
-        self._create_edge_tab_rail()
+        # Edge tab rail — terminal + checkpoint tabs
+        self._edge_rail = EdgeTabRail(self)
+        self._terminal_tab = self._edge_rail.terminal_tab
+        self._terminal_container = self._edge_rail.terminal_container
+        self._corner_widget = self._edge_rail.corner_widget
+        self._edge_rail.terminalTabToggled.connect(self._on_terminal_toggle)
+        # Wire checkpoint tab click to the existing handler on MainWindow.
+        checkpoint_tab = self._edge_rail.checkpoint_tab
+        if checkpoint_tab is not None:
+            checkpoint_tab.clicked.connect(lambda: self._on_open_checkpoints())
 
         # Frameless window — no native title bar
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.FramelessWindowHint)
@@ -311,46 +307,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         super().resizeEvent(event)
         self._position_edge_tabs()
 
-    def _create_edge_tab_rail(self) -> None:
-        self._edge_tab_rail = QFrame(self)
-        self._edge_tab_rail.setObjectName("edgeTabRail")
-        self._edge_tab_rail.setFixedWidth(40)
-        self._edge_tab_rail.setStyleSheet(
-            "QFrame#edgeTabRail { background: transparent; border: none; }"
-        )
-
-        rail_layout = QVBoxLayout(self._edge_tab_rail)
-        rail_layout.setContentsMargins(0, 0, 0, 0)
-        rail_layout.setSpacing(6)
-
-        self._terminal_tab = QToolButton(self._edge_tab_rail)
-        self._terminal_tab.setObjectName("edgeTerminalTab")
-        self._terminal_tab.setText("$")
-        self._terminal_tab.setToolTip("Toggle terminal output")
-        self._terminal_tab.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._terminal_tab.setCheckable(True)
-        self._terminal_tab.setFixedSize(40, 44)
-        self._terminal_tab.clicked.connect(lambda: self._on_edge_terminal_clicked())
-        rail_layout.addWidget(self._terminal_tab)
-
-        self._checkpoint_tab = QToolButton(self._edge_tab_rail)
-        self._checkpoint_tab.setObjectName("edgeCheckpointTab")
-        self._checkpoint_tab.setToolTip("Checkpoint Timeline")
-        self._checkpoint_tab.setIcon(QIcon(str(media_path("account_tree_.svg"))))
-        self._checkpoint_tab.setIconSize(QSize(22, 22))
-        self._checkpoint_tab.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-        self._checkpoint_tab.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._checkpoint_tab.setFixedSize(40, 44)
-        self._checkpoint_tab.clicked.connect(lambda: self._on_open_checkpoints())
-        self._checkpoint_tab.setStyleSheet(self._checkpoint_tab_style())
-        rail_layout.addWidget(self._checkpoint_tab)
-
-        self._edge_tab_rail.adjustSize()
-        self._set_terminal_tab_state("dim")
-        self._edge_tab_rail.raise_()
-
     def _position_edge_tabs(self) -> None:
-        rail = getattr(self, "_edge_tab_rail", None)
+        rail = self._edge_rail
         if rail is None:
             return
 
@@ -363,28 +321,29 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         rail.move(x, y)
         rail.raise_()
 
-    def _on_edge_terminal_clicked(self) -> None:
+    def _on_terminal_toggle(self, checked: bool) -> None:
         self._playground.toggle_terminal_window()
         self._sync_terminal_checked_state()
         self._position_edge_tabs()
 
     def _on_terminal_started(self) -> None:
-        self._set_terminal_tab_state("running")
+        self._edge_rail.set_state("running")
 
     def _on_terminal_finished(self, exit_code: int) -> None:
         if exit_code == 0:
-            self._set_terminal_tab_state("success")
+            self._edge_rail.set_state("success")
             QTimer.singleShot(1200, self._dim_terminal_tab_after_success)
         else:
-            self._set_terminal_tab_state("failure")
+            self._edge_rail.set_state("failure")
 
     def _on_terminal_visibility_changed(self, _visible: bool) -> None:
         self._sync_terminal_checked_state()
-        self._set_terminal_tab_state(self._terminal_tab_state)
+        self._edge_rail.set_is_terminal_open(self._playground.is_terminal_window_open())
+        self._edge_rail.set_state(self._edge_rail.state)
         self._position_edge_tabs()
 
     def _on_terminal_cleared(self) -> None:
-        self._set_terminal_tab_state("dim")
+        self._edge_rail.set_state("dim")
 
     def _on_terminal_geometry_saved(self, geometry: str) -> None:
         if self._settings.terminal_window_geometry == geometry:
@@ -393,71 +352,16 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         save_settings(self._settings)
 
     def _dim_terminal_tab_after_success(self) -> None:
-        if self._terminal_tab_state == "success":
-            self._set_terminal_tab_state("dim")
+        if self._edge_rail.state == "success":
+            self._edge_rail.set_state("dim")
 
     def _sync_terminal_checked_state(self) -> None:
-        self._terminal_tab.setChecked(self._playground.is_terminal_window_open())
-
-    def _set_terminal_tab_state(self, state: str) -> None:
-        self._terminal_tab_state = state
-        self._sync_terminal_checked_state()
-        self._terminal_tab.setStyleSheet(self._terminal_tab_style(state))
-
-    def _terminal_tab_style(self, state: str) -> str:
-        palette = {
-            "dim": (BG_RAISED, FG_DIM, BORDER),
-            "running": ("#3a2d16", WARN, WARN),
-            "success": ("#17351d", SUCCESS, SUCCESS),
-            "failure": ("#3a151b", DANGER, DANGER),
-        }
-        bg, fg, border = palette.get(state, palette["dim"])
-        if state == "dim" and self._playground.is_terminal_window_open():
-            bg, fg, border = ("#18243a", FG, ACCENT)
-
-        return (
-            "QToolButton#edgeTerminalTab {"
-            f"  background: {bg};"
-            f"  color: {fg};"
-            f"  border: 1px solid {border};"
-            "  border-right: none;"
-            "  border-top-left-radius: 8px;"
-            "  border-bottom-left-radius: 8px;"
-            "  border-top-right-radius: 0px;"
-            "  border-bottom-right-radius: 0px;"
-            "  font-size: 18px;"
-            "  font-weight: 700;"
-            "  padding: 0px;"
-            "}"
-            "QToolButton#edgeTerminalTab:hover {"
-            "  background: #2b2b34;"
-            f"  color: {FG};"
-            f"  border-color: {ACCENT};"
-            "  border-right: none;"
-            "}"
-        )
-
-    def _checkpoint_tab_style(self) -> str:
-        neon = "#39ff88"
-        return (
-            "QToolButton#edgeCheckpointTab {"
-            "  background: #0b2514;"
-            f"  color: {neon};"
-            f"  border: 1px solid {neon};"
-            "  border-right: none;"
-            "  border-top-left-radius: 8px;"
-            "  border-bottom-left-radius: 8px;"
-            "  border-top-right-radius: 0px;"
-            "  border-bottom-right-radius: 0px;"
-            "  font-size: 18px;"
-            "  font-weight: 800;"
-            "  padding: 0px;"
-            "}"
-            "QToolButton#edgeCheckpointTab:hover {"
-            "  background: #123d22;"
-            f"  color: {FG};"
-            "}"
-        )
+        tab = self._edge_rail.terminal_tab
+        if tab is None:
+            return
+        is_open = self._playground.is_terminal_window_open()
+        tab.setChecked(is_open)
+        self._edge_rail.set_is_terminal_open(is_open)
 
     def _show_onboarding(self) -> None:
         dlg = OnboardingDialog(
