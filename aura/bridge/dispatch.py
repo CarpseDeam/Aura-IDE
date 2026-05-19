@@ -6,7 +6,6 @@ the worker manager when the user clicks Dispatch.
 
 from __future__ import annotations
 
-import json
 import re
 import threading
 from dataclasses import replace
@@ -19,22 +18,7 @@ from PySide6.QtCore import (
 )
 
 from aura.bridge.approval_proxy import _ApprovalProxy
-from aura.client import (
-    ApiError,
-    AgentProcessFinished,
-    AgentProcessOutput,
-    AgentProcessStarted,
-    ContentDelta,
-    Done,
-    Event,
-    ReasoningDelta,
-    TerminalOutput,
-    ToolCallArgsDelta,
-    ToolCallEnd,
-    ToolCallStart,
-    ToolResult,
-    Usage,
-)
+from aura.bridge.event_relay import WorkerEventRelay
 from aura.config import (
     DEFAULT_WORKER_MODEL,
     DEFAULT_WORKER_THINKING,
@@ -272,112 +256,30 @@ class _DispatchProxy(QObject):
         cancel_event = threading.Event()
         pending.cancel_event = cancel_event
 
-        # Track worker tool calls for the structured report and to map
-        # streaming index -> id for arg/end signals.
-        index_to_id: dict[int, str] = {}
-        write_results: list[dict[str, Any]] = []
-        api_errors: list[str] = []
-        phase_boundary_info: dict[str, Any] | None = None
-
-        def on_event(ev: Event) -> None:
-            nonlocal phase_boundary_info
-            if isinstance(ev, ReasoningDelta):
-                self.workerReasoningDelta.emit(tool_call_id, ev.text)
-            elif isinstance(ev, ContentDelta):
-                self.workerContentDelta.emit(tool_call_id, ev.text)
-            elif isinstance(ev, ToolCallStart):
-                index_to_id[ev.index] = ev.id
-                self.workerToolCallStart.emit(tool_call_id, ev.id, ev.name)
-            elif isinstance(ev, ToolCallArgsDelta):
-                wid = index_to_id.get(ev.index, "")
-                if wid:
-                    self.workerToolCallArgs.emit(tool_call_id, wid, ev.args_chunk)
-            elif isinstance(ev, ToolCallEnd):
-                wid = index_to_id.get(ev.index, "")
-                if wid:
-                    self.workerToolCallEnd.emit(tool_call_id, wid)
-            elif isinstance(ev, Usage):
-                self.workerUsage.emit(
-                    tool_call_id,
-                    str(self._worker_model),
-                    ev.prompt_tokens,
-                    ev.completion_tokens,
-                    ev.cache_hit_tokens,
-                    ev.cache_miss_tokens,
-                )
-            elif isinstance(ev, Done):
-                if ev.full_message:
-                    self.workerStreamDone.emit(tool_call_id, ev.finish_reason or "", ev.full_message)
-            elif isinstance(ev, ApiError):
-                from aura.config import redact_secrets
-                msg = f"{ev.status_code}: {ev.message}" if ev.status_code is not None else ev.message
-                api_errors.append(redact_secrets(msg))
-                self.workerApiError.emit(
-                    tool_call_id,
-                    ev.status_code if ev.status_code is not None else -1,
-                    redact_secrets(ev.message),
-                )
-            elif isinstance(ev, ToolResult):
-                approval = (ev.extras or {}).get("approval")
-                if approval:
-                    last = self._approval_proxy.consume_last_event()
-                    if last is not None:
-                        self.workerDiffDecided.emit(
-                            tool_call_id,
-                            ev.tool_call_id,
-                            str(approval),
-                            str(last["rel_path"]),
-                            str(last["old_content"]),
-                            str(last["new_content"]),
-                            bool(last["is_new_file"]),
-                        )
-                self.workerToolResult.emit(
-                    tool_call_id, ev.tool_call_id, ev.name, ev.ok, ev.result, ev.extras or {}
-                )
-                # If this is a todo list update, emit the dedicated signal for the pinned UI.
-                if ev.name == "update_todo_list":
-                    tasks = (ev.extras or {}).get("tasks", [])
-                    self.workerTodoListUpdated.emit(tool_call_id, tasks)
-                # Track writes for the summary back to the planner.
-                try:
-                    parsed = json.loads(ev.result)
-                except (json.JSONDecodeError, TypeError):
-                    parsed = {}
-                if (
-                    isinstance(parsed, dict)
-                    and parsed.get("recoverable")
-                    and parsed.get("phase_boundary")
-                ):
-                    phase_boundary_info = parsed
-                if (
-                    ev.name in ("write_file", "edit_file")
-                    and isinstance(parsed, dict)
-                    and parsed.get("ok")
-                ):
-                    write_results.append(
-                        {
-                            "tool": ev.name,
-                            "path": parsed.get("path"),
-                            "is_new_file": parsed.get("is_new_file", False),
-                        }
-                    )
-            elif isinstance(ev, TerminalOutput):
-                self.workerTerminalOutput.emit(tool_call_id, ev.tool_call_id, ev.text)
-            elif isinstance(ev, AgentProcessStarted):
-                self.workerAgentProcessStarted.emit(
-                    tool_call_id,
-                    ev.process_id,
-                    ev.label,
-                    ev.command,
-                )
-            elif isinstance(ev, AgentProcessOutput):
-                self.workerAgentProcessOutput.emit(tool_call_id, ev.process_id, ev.text)
-            elif isinstance(ev, AgentProcessFinished):
-                self.workerAgentProcessFinished.emit(tool_call_id, ev.process_id, ev.exit_code)
+        relay = WorkerEventRelay(
+            approval_proxy=self._approval_proxy,
+            worker_model=str(self._worker_model),
+        )
+        # Forward relay signals to the dispatch proxy's signals for the UI.
+        relay.reasoningDelta.connect(self.workerReasoningDelta)
+        relay.contentDelta.connect(self.workerContentDelta)
+        relay.toolCallStart.connect(self.workerToolCallStart)
+        relay.toolCallArgs.connect(self.workerToolCallArgs)
+        relay.toolCallEnd.connect(self.workerToolCallEnd)
+        relay.usage.connect(self.workerUsage)
+        relay.streamDone.connect(self.workerStreamDone)
+        relay.apiError.connect(self.workerApiError)
+        relay.toolResult.connect(self.workerToolResult)
+        relay.diffDecided.connect(self.workerDiffDecided)
+        relay.todoListUpdated.connect(self.workerTodoListUpdated)
+        relay.terminalOutput.connect(self.workerTerminalOutput)
+        relay.agentProcessStarted.connect(self.workerAgentProcessStarted)
+        relay.agentProcessOutput.connect(self.workerAgentProcessOutput)
+        relay.agentProcessFinished.connect(self.workerAgentProcessFinished)
 
         try:
             worker_manager.send(
-                on_event=on_event,
+                on_event=lambda ev: relay.relay(tool_call_id, ev),
                 approval_cb=self._approval_proxy.request_approval,
                 cancel_event=cancel_event,
                 model=self._worker_model,
@@ -388,14 +290,14 @@ class _DispatchProxy(QObject):
                 max_tool_rounds=self._max_tool_rounds,
             )
         except Exception as exc:
-            api_errors.append(f"{type(exc).__name__}: {exc}")
+            relay.api_errors.append(f"{type(exc).__name__}: {exc}")
 
         if cancel_event.is_set():
             worker_history.pop_if_empty_assistant_message()
 
         final_report = _last_assistant_content(worker_history)
         continuation = _parse_continuation_report(final_report)
-        result_errors = list(api_errors)
+        result_errors = list(relay.api_errors)
         result_caveats: list[str] = []
         if _final_report_claims_failure(final_report):
             result_errors.append(
@@ -409,20 +311,20 @@ class _DispatchProxy(QObject):
         summary = _build_worker_summary(
             req,
             worker_history,
-            write_results,
+            relay.write_results,
             result_errors,
             continuation,
             result_caveats,
         )
-        phase_boundary = phase_boundary_info is not None
+        phase_boundary = relay.phase_boundary_info is not None
         ok = (
             not result_errors
             and not result_caveats
             and not phase_boundary
-            and bool(write_results or final_report)
+            and bool(relay.write_results or final_report)
         )
         modified_files = continuation.get("modified_files") or [
-            str(w["path"]) for w in write_results if isinstance(w.get("path"), str) and w.get("path")
+            str(w["path"]) for w in relay.write_results if isinstance(w.get("path"), str) and w.get("path")
         ]
 
         spec_dict = req.to_dict()
@@ -442,11 +344,11 @@ class _DispatchProxy(QObject):
             save_dispatch_record_to_memory(record, self._workspace_root)
 
         # Auto-commit if worker made changes — fire in background so dispatch isn't blocked.
-        if self._auto_commit_enabled and self._workspace_root is not None and write_results:
+        if self._auto_commit_enabled and self._workspace_root is not None and relay.write_results:
             try:
                 from aura.git_ops import auto_commit
 
-                written_files = [w["path"] for w in write_results if isinstance(w.get("path"), str) and w.get("path")]
+                written_files = [w["path"] for w in relay.write_results if isinstance(w.get("path"), str) and w.get("path")]
                 if written_files:
                     def _do_commit(root, goal, files, summary):
                         auto_commit(root, goal, files, summary)
@@ -466,7 +368,7 @@ class _DispatchProxy(QObject):
             needs_followup=phase_boundary,
             phase_boundary=phase_boundary,
             followup_reason=(
-                str(phase_boundary_info.get("reason")) if phase_boundary_info else None
+                str(relay.phase_boundary_info.get("reason")) if relay.phase_boundary_info else None
             ),
             recoverable=phase_boundary,
             completed=continuation.get("completed", []),
@@ -475,13 +377,13 @@ class _DispatchProxy(QObject):
             validation=continuation.get("validation_text"),
             suggested_next_spec=continuation.get("recommended_next_step"),
             extras={
-                "writes": write_results,
+                "writes": relay.write_results,
                 "errors": result_errors,
                 "caveats": result_caveats,
-                "phase_boundary": phase_boundary_info or {},
+                "phase_boundary": relay.phase_boundary_info or {},
                 "limit": (
-                    phase_boundary_info
-                    if phase_boundary_info and phase_boundary_info.get("limit_reached")
+                    relay.phase_boundary_info
+                    if relay.phase_boundary_info and relay.phase_boundary_info.get("limit_reached")
                     else {}
                 ),
             },

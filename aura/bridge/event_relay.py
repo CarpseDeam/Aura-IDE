@@ -1,0 +1,150 @@
+"""WorkerEventRelay — maps worker Event objects to PySide6 signals."""
+from __future__ import annotations
+
+import json
+from typing import Any
+
+from PySide6.QtCore import QObject, Signal
+
+from aura.client import (
+    ApiError,
+    AgentProcessFinished,
+    AgentProcessOutput,
+    AgentProcessStarted,
+    ContentDelta,
+    Done,
+    Event,
+    ReasoningDelta,
+    TerminalOutput,
+    ToolCallArgsDelta,
+    ToolCallEnd,
+    ToolCallStart,
+    ToolResult,
+    Usage,
+)
+
+
+class WorkerEventRelay(QObject):
+    """Relays worker ConversationManager events to Qt signals.
+
+    Tracks write_results, api_errors, and phase_boundary side-effect state
+    that _run_worker reads after the worker completes.
+    """
+
+    # Signals matching _DispatchProxy's original signal set
+    reasoningDelta = Signal(str, str)        # tool_call_id, text
+    contentDelta = Signal(str, str)           # tool_call_id, text
+    toolCallStart = Signal(str, str, str)     # tool_call_id, worker_tool_id, name
+    toolCallArgs = Signal(str, str, str)      # tool_call_id, worker_tool_id, args_chunk
+    toolCallEnd = Signal(str, str)            # tool_call_id, worker_tool_id
+    usage = Signal(str, str, int, int, int, int)  # tool_id, model, prompt, comp, hit, miss
+    streamDone = Signal(str, str, dict)       # tool_call_id, finish_reason, full_message
+    apiError = Signal(str, int, str)          # tool_call_id, status_code, message
+    toolResult = Signal(str, str, str, bool, str, dict)  # tool_id, worker_tc_id, name, ok, result, extras
+    diffDecided = Signal(str, str, str, str, str, str, bool)
+    todoListUpdated = Signal(str, list)       # tool_call_id, tasks
+    terminalOutput = Signal(str, str, str)    # parent_tool_id, worker_tool_id, text
+    agentProcessStarted = Signal(str, str, str, str)  # parent_tool_id, process_id, label, command
+    agentProcessOutput = Signal(str, str, str)  # parent_tool_id, process_id, text
+    agentProcessFinished = Signal(str, str, int)  # parent_tool_id, process_id, exit_code
+
+    def __init__(self, approval_proxy: Any, worker_model: str = "", parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._approval_proxy = approval_proxy
+        self._worker_model = worker_model
+        # Side-effect state that _run_worker reads after completion
+        self.index_to_id: dict[int, str] = {}
+        self.write_results: list[dict[str, Any]] = []
+        self.api_errors: list[str] = []
+        self.phase_boundary_info: dict[str, Any] | None = None
+
+    def relay(self, tool_call_id: str, ev: Event) -> None:
+        """Emit the appropriate signal for the event type and track side effects."""
+        if isinstance(ev, ReasoningDelta):
+            self.reasoningDelta.emit(tool_call_id, ev.text)
+        elif isinstance(ev, ContentDelta):
+            self.contentDelta.emit(tool_call_id, ev.text)
+        elif isinstance(ev, ToolCallStart):
+            self.index_to_id[ev.index] = ev.id
+            self.toolCallStart.emit(tool_call_id, ev.id, ev.name)
+        elif isinstance(ev, ToolCallArgsDelta):
+            wid = self.index_to_id.get(ev.index, "")
+            if wid:
+                self.toolCallArgs.emit(tool_call_id, wid, ev.args_chunk)
+        elif isinstance(ev, ToolCallEnd):
+            wid = self.index_to_id.get(ev.index, "")
+            if wid:
+                self.toolCallEnd.emit(tool_call_id, wid)
+        elif isinstance(ev, Usage):
+            self.usage.emit(
+                tool_call_id,
+                self._worker_model,
+                ev.prompt_tokens,
+                ev.completion_tokens,
+                ev.cache_hit_tokens,
+                ev.cache_miss_tokens,
+            )
+        elif isinstance(ev, Done):
+            if ev.full_message:
+                self.streamDone.emit(tool_call_id, ev.finish_reason or "", ev.full_message)
+        elif isinstance(ev, ApiError):
+            from aura.config import redact_secrets
+            msg = f"{ev.status_code}: {ev.message}" if ev.status_code is not None else ev.message
+            self.api_errors.append(redact_secrets(msg))
+            self.apiError.emit(
+                tool_call_id,
+                ev.status_code if ev.status_code is not None else -1,
+                redact_secrets(ev.message),
+            )
+        elif isinstance(ev, ToolResult):
+            approval = (ev.extras or {}).get("approval")
+            if approval:
+                last = self._approval_proxy.consume_last_event()
+                if last is not None:
+                    self.diffDecided.emit(
+                        tool_call_id,
+                        ev.tool_call_id,
+                        str(approval),
+                        str(last["rel_path"]),
+                        str(last["old_content"]),
+                        str(last["new_content"]),
+                        bool(last["is_new_file"]),
+                    )
+            self.toolResult.emit(
+                tool_call_id, ev.tool_call_id, ev.name, ev.ok, ev.result, ev.extras or {}
+            )
+            if ev.name == "update_todo_list":
+                tasks = (ev.extras or {}).get("tasks", [])
+                self.todoListUpdated.emit(tool_call_id, tasks)
+            try:
+                parsed = json.loads(ev.result)
+            except (json.JSONDecodeError, TypeError):
+                parsed = {}
+            if (
+                isinstance(parsed, dict)
+                and parsed.get("recoverable")
+                and parsed.get("phase_boundary")
+            ):
+                self.phase_boundary_info = parsed
+            if (
+                ev.name in ("write_file", "edit_file")
+                and isinstance(parsed, dict)
+                and parsed.get("ok")
+            ):
+                self.write_results.append(
+                    {
+                        "tool": ev.name,
+                        "path": parsed.get("path"),
+                        "is_new_file": parsed.get("is_new_file", False),
+                    }
+                )
+        elif isinstance(ev, TerminalOutput):
+            self.terminalOutput.emit(tool_call_id, ev.tool_call_id, ev.text)
+        elif isinstance(ev, AgentProcessStarted):
+            self.agentProcessStarted.emit(
+                tool_call_id, ev.process_id, ev.label, ev.command
+            )
+        elif isinstance(ev, AgentProcessOutput):
+            self.agentProcessOutput.emit(tool_call_id, ev.process_id, ev.text)
+        elif isinstance(ev, AgentProcessFinished):
+            self.agentProcessFinished.emit(tool_call_id, ev.process_id, ev.exit_code)
