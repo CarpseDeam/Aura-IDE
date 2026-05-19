@@ -346,6 +346,9 @@ class ConversationBridge(QObject):
     def dispatch_records(self) -> "list[WorkerDispatchRecord]":
         return self._dispatch_proxy.records()
 
+    def set_dispatch_records(self, records: list[WorkerDispatchRecord]) -> None:
+        self._dispatch_proxy.set_records(records)
+
     def clear_dispatch_records(self) -> None:
         self._dispatch_proxy.clear_records()
 

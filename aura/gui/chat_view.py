@@ -450,6 +450,23 @@ class ChatView(QScrollArea):
 
         controller = self._controllers.pop(tool_call_id, None)
         if controller:
+            if controller.tool_name == "dispatch_to_worker":
+                try:
+                    data = json.loads(result_text)
+                    summary = data.get("summary", "")
+                    if summary:
+                        self.add_worker_summary(tool_call_id, controller.goal or "", ok, summary)
+                except Exception:
+                    pass
+            elif controller.tool_name == "run_research":
+                try:
+                    data = json.loads(result_text)
+                    report = data.get("report", "")
+                    if report:
+                        self.add_worker_summary(tool_call_id, controller.goal or "Research", ok, report)
+                except Exception:
+                    pass
+
             controller.finalize(ok, result_text)
             self._scroll_to_bottom()
 

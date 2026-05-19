@@ -143,6 +143,9 @@ class _DispatchProxy(QObject):
     def records(self) -> list[WorkerDispatchRecord]:
         return list(self._records)
 
+    def set_records(self, records: list[WorkerDispatchRecord]) -> None:
+        self._records = list(records)
+
     def clear_records(self) -> None:
         self._records.clear()
 

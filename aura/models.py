@@ -36,6 +36,16 @@ def get_pricing(model_id: str) -> dict[str, float] | None:
     for provider in PROVIDERS.values():
         if model_id in provider.pricing:
             return provider.pricing[model_id]
+    # Fallback: read from ModelInfo pricing fields (used by dynamically
+    # fetched models that store pricing in ModelInfo but not in the pricing dict).
+    for provider in PROVIDERS.values():
+        if model_id in provider.models:
+            mi = provider.models[model_id]
+            return {
+                "in_miss": mi.input_per_m_usd,
+                "in_hit": mi.cache_hit_per_m_usd,
+                "out": mi.output_per_m_usd,
+            }
     return None
 
 

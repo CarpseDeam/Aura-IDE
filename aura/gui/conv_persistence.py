@@ -243,6 +243,7 @@ class ConversationPersistence(QObject):
 
         # Sync mode (without overwriting the system prompt we just set).
         self._bridge.set_planner_worker_mode(pwm)
+        self._bridge.set_dispatch_records(loaded.worker_dispatches)
         if pwm:
             self._left_pane.set_planner_model(loaded.planner_model)
             self._left_pane.set_planner_thinking(loaded.planner_thinking)

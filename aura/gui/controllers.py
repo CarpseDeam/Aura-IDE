@@ -59,6 +59,10 @@ class ToolStreamController(QObject):
         return self._tool_name
 
     @property
+    def goal(self) -> str | None:
+        return self._goal
+
+    @property
     def buffer(self) -> str:
         return self._buffer
 
@@ -111,15 +115,15 @@ class ToolStreamController(QObject):
             # Extract content based on tool name
             content = ""
             if self._tool_name == "write_file":
-                content = parsed.get("content", "")
+                content = parsed.get("content", "") or parsed.get("text", "") or parsed.get("new_str", "")
             elif self._tool_name == "edit_file":
-                content = parsed.get("new_str", "")
+                content = parsed.get("new_str", "") or parsed.get("content", "") or parsed.get("new_content", "")
             elif self._tool_name == "edit_symbol":
-                content = parsed.get("new_definition", "")
+                content = parsed.get("new_definition", "") or parsed.get("content", "")
             elif self._tool_name == "dispatch_to_worker":
-                content = parsed.get("spec", "")
+                content = parsed.get("spec", "") or parsed.get("content", "")
             elif self._tool_name == "run_research":
-                content = parsed.get("objective", "")
+                content = parsed.get("objective", "") or parsed.get("goal", "") or parsed.get("content", "")
 
             if content and content != self._last_content:
                 self._last_content = content
