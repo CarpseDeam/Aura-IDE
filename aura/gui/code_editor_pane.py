@@ -30,11 +30,7 @@ from PySide6.QtWidgets import (
 
 from aura.focused_actions import ACTION_LABELS, build_prompt_for_action, is_edit_action
 from aura.gui.cards._helpers import _mono_font
-from aura.gui.editor.diff_overlay import (
-    clear_editor_marks,
-    mark_deleted_region,
-    mark_inserted_region,
-)
+from aura.gui.editor.diff_overlay import DiffOverlay
 from aura.gui.smooth_code_streamer import SmoothCodeStreamer
 from aura.gui.syntax import PygmentsHighlighter, language_from_path
 from aura.gui.theme import ACCENT, BG, BORDER, FG
@@ -406,7 +402,7 @@ class CodeEditorPane(QWidget):
 
         streamer.set_text_immediately(old_content)
         self._focus_editor_position(editor, old_start)
-        mark_deleted_region(editor, old_start, old_end)
+        DiffOverlay.mark_deleted(editor, old_start, old_end)
         self._set_tab_status(canonical_tool_id, f":{state['animation_change_line']} - editing")
         timer.start()
 
@@ -692,7 +688,7 @@ class CodeEditorPane(QWidget):
             suffix = state["animation_suffix"]
             self._set_editor_text(editor, prefix + suffix, len(prefix))
             self._focus_editor_position(editor, len(prefix))
-            clear_editor_marks(editor)
+            DiffOverlay.clear(editor)
         elif next_phase == "replace":
             self._start_replacement_phase(state, editor)
 
@@ -712,7 +708,7 @@ class CodeEditorPane(QWidget):
             QTextCursor.MoveMode.KeepAnchor,
         )
         cursor.insertText("")
-        clear_editor_marks(editor)
+        DiffOverlay.clear(editor)
         self._set_tab_status(
             state.get("tool_id", ""), f":{state['animation_change_line']} - typing"
         )
@@ -739,9 +735,9 @@ class CodeEditorPane(QWidget):
             cursor_pos = len(prefix) + len(remaining)
             self._set_editor_text(editor, display, cursor_pos)
             if remaining:
-                mark_deleted_region(editor, len(prefix), cursor_pos)
+                DiffOverlay.mark_deleted(editor, len(prefix), cursor_pos)
             else:
-                clear_editor_marks(editor)
+                DiffOverlay.clear(editor)
         else:
             state["animation_char_index"] = max(
                 0,
@@ -754,9 +750,9 @@ class CodeEditorPane(QWidget):
             display = prefix + remaining + suffix
             self._set_editor_text(editor, display, len(prefix) + len(remaining))
             if remaining:
-                mark_deleted_region(editor, len(prefix), len(prefix) + len(remaining))
+                DiffOverlay.mark_deleted(editor, len(prefix), len(prefix) + len(remaining))
             else:
-                clear_editor_marks(editor)
+                DiffOverlay.clear(editor)
 
         no_lines_left = state.get("animation_delete_line_count", 0) == 0
         no_chars_left = (
@@ -784,7 +780,7 @@ class CodeEditorPane(QWidget):
         idx = state["animation_char_index"]
         display = prefix + new_mid[:idx] + suffix
         self._set_editor_text(editor, display, len(prefix) + idx)
-        mark_inserted_region(editor, len(prefix), len(prefix) + idx)
+        DiffOverlay.mark_inserted(editor, len(prefix), len(prefix) + idx)
         if idx >= len(new_mid):
             self._finish_edit_animation(state, editor)
 
@@ -802,9 +798,9 @@ class CodeEditorPane(QWidget):
         change_start = state.get("animation_change_start", len(state["animation_prefix"]))
         change_end = change_start + len(state.get("animation_new_middle", ""))
         if change_end > change_start:
-            mark_inserted_region(editor, change_start, change_end)
+            DiffOverlay.mark_inserted(editor, change_start, change_end)
         else:
-            clear_editor_marks(editor)
+            DiffOverlay.clear(editor)
         self._set_tab_status(state.get("tool_id", ""), " ✓")
 
     def _on_streamer_finished(self, tool_id: str) -> None:
@@ -819,7 +815,7 @@ class CodeEditorPane(QWidget):
             change_start = state.get("animation_change_start", 0)
             change_end = change_start + len(state.get("animation_new_middle", ""))
             if change_end > change_start:
-                mark_inserted_region(editor, change_start, change_end)
+                DiffOverlay.mark_inserted(editor, change_start, change_end)
         if state.get("pending_done") and state.get("active_count", 0) == 0:
             state["pending_done"] = False
             self._set_tab_status(canonical_tool_id, " ✓")

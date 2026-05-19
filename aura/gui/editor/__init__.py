@@ -1,1 +1,1 @@
-"""Editor sub-components."""
+"""Editor helper widgets and delegates."""
