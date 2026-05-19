@@ -18,105 +18,118 @@ DEEPSEEK_MODELS: dict[str, ModelInfo] = {
     "deepseek-v4-flash": ModelInfo(
         id="deepseek-v4-flash",
         label="DeepSeek V4 Flash",
-        input_per_m_usd=0.0,
-        output_per_m_usd=0.0,
-        cache_hit_per_m_usd=0.0,
+        input_per_m_usd=0.15,
+        output_per_m_usd=0.60,
+        cache_hit_per_m_usd=0.075,
     ),
     "deepseek-v4-pro": ModelInfo(
         id="deepseek-v4-pro",
         label="DeepSeek V4 Pro",
-        input_per_m_usd=0.0,
-        output_per_m_usd=0.0,
-        cache_hit_per_m_usd=0.0,
+        input_per_m_usd=2.50,
+        output_per_m_usd=10.00,
+        cache_hit_per_m_usd=0.375,
     ),
 }
-DEEPSEEK_PRICING: dict[str, dict[str, float]] = {}
+DEEPSEEK_PRICING: dict[str, dict[str, float]] = {
+    "deepseek-v4-flash": {"in_miss": 0.15, "in_hit": 0.075, "out": 0.60},
+    "deepseek-v4-pro": {"in_miss": 2.50, "in_hit": 0.375, "out": 10.00},
+}
 
 OPENAI_MODELS: dict[str, ModelInfo] = {
     "gpt-5.5": ModelInfo(
         id="gpt-5.5",
         label="GPT-5.5",
-        input_per_m_usd=0.0,
-        output_per_m_usd=0.0,
-        cache_hit_per_m_usd=0.0,
+        input_per_m_usd=10.00,
+        output_per_m_usd=40.00,
+        cache_hit_per_m_usd=5.00,
     ),
     "gpt-5.4": ModelInfo(
         id="gpt-5.4",
         label="GPT-5.4",
-        input_per_m_usd=0.0,
-        output_per_m_usd=0.0,
-        cache_hit_per_m_usd=0.0,
+        input_per_m_usd=2.50,
+        output_per_m_usd=10.00,
+        cache_hit_per_m_usd=1.25,
     ),
     "gpt-5.4-mini": ModelInfo(
         id="gpt-5.4-mini",
         label="GPT-5.4 Mini",
-        input_per_m_usd=0.0,
-        output_per_m_usd=0.0,
-        cache_hit_per_m_usd=0.0,
+        input_per_m_usd=0.15,
+        output_per_m_usd=0.60,
+        cache_hit_per_m_usd=0.075,
     ),
     "gpt-5.4-nano": ModelInfo(
         id="gpt-5.4-nano",
         label="GPT-5.4 Nano",
-        input_per_m_usd=0.0,
-        output_per_m_usd=0.0,
-        cache_hit_per_m_usd=0.0,
+        input_per_m_usd=0.10,
+        output_per_m_usd=0.40,
+        cache_hit_per_m_usd=0.05,
     ),
 }
-OPENAI_PRICING: dict[str, dict[str, float]] = {}
+OPENAI_PRICING: dict[str, dict[str, float]] = {
+    "gpt-5.5": {"in_miss": 10.00, "in_hit": 5.00, "out": 40.00},
+    "gpt-5.4": {"in_miss": 2.50, "in_hit": 1.25, "out": 10.00},
+    "gpt-5.4-mini": {"in_miss": 0.15, "in_hit": 0.075, "out": 0.60},
+    "gpt-5.4-nano": {"in_miss": 0.10, "in_hit": 0.05, "out": 0.40},
+}
 
 ANTHROPIC_MODELS: dict[str, ModelInfo] = {
     "claude-opus-4-7": ModelInfo(
         id="claude-opus-4-7",
         label="Claude Opus 4.7",
-        input_per_m_usd=0.0,
-        output_per_m_usd=0.0,
-        cache_hit_per_m_usd=0.0,
+        input_per_m_usd=15.00,
+        output_per_m_usd=75.00,
+        cache_hit_per_m_usd=1.50,
     ),
     "claude-sonnet-4-6": ModelInfo(
         id="claude-sonnet-4-6",
         label="Claude Sonnet 4.6",
-        input_per_m_usd=0.0,
-        output_per_m_usd=0.0,
-        cache_hit_per_m_usd=0.0,
+        input_per_m_usd=3.00,
+        output_per_m_usd=15.00,
+        cache_hit_per_m_usd=0.30,
     ),
     "claude-haiku-4-5": ModelInfo(
         id="claude-haiku-4-5",
         label="Claude Haiku 4.5",
-        input_per_m_usd=0.0,
-        output_per_m_usd=0.0,
-        cache_hit_per_m_usd=0.0,
+        input_per_m_usd=0.25,
+        output_per_m_usd=1.25,
+        cache_hit_per_m_usd=0.025,
     ),
     "claude-haiku-4-5-20251001": ModelInfo(
         id="claude-haiku-4-5-20251001",
         label="Claude Haiku 4.5 Snapshot",
-        input_per_m_usd=0.0,
-        output_per_m_usd=0.0,
-        cache_hit_per_m_usd=0.0,
+        input_per_m_usd=0.25,
+        output_per_m_usd=1.25,
+        cache_hit_per_m_usd=0.025,
     ),
 }
-ANTHROPIC_PRICING: dict[str, dict[str, float]] = {}
+ANTHROPIC_PRICING: dict[str, dict[str, float]] = {
+    "claude-opus-4-7": {"in_miss": 15.00, "in_hit": 1.50, "out": 75.00},
+    "claude-sonnet-4-6": {"in_miss": 3.00, "in_hit": 0.30, "out": 15.00},
+    "claude-haiku-4-5": {"in_miss": 0.25, "in_hit": 0.025, "out": 1.25},
+    "claude-haiku-4-5-20251001": {"in_miss": 0.25, "in_hit": 0.025, "out": 1.25},
+}
 
 OPENROUTER_MODELS: dict[str, ModelInfo] = {
     "deepseek/deepseek-v4-flash": ModelInfo(
         id="deepseek/deepseek-v4-flash",
         label="DeepSeek V4 Flash",
-        input_per_m_usd=0.0,
-        output_per_m_usd=0.0,
-        cache_hit_per_m_usd=0.0,
+        input_per_m_usd=0.15,
+        output_per_m_usd=0.60,
+        cache_hit_per_m_usd=0.075,
     ),
     "openai/gpt-oss-120b": ModelInfo(
         id="openai/gpt-oss-120b",
         label="OpenAI GPT-OSS 120B",
-        input_per_m_usd=0.0,
-        output_per_m_usd=0.0,
-        cache_hit_per_m_usd=0.0,
+        input_per_m_usd=2.00,
+        output_per_m_usd=8.00,
+        cache_hit_per_m_usd=1.00,
     ),
     "openai/gpt-oss-20b": ModelInfo(
         id="openai/gpt-oss-20b",
         label="OpenAI GPT-OSS 20B",
-        input_per_m_usd=0.0,
-        output_per_m_usd=0.0,
-        cache_hit_per_m_usd=0.0,
+        input_per_m_usd=0.40,
+        output_per_m_usd=1.60,
+        cache_hit_per_m_usd=0.20,
     ),
     "qwen/qwen3-coder:free": ModelInfo(
         id="qwen/qwen3-coder:free",
@@ -135,12 +148,19 @@ OPENROUTER_MODELS: dict[str, ModelInfo] = {
     "openrouter/owl-alpha": ModelInfo(
         id="openrouter/owl-alpha",
         label="Owl Alpha",
-        input_per_m_usd=0.0,
-        output_per_m_usd=0.0,
-        cache_hit_per_m_usd=0.0,
+        input_per_m_usd=2.00,
+        output_per_m_usd=8.00,
+        cache_hit_per_m_usd=1.00,
     ),
 }
-OPENROUTER_PRICING: dict[str, dict[str, float]] = {}
+OPENROUTER_PRICING: dict[str, dict[str, float]] = {
+    "deepseek/deepseek-v4-flash": {"in_miss": 0.15, "in_hit": 0.075, "out": 0.60},
+    "openai/gpt-oss-120b": {"in_miss": 2.00, "in_hit": 1.00, "out": 8.00},
+    "openai/gpt-oss-20b": {"in_miss": 0.40, "in_hit": 0.20, "out": 1.60},
+    "qwen/qwen3-coder:free": {"in_miss": 0.0, "in_hit": 0.0, "out": 0.0},
+    "meta-llama/llama-3.3-70b-instruct:free": {"in_miss": 0.0, "in_hit": 0.0, "out": 0.0},
+    "openrouter/owl-alpha": {"in_miss": 2.00, "in_hit": 1.00, "out": 8.00},
+}
 
 # ---------------------------------------------------------------------------
 # Google Cloud / Vertex AI
@@ -150,47 +170,54 @@ GOOGLE_CLOUD_MODELS: dict[str, ModelInfo] = {
     "gemini-3.1-pro-preview": ModelInfo(
         id="gemini-3.1-pro-preview",
         label="Gemini 3.1 Pro Preview",
-        input_per_m_usd=0.0,
-        output_per_m_usd=0.0,
-        cache_hit_per_m_usd=0.0,
+        input_per_m_usd=5.00,
+        output_per_m_usd=20.00,
+        cache_hit_per_m_usd=2.50,
     ),
     "gemini-3-flash-preview": ModelInfo(
         id="gemini-3-flash-preview",
         label="Gemini 3 Flash Preview",
-        input_per_m_usd=0.0,
-        output_per_m_usd=0.0,
-        cache_hit_per_m_usd=0.0,
+        input_per_m_usd=0.15,
+        output_per_m_usd=0.60,
+        cache_hit_per_m_usd=0.075,
     ),
     "gemini-3.1-flash-lite": ModelInfo(
         id="gemini-3.1-flash-lite",
         label="Gemini 3.1 Flash-Lite",
-        input_per_m_usd=0.0,
-        output_per_m_usd=0.0,
-        cache_hit_per_m_usd=0.0,
+        input_per_m_usd=0.075,
+        output_per_m_usd=0.30,
+        cache_hit_per_m_usd=0.0375,
     ),
     "gemini-2.5-pro": ModelInfo(
         id="gemini-2.5-pro",
         label="Gemini 2.5 Pro",
-        input_per_m_usd=0.0,
-        output_per_m_usd=0.0,
-        cache_hit_per_m_usd=0.0,
+        input_per_m_usd=1.25,
+        output_per_m_usd=10.00,
+        cache_hit_per_m_usd=0.625,
     ),
     "gemini-2.5-flash": ModelInfo(
         id="gemini-2.5-flash",
         label="Gemini 2.5 Flash",
-        input_per_m_usd=0.0,
-        output_per_m_usd=0.0,
-        cache_hit_per_m_usd=0.0,
+        input_per_m_usd=0.15,
+        output_per_m_usd=0.60,
+        cache_hit_per_m_usd=0.075,
     ),
     "gemini-2.5-flash-lite": ModelInfo(
         id="gemini-2.5-flash-lite",
         label="Gemini 2.5 Flash-Lite",
-        input_per_m_usd=0.0,
-        output_per_m_usd=0.0,
-        cache_hit_per_m_usd=0.0,
+        input_per_m_usd=0.075,
+        output_per_m_usd=0.30,
+        cache_hit_per_m_usd=0.0375,
     ),
 }
-GOOGLE_CLOUD_PRICING: dict[str, dict[str, float]] = {}
+GOOGLE_CLOUD_PRICING: dict[str, dict[str, float]] = {
+    "gemini-3.1-pro-preview": {"in_miss": 5.00, "in_hit": 2.50, "out": 20.00},
+    "gemini-3-flash-preview": {"in_miss": 0.15, "in_hit": 0.075, "out": 0.60},
+    "gemini-3.1-flash-lite": {"in_miss": 0.075, "in_hit": 0.0375, "out": 0.30},
+    "gemini-2.5-pro": {"in_miss": 1.25, "in_hit": 0.625, "out": 10.00},
+    "gemini-2.5-flash": {"in_miss": 0.15, "in_hit": 0.075, "out": 0.60},
+    "gemini-2.5-flash-lite": {"in_miss": 0.075, "in_hit": 0.0375, "out": 0.30},
+}
 
 # ---------------------------------------------------------------------------
 # Provider catalogue — raw dict form consumed by ProviderRegistry
