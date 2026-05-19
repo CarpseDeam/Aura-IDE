@@ -1,6 +1,5 @@
 """Build script for Aura EXE using PyInstaller."""
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -54,7 +53,7 @@ def build():
 if __name__ == "__main__":
     # Check if pyinstaller is installed
     try:
-        import PyInstaller
+        import PyInstaller  # noqa: F401
     except ImportError:
         print("PyInstaller is not installed. Installing it now...")
         subprocess.run([sys.executable, "-m", "pip", "install", "pyinstaller"], check=True)

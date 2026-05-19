@@ -208,7 +208,7 @@ def _helper():
     def test_analyzer_does_not_mutate_source(self):
         code = "x = 1\ny = 2\n"
         original = code
-        report = analyze_python_features(code)
+        analyze_python_features(code)
         assert code == original
 
     def test_pipeline_includes_feature_report(self):

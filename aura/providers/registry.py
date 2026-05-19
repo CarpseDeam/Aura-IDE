@@ -8,8 +8,14 @@ propagates automatically.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from aura.providers.base import ProviderSpec
 from aura.providers.catalog import PROVIDER_CATALOG
+
+if TYPE_CHECKING:
+    from aura.client.deepseek import DeepSeekClient
+    from aura.providers.google_cloud.client import GoogleCloudClient
 
 
 class ProviderRegistry:
@@ -40,12 +46,12 @@ class ProviderRegistry:
     def all(self) -> dict[str, ProviderSpec]:
         return dict(self._providers)
 
-    def create_client(self, provider_id: str) -> "DeepSeekClient | GoogleCloudClient":
+    def create_client(self, provider_id: str) -> DeepSeekClient | GoogleCloudClient:
         if provider_id == "google_cloud":
             from aura.providers.google_cloud.client import GoogleCloudClient
             from aura.providers.google_cloud.config import (
-                get_google_cloud_project,
                 get_google_cloud_location,
+                get_google_cloud_project,
             )
             return GoogleCloudClient(
                 project=get_google_cloud_project(),

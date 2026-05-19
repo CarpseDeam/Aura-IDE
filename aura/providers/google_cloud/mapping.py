@@ -3,9 +3,7 @@ from typing import Any
 
 from aura.client.events import (
     ContentDelta,
-    Done,
     Event,
-    ToolCallArgsDelta,
     ToolCallEnd,
     ToolCallStart,
 )
@@ -155,7 +153,6 @@ def google_response_to_events(
     reasoning_buf: list[str],
     tool_calls: dict[int, dict[str, Any]],
     seen_tool_starts: set[int],
-    finish_reason: str | None,
 ) -> Any:
     """Generator that processes Google GenAI streaming response chunks.
 
@@ -175,8 +172,6 @@ def google_response_to_events(
         return events
 
     candidate = response_chunks.candidates[0]
-    if candidate.finish_reason:
-        finish_reason = candidate.finish_reason
 
     content = getattr(candidate, "content", None)
     if content is None or not hasattr(content, "parts"):

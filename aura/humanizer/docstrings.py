@@ -56,7 +56,6 @@ def _handle_docstring_removal(
     if docstr is None:
         return
 
-    doc_lines = (docstr.end_lineno - docstr.lineno) + 1
     doc_text = docstr.value.value  # type: ignore[union-attr]
 
     if isinstance(node, ast.ClassDef):
