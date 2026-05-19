@@ -32,7 +32,7 @@ from aura.config import (
     save_workspace_root,
 )
 from aura.git_ops import git_init, is_git_repo
-from aura.gui.aura_widget import AuraPlayground
+from aura.gui.playground import AuraPlayground
 from aura.gui.widgets.aura_glow import AuraWidget
 from aura.gui.chat_view import ChatView
 from aura.gui.checkpoint_dialog import CheckpointDialog

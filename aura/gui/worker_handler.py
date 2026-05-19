@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from aura.bridge.qt_bridge import ConversationBridge
     from aura.config import AppSettings
     from aura.gui.chat_view import ChatView
-    from aura.gui.aura_widget import AuraPlayground
+    from aura.gui.playground import AuraPlayground
 
 
 class WorkerEventHandler(QObject):
