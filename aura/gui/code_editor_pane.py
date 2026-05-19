@@ -8,6 +8,7 @@ as line-aware delete/retype transitions.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, Signal
@@ -31,6 +32,7 @@ from PySide6.QtWidgets import (
 from aura.focused_actions import ACTION_LABELS, build_prompt_for_action, is_edit_action
 from aura.gui.cards._helpers import _mono_font
 from aura.gui.editor.diff_overlay import DiffOverlay
+from aura.gui.editor.edit_animation import EditAnimation
 from aura.gui.smooth_code_streamer import SmoothCodeStreamer
 from aura.gui.syntax import PygmentsHighlighter, language_from_path
 from aura.gui.theme import ACCENT, BG, BORDER, FG
@@ -49,119 +51,6 @@ class CodeEditorPane(QWidget):
     """
 
     focused_action_requested = Signal(str)
-
-    _ANIM_TICK_MS = 16
-    _TYPE_CHARS_PER_TICK = 36
-    _DELETE_CHARS_PER_TICK = 32
-    _DELETE_LINES_PER_TICK = 2
-    _RETYPE_CHARS_PER_TICK = 20
-    _DELETE_HOLD_TICKS = 7
-    _TYPE_HOLD_TICKS = 3
-    _INSTANT_TOTAL_CHARS = 200_000
-    _INSTANT_CHANGED_CHARS = 20_000
-
-    @staticmethod
-    def _compute_changed_region(
-        old_text: str, new_text: str
-    ) -> tuple[int, int, str, str]:
-        prefix_len = 0
-        while (
-            prefix_len < len(old_text)
-            and prefix_len < len(new_text)
-            and old_text[prefix_len] == new_text[prefix_len]
-        ):
-            prefix_len += 1
-
-        suffix_len = 0
-        while (
-            suffix_len < len(old_text) - prefix_len
-            and suffix_len < len(new_text) - prefix_len
-            and old_text[len(old_text) - 1 - suffix_len]
-            == new_text[len(new_text) - 1 - suffix_len]
-        ):
-            suffix_len += 1
-
-        old_middle = (
-            old_text[prefix_len:len(old_text) - suffix_len]
-            if suffix_len
-            else old_text[prefix_len:]
-        )
-        new_middle = (
-            new_text[prefix_len:len(new_text) - suffix_len]
-            if suffix_len
-            else new_text[prefix_len:]
-        )
-        return prefix_len, suffix_len, old_middle, new_middle
-
-    @staticmethod
-    def _line_start(text: str, position: int) -> int:
-        position = max(0, min(position, len(text)))
-        return text.rfind("\n", 0, position) + 1
-
-    @staticmethod
-    def _line_end(text: str, position: int) -> int:
-        position = max(0, min(position, len(text)))
-        newline = text.find("\n", position)
-        return len(text) if newline == -1 else newline + 1
-
-    @staticmethod
-    def _line_number_at(text: str, position: int) -> int:
-        position = max(0, min(position, len(text)))
-        return text.count("\n", 0, position) + 1
-
-    @classmethod
-    def _compute_animation_region(
-        cls, old_text: str, new_text: str
-    ) -> tuple[int, int, int, int]:
-        """Return old/new character ranges to animate.
-
-        Multiline replacements are expanded to whole logical lines so the UI
-        can show "delete these lines, type these lines" instead of a noisy
-        middle-of-buffer character churn. Pure insertions keep an empty old
-        range so existing lines do not flash or disappear.
-        """
-        prefix_len, suffix_len, old_mid, new_mid = cls._compute_changed_region(
-            old_text, new_text
-        )
-        old_raw_end = len(old_text) - suffix_len if suffix_len else len(old_text)
-        new_raw_end = len(new_text) - suffix_len if suffix_len else len(new_text)
-
-        pure_insert = not old_mid and bool(new_mid)
-        pure_delete = bool(old_mid) and not new_mid
-        multiline_change = "\n" in old_mid or "\n" in new_mid
-        replacement = bool(old_mid and new_mid)
-
-        if pure_insert and "\n" in new_mid:
-            old_start = cls._line_start(old_text, prefix_len)
-            new_start = cls._line_start(new_text, prefix_len)
-            new_end = (
-                cls._line_start(new_text, new_raw_end)
-                if suffix_len
-                else len(new_text)
-            )
-            return old_start, old_start, new_start, new_end
-
-        if pure_insert:
-            return prefix_len, prefix_len, prefix_len, new_raw_end
-
-        if pure_delete and "\n" in old_mid:
-            old_start = cls._line_start(old_text, prefix_len)
-            old_end = (
-                cls._line_start(old_text, old_raw_end)
-                if suffix_len
-                else len(old_text)
-            )
-            new_start = cls._line_start(new_text, prefix_len)
-            return old_start, old_end, new_start, new_start
-
-        if multiline_change or replacement:
-            old_start = cls._line_start(old_text, prefix_len)
-            old_end = cls._line_end(old_text, old_raw_end)
-            new_start = cls._line_start(new_text, prefix_len)
-            new_end = cls._line_end(new_text, new_raw_end)
-            return old_start, old_end, new_start, new_end
-
-        return prefix_len, old_raw_end, prefix_len, new_raw_end
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -322,7 +211,7 @@ class CodeEditorPane(QWidget):
         }
         timer: QTimer = self._typing_state[tool_id]["timer"]
         timer.timeout.connect(lambda tid=tool_id: self._on_typing_tick(tid))
-        timer.setInterval(self._ANIM_TICK_MS)
+        timer.setInterval(EditAnimation.ANIM_TICK_MS)
         streamer.finished.connect(
             lambda tid=tool_id: self._on_streamer_finished(tid)
         )
@@ -370,11 +259,11 @@ class CodeEditorPane(QWidget):
             streamer.set_target(new_content)
             return
 
-        if not self._should_edit_animate(old_content, new_content):
+        if not EditAnimation.should_animate(old_content, new_content):
             self.set_content(canonical_tool_id, new_content)
             return
 
-        old_start, old_end, new_start, new_end = self._compute_animation_region(
+        old_start, old_end, new_start, new_end = EditAnimation.compute_animation_region(
             old_content, new_content
         )
         old_mid = old_content[old_start:old_end]
@@ -386,7 +275,7 @@ class CodeEditorPane(QWidget):
         state["animation_new_middle"] = new_mid
         state["animation_char_index"] = 0
         state["animation_hold_ticks"] = (
-            self._DELETE_HOLD_TICKS if old_mid else self._TYPE_HOLD_TICKS
+            EditAnimation.DELETE_HOLD_TICKS if old_mid else EditAnimation.TYPE_HOLD_TICKS
         )
         old_lines = old_mid.splitlines(keepends=True)
         if old_mid and not old_lines:
@@ -394,14 +283,14 @@ class CodeEditorPane(QWidget):
         state["animation_old_lines"] = old_lines
         state["animation_delete_line_count"] = len(old_lines)
         state["animation_change_start"] = len(state["animation_prefix"])
-        state["animation_change_line"] = self._line_number_at(new_content, new_start)
+        state["animation_change_line"] = EditAnimation.line_number_at(new_content, new_start)
         state["animation_old_start"] = old_start
         state["animation_old_end"] = old_end
         state["position"] = 0
         state["animation_phase"] = "replace_hold"
 
         streamer.set_text_immediately(old_content)
-        self._focus_editor_position(editor, old_start)
+        EditAnimation.focus_editor_position(editor, old_start)
         DiffOverlay.mark_deleted(editor, old_start, old_end)
         self._set_tab_status(canonical_tool_id, f":{state['animation_change_line']} - editing")
         timer.start()
@@ -639,169 +528,12 @@ class CodeEditorPane(QWidget):
             editor.setTextCursor(keep)
 
     def _on_typing_tick(self, tool_id: str) -> None:
-        """Process one frame of the active code animation."""
         canonical_tool_id = self._canonical_tool_id(tool_id)
         state = self._typing_state.get(canonical_tool_id)
-        if state is None:
-            return
-
         editor = self._editors.get(canonical_tool_id)
-        if editor is None:
+        if state is None or editor is None:
             return
-
-        phase = state.get("animation_phase") or "type"
-        if phase == "delete_hold":
-            self._tick_hold_phase(state, editor, "delete")
-            return
-        if phase == "replace_hold":
-            self._tick_hold_phase(state, editor, "replace")
-            return
-        if phase == "replace":
-            self._start_replacement_phase(state, editor)
-            return
-        if phase == "delete":
-            self._tick_delete_phase(state, editor)
-            return
-        if phase == "type_hold":
-            self._tick_hold_phase(state, editor, "retype")
-            return
-        if phase == "retype":
-            self._tick_retype_phase(state, editor)
-            return
-
-        target = state["target"]
-        state["timer"].stop()
-        state["animation_phase"] = ""
-        state["streamer"].set_target(target)
-
-    def _tick_hold_phase(
-        self, state: dict, editor: QPlainTextEdit, next_phase: str
-    ) -> None:
-        state["animation_hold_ticks"] = max(
-            0, state.get("animation_hold_ticks", 0) - 1
-        )
-        if state["animation_hold_ticks"] > 0:
-            return
-        state["animation_phase"] = next_phase
-        if next_phase == "retype":
-            prefix = state["animation_prefix"]
-            suffix = state["animation_suffix"]
-            self._set_editor_text(editor, prefix + suffix, len(prefix))
-            self._focus_editor_position(editor, len(prefix))
-            DiffOverlay.clear(editor)
-        elif next_phase == "replace":
-            self._start_replacement_phase(state, editor)
-
-    def _start_replacement_phase(self, state: dict, editor: QPlainTextEdit) -> None:
-        state["timer"].stop()
-        state["animation_phase"] = "replace"
-        prefix = state["animation_prefix"]
-        suffix = state["animation_suffix"]
-        new_mid = state["animation_new_middle"]
-        old_start = state.get("animation_old_start", len(prefix))
-        old_end = state.get("animation_old_end", old_start)
-        cursor = QTextCursor(editor.document())
-        text_len = max(0, editor.document().characterCount() - 1)
-        cursor.setPosition(max(0, min(old_start, text_len)))
-        cursor.setPosition(
-            max(0, min(old_end, text_len)),
-            QTextCursor.MoveMode.KeepAnchor,
-        )
-        cursor.insertText("")
-        DiffOverlay.clear(editor)
-        self._set_tab_status(
-            state.get("tool_id", ""), f":{state['animation_change_line']} - typing"
-        )
-        streamer: SmoothCodeStreamer = state["streamer"]
-        streamer.start_replacement(
-            prefix,
-            new_mid,
-            suffix,
-            base_already_set=True,
-        )
-
-    def _tick_delete_phase(self, state: dict, editor: QPlainTextEdit) -> None:
-        prefix = state["animation_prefix"]
-        suffix = state["animation_suffix"]
-        old_lines = state.get("animation_old_lines") or []
-
-        if len(old_lines) > 1:
-            state["animation_delete_line_count"] = max(
-                0,
-                state["animation_delete_line_count"] - self._DELETE_LINES_PER_TICK,
-            )
-            remaining = "".join(old_lines[:state["animation_delete_line_count"]])
-            display = prefix + remaining + suffix
-            cursor_pos = len(prefix) + len(remaining)
-            self._set_editor_text(editor, display, cursor_pos)
-            if remaining:
-                DiffOverlay.mark_deleted(editor, len(prefix), cursor_pos)
-            else:
-                DiffOverlay.clear(editor)
-        else:
-            state["animation_char_index"] = max(
-                0,
-                len(state["animation_old_middle"])
-                - self._DELETE_CHARS_PER_TICK
-                if state["animation_char_index"] == 0
-                else state["animation_char_index"] - self._DELETE_CHARS_PER_TICK,
-            )
-            remaining = state["animation_old_middle"][:state["animation_char_index"]]
-            display = prefix + remaining + suffix
-            self._set_editor_text(editor, display, len(prefix) + len(remaining))
-            if remaining:
-                DiffOverlay.mark_deleted(editor, len(prefix), len(prefix) + len(remaining))
-            else:
-                DiffOverlay.clear(editor)
-
-        no_lines_left = state.get("animation_delete_line_count", 0) == 0
-        no_chars_left = (
-            len(old_lines) <= 1 and state.get("animation_char_index", 0) == 0
-        )
-        if no_lines_left or no_chars_left:
-            if state["animation_new_middle"]:
-                state["animation_phase"] = "type_hold"
-                state["animation_hold_ticks"] = self._TYPE_HOLD_TICKS
-                state["animation_char_index"] = 0
-                self._set_tab_status(
-                    state.get("tool_id", ""), f":{state['animation_change_line']} - typing"
-                )
-            else:
-                self._finish_edit_animation(state, editor)
-
-    def _tick_retype_phase(self, state: dict, editor: QPlainTextEdit) -> None:
-        new_mid = state["animation_new_middle"]
-        state["animation_char_index"] = min(
-            len(new_mid),
-            state["animation_char_index"] + self._RETYPE_CHARS_PER_TICK,
-        )
-        prefix = state["animation_prefix"]
-        suffix = state["animation_suffix"]
-        idx = state["animation_char_index"]
-        display = prefix + new_mid[:idx] + suffix
-        self._set_editor_text(editor, display, len(prefix) + idx)
-        DiffOverlay.mark_inserted(editor, len(prefix), len(prefix) + idx)
-        if idx >= len(new_mid):
-            self._finish_edit_animation(state, editor)
-
-    def _finish_edit_animation(self, state: dict, editor: QPlainTextEdit) -> None:
-        state["timer"].stop()
-        final_text = (
-            state["animation_prefix"]
-            + state["animation_new_middle"]
-            + state["animation_suffix"]
-        )
-        state["target"] = final_text
-        state["position"] = len(final_text)
-        state["animation_phase"] = ""
-        self._set_editor_text(editor, final_text, len(state["animation_prefix"]))
-        change_start = state.get("animation_change_start", len(state["animation_prefix"]))
-        change_end = change_start + len(state.get("animation_new_middle", ""))
-        if change_end > change_start:
-            DiffOverlay.mark_inserted(editor, change_start, change_end)
-        else:
-            DiffOverlay.clear(editor)
-        self._set_tab_status(state.get("tool_id", ""), " ✓")
+        EditAnimation.tick(state, editor, set_status=self._set_tab_status)
 
     def _on_streamer_finished(self, tool_id: str) -> None:
         canonical_tool_id = self._canonical_tool_id(tool_id)
@@ -809,52 +541,9 @@ class CodeEditorPane(QWidget):
         editor = self._editors.get(canonical_tool_id)
         if state is None or editor is None:
             return
-        state["position"] = len(state["streamer"].visible_text())
-        state["animation_phase"] = ""
-        if state.get("animation_new_middle"):
-            change_start = state.get("animation_change_start", 0)
-            change_end = change_start + len(state.get("animation_new_middle", ""))
-            if change_end > change_start:
-                DiffOverlay.mark_inserted(editor, change_start, change_end)
-        if state.get("pending_done") and state.get("active_count", 0) == 0:
-            state["pending_done"] = False
-            self._set_tab_status(canonical_tool_id, " ✓")
-
-    def _should_edit_animate(self, old_text: str, new_text: str) -> bool:
-        if (
-            len(old_text) > self._INSTANT_TOTAL_CHARS
-            or len(new_text) > self._INSTANT_TOTAL_CHARS
-        ):
-            return False
-        _prefix_len, _suffix_len, old_mid, new_mid = self._compute_changed_region(
-            old_text, new_text
+        EditAnimation.on_streamer_finished(
+            state, editor, set_status=self._set_tab_status
         )
-        return max(len(old_mid), len(new_mid)) <= self._INSTANT_CHANGED_CHARS
-
-    def _set_editor_text(
-        self, editor: QPlainTextEdit, text: str, cursor_position: int | None = None
-    ) -> None:
-        editor.setPlainText(text)
-        if cursor_position is None:
-            return
-        cursor = editor.textCursor()
-        cursor.setPosition(max(0, min(cursor_position, len(text))))
-        editor.setTextCursor(cursor)
-        editor.ensureCursorVisible()
-
-    def _focus_editor_position(self, editor: QPlainTextEdit, position: int) -> None:
-        cursor = QTextCursor(editor.document())
-        cursor.setPosition(max(0, min(position, len(editor.toPlainText()))))
-        editor.setTextCursor(cursor)
-        editor.centerCursor()
-
-
-
-
-
-
-
-
 
     def _set_tab_status(self, tool_id: str, suffix: str) -> None:
         canonical_tool_id = self._canonical_tool_id(tool_id)
