@@ -2,6 +2,11 @@
 __pycache__/
 *.py[cod]
 *.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
 dist/
 Aura-1.1.0-windows-x64.exe/
 *.egg

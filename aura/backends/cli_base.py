@@ -7,7 +7,6 @@ import queue
 import threading
 import uuid
 from pathlib import Path
-from abc import abstractmethod
 from collections.abc import Generator
 from typing import Any
 
@@ -19,6 +18,7 @@ from aura.client.events import (
     Event,
 )
 from aura.sandbox import SandboxExecutor, SandboxResult
+from aura.backends.cli_protocol import CLIEventAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +118,7 @@ class CLIAgentBackend(AgentBackend):
         timeout: int = 120,
         cancel_event: threading.Event | None = None,
         input_data: str | None = None,
+        adapter: CLIEventAdapter | None = None,
     ) -> Generator[Event, None, SandboxResult]:
         """Run a CLI agent command while yielding live process output events."""
         process_id = f"cli-{uuid.uuid4().hex}"
@@ -162,7 +163,10 @@ class CLIAgentBackend(AgentBackend):
         while result is None:
             kind, payload = events.get()
             if kind == "output":
-                yield AgentProcessOutput(process_id=process_id, text=str(payload))
+                chunk = str(payload)
+                yield AgentProcessOutput(process_id=process_id, text=chunk)
+                if adapter:
+                    yield from adapter.feed(chunk)
             else:
                 result = payload if isinstance(payload, SandboxResult) else SandboxResult(
                     ok=False,
@@ -172,21 +176,55 @@ class CLIAgentBackend(AgentBackend):
                 )
 
         thread.join(timeout=0)
+        
+        if adapter:
+            yield from adapter.finish(result.exit_code, result.stdout, result.stderr)
+
         yield AgentProcessFinished(process_id=process_id, exit_code=result.exit_code)
         return result
 
-    @abstractmethod
-    def stream(
-        self,
-        messages: list[dict[str, Any]],
-        tools: list[dict[str, Any]] | None,
-        model: str,
-        thinking: str,
-        cancel_event: Any = None,
-        temperature: float = 0.7,
-    ) -> Any:
-        """Stream a model response, yielding Event objects.
+    def _build_prompt(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None) -> str:
+        import json
+        parts = []
+        
+        if tools:
+            tools_json = json.dumps(tools, indent=2)
+            protocol = (
+                "You have access to the following tools:\n"
+                f"{tools_json}\n\n"
+                "To call a tool, you MUST output a JSON block exactly like this, on its own line:\n"
+                'AURA_EVENT {"type": "tool_call_start", "id": "call-1", "name": "tool_name", "index": 0}\n'
+                'AURA_EVENT {"type": "tool_call_args", "index": 0, "args_chunk": "{\\"arg1\\": \\"value\\"}"}\n'
+                'AURA_EVENT {"type": "tool_call_end", "index": 0}\n'
+                "Do NOT output conversational prose before the tool call if the tool call is your primary action.\n"
+                "After you output the tool call, STOP. The system will provide the result in a TOOL message."
+            )
+            parts.append(f"SYSTEM: {protocol}")
 
-        Subclasses must implement this — it is the core backend interface.
-        """
-        ...
+        for m in messages:
+            role = m.get("role", "").upper()
+            content = m.get("content", "")
+            
+            msg_parts = []
+            if content:
+                msg_parts.append(content)
+                
+            if "tool_calls" in m:
+                for tc in m["tool_calls"]:
+                    tid = tc.get("id", "")
+                    fn = tc.get("function", {})
+                    name = fn.get("name", "")
+                    args = fn.get("arguments", "")
+                    msg_parts.append(f'AURA_EVENT {{"type": "tool_call_start", "id": "{tid}", "name": "{name}", "index": 0}}')
+                    msg_parts.append(f'AURA_EVENT {{"type": "tool_call_args", "index": 0, "args_chunk": {json.dumps(args)}}}')
+                    msg_parts.append(f'AURA_EVENT {{"type": "tool_call_end", "index": 0}}')
+            
+            if role == "TOOL":
+                # The tool message might have tool_call_id, but the LLM just needs the result.
+                tid = m.get("tool_call_id", "")
+                msg_parts.insert(0, f"[Result for tool call {tid}]")
+
+            if msg_parts:
+                parts.append(f"{role}:\n" + "\n".join(msg_parts))
+
+        return "\n\n".join(parts)

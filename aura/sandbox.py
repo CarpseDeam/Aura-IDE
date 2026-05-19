@@ -279,8 +279,15 @@ class SandboxExecutor:
             proc = subprocess.Popen(command, **popen_kwargs)
             
             if input_data and proc.stdin:
-                proc.stdin.write(input_data)
-                proc.stdin.close()
+                try:
+                    proc.stdin.write(input_data)
+                    proc.stdin.close()
+                except (BrokenPipeError, ConnectionResetError):
+                    # Process likely exited immediately. We'll capture its output below.
+                    try:
+                        proc.stdin.close()
+                    except Exception:
+                        pass
 
             assert proc.stdout is not None
 

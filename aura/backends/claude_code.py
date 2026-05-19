@@ -6,14 +6,16 @@ Authentication: relies on `claude auth login`.
 from __future__ import annotations
 
 import shlex
+import sys
 import threading
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 from aura.backends.cli_base import CLIAgentBackend
+from aura.backends.cli_protocol import CLIEventAdapter
 from aura.cli_tools import resolve_cli_executable
-from aura.client.events import ApiError, ContentDelta, Done, Event
+from aura.client.events import ApiError, Event
 from aura.config import ThinkingMode
 
 
@@ -70,16 +72,24 @@ class ClaudeCodeBackend(CLIAgentBackend):
             yield ApiError(status_code=None, message="claude CLI not found.")
             return
 
-        prompt_text = self._build_prompt(messages)
+        prompt_text = self._build_prompt(messages, tools)
         
+        if sys.platform == "win32":
+            quoted_resolved = f'"{resolved}"'
+        else:
+            quoted_resolved = shlex.quote(resolved)
+
         # Use --bare to skip hooks/CLAUDE.md for speed and predictability
-        command = f"{shlex.quote(resolved)} -p {shlex.quote(prompt_text)} --bare"
+        command = f"{quoted_resolved} -p {shlex.quote(prompt_text)} --bare"
         
+        adapter = CLIEventAdapter()
+
         result = yield from self._run_cli_agent_command(
             command=command,
             label="Claude",
             timeout=120,
             cancel_event=cancel_event,
+            adapter=adapter,
         )
 
         if cancel_event and cancel_event.is_set():
@@ -89,10 +99,6 @@ class ClaudeCodeBackend(CLIAgentBackend):
         if not result.ok:
             yield ApiError(status_code=None, message=f"Claude error: {result.stderr or result.stdout}")
             return
-
-        output_text = result.stdout.strip()
-        yield ContentDelta(text=output_text)
-        yield Done(finish_reason="stop", full_message={"role": "assistant", "content": output_text})
 
     def _build_prompt(self, messages: list[dict[str, Any]]) -> str:
         # Simple flattening for now

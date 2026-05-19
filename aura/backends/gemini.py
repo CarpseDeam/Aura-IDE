@@ -6,14 +6,16 @@ Authentication: relies on `gemini` CLI being authenticated (OAuth).
 from __future__ import annotations
 
 import shlex
+import sys
 import threading
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 from aura.backends.cli_base import CLIAgentBackend
+from aura.backends.cli_protocol import CLIEventAdapter
 from aura.cli_tools import resolve_cli_executable
-from aura.client.events import ApiError, ContentDelta, Done, Event
+from aura.client.events import ApiError, Event
 from aura.config import ThinkingMode
 
 
@@ -66,11 +68,21 @@ class GeminiCLIBackend(CLIAgentBackend):
             yield ApiError(status_code=None, message="gemini CLI not found.")
             return
 
-        prompt_text = self._build_prompt(messages)
+        prompt_text = self._build_prompt(messages, tools)
         
         # We pass the prompt via stdin to avoid command-line length limits.
         # --skip-trust to avoid interactive prompts in headless mode.
-        command = f"{shlex.quote(resolved)} --skip-trust"
+        if sys.platform == "win32":
+            quoted_resolved = f'"{resolved}"'
+        else:
+            quoted_resolved = shlex.quote(resolved)
+
+        # -p "" ensures non-interactive mode and reads from stdin.
+        # --output-format stream-json yields structured JSON events.
+        # --yolo ensures it doesn't prompt for permission when executing tools.
+        command = f"{quoted_resolved} -p \"\" --skip-trust --output-format stream-json --yolo"
+        
+        adapter = CLIEventAdapter()
         
         result = yield from self._run_cli_agent_command(
             command=command,
@@ -78,6 +90,7 @@ class GeminiCLIBackend(CLIAgentBackend):
             timeout=120,
             cancel_event=cancel_event,
             input_data=prompt_text,
+            adapter=adapter,
         )
 
         if cancel_event and cancel_event.is_set():
@@ -87,16 +100,3 @@ class GeminiCLIBackend(CLIAgentBackend):
         if not result.ok:
             yield ApiError(status_code=None, message=f"Google CLI error: {result.stderr or result.stdout}")
             return
-
-        output_text = result.stdout.strip()
-        yield ContentDelta(text=output_text)
-        yield Done(finish_reason="stop", full_message={"role": "assistant", "content": output_text})
-
-    def _build_prompt(self, messages: list[dict[str, Any]]) -> str:
-        parts = []
-        for m in messages:
-            role = m.get("role")
-            content = m.get("content")
-            if role and content and isinstance(content, str):
-                parts.append(f"{role.upper()}: {content}")
-        return "\n\n".join(parts)
