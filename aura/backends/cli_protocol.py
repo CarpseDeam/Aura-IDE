@@ -207,3 +207,10 @@ class CLIEventAdapter:
                     yield ContentDelta(text=content)
         elif ev_type == "error":
             yield ApiError(status_code=None, message=data.get("message", "CLI Error"))
+        elif ev_type == "usage":
+            yield Usage(
+                prompt_tokens=data.get("prompt_tokens", 0),
+                completion_tokens=data.get("completion_tokens", 0),
+                cache_hit_tokens=data.get("cache_hit_tokens", 0),
+                cache_miss_tokens=data.get("cache_miss_tokens", 0),
+            )

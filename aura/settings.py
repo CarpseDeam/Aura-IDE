@@ -95,6 +95,8 @@ class AppSettings:
     @classmethod
     def from_dict(cls, data: dict) -> "AppSettings":
         s = cls()
+        # Ensure the rich interactive UI is always enabled, ignoring old saved configs.
+        s.planner_worker_mode = True
         # Humanizer
         if isinstance(data.get("humanizer_enabled"), bool):
             s.humanizer_enabled = data["humanizer_enabled"]
