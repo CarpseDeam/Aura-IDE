@@ -201,6 +201,8 @@ class LeftPane(QFrame):
         self._worker_thinking_combo.setVisible(enabled)
 
 
+
+
 def _models_with_default(provider: ProviderId) -> dict[str, ModelInfo]:
     spec = provider_registry.get(provider)
     models = dict(spec.models)

@@ -57,6 +57,8 @@ class AppSettings:
     provider: ProviderId = DEFAULT_PROVIDER
     planner_provider: ProviderId = DEFAULT_PROVIDER
     worker_provider: ProviderId = DEFAULT_PROVIDER
+    planner_backend: str = "default_api"
+    worker_backend: str = "default_api"
     default_model: str = DEFAULT_MODEL
     default_thinking: ThinkingMode = DEFAULT_THINKING
     restore_last_conversation: bool = True
@@ -126,6 +128,11 @@ class AppSettings:
         s.worker_provider = _provider_from_data(
             data, "worker_provider", s.worker_provider
         )
+        # Backends
+        if isinstance(data.get("planner_backend"), str):
+            s.planner_backend = data["planner_backend"]
+        if isinstance(data.get("worker_backend"), str):
+            s.worker_backend = data["worker_backend"]
         # Models
         s.default_model = _model_from_data(data, "default_model", s.provider)
         if isinstance(data.get("default_thinking"), str) and data["default_thinking"] in ("off", "high", "max"):

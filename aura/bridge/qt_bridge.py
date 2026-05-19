@@ -430,16 +430,22 @@ class ConversationBridge(QObject):
     def set_planner_provider(self, provider: ProviderId) -> None:
         """Update the planner provider and its backend hook."""
         self._planner_provider = provider
-        self._planner_backend = APIAgentBackend(provider=provider)
-        hooks.unregister('generate_planner_code')
-        hooks.register('generate_planner_code', self._planner_backend.stream)
+        if provider in ('gemini_cli', 'claude_code', 'codex'):
+            self.set_planner_backend(provider)
+        else:
+            self._planner_backend = APIAgentBackend(provider=provider)
+            hooks.unregister('generate_planner_code')
+            hooks.register('generate_planner_code', self._planner_backend.stream)
 
     def set_worker_provider(self, provider: ProviderId) -> None:
         """Update the worker provider and its backend hook."""
         self._worker_provider = provider
-        self._worker_backend = APIAgentBackend(provider=provider)
-        hooks.unregister('generate_worker_code')
-        hooks.register('generate_worker_code', self._worker_backend.stream)
+        if provider in ('gemini_cli', 'claude_code', 'codex'):
+            self.set_worker_backend(provider)
+        else:
+            self._worker_backend = APIAgentBackend(provider=provider)
+            hooks.unregister('generate_worker_code')
+            hooks.register('generate_worker_code', self._worker_backend.stream)
 
     def set_provider(self, provider: ProviderId) -> None:
         """Update both planner and worker to the same provider."""

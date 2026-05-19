@@ -20,7 +20,7 @@ from aura.config import ThinkingMode
 class GeminiCLIBackend(CLIAgentBackend):
     """Agent backend that calls Google via the `gemini` CLI."""
 
-    auth_command = "gemini auth login" 
+    auth_command = "gemini (Ensure GEMINI_API_KEY is set)" 
 
     def __init__(self, workspace_root: Path | None = None) -> None:
         super().__init__(workspace_root=workspace_root)
@@ -36,7 +36,7 @@ class GeminiCLIBackend(CLIAgentBackend):
 
         try:
             result = subprocess.run(
-                [path, "auth", "status"],
+                [path, "--version"],
                 capture_output=True,
                 text=True,
                 encoding="utf-8",

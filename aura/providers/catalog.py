@@ -242,6 +242,57 @@ PROVIDER_CATALOG: dict[str, dict] = {
         "models": GOOGLE_CLOUD_MODELS,
         "pricing": GOOGLE_CLOUD_PRICING,
     },
+    "gemini_cli": {
+        "label": "Gemini CLI",
+        "base_url": "",
+        "env_key": "",
+        "default_model": "gemini-cli",
+        "default_thinking": "off",
+        "models": {
+            "gemini-cli": ModelInfo(
+                id="gemini-cli",
+                label="Gemini CLI Agent",
+                input_per_m_usd=0.0,
+                output_per_m_usd=0.0,
+                cache_hit_per_m_usd=0.0,
+            )
+        },
+        "pricing": {},
+    },
+    "claude_code": {
+        "label": "Claude Code",
+        "base_url": "",
+        "env_key": "",
+        "default_model": "claude-code",
+        "default_thinking": "off",
+        "models": {
+            "claude-code": ModelInfo(
+                id="claude-code",
+                label="Claude Code Agent",
+                input_per_m_usd=0.0,
+                output_per_m_usd=0.0,
+                cache_hit_per_m_usd=0.0,
+            )
+        },
+        "pricing": {},
+    },
+    "codex": {
+        "label": "Codex",
+        "base_url": "",
+        "env_key": "",
+        "default_model": "codex",
+        "default_thinking": "off",
+        "models": {
+            "codex": ModelInfo(
+                id="codex",
+                label="Codex Agent",
+                input_per_m_usd=0.0,
+                output_per_m_usd=0.0,
+                cache_hit_per_m_usd=0.0,
+            )
+        },
+        "pricing": {},
+    },
 }
 
 # ---------------------------------------------------------------------------

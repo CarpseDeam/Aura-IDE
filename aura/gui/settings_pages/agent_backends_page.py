@@ -85,7 +85,7 @@ class AgentBackendsPage(QWidget):
         self._backend_rows: dict[str, dict[str, object]] = {}
 
         backends = [
-            ("gemini", "Gemini CLI", ["gemini", "auth", "status"]),
+            ("gemini", "Gemini CLI", ["gemini", "--version"]),
             ("claude_code", "Claude Code", ["claude", "auth", "status"]),
             ("codex", "Codex", ["codex", "login", "status"]),
         ]

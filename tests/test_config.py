@@ -18,8 +18,8 @@ from aura.models import PROVIDERS
 # ---------------------------------------------------------------------------
 
 def test_all_providers_registered():
-    """The PROVIDERS dict should contain all four providers."""
-    assert set(PROVIDERS.keys()) == {"deepseek", "openai", "openrouter", "anthropic"}
+    """The PROVIDERS dict should contain all five providers."""
+    assert set(PROVIDERS.keys()) == {"deepseek", "openai", "openrouter", "anthropic", "google_cloud"}
 
 
 def test_provider_ids_are_valid():
@@ -29,8 +29,10 @@ def test_provider_ids_are_valid():
 
 
 def test_provider_bases_are_urls():
-    """Every base_url should start with https://."""
+    """Every base_url should start with https:// (except google_cloud which doesn't use one)."""
     for cfg in PROVIDERS.values():
+        if cfg.id == "google_cloud":
+            continue
         assert cfg.base_url.startswith("https://")
 
 
@@ -38,7 +40,7 @@ def test_provider_has_env_key():
     """Every provider should have a non-empty primary env_key."""
     for cfg in PROVIDERS.values():
         assert cfg.env_key
-        assert cfg.env_key.startswith(("OPEN", "DEEPSEEK", "ANTHROPIC"))
+        assert cfg.env_key.startswith(("OPEN", "DEEPSEEK", "ANTHROPIC", "GOOGLE_CLOUD_PROJECT"))
 
 
 def test_provider_has_default_model():
@@ -150,10 +152,10 @@ def test_app_settings_to_from_dict_roundtrip():
         provider="openai",
         planner_provider="openai",
         worker_provider="openai",
-        default_model="gpt-4o",
-        default_planner_model="gpt-4o",
+        default_model="gpt-5.4-mini",
+        default_planner_model="gpt-5.4-mini",
         default_planner_thinking="off",
-        default_worker_model="gpt-4o",
+        default_worker_model="gpt-5.4-mini",
         default_worker_thinking="off",
         temperature=0.5,
         worker_temperature=0.1,
@@ -177,13 +179,13 @@ def test_app_settings_from_dict_partial():
     partial = {
         "provider": "openai",
         "planner_provider": "openai",
-        "default_planner_model": "gpt-4o",
+        "default_planner_model": "gpt-5.4-mini",
     }
     s = AppSettings.from_dict(partial)
     assert s.provider == "openai"
     # Fallback to provider default since list is empty
-    assert s.default_model == "gpt-4o"
-    assert s.default_planner_model == "gpt-4o"
+    assert s.default_model == "gpt-5.4-mini"
+    assert s.default_planner_model == "gpt-5.4-mini"
     # Defaults for unspecified fields
     assert s.default_planner_thinking == "off"
 
@@ -360,10 +362,10 @@ def test_redact_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_provider_registry_contains_exactly_four():
-    """provider_registry should contain exactly the 4 supported providers."""
+def test_provider_registry_contains_exactly_five():
+    """provider_registry should contain exactly the 5 supported providers."""
     from aura.providers.registry import provider_registry
-    assert set(provider_registry.ids()) == {"deepseek", "openai", "openrouter", "anthropic"}
+    assert set(provider_registry.ids()) == {"deepseek", "openai", "openrouter", "anthropic", "google_cloud"}
 
 
 def test_provider_registry_does_not_contain_google():
@@ -374,12 +376,16 @@ def test_provider_registry_does_not_contain_google():
 
 
 def test_provider_registry_creates_client():
-    """create_client should return a DeepSeekClient for each provider."""
+    """create_client should return a DeepSeekClient for each provider, except google_cloud."""
     from aura.client.deepseek import DeepSeekClient
+    from aura.providers.google_cloud.client import GoogleCloudClient
     from aura.providers.registry import provider_registry
     for pid in provider_registry.ids():
         client = provider_registry.create_client(pid)
-        assert isinstance(client, DeepSeekClient)
+        if pid == "google_cloud":
+            assert isinstance(client, GoogleCloudClient)
+        else:
+            assert isinstance(client, DeepSeekClient)
 
 
 def test_settings_migrates_google_ai_to_deepseek():

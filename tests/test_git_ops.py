@@ -250,8 +250,10 @@ class TestAutoCommit:
         """Truncate the commit message when goal + summary exceeds 2000 chars."""
         monkeypatch.setattr("aura.git_ops.is_git_repo", lambda p: True)
 
-        long_goal = "g" * 1500
-        long_summary = "s" * 600  # total = 2100 > 2000
+        # The goal becomes the subject and is truncated to 72 chars.
+        # To exceed 2000 chars total, we must use a very long summary.
+        long_goal = "short goal"
+        long_summary = "s" * 2500  # total > 2000
 
         captured_message: list[str] = []
 
