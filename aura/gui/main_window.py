@@ -19,7 +19,6 @@ from PySide6.QtWidgets import (
 
 from aura.bridge import ConversationBridge
 from aura.bridge.qt_bridge import PLANNER_SYSTEM_PROMPT
-from aura.prompts import SINGLE_SYSTEM_PROMPT
 from aura.config import (
     APP_NAME,
     PROVIDERS,
@@ -32,19 +31,18 @@ from aura.config import (
     save_settings,
     save_workspace_root,
 )
-from aura.gui.conv_persistence import ConversationPersistence
 from aura.git_ops import git_init, is_git_repo
-from aura.gui.checkpoint_dialog import CheckpointDialog
+from aura.gui.aura_widget import AuraPlayground, AuraWidget
 from aura.gui.chat_view import ChatView
+from aura.gui.checkpoint_dialog import CheckpointDialog
+from aura.gui.conv_persistence import ConversationPersistence
 from aura.gui.input_panel import InputPanel, SendPayload
-from aura.gui.send_handler import SendHandler
-from aura.gui.settings_dialog import SettingsDialog
-from aura.gui.update_dialog import UpdateDialog, UpdateWorker
-from aura.updater import UpdateStatus
-from aura.gui.onboarding_dialog import OnboardingDialog
-from aura.gui.status_bar import AuraStatusBar
 from aura.gui.left_pane import LeftPane
 from aura.gui.main_window_toolbar import MainWindowToolbar
+from aura.gui.onboarding_dialog import OnboardingDialog
+from aura.gui.send_handler import SendHandler
+from aura.gui.settings_dialog import SettingsDialog
+from aura.gui.status_bar import AuraStatusBar
 from aura.gui.theme import (
     ACCENT,
     BG_RAISED,
@@ -55,11 +53,11 @@ from aura.gui.theme import (
     SUCCESS,
     WARN,
 )
-from aura.gui.aura_widget import AuraPlayground, AuraWidget
-from aura.gui.worker_handler import WorkerEventHandler
+from aura.gui.update_dialog import UpdateDialog, UpdateWorker
 from aura.gui.window_chrome import WindowChromeMixin
-
-_THINKING_LABEL = {"off": "Off", "high": "High", "max": "Max"}
+from aura.gui.worker_handler import WorkerEventHandler
+from aura.prompts import SINGLE_SYSTEM_PROMPT
+from aura.updater import UpdateStatus
 
 
 class MainWindow(WindowChromeMixin, QMainWindow):
