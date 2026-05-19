@@ -10,6 +10,10 @@ from aura.gui.cards.terminal_card import TerminalCard
 from aura.gui.cards.error_card import ErrorCard
 from aura.gui.cards.worker_summary_card import WorkerSummaryCard
 
+# Deprecated — kept for backward compatibility
+from aura.gui.cards.artifact_card import ArtifactCard  # noqa: F401
+from aura.gui.cards.worker_log_card import WorkerLogCard  # noqa: F401
+
 __all__ = [
     "UserCard",
     "AssistantCard",
