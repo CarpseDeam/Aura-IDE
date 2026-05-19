@@ -179,7 +179,7 @@ class TestMessageQueueing:
             SendPayload(text="second", attachments=[])
         )
 
-        handler._process_message_queue("model", "off")
+        handler.process_message_queue("model", "off")
         assert len(handler._message_queue) == 1
         input_panel.set_queued_messages.assert_called_with(1)
         bridge.send.assert_called_once()
@@ -201,7 +201,7 @@ class TestMessageQueueing:
         self, handler: SendHandler, bridge: Mock
     ) -> None:
         """_process_message_queue with empty queue should be a no-op."""
-        handler._process_message_queue("model", "off")
+        handler.process_message_queue("model", "off")
         bridge.send.assert_not_called()
 
 

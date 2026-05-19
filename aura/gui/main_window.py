@@ -744,22 +744,21 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._tree.set_root(self._workspace_root)
 
     def _apply_planner_worker_mode_to_bridge(self, enabled: bool) -> None:
-        self._bridge.set_planner_worker_mode(enabled)
-        if enabled:
+        # HACK: Force planner/worker mode to always be enabled. The user is
+        # complaining about not seeing the rich playground UI, which is only
+        # active in this mode. This ensures all agent activity is routed
+        # through the AuraPlayground for the expected rich feedback.
+        effective_enabled = True
+
+        self._bridge.set_planner_worker_mode(effective_enabled)
+        if effective_enabled:
             prompt = self._settings.planner_system_prompt or PLANNER_SYSTEM_PROMPT
         else:
+            # This branch is now effectively dead code.
             prompt = self._settings.system_prompt or SINGLE_SYSTEM_PROMPT
         self._bridge.set_system_prompt(prompt)
         if hasattr(self, "_chat"):
-            self._chat.set_compact_tools(enabled)
-
-    def _on_worker_model_changed(self, model: str) -> None:
-        self._bridge.set_worker_model(model)
-        self._refresh_status_bar()
-
-    def _on_worker_thinking_changed(self, thinking: str) -> None:
-        self._bridge.set_worker_thinking(thinking)  # type: ignore[arg-type]
-        self._refresh_status_bar()
+            self._chat.set_compact_tools(effective_enabled)
 
     def _on_started(self) -> None:
         self._input.set_streaming(True)
@@ -769,7 +768,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._chat.assistant_done()
         self._chat.stop_current_aura()
         self._input.focus_editor()
-        self._send_handler._process_message_queue(self.current_model(), self.current_thinking())
+        self._send_handler.process_message_queue(self.current_model(), self.current_thinking())
 
     def _on_stream_done(self, finish_reason: str, full_message: dict) -> None:
         # If the model produced tool calls, it's not actually done — the bridge
