@@ -7,7 +7,7 @@ from aura.client.events import (
     ToolCallEnd,
     ToolCallStart,
 )
-from aura.providers.google_cloud.signatures import make_message_json_safe
+from aura.providers.google_cloud.signatures import decode_signature, make_message_json_safe
 
 
 def aura_tools_to_google_declarations(tools: list[dict]) -> list[dict]:
@@ -37,6 +37,7 @@ def aura_tools_to_google_declarations(tools: list[dict]) -> list[dict]:
 
 def aura_messages_to_google_contents(
     messages: list[dict],
+    google_call_metadata: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[str | None, list[dict]]:
     """Convert Aura (OpenAI-format) messages to Google's system_instruction + contents.
 
@@ -67,11 +68,20 @@ def aura_messages_to_google_contents(
             tool_call_id = msg.get("tool_call_id", "")
             tool_name = msg.get("name", tool_call_id)
             content = msg.get("content", "")
+            
+            try:
+                response_dict = json.loads(content)
+                if not isinstance(response_dict, dict):
+                    response_dict = {"result": response_dict}
+            except Exception:
+                response_dict = {"result": str(content)}
+
             current_tool_parts.append(
                 {
                     "function_response": {
+                        "id": tool_call_id,
                         "name": tool_name,
-                        "response": {"result": str(content)},
+                        "response": response_dict,
                     }
                 }
             )
@@ -127,15 +137,26 @@ def aura_messages_to_google_contents(
                         args = json.loads(raw_args)
                     except (json.JSONDecodeError, TypeError):
                         args = {}
-                    parts.append(
-                        {
-                            "function_call": {
-                                "id": str(tc.get("id", "")),
-                                "name": str(fn.get("name", "")),
-                                "args": args,
-                            }
+                    call_id = str(tc.get("id", ""))
+                    part = {
+                        "function_call": {
+                            "id": call_id,
+                            "name": str(fn.get("name", "")),
+                            "args": args,
                         }
+                    }
+                    metadata = (
+                        google_call_metadata.get(call_id)
+                        if google_call_metadata
+                        else None
                     )
+                    if metadata:
+                        sig = metadata.get("thought_signature")
+                        if sig:
+                            part["thought_signature"] = (
+                                decode_signature(sig) if isinstance(sig, str) else sig
+                            )
+                    parts.append(part)
 
             if not parts:
                 parts.append({"text": ""})

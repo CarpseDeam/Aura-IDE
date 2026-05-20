@@ -1,9 +1,14 @@
 import os
 from pathlib import Path
 
+import sys
+
 ADC_ENV = "GOOGLE_APPLICATION_CREDENTIALS"
 
-_DEFAULT_ADC_PATH = Path.home() / ".config" / "gcloud" / "application_default_credentials.json"
+if sys.platform == "win32":
+    _DEFAULT_ADC_PATH = Path(os.environ.get("APPDATA", "")) / "gcloud" / "application_default_credentials.json"
+else:
+    _DEFAULT_ADC_PATH = Path.home() / ".config" / "gcloud" / "application_default_credentials.json"
 
 
 def check_adc_file() -> str | None:

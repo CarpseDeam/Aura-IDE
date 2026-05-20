@@ -31,9 +31,6 @@ if TYPE_CHECKING:
 
 from aura.backends import (
     APIAgentBackend,
-    ClaudeCodeBackend,
-    CodexBackend,
-    AgyCLIBackend,
 )
 from aura.bridge.approval_proxy import _ApprovalProxy
 from aura.bridge.dispatch import _DispatchProxy
@@ -433,22 +430,16 @@ class ConversationBridge(QObject):
     def set_planner_provider(self, provider: ProviderId) -> None:
         """Update the planner provider and its backend hook."""
         self._planner_provider = provider
-        if provider in ('agy_cli', 'claude_code', 'codex'):
-            self.set_planner_backend(provider)
-        else:
-            self._planner_backend = APIAgentBackend(provider=provider)
-            hooks.unregister('generate_planner_code')
-            hooks.register('generate_planner_code', self._planner_backend.stream)
+        self._planner_backend = APIAgentBackend(provider=provider)
+        hooks.unregister('generate_planner_code')
+        hooks.register('generate_planner_code', self._planner_backend.stream)
 
     def set_worker_provider(self, provider: ProviderId) -> None:
         """Update the worker provider and its backend hook."""
         self._worker_provider = provider
-        if provider in ('agy_cli', 'claude_code', 'codex'):
-            self.set_worker_backend(provider)
-        else:
-            self._worker_backend = APIAgentBackend(provider=provider)
-            hooks.unregister('generate_worker_code')
-            hooks.register('generate_worker_code', self._worker_backend.stream)
+        self._worker_backend = APIAgentBackend(provider=provider)
+        hooks.unregister('generate_worker_code')
+        hooks.register('generate_worker_code', self._worker_backend.stream)
 
     def set_provider(self, provider: ProviderId) -> None:
         """Update both planner and worker to the same provider."""
@@ -459,71 +450,14 @@ class ConversationBridge(QObject):
         """Check if the named backend is authenticated.
 
         Args:
-            backend_name: 'default_api', 'agy_cli', 'claude_code', or 'codex'.
+            backend_name: 'default_api'
 
         Returns:
             True if the backend is authenticated, False otherwise.
         """
         root = self._registry.workspace_root
-        if backend_name == 'agy_cli':
-            return AgyCLIBackend(workspace_root=root).check_auth()
-        if backend_name == 'claude_code':
-            return ClaudeCodeBackend(workspace_root=root).check_auth()
-        if backend_name == 'codex':
-            return CodexBackend(workspace_root=root).check_auth()
         return True  # 'default_api' is always authenticated
 
-    def run_backend_auth(self, backend_name: str) -> bool:
-        """Run the CLI auth flow for the given backend. Blocks until complete.
-
-        Args:
-            backend_name: 'default_api', 'agy_cli', 'claude_code', or 'codex'.
-
-        Returns:
-            True if authentication succeeded, False otherwise.
-        """
-        root = self._registry.workspace_root
-        if backend_name == 'agy_cli':
-            return AgyCLIBackend(workspace_root=root).run_cli_auth()
-        if backend_name == 'claude_code':
-            return ClaudeCodeBackend(workspace_root=root).run_cli_auth()
-        if backend_name == 'codex':
-            return CodexBackend(workspace_root=root).run_cli_auth()
-        return True
-
-    def set_planner_backend(self, backend_name: str) -> None:
-        """Swap the planner backend hook handler.
-
-        Args:
-            backend_name: 'default_api', 'agy_cli', 'claude_code', or 'codex'
-        """
-        hooks.unregister('generate_planner_code')
-        root = self._registry.workspace_root
-        if backend_name == 'agy_cli':
-            hooks.register('generate_planner_code', AgyCLIBackend(workspace_root=root).stream)
-        elif backend_name == 'claude_code':
-            hooks.register('generate_planner_code', ClaudeCodeBackend(workspace_root=root).stream)
-        elif backend_name == 'codex':
-            hooks.register('generate_planner_code', CodexBackend(workspace_root=root).stream)
-        else:
-            hooks.register('generate_planner_code', self._planner_backend.stream)
-
-    def set_worker_backend(self, backend_name: str) -> None:
-        """Swap the worker backend hook handler.
-
-        Args:
-            backend_name: 'default_api', 'agy_cli', 'claude_code', or 'codex'
-        """
-        hooks.unregister('generate_worker_code')
-        root = self._registry.workspace_root
-        if backend_name == 'agy_cli':
-            hooks.register('generate_worker_code', AgyCLIBackend(workspace_root=root).stream)
-        elif backend_name == 'claude_code':
-            hooks.register('generate_worker_code', ClaudeCodeBackend(workspace_root=root).stream)
-        elif backend_name == 'codex':
-            hooks.register('generate_worker_code', CodexBackend(workspace_root=root).stream)
-        else:
-            hooks.register('generate_worker_code', self._worker_backend.stream)
 
     def reset_history(self) -> None:
         self._history.messages.clear()

@@ -486,6 +486,38 @@ def test_message_mapping_tool_calls():
     assert fc_parts[0]["function_call"]["args"] == {"path": "test.py"}
 
 
+def test_message_mapping_replays_google_thought_signature():
+    from aura.providers.google_cloud.signatures import encode_signature_safe
+    from aura.providers.google_cloud.mapping import aura_messages_to_google_contents
+
+    _, contents = aura_messages_to_google_contents(
+        [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "read_file",
+                            "arguments": '{"path": "test.py"}',
+                        },
+                    }
+                ],
+            }
+        ],
+        google_call_metadata={
+            "call_1": {
+                "thought_signature": encode_signature_safe(b"opaque-signature")
+            }
+        },
+    )
+    part = contents[0]["parts"][0]
+    assert part["function_call"]["id"] == "call_1"
+    assert part["thought_signature"] == b"opaque-signature"
+
+
 def test_message_mapping_tool_result():
     from aura.providers.google_cloud.mapping import aura_messages_to_google_contents
 
@@ -669,6 +701,69 @@ def test_stream_emits_tool_call_args_delta():
     assert done.full_message is not None
     assert "tool_calls" in done.full_message
     assert len(done.full_message["tool_calls"]) == 1
+
+
+def test_stream_preserves_google_tool_call_signature_for_replay():
+    from unittest.mock import MagicMock, patch
+
+    from aura.providers.google_cloud.client import GoogleCloudClient
+    from aura.providers.google_cloud.mapping import aura_messages_to_google_contents
+
+    fc_mock = MagicMock()
+    fc_mock.name = "update_todo_list"
+    fc_mock.args = {"tasks": [{"description": "Plan", "status": "active"}]}
+    fc_mock.id = "call_todo"
+
+    part_mock = MagicMock()
+    part_mock.text = None
+    part_mock.thought = None
+    part_mock.function_call = fc_mock
+    part_mock.thought_signature = b"gemini-signature"
+
+    candidate_mock = MagicMock()
+    candidate_mock.finish_reason = None
+    candidate_mock.content.parts = [part_mock]
+
+    chunk = MagicMock()
+    chunk.candidates = [candidate_mock]
+    chunk.usage_metadata = None
+
+    fake_client_mock = MagicMock()
+    fake_client_mock.models.generate_content_stream.return_value = [chunk]
+
+    client = GoogleCloudClient(project="test")
+
+    with patch.object(client, "_get_client", return_value=fake_client_mock):
+        list(
+            client.stream(
+                messages=[{"role": "user", "content": "do the task"}],
+                tools=None,
+                model="gemini-2.5-flash",
+                thinking="off",
+            )
+        )
+
+    _, contents = aura_messages_to_google_contents(
+        [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_todo",
+                        "type": "function",
+                        "function": {
+                            "name": "update_todo_list",
+                            "arguments": '{"tasks": [{"description": "Plan", "status": "active"}]}',
+                        },
+                    }
+                ],
+            }
+        ],
+        google_call_metadata=client._call_metadata,
+    )
+
+    assert contents[0]["parts"][0]["thought_signature"] == b"gemini-signature"
 
 
 # ---------------------------------------------------------------------------

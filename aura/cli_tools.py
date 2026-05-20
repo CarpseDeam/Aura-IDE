@@ -39,6 +39,7 @@ def resolve_cli_executable(name: str) -> str | None:
                 os.path.expandvars(r"%ProgramFiles(x86)%\nodejs"),
                 os.path.expanduser("~/AppData/Roaming/npm"),
                 os.path.expanduser("~/AppData/Local/npm"),
+                os.path.expanduser("~/AppData/Local/agy/bin"),
             ]
         )
 

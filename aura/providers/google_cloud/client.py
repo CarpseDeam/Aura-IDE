@@ -8,6 +8,7 @@ from aura.client.events import (
     ContentDelta,
     Done,
     Event,
+    ReasoningDelta,
     Usage,
 )
 from aura.providers.google_cloud.cooldown import CooldownManager
@@ -16,6 +17,7 @@ from aura.providers.google_cloud.mapping import (
     aura_messages_to_google_contents,
     aura_tools_to_google_declarations,
 )
+from aura.providers.google_cloud.signatures import encode_signature_safe
 
 
 class GoogleCloudClient:
@@ -37,6 +39,7 @@ class GoogleCloudClient:
         self._api_key = api_key
         self._client: Any = None
         self._cooldown = CooldownManager()
+        self._call_metadata: dict[str, dict[str, Any]] = {}
 
     def _get_client(self) -> Any:
         """Lazily create and return the google-genai Client."""
@@ -99,7 +102,10 @@ class GoogleCloudClient:
             )
             return
 
-        system_instruction, contents = aura_messages_to_google_contents(messages)
+        system_instruction, contents = aura_messages_to_google_contents(
+            messages,
+            google_call_metadata=self._call_metadata,
+        )
         google_tools = aura_tools_to_google_declarations(tools or [])
 
         # Build config
@@ -165,6 +171,16 @@ class GoogleCloudClient:
                     continue
 
                 for part in content.parts:
+                    is_thought = bool(getattr(part, "thought", False))
+
+                    # Thought text must stay out of the user-visible answer, but
+                    # remains useful to preserve in Aura's reasoning stream.
+                    if is_thought and hasattr(part, "text") and part.text:
+                        text = part.text
+                        reasoning_buf.append(text)
+                        yield ReasoningDelta(text)
+                        continue
+
                     # Text
                     if hasattr(part, "text") and part.text:
                         text = part.text
@@ -181,11 +197,17 @@ class GoogleCloudClient:
                         if args is None:
                             args = {}
                         args_str = json.dumps(args)
+                        call_id = getattr(fc, "id", None) or f"call_{idx}"
                         tc = {
-                            "id": getattr(fc, "id", f"call_{idx}"),
+                            "id": call_id,
                             "type": "function",
                             "function": {"name": name, "arguments": args_str},
                         }
+                        thought_signature = getattr(part, "thought_signature", None)
+                        if thought_signature:
+                            self._call_metadata[call_id] = {
+                                "thought_signature": encode_signature_safe(thought_signature)
+                            }
                         tool_calls[idx] = tc
                         seen_tool_starts.add(idx)
                         from aura.client.events import ToolCallArgsDelta, ToolCallEnd, ToolCallStart
@@ -195,9 +217,8 @@ class GoogleCloudClient:
                         yield ToolCallEnd(index=idx)
                         continue
 
-                    # Thought (reasoning)
-                    if hasattr(part, "thought") and part.thought:
-                        reasoning_buf.append(part.thought)
+                    # Thought markers without text don't carry replayable content.
+                    if is_thought:
                         continue
 
         except Exception as exc:
