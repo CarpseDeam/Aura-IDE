@@ -4,6 +4,11 @@ from enum import Enum
 from pathlib import Path
 from dataclasses import dataclass, field
 
+class CraftIssueSeverity(str, Enum):
+    HARD = "hard"
+    SOFT = "soft"
+
+
 class ChangeIntent(str, Enum):
     bug_fix = "bug_fix"
     feature = "feature"
@@ -33,12 +38,21 @@ class CraftIssue:
     code: str
     message: str
     suggestion: str
+    severity: CraftIssueSeverity = CraftIssueSeverity.HARD
 
 @dataclass
 class CraftDecision:
     approved: bool
     cleaned_code: str = ""
     issues: list[CraftIssue] = field(default_factory=list)
+
+    @property
+    def soft_issues(self) -> list[CraftIssue]:
+        return [i for i in self.issues if i.severity == CraftIssueSeverity.SOFT]
+
+    @property
+    def hard_issues(self) -> list[CraftIssue]:
+        return [i for i in self.issues if i.severity == CraftIssueSeverity.HARD]
 
 def line_in_ranges(line: int, ranges: list[tuple[int, int]]) -> bool:
     for start, end in ranges:
@@ -47,9 +61,10 @@ def line_in_ranges(line: int, ranges: list[tuple[int, int]]) -> bool:
     return False
 
 def node_in_ranges(node: ast.AST, ranges: list[tuple[int, int]]) -> bool:
-    start = getattr(node, "lineno", 1)
-    end = getattr(node, "end_lineno", start) or start
-    for cs, ce in ranges:
-        if (cs <= start <= ce) or (cs <= end <= ce) or (start <= cs <= end) or (start <= ce <= end):
+    """1-indexed, end-exclusive interval overlap: node_start < range_end and node_end > range_start."""
+    node_start = getattr(node, "lineno", 1)
+    node_end = (getattr(node, "end_lineno", node_start) or node_start) + 1
+    for range_start, range_end in ranges:
+        if node_start < range_end and node_end > range_start:
             return True
     return False

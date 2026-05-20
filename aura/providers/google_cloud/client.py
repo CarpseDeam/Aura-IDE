@@ -30,9 +30,11 @@ class GoogleCloudClient:
         *,
         project: str | None = None,
         location: str | None = None,
+        api_key: str | None = None,
     ) -> None:
         self._project = project
         self._location = location or "global"
+        self._api_key = api_key
         self._client: Any = None
         self._cooldown = CooldownManager()
 
@@ -41,11 +43,16 @@ class GoogleCloudClient:
         if self._client is None:
             from google import genai  # type: ignore[import-untyped]
 
-            self._client = genai.Client(
-                vertexai=True,
-                project=self._project,
-                location=self._location,
-            )
+            if self._api_key:
+                self._client = genai.Client(
+                    api_key=self._api_key,
+                )
+            else:
+                self._client = genai.Client(
+                    vertexai=True,
+                    project=self._project,
+                    location=self._location,
+                )
         return self._client
 
     def list_models(self) -> list[str]:

@@ -26,5 +26,5 @@ def get_google_cloud_config() -> dict[str, str | None]:
 
 
 def is_configured() -> bool:
-    """Return True if a Google Cloud project is set."""
-    return get_google_cloud_project() is not None
+    """Return True if a Google Cloud project or GEMINI_API_KEY is set."""
+    return get_google_cloud_project() is not None or "GEMINI_API_KEY" in os.environ

@@ -349,7 +349,8 @@ def _maybe_craft_proposal(proposal: dict, tool_name: str) -> ToolExecResult | No
             is_new_file=proposal.get("is_new_file", False),
         )
         
-        decision = CraftEngine().process_proposal(capsule)
+        engine = CraftEngine()
+        decision = engine.process_proposal(capsule)
         
         if is_observe:
             if not decision.approved:
@@ -358,6 +359,7 @@ def _maybe_craft_proposal(proposal: dict, tool_name: str) -> ToolExecResult | No
             
         if not decision.approved:
             issues_payload = []
+            is_authorship = len(decision.hard_issues) == 0 and len(decision.soft_issues) > 0
             for i in decision.issues:
                 issues_payload.append({
                     "code": i.code,
@@ -365,17 +367,23 @@ def _maybe_craft_proposal(proposal: dict, tool_name: str) -> ToolExecResult | No
                     "message": i.message,
                     "suggestion": i.suggestion
                 })
+            if is_authorship:
+                error_msg = "Code is structurally correct but does not meet Aura authorship standards. Revise before approval."
+                _log.info("[craft:authorship] %s soft issues: %s", rel_path, [i.code for i in decision.soft_issues])
+            else:
+                error_msg = "Code quality review failed before approval."
             return ToolExecResult(
-                ok=False, 
+                ok=False,
                 payload={
-                    "ok": False, 
-                    "error": "Code quality review failed before approval.", 
-                    "path": rel_path, 
+                    "ok": False,
+                    "error": error_msg,
+                    "path": rel_path,
                     "issues": issues_payload
                 }
             )
             
         proposal["new_content"] = decision.cleaned_code
+
         return None
     except Exception:
         _log.exception("CraftEngine failed for %s", rel_path)

@@ -53,9 +53,12 @@ class ProviderRegistry:
                 get_google_cloud_location,
                 get_google_cloud_project,
             )
+            from aura.config import get_api_key
+
             return GoogleCloudClient(
                 project=get_google_cloud_project(),
                 location=get_google_cloud_location(),
+                api_key=get_api_key("google_cloud"),
             )
         from aura.client.deepseek import DeepSeekClient
 

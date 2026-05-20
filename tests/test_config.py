@@ -43,7 +43,7 @@ def test_provider_has_env_key():
         if cfg.id in ("gemini_cli", "claude_code", "codex"):
             continue
         assert cfg.env_key
-        assert cfg.env_key.startswith(("OPEN", "DEEPSEEK", "ANTHROPIC", "GOOGLE_CLOUD_PROJECT"))
+        assert cfg.env_key.startswith(("OPEN", "DEEPSEEK", "ANTHROPIC", "GOOGLE_CLOUD_PROJECT", "GEMINI"))
 
 
 def test_provider_has_default_model():

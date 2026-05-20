@@ -261,9 +261,9 @@ PROVIDER_CATALOG: dict[str, dict] = {
         "pricing": ANTHROPIC_PRICING,
     },
     "google_cloud": {
-        "label": "Google Cloud Gemini",
+        "label": "Google Gemini",
         "base_url": "",
-        "env_key": "GOOGLE_CLOUD_PROJECT",
+        "env_key": "GEMINI_API_KEY",
         "default_model": "gemini-2.5-flash",
         "default_thinking": "off",
         "models": GOOGLE_CLOUD_MODELS,

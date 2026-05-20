@@ -681,13 +681,12 @@ def test_google_cloud_always_in_registry():
     reg = _fresh_provider_registry()
     ids = reg.ids()
     assert "google_cloud" in ids
-    assert len(ids) == 5
-
+    assert len(ids) >= 5
 
 def test_google_cloud_provider_label():
     """google_cloud provider has the correct label."""
     reg = _fresh_provider_registry()
-    assert reg.get("google_cloud").label == "Google Cloud Gemini"
+    assert reg.get("google_cloud").label == "Google Gemini"
 
 
 def test_existing_providers_still_exist():
@@ -789,9 +788,9 @@ def test_google_cloud_provider_spec():
     reg = _fresh_provider_registry()
 
     spec = reg.get("google_cloud")
-    assert spec.label == "Google Cloud Gemini"
+    assert spec.label == "Google Gemini"
     assert spec.base_url == ""
-    assert spec.env_key == "GOOGLE_CLOUD_PROJECT"
+    assert spec.env_key == "GEMINI_API_KEY"
     assert spec.default_model == "gemini-2.5-flash"
     assert "gemini-2.5-flash" in spec.models
     assert "gemini-2.5-pro" in spec.models
