@@ -251,7 +251,17 @@ MAX_GLOB_RESULTS = 200
 MAX_CONTEXT_TOKENS = 60_000
 TRUNCATE_TOOL_RESULT_CHARS = 500
 
-SKIP_DIRS = {"__pycache__", ".venv", ".git", "node_modules", ".import", ".aura"}
+SKIP_DIRS = {
+    "__pycache__",
+    ".venv",
+    ".git",
+    "node_modules",
+    ".import",
+    ".aura",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+}
 SKIP_FILE_SUFFIXES = {".import"}
 
 # ---------------------------------------------------------------------------

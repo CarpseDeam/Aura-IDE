@@ -117,7 +117,8 @@ def _grep_ripgrep(
     max_results: int,
     include: str | None
 ) -> dict[str, Any]:
-    cmd = ["rg", "--json", "--column", "--max-count", str(max_results)]
+    # Use --hidden to search .github, .env, etc. (but SKIP_DIRS still excludes .git/.venv)
+    cmd = ["rg", "--json", "--column", "--max-count", str(max_results), "--hidden"]
     
     if not regex:
         cmd.append("--fixed-strings")
@@ -129,10 +130,14 @@ def _grep_ripgrep(
     
     # Exclude common junk
     for skip in SKIP_DIRS:
+        # Use !{skip}/ to exclude the entire directory efficiently
+        cmd.extend(["--glob", f"!{skip}/"])
         cmd.extend(["--glob", f"!{skip}/*"])
+    
     for suffix in SKIP_FILE_SUFFIXES:
         cmd.extend(["--glob", f"!*{suffix}"])
     
+    cmd.append("--")
     cmd.append(pattern)
     cmd.append(str(root))
 
@@ -151,20 +156,30 @@ def _grep_ripgrep(
 
         import json
         matches = []
+        root_resolved = root.resolve()
+        
         for line in proc.stdout.splitlines():
             if not line.strip():
                 continue
-            data = json.loads(line)
+            try:
+                data = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+                
             if data.get("type") == "match":
                 m_data = data["data"]
-                # Resolve the path from rg (which might be relative to where it ran)
-                # to ensure it's absolute, then make it relative to our root.
+                # Resolve the path from rg to ensure it's absolute, then make it relative to our root.
                 raw_match_path = m_data["path"]["text"]
-                abs_match_path = (root / raw_match_path).resolve()
+                abs_match_path = Path(raw_match_path)
+                if not abs_match_path.is_absolute():
+                    abs_match_path = (root / abs_match_path).resolve()
+                else:
+                    abs_match_path = abs_match_path.resolve()
+                    
                 try:
-                    rel_path = abs_match_path.relative_to(root.resolve()).as_posix()
+                    rel_path = abs_match_path.relative_to(root_resolved).as_posix()
                 except ValueError:
-                    # Fallback if relative_to fails for some reason
+                    # Fallback if relative_to fails (e.g. case mismatch or outside root)
                     rel_path = raw_match_path
                 
                 matches.append({
@@ -221,11 +236,28 @@ def _grep_python(
 
     # Collect candidate files via rglob with optional include_pattern filter
     candidates: list[Path] = []
-    for p in workspace_root.rglob(include_pattern or "*"):
-        if _should_skip(p.relative_to(workspace_root)):
-            continue
-        if p.is_file():
-            candidates.append(p)
+    if include_pattern:
+        for p in workspace_root.rglob(include_pattern):
+            if _should_skip(p.relative_to(workspace_root)):
+                continue
+            if p.is_file():
+                candidates.append(p)
+    else:
+        # Faster manual walk to prune SKIP_DIRS early
+        import os
+        for root_dir, dirs, files in os.walk(workspace_root):
+            # Prune directories in-place to avoid visiting them
+            dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+            for f in files:
+                p = Path(root_dir) / f
+                if _should_skip(p.relative_to(workspace_root)):
+                    continue
+                candidates.append(p)
+                # Soft cap on candidate list to avoid extreme memory usage
+                if len(candidates) > max_results * 50:
+                    break
+            if len(candidates) > max_results * 50:
+                break
 
     for file_path in candidates:
         if len(matches) >= max_results:

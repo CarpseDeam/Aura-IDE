@@ -377,3 +377,24 @@ class TestGrepRipgrep:
         grep_files(tmp_workspace, r"he[l]+o", regex_mode=True)
         cmd_regex = captured[1]
         assert "--fixed-strings" not in cmd_regex
+
+    def test_ripgrep_flags_and_safety(self, monkeypatch: pytest.MonkeyPatch,
+                                       tmp_workspace: Path) -> None:
+        """--hidden and -- separator are present in the rg command."""
+        captured: list[list[str]] = []
+
+        def _capture_run(*args: object, **kwargs: object) -> MockResult:
+            cmd = args[0] if args else kwargs.get("cmd", [])
+            captured.append(list(cmd))  # type: ignore[arg-type]
+            return MockResult(stdout="")
+
+        monkeypatch.setattr(subprocess, "run", _capture_run)
+
+        grep_files(tmp_workspace, "-pattern")
+        cmd = captured[0]
+        assert "--hidden" in cmd
+        assert "--" in cmd
+        # Ensure -- is before the pattern
+        idx_sep = cmd.index("--")
+        idx_pat = cmd.index("-pattern")
+        assert idx_sep < idx_pat

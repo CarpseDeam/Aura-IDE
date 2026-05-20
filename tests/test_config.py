@@ -18,8 +18,9 @@ from aura.models import PROVIDERS
 # ---------------------------------------------------------------------------
 
 def test_all_providers_registered():
-    """The PROVIDERS dict should contain all five providers."""
-    assert set(PROVIDERS.keys()) == {"deepseek", "openai", "openrouter", "anthropic", "google_cloud"}
+    """The PROVIDERS dict should contain all expected providers."""
+    expected = {"deepseek", "openai", "openrouter", "anthropic", "google_cloud", "gemini_cli", "claude_code", "codex"}
+    assert set(PROVIDERS.keys()) == expected
 
 
 def test_provider_ids_are_valid():
@@ -29,16 +30,18 @@ def test_provider_ids_are_valid():
 
 
 def test_provider_bases_are_urls():
-    """Every base_url should start with https:// (except google_cloud which doesn't use one)."""
+    """Every base_url should start with https:// (except google_cloud and agents)."""
     for cfg in PROVIDERS.values():
-        if cfg.id == "google_cloud":
+        if cfg.id in ("google_cloud", "gemini_cli", "claude_code", "codex"):
             continue
         assert cfg.base_url.startswith("https://")
 
 
 def test_provider_has_env_key():
-    """Every provider should have a non-empty primary env_key."""
+    """Every real provider should have a non-empty primary env_key."""
     for cfg in PROVIDERS.values():
+        if cfg.id in ("gemini_cli", "claude_code", "codex"):
+            continue
         assert cfg.env_key
         assert cfg.env_key.startswith(("OPEN", "DEEPSEEK", "ANTHROPIC", "GOOGLE_CLOUD_PROJECT"))
 
@@ -362,10 +365,11 @@ def test_redact_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_provider_registry_contains_exactly_five():
-    """provider_registry should contain exactly the 5 supported providers."""
+def test_provider_registry_contains_expected():
+    """provider_registry should contain the expected supported providers."""
     from aura.providers.registry import provider_registry
-    assert set(provider_registry.ids()) == {"deepseek", "openai", "openrouter", "anthropic", "google_cloud"}
+    expected = {"deepseek", "openai", "openrouter", "anthropic", "google_cloud", "gemini_cli", "claude_code", "codex"}
+    assert set(provider_registry.ids()) == expected
 
 
 def test_provider_registry_does_not_contain_google():
@@ -376,11 +380,13 @@ def test_provider_registry_does_not_contain_google():
 
 
 def test_provider_registry_creates_client():
-    """create_client should return a DeepSeekClient for each provider, except google_cloud."""
+    """create_client should return a DeepSeekClient for each provider, except google_cloud and agents."""
     from aura.client.deepseek import DeepSeekClient
     from aura.providers.google_cloud.client import GoogleCloudClient
     from aura.providers.registry import provider_registry
     for pid in provider_registry.ids():
+        if pid in ("gemini_cli", "claude_code", "codex"):
+            continue
         client = provider_registry.create_client(pid)
         if pid == "google_cloud":
             assert isinstance(client, GoogleCloudClient)
