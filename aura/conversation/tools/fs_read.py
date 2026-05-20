@@ -8,6 +8,7 @@ from typing import Any
 
 from aura.ast_utils import parse_python_ast
 from aura.config import MAX_GLOB_RESULTS, MAX_READ_BYTES, SKIP_DIRS, SKIP_FILE_SUFFIXES
+from aura.paths import safe_relative_to
 
 
 def _should_skip(path: Path) -> bool:
@@ -23,9 +24,9 @@ def _should_skip(path: Path) -> bool:
 
 def read_file(workspace_root: Path, target: Path) -> dict[str, Any]:
     if not target.exists():
-        return {"ok": False, "error": f"file not found: {target.relative_to(workspace_root)}"}
+        return {"ok": False, "error": f"file not found: {safe_relative_to(target, workspace_root)}"}
     if not target.is_file():
-        return {"ok": False, "error": f"not a regular file: {target.relative_to(workspace_root)}"}
+        return {"ok": False, "error": f"not a regular file: {safe_relative_to(target, workspace_root)}"}
     
     truncated = False
     try:
@@ -38,13 +39,13 @@ def read_file(workspace_root: Path, target: Path) -> dict[str, Any]:
             
         text = raw.decode("utf-8")
     except UnicodeDecodeError:
-        return {"ok": False, "error": f"file cannot be decoded as UTF-8: {target.relative_to(workspace_root)}"}
+        return {"ok": False, "error": f"file cannot be decoded as UTF-8: {safe_relative_to(target, workspace_root)}"}
     except Exception as e:
         return {"ok": False, "error": f"error reading file: {e}"}
 
     if truncated:
         text += f"\n\n[... truncated at {MAX_READ_BYTES} bytes ...]"
-    rel = target.relative_to(workspace_root).as_posix()
+    rel = safe_relative_to(target, workspace_root).as_posix()
     return {"ok": True, "path": rel, "content": text, "truncated": truncated}
 
 
@@ -55,9 +56,9 @@ def read_file_outline(workspace_root: Path, target: Path) -> dict[str, Any]:
     other languages. Returns a structural summary without full file content.
     """
     if not target.exists():
-        return {"ok": False, "error": f"file not found: {target.relative_to(workspace_root)}"}
+        return {"ok": False, "error": f"file not found: {safe_relative_to(target, workspace_root)}"}
     if not target.is_file():
-        return {"ok": False, "error": f"not a regular file: {target.relative_to(workspace_root)}"}
+        return {"ok": False, "error": f"not a regular file: {safe_relative_to(target, workspace_root)}"}
 
     truncated = False
     try:
@@ -75,7 +76,7 @@ def read_file_outline(workspace_root: Path, target: Path) -> dict[str, Any]:
         return {"ok": False, "error": f"error reading file: {e}"}
 
     suffix = target.suffix.lower()
-    rel = target.relative_to(workspace_root).as_posix()
+    rel = safe_relative_to(target, workspace_root).as_posix()
     lines = text.splitlines()
     total_lines = len(lines) + (0 if not truncated else 0)  # line count from what we read
 
@@ -296,9 +297,9 @@ def _outline_generic(lines: list[str]) -> dict[str, Any]:
 
 def list_directory(workspace_root: Path, target: Path) -> dict[str, Any]:
     if not target.exists():
-        return {"ok": False, "error": f"not found: {target.relative_to(workspace_root)}"}
+        return {"ok": False, "error": f"not found: {safe_relative_to(target, workspace_root)}"}
     if not target.is_dir():
-        return {"ok": False, "error": f"not a directory: {target.relative_to(workspace_root)}"}
+        return {"ok": False, "error": f"not a directory: {safe_relative_to(target, workspace_root)}"}
     files: list[str] = []
     dirs: list[str] = []
     for entry in sorted(target.iterdir()):
@@ -310,17 +311,17 @@ def list_directory(workspace_root: Path, target: Path) -> dict[str, Any]:
             continue
         else:
             files.append(entry.name)
-    rel = target.relative_to(workspace_root).as_posix() or "."
+    rel = safe_relative_to(target, workspace_root).as_posix() or "."
     return {"ok": True, "path": rel, "directories": dirs, "files": files}
 
 
 def glob_files(workspace_root: Path, pattern: str) -> dict[str, Any]:
     matches: list[str] = []
     for p in workspace_root.rglob(pattern):
-        if _should_skip(p.relative_to(workspace_root)):
+        if _should_skip(safe_relative_to(p, workspace_root)):
             continue
         if p.is_file():
-            matches.append(p.relative_to(workspace_root).as_posix())
+            matches.append(safe_relative_to(p, workspace_root).as_posix())
         if len(matches) >= MAX_GLOB_RESULTS:
             break
     return {

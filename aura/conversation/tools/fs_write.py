@@ -6,6 +6,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from aura.paths import safe_is_relative_to, safe_relative_to
+
 
 def _sanitize_edit_strings(old_str: str, new_str: str) -> tuple[str, str, bool]:
     """Strip markdown fences and normalize whitespace on edit strings.
@@ -52,7 +54,7 @@ def _sanitize_edit_strings(old_str: str, new_str: str) -> tuple[str, str, bool]:
 
 
 def propose_write(workspace_root: Path, target: Path, content: str) -> dict[str, Any]:
-    rel = target.relative_to(workspace_root).as_posix() if target.is_relative_to(workspace_root) else str(target)
+    rel = safe_relative_to(target, workspace_root).as_posix() if safe_is_relative_to(target, workspace_root) else str(target)
     if target.exists() and target.is_file():
         try:
             old_content = target.read_text(encoding="utf-8")
@@ -93,15 +95,15 @@ def propose_edit(
     workspace_root: Path, target: Path, old_str: str, new_str: str
 ) -> dict[str, Any]:
     if not target.exists():
-        return {"ok": False, "error": f"file not found: {target.relative_to(workspace_root)}"}
+        return {"ok": False, "error": f"file not found: {safe_relative_to(target, workspace_root)}"}
     if not target.is_file():
-        return {"ok": False, "error": f"not a regular file: {target.relative_to(workspace_root)}"}
+        return {"ok": False, "error": f"not a regular file: {safe_relative_to(target, workspace_root)}"}
     try:
         original = target.read_text(encoding="utf-8")
     except UnicodeDecodeError:
         return {"ok": False, "error": "file is not valid UTF-8 text"}
 
-    rel = target.relative_to(workspace_root).as_posix()
+    rel = safe_relative_to(target, workspace_root).as_posix()
 
     # Sanitize inputs: strip markdown fences, normalize whitespace.
     old_str, new_str, sanitized = _sanitize_edit_strings(old_str, new_str)

@@ -180,7 +180,8 @@ class ToolRegistry(
         if ".." in Path(s).parts:
             raise ValueError("'..' is not allowed in tool paths")
         candidate = (self._root / s).resolve() if not Path(s).is_absolute() else Path(s).resolve()
-        if not candidate.is_relative_to(self._root):
+        from aura.paths import safe_is_relative_to
+        if not safe_is_relative_to(candidate, self._root):
             raise ValueError(f"path '{raw}' escapes workspace root")
         return candidate
 

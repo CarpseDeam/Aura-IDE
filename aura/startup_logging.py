@@ -45,6 +45,10 @@ def configure_startup_logging() -> Path:
     _install_exception_hooks()
     _install_qt_message_handler()
 
+    # Globally suppress Python SyntaxWarnings from dynamic workspace scans
+    import warnings
+    warnings.filterwarnings("ignore", category=SyntaxWarning)
+
     logger.info("startup logging configured: %s", log_path)
     return log_path
 

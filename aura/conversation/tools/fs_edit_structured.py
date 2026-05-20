@@ -11,6 +11,7 @@ from typing import Any
 
 from aura.ast_utils import parse_python_ast
 from aura.conversation.tools.fs_write import replace_line_range
+from aura.paths import safe_relative_to
 
 
 def find_symbol_range(
@@ -259,7 +260,4 @@ def propose_edit_symbol(
 
 def _rel_path(workspace_root: Path, target: Path) -> str:
     """Return a POSIX-relative path string for a target file."""
-    try:
-        return target.relative_to(workspace_root).as_posix()
-    except ValueError:
-        return str(target)
+    return safe_relative_to(target, workspace_root).as_posix()

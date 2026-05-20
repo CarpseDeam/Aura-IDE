@@ -19,6 +19,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from aura.paths import safe_is_relative_to
+
 from aura.config import (
     DEFAULT_MODEL,
     DEFAULT_PLANNER_MODEL,
@@ -131,10 +133,9 @@ def save_conversation(
     ensure_aura_gitignored(workspace_root)
 
     if existing_path is not None:
-        try:
-            existing_path.resolve().relative_to(target_dir.resolve())
+        if safe_is_relative_to(existing_path, target_dir):
             path = existing_path
-        except ValueError:
+        else:
             path = _new_path(target_dir, history, title)
     else:
         path = _new_path(target_dir, history, title)

@@ -17,6 +17,8 @@ import logging
 import os
 from pathlib import Path
 
+from aura.paths import safe_relative_to
+
 from aura.conversation.tools._types import ApprovalRequest, ToolExecResult
 
 # Import the registry module so we can look up functions at call time.
@@ -584,7 +586,7 @@ class WriteHandlersMixin:
         backup_path = _reg.backup_existing(self._root, target)
         target.write_text(req.new_content, encoding="utf-8")
         rel_backup = (
-            backup_path.relative_to(self._root).as_posix() if backup_path is not None else None
+            safe_relative_to(backup_path, self._root).as_posix() if backup_path is not None else None
         )
         return ToolExecResult(
             ok=True,

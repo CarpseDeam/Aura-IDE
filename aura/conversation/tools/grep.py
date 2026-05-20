@@ -21,11 +21,8 @@ def _should_skip(path: Path) -> bool:
 
 def _safe_relative_to(path: Path, root: Path) -> Path:
     """Safely compute relative path, handling Windows case-insensitivity."""
-    import os
-    try:
-        return Path(os.path.relpath(path, root))
-    except Exception:
-        return path.relative_to(root)
+    from aura.paths import safe_relative_to
+    return safe_relative_to(path, root)
 
 
 def grep_files(

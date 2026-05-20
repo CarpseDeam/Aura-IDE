@@ -228,7 +228,18 @@ class GoogleCloudClient:
                         from aura.client.events import ToolCallArgsDelta, ToolCallEnd, ToolCallStart
 
                         yield ToolCallStart(index=idx, id=tc["id"], name=name)
-                        yield ToolCallArgsDelta(index=idx, args_chunk=args_str)
+                        
+                        if name == "update_todo_list":
+                            # Simulate streaming for the TODO list to give the user 
+                            # the same visual "typing out" feedback as other models.
+                            import time
+                            chunk_size = 15
+                            for i in range(0, len(args_str), chunk_size):
+                                yield ToolCallArgsDelta(index=idx, args_chunk=args_str[i:i+chunk_size])
+                                time.sleep(0.02)
+                        else:
+                            yield ToolCallArgsDelta(index=idx, args_chunk=args_str)
+                            
                         yield ToolCallEnd(index=idx)
                         continue
 
