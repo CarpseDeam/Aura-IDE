@@ -30,9 +30,10 @@ env/
 # OS
 .DS_Store
 Thumbs.db
-/GEMINI.md
+/AGY.md
 /build/
 /aura/private_style.py
 /aura/private_style.md
 /aura/private_style_local.py
 /Golden_Examples/
+/.antigravitycli/885fcfda-e6ac-477b-a3b5-8677eaa539c7.json

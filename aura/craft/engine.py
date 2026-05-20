@@ -269,9 +269,10 @@ class CraftEngine:
             stripped = line_text.strip()
             if not stripped.startswith("#"):
                 continue
-            if re.match(r'^#[=*/\-]{3,}\s*\w+.*[=*/\-]{3,}$', stripped) or \
+            if re.match(r'^#[=*/\\-]{3,}\s*\w+.*[=*/\\-]{3,}$', stripped) or \
                re.match(r'^#\s*-{3,}\s', stripped) or \
-               re.match(r'^#\s*={3,}\s', stripped):
+               re.match(r'^#\s*={3,}\s', stripped) or \
+               re.match(r'^#[=*\-~]{4,}$', stripped):
                 issues.append(CraftIssue(
                     line=lineno,
                     column=0,
@@ -449,4 +450,238 @@ class CraftEngine:
                 severity=CraftIssueSeverity.SOFT,
             ))
 
+        issues.extend(self._check_destructive_operations(tree, capsule))
+        issues.extend(self._check_extra_public_api(tree, capsule))
+        issues.extend(self._check_schema_fidelity(tree, capsule))
+        issues.extend(self._check_empty_ceremony_class(tree))
+        issues.extend(self._check_forbidden_public_methods(tree, capsule))
+        issues.extend(self._check_forbidden_calls(tree, capsule))
+        issues.extend(self._check_scaffold_smell(tree, capsule, source_lines))
+
         return issues
+
+    def _check_destructive_operations(self, tree: ast.AST, capsule: ProposalCapsule) -> list[CraftIssue]:
+        issues = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+
+            # shutil.rmtree(...)
+            if (isinstance(func, ast.Attribute) and func.attr == "rmtree"
+                    and isinstance(func.value, ast.Name) and func.value.id == "shutil"):
+                issues.append(self._destructive_issue(node, "shutil.rmtree()"))
+                continue
+
+            # direct rmtree(...) from "from shutil import rmtree"
+            if isinstance(func, ast.Name) and func.id == "rmtree":
+                issues.append(self._destructive_issue(node, "rmtree()"))
+                continue
+
+            # os.remove(...), os.unlink(...), os.rmdir(...), os.removedirs(...)
+            if (isinstance(func, ast.Attribute) and func.attr in ("remove", "unlink", "rmdir", "removedirs")
+                    and isinstance(func.value, ast.Name) and func.value.id == "os"):
+                issues.append(self._destructive_issue(node, f"os.{func.attr}()"))
+                continue
+
+            # Path(...).unlink() or Path(...).rmdir()
+            if (isinstance(func, ast.Attribute) and func.attr in ("unlink", "rmdir")
+                    and isinstance(func.value, ast.Call)
+                    and isinstance(func.value.func, ast.Name)
+                    and func.value.func.id == "Path"):
+                issues.append(self._destructive_issue(node, f"Path(...).{func.attr}()"))
+                continue
+
+        return issues
+
+    def _destructive_issue(self, node: ast.Call, label: str) -> CraftIssue:
+        return CraftIssue(
+            line=node.lineno,
+            column=node.col_offset,
+            code="destructive_operation",
+            message=f"{label} call in new Aura-owned file. Destructive filesystem operations require explicit specification.",
+            suggestion="Remove the destructive operation unless the task explicitly requires it.",
+            severity=CraftIssueSeverity.SOFT,
+        )
+
+    def _check_extra_public_api(self, tree: ast.AST, capsule: ProposalCapsule) -> list[CraftIssue]:
+        if not capsule.expected_public_symbols:
+            return []
+        expected = set(capsule.expected_public_symbols)
+        found = set()
+
+        for node in tree.body:
+            if isinstance(node, ast.ClassDef) and not node.name.startswith("_"):
+                found.add(node.name)
+                for item in node.body:
+                    if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and not item.name.startswith("_"):
+                        found.add(f"{node.name}.{item.name}")
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and not node.name.startswith("_"):
+                found.add(node.name)
+
+        extra = found - expected
+        if not extra:
+            return []
+        return [CraftIssue(
+            line=1, column=0,
+            code="extra_public_api",
+            message=f"Unexpected public symbol(s): {', '.join(sorted(extra))}. Expected: {', '.join(sorted(expected))}",
+            suggestion="Remove unexpected public symbols or add them to the expected set if required.",
+            severity=CraftIssueSeverity.SOFT,
+        )]
+
+    def _check_schema_fidelity(self, tree: ast.AST, capsule: ProposalCapsule) -> list[CraftIssue]:
+        if not capsule.expected_dataclass_fields:
+            return []
+        issues = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ClassDef):
+                continue
+            if node.name not in capsule.expected_dataclass_fields:
+                continue
+            expected = set(capsule.expected_dataclass_fields[node.name])
+            actual = set()
+            for item in node.body:
+                if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name):
+                    actual.add(item.target.id)
+                elif isinstance(item, ast.Assign):
+                    for t in item.targets:
+                        if isinstance(t, ast.Name) and not t.id.startswith("_"):
+                            actual.add(t.id)
+            missing = expected - actual
+            if missing:
+                issues.append(CraftIssue(
+                    line=node.lineno, column=node.col_offset,
+                    code="schema_field_missing",
+                    message=f"Class '{node.name}' missing expected fields: {', '.join(sorted(missing))}",
+                    suggestion=f"Add the missing fields: {', '.join(sorted(missing))}",
+                    severity=CraftIssueSeverity.SOFT,
+                ))
+            extra = actual - expected
+            if extra:
+                issues.append(CraftIssue(
+                    line=node.lineno, column=node.col_offset,
+                    code="schema_field_extra",
+                    message=f"Class '{node.name}' has unexpected fields: {', '.join(sorted(extra))}",
+                    suggestion=f"Remove unexpected fields or rename to match expected: {', '.join(sorted(expected))}",
+                    severity=CraftIssueSeverity.SOFT,
+                ))
+        return issues
+
+    def _check_empty_ceremony_class(self, tree: ast.AST) -> list[CraftIssue]:
+        issues = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ClassDef):
+                continue
+            if node.bases:
+                continue
+            has_methods = any(isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef)) for m in node.body)
+            has_fields = any(isinstance(m, ast.AnnAssign) for m in node.body)
+            has_public_assigns = any(
+                isinstance(m, ast.Assign)
+                and any(isinstance(t, ast.Name) and not t.id.startswith("_") for t in m.targets)
+                for m in node.body
+            )
+            if not has_methods and not has_fields and not has_public_assigns:
+                issues.append(CraftIssue(
+                    line=node.lineno,
+                    column=node.col_offset,
+                    code="empty_ceremony_class",
+                    message=f"Class '{node.name}' has no methods, fields, or state.",
+                    suggestion="Remove the class or give it real responsibility.",
+                    severity=CraftIssueSeverity.SOFT,
+                ))
+        return issues
+
+    def _check_forbidden_public_methods(self, tree: ast.AST, capsule: ProposalCapsule) -> list[CraftIssue]:
+        if not capsule.forbidden_public_methods:
+            return []
+        forbidden = set(capsule.forbidden_public_methods)
+        issues = []
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in forbidden:
+                issues.append(CraftIssue(
+                    line=node.lineno,
+                    column=node.col_offset,
+                    code="forbidden_public_method",
+                    message=f"Function '{node.name}' is not allowed in this context.",
+                    suggestion=f"Remove '{node.name}' or rename it.",
+                    severity=CraftIssueSeverity.SOFT,
+                ))
+        return issues
+
+    @staticmethod
+    def _resolve_call_name(func: ast.expr) -> str | None:
+        if isinstance(func, ast.Name):
+            return func.id
+        if isinstance(func, ast.Attribute):
+            left = CraftEngine._resolve_call_name(func.value)
+            if left is not None:
+                return f"{left}.{func.attr}"
+            return func.attr
+        return None
+
+    def _check_forbidden_calls(self, tree: ast.AST, capsule: ProposalCapsule) -> list[CraftIssue]:
+        if not capsule.forbidden_calls:
+            return []
+        forbidden = set(capsule.forbidden_calls)
+        issues = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            name = self._resolve_call_name(node.func)
+            if name is not None and name in forbidden:
+                issues.append(CraftIssue(
+                    line=node.lineno,
+                    column=node.col_offset,
+                    code="forbidden_call",
+                    message=f"Call to '{name}' is not allowed in this context.",
+                    suggestion=f"Remove the call to '{name}'.",
+                    severity=CraftIssueSeverity.SOFT,
+                ))
+        return issues
+
+    def _check_scaffold_smell(self, tree: ast.AST, capsule: ProposalCapsule, source_lines: list[str]) -> list[CraftIssue]:
+        signals = []
+
+        banner_count = 0
+        for line in source_lines:
+            stripped = line.strip()
+            if re.match(r'^#[=*\-~]{4,}$', stripped):
+                banner_count += 1
+        if banner_count >= 3:
+            signals.append(f"{banner_count} decorative banner lines")
+
+        vague = {"process", "handle", "do_stuff", "run", "execute", "perform", "action", "thing", "item", "data", "info"}
+        vague_found = []
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if node.name.lower() in vague and not node.name.startswith("_"):
+                    vague_found.append(node.name)
+        if vague_found:
+            signals.append(f"vague method names: {vague_found}")
+
+        if capsule.expected_public_symbols:
+            expected = set(capsule.expected_public_symbols)
+            found = set()
+            for node in tree.body:
+                if isinstance(node, ast.ClassDef) and not node.name.startswith("_"):
+                    found.add(node.name)
+                    for item in node.body:
+                        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and not item.name.startswith("_"):
+                            found.add(f"{node.name}.{item.name}")
+                elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and not node.name.startswith("_"):
+                    found.add(node.name)
+            extra = found - expected
+            if extra:
+                signals.append("extra public symbols")
+
+        if len(signals) >= 2:
+            return [CraftIssue(
+                line=1, column=0,
+                code="scaffold_smell",
+                message=f"File has generated scaffold texture: {'; '.join(signals)}",
+                suggestion="Remove decorative banners and unnecessary infrastructure structure.",
+                severity=CraftIssueSeverity.SOFT,
+            )]
+        return []

@@ -85,7 +85,7 @@ class AgentBackendsPage(QWidget):
         self._backend_rows: dict[str, dict[str, object]] = {}
 
         backends = [
-            ("gemini", "Gemini CLI", ["gemini", "--version"]),
+            ("agy", "Antigravity IDE", ["agy", "--version"]),
             ("claude_code", "Claude Code", ["claude", "auth", "status"]),
             ("codex", "Codex", ["codex", "login", "status"]),
         ]
@@ -158,9 +158,9 @@ class AgentBackendsPage(QWidget):
 
         ws = Path.cwd()
 
-        if backend_id == "gemini":
-            resolved = resolve_cli_executable("gemini") or "gemini"
-            SandboxExecutor._launch_interactive_terminal(f"{resolved} auth login", ws)
+        if backend_id == "agy":
+            resolved = resolve_cli_executable("agy") or "agy"
+            SandboxExecutor._launch_interactive_terminal(f"{resolved}", ws)
         elif backend_id == "claude_code":
             resolved = resolve_cli_executable("claude") or "claude"
             SandboxExecutor._launch_interactive_terminal(f"{resolved} auth login", ws)

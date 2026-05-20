@@ -1,6 +1,6 @@
 """CLI Event Adapter — parses CLI output streams into structured Aura events.
 
-This allows CLI-based agents (like gemini, claude-code) to drive rich UI
+This allows CLI-based agents (like agy, claude-code) to drive rich UI
 features (tool cards, diffs, TODOs) by emitting machine-readable events
 instead of just raw process output.
 """
@@ -28,7 +28,7 @@ from aura.client.events import (
 logger = logging.getLogger(__name__)
 
 
-GEMINI_TOOL_NAME_MAP = {
+AGY_TOOL_NAME_MAP = {
     "run_shell_command": "run_terminal_command",
 }
 
@@ -106,7 +106,7 @@ class CLIEventAdapter:
             except json.JSONDecodeError:
                 pass # Fall through to raw
 
-        # 2. Heuristic JSON (e.g. Gemini CLI stream-json)
+        # 2. Heuristic JSON (e.g. Agy CLI stream-json)
         if trimmed.startswith("{") and trimmed.endswith("}"):
             try:
                 data = json.loads(trimmed)
@@ -175,15 +175,15 @@ class CLIEventAdapter:
             )
 
     def _map_generic_json(self, data: dict[str, Any]) -> Iterator[Event]:
-        """Maps non-Aura JSON formats (like Gemini CLI) to Aura events."""
+        """Maps non-Aura JSON formats (like Agy CLI) to Aura events."""
         ev_type = data.get("type")
         
-        # Gemini CLI native format
+        # Agy CLI native format
         if ev_type == "tool_use":
             idx = len(self._tool_calls)
             tid = data.get("tool_id", f"call-{idx}")
             name = data.get("tool_name", "")
-            name = GEMINI_TOOL_NAME_MAP.get(name, name)
+            name = AGY_TOOL_NAME_MAP.get(name, name)
             params = data.get("parameters", {})
             args_str = json.dumps(params)
             

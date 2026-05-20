@@ -450,7 +450,7 @@ In addition to API-based providers, Aura supports CLI-based AI tools as drop-in 
 
 | Backend | CLI Command | Authentication | Description |
 |---------|------------|----------------|-------------|
-| **Gemini CLI** | `gemini` | `gemini auth login` | Google Gemini via the official Gemini CLI (npm) |
+| **Antigravity IDE** | `agy` | `agy auth login` | Antigravity IDE via the official agy CLI |
 | **Claude Code** | `claude -p` | `claude auth login` | Anthropic Claude via Claude Code CLI |
 | **Codex CLI** | `codex exec` | `codex login` | OpenAI Codex via the Codex CLI |
 

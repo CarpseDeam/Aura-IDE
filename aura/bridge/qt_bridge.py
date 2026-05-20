@@ -33,7 +33,7 @@ from aura.backends import (
     APIAgentBackend,
     ClaudeCodeBackend,
     CodexBackend,
-    GeminiCLIBackend,
+    AgyCLIBackend,
 )
 from aura.bridge.approval_proxy import _ApprovalProxy
 from aura.bridge.dispatch import _DispatchProxy
@@ -433,7 +433,7 @@ class ConversationBridge(QObject):
     def set_planner_provider(self, provider: ProviderId) -> None:
         """Update the planner provider and its backend hook."""
         self._planner_provider = provider
-        if provider in ('gemini_cli', 'claude_code', 'codex'):
+        if provider in ('agy_cli', 'claude_code', 'codex'):
             self.set_planner_backend(provider)
         else:
             self._planner_backend = APIAgentBackend(provider=provider)
@@ -443,7 +443,7 @@ class ConversationBridge(QObject):
     def set_worker_provider(self, provider: ProviderId) -> None:
         """Update the worker provider and its backend hook."""
         self._worker_provider = provider
-        if provider in ('gemini_cli', 'claude_code', 'codex'):
+        if provider in ('agy_cli', 'claude_code', 'codex'):
             self.set_worker_backend(provider)
         else:
             self._worker_backend = APIAgentBackend(provider=provider)
@@ -459,14 +459,14 @@ class ConversationBridge(QObject):
         """Check if the named backend is authenticated.
 
         Args:
-            backend_name: 'default_api', 'gemini_cli', 'claude_code', or 'codex'.
+            backend_name: 'default_api', 'agy_cli', 'claude_code', or 'codex'.
 
         Returns:
             True if the backend is authenticated, False otherwise.
         """
         root = self._registry.workspace_root
-        if backend_name == 'gemini_cli':
-            return GeminiCLIBackend(workspace_root=root).check_auth()
+        if backend_name == 'agy_cli':
+            return AgyCLIBackend(workspace_root=root).check_auth()
         if backend_name == 'claude_code':
             return ClaudeCodeBackend(workspace_root=root).check_auth()
         if backend_name == 'codex':
@@ -477,14 +477,14 @@ class ConversationBridge(QObject):
         """Run the CLI auth flow for the given backend. Blocks until complete.
 
         Args:
-            backend_name: 'default_api', 'gemini_cli', 'claude_code', or 'codex'.
+            backend_name: 'default_api', 'agy_cli', 'claude_code', or 'codex'.
 
         Returns:
             True if authentication succeeded, False otherwise.
         """
         root = self._registry.workspace_root
-        if backend_name == 'gemini_cli':
-            return GeminiCLIBackend(workspace_root=root).run_cli_auth()
+        if backend_name == 'agy_cli':
+            return AgyCLIBackend(workspace_root=root).run_cli_auth()
         if backend_name == 'claude_code':
             return ClaudeCodeBackend(workspace_root=root).run_cli_auth()
         if backend_name == 'codex':
@@ -495,12 +495,12 @@ class ConversationBridge(QObject):
         """Swap the planner backend hook handler.
 
         Args:
-            backend_name: 'default_api', 'gemini_cli', 'claude_code', or 'codex'
+            backend_name: 'default_api', 'agy_cli', 'claude_code', or 'codex'
         """
         hooks.unregister('generate_planner_code')
         root = self._registry.workspace_root
-        if backend_name == 'gemini_cli':
-            hooks.register('generate_planner_code', GeminiCLIBackend(workspace_root=root).stream)
+        if backend_name == 'agy_cli':
+            hooks.register('generate_planner_code', AgyCLIBackend(workspace_root=root).stream)
         elif backend_name == 'claude_code':
             hooks.register('generate_planner_code', ClaudeCodeBackend(workspace_root=root).stream)
         elif backend_name == 'codex':
@@ -512,12 +512,12 @@ class ConversationBridge(QObject):
         """Swap the worker backend hook handler.
 
         Args:
-            backend_name: 'default_api', 'gemini_cli', 'claude_code', or 'codex'
+            backend_name: 'default_api', 'agy_cli', 'claude_code', or 'codex'
         """
         hooks.unregister('generate_worker_code')
         root = self._registry.workspace_root
-        if backend_name == 'gemini_cli':
-            hooks.register('generate_worker_code', GeminiCLIBackend(workspace_root=root).stream)
+        if backend_name == 'agy_cli':
+            hooks.register('generate_worker_code', AgyCLIBackend(workspace_root=root).stream)
         elif backend_name == 'claude_code':
             hooks.register('generate_worker_code', ClaudeCodeBackend(workspace_root=root).stream)
         elif backend_name == 'codex':

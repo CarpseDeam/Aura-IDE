@@ -1,6 +1,6 @@
-"""GeminiCLIBackend — calls Google via the `gemini` CLI tool.
+"""AgyCLIBackend — calls the antigravity IDE via the `agy` CLI tool.
 
-Authentication: relies on `gemini` CLI being authenticated (OAuth).
+Authentication: relies on `agy` CLI being authenticated (OAuth).
 """
 
 from __future__ import annotations
@@ -18,21 +18,20 @@ from aura.cli_tools import resolve_cli_executable
 from aura.client.events import ApiError, Event
 from aura.config import ThinkingMode
 
-# Default model identifier passed to the gemini CLI via --model.
-GEMINI_MODEL: str = "gemini-3.1-pro-preview"
 
 
-class GeminiCLIBackend(CLIAgentBackend):
-    """Agent backend that calls Google via the `gemini` CLI."""
 
-    auth_command = "gemini (Ensure GEMINI_API_KEY is set)" 
+class AgyCLIBackend(CLIAgentBackend):
+    """Agent backend that calls the Antigravity IDE via the `agy` CLI."""
+
+    auth_command = "agy" 
 
     def __init__(self, workspace_root: Path | None = None) -> None:
         super().__init__(workspace_root=workspace_root)
 
     def check_auth(self) -> bool:
-        """Check if gemini CLI is authenticated."""
-        path = resolve_cli_executable("gemini")
+        """Check if agy CLI is authenticated."""
+        path = resolve_cli_executable("agy")
         if path is None:
             return False
 
@@ -66,9 +65,9 @@ class GeminiCLIBackend(CLIAgentBackend):
             yield ApiError(status_code=None, message="Cancelled.")
             return
 
-        resolved = resolve_cli_executable("gemini")
+        resolved = resolve_cli_executable("agy")
         if resolved is None:
-            yield ApiError(status_code=None, message="gemini CLI not found.")
+            yield ApiError(status_code=None, message="agy CLI not found.")
             return
 
         prompt_text = self._build_prompt(messages, tools)
@@ -80,16 +79,15 @@ class GeminiCLIBackend(CLIAgentBackend):
         else:
             quoted_resolved = shlex.quote(resolved)
 
-        # -p "" ensures non-interactive mode and reads from stdin.
-        # --output-format stream-json yields structured JSON events.
-        # --yolo ensures it doesn't prompt for permission when executing tools.
-        command = f"{quoted_resolved} -p \"\" --skip-trust --output-format stream-json --yolo --model {GEMINI_MODEL}"
+        # --prompt "" ensures non-interactive mode and reads from stdin.
+        # --dangerously-skip-permissions ensures it doesn't prompt for permission when executing tools.
+        command = f"{quoted_resolved} --prompt \"\" --dangerously-skip-permissions"
         
         adapter = CLIEventAdapter()
         
         result = yield from self._run_cli_agent_command(
             command=command,
-            label="Gemini",
+            label="Antigravity",
             timeout=120,
             cancel_event=cancel_event,
             input_data=prompt_text,
@@ -101,5 +99,5 @@ class GeminiCLIBackend(CLIAgentBackend):
             return
 
         if not result.ok:
-            yield ApiError(status_code=None, message=f"Google CLI error: {result.stderr or result.stdout}")
+            yield ApiError(status_code=None, message=f"Antigravity CLI error: {result.stderr or result.stdout}")
             return

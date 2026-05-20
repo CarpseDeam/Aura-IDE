@@ -5,7 +5,7 @@ from aura.backends.base import AgentBackend
 from aura.backends.cli_base import CLIAgentBackend
 from aura.backends.claude_code import ClaudeCodeBackend
 from aura.backends.codex import CodexBackend
-from aura.backends.gemini import GeminiCLIBackend
+from aura.backends.agy import AgyCLIBackend
 
 __all__ = [
     "AgentBackend",
@@ -13,5 +13,5 @@ __all__ = [
     "CLIAgentBackend",
     "ClaudeCodeBackend",
     "CodexBackend",
-    "GeminiCLIBackend",
+    "AgyCLIBackend",
 ]

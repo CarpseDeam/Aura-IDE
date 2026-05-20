@@ -30,6 +30,10 @@ class ProposalCapsule:
     intent: ChangeIntent = ChangeIntent.unknown
     is_new_file: bool = False
     new_symbols: list[str] = field(default_factory=list)
+    expected_public_symbols: list[str] = field(default_factory=list)
+    expected_dataclass_fields: dict[str, list[str]] = field(default_factory=dict)
+    forbidden_public_methods: list[str] = field(default_factory=list)
+    forbidden_calls: list[str] = field(default_factory=list)
 
 @dataclass
 class CraftIssue:
