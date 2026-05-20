@@ -24,9 +24,12 @@ from aura.conversation.tools._types import ApprovalRequest, ToolExecResult
 # `registry` is already in sys.modules by the time this module is loaded.
 
 try:
-    from aura.craft import CraftEngine, ProposalCapsule, ChangeIntent, line_in_ranges
+    from aura.craft import CraftEngine, ProposalCapsule, ChangeIntent, line_in_ranges, CompilerService, CompiledPatch, CompilerBounce, CompilerReject
+    from aura.craft.compiler import compiler_service
 except ImportError:
     CraftEngine = None
+    CompilerService = None
+    compiler_service = None
 
 from aura.conversation.tools import registry as _reg
 
@@ -323,8 +326,8 @@ def _compute_craft_line_ranges(proposal: dict) -> list[tuple[int, int]]:
     return [(1, len(proposed_lines) + 1)]
 
 
-def _maybe_craft_proposal(proposal: dict, tool_name: str) -> ToolExecResult | None:
-    if CraftEngine is None:
+def _run_compiler_pipeline(proposal: dict, tool_name: str) -> ToolExecResult | None:
+    if compiler_service is None:
         return None
         
     env = os.environ.get("AURA_CRAFT", "1")
@@ -349,44 +352,44 @@ def _maybe_craft_proposal(proposal: dict, tool_name: str) -> ToolExecResult | No
             is_new_file=proposal.get("is_new_file", False),
         )
         
-        engine = CraftEngine()
-        decision = engine.process_proposal(capsule)
+        result = compiler_service.process_proposal(capsule)
         
         if is_observe:
-            if not decision.approved:
-                _log.info("[craft:observe] %s blocked: %s", rel_path, [i.code for i in decision.issues])
+            if not isinstance(result, CompiledPatch):
+                _log.info("[craft:observe] %s blocked", rel_path)
             return None
             
-        if not decision.approved:
-            issues_payload = []
-            is_authorship = len(decision.hard_issues) == 0 and len(decision.soft_issues) > 0
-            for i in decision.issues:
-                issues_payload.append({
-                    "code": i.code,
-                    "line": i.line,
-                    "message": i.message,
-                    "suggestion": i.suggestion
-                })
-            if is_authorship:
-                error_msg = "Code is structurally correct but does not meet Aura authorship standards. Revise before approval."
-                _log.info("[craft:authorship] %s soft issues: %s", rel_path, [i.code for i in decision.soft_issues])
-            else:
-                error_msg = "Code quality review failed before approval."
+        if isinstance(result, CompiledPatch):
+            proposal["new_content"] = result.cleaned_code
+            return None
+            
+        if isinstance(result, CompilerBounce):
+            _log.info("[craft:bounce] %s bounced (attempt %d/%d)", rel_path, result.attempt_number, result.max_attempts)
             return ToolExecResult(
                 ok=False,
                 payload={
                     "ok": False,
-                    "error": error_msg,
+                    "error": result.repair_instructions,
                     "path": rel_path,
-                    "issues": issues_payload
+                    "bounce": True
                 }
             )
             
-        proposal["new_content"] = decision.cleaned_code
-
+        if isinstance(result, CompilerReject):
+            _log.info("[craft:reject] %s rejected after %d attempts", rel_path, result.total_attempts)
+            return ToolExecResult(
+                ok=False,
+                payload={
+                    "ok": False,
+                    "error": result.reason,
+                    "path": rel_path,
+                    "reject": True
+                }
+            )
+            
         return None
     except Exception:
-        _log.exception("CraftEngine failed for %s", rel_path)
+        _log.exception("CompilerService failed for %s", rel_path)
         return None
 
 
@@ -476,7 +479,7 @@ class WriteHandlersMixin:
                 gate_error = _maybe_humanize_proposal(proposal)
                 if gate_error is not None:
                     return gate_error
-                craft_error = _maybe_craft_proposal(proposal, "write_file")
+                craft_error = _run_compiler_pipeline(proposal, "write_file")
                 if craft_error is not None:
                     return craft_error
 
@@ -503,7 +506,7 @@ class WriteHandlersMixin:
             if os.environ.get("AURA_HUMANIZER_EDIT_FILE", "") == "1":
                 _maybe_observe_humanizer(proposal)
             if os.environ.get("AURA_CRAFT_EDIT_FILE", "") == "1":
-                craft_error = _maybe_craft_proposal(proposal, "edit_file")
+                craft_error = _run_compiler_pipeline(proposal, "edit_file")
                 if craft_error is not None:
                     return craft_error
 
@@ -534,7 +537,7 @@ class WriteHandlersMixin:
             gate_error = _maybe_humanize_proposal(proposal)
             if gate_error is not None:
                 return gate_error
-            craft_error = _maybe_craft_proposal(proposal, "edit_symbol")
+            craft_error = _run_compiler_pipeline(proposal, "edit_symbol")
             if craft_error is not None:
                 return craft_error
 

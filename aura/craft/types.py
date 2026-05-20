@@ -58,6 +58,34 @@ class CraftDecision:
     def hard_issues(self) -> list[CraftIssue]:
         return [i for i in self.issues if i.severity == CraftIssueSeverity.HARD]
 
+@dataclass
+class CompiledPatch:
+    """A proposal that passed all compiler checks and is ready for approval."""
+    capsule: ProposalCapsule
+    cleaned_code: str
+    checks_passed: list[str] = field(default_factory=list)
+    checks_warned: list[str] = field(default_factory=list)
+
+
+@dataclass
+class CompilerBounce:
+    """A proposal that was rejected with structured repair instructions."""
+    capsule: ProposalCapsule
+    issues: list[CraftIssue]
+    repair_instructions: str
+    attempt_number: int
+    max_attempts: int
+
+
+@dataclass
+class CompilerReject:
+    """Final rejection after max retries exhausted. Halts gracefully."""
+    capsule: ProposalCapsule
+    issues: list[CraftIssue]
+    total_attempts: int
+    reason: str
+
+
 def line_in_ranges(line: int, ranges: list[tuple[int, int]]) -> bool:
     for start, end in ranges:
         if start <= line < end:
