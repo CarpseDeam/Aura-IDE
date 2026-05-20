@@ -19,6 +19,8 @@ class ProposalCapsule:
     tool_name: str
     original_code: str
     proposed_code: str
+    # 1-indexed, end-exclusive line ranges in proposed_code
+    # e.g. (3, 7) means lines 3, 4, 5, 6
     changed_line_ranges: list[tuple[int, int]]
     intent: ChangeIntent = ChangeIntent.unknown
     is_new_file: bool = False
@@ -45,7 +47,7 @@ def line_in_ranges(line: int, ranges: list[tuple[int, int]]) -> bool:
     return False
 
 def node_in_ranges(node: ast.AST, ranges: list[tuple[int, int]]) -> bool:
-    start = getattr(node, "lineno", 0) - 1
+    start = getattr(node, "lineno", 1)
     end = getattr(node, "end_lineno", start) or start
     for cs, ce in ranges:
         if (cs <= start <= ce) or (cs <= end <= ce) or (start <= cs <= end) or (start <= ce <= end):

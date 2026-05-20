@@ -308,7 +308,7 @@ import difflib
 def _compute_craft_line_ranges(proposal: dict) -> list[tuple[int, int]]:
     proposed_lines = proposal.get("new_content", "").splitlines()
     if proposal.get("is_new_file"):
-        return [(0, len(proposed_lines) + 1)]
+        return [(1, len(proposed_lines) + 1)]
     
     old_content = proposal.get("old_content")
     new_content = proposal.get("new_content")
@@ -320,7 +320,7 @@ def _compute_craft_line_ranges(proposal: dict) -> list[tuple[int, int]]:
             if tag != "equal":
                 ranges.append((j1 + 1, j2 + 1))
         return ranges
-    return [(0, len(proposed_lines) + 1)]
+    return [(1, len(proposed_lines) + 1)]
 
 
 def _maybe_craft_proposal(proposal: dict, tool_name: str) -> ToolExecResult | None:
