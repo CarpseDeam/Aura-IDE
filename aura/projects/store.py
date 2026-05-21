@@ -17,10 +17,36 @@ def _new_id() -> str:
     return uuid4().hex[:12]
 
 
+def _clean_thread_title(text: str, max_len: int = 120) -> str:
+    """Clean a thread title for display in the sidebar.
+
+    Strips whitespace, collapses newlines/multi-spaces into single spaces,
+    and caps at *max_len* with an ellipsis.  Ensures sidebar titles are
+    never multi-line blobs of pasted test output or logs.
+    """
+    if not text:
+        return "Conversation"
+    cleaned = " ".join(text.strip().split())
+    if not cleaned:
+        return "Conversation"
+    if len(cleaned) <= max_len:
+        return cleaned
+    # Truncate at a word boundary when reasonable
+    truncated = cleaned[:max_len]
+    last_space = truncated.rfind(" ")
+    if last_space > max_len * 0.6:
+        truncated = truncated[:last_space]
+    return truncated.rstrip() + "..."
+
+
 class ProjectStore:
     def __init__(self) -> None:
         self._data_dir: Path = data_dir() / "projects"
         self._index_path: Path = self._data_dir / "index.json"
+
+    @staticmethod
+    def clean_thread_title(text: str, max_len: int = 120) -> str:
+        return _clean_thread_title(text, max_len)
 
     def _load_index(self) -> dict:
         if not self._index_path.exists():
@@ -118,6 +144,7 @@ class ProjectStore:
         return threads
 
     def create_thread(self, project: ProjectSpace, title: str = "New thread") -> ProjectThread:
+        title = self.clean_thread_title(title)
         now = _utc_iso()
         thread = ProjectThread(
             id=_new_id(),
@@ -206,14 +233,14 @@ class ProjectStore:
         return new_threads
 
     @staticmethod
-    def _derive_title_from_conversation(path: Path, max_len: int = 200) -> str:
-        """Read a conversation JSON file and extract a title from the first user message."""
+    def _derive_title_from_conversation(path: Path, max_len: int = 120) -> str:
+        """Read a conversation JSON file and extract a clean title from the first user message."""
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
-            return path.stem[:max_len]
+            return _clean_thread_title(path.stem, max_len)
         if not isinstance(data, dict):
-            return path.stem[:max_len]
+            return _clean_thread_title(path.stem, max_len)
 
         msgs = data.get("messages", [])
         for msg in msgs:
@@ -223,15 +250,15 @@ class ProjectStore:
                 continue
             content = msg.get("content")
             if isinstance(content, str) and content.strip():
-                return content.strip()[:max_len]
+                return _clean_thread_title(content, max_len)
             if isinstance(content, list):
                 for part in content:
                     if isinstance(part, dict) and part.get("type") == "text":
                         text = part.get("text", "")
                         if text.strip():
-                            return text.strip()[:max_len]
+                            return _clean_thread_title(text, max_len)
         # Fallback: use filename stem
-        return path.stem[:max_len]
+        return _clean_thread_title(path.stem, max_len)
 
     @staticmethod
     def _load_project_from_root(root_path: Path) -> ProjectSpace | None:

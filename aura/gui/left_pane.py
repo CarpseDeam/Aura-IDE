@@ -375,8 +375,20 @@ class LeftPane(QFrame):
 
         self._clear_projects_layout()
 
-        try:
+        # Ensure the current workspace is registered as a project before listing
+        if workspace_root is not None:
+            try:
+                # Use a single ProjectStore instance for efficiency
+                store = ProjectStore()
+                store.create_or_update_project(workspace_root)
+            except Exception:
+                logging.warning("Failed to register workspace as project")
+                self._projects_layout.addStretch(1)
+                return
+        else:
             store = ProjectStore()
+
+        try:
             projects = store.list_projects()
         except Exception:
             logging.warning("Failed to list projects")

@@ -504,6 +504,10 @@ class MainWindow(WindowChromeMixin, QMainWindow):
                     )
 
     def _on_project_selected(self, root_path: Path) -> None:
+        # Ensure the path is registered as a project before switching to it
+        from aura.projects.store import ProjectStore
+        ProjectStore().create_or_update_project(root_path)
+
         self._workspace_root = root_path
         self._checkpoint_dialog = None
         self._bridge.set_workspace_root(root_path)

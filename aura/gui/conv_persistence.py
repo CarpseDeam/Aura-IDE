@@ -116,7 +116,9 @@ class ConversationPersistence(QObject):
                     break
 
             if thread is None:
-                title = (_first_user_text(history) or "Conversation")[:200]
+                raw_title = _first_user_text(history) or "Conversation"
+                clean_fn = getattr(ProjectStore, "clean_thread_title")
+                title = clean_fn(raw_title)
                 thread = store.create_thread(project, title=title)
 
             thread.conversation_path = conversation_path
