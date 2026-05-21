@@ -217,35 +217,6 @@ class ConversationManager:
             _terminal_dispatch = False
             _worker_phase_boundary_info: dict[str, Any] | None = None
 
-            def execute_tool(tc: dict[str, Any]) -> dict[str, Any]:
-                nonlocal _terminal_dispatch, _worker_phase_boundary_info, reject_all_for_turn, worker_redispatches
-                if cancel_event.is_set():
-                    return {"cancelled": True}
-
-                fn = tc["function"]
-                name = fn["name"]
-                tool_call_id = tc["id"]
-                try:
-                    args = json.loads(fn.get("arguments") or "{}")
-                except json.JSONDecodeError as exc:
-                    err = f"failed to parse tool arguments as JSON: {exc}"
-                    return {
-                        "id": tool_call_id,
-                        "name": name,
-                        "ok": False,
-                        "result_payload": json.dumps({"ok": False, "error": err}),
-                        "event": ToolResult(
-                            tool_call_id=tool_call_id,
-                            name=name,
-                            ok=False,
-                            result=err,
-                        )
-                    }
-
-                # Limits check is not thread-safe if done concurrently without a lock,
-                # but we will only parallelize reads. Let's do limits check synchronously first.
-                return {"id": tool_call_id, "name": name, "args": args}
-
             # Pre-process tools sequentially to handle limits check and identify parallelizable ones
             tasks = []
             for tc in tool_calls:
