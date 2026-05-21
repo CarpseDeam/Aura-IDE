@@ -40,26 +40,38 @@ class MainWindowToolbar(QToolBar):
         self._settings = settings
 
         # Group 1: conversation actions
-        new_act = QAction(QIcon(str(media_path("new_conv.svg"))), "New Conversation", self)
-        new_act.triggered.connect(lambda _checked=False: self.new_conversation_requested.emit())
-        self.addAction(new_act)
+        self._new_conv_btn = QToolButton()
+        self._new_conv_btn.setIcon(QIcon(str(media_path("new_conv.svg"))))
+        self._new_conv_btn.setText("New")
+        self._new_conv_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self._new_conv_btn.setToolTip("Start a new conversation (discards the current messages)")
+        self._new_conv_btn.clicked.connect(self.new_conversation_requested.emit)
+        self.addWidget(self._new_conv_btn)
 
-        open_act = QAction(QIcon(str(media_path("open_conversation.svg"))), "Open Conversation...", self)
-        open_act.triggered.connect(lambda _checked=False: self.open_conversation_requested.emit())
-        self.addAction(open_act)
+        self._open_conv_btn = QToolButton()
+        self._open_conv_btn.setIcon(QIcon(str(media_path("open_conversation.svg"))))
+        self._open_conv_btn.setText("Open")
+        self._open_conv_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self._open_conv_btn.setToolTip("Open a previously saved conversation")
+        self._open_conv_btn.clicked.connect(self.open_conversation_requested.emit)
+        self.addWidget(self._open_conv_btn)
 
         self.addWidget(_toolbar_separator())
 
         # Group 2: read-only
-        self._read_only_act = QAction(QIcon(str(media_path("read_only.svg"))), "Read-Only Mode", self)
-        self._read_only_act.setCheckable(True)
-        self._read_only_act.setChecked(False)
-        self._read_only_act.triggered.connect(self.read_only_toggled.emit)
-        self.addAction(self._read_only_act)
+        self._read_only_btn = QToolButton()
+        self._read_only_btn.setIcon(QIcon(str(media_path("read_only.svg"))))
+        self._read_only_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self._read_only_btn.setCheckable(True)
+        self._read_only_btn.setChecked(False)
+        self._read_only_btn.toggled.connect(self._on_read_only_toggled)
+        self.addWidget(self._read_only_btn)
 
         self._read_only_badge = QLabel("")
         self._read_only_badge.setObjectName("readOnlyBadge")
         self.addWidget(self._read_only_badge)
+
+        self._update_read_only_state(False)
 
         self.addWidget(_toolbar_separator())
 
@@ -118,14 +130,25 @@ class MainWindowToolbar(QToolBar):
         close_btn.clicked.connect(self.close_requested.emit)
         self.addWidget(close_btn)
 
-    def set_read_only(self, checked: bool) -> None:
-        self._read_only_act.setChecked(checked)
+    def _update_read_only_state(self, checked: bool) -> None:
         if checked:
-            self._read_only_act.setText("\U0001F512 Read-Only Mode")  # lock
+            self._read_only_btn.setText("Read-Only")
+            self._read_only_btn.setToolTip("Read-only mode is ON — files cannot be edited")
             self._read_only_badge.setText("READ-ONLY")
         else:
-            self._read_only_act.setText("Read-Only Mode")
+            self._read_only_btn.setText("Read Only")
+            self._read_only_btn.setToolTip("Toggle read-only mode to prevent file edits")
             self._read_only_badge.setText("")
+
+    def _on_read_only_toggled(self, checked: bool) -> None:
+        self._update_read_only_state(checked)
+        self.read_only_toggled.emit(checked)
+
+    def set_read_only(self, checked: bool) -> None:
+        self._read_only_btn.blockSignals(True)
+        self._read_only_btn.setChecked(checked)
+        self._read_only_btn.blockSignals(False)
+        self._update_read_only_state(checked)
 
     def update_settings(self, settings) -> None:
         """Use the latest settings object and refresh setting-backed controls."""
@@ -143,13 +166,11 @@ class MainWindowToolbar(QToolBar):
         self.refresh_auto_toggle_tooltips()
 
     def refresh_auto_toggle_tooltips(self) -> None:
-        dispatch_state = "ON" if self._settings.auto_dispatch else "OFF"
-        approve_state = "ON" if self._settings.auto_approve else "OFF"
         self._auto_dispatch_switch.setToolTip(
-            f"Auto-dispatch worker specs: {dispatch_state}"
+            "Auto-dispatch: when ON, the planner sends tasks to the worker automatically. When OFF, the planner asks before dispatching."
         )
         self._auto_approve_switch.setToolTip(
-            f"Auto-approve file modification diffs: {approve_state}"
+            "Auto-approve: when ON, file diffs are applied without confirmation. When OFF, you review and approve each change."
         )
 
     def update_maximize_icon(self, maximized: bool) -> None:
