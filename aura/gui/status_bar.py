@@ -58,14 +58,31 @@ class AuraStatusBar(QStatusBar):
         total_miss = sum(u["miss"] for u in session_usage.values())
         total_out = sum(u["out"] for u in session_usage.values())
         
-        total_cost = 0.0
+        known_cost = 0.0
+        unknown_count = 0
         for m_id, u in session_usage.items():
-            try:
-                total_cost += cost_usd(m_id, u["hit"], u["miss"], u["out"])
-            except KeyError:
-                pass
-                
+            c = cost_usd(m_id, u["hit"], u["miss"], u["out"])
+            if c is None:
+                unknown_count += 1
+            else:
+                known_cost += c
+
         self._status_tokens.setText(
             f"{total_hit:,} hit · {total_miss:,} miss · {total_out:,} out"
         )
-        self._status_cost.setText(f"${total_cost:.4f}")
+
+        total_models = len(session_usage)
+        if total_models == 0:
+            self._status_cost.setText("$0.0000")
+            self._status_cost.setToolTip("")
+        elif unknown_count == total_models:
+            self._status_cost.setText("$?.????")
+            self._status_cost.setToolTip("")
+        elif unknown_count > 0:
+            self._status_cost.setText(f"${known_cost:.4f}*")
+            self._status_cost.setToolTip(
+                "Some models have unknown pricing — actual cost may be higher."
+            )
+        else:
+            self._status_cost.setText(f"${known_cost:.4f}")
+            self._status_cost.setToolTip("")
