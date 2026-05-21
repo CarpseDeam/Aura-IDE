@@ -82,6 +82,12 @@ class ReferenceChecker:
                         symbols.add(node.name)
                     elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
                         symbols.add(node.id)
+                    elif isinstance(node, ast.Import):
+                        for alias in node.names:
+                            symbols.add(alias.asname or alias.name.split('.')[0])
+                    elif isinstance(node, ast.ImportFrom):
+                        for alias in node.names:
+                            symbols.add(alias.asname or alias.name)
 
                 if module_path:
                     self._workspace_symbols[module_path] = symbols

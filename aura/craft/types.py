@@ -1,5 +1,7 @@
 from __future__ import annotations
 import ast
+import difflib
+import re
 from enum import Enum
 from pathlib import Path
 from dataclasses import dataclass, field
@@ -143,3 +145,130 @@ def node_in_ranges(node: ast.AST, ranges: list[tuple[int, int]]) -> bool:
         if node_start < range_end and node_end > range_start:
             return True
     return False
+
+
+CONTEXT_PADDING = 1
+
+
+def _extract_issue_target(issue: CraftIssue) -> str | None:
+    """Extract the symbolic target from an issue message for stable key generation."""
+    msg = issue.message.lower().strip()
+    code = issue.code
+
+    if code == "undefined-name":
+        m = re.search(r"'([^']+)'", msg)
+        if m:
+            return m.group(1)
+    elif code == "broken-import":
+        m = re.search(r"'([^']+)'", msg)
+        if m:
+            target = m.group(1)
+            rest = msg[m.end():]
+            m2 = re.search(r"'([^']+)'", rest)
+            if m2:
+                target = f"{target}.{m2.group(1)}"
+            return target
+    elif code == "call-signature":
+        m = re.search(r"'([^']+)'", msg)
+        if m:
+            return m.group(1)
+    elif code == "missing-attribute":
+        m = re.search(r"'([^']+)'", msg)
+        if m:
+            return m.group(1)
+    return None
+
+
+def normalize_message(msg: str) -> str:
+    """Normalize issue message to make it format-insensitive and digit-independent."""
+    msg = msg.lower().strip()
+    msg = re.sub(r'\d+', 'N', msg)
+    msg = msg.replace("'", "").replace('"', "")
+    return msg
+
+
+def compute_issue_key(issue: CraftIssue) -> str:
+    """Build a stable key for matching a diagnostic across original vs proposed code.
+
+    Priority:
+    1. code + normalized_message + target (symbol/import name) — stable across line shifts
+    2. code + normalized_message + line — fallback when no target extractable
+    """
+    target = _extract_issue_target(issue)
+    norm_msg = normalize_message(issue.message)
+    if target:
+        return f"{issue.code}:{norm_msg}:{target}"
+    return f"{issue.code}:{norm_msg}:L{issue.line}"
+
+
+def line_near_changed_ranges(line: int, changed_ranges: list[range | tuple[int, int]], padding: int = CONTEXT_PADDING) -> bool:
+    """Check if a line is on or within padding lines of any changed range."""
+    for r in changed_ranges:
+        if isinstance(r, range):
+            start = r.start
+            end = r.stop
+        else:
+            start, end = r
+        padded_start = max(1, start - padding)
+        padded_end = end + padding
+        if padded_start <= line < padded_end:
+            return True
+    return False
+
+
+def changed_line_ranges(original: str, proposed: str) -> list[range]:
+    """Compute changed line ranges (1-indexed) in proposed code."""
+    original_lines = original.splitlines()
+    proposed_lines = proposed.splitlines()
+    matcher = difflib.SequenceMatcher(None, original_lines, proposed_lines)
+    ranges = []
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag != "equal":
+            ranges.append(range(j1 + 1, j2 + 1))
+    return ranges
+
+
+def filter_delta_issues(
+    proposed_issues: list[CraftIssue],
+    original_issues: list[CraftIssue],
+    changed_ranges: list[range | tuple[int, int]],
+    is_new_file: bool = False,
+) -> list[CraftIssue]:
+    """Filter reference/linter issues to only block newly introduced or changed-line issues.
+
+    Never filters:
+    - Syntax errors (handled before reference checking)
+    - Contract gate issues (CONTRACT_*)
+    - Unsafe operation checks (destructive_operation, codes starting with forbidden_)
+
+    Only filters pre-existing diagnostics that are NOT on or near changed lines.
+    """
+    if is_new_file or not original_issues:
+        return proposed_issues
+
+    original_keys: set[str] = set()
+    for issue in original_issues:
+        key = compute_issue_key(issue)
+        original_keys.add(key)
+
+    filtered: list[CraftIssue] = []
+
+    for issue in proposed_issues:
+        if (
+            issue.code in ("syntax-error", "destructive_operation")
+            or issue.code.startswith("CONTRACT_")
+            or issue.code.startswith("forbidden_")
+        ):
+            filtered.append(issue)
+            continue
+
+        key = compute_issue_key(issue)
+        is_pre_existing = key in original_keys
+
+        if is_pre_existing:
+            if line_near_changed_ranges(issue.line, changed_ranges):
+                filtered.append(issue)
+        else:
+            filtered.append(issue)
+
+    return filtered

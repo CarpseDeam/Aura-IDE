@@ -224,6 +224,8 @@ def _maybe_observe_humanizer(proposal: dict) -> None:
     """Run humanizer in observe-only mode for existing .py file edits."""
     if not _humanizer_enabled():
         return
+    if os.environ.get("AURA_HUMANIZER_EDIT_FILE") != "1":
+        return
     rel_path = proposal.get("rel_path", "")
     if not rel_path.endswith(".py"):
         return

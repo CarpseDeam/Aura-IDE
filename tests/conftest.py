@@ -123,3 +123,34 @@ def block_real_subprocess(monkeypatch):
 
     monkeypatch.setattr(subprocess, "run", _safe_run)
     return original_run
+
+
+# ---------------------------------------------------------------------------
+# Dynamic stub for aura.humanizer to enable unittest patching in tests
+# ---------------------------------------------------------------------------
+
+import sys
+from types import ModuleType
+from unittest.mock import MagicMock
+
+class DummyHumanizerPipeline:
+    def humanize_code(self, code, language="python", path=None):
+        mock_result = MagicMock()
+        mock_result.text = code
+        mock_result.syntax_fallback = False
+        mock_result.error = None
+        mock_result.changed = False
+        mock_result.markdown_stripped = False
+        mock_result.comments_removed = 0
+        mock_result.docstrings_removed = 0
+        mock_result.slop_report = MagicMock(issues=[], score=0.0, status="clean", issue_count=0)
+        mock_result.feature_report = MagicMock(has_structural_smells=False, tuple_returns=[], generic_names=[], narration_comments=[], thin_helpers=[])
+        return mock_result
+
+humanizer_mod = ModuleType("aura.humanizer")
+humanizer_mod.HumanizerPipeline = DummyHumanizerPipeline
+sys.modules["aura.humanizer"] = humanizer_mod
+
+import aura
+aura.humanizer = humanizer_mod
+
