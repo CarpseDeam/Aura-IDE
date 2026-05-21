@@ -29,20 +29,20 @@ from aura.config import (
     save_workspace_root,
 )
 from aura.git_ops import git_init, is_git_repo
-from aura.gui.edge_rails import EdgeTabRail, TerminalTabState
-from aura.gui.playground import AuraPlayground
-from aura.gui.widgets.aura_glow import AuraWidget
 from aura.gui.chat_view import ChatView
 from aura.gui.checkpoint_dialog import CheckpointDialog
 from aura.gui.conv_persistence import ConversationPersistence
+from aura.gui.edge_rails import EdgeTabRail
 from aura.gui.input_panel import InputPanel, SendPayload
 from aura.gui.left_pane import LeftPane
 from aura.gui.main_window_toolbar import MainWindowToolbar
 from aura.gui.onboarding_dialog import OnboardingDialog
+from aura.gui.playground import AuraPlayground
 from aura.gui.send_handler import SendHandler
 from aura.gui.settings_dialog import SettingsDialog
 from aura.gui.status_bar import AuraStatusBar
 from aura.gui.update_dialog import UpdateDialog, UpdateWorker
+from aura.gui.widgets.aura_glow import AuraWidget
 from aura.gui.window_chrome import WindowChromeMixin
 from aura.gui.worker_handler import WorkerEventHandler
 from aura.prompts import SINGLE_SYSTEM_PROMPT
@@ -266,6 +266,13 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._chat.mermaid_detected.connect(self._playground.add_mermaid_artifact)
 
         self._update_workspace_label()
+        
+        # Wire project thread selection from left pane
+        self._left_pane.thread_selected.connect(self._on_thread_selected)
+        self._persistence.project_thread_updated.connect(self._on_project_thread_updated)
+
+        self._left_pane.refresh_projects(self._workspace_root)
+
         self._refresh_status_bar()
         self._position_edge_tabs()
 
@@ -398,6 +405,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._tree.set_root(path)
         save_workspace_root(path)
         self._update_workspace_label()
+        self._left_pane.refresh_projects(path)
         self._refresh_status_bar()
         return str(path)
 
@@ -480,6 +488,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         # New workspace — drop any current conversation pointer (different .aura/).
         self._persistence._current_conversation_path = None
         self._update_workspace_label()
+        self._left_pane.refresh_projects(self._workspace_root)
         self._refresh_status_bar()
 
         # Offer to initialize git if the workspace is not a git repo.
@@ -759,5 +768,19 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         bucket["miss"] += miss
         bucket["out"] += completion
         self._refresh_status_bar()
-
 # ----- persistence (delegated to ConversationPersistence) --------------
+
+    def _on_thread_selected(self, conversation_path: Path) -> None:
+        if self._bridge.is_running():
+            QMessageBox.information(self, APP_NAME, "Wait for the current response to finish, or click Stop.")
+            return
+        try:
+            self._persistence.load_and_apply(conversation_path)
+            self._send_handler.clear_queue()
+            self._input.set_queued_messages(0)
+            self._reset_session_usage()
+        except Exception as _err:
+            QMessageBox.warning(self, APP_NAME, f"Could not open conversation:\n{_err}")
+
+    def _on_project_thread_updated(self) -> None:
+        self._left_pane.refresh_projects(self._workspace_root)

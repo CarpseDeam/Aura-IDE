@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QListWidget,
+    QListWidgetItem,
     QPushButton,
     QSizePolicy,
     QVBoxLayout,
@@ -22,6 +24,8 @@ from aura.config import (
 from aura.providers.registry import provider_registry
 from aura.gui.theme import BORDER, FG_DIM
 from aura.gui.workspace_tree import WorkspaceTree
+from aura.projects.store import ProjectStore
+
 
 class LeftPane(QFrame):
     change_root_requested = Signal()
@@ -29,6 +33,7 @@ class LeftPane(QFrame):
     planner_thinking_changed = Signal(str)
     worker_model_changed = Signal(str)
     worker_thinking_changed = Signal(str)
+    thread_selected = Signal(Path)  # conversation_path
 
     def __init__(self, workspace_root: Path | None, parent=None) -> None:
         super().__init__(parent)
@@ -54,6 +59,28 @@ class LeftPane(QFrame):
         change_row.setContentsMargins(8, 0, 8, 6)
         change_row.addWidget(change_btn)
         layout.addLayout(change_row)
+
+        # --- Projects section ---
+        projects_sep = QFrame()
+        projects_sep.setFrameShape(QFrame.Shape.HLine)
+        projects_sep.setStyleSheet(f"QFrame {{ color: {BORDER}; }}")
+        layout.addWidget(projects_sep)
+
+        projects_title = QLabel("Projects")
+        projects_title.setObjectName("paneTitle")
+        layout.addWidget(projects_title)
+
+        self._project_name_label = QLabel("")
+        self._project_name_label.setObjectName("projectNameLabel")
+        self._project_name_label.setWordWrap(True)
+        self._project_name_label.setVisible(False)
+        layout.addWidget(self._project_name_label)
+
+        self._thread_list = QListWidget()
+        self._thread_list.setVisible(False)
+        self._thread_list.setMaximumHeight(200)
+        self._thread_list.itemClicked.connect(self._on_thread_clicked)
+        layout.addWidget(self._thread_list)
 
         self._tree = WorkspaceTree(workspace_root)
         layout.addWidget(self._tree, 1)
@@ -200,7 +227,38 @@ class LeftPane(QFrame):
         self._worker_thinking_label.setVisible(enabled)
         self._worker_thinking_combo.setVisible(enabled)
 
+    def refresh_projects(self, workspace_root: Path | None) -> None:
+        """Update the project name and thread list for the given workspace root."""
+        if workspace_root is None:
+            self._project_name_label.setVisible(False)
+            self._thread_list.setVisible(False)
+            return
 
+        try:
+            store = ProjectStore()
+            project = store.create_or_update_project(workspace_root)
+        except Exception:
+            self._project_name_label.setVisible(False)
+            self._thread_list.setVisible(False)
+            return
+
+        self._project_name_label.setText(project.name)
+        self._project_name_label.setVisible(True)
+
+        threads = store.list_threads(project, include_archived=False)
+        self._thread_list.clear()
+        for t in threads:
+            item = QListWidgetItem(t.title)
+            item.setData(Qt.UserRole, str(t.conversation_path) if t.conversation_path else "")
+            self._thread_list.addItem(item)
+
+        self._thread_list.setVisible(len(threads) > 0)
+
+    def _on_thread_clicked(self, item: QListWidgetItem) -> None:
+        """Emit the conversation_path for the clicked thread."""
+        path_str = item.data(Qt.UserRole)
+        if path_str:
+            self.thread_selected.emit(Path(path_str))
 
 
 def _models_with_default(provider: ProviderId) -> dict[str, ModelInfo]:
