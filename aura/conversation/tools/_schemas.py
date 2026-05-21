@@ -854,3 +854,41 @@ TERMINAL_TOOL_DEF: dict[str, Any] = {
         },
     },
 }
+
+DIAGNOSTIC_TOOL_DEF: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "run_diagnostic_command",
+        "description": (
+            "Execute a short, read-only diagnostic command in the workspace. "
+            "Use this to validate code (py_compile, pytest), inspect git state (status, diff, log), "
+            "or search the filesystem (grep, ls, cat). "
+            "Rejects mutating, installing, or dangerous commands. "
+            "Returns stdout, stderr, exit_code, timed_out, and the original command. "
+            "Output is truncated at 100KB. "
+            "Use this instead of putting validation commands into Worker dispatch specs."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": (
+                        "A read-only diagnostic command. Examples: "
+                        "'python -m py_compile aura/gui/left_pane.py', "
+                        "'git status', 'git diff', "
+                        "'pytest tests/test_gui.py -x -q', "
+                        "'rg \"class LeftPane\" aura/', "
+                        "'ls aura/conversation/tools/'. "
+                    ),
+                },
+                "timeout": {
+                    "type": "integer",
+                    "description": "Maximum seconds to wait. Default: 30.",
+                    "default": 30,
+                },
+            },
+            "required": ["command"],
+        },
+    },
+}

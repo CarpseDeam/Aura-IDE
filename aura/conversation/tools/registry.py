@@ -28,6 +28,7 @@ from aura.conversation.tools._git_mixin import GitHandlersMixin
 from aura.conversation.tools._web_mixin import WebHandlersMixin
 from aura.conversation.tools._write_mixin import WriteHandlersMixin
 from aura.conversation.tools._memory_mixin import MemoryHandlersMixin
+from aura.conversation.tools._diagnostic_mixin import DiagnosticHandlersMixin
 
 # Imports kept for test-patch compatibility (patching
 # aura.conversation.tools.registry.<name> in test_tool_registry.py).
@@ -64,6 +65,7 @@ class ToolRegistry(
     WebHandlersMixin,
     WriteHandlersMixin,
     MemoryHandlersMixin,
+    DiagnosticHandlersMixin,
 ):
     """Workspace-jailed tool dispatcher.
 
@@ -222,3 +224,4 @@ TOOL_HANDLERS["edit_symbol"] = ToolRegistry._handle_edit_symbol
 TOOL_HANDLERS["update_todo_list"] = ToolRegistry._handle_update_todo_list
 TOOL_HANDLERS["search_project_memory"] = ToolRegistry._handle_search_project_memory
 TOOL_HANDLERS["save_to_project_memory"] = ToolRegistry._handle_save_to_project_memory
+TOOL_HANDLERS["run_diagnostic_command"] = ToolRegistry._handle_run_diagnostic_command
