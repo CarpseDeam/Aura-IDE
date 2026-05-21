@@ -54,10 +54,10 @@ def cost_usd(
     cache_hit_tokens: int,
     cache_miss_tokens: int,
     output_tokens: int,
-) -> float:
+) -> float | None:
     p = get_pricing(model)
     if p is None:
-        return 0.0
+        return None
     return (
         cache_hit_tokens * p["in_hit"]
         + cache_miss_tokens * p["in_miss"]
