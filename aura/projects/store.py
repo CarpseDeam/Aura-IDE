@@ -35,9 +35,7 @@ class ProjectStore:
 
     def _save_index(self, index: dict) -> None:
         self._data_dir.mkdir(parents=True, exist_ok=True)
-        self._index_path.write_text(
-            json.dumps(index, indent=2, ensure_ascii=False), encoding="utf-8"
-        )
+        self._index_path.write_text(json.dumps(index, indent=2, ensure_ascii=False), encoding="utf-8")
 
     def list_projects(self, include_archived: bool = False) -> list[ProjectSpace]:
         index = self._load_index()
@@ -156,6 +154,84 @@ class ProjectStore:
         if conversation_path is not None:
             thread.conversation_path = conversation_path
         self.save_thread(project, thread)
+
+    def backfill_threads_from_conversations(
+        self, project: ProjectSpace, max_title_length: int = 200
+    ) -> list[ProjectThread]:
+        """
+        Scan .aura/conversations/*.json files and create ProjectThread entries
+        for any conversation file that doesn't already have a thread pointing at it.
+        Returns the list of newly created threads.
+        Does NOT move or rename conversation files.
+        Does NOT create duplicate threads (checks by conversation_path).
+        """
+        conv_dir = project.root_path / ".aura" / "conversations"
+        if not conv_dir.is_dir():
+            return []
+
+        # Build set of existing conversation_paths
+        existing_paths = set()
+        for t in self.list_threads(project, include_archived=True):
+            if t.conversation_path is not None:
+                existing_paths.add(t.conversation_path.resolve())
+
+        new_threads = []
+        for conv_file in sorted(conv_dir.iterdir()):
+            if not conv_file.suffix == ".json":
+                continue
+            # Skip thread metadata files (stored in .aura/threads/ not .aura/conversations/)
+            resolved = conv_file.resolve()
+            if resolved in existing_paths:
+                continue
+
+            # Derive title from first user message or filename
+            title = self._derive_title_from_conversation(conv_file, max_title_length)
+
+            thread = ProjectThread(
+                id=_new_id(),
+                project_id=project.id,
+                title=title,
+                conversation_path=resolved,
+                created_at=_utc_iso(),
+                updated_at=_utc_iso(),
+            )
+            self.save_thread(project, thread)
+            new_threads.append(thread)
+            existing_paths.add(resolved)
+
+        if new_threads:
+            project.last_thread_id = new_threads[0].id
+            self.save_project(project)
+
+        return new_threads
+
+    @staticmethod
+    def _derive_title_from_conversation(path: Path, max_len: int = 200) -> str:
+        """Read a conversation JSON file and extract a title from the first user message."""
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return path.stem[:max_len]
+        if not isinstance(data, dict):
+            return path.stem[:max_len]
+
+        msgs = data.get("messages", [])
+        for msg in msgs:
+            if not isinstance(msg, dict):
+                continue
+            if msg.get("role") != "user":
+                continue
+            content = msg.get("content")
+            if isinstance(content, str) and content.strip():
+                return content.strip()[:max_len]
+            if isinstance(content, list):
+                for part in content:
+                    if isinstance(part, dict) and part.get("type") == "text":
+                        text = part.get("text", "")
+                        if text.strip():
+                            return text.strip()[:max_len]
+        # Fallback: use filename stem
+        return path.stem[:max_len]
 
     @staticmethod
     def _load_project_from_root(root_path: Path) -> ProjectSpace | None:
