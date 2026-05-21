@@ -381,8 +381,20 @@ def load_dynamic_catalog() -> None:
         cached_pricing = entry.get("pricing", {})
 
         for mid, m_data in cached_models.items():
+            if mid in cfg.models:
+                hc_m = cfg.models[mid]
+                if m_data.get("input_per_m_usd", 0.0) == 0.0 and m_data.get("output_per_m_usd", 0.0) == 0.0:
+                    if hc_m.input_per_m_usd > 0.0 or hc_m.output_per_m_usd > 0.0:
+                        m_data["input_per_m_usd"] = hc_m.input_per_m_usd
+                        m_data["output_per_m_usd"] = hc_m.output_per_m_usd
+                        m_data["cache_hit_per_m_usd"] = hc_m.cache_hit_per_m_usd
             cfg.models[mid] = ModelInfo(**m_data)
+            
         for mid, p_data in cached_pricing.items():
+            if p_data.get("in_miss", 0.0) == 0.0 and p_data.get("out", 0.0) == 0.0:
+                hc_p = cfg.pricing.get(mid, {})
+                if hc_p.get("in_miss", 0.0) > 0.0 or hc_p.get("out", 0.0) > 0.0:
+                    continue
             cfg.pricing[mid] = p_data
 
 

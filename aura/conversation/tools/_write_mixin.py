@@ -488,9 +488,10 @@ class WriteHandlersMixin:
                 gate_error = _maybe_humanize_proposal(proposal)
                 if gate_error is not None:
                     return gate_error
-                craft_error = _run_compiler_pipeline(proposal, "write_file", contract=self.get_contract(), workspace_root=self._root)
-                if craft_error is not None:
-                    return craft_error
+
+            craft_error = _run_compiler_pipeline(proposal, "write_file", contract=self.get_contract(), workspace_root=self._root)
+            if craft_error is not None:
+                return craft_error
 
             req = ApprovalRequest(
                 tool_name="write_file",

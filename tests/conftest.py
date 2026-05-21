@@ -93,6 +93,11 @@ def sample_py_file(tmp_workspace: Path) -> Path:
 # Environment isolation
 # ---------------------------------------------------------------------------
 
+@pytest.fixture(autouse=True)
+def disable_craft_compiler(monkeypatch):
+    """Disable AURA_CRAFT by default so dummy edits don't trigger compiler bounces."""
+    monkeypatch.setenv("AURA_CRAFT", "0")
+
 @pytest.fixture
 def mock_env_api_key(monkeypatch):
     """Set a fake ANTHROPIC_API_KEY in the environment."""

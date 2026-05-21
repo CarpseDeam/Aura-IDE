@@ -8,6 +8,26 @@ from pathlib import Path
 from .types import CraftIssue, CraftIssueSeverity
 
 
+_SKIP_DIRS = frozenset({
+    ".venv",
+    "venv",
+    "env",
+    ".env",
+    "site-packages",
+    "node_modules",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".git",
+    "build",
+    "dist",
+})
+
+def _is_skip_dir(name: str) -> bool:
+    return name in _SKIP_DIRS
+
+
 @dataclass
 class _FuncSig:
     """Lightweight function/method signature for workspace index."""
@@ -61,53 +81,59 @@ class ReferenceChecker:
         self._workspace_functions = {}
         self._workspace_classes = {}
 
-        for py_file in workspace_root.rglob("*.py"):
-            try:
-                rel_path = py_file.relative_to(workspace_root)
-                parts = list(rel_path.parts)
-                if parts[-1] == "__init__.py":
-                    parts.pop()
-                else:
-                    parts[-1] = parts[-1][:-3]
+        import os
+        for root, dirs, files in os.walk(workspace_root):
+            dirs[:] = [d for d in dirs if not _is_skip_dir(d)]
+            for file in files:
+                if not file.endswith(".py"):
+                    continue
+                py_file = Path(root) / file
+                try:
+                    rel_path = py_file.relative_to(workspace_root)
+                    parts = list(rel_path.parts)
+                    if parts[-1] == "__init__.py":
+                        parts.pop()
+                    else:
+                        parts[-1] = parts[-1][:-3]
 
-                module_path = ".".join(parts) if parts else ""
-                if module_path:
-                    self._workspace_modules.add(module_path)
+                    module_path = ".".join(parts) if parts else ""
+                    if module_path:
+                        self._workspace_modules.add(module_path)
 
-                content = py_file.read_text(encoding="utf-8")
-                tree = ast.parse(content)
-                symbols = set()
-                for node in ast.walk(tree):
-                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                        symbols.add(node.name)
-                    elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
-                        symbols.add(node.id)
-                    elif isinstance(node, ast.Import):
-                        for alias in node.names:
-                            symbols.add(alias.asname or alias.name.split('.')[0])
-                    elif isinstance(node, ast.ImportFrom):
-                        for alias in node.names:
-                            symbols.add(alias.asname or alias.name)
+                    content = py_file.read_text(encoding="utf-8")
+                    tree = ast.parse(content)
+                    symbols = set()
+                    for node in ast.walk(tree):
+                        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                            symbols.add(node.name)
+                        elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+                            symbols.add(node.id)
+                        elif isinstance(node, ast.Import):
+                            for alias in node.names:
+                                symbols.add(alias.asname or alias.name.split('.')[0])
+                        elif isinstance(node, ast.ImportFrom):
+                            for alias in node.names:
+                                symbols.add(alias.asname or alias.name)
 
-                if module_path:
-                    self._workspace_symbols[module_path] = symbols
+                    if module_path:
+                        self._workspace_symbols[module_path] = symbols
 
-                # Phase 4: collect function signatures and class info
-                for node in ast.iter_child_nodes(tree):
-                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                        sig = self._extract_signature(node)
-                        key = f"{module_path}.{node.name}" if module_path else node.name
-                        self._workspace_functions[key] = sig
-                    elif isinstance(node, ast.ClassDef):
-                        ci = self._extract_class_info(node)
-                        key = f"{module_path}.{node.name}" if module_path else node.name
-                        self._workspace_classes[key] = ci
-                        # Also index methods as module.ClassName.method
-                        for mname, msig in ci.methods.items():
-                            mkey = f"{key}.{mname}"
-                            self._workspace_functions[mkey] = msig
-            except Exception:
-                continue
+                    # Phase 4: collect function signatures and class info
+                    for node in ast.iter_child_nodes(tree):
+                        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                            sig = self._extract_signature(node)
+                            key = f"{module_path}.{node.name}" if module_path else node.name
+                            self._workspace_functions[key] = sig
+                        elif isinstance(node, ast.ClassDef):
+                            ci = self._extract_class_info(node)
+                            key = f"{module_path}.{node.name}" if module_path else node.name
+                            self._workspace_classes[key] = ci
+                            # Also index methods as module.ClassName.method
+                            for mname, msig in ci.methods.items():
+                                mkey = f"{key}.{mname}"
+                                self._workspace_functions[mkey] = msig
+                except Exception:
+                    continue
 
     @staticmethod
     def _extract_signature(node: ast.FunctionDef | ast.AsyncFunctionDef, is_method: bool = False) -> _FuncSig:
