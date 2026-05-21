@@ -20,7 +20,7 @@ class AuraStatusBar(QStatusBar):
         self._status_tokens = QLabel("0 hit · 0 miss · 0 out")
         self.addPermanentWidget(self._status_tokens)
 
-        self._status_cost = QLabel("$0.0000")
+        self._status_cost = QLabel("$—")
         self._status_cost.setObjectName("statusCost")
         self.addPermanentWidget(self._status_cost)
 
@@ -76,13 +76,13 @@ class AuraStatusBar(QStatusBar):
             self._status_cost.setText("$—")
             self._status_cost.setToolTip("")
         elif unknown_count == total_models:
-            self._status_cost.setText("$?.????")
+            self._status_cost.setText("$?.??????")
             self._status_cost.setToolTip("")
         elif unknown_count > 0:
-            self._status_cost.setText(f"${known_cost:.4f}*")
+            self._status_cost.setText(f"${known_cost:.6f}*")
             self._status_cost.setToolTip(
                 "Some models have unknown pricing — actual cost may be higher."
             )
         else:
-            self._status_cost.setText(f"${known_cost:.4f}")
+            self._status_cost.setText(f"${known_cost:.6f}")
             self._status_cost.setToolTip("")
