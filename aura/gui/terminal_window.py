@@ -28,7 +28,7 @@ class TerminalWindow(QDialog):
     """
 
     terminal_started = Signal()
-    terminal_finished = Signal(int)
+    terminal_finished = Signal(object)
     visibility_changed = Signal(bool)
     terminal_cleared = Signal()
     geometry_saved = Signal(str)

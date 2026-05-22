@@ -87,7 +87,7 @@ class _Worker(QObject):
     terminalOutput = Signal(str, str)  # (tool_call_id, text)
     agentProcessStarted = Signal(str, str, str)  # process_id, label, command
     agentProcessOutput = Signal(str, str)  # process_id, text
-    agentProcessFinished = Signal(str, int)  # process_id, exit_code
+    agentProcessFinished = Signal(str, object)  # process_id, exit_code
     finished = Signal()
 
     def __init__(
@@ -243,13 +243,13 @@ class ConversationBridge(QObject):
     workerTerminalOutput = Signal(str, str, str)  # parent_tool_id, worker_tool_id, text
     workerAgentProcessStarted = Signal(str, str, str, str)
     workerAgentProcessOutput = Signal(str, str, str)
-    workerAgentProcessFinished = Signal(str, str, int)
+    workerAgentProcessFinished = Signal(str, str, object)
 
     # Terminal output (single mode)
     terminalOutput = Signal(str, str)  # tool_call_id, text
     agentProcessStarted = Signal(str, str, str)
     agentProcessOutput = Signal(str, str)
-    agentProcessFinished = Signal(str, int)
+    agentProcessFinished = Signal(str, object)
 
     def __init__(
         self,

@@ -37,7 +37,7 @@ class TerminalDrawer(QWidget):
     """
 
     terminal_started = Signal()
-    terminal_finished = Signal(int)  # exit_code: 0=success, nonzero=failure
+    terminal_finished = Signal(object)  # exit_code: 0=success, nonzero=failure
     visibility_changed = Signal(bool)
     terminal_cleared = Signal()
 

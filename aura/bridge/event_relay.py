@@ -46,7 +46,7 @@ class WorkerEventRelay(QObject):
     terminalOutput = Signal(str, str, str)    # parent_tool_id, worker_tool_id, text
     agentProcessStarted = Signal(str, str, str, str)  # parent_tool_id, process_id, label, command
     agentProcessOutput = Signal(str, str, str)  # parent_tool_id, process_id, text
-    agentProcessFinished = Signal(str, str, int)  # parent_tool_id, process_id, exit_code
+    agentProcessFinished = Signal(str, str, object)  # parent_tool_id, process_id, exit_code
 
     def __init__(self, approval_proxy: Any, worker_model: str = "", parent: QObject | None = None) -> None:
         super().__init__(parent)

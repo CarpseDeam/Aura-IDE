@@ -79,7 +79,7 @@ class _DispatchProxy(QObject):
     workerTerminalOutput = Signal(str, str, str)  # parent_tool_id, worker_tool_id, text
     workerAgentProcessStarted = Signal(str, str, str, str)  # parent_tool_id, process_id, label, command
     workerAgentProcessOutput = Signal(str, str, str)  # parent_tool_id, process_id, text
-    workerAgentProcessFinished = Signal(str, str, int)  # parent_tool_id, process_id, exit_code
+    workerAgentProcessFinished = Signal(str, str, object)  # parent_tool_id, process_id, exit_code
 
     def __init__(
         self,
