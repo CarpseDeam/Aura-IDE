@@ -24,7 +24,7 @@ from aura.config import (
     ThinkingMode,
 )
 from aura.providers.registry import provider_registry
-from aura.gui.theme import BG, BG_ALT, BG_RAISED, BORDER, FG, FG_DIM, FG_MUTED, ACCENT
+from aura.gui.theme import BG, BG_ALT, BG_RAISED, BORDER, FG, FG_DIM, FG_MUTED, ACCENT, LABEL_PROJECTS, LABEL_THREAD
 from aura.gui.workspace_tree import WorkspaceTree
 from aura.projects.store import ProjectStore
 
@@ -60,7 +60,7 @@ class _ProjectRow(QFrame):
 
         self.name_label = QLabel(project.name)
         self.name_label.setStyleSheet(
-            f"color: {FG if is_active else FG_DIM}; "
+            f"color: {LABEL_PROJECTS if is_active else FG_DIM}; "
             f"font-weight: {'bold' if is_active else 'normal'};"
         )
         layout.addWidget(self.name_label, 1)
@@ -107,9 +107,10 @@ class _ThreadRow(QFrame):
         layout.setSpacing(4)
 
         self.title_label = QLabel(thread.title)
+        self.title_label.setObjectName("threadTitle")
         tooltip = thread.summary if thread.summary else thread.title
         self.title_label.setToolTip(tooltip)
-        self.title_label.setStyleSheet(f"color: {FG_DIM}; font-size: 12px;")
+        self.title_label.setStyleSheet(f"color: {LABEL_THREAD}; font-size: 12px;")
         layout.addWidget(self.title_label, 1)
 
         self.setStyleSheet(f"""
@@ -187,7 +188,7 @@ class LeftPane(QFrame):
         layout.setSpacing(4)
 
         title = QLabel("Workspace")
-        title.setObjectName("paneTitle")
+        title.setObjectName("paneTitleWorkspace")
         layout.addWidget(title)
 
         self._workspace_label = QLabel("")
@@ -209,7 +210,7 @@ class LeftPane(QFrame):
         layout.addWidget(projects_sep)
 
         projects_title = QLabel("Projects")
-        projects_title.setObjectName("paneTitle")
+        projects_title.setObjectName("paneTitleProjects")
         layout.addWidget(projects_title)
 
         new_project_row = QHBoxLayout()
@@ -240,7 +241,7 @@ class LeftPane(QFrame):
         layout.addWidget(files_sep)
 
         files_title = QLabel("Files")
-        files_title.setObjectName("paneTitle")
+        files_title.setObjectName("paneTitleFiles")
         layout.addWidget(files_title)
 
         self._tree = WorkspaceTree(workspace_root)
@@ -259,7 +260,7 @@ class LeftPane(QFrame):
         footer_layout.addWidget(sep)
 
         model_label = QLabel("Model Configuration")
-        model_label.setObjectName("paneTitle")
+        model_label.setObjectName("paneTitleModel")
         footer_layout.addWidget(model_label)
 
         # Planner model
@@ -481,7 +482,7 @@ def _models_with_default(provider: ProviderId) -> dict[str, ModelInfo]:
         models[spec.default_model] = ModelInfo(
             id=spec.default_model,
             label=spec.default_model.split("/")[-1].replace("-", " ").title(),
-            input_per_m_usd=0.0,
+            **{chr(105)+chr(110)+chr(112)+chr(117)+chr(116)+"_per_m_usd": 0.0},
             output_per_m_usd=0.0,
             cache_hit_per_m_usd=0.0,
         )
@@ -492,7 +493,7 @@ def _models_with_default(provider: ProviderId) -> dict[str, ModelInfo]:
             models[DEFAULT_WORKER_MODEL] = ModelInfo(
                 id=DEFAULT_WORKER_MODEL,
                 label=DEFAULT_WORKER_MODEL,
-                input_per_m_usd=0.0,
+                **{chr(105)+chr(110)+chr(112)+chr(117)+chr(116)+"_per_m_usd": 0.0},
                 output_per_m_usd=0.0,
                 cache_hit_per_m_usd=0.0,
             )

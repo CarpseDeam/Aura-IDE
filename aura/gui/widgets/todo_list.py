@@ -43,18 +43,12 @@ def normalize_todo_tasks(tasks: list[Any]) -> list[dict[str, Any]]:
             else:
                 status = "pending"
 
-            normalized.append({
-                "description": desc,
-                "status": status
-            })
+            normalized.append({"description": desc, "status": status})
         elif isinstance(t, str):
             desc_str: str = t
             if len(desc_str) > 220:
                 desc_str = desc_str[:217] + "..."
-            normalized.append({
-                "description": desc_str,
-                "status": "pending"
-            })
+            normalized.append({"description": desc_str, "status": "pending"})
 
     return normalized
 
@@ -66,11 +60,7 @@ class TodoListWidget(QFrame):
         super().__init__(parent)
         self.setObjectName("todoListWidget")
         self.setStyleSheet(
-            f"QFrame#todoListWidget {{"
-            f"  background: {BG};"
-            f"  border-bottom: 1px solid {BORDER};"
-            f"  padding: 0;"
-            f"}}"
+            f"QFrame#todoListWidget {{  background: {BG};  border-bottom: 1px solid {BORDER};  padding: 0;}}"
         )
 
         outer = QVBoxLayout(self)
@@ -78,7 +68,7 @@ class TodoListWidget(QFrame):
         outer.setSpacing(4)
 
         header = QLabel("TODO LIST", self)
-        header.setObjectName("paneTitle")
+        header.setObjectName("paneTitleTodo")
         header.setStyleSheet("padding: 0 0 4px 0;")
         outer.addWidget(header)
 

@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from aura.gui.theme import LABEL_DISPATCH, LABEL_APPROVE, LABEL_READ_ONLY
 from aura.config import media_path
 from aura.gui.widgets.glass_switch import GlassSwitch
 
@@ -76,13 +77,13 @@ class MainWindowToolbar(QToolBar):
         self.addWidget(_toolbar_separator())
 
         # Group 3: auto toggles
-        self._auto_dispatch_switch = GlassSwitch("Dispatch", self._settings.auto_dispatch, vertical=True)
+        self._auto_dispatch_switch = GlassSwitch("Dispatch", self._settings.auto_dispatch, vertical=True, accent_color=LABEL_DISPATCH)
         self._auto_dispatch_switch.toggled.connect(self.auto_dispatch_toggled.emit)
         self.addWidget(self._auto_dispatch_switch)
 
         self.addWidget(_toolbar_separator())
 
-        self._auto_approve_switch = GlassSwitch("Approve", self._settings.auto_approve, vertical=True)
+        self._auto_approve_switch = GlassSwitch("Approve", self._settings.auto_approve, vertical=True, accent_color=LABEL_APPROVE)
         self._auto_approve_switch.toggled.connect(self.auto_approve_toggled.emit)
         self.addWidget(self._auto_approve_switch)
         self.refresh_auto_toggle_tooltips()
@@ -134,10 +135,12 @@ class MainWindowToolbar(QToolBar):
         if checked:
             self._read_only_btn.setText("Read-Only")
             self._read_only_btn.setToolTip("Read-only mode is ON — files cannot be edited")
+            self._read_only_btn.setStyleSheet(f"color: {LABEL_READ_ONLY};")
             self._read_only_badge.setText("READ-ONLY")
         else:
             self._read_only_btn.setText("Read Only")
             self._read_only_btn.setToolTip("Toggle read-only mode to prevent file edits")
+            self._read_only_btn.setStyleSheet("")
             self._read_only_badge.setText("")
 
     def _on_read_only_toggled(self, checked: bool) -> None:

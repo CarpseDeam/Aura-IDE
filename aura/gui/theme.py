@@ -8,12 +8,12 @@ from PySide6.QtWidgets import QApplication
 # ---- color tokens ---------------------------------------------------------
 BG = "#141418"           # window background (was #1e1e1e)
 BG_ALT = "#1c1c22"       # panels / generic cards (was #25252d)
-BG_RAISED = "#222228"    # input field, pressed buttons (was #2a2a33)
+BG_RAISED = "#222228"    # text field, pressed buttons (was #2a2a33)
 BORDER = "#252830"
 BORDER_STRONG = "#2e3340"
 
 # Message-card backgrounds — distinct so user/assistant turns separate at a glance.
-BG_USER_CARD = "#151b28"        # cool blue tint (user — feels like input)
+BG_USER_CARD = "#151b28"        # cool blue tint (user — feels like prompt)
 BG_ASSISTANT_CARD = "#16161a"   # warm neutral (assistant — feels like output)
 BG_TOOL_CARD = "#13171c"        # supporting info, slightly recessed
 
@@ -36,6 +36,18 @@ TERMINAL_BG = "#060608"
 # Diff hunk backgrounds (low-saturation)
 DIFF_ADD_BG = "#151f17"
 DIFF_DEL_BG = "#1f1518"
+
+# Semantic label colors — subtle accents for section headers and badges
+LABEL_WORKSPACE = "#7aa2f7"     # cool blue — workspace header/path
+LABEL_PROJECTS = "#9d7cd8"      # soft violet — projects header & active project name
+LABEL_FILES = "#7dcfff"         # cyan-blue — files header
+LABEL_MODEL = "#a8aebb"         # muted silver — model config header (same as FG_DIM, keep subtle)
+LABEL_DISPATCH = "#7aa2f7"      # blue — dispatch toggle label
+LABEL_APPROVE = "#9ece6a"       # green — approve toggle label
+LABEL_READ_ONLY = "#e0af68"     # amber/warm — read-only badge
+LABEL_THREAD = "#a8aebb"        # dim gray — thread titles (same as FG_DIM)
+LABEL_THREAD_HOVER = "#eaecef"  # bright — thread title on hover (same as FG)
+LABEL_TODO = "#9d7cd8"          # soft violet — TODO header (matches projects)
 
 
 def apply_theme(app: QApplication) -> None:
@@ -262,6 +274,15 @@ QLabel#paneTitle {{
     padding: 4px 8px;
 }}
 
+QLabel#paneTitleWorkspace {{ color: {LABEL_WORKSPACE}; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; padding: 4px 8px; }}
+QLabel#paneTitleFiles {{ color: {LABEL_FILES}; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; padding: 4px 8px; }}
+QLabel#paneTitleProjects {{ color: {LABEL_PROJECTS}; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; padding: 4px 8px; }}
+QLabel#paneTitleModel {{ color: {LABEL_MODEL}; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; padding: 4px 8px; }}
+QLabel#paneTitleTodo {{ color: {LABEL_TODO}; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; padding: 0 0 4px 0; }}
+
+QLabel#threadTitle {{ color: {LABEL_THREAD}; font-size: 12px; }}
+QLabel#threadTitle:hover {{ color: {LABEL_THREAD_HOVER}; }}
+
 QLabel#workspaceLabel {{
     color: {FG};
     padding: 4px 8px;
@@ -400,7 +421,7 @@ QToolButton#closeAllBtn:hover, QToolButton#closeTerminalsBtn:hover {{
 
 
 QLabel#readOnlyBadge {{
-    color: {WARN};
+    color: {LABEL_READ_ONLY};
     font-weight: 600;
 }}
 

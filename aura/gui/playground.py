@@ -39,7 +39,7 @@ class AuraPlayground(QWidget):
         header_layout.setSpacing(8)
 
         header_label = QLabel("WORKSPACE", self)
-        header_label.setObjectName("paneTitle")
+        header_label.setObjectName("paneTitleWorkspace")
         header_layout.addWidget(header_label)
 
         header_layout.addStretch(1)
