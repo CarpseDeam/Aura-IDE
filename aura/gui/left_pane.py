@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QScrollArea,
     QWidget,
+    QToolButton,
 )
 
 from aura.config import (
@@ -28,19 +29,34 @@ from aura.gui.workspace_tree import WorkspaceTree
 from aura.projects.store import ProjectStore
 
 
+class _ToggleToolButton(QToolButton):
+    def mousePressEvent(self, event) -> None:
+        event.accept()
+        super().mousePressEvent(event)
+
+
 class _ProjectRow(QFrame):
     clicked = Signal(Path)
+    collapse_toggled = Signal(str)
 
     def __init__(self, project, is_active: bool, parent=None) -> None:
         super().__init__(parent)
         self.project = project
         self.is_active = is_active
+        self._collapsed = False
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFixedHeight(32)
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 0, 8, 0)
         layout.setSpacing(4)
+
+        self.toggle_btn = _ToggleToolButton(self)
+        self.toggle_btn.setObjectName("sectionToggle")
+        self.toggle_btn.setFixedWidth(16)
+        self.toggle_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.toggle_btn.clicked.connect(self._on_toggle_clicked)
+        layout.addWidget(self.toggle_btn)
 
         self.name_label = QLabel(project.name)
         self.name_label.setStyleSheet(
@@ -60,6 +76,14 @@ class _ProjectRow(QFrame):
                 background-color: {BG_RAISED};
             }}
         """)
+
+    def set_collapsed(self, collapsed: bool) -> None:
+        self._collapsed = collapsed
+        caret = "\u25b8" if collapsed else "\u25be"  # ▸ vs ▾
+        self.toggle_btn.setText(caret)
+
+    def _on_toggle_clicked(self) -> None:
+        self.collapse_toggled.emit(self.project.id)
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
@@ -156,6 +180,7 @@ class LeftPane(QFrame):
 
         self._last_workspace_root = workspace_root
         self._show_all_active_threads = False
+        self._project_collapsed: dict[str, bool] = {}
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 8, 0, 8)
@@ -374,6 +399,7 @@ class LeftPane(QFrame):
         if workspace_root != self._last_workspace_root:
             self._show_all_active_threads = False
             self._last_workspace_root = workspace_root
+            self._project_collapsed = {}
 
         self._clear_projects_layout()
 
@@ -407,9 +433,11 @@ class LeftPane(QFrame):
 
             row = _ProjectRow(project, is_active, parent=self._projects_container)
             row.clicked.connect(self.project_selected.emit)
+            row.collapse_toggled.connect(self._on_project_collapse_toggled)
+            row.set_collapsed(self._project_collapsed.get(project.id, False))
             self._projects_layout.addWidget(row)
 
-            if is_active:
+            if is_active and not self._project_collapsed.get(project.id, False):
                 try:
                     threads = store.list_threads(project, include_archived=False)
                 except Exception:
@@ -438,6 +466,11 @@ class LeftPane(QFrame):
 
     def _on_show_more_clicked(self) -> None:
         self._show_all_active_threads = True
+        self.refresh_projects(self._last_workspace_root)
+
+    @Slot(str)
+    def _on_project_collapse_toggled(self, project_id: str) -> None:
+        self._project_collapsed[project_id] = not self._project_collapsed.get(project_id, False)
         self.refresh_projects(self._last_workspace_root)
 
 
