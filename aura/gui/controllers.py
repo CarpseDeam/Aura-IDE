@@ -132,11 +132,11 @@ class ToolStreamController(QObject):
                 if self._tool_name == "run_research" and content != self._goal:
                     self.goal_updated.emit(content)
 
-            # Update tasks for update_todo_list (Disabled: final-result-only stabilization)
-            # if self._tool_name == "update_todo_list":
-            #     tasks = parsed.get("tasks")
-            #     if isinstance(tasks, list):
-            #         self.todo_updated.emit(tasks)
+            # Update tasks for update_todo_list
+            if self._tool_name == "update_todo_list":
+                tasks = parsed.get("tasks")
+                if isinstance(tasks, list):
+                    self.todo_updated.emit(tasks)
 
         except json.JSONDecodeError:
             # Buffer is still incomplete JSON — emit raw buffer for now
@@ -169,14 +169,14 @@ class ToolStreamController(QObject):
                     self._last_content = content
                     self.content_updated.emit(content)
 
-            # Partial task extraction for update_todo_list (Disabled: final-result-only stabilization)
-            # if self._tool_name == "update_todo_list":
-            #     now = time.monotonic()
-            #     if now - self._last_todo_emit >= self._TODO_THROTTLE:
-            #         tasks = self._extract_partial_tasks()
-            #         if tasks is not None:
-            #             self._last_todo_emit = now
-            #             self.todo_updated.emit(tasks)
+            # Partial task extraction for update_todo_list
+            if self._tool_name == "update_todo_list":
+                now = time.monotonic()
+                if now - self._last_todo_emit >= self._TODO_THROTTLE:
+                    tasks = self._extract_partial_tasks()
+                    if tasks is not None:
+                        self._last_todo_emit = now
+                        self.todo_updated.emit(tasks)
 
     def _extract_partial_string(self, key: str) -> str | None:
         """Surgically extract a JSON string value from the buffer, handling escapes."""
@@ -271,8 +271,36 @@ class ToolStreamController(QObject):
                     except json.JSONDecodeError:
                         pass
                     obj_start = None
-            elif ch == ']' and depth == 0:
-                break
+            elif ch == ']':
+                # We reached the end of the array, but check depth to be safe
+                if depth == 0:
+                    break
+
+        # If we have an open object, try to extract its partial description
+        if depth > 0 and obj_start is not None:
+            partial_obj = self._buffer[obj_start:]
+            for key in ("description", "content", "text", "task"):
+                m_key = re.search(r'"' + key + r'"\s*:\s*"', partial_obj)
+                if m_key:
+                    start_idx = m_key.end()
+                    raw_tail = partial_obj[start_idx:]
+                    content_chars = []
+                    esc = False
+                    for c in raw_tail:
+                        if esc:
+                            if c == 'n': content_chars.append('\n')
+                            elif c == 't': content_chars.append('\t')
+                            elif c == 'r': content_chars.append('\r')
+                            else: content_chars.append(c)
+                            esc = False
+                        elif c == '\\':
+                            esc = True
+                        elif c == '"':
+                            break
+                        else:
+                            content_chars.append(c)
+                    tasks.append({"description": "".join(content_chars), "status": "pending"})
+                    break
 
         return tasks if tasks else None
 

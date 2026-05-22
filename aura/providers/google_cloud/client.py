@@ -248,10 +248,10 @@ class GoogleCloudClient:
                             # Simulate streaming for the TODO list to give the user 
                             # the same visual "typing out" feedback as other models.
                             import time
-                            chunk_size = 15
+                            chunk_size = 5
                             for i in range(0, len(args_str), chunk_size):
                                 yield ToolCallArgsDelta(index=idx, args_chunk=args_str[i:i+chunk_size])
-                                time.sleep(0.02)
+                                time.sleep(0.01)
                         else:
                             yield ToolCallArgsDelta(index=idx, args_chunk=args_str)
                             
