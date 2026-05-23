@@ -252,7 +252,7 @@ def create_nuitka_command(
         "--clean-cache=all",
         "--assume-yes-for-downloads",
         "--python-flag=-m",
-        "--nofollow-import-to=google.genai",
+        "--nofollow-import-to=google",
         "--lto=no",
     ]
     if low_memory:

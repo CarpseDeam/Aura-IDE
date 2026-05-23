@@ -141,6 +141,40 @@ class GoogleCloudClient:
         if thinking == "off":
             config_kwargs["temperature"] = temperature
 
+        # Prevent premature model termination by using maximum allowed output tokens and disabling safety blocks on code contents
+        config_kwargs["max_output_tokens"] = 8192
+        try:
+            config_kwargs["safety_settings"] = [
+                genai.types.SafetySetting(
+                    category=genai.types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+                    threshold=genai.types.HarmBlockThreshold.BLOCK_NONE,
+                ),
+                genai.types.SafetySetting(
+                    category=genai.types.HarmCategory.HARM_CATEGORY_HARASSMENT,
+                    threshold=genai.types.HarmBlockThreshold.BLOCK_NONE,
+                ),
+                genai.types.SafetySetting(
+                    category=genai.types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+                    threshold=genai.types.HarmBlockThreshold.BLOCK_NONE,
+                ),
+                genai.types.SafetySetting(
+                    category=genai.types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+                    threshold=genai.types.HarmBlockThreshold.BLOCK_NONE,
+                ),
+            ]
+            # Try to add civic integrity category if supported by this SDK version
+            try:
+                config_kwargs["safety_settings"].append(
+                    genai.types.SafetySetting(
+                        category=genai.types.HarmCategory.HARM_CATEGORY_CIVIC_INTEGRITY,
+                        threshold=genai.types.HarmBlockThreshold.BLOCK_NONE,
+                    )
+                )
+            except AttributeError:
+                pass
+        except AttributeError:
+            pass
+
         config = genai.types.GenerateContentConfig(**config_kwargs)
 
         # State accumulators
@@ -191,7 +225,7 @@ class GoogleCloudClient:
                     finish_reason = candidate.finish_reason
 
                 content = getattr(candidate, "content", None)
-                if content is None or not hasattr(content, "parts"):
+                if content is None or not hasattr(content, "parts") or content.parts is None:
                     continue
 
                 for part in content.parts:

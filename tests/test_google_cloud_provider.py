@@ -1033,3 +1033,41 @@ def test_settings_dialog_with_missing_google_cloud_project(
         qapp.processEvents()
 
     mock_fetch.assert_not_called()
+
+
+def test_stream_and_mapping_handle_none_parts() -> None:
+    from unittest.mock import MagicMock, patch
+    from aura.providers.google_cloud.client import GoogleCloudClient
+    from aura.providers.google_cloud.mapping import google_response_to_events
+
+    # Test mapping.py
+    candidate_mock = MagicMock()
+    candidate_mock.finish_reason = None
+    candidate_mock.content.parts = None  # None parts!
+
+    chunk = MagicMock()
+    chunk.candidates = [candidate_mock]
+
+    events = google_response_to_events(chunk, [], [], {}, set())
+    assert events == []
+
+    # Test client.py stream handles None parts
+    fake_client_mock = MagicMock()
+    fake_client_mock.models.generate_content_stream.return_value = [chunk]
+
+    client = GoogleCloudClient(project="test")
+
+    with patch.object(client, "_get_client", return_value=fake_client_mock):
+        stream_events = list(
+            client.stream(
+                messages=[{"role": "user", "content": "hello"}],
+                tools=None,
+                model="gemini-2.0-flash-001",
+                thinking="off",
+            )
+        )
+    # Stream should complete successfully with Done event
+    from aura.client.events import Done
+    done_event = next((e for e in stream_events if isinstance(e, Done)), None)
+    assert done_event is not None
+

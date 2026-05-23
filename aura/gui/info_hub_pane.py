@@ -159,12 +159,19 @@ class InfoHubPane(QWidget):
     # ------------------------------------------------------------------
 
     def _on_log_tick(self) -> None:
-        """Reveal 2 more characters of the log buffer."""
+        """Reveal more characters of the log buffer."""
         if len(self._log_visible) >= len(self._log_buffer):
             self._log_timer.stop()
             return
-        self._log_visible = self._log_buffer[:len(self._log_visible) + 2]
-        self._log_view.setPlainText(self._log_visible)
+            
+        chunk_size = 16
+        next_chunk = self._log_buffer[len(self._log_visible):len(self._log_visible) + chunk_size]
+        self._log_visible += next_chunk
+        
+        cursor = self._log_view.textCursor()
+        cursor.movePosition(cursor.MoveOperation.End)
+        self._log_view.setTextCursor(cursor)
+        self._log_view.insertPlainText(next_chunk)
 
         # Auto-scroll to bottom
         sb = self._log_view.verticalScrollBar()
@@ -173,8 +180,15 @@ class InfoHubPane(QWidget):
     def _flush_log(self) -> None:
         """Immediately reveal all buffered log text."""
         self._log_timer.stop()
-        self._log_visible = self._log_buffer
-        self._log_view.setPlainText(self._log_visible)
+        if len(self._log_visible) < len(self._log_buffer):
+            remaining = self._log_buffer[len(self._log_visible):]
+            self._log_visible = self._log_buffer
+            
+            cursor = self._log_view.textCursor()
+            cursor.movePosition(cursor.MoveOperation.End)
+            self._log_view.setTextCursor(cursor)
+            self._log_view.insertPlainText(remaining)
+            
         sb = self._log_view.verticalScrollBar()
         sb.setValue(sb.maximum())
 

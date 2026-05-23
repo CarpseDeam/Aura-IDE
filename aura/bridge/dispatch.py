@@ -310,7 +310,9 @@ class _DispatchProxy(QObject):
                 "Worker final report claims a blocker, failed validation, failed acceptance, "
                 "or unverified acceptance."
             )
-        if req.acceptance.strip() and not _final_report_claims_validation(final_report):
+        is_partial = bool(continuation.get("status") == "needs_followup" or continuation.get("remaining"))
+        claimed_validation = _final_report_claims_validation(final_report) or bool(continuation.get("validation_text"))
+        if req.acceptance.strip() and not is_partial and not claimed_validation:
             result_caveats.append(
                 "Worker final report did not clearly mention validation or acceptance verification."
             )

@@ -207,7 +207,7 @@ def google_response_to_events(
     candidate = response_chunks.candidates[0]
 
     content = getattr(candidate, "content", None)
-    if content is None or not hasattr(content, "parts"):
+    if content is None or not hasattr(content, "parts") or content.parts is None:
         return events
 
     for part in content.parts:
