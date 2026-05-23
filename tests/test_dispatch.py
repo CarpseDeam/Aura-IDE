@@ -8,9 +8,7 @@ from aura.conversation.dispatch import (
 )
 
 
-# ---------------------------------------------------------------------------
 # WorkerDispatchRequest
-# ---------------------------------------------------------------------------
 
 def test_dispatch_request_to_from_dict_roundtrip():
     original = WorkerDispatchRequest(
@@ -48,9 +46,7 @@ def test_dispatch_request_from_dict_files_with_non_strings():
     assert req.files == ["123", "None", "ok.py"]
 
 
-# ---------------------------------------------------------------------------
 # WorkerDispatchResult
-# ---------------------------------------------------------------------------
 
 def test_dispatch_result_success():
     result = WorkerDispatchResult(ok=True, summary="Done.", cancelled=False)
@@ -128,9 +124,7 @@ def test_dispatch_result_from_legacy_payload():
     assert restored.completed == []
 
 
-# ---------------------------------------------------------------------------
 # Structured fields roundtrips
-# ---------------------------------------------------------------------------
 
 
 def test_dispatch_request_structured_fields_roundtrip():
@@ -146,6 +140,7 @@ def test_dispatch_request_structured_fields_roundtrip():
         validation_commands=["pytest tests/ -x"],
         risk_notes=["auth is critical"],
         non_goals=["rewrite from scratch"],
+        expected_dataclass_fields={"MyClass": ["a", "b"]},
     )
     data = original.to_dict()
     restored = WorkerDispatchRequest.from_dict(data)
@@ -160,10 +155,11 @@ def test_dispatch_request_structured_fields_roundtrip():
     assert restored.validation_commands == original.validation_commands
     assert restored.risk_notes == original.risk_notes
     assert restored.non_goals == original.non_goals
+    assert restored.expected_dataclass_fields == {"MyClass": ["a", "b"]}
 
 
 def test_dispatch_request_structured_fields_default_to_empty():
-    """Missing structured fields should default to empty lists."""
+    """Missing structured fields should default to empty lists/dicts."""
     req = WorkerDispatchRequest.from_dict(
         {"goal": "x", "files": [], "spec": "", "acceptance": ""}
     )
@@ -173,10 +169,11 @@ def test_dispatch_request_structured_fields_default_to_empty():
     assert req.validation_commands == []
     assert req.risk_notes == []
     assert req.non_goals == []
+    assert req.expected_dataclass_fields == {}
 
 
 def test_dispatch_request_structured_fields_not_list():
-    """Non-list structured fields should default to empty lists."""
+    """Non-list structured fields should default to empty lists/dicts."""
     req = WorkerDispatchRequest.from_dict(
         {
             "goal": "x",
@@ -196,9 +193,40 @@ def test_dispatch_request_structured_fields_not_list():
     assert req.non_goals == []
 
 
-# ---------------------------------------------------------------------------
+def test_dispatch_request_expected_dataclass_fields_dict():
+    """expected_dataclass_fields as dict roundtrips correctly."""
+    req = WorkerDispatchRequest.from_dict(
+        {
+            "goal": "x",
+            "expected_dataclass_fields": {"MyModel": ["id", "name"]},
+        }
+    )
+    assert req.expected_dataclass_fields == {"MyModel": ["id", "name"]}
+
+
+def test_dispatch_request_expected_dataclass_fields_list_old_format():
+    """expected_dataclass_fields as list (old format) degrades to {}."""
+    req = WorkerDispatchRequest.from_dict(
+        {
+            "goal": "x",
+            "expected_dataclass_fields": ["a", "b"],
+        }
+    )
+    assert req.expected_dataclass_fields == {}
+
+
+def test_dispatch_request_expected_dataclass_fields_none():
+    """expected_dataclass_fields as None degrades to {}."""
+    req = WorkerDispatchRequest.from_dict(
+        {
+            "goal": "x",
+            "expected_dataclass_fields": None,
+        }
+    )
+    assert req.expected_dataclass_fields == {}
+
+
 # normalize_worker_task
-# ---------------------------------------------------------------------------
 
 from aura.conversation.dispatch import normalize_worker_task, WorkerTaskSpec
 
@@ -243,7 +271,7 @@ def test_normalize_worker_task_non_goals_explicit():
 
 
 def test_normalize_worker_task_structured_fields():
-    """allowed_responsibilities, forbidden_responsibilities, required_outputs, risk_notes forwarded."""
+    """allowed_responsibilities, forbidden_responsibilities, required_outputs, risk_notes, expected_dataclass_fields forwarded."""
     req = WorkerDispatchRequest(
         goal="Do things",
         files=["x.py"],
@@ -253,9 +281,12 @@ def test_normalize_worker_task_structured_fields():
         forbidden_responsibilities=["new files"],
         required_outputs=["x.py"],
         risk_notes=["breaks easily"],
+        expected_dataclass_fields={"MyClass": ["a"]},
     )
     spec = normalize_worker_task(req)
     assert spec.allowed_responsibilities == ["editing"]
     assert spec.forbidden_responsibilities == ["new files"]
     assert spec.required_outputs == ["x.py"]
     assert spec.risk_notes == ["breaks easily"]
+    assert spec.contract is not None
+    assert spec.contract.expected_dataclass_fields == {"MyClass": ["a"]}

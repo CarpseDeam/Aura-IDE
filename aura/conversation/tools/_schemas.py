@@ -533,11 +533,15 @@ DISPATCH_TOOL_DEF: dict[str, Any] = {
                     ),
                 },
                 "expected_dataclass_fields": {
-                    "type": "array",
-                    "items": {"type": "string"},
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
                     "description": (
-                        "Specific field names that must exist on dataclass definitions, "
-                        "e.g. ['id', 'name', 'created_at']. The ContractGate will verify these fields are present."
+                        "A mapping from class names to lists of required dataclass field names, "
+                        "e.g. {'WorkerDispatchRequest': ['goal', 'files', 'spec']}. "
+                        "The ContractGate will verify these fields exist on the corresponding dataclass."
                     ),
                 },
                 "forbidden_public_methods": {

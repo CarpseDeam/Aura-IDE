@@ -29,7 +29,7 @@ class WorkerDispatchRequest:
     risk_notes: list[str] = field(default_factory=list)
     non_goals: list[str] = field(default_factory=list)
     expected_public_symbols: list[str] = field(default_factory=list)
-    expected_dataclass_fields: list[str] = field(default_factory=list)
+    expected_dataclass_fields: dict[str, list[str]] = field(default_factory=dict)
     forbidden_public_methods: list[str] = field(default_factory=list)
     forbidden_calls: list[str] = field(default_factory=list)
     contract: ExplicitSpecContract | None = None
@@ -48,7 +48,7 @@ class WorkerDispatchRequest:
             "risk_notes": list(self.risk_notes),
             "non_goals": list(self.non_goals),
             "expected_public_symbols": list(self.expected_public_symbols),
-            "expected_dataclass_fields": list(self.expected_dataclass_fields),
+            "expected_dataclass_fields": dict(self.expected_dataclass_fields),
             "forbidden_public_methods": list(self.forbidden_public_methods),
             "forbidden_calls": list(self.forbidden_calls),
             "contract": self.contract.to_dict() if self.contract else None,
@@ -72,7 +72,7 @@ class WorkerDispatchRequest:
             risk_notes=_string_list(data.get("risk_notes")),
             non_goals=_string_list(data.get("non_goals")),
             expected_public_symbols=_string_list(data.get("expected_public_symbols")),
-            expected_dataclass_fields=_string_list(data.get("expected_dataclass_fields")),
+            expected_dataclass_fields=_string_dict_list(data.get("expected_dataclass_fields")),
             forbidden_public_methods=_string_list(data.get("forbidden_public_methods")),
             forbidden_calls=_string_list(data.get("forbidden_calls")),
             contract=ExplicitSpecContract.from_dict(data["contract"]) if data.get("contract") else None,
@@ -212,6 +212,23 @@ def _string_list(value: Any) -> list[str]:
     return [str(item) for item in value]
 
 
+def _string_dict_list(value: Any) -> dict[str, list[str]]:
+    """Safely coerce expected_dataclass_fields to dict[str, list[str]].
+    
+    If value is a dict, normalizes each value to list[str].
+    If value is a list (old format) or None/missing, returns {}.
+    """
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, list[str]] = {}
+    for key, val in value.items():
+        if isinstance(val, list):
+            result[str(key)] = [str(v) for v in val]
+        else:
+            result[str(key)] = []
+    return result
+
+
 def _extract_validation_commands(text: str) -> list[str]:
     """Extract validation commands from acceptance text.
 
@@ -289,7 +306,7 @@ def normalize_worker_task(req: WorkerDispatchRequest) -> WorkerTaskSpec:
 
     contract = ExplicitSpecContract(
         expected_public_symbols=list(req.expected_public_symbols),
-        expected_dataclass_fields=list(req.expected_dataclass_fields),
+        expected_dataclass_fields={k: list(v) for k, v in req.expected_dataclass_fields.items()},
         forbidden_public_methods=list(req.forbidden_public_methods),
         forbidden_calls=list(req.forbidden_calls),
         required_outputs=list(req.required_outputs),

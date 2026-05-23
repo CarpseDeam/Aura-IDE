@@ -253,7 +253,7 @@ Optional structured fields (all list[str]):
 - `risk_notes`: realistic failure/security/integration risks
 - `non_goals`: things not to build
 - `expected_public_symbols`: names of public symbols (classes, functions, constants) the Worker must define
-- `expected_dataclass_fields`: specific field names that must exist on dataclass definitions
+- `expected_dataclass_fields`: a dict mapping class names to lists of required field names on dataclass definitions, e.g. `{"WorkerDispatchRequest": ["goal", "files", "spec"]}`
 - `forbidden_public_methods`: method names the Worker must not introduce on public classes
 - `forbidden_calls`: function call names the Worker must not use (e.g. 'print', 'eval')
 
