@@ -47,20 +47,21 @@ def test_worker_log_flush(qapp) -> None:
 
 def test_worker_log_reveals_in_chunks(qapp) -> None:
     pane = InfoHubPane()
-    # Feed text longer than one reveal chunk (16 chars)
+    chunk = pane._LOG_REVEAL_CHARS_PER_TICK
+    # Feed text longer than one reveal chunk
     long_text = "Hello World, this is a very long text that should span multiple ticks."
-    assert len(long_text) > 16
+    assert len(long_text) > chunk
     pane.append_content(long_text)
 
-    # After first tick, only first 16 chars should be visible
+    # After first tick, only first chunk chars should be visible
     pane._on_log_tick()
-    expected_first = long_text[:16]
+    expected_first = long_text[:chunk]
     assert pane._log_visible == expected_first, f"Expected '{expected_first}', got '{pane._log_visible}'"
     assert pane._log_view.toPlainText() == expected_first
 
     # After second tick, next chunk appended, previous text preserved
     pane._on_log_tick()
-    expected_second = long_text[:32]
+    expected_second = long_text[: chunk * 2]
     assert pane._log_visible == expected_second, f"Expected '{expected_second}', got '{pane._log_visible}'"
     assert pane._log_view.toPlainText() == expected_second
 

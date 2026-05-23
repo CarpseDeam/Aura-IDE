@@ -253,6 +253,10 @@ def create_nuitka_command(
         "--assume-yes-for-downloads",
         "--python-flag=-m",
         "--nofollow-import-to=google",
+        "--nofollow-import-to=libcst",
+        "--nofollow-import-to=numpy",
+        "--nofollow-import-to=scipy",
+        "--nofollow-import-to=pytest",
         "--lto=no",
     ]
     if low_memory:
@@ -356,6 +360,19 @@ def build(
             shutil.copytree(google_genai_path, target_genai_dir)
     except ImportError:
         print("Warning: google-genai is not installed in the environment, skipping manual bundle.")
+
+    # Copy libcst as pure Python files to avoid Nuitka compilation hang/crash
+    try:
+        import libcst
+        libcst_path: Path = Path(libcst.__file__).resolve().parent
+        if libcst_path.exists():
+            target_libcst_dir: Path = final_dist_dir / "libcst"
+            print(f"Bundling libcst as raw source: {libcst_path} -> {target_libcst_dir}")
+            if target_libcst_dir.exists():
+                shutil.rmtree(target_libcst_dir)
+            shutil.copytree(libcst_path, target_libcst_dir)
+    except ImportError:
+        print("Warning: libcst is not installed in the environment, skipping manual bundle.")
 
     zip_path = zip_distribution(root, final_dist_dir)
     if copy_desktop:

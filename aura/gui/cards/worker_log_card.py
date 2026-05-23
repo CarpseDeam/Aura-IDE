@@ -50,6 +50,9 @@ class WorkerLogCard(QFrame):
             return
         delta = self._full[len(self._visible):len(self._visible) + self._REVEAL_CHUNK]
         self._visible += delta
+        cursor = self._content_view.textCursor()
+        cursor.movePosition(cursor.MoveOperation.End)
+        self._content_view.setTextCursor(cursor)
         self._content_view.insertPlainText(delta)
         h = self._content_view.document().size().height() + 15
         self._content_view.setFixedHeight(int(max(120, min(h, 600))))
