@@ -1,6 +1,8 @@
 """Chat transcript: scrollable column of message cards."""
 from __future__ import annotations
 
+import json
+
 from PySide6.QtCore import QEasingCurve, QEvent, QPropertyAnimation, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -434,7 +436,7 @@ class ChatView(QScrollArea):
         self._scroll_to_bottom()
 
     def append_tool_args(self, tool_call_id: str, fragment: str) -> None:
-        if self._compact_tools:
+        if self._compact_tools and tool_call_id in self._compact_tool_names:
             return
         controller = self._controllers.get(tool_call_id)
         if controller:

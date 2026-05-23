@@ -126,3 +126,38 @@ def test_removes_plan_writer_card_on_worker_summary(qapp) -> None:
     chat.add_worker_summary("dispatch-1", "goal", True, "done")
     assert len(chat.findChildren(PlanWriterCard)) == 0
     assert len(chat._plan_writer_cards) == 0
+
+
+def test_compact_mode_hides_generic_tools(qapp) -> None:
+    chat = ChatView()
+    chat.set_compact_tools(True)
+    chat.begin_assistant()
+
+    chat.add_tool_call("tool-1", "read_file")
+    chat.append_tool_args("tool-1", '{"path": "f.py"}')
+    chat.set_tool_result("tool-1", True, "content")
+
+    assert chat.findChildren(ToolCallCard) == []
+    assert "tool-1" not in chat._compact_tool_names
+
+
+def test_compact_mode_streams_heavy_tools(qapp) -> None:
+    chat = ChatView()
+    chat.set_compact_tools(True)
+    chat.begin_assistant()
+
+    chat.add_tool_call("dispatch-1", "dispatch_to_worker")
+    chat.append_tool_args("dispatch-1", '{"goal": "Fix it", "spec": "Verify with tests"}')
+
+    cards = chat.findChildren(PlanWriterCard)
+    assert len(cards) == 1
+    card = cards[0]
+
+    # Assert that the PlanWriterCard received streamed goal and spec updates
+    assert card._goal == "Fix it"
+    assert card._latest_spec == "Verify with tests"
+    assert "Goal: Fix it" in card.toolTip()
+    assert "Verify with tests" in card.toolTip()
+
+    controller = chat._controllers["dispatch-1"]
+    assert controller.goal == "Fix it"
