@@ -61,6 +61,7 @@ from aura.conversation import (
     ConversationManager,
     History,
 )
+from aura.conversation.tool_limits import WRITE_TOOLS
 from aura.conversation.tools import (
     ToolRegistry,
 )
@@ -183,7 +184,7 @@ class _Worker(QObject):
         elif isinstance(ev, ToolResult):
             self.toolResultEmitted.emit(ev.tool_call_id, ev.name, ev.ok, ev.result, ev.extras or {})
             # Track successful writes for auto-commit in single mode
-            if ev.name in ("write_file", "edit_file") and ev.ok:
+            if ev.name in WRITE_TOOLS and ev.ok:
                 try:
                     import json
                     parsed = json.loads(ev.result)

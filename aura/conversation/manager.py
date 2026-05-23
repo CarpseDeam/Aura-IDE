@@ -46,6 +46,7 @@ from aura.conversation.tool_runner import ToolRunner
 from aura.conversation.tool_limits import (
     MAX_WORKER_REDISPATCHES_PER_USER_TURN,
     ToolLimitState,
+    WRITE_TOOLS,
     limit_reached_payload,
 )
 from aura.conversation.tools._types import (
@@ -303,7 +304,7 @@ class ConversationManager:
                         _worker_phase_boundary_info = loop_info
                     return {"id": tool_call_id, "skip": True}
 
-                if reject_all_for_turn and name in ("write_file", "edit_file"):
+                if reject_all_for_turn and name in WRITE_TOOLS:
                     payload = json.dumps(
                         {"ok": False, "error": "User rejected all writes in this turn."}
                     )
@@ -381,7 +382,6 @@ class ConversationManager:
                         if cancel_event.is_set():
                             break
                             
-                        # Process sequential task
                         results_to_append.append(process_task(task))
                         
                 # Wait for any remaining reads
@@ -509,7 +509,6 @@ class ConversationManager:
             if msg.get("role") == "assistant":
                 tool_calls = msg.get("tool_calls")
                 if tool_calls:
-                    # Check if all tool calls have results in history.
                     call_ids = {tc["id"] for tc in tool_calls}
                     # Look at messages following this one.
                     for j in range(i + 1, len(self._history.messages)):

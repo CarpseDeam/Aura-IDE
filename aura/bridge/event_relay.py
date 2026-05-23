@@ -22,6 +22,7 @@ from aura.client import (
     ToolResult,
     Usage,
 )
+from aura.conversation.tool_limits import WRITE_TOOLS
 
 
 class WorkerEventRelay(QObject):
@@ -131,7 +132,7 @@ class WorkerEventRelay(QObject):
             ):
                 self.phase_boundary_info = parsed
             if (
-                ev.name in ("write_file", "edit_file")
+                ev.name in WRITE_TOOLS
                 and isinstance(parsed, dict)
                 and parsed.get("ok")
             ):
