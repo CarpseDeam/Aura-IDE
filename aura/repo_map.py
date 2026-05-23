@@ -3,6 +3,7 @@
 Tier 1 (Core Context) uses this to inject a repo map into the system prompt,
 giving the model a structural overview of the codebase on every turn.
 """
+
 from __future__ import annotations
 
 import ast
@@ -14,9 +15,21 @@ from aura.ast_utils import parse_python_ast
 
 # Directories and file suffixes to skip when generating the repo map.
 SKIP_DIRS: set[str] = {
-    ".git", ".aura", "__pycache__", "node_modules", "build", "dist",
-    ".mypy_cache", ".pytest_cache", ".ruff_cache", ".venv", "venv",
-    ".svn", ".hg", "eggs", ".eggs",
+    ".git",
+    ".aura",
+    "__pycache__",
+    "node_modules",
+    "build",
+    "dist",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".venv",
+    "venv",
+    ".svn",
+    ".hg",
+    "eggs",
+    ".eggs",
 }
 SKIP_FILE_SUFFIXES: set[str] = {".pyc", ".pyo", ".so", ".o", ".class", ".jar"}
 
@@ -49,9 +62,7 @@ def _get_max_mtime(root: Path) -> float:
             dirnames[:] = [
                 d
                 for d in dirnames
-                if not d.startswith(".")
-                and d not in SKIP_DIRS
-                and (root / d).parts[-1] not in SKIP_DIRS
+                if not d.startswith(".") and d not in SKIP_DIRS and (root / d).parts[-1] not in SKIP_DIRS
             ]
             for fname in filenames:
                 suffix = Path(fname).suffix.lower()
@@ -151,11 +162,14 @@ def _py_func_signature(node: ast.FunctionDef | ast.AsyncFunctionDef) -> str:
         return f"{prefix} {node.name}({args})"
 
 
-def generate_repo_map(workspace_root: Path) -> str:
+def generate_repo_map(workspace_root: Path, force: bool = False) -> str:
     """Generate a concise AST-based structural map of the workspace.
 
     Args:
         workspace_root: Root directory of the workspace.
+        force: If True, always validate mtime and regenerate if stale.
+               If False (default), return cached result immediately when
+               available, avoiding a full workspace tree mtime scan.
 
     Returns:
         A tree-like string showing top-level directories, then per-file:
@@ -170,12 +184,19 @@ def generate_repo_map(workspace_root: Path) -> str:
     """
     root_str = str(workspace_root.resolve())
 
-    # Check cache
+    # Fast path: use cached result when available and not forced to refresh.
+    # Avoids a full workspace tree mtime scan on hot GUI paths.
+    if not force and root_str in _repo_map_cache:
+        _, cached_text = _repo_map_cache[root_str]
+        if cached_text:
+            return cached_text
+
+    # Check cache with mtime validation
     current_mtime = _get_max_mtime(workspace_root)
     cached_mtime, cached_text = _repo_map_cache.get(root_str, (0.0, ""))
     if current_mtime == cached_mtime and cached_text:
         return cached_text
-        
+
     from aura.config import MAX_READ_BYTES
 
     # Walk workspace and collect outlines
@@ -187,9 +208,7 @@ def generate_repo_map(workspace_root: Path) -> str:
         dirnames[:] = [
             d
             for d in dirnames
-            if not d.startswith(".")
-            and d not in SKIP_DIRS
-            and (workspace_root / d).parts[-1] not in SKIP_DIRS
+            if not d.startswith(".") and d not in SKIP_DIRS and (workspace_root / d).parts[-1] not in SKIP_DIRS
         ]
 
         rel_dir = os.path.relpath(dirpath, workspace_root)
@@ -206,8 +225,8 @@ def generate_repo_map(workspace_root: Path) -> str:
                 # Use chunked read here as well
                 file_size = os.path.getsize(fpath)
                 if file_size > MAX_READ_BYTES:
-                    continue # Skip massive files for outline
-                    
+                    continue  # Skip massive files for outline
+
                 with open(fpath, "rb") as f:
                     raw = f.read(MAX_READ_BYTES)
             except (OSError, PermissionError):

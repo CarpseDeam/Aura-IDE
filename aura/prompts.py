@@ -410,8 +410,11 @@ def inject_private_worker_style(prompt: str) -> str:
 
 
 
-def build_tier1_context(workspace_root: Path) -> str:
+def build_tier1_context(workspace_root: Path, force: bool = False) -> str:
     """Compose the Tier 1 (Core Context) string for a given workspace.
+
+    Pass force=True when the workspace may have changed since the last
+    generation (e.g., after file writes, before a new conversation turn).
 
     Returns:
         A string containing the project rules (from ``project_rules.md``),
@@ -442,7 +445,7 @@ def build_tier1_context(workspace_root: Path) -> str:
 
     # 3. AST-based repo map
     try:
-        repo_map = generate_repo_map(workspace_root)
+        repo_map = generate_repo_map(workspace_root, force=force)
         if repo_map and "No Python/TypeScript files found." not in repo_map:
             parts.append(repo_map)
     except Exception:
