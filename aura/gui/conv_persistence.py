@@ -156,6 +156,15 @@ class ConversationPersistence(QObject):
         history_copy = copy.deepcopy(self._bridge.history)
         dispatch_records_copy = list(self._bridge.dispatch_records)
         existing_path = self._current_conversation_path
+
+        # Guard: if existing_path is not under the current workspace root's
+        # conversations dir, ignore it to prevent cross-project contamination.
+        if existing_path is not None:
+            from aura.conversation.persistence import conversations_dir
+            from aura.paths import safe_is_relative_to
+            if not safe_is_relative_to(existing_path, conversations_dir(workspace_root)):
+                existing_path = None
+
         pwm = self._bridge.planner_worker_mode
 
         def _run_save() -> None:
@@ -231,7 +240,22 @@ class ConversationPersistence(QObject):
         return loaded
         
     def load_and_apply(self, path: Path) -> None:
-        """Load a conversation from a file path and apply it to the live bridge/view."""
+        """Load a conversation from a file path and apply it to the live bridge/view.
+
+        Raises ValueError if the path lies outside the active workspace's
+        conversations directory (cross-project guard).
+        """
+        # Guard: refuse to load a conversation outside the active workspace
+        ws = self._bridge.registry.workspace_root
+        if ws is not None:
+            from aura.conversation.persistence import conversations_dir
+            from aura.paths import safe_is_relative_to
+            if not safe_is_relative_to(path, conversations_dir(ws)):
+                raise ValueError(
+                    f"Cannot load conversation from outside the active workspace:\n"
+                    f"  Path: {path}\n"
+                    f"  Workspace: {ws}"
+                )
         loaded = load_conversation(path)
         self.apply_loaded(loaded)
 

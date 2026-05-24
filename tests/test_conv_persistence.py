@@ -360,3 +360,64 @@ def test_update_project_thread_does_not_break_on_error(mock_project_store_class,
     
     # Should silently handle exception and return
     persistence._update_project_thread(ws, path, h)
+
+
+# Test 15: auto_save ignores cross-project existing_path
+
+
+def test_auto_save_ignores_cross_project_existing_path(tmp_path, persistence, mock_bridge):
+    import copy
+    import json
+    import threading
+    from aura.conversation.persistence import conversations_dir, save_conversation
+
+    ws_a = tmp_path / "project_a"
+    ws_a.mkdir()
+    ws_b = tmp_path / "project_b"
+    ws_b.mkdir()
+
+    # Save a conversation in project A to get a valid existing path
+    h = copy.deepcopy(mock_bridge.history)
+    path_a = save_conversation(h, ws_a, model="m1", thinking="high", provider="deepseek")
+
+    # Persistence's existing_path points to project A
+    persistence._current_conversation_path = path_a
+
+    # But we auto-save in project B — should NOT re-use path_a
+    mock_bridge.history.messages = [{"role": "user", "content": "hello b"}]
+
+    orig_thread = threading.Thread
+    try:
+        def tracking_thread(*args, **kwargs):
+            t = orig_thread(*args, **kwargs)
+            # Execute synchronously for test
+            target = kwargs.get("target")
+            if target:
+                target()
+            return t
+        threading.Thread = tracking_thread
+
+        persistence.auto_save(
+            workspace_root=ws_b,
+            model="m1",
+            thinking="high",
+            worker_model="wm1",
+            worker_thinking="max",
+            provider="deepseek",
+            planner_provider="deepseek",
+            worker_provider="deepseek",
+        )
+    finally:
+        threading.Thread = orig_thread
+
+    # Should have saved a NEW path in ws_b, not reused path_a
+    conv_dir_b = conversations_dir(ws_b)
+    saved_files = list(conv_dir_b.glob("*.json"))
+    assert len(saved_files) >= 1
+    # Verify at least one saved file has our messages
+    for sf in saved_files:
+        data = json.loads(sf.read_text(encoding="utf-8"))
+        if data.get("messages"):
+            break
+    else:
+        pytest.fail("No conversation saved in project B")

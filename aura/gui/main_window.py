@@ -504,9 +504,12 @@ class MainWindow(WindowChromeMixin, QMainWindow):
                     )
 
     def _on_project_selected(self, root_path: Path) -> None:
-        # Ensure the path is registered as a project before switching to it
         from aura.projects.store import ProjectStore
         ProjectStore().create_or_update_project(root_path)
+
+        if self._workspace_root is not None and self._workspace_root.resolve() != root_path.resolve():
+            # Fully reset conversation state before switching
+            self._persistence.new_conversation()
 
         self._workspace_root = root_path
         self._checkpoint_dialog = None
@@ -516,11 +519,16 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._playground.set_workspace_root(root_path)
         self._tree.set_root(root_path)
         save_workspace_root(root_path)
-        # New workspace — drop any current conversation pointer (different .aura/).
-        self._persistence._current_conversation_path = None
+        # new_conversation() above already sets _current_conversation_path = None
+        # and clears chat, playground, bridge history
+
         self._update_workspace_label()
         self._left_pane.refresh_projects(self._workspace_root)
         self._refresh_status_bar()
+
+        # Optionally restore last conversation from the new workspace
+        if self._settings.restore_last_conversation:
+            QTimer.singleShot(0, lambda: self._persistence.restore_last(self._workspace_root))
 
     def _on_new_project(self) -> None:
         start = str(self._workspace_root) if self._workspace_root else str(Path.home())

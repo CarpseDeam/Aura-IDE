@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -116,6 +117,13 @@ class ProjectStore:
     def __init__(self) -> None:
         self._data_dir: Path = data_dir() / "projects"
         self._index_path: Path = self._data_dir / "index.json"
+        self.repair_index()
+
+    @staticmethod
+    def _canonical_root(root_path: Path) -> str:
+        """Return a case-normalized absolute path string for identity matching."""
+        resolved = root_path.expanduser().resolve()
+        return os.path.normcase(str(resolved))
 
     @staticmethod
     def clean_thread_title(text: str, max_len: int = 72) -> str:
@@ -138,6 +146,31 @@ class ProjectStore:
 
     def list_projects(self, include_archived: bool = False) -> list[ProjectSpace]:
         index = self._load_index()
+
+        # Deduplicate by canonical root path
+        canonical_map: dict[str, str] = {}  # canonical_root -> pid
+        for pid, entry in index.items():
+            root_path_str = entry.get("root_path") if isinstance(entry, dict) else None
+            if not root_path_str:
+                continue
+            canonical = self._canonical_root(Path(root_path_str))
+            if canonical not in canonical_map:
+                canonical_map[canonical] = pid
+
+        # Save cleaned index if duplicates were removed
+        if len(canonical_map) != len(index):
+            cleaned = {}
+            for pid, entry in index.items():
+                root_path_str = entry.get("root_path") if isinstance(entry, dict) else None
+                if not root_path_str:
+                    continue
+                if self._canonical_root(Path(root_path_str)) in canonical_map:
+                    canonical_pid = canonical_map[self._canonical_root(Path(root_path_str))]
+                    if pid == canonical_pid:
+                        cleaned[pid] = entry
+            self._save_index(cleaned)
+            index = cleaned
+
         projects: list[ProjectSpace] = []
         for pid, entry in index.items():
             root_path_str = entry.get("root_path") if isinstance(entry, dict) else None
@@ -161,6 +194,7 @@ class ProjectStore:
                     project.name = name
                 project.updated_at = _utc_iso()
                 self.save_project(project)
+                self._prune_stale_index_entries(root_path, project.id)
                 return project
 
         now = _utc_iso()
@@ -172,6 +206,7 @@ class ProjectStore:
             updated_at=now,
         )
         self.save_project(project)
+        self._prune_stale_index_entries(root_path, project.id)
         return project
 
     def load_project(self, project_id: str) -> ProjectSpace | None:
@@ -198,6 +233,51 @@ class ProjectStore:
             "name": project.name,
         }
         self._save_index(index)
+
+    def _prune_stale_index_entries(self, root_path: Path, keep_id: str) -> None:
+        """Remove index entries with the same canonical root but a different ID."""
+        index = self._load_index()
+        canonical = self._canonical_root(root_path)
+        changed = False
+        for pid in list(index.keys()):
+            if pid == keep_id:
+                continue
+            entry = index[pid]
+            if not isinstance(entry, dict):
+                continue
+            entry_root = entry.get("root_path")
+            if not entry_root:
+                continue
+            if self._canonical_root(Path(entry_root)) == canonical:
+                del index[pid]
+                changed = True
+        if changed:
+            self._save_index(index)
+
+    def repair_index(self) -> None:
+        """Remove duplicate, stale, or missing-root entries from the index."""
+        index = self._load_index()
+        cleaned: dict[str, dict] = {}
+        for pid, entry in list(index.items()):
+            root_path_str = entry.get("root_path") if isinstance(entry, dict) else None
+            if not root_path_str:
+                continue
+            root_path = Path(root_path_str)
+            if not root_path.is_dir():
+                continue
+            project = self._load_project_from_root(root_path)
+            if project is None:
+                continue
+            canonical = self._canonical_root(root_path)
+            existing_pid = None
+            for cpid, centry in cleaned.items():
+                if self._canonical_root(Path(centry.get("root_path", ""))) == canonical:
+                    existing_pid = cpid
+                    break
+            if existing_pid is None:
+                cleaned[pid] = entry
+        if len(cleaned) != len(index):
+            self._save_index(cleaned)
 
     def list_threads(self, project: ProjectSpace, include_archived: bool = False) -> list[ProjectThread]:
         threads_dir = project.root_path / ".aura" / "threads"
