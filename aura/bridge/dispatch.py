@@ -6,6 +6,7 @@ the worker manager when the user clicks Dispatch.
 
 from __future__ import annotations
 
+import logging
 import re
 import threading
 from dataclasses import replace
@@ -49,6 +50,8 @@ __all__ = [
     "_build_worker_summary",
     "_last_assistant_content",
 ]
+
+DISPATCH_TIMEOUT = 300.0
 
 
 class _DispatchPending:
@@ -165,7 +168,16 @@ class _DispatchProxy(QObject):
             tool_call_id, req.goal, list(req.files), req.spec, req.acceptance, req.summary
         )
 
-        pending.decision_event.wait()
+        signaled = pending.decision_event.wait(timeout=DISPATCH_TIMEOUT)
+        if not signaled:
+            with self._lock:
+                self._pending.pop(tool_call_id, None)
+            return WorkerDispatchResult(
+                ok=False,
+                recoverable=True,
+                summary="Dispatch approval timed out — no decision was made.",
+            )
+
         if pending.cancelled:
             with self._lock:
                 self._pending.pop(tool_call_id, None)
@@ -191,11 +203,14 @@ class _DispatchProxy(QObject):
         spec: str,
         acceptance: str,
         summary: str,
-    ) -> None:
+    ) -> bool:
         with self._lock:
             pending = self._pending.get(tool_call_id)
         if pending is None:
-            return
+            logging.warning(
+                f"user_dispatched: tool_call_id '{tool_call_id}' is not pending or has already timed out/resolved."
+            )
+            return False
         pending.edited_request = replace(
             pending.request,
             goal=goal,
@@ -206,18 +221,26 @@ class _DispatchProxy(QObject):
         )
         pending.cancelled = False
         pending.decision_event.set()
+        return True
 
-    def user_cancelled(self, tool_call_id: str) -> None:
+    def user_cancelled(self, tool_call_id: str) -> bool:
         with self._lock:
             pending = self._pending.get(tool_call_id)
         if pending is None:
-            return
+            logging.warning(
+                f"user_cancelled: tool_call_id '{tool_call_id}' is not pending or has already timed out/resolved."
+            )
+            return False
         pending.cancelled = True
         pending.decision_event.set()
+        return True
 
     def cancel_all_pending(self) -> None:
         """Called when the user hits Stop. Unblocks any planner waiting for a
         dispatch decision AND signals any running worker to cancel."""
+        if self._approval_proxy is not None:
+            self._approval_proxy.cancel_active_dialog()
+
         with self._lock:
             for tool_id, pending in list(self._pending.items()):
                 # Unblock dispatch decision wait (if planner is waiting on SpecCard)

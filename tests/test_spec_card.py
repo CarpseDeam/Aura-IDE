@@ -133,3 +133,30 @@ class TestFullSpecCollapsed:
 class TestToolCallId:
     def test_tool_call_id(self, spec_card):
         assert spec_card.tool_call_id() == "test_tc_id"
+
+
+class TestDispatchExpired:
+    """mark_dispatch_expired() behaviour."""
+
+    def test_mark_dispatch_expired(self, spec_card):
+        spec_card.mark_dispatch_expired()
+        assert not spec_card._buttons_row.isVisible()
+        # Use isHidden() — isVisible() requires an ancestor window to be shown.
+        assert not spec_card._status_label.isHidden()
+        assert spec_card._status_label.text() == "Plan expired — click Dispatch again or Cancel"
+
+    def test_mark_stale_after_on_dispatch(self, spec_card):
+        """Simulate clicking Dispatch then calling mark_stale."""
+        spec_card._on_dispatch()
+        spec_card.mark_stale()
+        assert not spec_card._buttons_row.isVisible()
+        assert not spec_card._status_label.isHidden()
+        assert spec_card._status_label.text() == "Stale plan — not pending"
+
+    def test_worker_finished_user_facing_no_worker_word(self, spec_card):
+        """worker_finished() status must not contain the word 'Worker'."""
+        spec_card.worker_finished(True, "All good.")
+        assert "Worker" not in spec_card._status_label.text()
+
+        spec_card.worker_finished(False, "Something broke.")
+        assert "Worker" not in spec_card._status_label.text()

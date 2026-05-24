@@ -116,12 +116,15 @@ class SpecCard(QFrame):
         outer.addWidget(self._view_worker_btn)
         outer.addWidget(self._status_label)
 
+        if not self._dispatched:
+            self._status_label.setText("Plan ready — waiting for dispatch approval.")
+            self._status_label.setStyleSheet(f"color: {FG_DIM}; font-size: 11px;")
+            self._status_label.setVisible(True)
+
         # ---- Initial chip computation ----
         self._compute_chips()
 
-    # ------------------------------------------------------------------
     # Private layout helpers
-    # ------------------------------------------------------------------
 
     def _build_header(self) -> QHBoxLayout:
         """Return the header row layout: label + stretch + mode/risk/scope chips."""
@@ -269,9 +272,7 @@ class SpecCard(QFrame):
 
         return view_worker_btn, status_label
 
-    # ------------------------------------------------------------------
     # Static helpers
-    # ------------------------------------------------------------------
 
     @staticmethod
     def _make_section_header(text: str) -> QLabel:
@@ -292,9 +293,7 @@ class SpecCard(QFrame):
         chip.setStyleSheet(style)
         return chip
 
-    # ------------------------------------------------------------------
     # Chip computation
-    # ------------------------------------------------------------------
 
     def _compute_chips(self) -> None:
         """Update mode, risk, and scope chip text and styling."""
@@ -341,9 +340,7 @@ class SpecCard(QFrame):
             _CHIP_STYLE.replace(f"color: {FG_DIM}", f"color: {scope_color}")
         )
 
-    # ------------------------------------------------------------------
     # Content refresh
-    # ------------------------------------------------------------------
 
     def _refresh_files_list(self, layout: QVBoxLayout) -> None:
         """Clear and rebuild the files list with polished chip styling."""
@@ -408,9 +405,7 @@ class SpecCard(QFrame):
             self._refresh_files_list(self._files_container.layout())
         self._compute_chips()
 
-    # ------------------------------------------------------------------
     # Public API
-    # ------------------------------------------------------------------
 
     def update_spec(
         self, goal: str, files: list[str], spec: str, acceptance: str, summary: str = ""
@@ -435,12 +430,10 @@ class SpecCard(QFrame):
 
     def _on_dispatch(self) -> None:
         self._dispatched = True
-        self._worker_running = True
         self._buttons_row.setVisible(False)
-        self._status_label.setText("Worker running…")
+        self._status_label.setText("Dispatch requested…")
         self._status_label.setStyleSheet(f"color: {FG_DIM}; font-size: 11px;")
         self._status_label.setVisible(True)
-        self._view_worker_btn.setVisible(True)
         self.dispatch_clicked.emit(self._tool_call_id)
 
     def _on_cancel(self) -> None:
@@ -460,6 +453,36 @@ class SpecCard(QFrame):
         self._status_label.setStyleSheet(f"color: {FG_DIM}; font-size: 11px;")
         self._status_label.setVisible(True)
         self._view_worker_btn.setVisible(True)
+
+    def mark_worker_running(self) -> None:
+        """Update status to indicate worker is running."""
+        self._dispatched = True
+        self._worker_running = True
+        self._buttons_row.setVisible(False)
+        self._status_label.setText("Worker running...")
+        self._status_label.setStyleSheet(f"color: {FG_DIM}; font-size: 11px;")
+        self._status_label.setVisible(True)
+        self._view_worker_btn.setVisible(True)
+
+    def mark_stale(self) -> None:
+        """Update status to indicate the card is stale/non-pending."""
+        self._dispatched = False
+        self._worker_running = False
+        self._buttons_row.setVisible(False)
+        self._status_label.setText("Stale plan — not pending")
+        self._status_label.setStyleSheet(f"color: {DANGER}; font-size: 11px;")
+        self._status_label.setVisible(True)
+        self._view_worker_btn.setVisible(False)
+
+    def mark_dispatch_expired(self) -> None:
+        """Update status when dispatch is no longer pending (stale card button)."""
+        self._dispatched = False
+        self._worker_running = False
+        self._buttons_row.setVisible(False)
+        self._status_label.setText("Plan expired — click Dispatch again or Cancel")
+        self._status_label.setStyleSheet(f"color: {WARN}; font-size: 11px;")
+        self._status_label.setVisible(True)
+        self._view_worker_btn.setVisible(False)
 
     def mark_cancelled(self) -> None:
         """Reflect a modal cancellation without emitting another cancel signal."""

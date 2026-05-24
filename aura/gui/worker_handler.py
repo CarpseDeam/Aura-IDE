@@ -103,7 +103,7 @@ class WorkerEventHandler(QObject):
         acceptance: str,
         summary: str,
     ) -> None:
-        """Always show the SpecCard; auto-dispatch or open SpecApprovalDialog."""
+        """Always show the SpecCard; auto-dispatch or wait for card interaction."""
         file_list = list(files)
         card = self._chat.add_spec_card(tool_call_id, goal, file_list, spec, acceptance, summary)
         card.dispatch_clicked.connect(self._on_dispatch_clicked)
@@ -116,28 +116,15 @@ class WorkerEventHandler(QObject):
             self._bridge.user_dispatched(tool_call_id, goal, file_list, spec, acceptance, summary)
             return
 
-        # Delayed import to avoid circular dependency at module level.
-        from PySide6.QtWidgets import QDialog
-        from aura.gui.spec_edit_dialog import SpecApprovalDialog
-
-        dlg = SpecApprovalDialog(goal, file_list, spec, acceptance, summary, parent=self.parent())
-        if dlg.exec() == QDialog.DialogCode.Accepted:
-            card.update_spec(dlg.goal(), dlg.files(), dlg.spec(), dlg.acceptance(), dlg.summary())
-            card.mark_dispatched()
-            self._bridge.user_dispatched(
-                tool_call_id, dlg.goal(), dlg.files(), dlg.spec(), dlg.acceptance(), dlg.summary()
-            )
-        else:
-            card.mark_cancelled()
-            self._bridge.user_cancelled_dispatch(tool_call_id)
-
     def _on_dispatch_clicked(self, tool_call_id: str) -> None:
         """Dispatch the spec card's current values directly."""
         card = self._chat.get_spec_card(tool_call_id)
         if card is None:
             return
         goal, files, spec, acceptance, summary = card.current_spec()
-        self._bridge.user_dispatched(tool_call_id, goal, files, spec, acceptance, summary)
+        accepted = self._bridge.user_dispatched(tool_call_id, goal, files, spec, acceptance, summary)
+        if not accepted:
+            card.mark_stale()
 
     def _on_edit_spec_clicked(self, tool_call_id: str) -> None:
         """Open the SpecEditDialog pre-populated with the spec card's values."""
@@ -153,7 +140,11 @@ class WorkerEventHandler(QObject):
 
     def _on_cancel_dispatch_clicked(self, tool_call_id: str) -> None:
         """Cancel the pending dispatch."""
-        self._bridge.user_cancelled_dispatch(tool_call_id)
+        accepted = self._bridge.user_cancelled_dispatch(tool_call_id)
+        if not accepted:
+            card = self._chat.get_spec_card(tool_call_id)
+            if card:
+                card.mark_stale()
 
     # ---- worker lifecycle slots ------------------------------------------------
 
@@ -163,6 +154,10 @@ class WorkerEventHandler(QObject):
         self._playground.set_glow_state("coding")
         self._playground.begin_assistant()
         self.worker_started.emit()
+
+        card = self._chat.get_spec_card(tool_call_id)
+        if card:
+            card.mark_worker_running()
 
     def _on_worker_finished(self, tool_call_id: str, ok: bool, summary: str) -> None:
         """Forward worker finished to playground and update spec card."""
@@ -238,7 +233,6 @@ class WorkerEventHandler(QObject):
 
     def _on_view_worker_clicked(self, tool_call_id: str) -> None:
         """No-op placeholder for view-worker button."""
-        pass
 
     def _on_worker_usage(
         self,

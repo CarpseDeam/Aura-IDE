@@ -290,3 +290,144 @@ def test_normalize_worker_task_structured_fields():
     assert spec.risk_notes == ["breaks easily"]
     assert spec.contract is not None
     assert spec.contract.expected_dataclass_fields == {"MyClass": ["a"]}
+
+
+# New focused tests for dispatch and approval proxy timeout and cancellation
+
+def test_dispatch_proxy_timeout():
+    from unittest.mock import Mock
+    from aura.bridge.dispatch import _DispatchProxy
+    from aura.conversation.dispatch import WorkerDispatchRequest
+
+    # Create approval proxy mock
+    approval = Mock()
+    proxy = _DispatchProxy(
+        parent_widget=Mock(),
+        registry_factory=Mock(),
+        approval_proxy=approval,
+    )
+
+    req = WorkerDispatchRequest(
+        goal="Test goal",
+        files=["test.py"],
+        spec="test spec",
+        acceptance="test acceptance",
+    )
+
+    # We want to patch DISPATCH_TIMEOUT or call it under thread or short timeout so it doesn't block for 300s in test.
+    # Let's temporarily override DISPATCH_TIMEOUT in the module!
+    import aura.bridge.dispatch
+    orig_timeout = aura.bridge.dispatch.DISPATCH_TIMEOUT
+    aura.bridge.dispatch.DISPATCH_TIMEOUT = 0.05  # 50ms for fast test execution!
+    try:
+        res = proxy.request_dispatch("test_call_id", req)
+        assert res.ok is False
+        assert res.recoverable is True
+        assert "timed out" in res.summary
+        assert "UI signal" not in res.summary
+    finally:
+        aura.bridge.dispatch.DISPATCH_TIMEOUT = orig_timeout
+
+
+def test_dispatch_proxy_stale_dispatch():
+    from unittest.mock import Mock
+    from aura.bridge.dispatch import _DispatchProxy
+
+    proxy = _DispatchProxy(
+        parent_widget=Mock(),
+        registry_factory=Mock(),
+        approval_proxy=Mock(),
+    )
+
+    # If we call user_dispatched with a tool_call_id that is not in pending:
+    res = proxy.user_dispatched("stale_call_id", "goal", [], "spec", "acceptance", "")
+    assert res is False
+
+    # Same for user_cancelled:
+    res = proxy.user_cancelled("stale_call_id")
+    assert res is False
+
+
+def test_dispatch_proxy_cancel_all_unblocks_and_cancels_active_dialog():
+    from unittest.mock import Mock
+    import threading
+    import time
+    from aura.bridge.dispatch import _DispatchProxy
+    from aura.conversation.dispatch import WorkerDispatchRequest
+
+    approval = Mock()
+    proxy = _DispatchProxy(
+        parent_widget=Mock(),
+        registry_factory=Mock(),
+        approval_proxy=approval,
+    )
+
+    req = WorkerDispatchRequest(
+        goal="Test goal",
+        files=["test.py"],
+        spec="test spec",
+        acceptance="test acceptance",
+    )
+
+    # Let's trigger a dispatch wait in a background thread
+    results = []
+    def runner():
+        res = proxy.request_dispatch("test_call_id", req)
+        results.append(res)
+
+    t = threading.Thread(target=runner)
+    t.start()
+
+    # Wait a tiny bit to ensure the thread is waiting
+    time.sleep(0.05)
+
+    # Now cancel all pending
+    proxy.cancel_all_pending()
+    t.join(timeout=1.0)
+
+    # Verify that cancel_active_dialog was called on the approval proxy
+    approval.cancel_active_dialog.assert_called_once()
+
+    # Verify that request_dispatch returned a cancelled result
+    assert len(results) == 1
+    assert results[0].ok is False
+    assert results[0].cancelled is True
+    assert "user cancelled" in results[0].summary
+
+
+def test_approval_proxy_active_dialog_cancellation():
+    from unittest.mock import Mock, patch
+    from aura.bridge.approval_proxy import _ApprovalProxy
+    from aura.conversation.tools import ApprovalRequest
+
+    proxy = _ApprovalProxy(parent_widget=Mock())
+    assert proxy._active_dialog is None
+
+    # Let's mock DiffApprovalDialog
+    with patch("aura.bridge.approval_proxy.DiffApprovalDialog") as mock_dlg_cls:
+        mock_dlg = Mock()
+        mock_dlg_cls.return_value = mock_dlg
+        
+        # When dlg.exec() is called, we will simulate calling cancel_active_dialog
+        def fake_exec():
+            # While exec is running, the active_dialog must be set
+            assert proxy._active_dialog is mock_dlg
+            proxy.cancel_active_dialog()
+            return 0
+            
+        mock_dlg.exec.side_effect = fake_exec
+        mock_dlg.decision.return_value = Mock(action="reject")
+
+        # Now trigger the open_dialog Slot directly (which is what BlockingQueuedConnection invokes)
+        proxy._last_request = ApprovalRequest(
+            tool_name="write_file",
+            rel_path="a.py",
+            old_content="old",
+            new_content="new",
+            is_new_file=False,
+        )
+        proxy._open_dialog()
+
+        # After execution completes, active_dialog should be None again
+        assert proxy._active_dialog is None
+
