@@ -53,6 +53,7 @@ class WorkerEventRelay(QObject):
         super().__init__(parent)
         self._approval_proxy = approval_proxy
         self._worker_model = worker_model
+        self.index_to_id: dict[int, str] = {}
         self.write_results: list[dict[str, Any]] = []
         self.api_errors: list[str] = []
         self.phase_boundary_info: dict[str, Any] | None = None

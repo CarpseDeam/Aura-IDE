@@ -14,7 +14,7 @@ from aura.client import (
     ToolResult,
     WorkerDispatchRequested,
 )
-from aura.config import ModelId, ThinkingMode, load_settings
+from aura.config import ModelId, ThinkingMode, load_settings, redact_secrets
 from aura.conversation.dispatch import (
     DispatchCallback,
     WorkerDispatchRequest,
@@ -59,15 +59,21 @@ class ToolRunner:
         req = WorkerDispatchRequest.from_dict(args)
         quality = validate_worker_dispatch_spec(req.spec, req.acceptance, goal=req.goal)
         if not quality.ok:
+            missing = [
+                item.removesuffix(" is required") for item in quality.errors
+            ]
+            missing_text = ", ".join(missing) if missing else "required details"
             error_message = (
-                "Planner dispatch rejected: goal, spec, and acceptance are required before Worker runs. "
-                "Missing required fields:\n"
+                f"Plan incomplete — missing {missing_text}. "
+                "The Worker was not started. Missing required fields:\n"
                 + "\n".join(f"- {item}" for item in quality.errors)
             )
             result = WorkerDispatchResult(
                 ok=False,
                 summary=error_message,
+                recoverable=True,
                 extras={
+                    "dispatch_not_started": True,
                     "dispatch_spec_rejected": True,
                     "quality_errors": list(quality.errors),
                 },
@@ -81,6 +87,7 @@ class ToolRunner:
                     ok=False,
                     result=payload,
                     extras={
+                        "dispatch_not_started": True,
                         "dispatch_spec_rejected": True,
                         "summary": error_message,
                         "quality_errors": list(quality.errors),
@@ -121,27 +128,35 @@ class ToolRunner:
         except Exception as exc:
             result = WorkerDispatchResult(
                 ok=False,
-                summary=f"dispatch failed: {type(exc).__name__}: {exc}",
+                summary="Worker failed due to an internal error.",
                 cancelled=False,
+                recoverable=False,
+                extras={
+                    "worker_internal_error": True,
+                    "error_type": type(exc).__name__,
+                    "internal_error": redact_secrets(f"{type(exc).__name__}: {exc}"),
+                },
             )
 
         payload = json.dumps(result.to_tool_payload(), ensure_ascii=False)
         self._history.append_tool_result(tool_call_id, payload)
+        event_extras = {
+            "dispatch": True,
+            "cancelled": result.cancelled,
+            "summary": result.summary,
+            "recoverable": result.recoverable,
+            "phase_boundary": result.phase_boundary,
+            "needs_followup": result.needs_followup,
+            "followup_reason": result.followup_reason,
+        }
+        event_extras.update(result.extras)
         on_event(
             ToolResult(
                 tool_call_id=tool_call_id,
                 name="dispatch_to_worker",
                 ok=result.ok,
                 result=payload,
-                extras={
-                    "dispatch": True,
-                    "cancelled": result.cancelled,
-                    "summary": result.summary,
-                    "recoverable": result.recoverable,
-                    "phase_boundary": result.phase_boundary,
-                    "needs_followup": result.needs_followup,
-                    "followup_reason": result.followup_reason,
-                },
+                extras=event_extras,
             )
         )
         return result

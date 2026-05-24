@@ -71,6 +71,7 @@ class ChatView(QScrollArea):
         self._scroll_anim: QPropertyAnimation | None = None
         self._programmatic_scroll_depth = 0
         self._plan_writer_cards: dict[str, PlanWriterCard] = {}
+        self._worker_summary_cards: dict[str, WorkerSummaryCard] = {}
         self._compact_tools: bool = False
         self._compact_tool_names: dict[str, str] = {}
         self._is_bulk_updating: bool = False
@@ -212,6 +213,7 @@ class ChatView(QScrollArea):
         self._tool_owner.clear()
         self._spec_cards.clear()
         self._plan_writer_cards.clear()
+        self._worker_summary_cards.clear()
         self._terminal_cards.clear()
         self._controllers.clear()
         self._clear_code_card_routes()
@@ -456,7 +458,12 @@ class ChatView(QScrollArea):
                 try:
                     data = json.loads(result_text)
                     extras = data.get("extras", {})
-                    dispatch_not_started = extras.get("dispatch_not_started", False)
+                    dispatch_not_started = bool(
+                        data.get("dispatch_not_started")
+                        or data.get("dispatch_spec_rejected")
+                        or extras.get("dispatch_not_started")
+                        or extras.get("dispatch_spec_rejected")
+                    )
 
                     if dispatch_not_started:
                         # Worker never started — update SpecCard, do NOT create WorkerSummaryCard
@@ -472,7 +479,7 @@ class ChatView(QScrollArea):
                         # Worker actually started and finished (or errored during run)
                         summary = data.get("summary", "")
                         if summary:
-                            needs_followup = data.get("needs_followup", False) or data.get("recoverable", False)
+                            needs_followup = bool(data.get("needs_followup", False))
                             self.add_worker_summary(
                                 tool_call_id, controller.goal or "", ok, summary,
                                 needs_followup=needs_followup,
@@ -588,8 +595,14 @@ class ChatView(QScrollArea):
     ) -> None:
         """Add a summary card to the chat after a worker completes."""
         self._remove_plan_writer_card(tool_call_id)
+        existing = self._worker_summary_cards.get(tool_call_id)
+        if existing is not None:
+            existing.update_summary(goal, ok, summary, needs_followup=needs_followup)
+            self._scroll_to_bottom()
+            return
         card = WorkerSummaryCard(
             tool_call_id, goal, ok, summary,
             needs_followup=needs_followup, parent=self
         )
+        self._worker_summary_cards[tool_call_id] = card
         self._add_card(card)

@@ -571,12 +571,50 @@ def test_dispatch_cb_raises(manager, mock_client, mock_tools, on_event,
             dispatch_cb=_raising_cb,
         )
 
-        # ToolResult with ok=False and "RuntimeError: boom" in result
+        # ToolResult with ok=False and a generic internal-error summary
         tool_results = [e for e in captured_events if isinstance(e, ToolResult)]
         dispatch_results = [tr for tr in tool_results if tr.name == "dispatch_to_worker"]
         assert len(dispatch_results) >= 1
         assert dispatch_results[-1].ok is False
-        assert "RuntimeError" in dispatch_results[-1].result
+        parsed = json.loads(dispatch_results[-1].result)
+        assert parsed["summary"] == "Worker failed due to an internal error."
+        assert parsed["extras"]["worker_internal_error"] is True
+        assert "RuntimeError" not in parsed["summary"]
+
+def test_dispatch_spec_rejection_is_plan_incomplete_not_worker_started(
+    manager, mock_client, mock_tools, on_event, captured_events, cancel_event, history
+):
+    type(mock_tools).mode = PropertyMock(return_value="planner")
+    args = _valid_dispatch_args()
+    args["acceptance"] = ""
+    tc = _tool_call("dispatch1", "dispatch_to_worker", args)
+    dispatch_cb = MagicMock()
+    mock_client.side_effect = [
+        iter([_make_done(content="", tool_calls=[tc])]),
+        iter([ContentDelta(text="Plan fixed"), _make_done(content="Plan fixed")]),
+    ]
+
+    manager.send(
+        on_event=on_event,
+        approval_cb=_make_approval_cb(),
+        cancel_event=cancel_event,
+        model="deepseek-chat",
+        thinking="off",
+        dispatch_cb=dispatch_cb,
+    )
+
+    dispatch_cb.assert_not_called()
+    assert not any(isinstance(e, WorkerDispatchRequested) for e in captured_events)
+    dispatch_result = next(
+        e for e in captured_events
+        if isinstance(e, ToolResult) and e.name == "dispatch_to_worker"
+    )
+    parsed = json.loads(dispatch_result.result)
+    assert parsed["ok"] is False
+    assert parsed["summary"].startswith("Plan incomplete")
+    assert parsed["extras"]["dispatch_not_started"] is True
+    assert parsed["extras"]["dispatch_spec_rejected"] is True
+    assert history.messages[-1]["content"] == "Plan fixed"
 
 def test_recoverable_worker_phase_boundary_allows_planner_to_continue(
     manager, mock_client, mock_tools, on_event, captured_events, cancel_event, history
@@ -651,10 +689,79 @@ def test_redispatch_counter_stops_runaway_followups(
         dispatch_cb=dispatch_cb,
     )
 
-    assert dispatch_cb.call_count == 3
+    assert dispatch_cb.call_count == 2
     final_content = history.messages[-1]["content"]
-    assert "Continue?" in final_content
-    assert "still need More work" in final_content
+    assert "failed attempts this turn" in final_content
+    assert "stopped automatic redispatch" in final_content
+
+
+def test_identical_dispatch_failure_stops_after_second_attempt(
+    manager, mock_client, mock_tools, on_event, captured_events, cancel_event, history
+):
+    type(mock_tools).mode = PropertyMock(return_value="planner")
+    args = _valid_dispatch_args(goal="Same goal", core="Same change")
+    dispatches = [
+        _tool_call(f"dispatch{i}", "dispatch_to_worker", args)
+        for i in range(3)
+    ]
+    mock_client.side_effect = [
+        iter([_make_done(content="", tool_calls=[dispatches[0]])]),
+        iter([_make_done(content="", tool_calls=[dispatches[1]])]),
+        iter([_make_done(content="", tool_calls=[dispatches[2]])]),
+    ]
+    dispatch_cb = MagicMock(return_value=WorkerDispatchResult(
+        ok=False,
+        summary="Worker still needs validation.",
+        needs_followup=True,
+        recoverable=True,
+        remaining=["Run validation"],
+    ))
+
+    manager.send(
+        on_event=on_event,
+        approval_cb=_make_approval_cb(),
+        cancel_event=cancel_event,
+        model="deepseek-chat",
+        thinking="off",
+        dispatch_cb=dispatch_cb,
+    )
+
+    assert dispatch_cb.call_count == 2
+    final_content = history.messages[-1]["content"]
+    assert "same Worker dispatch failed twice" in final_content
+    assert "stopped automatic redispatch" in final_content
+
+
+def test_worker_internal_error_stops_without_redispatch(
+    manager, mock_client, mock_tools, on_event, captured_events, cancel_event, history
+):
+    type(mock_tools).mode = PropertyMock(return_value="planner")
+    tc1 = _tool_call("dispatch1", "dispatch_to_worker", _valid_dispatch_args())
+    tc2 = _tool_call("dispatch2", "dispatch_to_worker", _valid_dispatch_args())
+    mock_client.side_effect = [
+        iter([_make_done(content="", tool_calls=[tc1])]),
+        iter([_make_done(content="", tool_calls=[tc2])]),
+    ]
+    dispatch_cb = MagicMock(return_value=WorkerDispatchResult(
+        ok=False,
+        summary="Worker failed due to an internal error.",
+        recoverable=False,
+        extras={"worker_internal_error": True, "internal_error": "AttributeError: hidden"},
+    ))
+
+    manager.send(
+        on_event=on_event,
+        approval_cb=_make_approval_cb(),
+        cancel_event=cancel_event,
+        model="deepseek-chat",
+        thinking="off",
+        dispatch_cb=dispatch_cb,
+    )
+
+    assert dispatch_cb.call_count == 1
+    final_content = history.messages[-1]["content"]
+    assert "Worker failed due to an internal error." in final_content
+    assert "AttributeError" not in final_content
 
 
 # ===================================================================
@@ -664,8 +771,8 @@ def test_redispatch_counter_stops_runaway_followups(
 class TestRunTerminalCommand:
     """Terminal command execution via SandboxExecutor."""
 
-    @patch("aura.conversation.manager.SandboxExecutor")
-    @patch("aura.config.load_settings")
+    @patch("aura.conversation.tool_runner.SandboxExecutor")
+    @patch("aura.conversation.tool_runner.load_settings")
     def test_terminal_ok(self, mock_load_settings, mock_sandbox_cls,
                          manager, mock_client, mock_tools, on_event,
                          captured_events, cancel_event, history, tmp_path):
@@ -711,8 +818,8 @@ class TestRunTerminalCommand:
         assert len(term_results) >= 1
         assert term_results[-1].ok is True
 
-    @patch("aura.conversation.manager.SandboxExecutor")
-    @patch("aura.config.load_settings")
+    @patch("aura.conversation.tool_runner.SandboxExecutor")
+    @patch("aura.conversation.tool_runner.load_settings")
     def test_terminal_missing_command(self, mock_load_settings, mock_sandbox_cls,
                                       manager, mock_client, on_event,
                                       captured_events, cancel_event, history,
@@ -751,7 +858,7 @@ class TestRunTerminalCommand:
 class TestRunResearch:
     """Research sub-agent flow."""
 
-    @patch("aura.conversation.manager.ToolRegistry")
+    @patch("aura.conversation.tool_runner.ToolRegistry")
     def test_research_ok(self, mock_tool_registry_cls, manager, mock_client,
                          mock_tools, on_event, captured_events, cancel_event,
                          history, tmp_path):
@@ -797,7 +904,7 @@ class TestRunResearch:
         _, kwargs = mock_tool_registry_cls.call_args
         assert kwargs["mode"] == "researcher"
 
-    @patch("aura.conversation.manager.ToolRegistry")
+    @patch("aura.conversation.tool_runner.ToolRegistry")
     def test_research_with_tool_calls(self, mock_tool_registry_cls, manager,
                                        mock_client, mock_tools, on_event,
                                        captured_events, cancel_event, history,
@@ -852,7 +959,7 @@ class TestRunResearch:
         assert payload["ok"] is True
         assert "report" in payload
 
-    @patch("aura.conversation.manager.ToolRegistry")
+    @patch("aura.conversation.tool_runner.ToolRegistry")
     def test_research_error(self, mock_tool_registry_cls, manager, mock_client,
                             mock_tools, on_event, captured_events, cancel_event,
                             history, tmp_path):
@@ -889,7 +996,7 @@ class TestRunResearch:
         assert payload["ok"] is False
         assert "API failure" in payload.get("error", "")
 
-    @patch("aura.conversation.manager.ToolRegistry")
+    @patch("aura.conversation.tool_runner.ToolRegistry")
     def test_research_no_objective(self, mock_tool_registry_cls, manager,
                                    mock_client, on_event, captured_events,
                                    cancel_event, history, tmp_path):

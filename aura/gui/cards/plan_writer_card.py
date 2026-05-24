@@ -23,6 +23,7 @@ class PlanWriterCard(QFrame):
     STATE_DONE = "done"
     STATE_FAILED = "failed"
     STATE_PHASE = "phase"
+    STATE_INCOMPLETE = "incomplete"
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -34,6 +35,7 @@ class PlanWriterCard(QFrame):
         self._goal: str = ""
         self._latest_spec: str = ""
         self._state = self.STATE_RUNNING
+        self._incomplete_text = "⚡ Plan incomplete"
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(10, 4, 10, 4)
@@ -57,6 +59,7 @@ class PlanWriterCard(QFrame):
             self.STATE_DONE: SUCCESS,
             self.STATE_FAILED: DANGER,
             self.STATE_PHASE: WARN,
+            self.STATE_INCOMPLETE: WARN,
         }[self._state]
 
         text = {
@@ -66,6 +69,7 @@ class PlanWriterCard(QFrame):
             self.STATE_DONE: "⚡ Plan ready ✓",
             self.STATE_FAILED: "⚡ Plan failed ✗",
             self.STATE_PHASE: "⚡ Phase complete — preparing follow-up",
+            self.STATE_INCOMPLETE: self._incomplete_text,
         }[self._state]
 
         metrics = QFontMetrics(self._status.font())
@@ -118,9 +122,30 @@ class PlanWriterCard(QFrame):
                 parsed = json.loads(result_text)
             except (json.JSONDecodeError, TypeError):
                 parsed = {}
-            if isinstance(parsed, dict) and parsed.get("phase_boundary"):
-                self._state = self.STATE_PHASE
-                self._refresh()
-                return
+            if isinstance(parsed, dict):
+                extras = parsed.get("extras") if isinstance(parsed.get("extras"), dict) else {}
+                if parsed.get("dispatch_spec_rejected") or extras.get("dispatch_spec_rejected"):
+                    self._incomplete_text = self._format_incomplete_text(
+                        extras.get("quality_errors") or parsed.get("quality_errors")
+                    )
+                    self._state = self.STATE_INCOMPLETE
+                    self._refresh()
+                    return
+                if parsed.get("phase_boundary"):
+                    self._state = self.STATE_PHASE
+                    self._refresh()
+                    return
         self._state = self.STATE_DONE if ok else self.STATE_FAILED
         self._refresh()
+
+    @staticmethod
+    def _format_incomplete_text(errors: object) -> str:
+        if not isinstance(errors, list) or not errors:
+            return "⚡ Plan incomplete"
+        missing: list[str] = []
+        for error in errors:
+            text = str(error)
+            if text.endswith(" is required"):
+                text = text[: -len(" is required")]
+            missing.append(text)
+        return "⚡ Plan incomplete — missing " + ", ".join(missing)

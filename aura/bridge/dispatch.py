@@ -67,7 +67,7 @@ class _DispatchPending:
 class _DispatchProxy(QObject):
     showSpecCard = Signal(str, str, list, str, str, str)  # tool_id, goal, files, spec, acceptance, summary
     workerStarted = Signal(str)  # tool_id
-    workerFinished = Signal(str, bool, str)  # tool_id, ok, summary
+    workerFinished = Signal(str, bool, str, bool)  # tool_id, ok, summary, needs_followup
     workerCancelled = Signal(str)
     workerReasoningDelta = Signal(str, str)
     workerContentDelta = Signal(str, str)
@@ -309,6 +309,7 @@ class _DispatchProxy(QObject):
         relay.agentProcessOutput.connect(self.workerAgentProcessOutput)
         relay.agentProcessFinished.connect(self.workerAgentProcessFinished)
 
+        internal_error: str | None = None
         try:
             worker_manager.send(
                 on_event=lambda ev: relay.relay(tool_call_id, ev),
@@ -322,7 +323,9 @@ class _DispatchProxy(QObject):
                 max_tool_rounds=self._max_tool_rounds,
             )
         except Exception as exc:
-            relay.api_errors.append(f"{type(exc).__name__}: {exc}")
+            from aura.config import redact_secrets
+
+            internal_error = redact_secrets(f"{type(exc).__name__}: {exc}")
 
         if cancel_event.is_set():
             worker_history.pop_if_empty_assistant_message()
@@ -346,6 +349,8 @@ class _DispatchProxy(QObject):
 
         # Build structured errors and caveats
         result_errors = list(relay.api_errors)
+        if internal_error:
+            result_errors.insert(0, "Worker failed due to an internal error.")
 
         # Failed write tools are hard errors
         for r in failed_write_tools:
@@ -399,6 +404,9 @@ class _DispatchProxy(QObject):
             or acceptance_unverified
             or bool(failed_write_tools)
         )
+        if internal_error:
+            needs_followup = False
+            recoverable = False
 
         summary = _build_worker_summary(
             req,
@@ -445,7 +453,7 @@ class _DispatchProxy(QObject):
             except Exception:
                 pass  # Never block the chat on git failures
 
-        self.workerFinished.emit(tool_call_id, ok, summary)
+        self.workerFinished.emit(tool_call_id, ok, summary, needs_followup)
         return WorkerDispatchResult(
             ok=ok,
             summary=summary,
@@ -465,6 +473,8 @@ class _DispatchProxy(QObject):
                 "writes": relay.write_results,
                 "errors": result_errors,
                 "caveats": result_caveats,
+                "worker_internal_error": bool(internal_error),
+                "internal_error": internal_error or "",
                 "phase_boundary": relay.phase_boundary_info or {},
                 "limit": (
                     relay.phase_boundary_info
