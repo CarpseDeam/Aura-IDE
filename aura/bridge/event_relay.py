@@ -60,6 +60,14 @@ class WorkerEventRelay(QObject):
         self.tool_results: list[dict] = []
         self.failed_tool_results: list[dict] = []
         self.validation_results: list[dict] = []
+        # Execution ledger
+        self.read_files: set[str] = set()         # paths read via read_file/read_files
+        self.read_outline_files: set[str] = set() # paths read via read_file_outline
+        self.touched_files: set[str] = set()      # all paths touched by writes
+        self.wrote_new_files: list[str] = []      # paths of newly created files
+        self.edited_existing_files: list[str] = []  # paths of existing files that were edited
+        self.todo_used: bool = False              # whether update_todo_list was called
+        self.final_report_text: str = ""          # last assistant content after Done event
 
     def relay(self, tool_call_id: str, ev: Event) -> None:
         """Emit the appropriate signal for the event type and track side effects."""
@@ -90,6 +98,9 @@ class WorkerEventRelay(QObject):
         elif isinstance(ev, Done):
             if ev.full_message:
                 self.streamDone.emit(tool_call_id, ev.finish_reason or "", ev.full_message)
+                content = ev.full_message.get("content")
+                if isinstance(content, str):
+                    self.final_report_text = content
         elif isinstance(ev, ApiError):
             from aura.config import redact_secrets
             msg = f"{ev.status_code}: {ev.message}" if ev.status_code is not None else ev.message
@@ -145,6 +156,31 @@ class WorkerEventRelay(QObject):
                         "is_new_file": parsed.get("is_new_file", False),
                     }
                 )
+                path = parsed.get("path")
+                if isinstance(path, str) and path:
+                    self.touched_files.add(path)
+                    if parsed.get("is_new_file"):
+                        self.wrote_new_files.append(path)
+                    else:
+                        self.edited_existing_files.append(path)
+            # Track reads for read-before-edit enforcement
+            if ev.ok and ev.name == "read_file" and isinstance(parsed, dict):
+                path = parsed.get("path")
+                if isinstance(path, str) and path:
+                    self.read_files.add(path)
+            if ev.ok and ev.name == "read_files" and isinstance(parsed, dict):
+                paths = parsed.get("paths")
+                if isinstance(paths, list):
+                    for p in paths:
+                        if isinstance(p, str) and p:
+                            self.read_files.add(p)
+            if ev.ok and ev.name == "read_file_outline" and isinstance(parsed, dict):
+                path = parsed.get("path")
+                if isinstance(path, str) and path:
+                    self.read_outline_files.add(path)
+            # Track TODO usage
+            if ev.ok and ev.name == "update_todo_list":
+                self.todo_used = True
             # Track all tool results
             tr = {
                 "name": ev.name,
@@ -181,3 +217,20 @@ class WorkerEventRelay(QObject):
             self.agentProcessOutput.emit(tool_call_id, ev.process_id, ev.text)
         elif isinstance(ev, AgentProcessFinished):
             self.agentProcessFinished.emit(tool_call_id, ev.process_id, ev.exit_code)
+
+    def reset(self) -> None:
+        """Clear all tracking fields so the relay can be reused."""
+        self.index_to_id.clear()
+        self.write_results.clear()
+        self.api_errors.clear()
+        self.phase_boundary_info = None
+        self.tool_results.clear()
+        self.failed_tool_results.clear()
+        self.validation_results.clear()
+        self.read_files.clear()
+        self.read_outline_files.clear()
+        self.touched_files.clear()
+        self.wrote_new_files.clear()
+        self.edited_existing_files.clear()
+        self.todo_used = False
+        self.final_report_text = ""

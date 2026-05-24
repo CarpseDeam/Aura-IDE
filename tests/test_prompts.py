@@ -64,8 +64,8 @@ def test_snappy_planner_worker_rules():
     # Worker
     assert "Snappy execution" in WORKER_SYSTEM_PROMPT
     assert "update_todo_list" in WORKER_SYSTEM_PROMPT
-    assert "The TODO list is the visible execution plan" in WORKER_SYSTEM_PROMPT
-    assert "Do not emit prose or XML planning" in WORKER_SYSTEM_PROMPT
+    assert "visible execution plan" in WORKER_SYSTEM_PROMPT
+    assert "Read before you edit" in WORKER_SYSTEM_PROMPT
 
     # Continuation report still exists
     assert "continuation_report" in WORKER_SYSTEM_PROMPT

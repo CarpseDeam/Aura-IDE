@@ -50,6 +50,7 @@ __all__ = [
     "_format_spec_as_user_message",
     "_build_worker_summary",
     "_last_assistant_content",
+    "_check_read_before_edit",
 ]
 
 DISPATCH_TIMEOUT = 300.0
@@ -367,6 +368,16 @@ class _DispatchProxy(QObject):
                 "or unverified acceptance."
             )
 
+        # Read-before-edit enforcement
+        edited_without_read = _check_read_before_edit(
+            relay.read_files, relay.read_outline_files, relay.edited_existing_files,
+        )
+        if edited_without_read:
+            result_errors.append(
+                "Worker edited existing file(s) without reading them first: "
+                + ", ".join(edited_without_read[:5])
+            )
+
         result_caveats: list[str] = []
 
         if missing_validation_after_writes:
@@ -375,36 +386,47 @@ class _DispatchProxy(QObject):
         if acceptance_unverified:
             result_caveats.append("Worker final report did not clearly mention validation or acceptance verification.")
 
+        # No-work detection
         phase_boundary = relay.phase_boundary_info is not None
+        is_implementation = not (
+            "blueprint" in req.spec.lower()[:200]
+            or "inspect" in req.goal.lower()[:100]
+            or "diagnostic" in req.goal.lower()[:100]
+        )
+        if is_implementation and not relay.touched_files and not relay.failed_tool_results and not internal_error and not relay.api_errors:
+            result_caveats.append("Worker made no changes, reported no blocker, and ran no meaningful validation.")
 
-        # Determine ok: only true when no errors, no caveats, no failures,
-        # and either writes exist or final evidence exists.
-        ok = (
-            not result_errors
-            and not result_caveats
-            and not phase_boundary
-            and not failed_write_tools
-            and not failed_validation
-            and not missing_validation_after_writes
-            and not acceptance_unverified
-            and bool(relay.write_results or final_report)
-        )
+        # Severity-based classification
+        has_hard_failure = bool(result_errors)
+        has_no_work = not relay.touched_files and not relay.failed_tool_results and not internal_error and not relay.api_errors
+        has_no_validation_after_writes = missing_validation_after_writes
+        has_unverified_acceptance = acceptance_unverified
 
-        # Determine needs_followup and recoverable
-        needs_followup = (
-            phase_boundary
-            or bool(failed_validation)
-            or missing_validation_after_writes
-            or acceptance_unverified
-        )
-        recoverable = (
-            phase_boundary
-            or bool(failed_validation)
-            or missing_validation_after_writes
-            or acceptance_unverified
-            or bool(failed_write_tools)
-        )
-        if internal_error:
+        # Is this a broad/risky/multi-file task that should have used TODO?
+        files_count = len(req.files)
+        is_broad = files_count >= 3 or bool(req.allowed_responsibilities) or bool(req.risk_notes)
+
+        # Determine severity
+        if has_hard_failure:
+            ok = False
+            needs_followup = False
+            recoverable = False
+        elif has_no_work and is_implementation:
+            ok = False
+            needs_followup = True
+            recoverable = True
+        elif has_no_validation_after_writes or has_unverified_acceptance:
+            ok = False
+            needs_followup = True
+            recoverable = True
+        elif is_broad and not relay.todo_used and relay.touched_files:
+            # Broad task skipped TODO but did work — caveat, not failure
+            ok = True
+            needs_followup = False
+            recoverable = False
+            result_caveats.append("Broad/multi-file task did not use update_todo_list — consider a visible plan next time.")
+        else:
+            ok = True
             needs_followup = False
             recoverable = False
 
@@ -534,7 +556,7 @@ def _format_spec_as_user_message(task: WorkerTaskSpec | WorkerDispatchRequest) -
     parts.extend([
         "",
         "Worker Contract",
-        "- Listed files are the expected working set. Read every one before editing.",
+        "- Read every file before editing it. Call read_file (or read_files) on every listed file. Read before any write.",
         "- Do not move unrelated behavior into entry points.",
         "- Do not create demo, prototype, or phase files unless explicitly requested.",
         "- Do not invent broad architecture outside the task scope.",
@@ -628,9 +650,19 @@ def _build_worker_summary(
     continuation = continuation or {}
     caveats = caveats or []
 
+    # Severity prefix
+    if errors:
+        lines.append(f"Worker failed — {errors[0]}")
+    elif continuation.get("status") == "needs_followup":
+        reason = continuation.get("reason", "") or (caveats[0] if caveats else "needs further work")
+        lines.append(f"Worker needs follow-up — {reason}")
+    elif caveats:
+        lines.append(f"Worker completed with caveats — {caveats[0]}")
+    else:
+        lines.append("Worker completed successfully.")
+
     # 1. Errors first
     if errors:
-        lines.append("Worker encountered errors:")
         for err in errors:
             lines.append(f"  - {err}")
 
@@ -673,6 +705,26 @@ def _build_worker_summary(
         lines.append("Worker finished with no changes.")
 
     return "\n".join(lines).strip()
+
+
+def _check_read_before_edit(
+    read_files: set[str],
+    read_outline_files: set[str],
+    edited_existing_files: list[str],
+    *,
+    file_exists: Any = None,
+) -> list[str]:
+    """Return paths of existing files that were edited without being read.
+
+    Splits Path-exists into a callable to allow testing without the filesystem.
+    """
+    if file_exists is None:
+        file_exists = lambda p: Path(p).exists()  # noqa: E731
+    all_read = read_files | set(read_outline_files)
+    return [
+        p for p in edited_existing_files
+        if p not in all_read and file_exists(p)
+    ]
 
 
 def _parse_continuation_report(content: str) -> dict[str, Any]:
