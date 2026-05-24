@@ -35,6 +35,7 @@ from aura.conversation import (
     WorkerTaskSpec,
     normalize_worker_task,
 )
+from aura.conversation.tool_limits import WRITE_TOOLS
 from aura.conversation.persistence import WorkerDispatchRecord
 from aura.prompts import (
     WORKER_SYSTEM_PROMPT,
@@ -328,19 +329,77 @@ class _DispatchProxy(QObject):
 
         final_report = _last_assistant_content(worker_history)
         continuation = _parse_continuation_report(final_report)
+        is_partial = bool(continuation.get("status") == "needs_followup" or continuation.get("remaining"))
+        claimed_validation = _final_report_claims_validation(final_report) or bool(continuation.get("validation_text"))
+
+        has_writes = bool(relay.write_results)
+        failed_write_tools = [r for r in relay.failed_tool_results if r["name"] in WRITE_TOOLS]
+        failed_validation = [v for v in relay.validation_results if not v["ok"]]
+        validation_ran = bool(relay.validation_results)
+        missing_validation_after_writes = has_writes and not validation_ran
+
+        # Compute acceptance-unverified
+        acceptance_unverified = False
+        if req.acceptance.strip():
+            if not is_partial and not claimed_validation and not validation_ran:
+                acceptance_unverified = True
+
+        # Build structured errors and caveats
         result_errors = list(relay.api_errors)
-        result_caveats: list[str] = []
+
+        # Failed write tools are hard errors
+        for r in failed_write_tools:
+            result_errors.append(f"Worker write tool '{r['name']}' reported failure.")
+
+        # Failed validation commands are hard errors
+        for v in failed_validation:
+            cmd = v["command"][:80]
+            result_errors.append(f"Validation command failed (exit code {v['exit_code']}): {cmd}")
+
         if _final_report_claims_failure(final_report):
             result_errors.append(
                 "Worker final report claims a blocker, failed validation, failed acceptance, "
                 "or unverified acceptance."
             )
-        is_partial = bool(continuation.get("status") == "needs_followup" or continuation.get("remaining"))
-        claimed_validation = _final_report_claims_validation(final_report) or bool(continuation.get("validation_text"))
-        if req.acceptance.strip() and not is_partial and not claimed_validation:
-            result_caveats.append(
-                "Worker final report did not clearly mention validation or acceptance verification."
-            )
+
+        result_caveats: list[str] = []
+
+        if missing_validation_after_writes:
+            result_caveats.append("Worker modified files but ran no validation command.")
+
+        if acceptance_unverified:
+            result_caveats.append("Worker final report did not clearly mention validation or acceptance verification.")
+
+        phase_boundary = relay.phase_boundary_info is not None
+
+        # Determine ok: only true when no errors, no caveats, no failures,
+        # and either writes exist or final evidence exists.
+        ok = (
+            not result_errors
+            and not result_caveats
+            and not phase_boundary
+            and not failed_write_tools
+            and not failed_validation
+            and not missing_validation_after_writes
+            and not acceptance_unverified
+            and bool(relay.write_results or final_report)
+        )
+
+        # Determine needs_followup and recoverable
+        needs_followup = (
+            phase_boundary
+            or bool(failed_validation)
+            or missing_validation_after_writes
+            or acceptance_unverified
+        )
+        recoverable = (
+            phase_boundary
+            or bool(failed_validation)
+            or missing_validation_after_writes
+            or acceptance_unverified
+            or bool(failed_write_tools)
+        )
+
         summary = _build_worker_summary(
             req,
             worker_history,
@@ -348,13 +407,6 @@ class _DispatchProxy(QObject):
             result_errors,
             continuation,
             result_caveats,
-        )
-        phase_boundary = relay.phase_boundary_info is not None
-        ok = (
-            not result_errors
-            and not result_caveats
-            and not phase_boundary
-            and bool(relay.write_results or final_report)
         )
         modified_files = continuation.get("modified_files") or [
             str(w["path"]) for w in relay.write_results if isinstance(w.get("path"), str) and w.get("path")
@@ -398,12 +450,12 @@ class _DispatchProxy(QObject):
             ok=ok,
             summary=summary,
             cancelled=False,
-            needs_followup=phase_boundary,
+            needs_followup=needs_followup,
             phase_boundary=phase_boundary,
             followup_reason=(
                 str(relay.phase_boundary_info.get("reason")) if relay.phase_boundary_info else None
             ),
-            recoverable=phase_boundary,
+            recoverable=recoverable,
             completed=continuation.get("completed", []),
             remaining=continuation.get("remaining", []),
             modified_files=modified_files,

@@ -275,8 +275,9 @@ class ConversationManager:
                                 # We must handle return here carefully since we're inside a function
                                 return {"id": tool_call_id, "return": True, "result": result}
                             worker_redispatches += 1
-                        else:
+                        elif result.ok:
                             _terminal_dispatch = True
+                        # else: result.ok is False and not recoverable — let the loop continue
                     return {"id": tool_call_id, "skip": True}
 
                 if name == "run_research":

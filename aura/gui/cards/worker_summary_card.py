@@ -17,7 +17,8 @@ class WorkerSummaryCard(QFrame):
     """
 
     def __init__(
-        self, tool_call_id: str, goal: str, ok: bool, summary: str, parent=None
+        self, tool_call_id: str, goal: str, ok: bool, summary: str,
+        needs_followup: bool = False, parent=None
     ) -> None:
         super().__init__(parent)
         self.tool_call_id = tool_call_id
@@ -34,9 +35,14 @@ class WorkerSummaryCard(QFrame):
         layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(8)
 
-        # Header
-        status_icon = "✅" if ok else "⚠️"
-        header = QLabel(f"{status_icon} Worker completed")
+        # Header — pick label based on status
+        if ok:
+            header_text = "✅ Worker completed"
+        elif needs_followup:
+            header_text = "⚠️ Worker needs follow-up"
+        else:
+            header_text = "❌ Worker failed"
+        header = QLabel(header_text)
         header.setStyleSheet(
             f"color: {SUCCESS if ok else DANGER}; "
             f"font-weight: 700; font-size: 12px;"

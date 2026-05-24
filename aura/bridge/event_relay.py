@@ -53,11 +53,12 @@ class WorkerEventRelay(QObject):
         super().__init__(parent)
         self._approval_proxy = approval_proxy
         self._worker_model = worker_model
-        # Side-effect state that _run_worker reads after completion
-        self.index_to_id: dict[int, str] = {}
         self.write_results: list[dict[str, Any]] = []
         self.api_errors: list[str] = []
         self.phase_boundary_info: dict[str, Any] | None = None
+        self.tool_results: list[dict] = []
+        self.failed_tool_results: list[dict] = []
+        self.validation_results: list[dict] = []
 
     def relay(self, tool_call_id: str, ev: Event) -> None:
         """Emit the appropriate signal for the event type and track side effects."""
@@ -141,6 +142,32 @@ class WorkerEventRelay(QObject):
                         "tool": ev.name,
                         "path": parsed.get("path"),
                         "is_new_file": parsed.get("is_new_file", False),
+                    }
+                )
+            # Track all tool results
+            tr = {
+                "name": ev.name,
+                "ok": ev.ok,
+                "result_preview": (ev.result or "")[:200],
+            }
+            self.tool_results.append(tr)
+            if not ev.ok:
+                self.failed_tool_results.append(tr)
+
+            # Track terminal validation command results
+            if (
+                ev.name == "run_terminal_command"
+                and isinstance(parsed, dict)
+                and "command" in parsed
+                and "exit_code" in parsed
+                and "ok" in parsed
+            ):
+                self.validation_results.append(
+                    {
+                        "command": parsed.get("command", ""),
+                        "ok": parsed.get("ok", False),
+                        "exit_code": parsed.get("exit_code", -1),
+                        "output_preview": (parsed.get("output", "") or "")[:200],
                     }
                 )
         elif isinstance(ev, TerminalOutput):

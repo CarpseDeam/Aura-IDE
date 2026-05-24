@@ -123,7 +123,7 @@ class InfoHubPane(QWidget):
         card = ErrorCard("Worker Error", message, parent=self._log_tab)
         self._cards_layout.addWidget(card)
 
-    def show_final_summary(self, ok: bool, summary: str) -> None:
+    def show_final_summary(self, ok: bool, summary: str, needs_followup: bool = False) -> None:
         """Append a formatted summary block to the Worker Log text.
 
         Flushes the typewriter immediately so the summary is visible at once.
@@ -131,7 +131,12 @@ class InfoHubPane(QWidget):
         # Flush any pending typewriter content
         self._flush_log()
 
-        prefix = "✅ Worker completed successfully." if ok else "⚠️ Worker failed."
+        if ok:
+            prefix = "✅ Worker completed successfully."
+        elif needs_followup:
+            prefix = "⚠️ Worker needs follow-up."
+        else:
+            prefix = "❌ Worker failed."
         block = f"\n\n{'─' * 40}\n{prefix}\n{summary}\n{'─' * 40}\n"
         self._log_view.insertPlainText(block)
 

@@ -472,7 +472,11 @@ class ChatView(QScrollArea):
                         # Worker actually started and finished (or errored during run)
                         summary = data.get("summary", "")
                         if summary:
-                            self.add_worker_summary(tool_call_id, controller.goal or "", ok, summary)
+                            needs_followup = data.get("needs_followup", False)
+                            self.add_worker_summary(
+                                tool_call_id, controller.goal or "", ok, summary,
+                                needs_followup=needs_followup,
+                            )
                 except Exception:
                     pass
             elif controller.tool_name == "run_research":
@@ -480,7 +484,11 @@ class ChatView(QScrollArea):
                     data = json.loads(result_text)
                     report = data.get("report", "")
                     if report:
-                        self.add_worker_summary(tool_call_id, controller.goal or "Research", ok, report)
+                        needs_followup = data.get("needs_followup", False)
+                        self.add_worker_summary(
+                            tool_call_id, controller.goal or "Research", ok, report,
+                            needs_followup=needs_followup,
+                        )
                 except Exception:
                     pass
 
@@ -575,9 +583,13 @@ class ChatView(QScrollArea):
         return self._spec_cards.get(tool_call_id)
 
     def add_worker_summary(
-        self, tool_call_id: str, goal: str, ok: bool, summary: str
+        self, tool_call_id: str, goal: str, ok: bool, summary: str,
+        needs_followup: bool = False
     ) -> None:
         """Add a summary card to the chat after a worker completes."""
         self._remove_plan_writer_card(tool_call_id)
-        card = WorkerSummaryCard(tool_call_id, goal, ok, summary, parent=self)
+        card = WorkerSummaryCard(
+            tool_call_id, goal, ok, summary,
+            needs_followup=needs_followup, parent=self
+        )
         self._add_card(card)

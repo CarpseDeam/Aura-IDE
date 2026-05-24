@@ -274,9 +274,9 @@ class AuraPlayground(QWidget):
     def finish_terminal_process(self, process_id: str, exit_code: int) -> None:
         self._terminal_window.set_result(process_id, exit_code)
 
-    def worker_finished(self, ok: bool, summary: str):
+    def worker_finished(self, ok: bool, summary: str, needs_followup: bool = False) -> None:
         self.clear()
-        self._info_hub.show_final_summary(ok, summary)
+        self._info_hub.show_final_summary(ok, summary, needs_followup=needs_followup)
 
     def worker_cancelled(self):
         self.clear()
