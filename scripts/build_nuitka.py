@@ -20,7 +20,7 @@ PACKAGE_NAME = "aura"
 ICON_PATH = "media/AurA.ico"
 MEDIA_DIR = "media"
 OUTPUT_DIR = "build"
-DEFAULT_NUITKA_JOBS = 1
+DEFAULT_NUITKA_JOBS = max(1, (os.cpu_count() or 2) // 2)
 
 FINAL_DIST_NAME = f"{APP_NAME}.dist"
 FINAL_EXE_NAME = f"{APP_NAME}.exe"
@@ -128,21 +128,25 @@ def run(cmd: list[str]) -> None:
     subprocess.run(cmd, check=True)
 
 
-def ensure_build_dependencies() -> None:
-    """Install required build dependencies if they are missing."""
-    missing: list[str] = []
-    try:
-        import nuitka  # noqa: F401
-    except ImportError:
-        missing.append("nuitka")
-    try:
-        import zstandard  # noqa: F401
-    except ImportError:
-        missing.append("zstandard")
-
-    if missing:
-        print(f"Installing missing dependencies: {', '.join(missing)}")
-        run([sys.executable, "-m", "pip", "install", *missing])
+def create_build_venv(root: Path) -> Path:
+    """Create a pristine virtual environment for the build."""
+    venv_dir = root / OUTPUT_DIR / ".build_venv"
+    if venv_dir.exists():
+        print("Cleaning up old build environment...")
+        shutil.rmtree(venv_dir, ignore_errors=True)
+    
+    print("Creating pristine build environment...")
+    import venv
+    venv.create(venv_dir, with_pip=True)
+    
+    python_exe = venv_dir / "Scripts" / "python.exe"
+    if not python_exe.exists():
+        raise SystemExit(f"Failed to find python executable in {venv_dir}")
+        
+    print("Installing Aura and build dependencies into pristine environment...")
+    run([str(python_exe), "-m", "pip", "install", "-e", ".", "nuitka", "zstandard"])
+    
+    return python_exe
 
 
 def validate_project_paths(root: Path) -> None:
@@ -228,6 +232,7 @@ def copy_to_desktop(zip_path: Path) -> None:
 
 
 def create_nuitka_command(
+    python_exe: Path,
     *,
     low_memory: bool = True,
     jobs: int = DEFAULT_NUITKA_JOBS,
@@ -237,7 +242,7 @@ def create_nuitka_command(
         raise SystemExit("--jobs cannot be 0.")
 
     cmd = [
-        sys.executable,
+        str(python_exe),
         "-m",
         "nuitka",
         "--standalone",
@@ -257,6 +262,8 @@ def create_nuitka_command(
         "--nofollow-import-to=numpy",
         "--nofollow-import-to=scipy",
         "--nofollow-import-to=pytest",
+        "--nofollow-import-to=charset_normalizer",
+        "--nofollow-import-to=click",
         "--lto=no",
     ]
     if low_memory:
@@ -332,10 +339,13 @@ def build(
     validate_project_paths(root)
     clean_previous_dist_dirs(root)
 
-    # 3. Nuitka Command
-    cmd = create_nuitka_command(low_memory=low_memory, jobs=jobs)
+    # 3. Build Environment
+    python_exe = create_build_venv(root)
 
-    # 4. Run Build
+    # 4. Nuitka Command
+    cmd = create_nuitka_command(python_exe, low_memory=low_memory, jobs=jobs)
+
+    # 5. Run Build
     print(f"\nStarting Nuitka build for version {new_version}...")
     try:
         run(cmd)
@@ -343,36 +353,66 @@ def build(
         print("\nBuild failed.")
         sys.exit(1)
 
-    # 5. Package & Deploy
+    # 6. Package & Deploy
     dist_dir = find_created_dist_dir(root)
     final_dist_dir = normalize_dist_dir(root, dist_dir)
 
+    # Helper to find a package path inside the clean venv
+    def get_venv_package_path(pkg: str) -> Path | None:
+        try:
+            out = subprocess.check_output(
+                [str(python_exe), "-c", f"import {pkg}; print({pkg}.__file__)"],
+                text=True,
+                stderr=subprocess.DEVNULL
+            ).strip()
+            return Path(out).resolve().parent
+        except subprocess.CalledProcessError:
+            return None
+
     # Copy google-genai as pure Python files to avoid Nuitka compilation hang/crash
-    try:
-        import google.genai
-        google_genai_path: Path = Path(google.genai.__file__).resolve().parent
-        if google_genai_path.exists():
-            target_google_dir: Path = final_dist_dir / "google"
-            target_genai_dir: Path = target_google_dir / "genai"
-            print(f"Bundling google-genai as raw source: {google_genai_path} -> {target_genai_dir}")
-            if target_genai_dir.exists():
-                shutil.rmtree(target_genai_dir)
-            shutil.copytree(google_genai_path, target_genai_dir)
-    except ImportError:
-        print("Warning: google-genai is not installed in the environment, skipping manual bundle.")
+    google_genai_path = get_venv_package_path("google.genai")
+    if google_genai_path and google_genai_path.exists():
+        target_google_dir: Path = final_dist_dir / "google"
+        target_genai_dir: Path = target_google_dir / "genai"
+        print(f"Bundling google-genai as raw source: {google_genai_path} -> {target_genai_dir}")
+        if target_genai_dir.exists():
+            shutil.rmtree(target_genai_dir)
+        shutil.copytree(google_genai_path, target_genai_dir)
+    else:
+        print("Warning: google-genai is not installed in the clean environment, skipping manual bundle.")
 
     # Copy libcst as pure Python files to avoid Nuitka compilation hang/crash
-    try:
-        import libcst
-        libcst_path: Path = Path(libcst.__file__).resolve().parent
-        if libcst_path.exists():
-            target_libcst_dir: Path = final_dist_dir / "libcst"
-            print(f"Bundling libcst as raw source: {libcst_path} -> {target_libcst_dir}")
-            if target_libcst_dir.exists():
-                shutil.rmtree(target_libcst_dir)
-            shutil.copytree(libcst_path, target_libcst_dir)
-    except ImportError:
-        print("Warning: libcst is not installed in the environment, skipping manual bundle.")
+    libcst_path = get_venv_package_path("libcst")
+    if libcst_path and libcst_path.exists():
+        target_libcst_dir: Path = final_dist_dir / "libcst"
+        print(f"Bundling libcst as raw source: {libcst_path} -> {target_libcst_dir}")
+        if target_libcst_dir.exists():
+            shutil.rmtree(target_libcst_dir)
+        shutil.copytree(libcst_path, target_libcst_dir)
+    else:
+        print("Warning: libcst is not installed in the clean environment, skipping manual bundle.")
+
+    # Copy charset_normalizer as pure Python files to avoid Nuitka compilation hang/crash
+    charset_normalizer_path = get_venv_package_path("charset_normalizer")
+    if charset_normalizer_path and charset_normalizer_path.exists():
+        target_charset_dir: Path = final_dist_dir / "charset_normalizer"
+        print(f"Bundling charset_normalizer as raw source: {charset_normalizer_path} -> {target_charset_dir}")
+        if target_charset_dir.exists():
+            shutil.rmtree(target_charset_dir)
+        shutil.copytree(charset_normalizer_path, target_charset_dir)
+    else:
+        print("Warning: charset_normalizer is not installed in the clean environment, skipping manual bundle.")
+
+    # Copy click as pure Python files to avoid Nuitka C compiler crash
+    click_path = get_venv_package_path("click")
+    if click_path and click_path.exists():
+        target_click_dir: Path = final_dist_dir / "click"
+        print(f"Bundling click as raw source: {click_path} -> {target_click_dir}")
+        if target_click_dir.exists():
+            shutil.rmtree(target_click_dir)
+        shutil.copytree(click_path, target_click_dir)
+    else:
+        print("Warning: click is not installed in the clean environment, skipping manual bundle.")
 
     zip_path = zip_distribution(root, final_dist_dir)
     if copy_desktop:
@@ -418,7 +458,6 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 if __name__ == "__main__":
     args = parse_args(sys.argv[1:])
-    ensure_build_dependencies()
     build(
         args.version,
         skip_version_update=args.skip_version_update,

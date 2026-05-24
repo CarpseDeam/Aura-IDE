@@ -139,11 +139,11 @@ def propose_edit_symbol(
     Args:
         workspace_root: Resolved root of the workspace jail.
         target: The ``.py`` file to edit.
-        symbol_type: ``"function"``, ``"class"``, or ``"method"``.
+        symbol_type: ``\"function\"``, ``\"class\"``, or ``\"method\"``.
         symbol_name: Name of the symbol to replace.
         new_definition: The complete new definition (decorators, signature,
             docstring, body). This replaces the entire existing definition.
-        class_name: Required when *symbol_type* is ``"method"``.
+        class_name: Required when *symbol_type* is ``\"method\"``.
 
     Returns:
         A dict with the same shape as :func:`propose_edit`:
@@ -151,9 +151,9 @@ def propose_edit_symbol(
         - ``ok``: bool
         - ``rel_path``: str (POSIX-relative path)
         - ``old_content``: str (original file content)
-        - ``new_content``: str (file content after replacement) or ``""`` on error
+        - ``new_content``: str (file content after replacement) or ``\"\"`` on error
         - ``is_new_file``: ``False``
-        - ``match_tier``: ``"symbol"`` on success
+        - ``match_tier``: ``\"symbol\"`` on success
     """
     # --- Validation -----------------------------------------------------------
     if not target.exists():
@@ -230,11 +230,26 @@ def propose_edit_symbol(
     # --- Compute replacement --------------------------------------------------
     lines_with_nl = original.splitlines(keepends=True)
 
+    orig_block = "".join(lines_with_nl[start_line:end_line])
+
+    # Auto-indent new_definition to match the original symbol's indentation.
+    # This handles methods inside classes where the replacement body is often
+    # given without class-level indentation.
+    first_orig_line = orig_block.split("\n", 1)[0]
+    orig_indent = first_orig_line[: len(first_orig_line) - len(first_orig_line.lstrip())]
+    if orig_indent:
+        first_new_line = new_definition.split("\n", 1)[0]
+        if not first_new_line.startswith(orig_indent):
+            indented = "\n".join(
+                (orig_indent + line) if line else ""
+                for line in new_definition.split("\n")
+            )
+            new_definition = indented
+
     # Normalise new_definition trailing newline to match original block's style.
     # If the original block ended with a newline and new_definition doesn't, add one.
     # If the original file didn't end with a newline and this was the last block,
     # preserve that.
-    orig_block = "".join(lines_with_nl[start_line:end_line])
     orig_ends_with_nl = orig_block.endswith("\n")
 
     if orig_ends_with_nl and not new_definition.endswith("\n"):
@@ -243,6 +258,21 @@ def propose_edit_symbol(
         new_definition = new_definition.rstrip("\n")
 
     new_content = replace_line_range(original, lines_with_nl, start_line, end_line, new_definition)
+
+    # --- Validate replacement produces valid Python --------------------------
+    try:
+        parse_python_ast(new_content, filename=str(target))
+    except SyntaxError:
+        import sys
+        syntax_error = sys.exc_info()[1]
+        return {
+            "ok": False,
+            "rel_path": rel,
+            "old_content": original,
+            "new_content": "",
+            "is_new_file": False,
+            "error": f"Proposed replacement makes the file invalid: {syntax_error}",
+        }
 
     result: dict[str, Any] = {
         "ok": True,
