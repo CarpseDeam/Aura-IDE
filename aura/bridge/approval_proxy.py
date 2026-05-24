@@ -23,6 +23,7 @@ class _ApprovalProxy(QObject):
         self._last_request: ApprovalRequest | None = None
         self._last_event: dict[str, Any] | None = None
         self._approve_all_session: bool = False
+        self._active_dialog: DiffApprovalDialog | None = None
 
     def request_approval(self, request: ApprovalRequest) -> ApprovalDecision:
         if self._approve_all_session:
@@ -51,6 +52,21 @@ class _ApprovalProxy(QObject):
     def reset_approve_all(self) -> None:
         self._approve_all_session = False
 
+    def cancel_active_dialog(self) -> None:
+        """Close the active diff approval dialog, rejecting the change."""
+        with self._lock:
+            dialog = self._active_dialog
+        if dialog is not None:
+            from PySide6.QtCore import QObject
+            if isinstance(dialog, QObject):
+                QMetaObject.invokeMethod(
+                    dialog,
+                    "reject",
+                    Qt.ConnectionType.QueuedConnection,
+                )
+            elif hasattr(dialog, "reject"):
+                dialog.reject()
+
     @Slot()
     def _open_dialog(self) -> None:
         req = self._last_request
@@ -58,7 +74,13 @@ class _ApprovalProxy(QObject):
             self._last_decision = ApprovalDecision(action="reject")
             return
         dlg = DiffApprovalDialog(req, parent=self._parent_widget)
-        dlg.exec()
+        with self._lock:
+            self._active_dialog = dlg
+        try:
+            dlg.exec()
+        finally:
+            with self._lock:
+                self._active_dialog = None
         self._last_decision = dlg.decision()
         if self._last_decision.action == "approve_all":
             self._approve_all_session = True

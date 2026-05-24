@@ -505,11 +505,11 @@ class ConversationBridge(QObject):
         spec: str,
         acceptance: str,
         summary: str,
-    ) -> None:
-        self._dispatch_proxy.user_dispatched(tool_call_id, goal, files, spec, acceptance, summary)
+    ) -> bool:
+        return self._dispatch_proxy.user_dispatched(tool_call_id, goal, files, spec, acceptance, summary)
 
-    def user_cancelled_dispatch(self, tool_call_id: str) -> None:
-        self._dispatch_proxy.user_cancelled(tool_call_id)
+    def user_cancelled_dispatch(self, tool_call_id: str) -> bool:
+        return self._dispatch_proxy.user_cancelled(tool_call_id)
 
     # ---- send / cancel ----------------------------------------------------
 
