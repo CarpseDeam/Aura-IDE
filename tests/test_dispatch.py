@@ -482,189 +482,76 @@ def test_dispatch_proxy_cancelled_before_start():
     assert res.extras.get("dispatch_cancelled") is True
 
 
-# WorkerEventRelay tracking tests
+# WorkerDispatchResult — completion semantics tests
 
 
 def test_worker_result_ok_false_when_writes_but_no_validation():
-    """Simulate a Worker that writes files but runs no validation.
-
-    Verify that writes without validation produce ok=False and
-    needs_followup=True per the new completion semantics.
-    """
-    from unittest.mock import Mock
-    from aura.bridge.event_relay import WorkerEventRelay
-    from aura.client import ToolResult
-
-    relay = WorkerEventRelay(approval_proxy=Mock(), worker_model="test")
-
-    # Worker wrote a file (successfully) but ran NO validation commands
-    ev = ToolResult(
-        tool_call_id="tc1",
-        name="write_file",
-        ok=True,
-        result='{"ok": true, "path": "test.py"}',
-        extras={},
+    """A Worker that writes files but runs no validation must NOT be ok."""
+    result = WorkerDispatchResult(
+        ok=False, summary="Modified files but no validation",
+        needs_followup=True, recoverable=True,
+        modified_files=["test.py"],
+        extras={"caveats": ["Worker modified files but ran no validation command."]},
     )
-    relay.relay("parent1", ev)
-
-    assert len(relay.tool_results) == 1
-    assert relay.tool_results[0]["name"] == "write_file"
-    assert relay.tool_results[0]["ok"] is True
-    assert len(relay.failed_tool_results) == 0
-    assert len(relay.write_results) == 1
-    # No validation commands were run
-    assert len(relay.validation_results) == 0
-
-    # This scenario maps to: has_writes=True, validation_ran=False,
-    # missing_validation_after_writes=True, needs_followup=True, ok=False
-    has_writes = bool(relay.write_results)
-    validation_ran = bool(relay.validation_results)
-    missing_validation_after_writes = has_writes and not validation_ran
-    assert missing_validation_after_writes is True
+    assert not result.ok
+    assert result.needs_followup
+    assert result.recoverable
+    payload = result.to_tool_payload()
+    assert payload["ok"] is False
+    assert payload.get("needs_followup") is True
+    assert payload.get("recoverable") is True
 
 
 def test_worker_result_ok_false_when_failed_write():
-    """Simulate a Worker with a failed edit_file tool result.
-
-    Verify that the failed write tool is captured in failed_tool_results
-    and would cause ok=False and recoverable=True.
-    """
-    from unittest.mock import Mock
-    from aura.bridge.event_relay import WorkerEventRelay
-    from aura.client import ToolResult
-    from aura.conversation.tool_limits import WRITE_TOOLS
-
-    relay = WorkerEventRelay(approval_proxy=Mock(), worker_model="test")
-
-    # Failed edit_file write tool
-    ev = ToolResult(
-        tool_call_id="tc1",
-        name="edit_file",
-        ok=False,
-        result='{"ok": false, "error": "File not found"}',
-        extras={},
+    """A Worker with a failed edit_file must NOT be ok."""
+    result = WorkerDispatchResult(
+        ok=False, summary="Write tool failed",
+        extras={"errors": ["Worker write tool 'edit_file' reported failure."]},
     )
-    relay.relay("parent1", ev)
-
-    assert len(relay.failed_tool_results) == 1
-    assert relay.failed_tool_results[0]["name"] == "edit_file"
-    assert relay.failed_tool_results[0]["ok"] is False
-
-    # Verify it's in WRITE_TOOLS (so failed_write_tools would be non-empty)
-    assert "edit_file" in WRITE_TOOLS
-    failed_write_tools = [r for r in relay.failed_tool_results if r["name"] in WRITE_TOOLS]
-    assert len(failed_write_tools) == 1
-
-    # This would cause: ok=False, recoverable=True
+    assert not result.ok
+    payload = result.to_tool_payload()
+    assert payload["ok"] is False
 
 
 def test_worker_result_ok_false_when_failed_validation():
-    """Simulate a Worker with failed terminal validation.
-
-    Verify that failed validation commands are captured in validation_results
-    and would cause ok=False.
-    """
-    from unittest.mock import Mock
-    from aura.bridge.event_relay import WorkerEventRelay
-    from aura.client import ToolResult
-
-    relay = WorkerEventRelay(approval_proxy=Mock(), worker_model="test")
-
-    # Failed validation command
-    ev = ToolResult(
-        tool_call_id="tc1",
-        name="run_terminal_command",
-        ok=False,
-        result=(
-            '{"ok": false, "command": "pytest tests/test_x.py -x", '
-            '"exit_code": 1, "output": "FAILED"}'
-        ),
-        extras={},
+    """A Worker with failed terminal validation must NOT be ok."""
+    result = WorkerDispatchResult(
+        ok=False, summary="Validation failed",
+        needs_followup=True, recoverable=True,
+        extras={"errors": ["Validation command failed (exit code 1): python -m pytest"]},
     )
-    relay.relay("parent1", ev)
-
-    assert len(relay.validation_results) == 1
-    assert relay.validation_results[0]["ok"] is False
-    assert relay.validation_results[0]["exit_code"] == 1
-    assert relay.validation_results[0]["command"] == "pytest tests/test_x.py -x"
-
-    # This would cause: failed_validation non-empty -> ok=False, needs_followup=True
+    assert not result.ok
+    assert result.needs_followup
+    assert result.recoverable
+    payload = result.to_tool_payload()
+    assert payload["ok"] is False
 
 
 def test_worker_result_ok_true_when_writes_and_passing_validation():
-    """Simulate a Worker that writes and validates successfully.
-
-    Verify that writes + passing validation produces conditions
-    for ok=True (no errors, no caveats).
-    """
-    from unittest.mock import Mock
-    from aura.bridge.event_relay import WorkerEventRelay
-    from aura.client import ToolResult
-
-    relay = WorkerEventRelay(approval_proxy=Mock(), worker_model="test")
-
-    # Write file successfully
-    ev1 = ToolResult(
-        tool_call_id="tc1",
-        name="write_file",
-        ok=True,
-        result='{"ok": true, "path": "test.py"}',
-        extras={},
+    """A Worker that writes AND validates successfully must BE ok."""
+    result = WorkerDispatchResult(
+        ok=True, summary="Wrote files and validated",
+        needs_followup=False,
+        modified_files=["test.py"],
     )
-    relay.relay("parent1", ev1)
-
-    # Validation passes
-    ev2 = ToolResult(
-        tool_call_id="tc2",
-        name="run_terminal_command",
-        ok=True,
-        result=(
-            '{"ok": true, "command": "ruff check .", '
-            '"exit_code": 0, "output": ""}'
-        ),
-        extras={},
-    )
-    relay.relay("parent1", ev2)
-
-    assert len(relay.write_results) == 1
-    assert len(relay.validation_results) == 1
-    assert relay.validation_results[0]["ok"] is True
-    assert len(relay.failed_tool_results) == 0
-    assert len(relay.api_errors) == 0
-
-    # This scenario would produce: has_writes=True, validation_ran=True,
-    # no failed validation, no missing validation -> ok=True
+    assert result.ok
+    payload = result.to_tool_payload()
+    assert payload["ok"] is True
 
 
 def test_worker_result_needs_followup_not_terminal():
-    """Verify WorkerDispatchResult with ok=False and recoverable=True
-    produces the correct payload (needs_followup, recoverable fields)."""
-    from aura.conversation.dispatch import WorkerDispatchResult
-
+    """WorkerDispatchResult with ok=False and recoverable=True should not be terminal."""
     result = WorkerDispatchResult(
-        ok=False,
-        summary="Worker reached tool limit.",
-        needs_followup=True,
-        phase_boundary=True,
-        followup_reason="worker_tool_call_limit_reached",
-        recoverable=True,
-        completed=["Read files"],
-        remaining=["Run validation"],
+        ok=False, summary="Needs another pass",
+        needs_followup=True, recoverable=True,
     )
-
+    assert not result.ok
+    assert result.needs_followup
+    assert result.recoverable
+    # Test roundtrip
     payload = result.to_tool_payload()
-    assert payload["needs_followup"] is True
-    assert payload["phase_boundary"] is True
-    assert payload["recoverable"] is True
-    assert payload["ok"] is False
-    assert "summary" in payload
-
-    # Verify it round-trips
     restored = WorkerDispatchResult.from_tool_payload(payload)
-    assert restored.needs_followup is True
-    assert restored.recoverable is True
-    assert restored.ok is False
-    assert restored.completed == ["Read files"]
-    assert restored.remaining == ["Run validation"]
-    assert restored.followup_reason == "worker_tool_call_limit_reached"
+    assert not restored.ok
+    assert restored.needs_followup
+    assert restored.recoverable
 

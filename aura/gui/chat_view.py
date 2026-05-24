@@ -472,7 +472,7 @@ class ChatView(QScrollArea):
                         # Worker actually started and finished (or errored during run)
                         summary = data.get("summary", "")
                         if summary:
-                            needs_followup = data.get("needs_followup", False)
+                            needs_followup = data.get("needs_followup", False) or data.get("recoverable", False)
                             self.add_worker_summary(
                                 tool_call_id, controller.goal or "", ok, summary,
                                 needs_followup=needs_followup,

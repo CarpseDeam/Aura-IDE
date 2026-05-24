@@ -35,16 +35,19 @@ class WorkerSummaryCard(QFrame):
         layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(8)
 
-        # Header — pick label based on status
+        # Header — pick label and color based on status
         if ok:
             header_text = "✅ Worker completed"
+            header_color = SUCCESS
         elif needs_followup:
             header_text = "⚠️ Worker needs follow-up"
+            header_color = "#E8A317"
         else:
             header_text = "❌ Worker failed"
+            header_color = DANGER
         header = QLabel(header_text)
         header.setStyleSheet(
-            f"color: {SUCCESS if ok else DANGER}; "
+            f"color: {header_color}; "
             f"font-weight: 700; font-size: 12px;"
         )
         layout.addWidget(header)
