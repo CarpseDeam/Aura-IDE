@@ -218,13 +218,19 @@ def propose_edit_symbol(
         }
 
     if start_line == -1:
+        available = info.get("available_symbols", {})
+        is_empty = not any(available.values())
+        error_extra = info.get("error", f"Symbol '{symbol_name}' not found")
         return {
             "ok": False,
             "rel_path": rel,
             "old_content": original,
             "new_content": "",
             "is_new_file": False,
-            "error": info.get("error", f"Symbol '{symbol_name}' not found"),
+            "error": error_extra,
+            "suggested_tool": "edit_line_range",
+            "available_symbols": available,
+            "suggested_fallback": "read_file_outline" if is_empty else "read_file",
         }
 
     # --- Compute replacement --------------------------------------------------

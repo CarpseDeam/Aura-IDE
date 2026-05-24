@@ -116,6 +116,8 @@ class ConversationManager:
         worker_phase_boundary_info: dict[str, Any] | None = None
         worker_redispatches = 0
         worker_dispatch_failures: dict[str, int] = {}
+        _edit_failures: dict[str, list[str]] = {}
+        _edit_tactic_blocked: dict[str, set[str]] = {}
 
         while True:
             rounds_used += 1
@@ -261,6 +263,29 @@ class ConversationManager:
                 name = task["name"]
                 args = task["args"]
 
+                # Worker mode tactic-forcing: block retrying same edit tactic on a file that already failed.
+                if mode == "worker" and name in ("edit_file", "edit_symbol"):
+                    file_path = args.get("path", "")
+                    if file_path and file_path in _edit_tactic_blocked and name in _edit_tactic_blocked[file_path]:
+                        payload = json.dumps({
+                            "ok": False,
+                            "error": (
+                                "The same edit tactic (" + name + ") was attempted again on " + file_path +
+                                " after a prior failure. This is not allowed. "
+                                "Use a different tactic: edit_line_range or write_file."
+                            )
+                        })
+                        return {
+                            "id": tool_call_id,
+                            "result_payload": payload,
+                            "event": ToolResult(
+                                tool_call_id=tool_call_id,
+                                name=name,
+                                ok=False,
+                                result=payload,
+                            )
+                        }
+
                 if name == "dispatch_to_worker":
                     result = self._tool_runner.handle_dispatch(
                         tool_call_id=tool_call_id,
@@ -343,6 +368,26 @@ class ConversationManager:
                     reject_all_for_turn = True
 
                 tool_msg_content = exec_result.to_tool_message_content()
+
+                # Worker mode tactic-forcing: track edit failures and inject recovery hint.
+                if mode == "worker" and name in ("edit_file", "edit_symbol") and not exec_result.ok:
+                    file_path = args.get("path", "")
+                    if file_path:
+                        _edit_tactic_blocked.setdefault(file_path, set()).add(name)
+                        hint = (
+                            "[edit-recovery: Your edit on " + file_path +
+                            " failed because old_str/symbol was not matched. "
+                            "Do NOT retry edit_file/edit_symbol on this path. "
+                            "Use a different tactic: edit_line_range (if you know the line numbers from a prior read_file) "
+                            "or write_file (to replace the whole file).]"
+                        )
+                        try:
+                            payload_dict = json.loads(tool_msg_content)
+                            if isinstance(payload_dict, dict):
+                                payload_dict["error"] = payload_dict.get("error", "") + "\n" + hint
+                                tool_msg_content = json.dumps(payload_dict)
+                        except (json.JSONDecodeError, TypeError):
+                            tool_msg_content = tool_msg_content + "\n" + hint
 
                 loop_result = self._apply_loop_detection(
                     mode=mode,

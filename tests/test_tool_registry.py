@@ -6,10 +6,10 @@ calls are made during test execution.
 """
 
 from __future__ import annotations
-
+from __future__ import annotations
+import tempfile
 from pathlib import Path
 from unittest.mock import ANY, MagicMock, patch
-
 import pytest
 
 from aura.conversation.tools._types import (

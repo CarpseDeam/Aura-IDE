@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from aura.ast_utils import parse_python_ast
 from aura.paths import safe_is_relative_to, safe_relative_to
 
 
@@ -78,6 +79,68 @@ def propose_write(workspace_root: Path, target: Path, content: str) -> dict[str,
     }
 
 
+def propose_line_range_edit(
+    workspace_root: Path, target: Path, start_line: int, end_line: int, new_str: str
+) -> dict[str, Any]:
+    """Propose replacing an exact line range in a file.
+
+    1-based, inclusive start_line, exclusive end_line (replaces lines
+    [start_line, end_line)). Requires the file to already exist.
+    """
+    if not target.exists():
+        rel = safe_relative_to(target, workspace_root).as_posix() if safe_is_relative_to(target, workspace_root) else str(target)
+        return {"ok": False, "error": f"file not found: {rel}", "rel_path": rel, "suggested_tool": "write_file"}
+    if not target.is_file():
+        rel = safe_relative_to(target, workspace_root).as_posix() if safe_is_relative_to(target, workspace_root) else str(target)
+        return {"ok": False, "error": f"not a regular file: {rel}", "rel_path": rel}
+
+    try:
+        original = target.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return {"ok": False, "error": "file is not valid UTF-8 text"}
+    except OSError:
+        return {"ok": False, "error": "failed to read file"}
+
+    rel = safe_relative_to(target, workspace_root).as_posix()
+    lines_with_nl = original.splitlines(keepends=True)
+    num_lines = len(lines_with_nl)
+
+    # Validate line numbers
+    if start_line < 1:
+        return {"ok": False, "error": f"start_line must be >= 1, got {start_line}", "rel_path": rel}
+    if end_line <= start_line:
+        return {"ok": False, "error": f"end_line ({end_line}) must be > start_line ({start_line})", "rel_path": rel}
+    if start_line > num_lines:
+        return {"ok": False, "error": f"start_line ({start_line}) exceeds file length ({num_lines} lines)", "rel_path": rel}
+    if end_line > num_lines + 1:
+        return {"ok": False, "error": f"end_line ({end_line}) exceeds file length+1 ({num_lines + 1})", "rel_path": rel}
+
+    # Convert to 0-based for replace_line_range
+    start_idx = start_line - 1
+    end_idx = end_line - 1
+    new_content = replace_line_range(original, lines_with_nl, start_idx, end_idx, new_str)
+
+    # Validate Python syntax if .py file
+    if target.suffix == ".py":
+        try:
+            compile(new_content, target.name, "exec")
+        except SyntaxError:
+            return {
+                "ok": False,
+                "error": "replacement produces invalid Python",
+                "rel_path": rel,
+                "suggested_tool": "write_file",
+            }
+
+    return {
+        "ok": True,
+        "rel_path": rel,
+        "old_content": original,
+        "new_content": new_content,
+        "is_new_file": False,
+    }
+
+
 def replace_line_range(
     original: str, file_lines_with_newlines: list[str], start_line: int, end_line: int, new_str: str
 ) -> str:
@@ -137,6 +200,10 @@ def propose_edit(
                 "old_str not found in file. Best fuzzy match ratio: 0.000 "
                 "(threshold: 0.75). Tried exact, line-exact, and fuzzy matching."
             ),
+            "edit_file_failure": True,
+            "suggested_tool": "edit_line_range",
+            "suggested_next_tool": "edit_line_range",
+            "suggested_next_action": "Re-read the file to see the actual content, then use edit_line_range with the exact line numbers you can see.",
         }
 
     # ---- Tier 2: Line-by-line exact match ----
@@ -165,6 +232,7 @@ def propose_edit(
     # ---- Tier 3: Whitespace-agnostic fuzzy line matching ----
     candidates: list[tuple[int, float]] = []
     best_ratio = 0.0
+    all_near_matches: list[tuple[int, float]] = []  # for nearest_candidates
 
     if len(old_lines) <= len(file_lines):
         normalized_old = [line.strip() for line in old_lines]
@@ -181,6 +249,27 @@ def propose_edit(
                 best_ratio = ratio
             if ratio >= 0.75:
                 candidates.append((i, ratio))
+            if ratio > 0.5:
+                all_near_matches.append((i, ratio))
+
+    def _build_nearest_candidates() -> list[dict[str, Any]]:
+        """Build nearest_candidates list from all_near_matches."""
+        sorted_matches = sorted(all_near_matches, key=lambda x: -x[1])
+        result = []
+        seen = set()
+        for idx, rat in sorted_matches:
+            block_text = "\n".join(file_lines[idx:idx + window_len])
+            key = (idx, idx + window_len)
+            if key not in seen:
+                seen.add(key)
+                result.append({
+                    "start_line": idx + 1,
+                    "end_line": idx + window_len,
+                    "text": block_text,
+                })
+            if len(result) >= 3:
+                break
+        return result
 
     if len(candidates) == 1:
         start_idx = candidates[0][0]
@@ -234,7 +323,16 @@ def propose_edit(
             f"old_str does not uniquely identify the target. "
             f"Add more surrounding context lines to disambiguate."
         )
-        return {"ok": False, "error": error_msg}
+        return {
+            "ok": False,
+            "error": error_msg,
+            "edit_file_failure": True,
+            "suggested_tool": "edit_line_range",
+            "suggested_next_tool": "edit_line_range",
+            "suggested_next_action": "Re-read the file to see the actual content, then use edit_line_range with the exact line numbers you can see.",
+            "best_fuzzy_ratio": round(max_ratio, 3),
+            "nearest_candidates": _build_nearest_candidates(),
+        }
 
     # ---- All tiers failed ----
     error_msg = (
@@ -244,4 +342,11 @@ def propose_edit(
     return {
         "ok": False,
         "error": error_msg,
+        "edit_file_failure": True,
+        "suggested_tool": "edit_line_range",
+        "suggested_next_tool": "edit_line_range",
+        "suggested_next_action": "Re-read the file to see the actual content, then use edit_line_range with the exact line numbers you can see.",
+        "best_fuzzy_ratio": round(best_ratio, 3),
+        "best_ratio": round(best_ratio, 4),
+        "nearest_candidates": _build_nearest_candidates(),
     }

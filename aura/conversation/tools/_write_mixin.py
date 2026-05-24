@@ -456,6 +456,23 @@ class WriteHandlersMixin:
             )
         return self._handle_write("edit_symbol", args, approval_cb, reject_all)
 
+    def _handle_edit_line_range(self, args, approval_cb, reject_all) -> ToolExecResult:
+        if self._read_only:
+            return ToolExecResult(ok=False, payload={"ok": False, "error": "Read-Only Mode is enabled — write tools are disabled."})
+        if self._mode == "planner":
+            return ToolExecResult(
+                ok=False,
+                payload={
+                    "ok": False,
+                    "error": (
+                        "Planner cannot write directly. "
+                        "You must use the 'dispatch_to_worker' tool to specify code changes. "
+                        "Include your intended edits in the 'spec' field of the dispatch."
+                    ),
+                },
+            )
+        return self._handle_write("edit_line_range", args, approval_cb, reject_all)
+
     def _handle_write(
         self,
         name: str,
@@ -521,6 +538,26 @@ class WriteHandlersMixin:
 
             req = ApprovalRequest(
                 tool_name="edit_file",
+                rel_path=proposal["rel_path"],
+                old_content=proposal["old_content"],
+                new_content=proposal["new_content"],
+                is_new_file=False,
+            )
+        elif name == "edit_line_range":
+            start_line = args.get("start_line")
+            end_line = args.get("end_line")
+            new_str = args.get("new_str", "")
+            if not isinstance(start_line, int) or not isinstance(end_line, int) or not isinstance(new_str, str):
+                return ToolExecResult(
+                    ok=False,
+                    payload={"ok": False, "error": "start_line and end_line must be integers, new_str must be a string"},
+                )
+            proposal = _reg.propose_line_range_edit(self._root, target, start_line, end_line, new_str)
+            if not proposal.get("ok", False):
+                return ToolExecResult(ok=False, payload=proposal)
+
+            req = ApprovalRequest(
+                tool_name="edit_line_range",
                 rel_path=proposal["rel_path"],
                 old_content=proposal["old_content"],
                 new_content=proposal["new_content"],

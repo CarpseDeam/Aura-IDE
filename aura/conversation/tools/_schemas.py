@@ -666,6 +666,36 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "edit_line_range",
+            "description": "Replace an exact line range in a file. Use after reading the file when you know the exact start and end line numbers. 1-based, inclusive start_line, exclusive end_line (like Python list slicing — replaces lines [start_line, end_line)). Requires preceding read_file or read_files on this path.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Workspace-relative file path (e.g. 'src/main.py')."
+                    },
+                    "start_line": {
+                        "type": "integer",
+                        "description": "First line to replace (1-based, inclusive)."
+                    },
+                    "end_line": {
+                        "type": "integer",
+                        "description": "Line after the last line to replace (1-based, exclusive). Replaces lines [start_line, end_line)."
+                    },
+                    "new_str": {
+                        "type": "string",
+                        "description": "Replacement content to insert in place of the removed lines."
+                    }
+                },
+                "required": ["path", "start_line", "end_line", "new_str"],
+                "additionalProperties": False
+            },
+        },
+    },
 ]
 
 RESEARCH_TOOL_DEFS: list[dict[str, Any]] = [
@@ -866,7 +896,7 @@ DIAGNOSTIC_TOOL_DEF: dict[str, Any] = {
         "description": (
             "Execute a short, read-only diagnostic command in the workspace. "
             "Use this to validate code (py_compile, pytest), inspect git state (status, diff, log), "
-            "or search the filesystem (grep, ls, cat). "
+            "or search the filesystem (rg, ls, cat). "
             "Rejects mutating, installing, or dangerous commands. "
             "Returns stdout, stderr, exit_code, timed_out, and the original command. "
             "Output is truncated at 100KB. "
@@ -884,6 +914,8 @@ DIAGNOSTIC_TOOL_DEF: dict[str, Any] = {
                         "'pytest tests/test_gui.py -x -q', "
                         "'rg \"class LeftPane\" aura/', "
                         "'ls aura/conversation/tools/'. "
+                        "Avoid bare grep; it is not portable on Windows/PowerShell. "
+                        "For absence checks, make the command exit 0 when the pattern is absent."
                     ),
                 },
                 "timeout": {

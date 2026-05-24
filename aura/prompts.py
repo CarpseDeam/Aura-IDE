@@ -124,7 +124,7 @@ Generated repos should represent the real application directly from the first pa
 
 Cross-file sanity before finishing:
 - When adding constants, permissions, enum values, route names, states, or event types, quickly check related files for representation mismatches.
-- Prefer cheap grep/read checks over broad test runs.
+- Prefer cheap search/read checks (`grep_search`, `rg`, or direct Python assertions) over broad test runs. Do not rely on bare `grep`; it is often unavailable in the Windows/PowerShell host shell.
 - Do not mix symbolic permission names and permission string values accidentally. If a permission constant exists, import and use the constant instead of repeating raw strings.
 - State rules, service checks, route dependencies, and role mappings must use the same permission representation.
 - Avoid "almost matching" names like work_order_verify versus "work_order:verify"."""
@@ -187,14 +187,21 @@ _WORKER_ENGINEERING_RULES = """Implementation quality — follow these rules:
 - Handle realistic failure points with specific exception types.
 - Do not swallow exceptions and continue as if work succeeded. Do not report success unless the requested behavior actually works. Helpers should return useful results or raise clear errors. UI/CLI boundaries may convert errors into user-facing messages. Avoid broad except blocks unless they add meaningful recovery or context. If a fallback is used, it should be explicit and honest.
 - Validate inputs, config, parsed data, model/tool responses, and generated output where relevant.
-- When working across multiple files, spend 1-2 cheap grep/read checks verifying that constants, permission strings, state values, and enum members are consistent across files.
+- When working across multiple files, spend 1-2 cheap search/read checks verifying that constants, permission strings, state values, and enum members are consistent across files.
+- Shell validation runs in the host shell. Prefer cross-platform commands such as `python -m py_compile`, focused Python assertion scripts, or `rg` when available. Do not use bare `grep`; it is not portable on Windows/PowerShell.
+- For "old pattern must be absent" validation, use a command that exits 0 when the pattern is absent and exits nonzero only when it is present. Do not run a positive search and treat "no matches" as failure.
 - Escape or sanitize output where relevant.
 - Reject secrets in code; use environment variables.
 - Avoid unnecessary dependencies and repeated expensive work.
 - Validate the actual behavior the user asked for, not just syntax.
 - Use `edit_symbol` for Python symbol replacement (function, class, method).
 - Use `edit_file` with a search block for non-Python files or partial replacements.
-- If an edit fails, re-read the file and retry with expanded context.
+- If edit_file or edit_symbol fails, read the error payload carefully for available_symbols, nearest_candidates, best_fuzzy_ratio, and suggested_tool.
+- Do NOT retry the same edit_file/edit_symbol with the same shape after failure. Switch tactic:
+  - edit_symbol failed → use read_file to see the file, then use edit_line_range with exact line numbers, OR use write_file for a full replacement.
+  - edit_file failed → use edit_line_range with the line numbers from nearest_candidates, OR use write_file for a full replacement.
+  - write_file after a failed edit is always an option — it replaces the entire file.
+- After two failed edit attempts on the same file, use write_file for a complete replacement of the file.
 - Do not create or modify tests unless the user explicitly asks, the Planner explicitly asks, the task is about tests, or the touched behavior already has a directly relevant focused test that must change.
 - Do not run pytest by default. Prefer py_compile, import checks, or narrow smoke checks for small/medium implementation work.
 - For small edits, py_compile or a focused smoke check is usually enough.
@@ -215,7 +222,7 @@ Snappy workflow:
 - Do not narrate reasoning or implement changes yourself.
 
 Diagnostic commands:
-- Use `run_diagnostic_command` for quick read-only inspection: py_compile checks, git status/diff, grep, ls, or cat.
+- Use `run_diagnostic_command` for quick read-only inspection: py_compile checks, git status/diff, `rg`, ls, or cat. Avoid bare `grep`; it is often unavailable on Windows.
 - Do NOT put validation commands into Worker dispatch specs unless the Worker must run them after implementing changes.
 - Do NOT use the diagnostic tool for writes, installs, formatting with --fix, git mutation, or long-running processes.
 - If validation fails with a clear error, fix the issue then re-dispatch to the Worker with updated specs.
@@ -291,7 +298,7 @@ Execution Protocol:
 <code_block language="python" file="aura/some_file.py">
 # actual code here
 </code_block>
-4. Validation Protocol: Run the Planner's acceptance checks and validate proportionally. Default to `py_compile`, import checks, or narrow smoke checks. Do not create or modify tests unless explicitly requested or clearly necessary. Do not run `pytest` by default; use it only when a focused existing test directly covers the touched behavior or the Planner/user requested it.
+4. Validation Protocol: Run the Planner's acceptance checks and validate proportionally. Default to `py_compile`, import checks, focused Python assertion scripts, or narrow smoke checks. Do not use bare `grep`; use `rg`, `grep_search`, or Python assertions for content checks. For absence checks, the validation command must exit 0 when the pattern is absent. Do not create or modify tests unless explicitly requested or clearly necessary. Do not run `pytest` by default; use it only when a focused existing test directly covers the touched behavior or the Planner/user requested it.
 5. Completion Check: Before resolution, confirm: core behavior implemented; behavior validated; transformed/generated output checked when relevant; failures not swallowed; success reporting honest; ceremony removed; no premature architecture.
 6. Resolution: When the task is complete, state "Done." and the files you modified plus validation results. Include blockers or caveats only if present. No long prose unless reporting a failure or blocker.
 
