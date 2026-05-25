@@ -4,6 +4,7 @@ from __future__ import annotations
 import difflib
 import re
 from pathlib import Path
+import hashlib
 from typing import Any
 
 from aura.paths import safe_is_relative_to, safe_relative_to
@@ -127,7 +128,13 @@ def propose_write(workspace_root: Path, target: Path, content: str) -> dict[str,
 
 
 def propose_line_range_edit(
-    workspace_root: Path, target: Path, start_line: int, end_line: int, new_str: str
+    workspace_root: Path,
+    target: Path,
+    start_line: int,
+    end_line: int,
+    new_str: str,
+    expected_old_str: str | None = None,
+    expected_old_hash: str | None = None,
 ) -> dict[str, Any]:
     """Propose replacing an exact line range in a file.
 
@@ -175,6 +182,25 @@ def propose_line_range_edit(
     # Convert to 0-based for replace_line_range
     start_idx = start_line - 1
     end_idx = end_line - 1
+    current_range = "".join(lines_with_nl[start_idx:end_idx])
+    if start_line < end_line and expected_old_str is not None and current_range != expected_old_str:
+        return _stale_line_range_payload(
+            workspace_root,
+            target,
+            "Line range content did not match expected_old_str.",
+            start_line,
+            end_line,
+        )
+    if start_line < end_line and expected_old_hash is not None:
+        current_hash = hashlib.sha256(current_range.encode("utf-8")).hexdigest()
+        if current_hash != expected_old_hash:
+            return _stale_line_range_payload(
+                workspace_root,
+                target,
+                "Line range content did not match expected_old_hash.",
+                start_line,
+                end_line,
+            )
     new_content = replace_line_range(original, lines_with_nl, start_idx, end_idx, new_str)
 
     # Validate Python syntax if .py file

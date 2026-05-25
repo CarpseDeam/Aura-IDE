@@ -168,6 +168,36 @@ def test_exception_alias_defined_locally(tmp_workspace: Path):
     assert not any(i.code == "undefined-name" for i in issues)
 
 
+def test_module_dunder_globals_are_defined(tmp_workspace: Path):
+    rc = ReferenceChecker()
+    code = (
+        "from pathlib import Path\n"
+        "ROOT = Path(__file__).resolve().parent\n"
+        'if __name__ == "__main__":\n'
+        "    print(ROOT)\n"
+    )
+
+    issues = rc.check(MockCapsule(proposed_code=code), workspace_root=tmp_workspace)
+
+    assert not any(i.code == "undefined-name" and "__file__" in i.message for i in issues)
+    assert not any(i.code == "undefined-name" and "__name__" in i.message for i in issues)
+
+
+def test_urllib_exception_alias_is_defined(tmp_workspace: Path):
+    rc = ReferenceChecker()
+    code = (
+        "import urllib.error\n"
+        "try:\n"
+        "    raise urllib.error.URLError('x')\n"
+        "except urllib.error.URLError as url_err:\n"
+        "    print(url_err)\n"
+    )
+
+    issues = rc.check(MockCapsule(proposed_code=code), workspace_root=tmp_workspace)
+
+    assert not any(i.code == "undefined-name" and "url_err" in i.message for i in issues)
+
+
 def test_multiple_exception_aliases(tmp_workspace: Path):
     rc = ReferenceChecker()
     code = (

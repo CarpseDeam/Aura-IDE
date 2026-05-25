@@ -577,7 +577,7 @@ def test_dispatch_cb_raises(manager, mock_client, mock_tools, on_event,
         assert len(dispatch_results) >= 1
         assert dispatch_results[-1].ok is False
         parsed = json.loads(dispatch_results[-1].result)
-        assert parsed["summary"] == "Worker failed due to an internal error."
+        assert parsed["summary"] == "Harness error due to an internal Worker dispatch exception."
         assert parsed["extras"]["worker_internal_error"] is True
         assert "RuntimeError" not in parsed["summary"]
 
@@ -744,7 +744,7 @@ def test_worker_internal_error_stops_without_redispatch(
     ]
     dispatch_cb = MagicMock(return_value=WorkerDispatchResult(
         ok=False,
-        summary="Worker failed due to an internal error.",
+        summary="Harness error due to an internal Worker dispatch exception.",
         recoverable=False,
         extras={"worker_internal_error": True, "internal_error": "AttributeError: hidden"},
     ))
@@ -760,7 +760,7 @@ def test_worker_internal_error_stops_without_redispatch(
 
     assert dispatch_cb.call_count == 1
     final_content = history.messages[-1]["content"]
-    assert "Worker failed due to an internal error." in final_content
+    assert "Harness error due to an internal Worker exception." in final_content
     assert "AttributeError" not in final_content
 
 

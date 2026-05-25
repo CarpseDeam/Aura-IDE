@@ -372,6 +372,7 @@ class _DispatchProxy(QObject):
         ]
         failed_validation = _unrecovered_validation_failures(relay.validation_results)
         validation_ran = bool(relay.validation_results)
+        quality_bounces = list(getattr(relay, "quality_bounces", []))
 
         # Compute acceptance-unverified
         acceptance_unverified = False
@@ -382,9 +383,14 @@ class _DispatchProxy(QObject):
         # Build structured errors and caveats
         result_errors = list(relay.api_errors)
         if internal_error:
-            result_errors.insert(0, "Worker failed due to an internal error.")
+            result_errors.insert(0, "Harness error due to an internal Worker exception.")
 
         structured_failure = _parse_structured_worker_failure(final_report)
+        patch_quality_unresolved = (
+            structured_failure
+            if structured_failure.get("failure_class") == "patch_quality_unresolved"
+            else {}
+        )
         if structured_failure:
             result_errors.append(_format_structured_worker_failure(structured_failure))
 
@@ -440,13 +446,14 @@ class _DispatchProxy(QObject):
             or "inspect" in req.goal.lower()[:100]
             or "diagnostic" in req.goal.lower()[:100]
         )
-        if is_implementation and not relay.touched_files and not relay.failed_tool_results and not internal_error and not relay.api_errors:
+        if is_implementation and not relay.touched_files and not relay.failed_tool_results and not quality_bounces and not internal_error and not relay.api_errors:
             result_caveats.append("Worker made no changes, reported no blocker, and ran no meaningful validation.")
 
         # Severity-based classification
         has_hard_failure = bool(result_errors)
         has_recoverable_edit_blocker = bool(recoverable_write_failures) and not relay.write_results
-        has_no_work = not relay.touched_files and not relay.failed_tool_results and not internal_error and not relay.api_errors
+        has_quality_bounce_blocker = bool(quality_bounces) and not relay.write_results
+        has_no_work = not relay.touched_files and not relay.failed_tool_results and not quality_bounces and not internal_error and not relay.api_errors
         has_unverified_acceptance = acceptance_unverified
 
         # Is this a broad/risky/multi-file task that should have used TODO?
@@ -458,6 +465,10 @@ class _DispatchProxy(QObject):
             ok = False
             needs_followup = False
             recoverable = False
+        elif has_quality_bounce_blocker:
+            ok = False
+            needs_followup = True
+            recoverable = True
         elif has_recoverable_edit_blocker:
             ok = False
             needs_followup = True
@@ -488,6 +499,19 @@ class _DispatchProxy(QObject):
             if result_caveats:
                 if not summary_continuation.get("reason"):
                     summary_continuation["reason"] = result_caveats[0]
+        if patch_quality_unresolved:
+            summary_continuation["status"] = "patch_quality_unresolved"
+            summary_continuation["reason"] = str(
+                patch_quality_unresolved.get("error") or "Patch quality needs repair."
+            )
+        elif has_quality_bounce_blocker:
+            bounce = quality_bounces[0]
+            summary_continuation["status"] = "patch_quality_unresolved"
+            summary_continuation["reason"] = str(
+                bounce.get("repair_instructions")
+                or bounce.get("suggested_next_action")
+                or "Patch quality needs repair."
+            )
 
         summary = _build_worker_summary(
             req,
@@ -564,6 +588,8 @@ class _DispatchProxy(QObject):
                 "failed_write_tools": failed_write_tools,
                 "internal_recovery_steers": internal_recovery_steers,
                 "recoverable_write_failures": recoverable_write_failures,
+                "quality_bounces": quality_bounces,
+                "patch_quality_unresolved": patch_quality_unresolved,
                 "validation_results": relay.validation_results,
                 "errors": result_errors,
                 "caveats": result_caveats,
@@ -727,7 +753,7 @@ def _parse_structured_worker_failure(content: str) -> dict[str, Any]:
 
 
 def _format_structured_worker_failure(result: dict[str, Any]) -> str:
-    error = str(result.get("error") or "Worker failed.")
+    error = str(result.get("error") or "Harness error.")
     failure_class = str(result.get("failure_class") or "worker_failed")
     return f"{error} ({failure_class})."
 
@@ -747,7 +773,7 @@ def _format_worker_write_failure(result: dict[str, Any]) -> str:
     error = str(result.get("error") or result.get("result_preview") or "unknown error")
     failure_class = str(result.get("failure_class") or "internal_error")
     target = f" on {path}" if path else ""
-    return f"Worker write tool '{name}' failed{target}: {error} ({failure_class})."
+    return f"Write tool '{name}' failed{target}: {error} ({failure_class})."
 
 
 def _format_recoverable_write_failure(result: dict[str, Any]) -> str:
@@ -808,8 +834,11 @@ def _build_worker_summary(
     caveats = caveats or []
 
     # Severity prefix
-    if errors:
-        lines.append(f"Worker failed — {errors[0]}")
+    if continuation.get("status") == "patch_quality_unresolved":
+        reason = continuation.get("reason", "") or (errors[0] if errors else "Patch quality needs repair.")
+        lines.append(f"Patch quality needs repair: {reason}")
+    elif errors:
+        lines.append(f"Harness error — {errors[0]}")
     elif continuation.get("status") == "needs_followup":
         reason = continuation.get("reason", "") or (caveats[0] if caveats else "needs further work")
         lines.append(f"Worker needs follow-up — {reason}")

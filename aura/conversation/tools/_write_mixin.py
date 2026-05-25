@@ -376,19 +376,17 @@ def _run_compiler_pipeline(proposal: dict, tool_name: str, contract: ExplicitSpe
         if isinstance(result, CompilerBounce):
             _log.info("[craft:bounce] %s bounced (attempt %d/%d)", rel_path, result.attempt_number, result.max_attempts)
             return ToolExecResult(
-                ok=False,
+                ok=True,
                 payload={
-                    "ok": False,
-                    "error": result.repair_instructions,
+                    "ok": True,
+                    "applied": False,
+                    "quality_bounce": True,
                     "path": rel_path,
-                    "failure_class": "compiler_rejected",
-                    "bounce": True,
+                    "tool_name": tool_name,
+                    "repair_instructions": result.repair_instructions,
                     "is_new_file": is_new_file,
                     "craft_issues": [_craft_issue_payload(issue) for issue in result.issues],
-                    "suggested_next_action": (
-                        "Repair the proposed code once using the checker error, then "
-                        "retry with a different write tactic."
-                    ),
+                    "suggested_next_action": "Repair the proposed patch and retry this file.",
                 },
             )
             
@@ -639,12 +637,32 @@ class WriteHandlersMixin:
             start_line = args.get("start_line")
             end_line = args.get("end_line")
             new_str = args.get("new_str", "")
+            expected_old_str = args.get("expected_old_str")
+            expected_old_hash = args.get("expected_old_hash")
             if not isinstance(start_line, int) or not isinstance(end_line, int) or not isinstance(new_str, str):
                 return ToolExecResult(
                     ok=False,
                     payload={"ok": False, "error": "start_line and end_line must be integers, new_str must be a string", "failure_class": "internal_error"},
                 )
-            proposal = _reg.propose_line_range_edit(self._root, target, start_line, end_line, new_str)
+            if expected_old_str is not None and not isinstance(expected_old_str, str):
+                return ToolExecResult(
+                    ok=False,
+                    payload={"ok": False, "error": "expected_old_str must be a string when supplied", "failure_class": "internal_error"},
+                )
+            if expected_old_hash is not None and not isinstance(expected_old_hash, str):
+                return ToolExecResult(
+                    ok=False,
+                    payload={"ok": False, "error": "expected_old_hash must be a string when supplied", "failure_class": "internal_error"},
+                )
+            proposal = _reg.propose_line_range_edit(
+                self._root,
+                target,
+                start_line,
+                end_line,
+                new_str,
+                expected_old_str=expected_old_str,
+                expected_old_hash=expected_old_hash,
+            )
             if not proposal.get("ok", False):
                 return ToolExecResult(ok=False, payload=proposal)
 

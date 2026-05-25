@@ -54,7 +54,7 @@ class WorkerSummaryCard(QFrame):
         needs_followup: bool = False,
     ) -> None:
         """Update this card in place for repeated results with the same ID."""
-        header_text, header_color = self._status_label(ok, needs_followup)
+        header_text, header_color = self._status_label(ok, needs_followup, summary)
         self._header.setText(header_text)
         self._header.setStyleSheet(
             f"color: {header_color}; font-weight: 700; font-size: 12px;"
@@ -75,9 +75,15 @@ class WorkerSummaryCard(QFrame):
         self._body.setVisible(bool(summary))
 
     @staticmethod
-    def _status_label(ok: bool, needs_followup: bool) -> tuple[str, str]:
+    def _status_label(ok: bool, needs_followup: bool, summary: str = "") -> tuple[str, str]:
+        if "Patch quality needs repair" in summary:
+            return "Patch quality needs repair", WARN
+        if "Waiting for approval" in summary:
+            return "Waiting for approval", WARN
+        if "Repairing patch" in summary:
+            return "Repairing patch", WARN
         if ok:
-            return "✅ Worker completed", SUCCESS
+            return "Completed", SUCCESS
         if needs_followup:
-            return "⚠️ Worker needs follow-up", WARN
-        return "❌ Worker failed", DANGER
+            return "Patch quality needs repair", WARN
+        return "Harness error", DANGER

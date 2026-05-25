@@ -132,7 +132,7 @@ class ToolRunner:
         except Exception as exc:
             result = WorkerDispatchResult(
                 ok=False,
-                summary="Worker failed due to an internal error.",
+                summary="Harness error due to an internal Worker dispatch exception.",
                 cancelled=False,
                 recoverable=False,
                 extras={

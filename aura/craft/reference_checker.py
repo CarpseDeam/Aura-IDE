@@ -24,6 +24,17 @@ _SKIP_DIRS = frozenset({
     "dist",
 })
 
+_MODULE_GLOBALS = frozenset({
+    "__file__",
+    "__name__",
+    "__package__",
+    "__doc__",
+    "__spec__",
+    "__loader__",
+    "__cached__",
+    "__builtins__",
+})
+
 def _is_skip_dir(name: str) -> bool:
     return name in _SKIP_DIRS
 
@@ -224,7 +235,7 @@ class ReferenceChecker:
             except ValueError:
                 pass
 
-        local_defs = set()
+        local_defs = set(_MODULE_GLOBALS)
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                 local_defs.add(node.name)

@@ -59,6 +59,7 @@ class WorkerEventRelay(QObject):
         self.phase_boundary_info: dict[str, Any] | None = None
         self.tool_results: list[dict] = []
         self.failed_tool_results: list[dict] = []
+        self.quality_bounces: list[dict[str, Any]] = []
         self.validation_results: list[dict] = []
         # Execution ledger
         self.read_files: set[str] = set()         # paths read via read_file/read_files
@@ -148,6 +149,21 @@ class WorkerEventRelay(QObject):
                 ev.name in WRITE_TOOLS
                 and isinstance(parsed, dict)
                 and parsed.get("ok")
+                and parsed.get("quality_bounce") is True
+            ):
+                bounce_record = {
+                    "path": parsed.get("path"),
+                    "tool_name": parsed.get("tool_name") or ev.name,
+                    "repair_instructions": parsed.get("repair_instructions", ""),
+                    "craft_issues": parsed.get("craft_issues", []),
+                    "suggested_next_action": parsed.get("suggested_next_action", ""),
+                    "payload": parsed,
+                }
+                self.quality_bounces.append(bounce_record)
+            elif (
+                ev.name in WRITE_TOOLS
+                and isinstance(parsed, dict)
+                and parsed.get("ok")
             ):
                 write_record = {
                     "tool": ev.name,
@@ -228,6 +244,7 @@ class WorkerEventRelay(QObject):
         self.phase_boundary_info = None
         self.tool_results.clear()
         self.failed_tool_results.clear()
+        self.quality_bounces.clear()
         self.validation_results.clear()
         self.read_files.clear()
         self.read_outline_files.clear()
@@ -266,6 +283,10 @@ class WorkerEventRelay(QObject):
             "bounce",
             "reject",
             "craft_issues",
+            "quality_bounce",
+            "repair_instructions",
+            "tool_name",
+            "patch_quality_unresolved",
             "applied",
             "is_new_file",
             "start_line",

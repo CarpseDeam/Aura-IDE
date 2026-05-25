@@ -6,6 +6,8 @@ from aura.conversation.dispatch import (
     WorkerDispatchRequest,
     WorkerDispatchResult,
 )
+from aura.bridge.dispatch import _build_worker_summary
+from aura.conversation.history import History
 
 
 # WorkerDispatchRequest
@@ -554,4 +556,19 @@ def test_worker_result_needs_followup_not_terminal():
     assert not restored.ok
     assert restored.needs_followup
     assert restored.recoverable
+
+
+def test_patch_quality_unresolved_summary_is_not_worker_failed():
+    req = WorkerDispatchRequest(goal="Fix code", files=["a.py"], spec="spec", acceptance="")
+    summary = _build_worker_summary(
+        req,
+        History(),
+        [],
+        ["Patch quality needs repair: Define missing (patch_quality_unresolved)."],
+        {"status": "patch_quality_unresolved", "reason": "Patch quality needs repair: Define missing"},
+        [],
+    )
+
+    assert summary.startswith("Patch quality needs repair:")
+    assert "Worker failed" not in summary
 

@@ -4,8 +4,9 @@ import pytest
 from unittest.mock import patch, MagicMock
 
 from aura.conversation.tools.registry import ToolRegistry
-from aura.conversation.tools._write_mixin import WriteHandlersMixin
+from aura.conversation.tools._write_mixin import WriteHandlersMixin, _run_compiler_pipeline
 from aura.conversation.tools._types import ToolExecResult
+from aura.craft.types import CompilerBounce, CraftIssue, CraftIssueSeverity
 
 
 class DummyWriteRegistry(ToolRegistry, WriteHandlersMixin):
@@ -38,6 +39,45 @@ def enable_craft(monkeypatch):
 
 
 class TestWriteMixinCompiler:
+
+    @pytest.mark.usefixtures("enable_craft")
+    def test_compiler_bounce_becomes_quality_bounce_result(self, tmp_workspace):
+        proposal = {
+            "ok": True,
+            "rel_path": "a.py",
+            "old_content": "value = 1\n",
+            "new_content": "value = missing\n",
+            "is_new_file": False,
+        }
+        issue = CraftIssue(
+            line=1,
+            column=8,
+            code="undefined-name",
+            message="Name 'missing' is used but never defined.",
+            suggestion="Define or import the name before using it.",
+            severity=CraftIssueSeverity.HARD,
+        )
+
+        with patch("aura.conversation.tools._write_mixin.compiler_service.process_proposal") as process:
+            process.side_effect = lambda capsule, workspace_root=None: CompilerBounce(
+                capsule=capsule,
+                issues=[issue],
+                repair_instructions="Define missing before use.",
+                attempt_number=1,
+                max_attempts=2,
+            )
+
+            result = _run_compiler_pipeline(proposal, "edit_file", workspace_root=tmp_workspace)
+
+        assert result is not None
+        assert result.ok is True
+        assert result.payload["ok"] is True
+        assert result.payload["applied"] is False
+        assert result.payload["quality_bounce"] is True
+        assert result.payload["path"] == "a.py"
+        assert result.payload["tool_name"] == "edit_file"
+        assert result.payload["repair_instructions"] == "Define missing before use."
+        assert result.payload["craft_issues"][0]["code"] == "undefined-name"
 
     @pytest.mark.usefixtures("enable_craft")
     def test_new_python_write_enters_craft(self, tmp_workspace):
@@ -103,17 +143,24 @@ class TestWriteMixinCompiler:
                 "is_new_file": False
             }
             mock_craft.return_value = ToolExecResult(
-                ok=False,
-                payload={"ok": False, "error": "Syntax error", "path": "existing.py", "bounce": True}
+                ok=True,
+                payload={
+                    "ok": True,
+                    "applied": False,
+                    "quality_bounce": True,
+                    "repair_instructions": "Syntax error",
+                    "path": "existing.py",
+                },
             )
             
             result = _handler("write_file")(
                 reg, {"path": "existing.py", "content": "bad_syntax"}, approve_cb, False
             )
             
-            assert result.ok is False
-            assert result.payload["bounce"] is True
-            assert result.payload["error"] == "Syntax error"
+            assert result.ok is True
+            assert result.payload["quality_bounce"] is True
+            assert result.payload["applied"] is False
+            assert result.payload["repair_instructions"] == "Syntax error"
             approve_cb.assert_not_called()
 
     @pytest.mark.usefixtures("enable_craft")
@@ -217,8 +264,9 @@ class TestWriteMixinCompiler:
             res = _handler("write_file")(
                 reg, {"path": "main.py", "content": "import does_not_exist\n"}, approve_cb, False
             )
-            assert not res.ok
-            assert res.payload.get("bounce") is True
+            assert res.ok
+            assert res.payload.get("quality_bounce") is True
+            assert res.payload.get("applied") is False
             mock_inval.assert_not_called()
 
     @pytest.mark.usefixtures("enable_craft")
@@ -237,4 +285,3 @@ class TestWriteMixinCompiler:
             assert not res.ok
             assert res.extras.get("rejected_all") is True
             mock_inval.assert_not_called()
-

@@ -279,20 +279,22 @@ def test_py_compile_failure_blocks_unrelated_tool_until_syntax_repair(tmp_path):
     assert "pass py_compile before any unrelated tool call" in payload["error"]
 
 
-def test_compiler_bounce_blocks_same_tactic_and_nudges_repair(tmp_path):
+def test_quality_bounce_adds_repair_guidance_without_blocking_tools(tmp_path):
     history = History()
     tools = MagicMock(spec=ToolRegistry)
     tools.tool_defs.return_value = []
     type(tools).mode = PropertyMock(return_value="worker")
     type(tools).workspace_root = PropertyMock(return_value=tmp_path)
-    tools.execute.return_value = ToolExecResult(
-        ok=False,
+    tools.execute.side_effect = [
+        ToolExecResult(
+        ok=True,
         payload={
-            "ok": False,
+            "ok": True,
+            "applied": False,
+            "quality_bounce": True,
             "path": "a.py",
-            "error": "Line 2: [undefined-name] Name 'missing' is used but never defined.",
-            "failure_class": "compiler_rejected",
-            "bounce": True,
+            "tool_name": "edit_file",
+            "repair_instructions": "Line 2: [undefined-name] Name 'missing' is used but never defined.",
             "craft_issues": [
                 {
                     "line": 2,
@@ -302,47 +304,57 @@ def test_compiler_bounce_blocks_same_tactic_and_nudges_repair(tmp_path):
                     "suggestion": "Define or import the name before using it.",
                 }
             ],
+            "suggested_next_action": "Repair the proposed patch and retry this file.",
         },
-    )
+    ),
+        ToolExecResult(ok=True, payload={"ok": True, "path": "a.py", "content": "value = 1\n"}),
+        ToolExecResult(ok=True, payload={"ok": True, "path": "a.py", "applied": "write_file", "is_new_file": False}),
+    ]
     manager = ConversationManager(history, tools)
     events = []
     args = {"path": "a.py", "old_str": "value = 1", "new_str": "value = missing"}
     hook = MagicMock(
         side_effect=[
             iter([_done(tool_calls=[_tool_call("e1", "edit_file", args)])]),
-            iter([_done(tool_calls=[_tool_call("e2", "edit_file", args)])]),
-            iter([_done("Here is a long explanation.")]),
-            iter([_done("Still explaining.")]),
+            iter([_done(tool_calls=[_tool_call("r1", "read_file", {"path": "a.py"})])]),
+            iter([_done(tool_calls=[_tool_call("w1", "write_file", {"path": "a.py", "content": "value = 2\n"})])]),
+            iter([_done("Done.")]),
         ]
     )
 
     try:
         _register_worker_hook(hook)
-        manager.send(
-            on_event=events.append,
-            approval_cb=MagicMock(return_value=ApprovalDecision("approve")),
-            cancel_event=threading.Event(),
-            model="test-model",
-            thinking="off",
-            hook_name="generate_worker_code",
-        )
+        with patch.object(ConversationManager, "_run_focused_py_compile", return_value=(True, "a.py: ok")):
+            manager.send(
+                on_event=events.append,
+                approval_cb=MagicMock(return_value=ApprovalDecision("approve")),
+                cancel_event=threading.Event(),
+                model="test-model",
+                thinking="off",
+                hook_name="generate_worker_code",
+            )
     finally:
         hooks.unregister("generate_worker_code")
 
     edit_results = [ev for ev in events if isinstance(ev, ToolResult) and ev.name == "edit_file"]
-    assert tools.execute.call_count == 1
-    assert len(edit_results) == 2
-    blocked = json.loads(edit_results[-1].result)
-    assert blocked["failure_class"] == "compiler_rejected"
-    assert blocked["internal_recovery_steer"] is True
-    assert blocked["suggested_next_tool"] == "write_file"
+    read_results = [ev for ev in events if isinstance(ev, ToolResult) and ev.name == "read_file"]
+    assert tools.execute.call_count == 3
+    assert len(edit_results) == 1
+    bounced = json.loads(edit_results[-1].result)
+    assert bounced["quality_bounce"] is True
+    assert bounced["applied"] is False
+    assert read_results
     assert any(
         msg.get("role") == "user"
-        and "Craft/compiler rejected the proposed code" in str(msg.get("content"))
+        and "Craft reviewed the proposed patch and returned repair notes" in str(msg.get("content"))
         for msg in history.messages
     )
-    final_payload = json.loads(history.messages[-1]["content"])
-    assert final_payload["failure_class"] == "worker_compiler_repair_exhausted"
+    assert not any(
+        isinstance(ev, ToolResult)
+        and json.loads(ev.result).get("failure_class") == "compiler_rejected"
+        for ev in events
+        if isinstance(ev, ToolResult) and ev.result.startswith("{")
+    )
 
 
 def test_compiler_bounce_failed_repair_finishes_with_single_reason(tmp_path):
@@ -352,16 +364,18 @@ def test_compiler_bounce_failed_repair_finishes_with_single_reason(tmp_path):
     type(tools).mode = PropertyMock(return_value="worker")
     type(tools).workspace_root = PropertyMock(return_value=tmp_path)
     bounce_payload = {
-        "ok": False,
+        "ok": True,
+        "applied": False,
+        "quality_bounce": True,
         "path": "a.py",
-        "error": "Line 2: [undefined-name] Name 'missing' is used but never defined.",
-        "failure_class": "compiler_rejected",
-        "bounce": True,
+        "tool_name": "edit_file",
+        "repair_instructions": "Line 2: [undefined-name] Name 'missing' is used but never defined.",
         "craft_issues": [{"line": 2, "code": "undefined-name", "message": "Name 'missing' is used but never defined."}],
+        "suggested_next_action": "Repair the proposed patch and retry this file.",
     }
     tools.execute.side_effect = [
-        ToolExecResult(ok=False, payload=dict(bounce_payload)),
-        ToolExecResult(ok=False, payload=dict(bounce_payload)),
+        ToolExecResult(ok=True, payload=dict(bounce_payload)),
+        ToolExecResult(ok=True, payload=dict(bounce_payload)),
     ]
     manager = ConversationManager(history, tools)
     events = []
@@ -398,8 +412,8 @@ def test_compiler_bounce_failed_repair_finishes_with_single_reason(tmp_path):
     final_payload = json.loads(history.messages[-1]["content"])
     assert final_payload == {
         "ok": False,
-        "failure_class": "compiler_rejected",
-        "error": "Craft/compiler repair failed after one retry.",
+        "failure_class": "patch_quality_unresolved",
+        "error": "Patch quality needs repair: Line 2: [undefined-name] Name 'missing' is used but never defined.",
     }
 
 
@@ -497,7 +511,7 @@ def test_recoverable_edit_mechanics_exhaustion_is_single_final_reason(tmp_worksp
     assert result.extras["errors"] == [
         "Worker stopped before recovering from a recoverable edit mechanics failure. (worker_recovery_exhausted)."
     ]
-    assert "Worker failed" in result.summary
+    assert "Harness error" in result.summary
     assert "old_str not found" not in result.summary
 
 

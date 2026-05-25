@@ -83,11 +83,9 @@ WORKER_AUTO_PY_COMPILE_INSTRUCTION = (
 )
 
 WORKER_COMPILER_REPAIR_INSTRUCTION = (
-    "Craft/compiler rejected the proposed code with a precise checker error. "
-    "Re-read the file, repair the proposed code once, then retry with a different "
-    "write tactic. Use edit_line_range with exact line numbers, or write_file if "
-    "a full replacement is safer. Do not narrate; use tools. Finish only after "
-    "the edit applies and touched Python files pass py_compile."
+    "Craft reviewed the proposed patch and returned repair notes. Re-read the "
+    "affected file, repair the proposal using the notes below, then retry the "
+    "patch once. Normal inspection and validation tools remain available."
 )
 
 
@@ -173,6 +171,7 @@ class ConversationManager:
         syntax_validation_required: set[str] = set()
         compiler_repair_required: dict[str, dict[str, Any]] = {}
         worker_recovery_nudge_sent = False
+        patch_quality_unresolved: dict[str, Any] | None = None
 
         while True:
             rounds_used += 1
@@ -279,11 +278,14 @@ class ConversationManager:
                             error="Python syntax still fails after one repair attempt.",
                         )
                         return
-                    if self._has_compiler_repair_failure(compiler_repair_required):
+                    if patch_quality_unresolved is not None:
                         self._finish_worker_unrecoverable(
                             on_event,
-                            failure_class="compiler_rejected",
-                            error="Craft/compiler repair failed after one retry.",
+                            failure_class="patch_quality_unresolved",
+                            error=str(
+                                patch_quality_unresolved.get("error")
+                                or "Patch quality needs repair."
+                            ),
                         )
                         return
                     edit_recovery_pending = bool(
@@ -405,7 +407,7 @@ class ConversationManager:
                 return
 
             def process_task(task: dict[str, Any]) -> dict[str, Any]:
-                nonlocal _terminal_dispatch, _worker_phase_boundary_info, reject_all_for_turn, worker_redispatches
+                nonlocal _terminal_dispatch, _worker_phase_boundary_info, reject_all_for_turn, worker_redispatches, patch_quality_unresolved
                 tool_call_id = task["id"]
                 name = task["name"]
                 args = task["args"]
@@ -531,6 +533,9 @@ class ConversationManager:
                         syntax_validation_required=syntax_validation_required,
                         compiler_repair_required=compiler_repair_required,
                     )
+                    parsed_after_recovery = self._parse_tool_payload(tool_msg_content)
+                    if isinstance(parsed_after_recovery, dict) and parsed_after_recovery.get("patch_quality_unresolved"):
+                        patch_quality_unresolved = parsed_after_recovery
 
                 loop_result = self._apply_loop_detection(
                     mode=mode,
@@ -554,7 +559,15 @@ class ConversationManager:
                         ok=exec_result.ok,
                         result=tool_msg_content,
                         extras=exec_result.extras,
-                    )
+                    ),
+                    "quality_instruction": (
+                        self._quality_bounce_instruction(parsed_after_recovery)
+                        if mode == "worker"
+                        and isinstance(parsed_after_recovery, dict)
+                        and parsed_after_recovery.get("quality_bounce")
+                        and not parsed_after_recovery.get("patch_quality_unresolved")
+                        else ""
+                    ),
                 }
 
             # Only parallelize read-only tools to avoid race conditions.
@@ -590,6 +603,7 @@ class ConversationManager:
             # History is not thread-safe. Reorder results by original tool_call_id order and append.
             results_by_id = {r.get("id"): r for r in results_to_append if r is not None}
 
+            quality_instructions: list[str] = []
             for task in tasks:
                 if cancel_event.is_set():
                     self._cleanup_cancelled(on_event)
@@ -610,6 +624,23 @@ class ConversationManager:
                 if "result_payload" in res:
                     self._history.append_tool_result(task["id"], res["result_payload"])
                     on_event(res["event"])
+                    instruction = res.get("quality_instruction")
+                    if isinstance(instruction, str) and instruction:
+                        quality_instructions.append(instruction)
+
+            for instruction in quality_instructions:
+                self._history.append_user_text(instruction)
+
+            if patch_quality_unresolved is not None:
+                self._finish_worker_unrecoverable(
+                    on_event,
+                    failure_class="patch_quality_unresolved",
+                    error=str(
+                        patch_quality_unresolved.get("error")
+                        or "Patch quality needs repair."
+                    ),
+                )
+                return
 
             if _worker_phase_boundary_info is not None:
                 worker_phase_boundary_info = _worker_phase_boundary_info
@@ -638,14 +669,17 @@ class ConversationManager:
         return {
             path
             for path, state in compiler_repair_required.items()
-            if not state.get("repair_failed")
+            if not state.get("repair_failed") and not state.get("quality_bounce")
         }
 
     @staticmethod
     def _has_compiler_repair_failure(
         compiler_repair_required: dict[str, dict[str, Any]],
     ) -> bool:
-        return any(state.get("repair_failed") for state in compiler_repair_required.values())
+        return any(
+            state.get("repair_failed") and not state.get("quality_bounce")
+            for state in compiler_repair_required.values()
+        )
 
     @staticmethod
     def _has_terminal_syntax_failure(
@@ -783,7 +817,7 @@ class ConversationManager:
             payload = self._recovery_payload(
                 path=target,
                 failure_class="compiler_rejected",
-                error="Craft/compiler repair failed after one retry.",
+                error="Patch quality needs repair after one retry.",
                 suggested_next_tool="",
                 suggested_next_action="Stop tool use and report the compiler rejection.",
                 recoverable=False,
@@ -802,7 +836,7 @@ class ConversationManager:
                 path=target,
                 failure_class="compiler_rejected",
                 error=(
-                    "Craft/compiler repair failed after one retry."
+                    "Patch quality needs repair after one retry."
                     if repair_failed
                     else (
                         "Craft/compiler rejected the proposed code. Re-read the file, "
@@ -905,6 +939,37 @@ class ConversationManager:
         self._record_reads_for_recovery(name, args, parsed, line_range_reread_required)
         path = self._tool_path(name, args, parsed)
 
+        if (
+            ok
+            and isinstance(parsed, dict)
+            and parsed.get("quality_bounce")
+            and path
+            and name in WRITE_TOOLS
+        ):
+            signature = self._quality_bounce_signature(path, name, args, parsed)
+            prior = compiler_repair_required.get(path)
+            if prior is not None and prior.get("signature") == signature:
+                prior["repair_failed"] = True
+                parsed["patch_quality_unresolved"] = True
+                parsed["error"] = (
+                    "Patch quality needs repair: "
+                    + str(
+                        parsed.get("repair_instructions")
+                        or parsed.get("suggested_next_action")
+                        or "Craft returned the same repair notes after one retry."
+                    )
+                )
+            else:
+                compiler_repair_required[path] = {
+                    "tool": name,
+                    "quality_bounce": True,
+                    "signature": signature,
+                    "repair_instructions": parsed.get("repair_instructions", ""),
+                    "craft_issues": parsed.get("craft_issues", []),
+                    "suggested_next_action": parsed.get("suggested_next_action", ""),
+                }
+            return json.dumps(parsed, ensure_ascii=False)
+
         if ok:
             if name in WRITE_TOOLS and path:
                 edit_fallback_required.pop(path, None)
@@ -962,7 +1027,7 @@ class ConversationManager:
                 prior["failed_tool"] = name
                 parsed["recoverable"] = False
                 parsed["error"] = (
-                    "Craft/compiler repair failed after one retry. "
+                    "Patch quality needs repair after one retry. "
                     + str(parsed.get("error", ""))
                 )
             else:
@@ -1068,6 +1133,68 @@ class ConversationManager:
             prior_tool = str(compiler_repair_required[path].get("tool", ""))
             return name != prior_tool
         return False
+
+    @staticmethod
+    def _quality_bounce_signature(
+        path: str,
+        name: str,
+        args: dict[str, Any],
+        parsed: dict[str, Any],
+    ) -> str:
+        issues = parsed.get("craft_issues")
+        issue_bits: list[str] = []
+        if isinstance(issues, list):
+            for issue in issues[:8]:
+                if isinstance(issue, dict):
+                    issue_bits.append(
+                        "|".join(
+                            str(issue.get(key, ""))
+                            for key in ("line", "code", "message")
+                        )
+                    )
+        raw = json.dumps(
+            {
+                "path": path,
+                "repair": parsed.get("repair_instructions", ""),
+                "issues": issue_bits,
+            },
+            sort_keys=True,
+            ensure_ascii=False,
+            default=str,
+        )
+        return hashlib.sha256(raw.encode("utf-8", errors="replace")).hexdigest()
+
+    @staticmethod
+    def _quality_bounce_instruction(parsed: dict[str, Any]) -> str:
+        path = str(parsed.get("path") or "")
+        repair = str(parsed.get("repair_instructions") or "").strip()
+        suggested = str(parsed.get("suggested_next_action") or "").strip()
+        issues = parsed.get("craft_issues")
+        lines = [
+            WORKER_COMPILER_REPAIR_INSTRUCTION,
+            "",
+            f"Path: {path}" if path else "Path: (unknown)",
+        ]
+        if repair:
+            lines.extend(["", "Repair instructions:", repair])
+        if isinstance(issues, list) and issues:
+            lines.append("")
+            lines.append("Craft issues:")
+            for issue in issues[:8]:
+                if not isinstance(issue, dict):
+                    continue
+                line = issue.get("line")
+                code = issue.get("code", "")
+                message = issue.get("message", "")
+                suggestion = issue.get("suggestion", "")
+                prefix = f"- line {line}: " if line else "- "
+                text = f"{prefix}{code}: {message}".strip()
+                if suggestion:
+                    text += f" Suggestion: {suggestion}"
+                lines.append(text)
+        if suggested:
+            lines.extend(["", f"Suggested next action: {suggested}"])
+        return "\n".join(lines)
 
     @staticmethod
     def _alternate_write_tactic(name: str) -> str:
@@ -1331,7 +1458,7 @@ class ConversationManager:
     ) -> None:
         if reason == "internal":
             message = (
-                "Worker failed due to an internal error. "
+                "Harness error due to an internal Worker exception. "
                 "I stopped automatic redispatch to avoid repeating the same handoff."
             )
         elif reason == "repeated":
@@ -1353,7 +1480,7 @@ class ConversationManager:
             )
         else:
             message = (
-                "Worker failed. I stopped automatic redispatch so the failure can be addressed first."
+                "Harness error. I stopped automatic redispatch so the failure can be addressed first."
             )
         on_event(ContentDelta(text=message))
         full_message = {

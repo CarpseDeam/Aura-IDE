@@ -5,7 +5,7 @@ from __future__ import annotations
 from unittest.mock import Mock
 
 from aura.bridge.event_relay import WorkerEventRelay
-from aura.client.events import ToolCallArgsDelta, ToolCallEnd, ToolCallStart
+from aura.client.events import ToolCallArgsDelta, ToolCallEnd, ToolCallStart, ToolResult
 
 
 def test_worker_event_relay_tool_call_lifecycle_tracks_index_to_id() -> None:
@@ -25,3 +25,42 @@ def test_worker_event_relay_tool_call_lifecycle_tracks_index_to_id() -> None:
     assert starts == [("dispatch-1", "worker-tool-1", "read_file")]
     assert args == [("dispatch-1", "worker-tool-1", '{"path": "a.py"}')]
     assert ends == [("dispatch-1", "worker-tool-1")]
+
+
+def test_quality_bounce_is_tracked_separately_from_failures_and_writes() -> None:
+    relay = WorkerEventRelay(approval_proxy=Mock(), worker_model="test-model")
+    payload = (
+        '{"ok": true, "applied": false, "quality_bounce": true, '
+        '"path": "a.py", "tool_name": "edit_file", '
+        '"repair_instructions": "Define missing", '
+        '"craft_issues": [{"code": "undefined-name"}], '
+        '"suggested_next_action": "Repair the proposed patch and retry this file."}'
+    )
+
+    relay.relay(
+        "dispatch-1",
+        ToolResult(tool_call_id="worker-tool-1", name="edit_file", ok=True, result=payload),
+    )
+
+    assert relay.quality_bounces == [
+        {
+            "path": "a.py",
+            "tool_name": "edit_file",
+            "repair_instructions": "Define missing",
+            "craft_issues": [{"code": "undefined-name"}],
+            "suggested_next_action": "Repair the proposed patch and retry this file.",
+            "payload": {
+                "ok": True,
+                "applied": False,
+                "quality_bounce": True,
+                "path": "a.py",
+                "tool_name": "edit_file",
+                "repair_instructions": "Define missing",
+                "craft_issues": [{"code": "undefined-name"}],
+                "suggested_next_action": "Repair the proposed patch and retry this file.",
+            },
+        }
+    ]
+    assert relay.failed_tool_results == []
+    assert relay.write_results == []
+    assert relay.touched_files == set()

@@ -184,7 +184,9 @@ _WORKER_ENGINEERING_RULES = """Implementation quality — follow these rules:
 - Use `edit_file` for precise search-block edits.
 - If `edit_symbol` or `edit_file` misses, read the failure payload, reread the file, and switch tactics.
 - Use `edit_line_range` with exact line numbers after rereading.
+- For replacement/deletion `edit_line_range` calls, include `expected_old_str` from the exact current range whenever practical.
 - Use `write_file` when a full replacement is safer.
+- Craft compiles your patch into cleaner human code before approval. If Craft returns repair notes, re-read the affected file, repair the patch once, and retry. Craft repair notes are normal patch preparation, not task failure.
 - If a tool result says "Repeated failed edit tactic", stop that edit shape immediately. Re-read the file and use edit_line_range or write_file.
 - Validate touched Python with `python -m py_compile`.
 - If py_compile reports invalid syntax in a touched file, repair that file before unrelated validation, then rerun py_compile on that file.
@@ -266,10 +268,12 @@ Snappy execution:
 Handoff Adherence Protocol:
 1. Read target files before editing. read_file_outline helps navigation, but read_file/read_files is required before modifying an existing file.
 2. Implement the requested change from the Planner's goal, Builder Note/spec field, files, and acceptance criteria.
-3. Acceptance Verification: run the focused validation needed for the change. Touched Python files must pass `python -m py_compile`.
-4. If `edit_symbol` or `edit_file` misses, reread and switch to `edit_line_range` with exact line numbers, or use `write_file` when a full replacement is safer.
-5. Repair syntax before unrelated validation. Use focused existing tests only when directly relevant or requested.
-6. Use `python -c` for scratch validation; do not write root-level `_check*.py` files.
+3. Make the edit. Craft compiles/checks the proposed patch before approval and returns cleaned code on the happy path.
+4. If Craft returns repair notes, re-read the affected file, repair the patch once, and retry. This is normal patch preparation, not task failure.
+5. Acceptance Verification: run the focused validation needed for the change. Touched Python files must pass `python -m py_compile`.
+6. If `edit_symbol` or `edit_file` misses, reread and switch to `edit_line_range` with exact line numbers and `expected_old_str` for replacements/deletions, or use `write_file` when a full replacement is safer.
+7. Repair syntax before unrelated validation. Use focused existing tests only when directly relevant or requested.
+8. Use `python -c` for scratch validation; do not write root-level `_check*.py` files.
 
 Execution Protocol:
 - For broad or risky tasks, start with `update_todo_list`; this creates the visible execution plan for the user. Small localized tasks may stay fast.

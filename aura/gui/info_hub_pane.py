@@ -136,7 +136,7 @@ class InfoHubPane(QWidget):
         elif needs_followup:
             prefix = "⚠️ Worker needs follow-up."
         else:
-            prefix = "❌ Worker failed."
+            prefix = "Harness error."
         block = f"\n\n{'─' * 40}\n{prefix}\n{summary}\n{'─' * 40}\n"
         self._log_view.insertPlainText(block)
 

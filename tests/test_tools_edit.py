@@ -68,6 +68,53 @@ def test_propose_line_range_append_at_eof(tmp_workspace: Path):
     assert result["end_line"] == 3
     assert result["new_content"] == "one = 1\ntwo = 2\nthree = 3\n"
 
+
+def test_propose_line_range_rejects_wrong_expected_old_str(tmp_workspace: Path):
+    target = tmp_workspace / "stale.py"
+    original = "one = 1\ntwo = 2\nthree = 3\n"
+    target.write_text(original, encoding="utf-8")
+
+    result = propose_line_range_edit(
+        tmp_workspace,
+        target,
+        2,
+        3,
+        "two = 22\n",
+        expected_old_str="not the current line\n",
+    )
+
+    assert result["ok"] is False
+    assert result["failure_class"] == "edit_mechanics_stale_line_range"
+    assert target.read_text(encoding="utf-8") == original
+
+
+def test_propose_line_range_expected_old_str_allows_insert_and_eof_append(tmp_workspace: Path):
+    target = tmp_workspace / "insert_append.py"
+    target.write_text("one = 1\nthree = 3\n", encoding="utf-8")
+
+    inserted = propose_line_range_edit(
+        tmp_workspace,
+        target,
+        2,
+        2,
+        "two = 2\n",
+        expected_old_str="ignored for insertions",
+    )
+    assert inserted["ok"] is True
+    assert inserted["new_content"] == "one = 1\ntwo = 2\nthree = 3\n"
+
+    target.write_text("one = 1\ntwo = 2\n", encoding="utf-8")
+    appended = propose_line_range_edit(
+        tmp_workspace,
+        target,
+        3,
+        3,
+        "three = 3\n",
+        expected_old_str="ignored for eof append",
+    )
+    assert appended["ok"] is True
+    assert appended["new_content"] == "one = 1\ntwo = 2\nthree = 3\n"
+
 # propose_write
 
 def test_propose_write_new_file(tmp_workspace: Path):

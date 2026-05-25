@@ -698,6 +698,14 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
                     "new_str": {
                         "type": "string",
                         "description": "Replacement content to insert in place of the removed lines."
+                    },
+                    "expected_old_str": {
+                        "type": "string",
+                        "description": "Strongly preferred for replacements/deletions after reading: the exact current text in [start_line, end_line). If it does not match, the edit is rejected without mutation."
+                    },
+                    "expected_old_hash": {
+                        "type": "string",
+                        "description": "Optional SHA-256 hex digest of the exact current text in [start_line, end_line). Use when expected_old_str would be too large."
                     }
                 },
                 "required": ["path", "start_line", "end_line", "new_str"],
