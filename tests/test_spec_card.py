@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 from PySide6.QtWidgets import QApplication
 
+from aura.conversation.dispatch import WorkerOutcomeStatus
 from aura.gui.cards.spec_card import SpecCard
 
 
@@ -173,3 +174,25 @@ class TestDispatchExpired:
 
         spec_card.worker_finished(False, "Something broke.")
         assert "Worker" not in spec_card._status_label.text()
+
+    def test_worker_finished_uses_status_specific_label(self, spec_card):
+        spec_card.worker_finished(
+            False,
+            "Validation failed.",
+            status=WorkerOutcomeStatus.validation_failed.value,
+        )
+        assert spec_card._status_label.text() == "Validation failed"
+
+        spec_card.worker_finished(
+            False,
+            "Patch quality needs repair.",
+            status=WorkerOutcomeStatus.craft_bounced.value,
+        )
+        assert spec_card._status_label.text() == "Patch quality needs repair"
+
+        spec_card.worker_finished(
+            False,
+            "Approval rejected.",
+            status=WorkerOutcomeStatus.approval_rejected.value,
+        )
+        assert spec_card._status_label.text() == "Approval rejected"

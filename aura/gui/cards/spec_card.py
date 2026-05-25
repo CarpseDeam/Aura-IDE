@@ -504,10 +504,32 @@ class SpecCard(QFrame):
     def worker_finished(self, ok: bool, summary: str, status: str | None = None) -> None:
         """Update status when worker completes."""
         self._worker_running = False
-        verb = "Completed" if ok else "Completed with errors"
-        color = SUCCESS if ok else DANGER
+        verb, color = self._finished_status_label(ok, status)
         self._status_label.setText(verb)
         self._status_label.setStyleSheet(f"color: {color}; font-size: 11px;")
+
+    @staticmethod
+    def _finished_status_label(ok: bool, status: str | None = None) -> tuple[str, str]:
+        if status is not None:
+            from aura.conversation.dispatch import WorkerOutcomeStatus, normalize_outcome_status
+
+            mapping = {
+                WorkerOutcomeStatus.completed.value: ("Completed", SUCCESS),
+                WorkerOutcomeStatus.completed_with_caveats.value: ("Completed with caveats", WARN),
+                WorkerOutcomeStatus.needs_followup.value: ("Needs follow-up", WARN),
+                WorkerOutcomeStatus.validation_failed.value: ("Validation failed", DANGER),
+                WorkerOutcomeStatus.edit_mechanics_blocked.value: ("Edit mechanics blocked", WARN),
+                WorkerOutcomeStatus.craft_bounced.value: ("Patch quality needs repair", WARN),
+                WorkerOutcomeStatus.craft_rejected.value: ("Craft rejected", DANGER),
+                WorkerOutcomeStatus.scope_mismatch.value: ("Scope mismatch", WARN),
+                WorkerOutcomeStatus.approval_rejected.value: ("Approval rejected", DANGER),
+                WorkerOutcomeStatus.cancelled.value: ("Cancelled", DANGER),
+                WorkerOutcomeStatus.harness_error.value: ("Harness error", DANGER),
+            }
+            normalized = normalize_outcome_status(status)
+            if normalized in mapping:
+                return mapping[normalized]
+        return ("Completed", SUCCESS) if ok else ("Needs follow-up", WARN)
 
     def worker_cancelled(self) -> None:
         """Update status when worker is cancelled during execution."""

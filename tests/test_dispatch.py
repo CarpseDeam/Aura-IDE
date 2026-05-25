@@ -5,9 +5,13 @@ from __future__ import annotations
 from aura.conversation.dispatch import (
     WorkerDispatchRequest,
     WorkerDispatchResult,
+    WorkerOutcomeStatus,
+    infer_outcome_status,
+    normalize_outcome_status,
 )
 from aura.bridge.dispatch import (
     _build_worker_summary,
+    _compute_outcome_status,
     _final_report_claims_failure,
     _final_report_claims_validation,
     _format_spec_as_user_message,
@@ -131,6 +135,37 @@ def test_dispatch_result_from_legacy_payload():
     assert restored.summary == "Done"
     assert restored.needs_followup is False
     assert restored.completed == []
+
+
+def test_normalize_outcome_status_accepts_enum_and_valid_strings():
+    assert normalize_outcome_status(WorkerOutcomeStatus.validation_failed) == "validation_failed"
+    assert normalize_outcome_status(" validation_failed ") == "validation_failed"
+    assert normalize_outcome_status("not_a_status") is None
+    assert normalize_outcome_status(None) is None
+
+
+def test_dispatch_result_from_tool_payload_drops_unknown_status():
+    restored = WorkerDispatchResult.from_tool_payload(
+        {"ok": False, "summary": "legacy", "status": "not_a_status"}
+    )
+
+    assert restored.status is None
+
+
+def test_infer_outcome_status_legacy_non_ok_defaults_to_followup():
+    result = WorkerDispatchResult(ok=False, summary="Something failed.")
+
+    assert infer_outcome_status(result) == WorkerOutcomeStatus.needs_followup.value
+
+
+def test_infer_outcome_status_uses_explicit_harness_signals():
+    result = WorkerDispatchResult(
+        ok=False,
+        summary="Harness error - RuntimeError: boom",
+        extras={"worker_internal_error": True},
+    )
+
+    assert infer_outcome_status(result) == WorkerOutcomeStatus.harness_error.value
 
 
 # Structured fields roundtrips
@@ -762,4 +797,66 @@ def test_patch_quality_unresolved_summary_is_not_worker_failed():
 
     assert summary.startswith("Patch quality needs repair:")
     assert "Worker failed" not in summary
+
+
+def _status_for(**overrides):
+    args = {
+        "ok": False,
+        "needs_followup": True,
+        "recoverable": True,
+        "has_internal_failure": False,
+        "has_validation_failure": False,
+        "has_recoverable_edit_blocker": False,
+        "has_quality_bounce_blocker": False,
+        "has_no_work": False,
+        "is_implementation": True,
+        "has_unverified_acceptance": False,
+        "has_hard_failure": True,
+        "result_errors": ["failed"],
+        "result_caveats": [],
+        "continuation": {},
+        "structured_failure": {},
+        "write_failures": [],
+    }
+    args.update(overrides)
+    return _compute_outcome_status(**args)
+
+
+def test_compute_outcome_status_distinguishes_rejection_and_bounce_classes():
+    assert _status_for(
+        structured_failure={"failure_class": "approval_rejected"}
+    ) == WorkerOutcomeStatus.approval_rejected.value
+    assert _status_for(
+        write_failures=[{"failure_class": "compiler_rejected"}]
+    ) == WorkerOutcomeStatus.craft_rejected.value
+    assert _status_for(
+        write_failures=[{"reject": True}]
+    ) == WorkerOutcomeStatus.craft_rejected.value
+    assert _status_for(
+        structured_failure={"failure_class": "patch_quality_unresolved"},
+        continuation={"status": "patch_quality_unresolved"},
+    ) == WorkerOutcomeStatus.craft_bounced.value
+
+
+def test_compute_outcome_status_distinguishes_validation_mechanics_and_harness():
+    assert _status_for(
+        has_recoverable_edit_blocker=True
+    ) == WorkerOutcomeStatus.edit_mechanics_blocked.value
+    assert _status_for(
+        has_validation_failure=True
+    ) == WorkerOutcomeStatus.validation_failed.value
+    assert _status_for(
+        has_internal_failure=True
+    ) == WorkerOutcomeStatus.harness_error.value
+
+
+def test_compute_outcome_status_completed_with_caveats_requires_ok():
+    assert _status_for(
+        ok=True,
+        needs_followup=False,
+        recoverable=False,
+        has_hard_failure=False,
+        result_errors=[],
+        result_caveats=["minor caveat"],
+    ) == WorkerOutcomeStatus.completed_with_caveats.value
 

@@ -507,22 +507,6 @@ class _DispatchProxy(QObject):
 
         summary_continuation = dict(continuation)
 
-        status = _compute_outcome_status(
-            ok=ok,
-            needs_followup=needs_followup,
-            recoverable=recoverable,
-            has_internal_failure=has_internal_failure,
-            has_validation_failure=has_validation_failure,
-            has_recoverable_edit_blocker=has_recoverable_edit_blocker,
-            has_quality_bounce_blocker=has_quality_bounce_blocker,
-            has_no_work=has_no_work,
-            is_implementation=is_implementation,
-            has_unverified_acceptance=has_unverified_acceptance,
-            has_hard_failure=has_hard_failure,
-            result_errors=result_errors,
-            result_caveats=result_caveats,
-            continuation=summary_continuation,
-        )
         if has_recoverable_edit_blocker:
             if not summary_continuation.get("status"):
                 summary_continuation["status"] = "needs_followup"
@@ -542,6 +526,25 @@ class _DispatchProxy(QObject):
                 or bounce.get("suggested_next_action")
                 or "Patch quality needs repair."
             )
+
+        status = _compute_outcome_status(
+            ok=ok,
+            needs_followup=needs_followup,
+            recoverable=recoverable,
+            has_internal_failure=has_internal_failure,
+            has_validation_failure=has_validation_failure,
+            has_recoverable_edit_blocker=has_recoverable_edit_blocker,
+            has_quality_bounce_blocker=has_quality_bounce_blocker,
+            has_no_work=has_no_work,
+            is_implementation=is_implementation,
+            has_unverified_acceptance=has_unverified_acceptance,
+            has_hard_failure=has_hard_failure,
+            result_errors=result_errors,
+            result_caveats=result_caveats,
+            continuation=summary_continuation,
+            structured_failure=structured_failure,
+            write_failures=write_failures,
+        )
 
         summary = _build_worker_summary(
             req,
@@ -652,31 +655,51 @@ def _compute_outcome_status(
     result_errors: list[str],
     result_caveats: list[str],
     continuation: dict[str, Any],
+    structured_failure: dict[str, Any] | None = None,
+    write_failures: list[dict[str, Any]] | None = None,
 ) -> str:
     """Map the boolean severity classification to a WorkerOutcomeStatus."""
     from aura.conversation.dispatch import WorkerOutcomeStatus as S
 
-    if has_hard_failure and has_internal_failure:
-        return S.harness_error.value
-    if has_hard_failure and has_validation_failure:
-        return S.validation_failed.value
-    if has_hard_failure:
-        # Non-internal, non-validation failures
-        structured = continuation.get("status")
-        if structured == "patch_quality_unresolved":
-            return S.craft_bounced.value
-        if structured == "phased":
-            return S.needs_followup.value
-        return S.needs_followup.value
-    if has_quality_bounce_blocker:
+    structured_failure = structured_failure or {}
+    write_failures = write_failures or []
+    failure_classes = [
+        str(item.get("failure_class") or "")
+        for item in [structured_failure, *write_failures]
+        if isinstance(item, dict)
+    ]
+    reject_flags = any(
+        bool(item.get("reject"))
+        for item in [structured_failure, *write_failures]
+        if isinstance(item, dict)
+    )
+    structured_status = str(continuation.get("status") or "")
+
+    if "approval_rejected" in failure_classes:
+        return S.approval_rejected.value
+    if "compiler_rejected" in failure_classes or reject_flags:
+        return S.craft_rejected.value
+    if (
+        "patch_quality_unresolved" in failure_classes
+        or structured_status == "patch_quality_unresolved"
+        or has_quality_bounce_blocker
+    ):
         return S.craft_bounced.value
     if has_recoverable_edit_blocker:
         return S.edit_mechanics_blocked.value
+    if has_validation_failure or any(fc.startswith("validation_") for fc in failure_classes):
+        return S.validation_failed.value
+    if has_internal_failure or any(fc in {"internal_error", "worker_internal_error", "harness_error"} for fc in failure_classes):
+        return S.harness_error.value
+    if has_hard_failure:
+        if structured_status == "phased":
+            return S.needs_followup.value
+        return S.needs_followup.value
     if has_no_work and is_implementation:
         return S.needs_followup.value
     if has_unverified_acceptance:
         return S.needs_followup.value
-    if result_caveats:
+    if ok and result_caveats:
         return S.completed_with_caveats.value
     return S.completed.value
 

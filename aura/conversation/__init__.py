@@ -6,6 +6,8 @@ from aura.conversation.dispatch import (
     WorkerDispatchResult,
     WorkerOutcomeStatus,
     WorkerTaskSpec,
+    infer_outcome_status,
+    normalize_outcome_status,
     normalize_worker_task,
 )
 from aura.conversation.history import History
@@ -20,5 +22,6 @@ __all__ = [
     "WorkerTaskSpec",
     "DispatchCallback",
     "infer_outcome_status",
+    "normalize_outcome_status",
     "normalize_worker_task",
 ]

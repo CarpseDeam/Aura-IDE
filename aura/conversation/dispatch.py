@@ -53,6 +53,18 @@ class WorkerOutcomeStatus(str, enum.Enum):
     """An unexpected error occurred in the worker harness."""
 
 
+def normalize_outcome_status(value: Any) -> str | None:
+    """Return a valid WorkerOutcomeStatus string, or None for unknown values."""
+    if value is None:
+        return None
+    if isinstance(value, WorkerOutcomeStatus):
+        return value.value
+    try:
+        return WorkerOutcomeStatus(str(value).strip()).value
+    except ValueError:
+        return None
+
+
 @dataclass
 class WorkerDispatchRequest:
     goal: str
@@ -167,10 +179,7 @@ class WorkerDispatchResult:
     @classmethod
     def from_tool_payload(cls, data: dict[str, Any]) -> "WorkerDispatchResult":
         """Restore a dispatch result from a planner tool payload."""
-        status: str | None = None
-        if "status" in data:
-            raw = data["status"]
-            status = str(raw) if raw is not None else None
+        status = normalize_outcome_status(data.get("status"))
         return cls(
             ok=bool(data.get("ok", False)),
             summary=str(data.get("summary", "")),
@@ -195,17 +204,45 @@ class WorkerDispatchResult:
 
 def infer_outcome_status(result: WorkerDispatchResult) -> str:
     """Infer an outcome status from legacy boolean fields when no explicit status is set."""
+    explicit = normalize_outcome_status(result.status)
+    if explicit is not None:
+        return explicit
     if result.cancelled:
         return WorkerOutcomeStatus.cancelled.value
     if not result.ok:
-        return (
-            WorkerOutcomeStatus.needs_followup.value
-            if result.recoverable
-            else WorkerOutcomeStatus.harness_error.value
-        )
+        extras = result.extras if isinstance(result.extras, dict) else {}
+        errors = extras.get("errors") if isinstance(extras.get("errors"), list) else []
+        internal_signals = [
+            extras.get("worker_internal_error"),
+            extras.get("internal_error"),
+            bool(extras.get("api_errors")),
+            result.summary,
+            *errors,
+        ]
+        if any(_looks_like_harness_error(signal) for signal in internal_signals):
+            return WorkerOutcomeStatus.harness_error.value
+        return WorkerOutcomeStatus.needs_followup.value
     if result.needs_followup:
         return WorkerOutcomeStatus.needs_followup.value
     return WorkerOutcomeStatus.completed.value
+
+
+def _looks_like_harness_error(value: Any) -> bool:
+    if value is True:
+        return True
+    if not value:
+        return False
+    text = str(value).lower()
+    return any(
+        marker in text
+        for marker in (
+            "harness error",
+            "internal worker exception",
+            "internal worker dispatch exception",
+            "worker_internal_error",
+            "api error",
+        )
+    )
 
 
 @dataclass
@@ -405,5 +442,6 @@ __all__ = [
     "WorkerTaskSpec",
     "DispatchCallback",
     "infer_outcome_status",
+    "normalize_outcome_status",
     "normalize_worker_task",
 ]
