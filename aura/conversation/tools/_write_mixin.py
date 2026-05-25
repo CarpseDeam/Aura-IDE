@@ -434,6 +434,24 @@ def _is_new_root_validation_scratch(root: Path, target: Path) -> bool:
     )
 
 
+
+def _normalize_worker_path(path: str) -> str:
+    normalized = str(path).replace("\\", "/")
+    if normalized.startswith("./"):
+        normalized = normalized[2:]
+    while "//" in normalized:
+        normalized = normalized.replace("//", "/")
+    return normalized
+
+
+def _is_validation_scratch_path(path: str) -> bool:
+    normalized = _normalize_worker_path(path)
+    if not (normalized.startswith(".aura/tmp/") and normalized.endswith(".py")):
+        return False
+    name = normalized.rsplit("/", 1)[-1]
+    return name.startswith(("dump", "_check", "check", "tmp"))
+
+
 class WriteHandlersMixin:
     """Handlers for write tools — guards + approval + backup."""
 
@@ -525,23 +543,44 @@ class WriteHandlersMixin:
 
         path_arg = args.get("path", "")
         target = self._resolve_in_root(path_arg)
-        if name == "write_file" and _is_new_root_validation_scratch(self._root, target):
+        if name == "write_file":
             rel_path = safe_relative_to(target, self._root).as_posix()
-            return ToolExecResult(
-                ok=False,
-                payload={
-                    "ok": False,
-                    "path": rel_path,
-                    "rel_path": rel_path,
-                    "error": "Root-level _check*.py validation scratch files are not allowed.",
-                    "failure_class": "validation_scratch_banned",
-                    "suggested_next_tool": "run_terminal_command",
-                    "suggested_next_action": (
-                        "Use python -c, an existing focused test, or .aura/tmp "
-                        "with cleanup."
-                    ),
-                },
-            )
+            if _is_validation_scratch_path(rel_path):
+                return ToolExecResult(
+                    ok=False,
+                    payload={
+                        "ok": False,
+                        "path": rel_path,
+                        "rel_path": rel_path,
+                        "error": (
+                            "Validation scratch files should use run_terminal_command "
+                            "with python -c, or create and remove a temporary file "
+                            "inside one terminal command."
+                        ),
+                        "failure_class": "validation_scratch_banned",
+                        "suggested_next_tool": "run_terminal_command",
+                        "suggested_next_action": (
+                            "Use python -c for scratch validation, or create and remove "
+                            "a temporary file inside one terminal command."
+                        ),
+                    },
+                )
+            if _is_new_root_validation_scratch(self._root, target):
+                return ToolExecResult(
+                    ok=False,
+                    payload={
+                        "ok": False,
+                        "path": rel_path,
+                        "rel_path": rel_path,
+                        "error": "Root-level _check*.py validation scratch files are not allowed.",
+                        "failure_class": "validation_scratch_banned",
+                        "suggested_next_tool": "run_terminal_command",
+                        "suggested_next_action": (
+                            "Use python -c, an existing focused test, or .aura/tmp "
+                            "with cleanup."
+                        ),
+                    },
+                )
 
         if name == "write_file":
             content = args.get("content", "")
