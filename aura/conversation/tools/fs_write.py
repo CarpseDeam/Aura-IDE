@@ -1,4 +1,4 @@
-"""Approval-gated write tools: write_file, edit_file."""
+"""Approval-gated write tools: write_file, edit_file, patch_file."""
 from __future__ import annotations
 
 import difflib
@@ -243,6 +243,148 @@ def replace_line_range(
     start_char = sum(len(ln) for ln in file_lines_with_newlines[:start_line])
     end_char = start_char + sum(len(ln) for ln in file_lines_with_newlines[start_line:end_line])
     return original[:start_char] + new_str + original[end_char:]
+
+
+def _preview_block(text: str, limit: int = 160) -> str:
+    compact = text.replace("\r\n", "\n")
+    if len(compact) <= limit:
+        return compact
+    return compact[:limit] + "..."
+
+
+def propose_patch_file(
+    workspace_root: Path,
+    target: Path,
+    edits: list[dict[str, Any]],
+    expected_file_hash: str | None = None,
+    description: str | None = None,
+) -> dict[str, Any]:
+    """Propose an atomic multi-hunk exact-text patch for one existing file."""
+    rel = _rel_path(workspace_root, target)
+    if not target.exists():
+        return _failure_payload(workspace_root, target, f"file not found: {rel}", "path_error")
+    if not target.is_file():
+        return _failure_payload(workspace_root, target, f"not a regular file: {rel}", "path_error")
+    try:
+        original = target.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return _failure_payload(workspace_root, target, "file is not valid UTF-8 text", "internal_error")
+    except OSError:
+        return _failure_payload(workspace_root, target, "failed to read file", "internal_error")
+
+    if expected_file_hash is not None:
+        current_hash = hashlib.sha256(original.encode("utf-8")).hexdigest()
+        if current_hash != expected_file_hash:
+            return _failure_payload(
+                workspace_root,
+                target,
+                "File content did not match expected_file_hash.",
+                "patch_file_hash_mismatch",
+                suggested_next_action="Re-read the file and submit one corrected patch_file transaction.",
+            )
+
+    proposed = original
+    for index, hunk in enumerate(edits):
+        old = hunk.get("old")
+        new = hunk.get("new")
+        if not isinstance(old, str) or not isinstance(new, str):
+            return _failure_payload(
+                workspace_root,
+                target,
+                "Each patch_file hunk must include string old and new fields.",
+                "internal_error",
+                hunk_index=index,
+            )
+        if old == "":
+            return _failure_payload(
+                workspace_root,
+                target,
+                "patch_file hunk old block must not be empty.",
+                "internal_error",
+                hunk_index=index,
+            )
+
+        explicit_occurrence = "occurrence" in hunk
+        occurrence = hunk.get("occurrence", 1)
+        allow_multiple = bool(hunk.get("allow_multiple", False))
+        if not isinstance(occurrence, int) or occurrence < 1:
+            return _failure_payload(
+                workspace_root,
+                target,
+                "patch_file hunk occurrence must be a 1-based integer.",
+                "internal_error",
+                hunk_index=index,
+            )
+
+        count = proposed.count(old)
+        if count == 0:
+            return _failure_payload(
+                workspace_root,
+                target,
+                "patch_file hunk old block was not found.",
+                "patch_hunk_not_found",
+                hunk_index=index,
+                old_preview=_preview_block(old),
+                suggested_next_action="Re-read the file and submit one corrected patch_file transaction.",
+            )
+        if count > 1 and not allow_multiple and not explicit_occurrence:
+            return _failure_payload(
+                workspace_root,
+                target,
+                "patch_file hunk old block is ambiguous.",
+                "patch_hunk_ambiguous",
+                hunk_index=index,
+                old_preview=_preview_block(old),
+                occurrence_count=count,
+                suggested_next_action="Provide occurrence or make the old block more specific.",
+            )
+
+        if allow_multiple and not explicit_occurrence:
+            proposed = proposed.replace(old, new)
+            continue
+
+        if occurrence > count:
+            return _failure_payload(
+                workspace_root,
+                target,
+                "patch_file hunk occurrence exceeds matching old block count.",
+                "patch_hunk_not_found",
+                hunk_index=index,
+                old_preview=_preview_block(old),
+                occurrence_count=count,
+                suggested_next_action="Re-read the file and submit one corrected patch_file transaction.",
+            )
+        start = -1
+        search_from = 0
+        for _ in range(occurrence):
+            start = proposed.find(old, search_from)
+            search_from = start + len(old)
+        proposed = proposed[:start] + new + proposed[start + len(old):]
+
+    if target.suffix == ".py":
+        try:
+            compile(proposed, target.name, "exec")
+        except SyntaxError as exc:
+            return _failure_payload(
+                workspace_root,
+                target,
+                f"replacement produces invalid Python: {exc}",
+                "syntax_invalid",
+                suggested_tool="patch_file",
+                suggested_next_tool="patch_file",
+                suggested_next_action="Repair the Python syntax in this file before any unrelated tool call.",
+            )
+
+    return {
+        "ok": True,
+        "path": rel,
+        "rel_path": rel,
+        "old_content": original,
+        "new_content": proposed,
+        "is_new_file": False,
+        "hunk_count": len(edits),
+        "description": description or "",
+    }
 
 
 def propose_edit(

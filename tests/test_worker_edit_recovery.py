@@ -169,7 +169,7 @@ def test_repeated_identical_edit_attempt_is_blocked_and_redirected(tmp_path):
     assert len(edit_results) == 2
     blocked = json.loads(edit_results[-1].result)
     assert "Repeated failed edit tactic" in blocked["error"]
-    assert blocked["suggested_next_tool"] == "edit_line_range"
+    assert blocked["suggested_next_tool"] == "patch_file"
     assert blocked["internal_recovery_steer"] is True
     assert any(
         msg.get("role") == "user"

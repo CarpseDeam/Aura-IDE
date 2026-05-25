@@ -113,6 +113,14 @@ class ToolStreamController(QObject):
                 content = parsed.get("content", "") or parsed.get("text", "") or parsed.get("new_str", "")
             elif self._tool_name in {"edit_file", "edit_line_range"}:
                 content = parsed.get("new_str", "") or parsed.get("content", "") or parsed.get("new_content", "")
+            elif self._tool_name == "patch_file":
+                edits = parsed.get("edits")
+                if isinstance(edits, list):
+                    content = "\n\n".join(
+                        str(item.get("new", ""))
+                        for item in edits
+                        if isinstance(item, dict)
+                    )
             elif self._tool_name == "edit_symbol":
                 content = parsed.get("new_definition", "") or parsed.get("content", "")
             elif self._tool_name == "dispatch_to_worker":
@@ -145,6 +153,8 @@ class ToolStreamController(QObject):
                 key = "content"
             elif self._tool_name in {"edit_file", "edit_line_range"}:
                 key = "new_str"
+            elif self._tool_name == "patch_file":
+                key = "new"
             elif self._tool_name == "edit_symbol":
                 key = "new_definition"
             elif self._tool_name == "dispatch_to_worker":

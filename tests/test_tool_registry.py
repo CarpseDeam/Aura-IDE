@@ -1364,6 +1364,7 @@ class TestHandlerRegistration:
         "edit_file",
         "edit_symbol",
         "edit_line_range",
+        "patch_file",
         "update_todo_list",
         "search_project_memory",
         "save_to_project_memory",
@@ -1428,6 +1429,7 @@ class TestModeToolSurfaces:
         assert "write_file" not in tool_names
         assert "edit_file" not in tool_names
         assert "edit_symbol" not in tool_names
+        assert "patch_file" not in tool_names
         assert "run_terminal_command" not in tool_names
 
     def test_researcher_tool_surface(self, tmp_path: Path):
@@ -1463,6 +1465,7 @@ class TestModeToolSurfaces:
         assert "write_file" in tool_names
         assert "edit_file" in tool_names
         assert "edit_line_range" in tool_names
+        assert "patch_file" in tool_names
         assert "update_todo_list" in tool_names
         assert "run_terminal_command" in tool_names
         assert "run_research" in tool_names  # Added!
@@ -1481,6 +1484,7 @@ class TestModeToolSurfaces:
         assert "write_file" in tool_names
         assert "edit_file" in tool_names
         assert "edit_line_range" in tool_names
+        assert "patch_file" in tool_names
         assert "run_terminal_command" in tool_names
         assert "run_research" in tool_names  # Added!
         assert "dispatch_to_worker" not in tool_names
@@ -1575,6 +1579,13 @@ class TestSingleModeToolDefs:
         tool_names = {t["function"]["name"] for t in registry.tool_defs()}
         assert "edit_line_range" in tool_names
 
+    def test_includes_patch_file(self, tmp_path: Path):
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+        registry = ToolRegistry(workspace_root=ws, read_only=False, mode="single")
+        tool_names = {t["function"]["name"] for t in registry.tool_defs()}
+        assert "patch_file" in tool_names
+
     def test_excludes_dispatch_to_worker(self, tmp_path: Path):
         ws = tmp_path / "workspace"
         ws.mkdir()
@@ -1620,3 +1631,10 @@ class TestPlannerModeToolDefs:
         registry = ToolRegistry(workspace_root=ws, read_only=False, mode="planner")
         tool_names = {t["function"]["name"] for t in registry.tool_defs()}
         assert "edit_line_range" not in tool_names
+
+    def test_excludes_patch_file(self, tmp_path: Path):
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+        registry = ToolRegistry(workspace_root=ws, read_only=False, mode="planner")
+        tool_names = {t["function"]["name"] for t in registry.tool_defs()}
+        assert "patch_file" not in tool_names

@@ -713,6 +713,67 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "patch_file",
+            "description": (
+                "Apply multiple exact-text replacement hunks to one existing workspace file as a single "
+                "atomic, approval-gated transaction. Use this after reading a file when a change touches "
+                "multiple locations in that same file. Every hunk is applied to an in-memory copy first; "
+                "if any hunk is missing or ambiguous, nothing is written. Craft reviews the full proposed "
+                "file once and the user sees one approval diff."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Workspace-relative file path.",
+                    },
+                    "edits": {
+                        "type": "array",
+                        "description": "Ordered exact-text replacement hunks to apply to the file.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "old": {
+                                    "type": "string",
+                                    "description": "Exact current text block to replace.",
+                                },
+                                "new": {
+                                    "type": "string",
+                                    "description": "Replacement text for this hunk.",
+                                },
+                                "occurrence": {
+                                    "type": "integer",
+                                    "description": "Optional 1-based occurrence number when old appears more than once.",
+                                    "default": 1,
+                                },
+                                "allow_multiple": {
+                                    "type": "boolean",
+                                    "description": "If true, replace every occurrence of old for this hunk.",
+                                    "default": False,
+                                },
+                            },
+                            "required": ["old", "new"],
+                            "additionalProperties": False,
+                        },
+                    },
+                    "expected_file_hash": {
+                        "type": "string",
+                        "description": "Optional SHA-256 hex digest of the current whole file.",
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Optional short description of the patch.",
+                    },
+                },
+                "required": ["path", "edits"],
+                "additionalProperties": False,
+            },
+        },
+    },
 ]
 
 RESEARCH_TOOL_DEFS: list[dict[str, Any]] = [

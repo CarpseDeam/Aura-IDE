@@ -525,6 +525,24 @@ class WriteHandlersMixin:
             )
         return self._handle_write("edit_line_range", args, approval_cb, reject_all)
 
+    def _handle_patch_file(self, args, approval_cb, reject_all) -> ToolExecResult:
+        if self._read_only:
+            return ToolExecResult(ok=False, payload={"ok": False, "error": "Read-Only Mode is enabled — write tools are disabled.", "failure_class": "read_only"})
+        if self._mode == "planner":
+            return ToolExecResult(
+                ok=False,
+                payload={
+                    "ok": False,
+                    "error": (
+                        "Planner cannot write directly. "
+                        "You must use the 'dispatch_to_worker' tool to specify code changes. "
+                        "Include your intended edits in the 'spec' field of the dispatch."
+                    ),
+                    "failure_class": "internal_error",
+                },
+            )
+        return self._handle_write("patch_file", args, approval_cb, reject_all)
+
     def _handle_write(
         self,
         name: str,
@@ -678,6 +696,47 @@ class WriteHandlersMixin:
                 new_content=proposal["new_content"],
                 is_new_file=False,
             )
+        elif name == "patch_file":
+            edits = args.get("edits")
+            expected_file_hash = args.get("expected_file_hash")
+            description = args.get("description")
+            if not isinstance(edits, list):
+                return ToolExecResult(
+                    ok=False,
+                    payload={"ok": False, "error": "edits must be a list", "failure_class": "internal_error"},
+                )
+            if expected_file_hash is not None and not isinstance(expected_file_hash, str):
+                return ToolExecResult(
+                    ok=False,
+                    payload={"ok": False, "error": "expected_file_hash must be a string when supplied", "failure_class": "internal_error"},
+                )
+            if description is not None and not isinstance(description, str):
+                return ToolExecResult(
+                    ok=False,
+                    payload={"ok": False, "error": "description must be a string when supplied", "failure_class": "internal_error"},
+                )
+            proposal = _reg.propose_patch_file(
+                self._root,
+                target,
+                edits,
+                expected_file_hash=expected_file_hash,
+                description=description,
+            )
+            if not proposal.get("ok", False):
+                return ToolExecResult(ok=False, payload=proposal)
+
+            _maybe_observe_humanizer(proposal)
+            craft_error = _run_compiler_pipeline(proposal, "patch_file", contract=self.get_contract(), workspace_root=self._root)
+            if craft_error is not None:
+                return craft_error
+
+            req = ApprovalRequest(
+                tool_name="patch_file",
+                rel_path=proposal["rel_path"],
+                old_content=proposal["old_content"],
+                new_content=proposal["new_content"],
+                is_new_file=False,
+            )
         else:  # edit_symbol
             symbol_type = args.get("symbol_type", "")
             symbol_name = args.get("symbol_name", "")
@@ -758,6 +817,8 @@ class WriteHandlersMixin:
         if name == "edit_line_range":
             payload["start_line"] = proposal.get("start_line")
             payload["end_line"] = proposal.get("end_line")
+        if name == "patch_file":
+            payload["hunk_count"] = proposal.get("hunk_count", 0)
         return ToolExecResult(
             ok=True,
             payload=payload,

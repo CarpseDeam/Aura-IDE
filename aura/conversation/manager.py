@@ -67,11 +67,14 @@ EDIT_MECHANICS_FAILURE_CLASSES = {
     "edit_mechanics_symbol_not_found",
     "edit_mechanics_old_str_not_found",
     "edit_mechanics_ambiguous_match",
+    "patch_hunk_not_found",
+    "patch_hunk_ambiguous",
 }
 
 WORKER_EDIT_RECOVERY_INSTRUCTION = (
-    "Previous edit failed recoverably. Re-read the file, then use edit_line_range "
-    "with exact line numbers, or use write_file if a full replacement is safer. "
+    "Previous edit failed recoverably. Re-read the file, then use patch_file for "
+    "multi-location edits in one file, edit_line_range for one local range, or "
+    "write_file if a full replacement is safer. "
     "Finish only after the edit is applied and touched Python files pass py_compile."
 )
 
@@ -170,6 +173,7 @@ class ConversationManager:
         syntax_repair_required: dict[str, dict[str, Any]] = {}
         syntax_validation_required: set[str] = set()
         compiler_repair_required: dict[str, dict[str, Any]] = {}
+        write_attempts_by_path: dict[str, int] = {}
         worker_recovery_nudge_sent = False
         patch_quality_unresolved: dict[str, Any] | None = None
 
@@ -424,6 +428,7 @@ class ConversationManager:
                         syntax_repair_required=syntax_repair_required,
                         syntax_validation_required=syntax_validation_required,
                         compiler_repair_required=compiler_repair_required,
+                        write_attempts_by_path=write_attempts_by_path,
                     )
                     if blocked is not None:
                         blocked_payload = self._parse_tool_payload(str(blocked.get("result_payload", "")))
@@ -532,6 +537,7 @@ class ConversationManager:
                         syntax_repair_required=syntax_repair_required,
                         syntax_validation_required=syntax_validation_required,
                         compiler_repair_required=compiler_repair_required,
+                        write_attempts_by_path=write_attempts_by_path,
                     )
                     parsed_after_recovery = self._parse_tool_payload(tool_msg_content)
                     if isinstance(parsed_after_recovery, dict) and parsed_after_recovery.get("patch_quality_unresolved"):
@@ -807,6 +813,7 @@ class ConversationManager:
         syntax_repair_required: dict[str, dict[str, Any]],
         syntax_validation_required: set[str],
         compiler_repair_required: dict[str, dict[str, Any]],
+        write_attempts_by_path: dict[str, int],
     ) -> dict[str, Any] | None:
         path = self._tool_path(name, args)
         if self._has_compiler_repair_failure(compiler_repair_required):
@@ -881,13 +888,34 @@ class ConversationManager:
             self._record_recovery_block(payload, f"syntax:{target}:{name}", recovery_block_counts)
             return self._blocked_tool_result(tool_call_id, name, payload)
 
+        if (
+            path
+            and name in {"edit_file", "edit_line_range"}
+            and write_attempts_by_path.get(path, 0) > 3
+        ):
+            payload = self._recovery_payload(
+                path=path,
+                failure_class="edit_mechanics_multi_edit_spin",
+                error=(
+                    "Multiple failed or unapplied write attempts targeted the same file. "
+                    "Use patch_file for this multi-location file edit."
+                ),
+                suggested_next_tool="patch_file",
+                suggested_next_action=(
+                    "Re-read the file, then submit one patch_file transaction "
+                    "containing all intended hunks."
+                ),
+            )
+            self._record_recovery_block(payload, f"multi-edit-spin:{path}:{name}", recovery_block_counts)
+            return self._blocked_tool_result(tool_call_id, name, payload)
+
         if name == "edit_line_range" and path in line_range_reread_required:
             payload = self._recovery_payload(
                 path=path,
                 failure_class="edit_mechanics_stale_line_range",
                 error="Stale line range after a failed edit_line_range. Re-read the file before retrying line-range editing.",
                 suggested_next_tool="read_file",
-                suggested_next_action="Re-read the file, then make one corrected edit_line_range attempt or use write_file.",
+                suggested_next_action="Re-read the file, then submit one corrected patch_file transaction for multi-location edits or one edit_line_range for a local range.",
             )
             self._record_recovery_block(payload, f"line-range-reread:{path}", recovery_block_counts)
             return self._blocked_tool_result(tool_call_id, name, payload)
@@ -898,9 +926,9 @@ class ConversationManager:
             payload = self._recovery_payload(
                 path=path,
                 failure_class=str(prior.get("failure_class") or self._default_edit_failure_class(name)),
-                error="Repeated failed edit tactic. Do not retry this edit shape. Re-read the file and use edit_line_range or write_file.",
-                suggested_next_tool="edit_line_range",
-                suggested_next_action="Use read_file/read_file_outline, then edit_line_range with exact line numbers, or use write_file.",
+                error="Repeated failed edit tactic. Do not retry this edit shape. Re-read the file and use patch_file for multi-location edits.",
+                suggested_next_tool="patch_file",
+                suggested_next_action="Use read_file/read_file_outline, then submit one patch_file transaction containing all intended hunks.",
             )
             payload["previous_error"] = prior.get("error", "")
             self._record_recovery_block(payload, block_key, recovery_block_counts)
@@ -912,9 +940,9 @@ class ConversationManager:
                 payload = self._recovery_payload(
                     path=path,
                     failure_class=self._default_edit_failure_class(name),
-                    error="Repeated failed edit tactic. Do not retry this edit shape. Re-read the file and use edit_line_range or write_file.",
-                    suggested_next_tool="edit_line_range",
-                    suggested_next_action="Use read_file/read_file_outline, then edit_line_range with exact line numbers, or use write_file.",
+                    error="Repeated failed edit tactic. Do not retry this edit shape. Re-read the file and use patch_file for multi-location edits.",
+                    suggested_next_tool="patch_file",
+                    suggested_next_action="Use read_file/read_file_outline, then submit one patch_file transaction containing all intended hunks.",
                 )
                 self._record_recovery_block(payload, shape, recovery_block_counts)
                 return self._blocked_tool_result(tool_call_id, name, payload)
@@ -934,10 +962,20 @@ class ConversationManager:
         syntax_repair_required: dict[str, dict[str, Any]],
         syntax_validation_required: set[str],
         compiler_repair_required: dict[str, dict[str, Any]],
+        write_attempts_by_path: dict[str, int],
     ) -> str:
         parsed = self._parse_tool_payload(content)
         self._record_reads_for_recovery(name, args, parsed, line_range_reread_required)
         path = self._tool_path(name, args, parsed)
+        if name in WRITE_TOOLS and path and (
+            not ok
+            or (
+                isinstance(parsed, dict)
+                and parsed.get("ok")
+                and parsed.get("applied") is False
+            )
+        ):
+            write_attempts_by_path[path] = write_attempts_by_path.get(path, 0) + 1
 
         if (
             ok
@@ -994,14 +1032,23 @@ class ConversationManager:
         if path and failure_class in EDIT_MECHANICS_FAILURE_CLASSES:
             edit_fallback_required[path] = parsed
             parsed["recoverable"] = True
-            parsed["suggested_next_tool"] = "edit_line_range"
-            parsed["suggested_next_action"] = "Do not retry edit_file/edit_symbol on this path. Re-read the file and use edit_line_range or write_file."
+            parsed["suggested_next_tool"] = "patch_file"
+            parsed["suggested_next_action"] = "Do not retry edit_file/edit_symbol on this path. Re-read the file and submit one patch_file transaction for multi-location edits."
             content = json.dumps(parsed, ensure_ascii=False)
         elif path and failure_class == "edit_mechanics_stale_line_range":
             line_range_reread_required[path] = parsed
             parsed["recoverable"] = True
             parsed["suggested_next_tool"] = "read_file"
-            parsed["suggested_next_action"] = "Re-read the file, then make one corrected edit_line_range attempt or use write_file."
+            parsed["suggested_next_action"] = "Re-read the file, then use patch_file for multi-location edits or one corrected edit_line_range for a local range."
+            content = json.dumps(parsed, ensure_ascii=False)
+        elif path and failure_class in {"patch_hunk_not_found", "patch_hunk_ambiguous"}:
+            edit_fallback_required[path] = parsed
+            parsed["recoverable"] = True
+            parsed["suggested_next_tool"] = "patch_file"
+            parsed["suggested_next_action"] = str(
+                parsed.get("suggested_next_action")
+                or "Re-read the file and submit one corrected patch_file transaction."
+            )
             content = json.dumps(parsed, ensure_ascii=False)
         elif path and failure_class == "syntax_invalid":
             state = syntax_repair_required.setdefault(path, {"failed_repairs": 0})
@@ -1131,6 +1178,8 @@ class ConversationManager:
             return isinstance(requested, list) and any(str(item) in paths for item in requested)
         if name in WRITE_TOOLS and path in paths:
             prior_tool = str(compiler_repair_required[path].get("tool", ""))
+            if prior_tool == "patch_file" and name == "patch_file":
+                return True
             return name != prior_tool
         return False
 

@@ -176,6 +176,8 @@ class WorkerEventRelay(QObject):
                     write_record["start_line"] = parsed.get("start_line")
                 if "end_line" in parsed:
                     write_record["end_line"] = parsed.get("end_line")
+                if "hunk_count" in parsed:
+                    write_record["hunk_count"] = parsed.get("hunk_count")
                 self.write_results.append(write_record)
                 path = parsed.get("path")
                 if isinstance(path, str) and path:
@@ -291,6 +293,7 @@ class WorkerEventRelay(QObject):
             "is_new_file",
             "start_line",
             "end_line",
+            "hunk_count",
             "backup",
         )
         for key in fields:

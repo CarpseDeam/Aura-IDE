@@ -64,3 +64,24 @@ def test_quality_bounce_is_tracked_separately_from_failures_and_writes() -> None
     assert relay.failed_tool_results == []
     assert relay.write_results == []
     assert relay.touched_files == set()
+
+
+def test_patch_file_quality_bounce_is_not_failed_or_touched() -> None:
+    relay = WorkerEventRelay(approval_proxy=Mock(), worker_model="test-model")
+    payload = (
+        '{"ok": true, "applied": false, "quality_bounce": true, '
+        '"path": "a.py", "tool_name": "patch_file", '
+        '"repair_instructions": "Repair patch", '
+        '"craft_issues": [], '
+        '"suggested_next_action": "Repair the proposed patch and retry this file."}'
+    )
+
+    relay.relay(
+        "dispatch-1",
+        ToolResult(tool_call_id="worker-tool-1", name="patch_file", ok=True, result=payload),
+    )
+
+    assert relay.quality_bounces[0]["tool_name"] == "patch_file"
+    assert relay.failed_tool_results == []
+    assert relay.write_results == []
+    assert relay.touched_files == set()

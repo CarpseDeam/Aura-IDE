@@ -39,7 +39,7 @@ from aura.conversation.tools.fs_handler import FsReadHandler
 from aura.conversation.tools.git_handler import GitHandler
 from aura.conversation.tools.grep import grep_files  # noqa: F401
 from aura.conversation.tools.fs_edit_structured import propose_edit_symbol  # noqa: F401
-from aura.conversation.tools.fs_write import propose_edit, propose_line_range_edit, propose_write  # noqa: F401
+from aura.conversation.tools.fs_write import propose_edit, propose_line_range_edit, propose_patch_file, propose_write  # noqa: F401
 from aura.codebase_index.tool import search_codebase as _search_codebase  # noqa: F401
 from aura.codebase_index.indexer import CodebaseIndex  # noqa: F401
 from aura.conversation.tools.web_handler import WebHandler
@@ -224,6 +224,7 @@ TOOL_HANDLERS["write_file"] = ToolRegistry._handle_write_file
 TOOL_HANDLERS["edit_file"] = ToolRegistry._handle_edit_file
 TOOL_HANDLERS["edit_symbol"] = ToolRegistry._handle_edit_symbol
 TOOL_HANDLERS["edit_line_range"] = ToolRegistry._handle_edit_line_range
+TOOL_HANDLERS["patch_file"] = ToolRegistry._handle_patch_file
 TOOL_HANDLERS["update_todo_list"] = ToolRegistry._handle_update_todo_list
 TOOL_HANDLERS["search_project_memory"] = ToolRegistry._handle_search_project_memory
 TOOL_HANDLERS["save_to_project_memory"] = ToolRegistry._handle_save_to_project_memory

@@ -181,13 +181,15 @@ _WORKER_ENGINEERING_RULES = """Implementation quality — follow these rules:
 - Use meaningful practical names and keep changes scoped.
 - Handle realistic failures specifically; do not swallow errors and report success.
 - Use `edit_symbol` for Python symbol replacement when the symbol is clear.
-- Use `edit_file` for precise search-block edits.
+- Use `edit_file` for one precise search-block replacement.
+- Use `patch_file` for multiple changes in one file after reading the file.
 - If `edit_symbol` or `edit_file` misses, read the failure payload, reread the file, and switch tactics.
-- Use `edit_line_range` with exact line numbers after rereading.
+- Use `edit_line_range` with exact line numbers for one local range after rereading.
 - For replacement/deletion `edit_line_range` calls, include `expected_old_str` from the exact current range whenever practical.
-- Use `write_file` when a full replacement is safer.
+- Use `write_file` only when replacing most of the file is safer.
+- Hot path for multi-location edits in one file: read file, call `patch_file` once with all intended hunks, let Craft compile once, approve one diff, then py_compile touched Python.
 - Craft compiles your patch into cleaner human code before approval. If Craft returns repair notes, re-read the affected file, repair the patch once, and retry. Craft repair notes are normal patch preparation, not task failure.
-- If a tool result says "Repeated failed edit tactic", stop that edit shape immediately. Re-read the file and use edit_line_range or write_file.
+- If a tool result says "Repeated failed edit tactic", stop that edit shape immediately. Re-read the file and use patch_file for multi-location edits.
 - Validate touched Python with `python -m py_compile`.
 - If py_compile reports invalid syntax in a touched file, repair that file before unrelated validation, then rerun py_compile on that file.
 - Use focused existing tests only when directly relevant or requested.
@@ -271,7 +273,7 @@ Handoff Adherence Protocol:
 3. Make the edit. Craft compiles/checks the proposed patch before approval and returns cleaned code on the happy path.
 4. If Craft returns repair notes, re-read the affected file, repair the patch once, and retry. This is normal patch preparation, not task failure.
 5. Acceptance Verification: run the focused validation needed for the change. Touched Python files must pass `python -m py_compile`.
-6. If `edit_symbol` or `edit_file` misses, reread and switch to `edit_line_range` with exact line numbers and `expected_old_str` for replacements/deletions, or use `write_file` when a full replacement is safer.
+6. Use the smallest write tool that matches the edit shape: `edit_symbol` for one known Python symbol, `edit_line_range` for one local range, `edit_file` for one exact replacement, `patch_file` for multiple changes in one file, and `write_file` only when replacing most of the file. If `edit_symbol` or `edit_file` misses, reread and switch to `patch_file` for multi-location edits or `edit_line_range` for one local range.
 7. Repair syntax before unrelated validation. Use focused existing tests only when directly relevant or requested.
 8. Use `python -c` for scratch validation; do not write root-level `_check*.py` files.
 

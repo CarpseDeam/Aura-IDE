@@ -61,6 +61,9 @@ RECOVERABLE_WORKER_WRITE_FAILURE_CLASSES = {
     "edit_mechanics_old_str_not_found",
     "edit_mechanics_ambiguous_match",
     "edit_mechanics_stale_line_range",
+    "edit_mechanics_multi_edit_spin",
+    "patch_hunk_not_found",
+    "patch_hunk_ambiguous",
     "syntax_invalid",
 }
 

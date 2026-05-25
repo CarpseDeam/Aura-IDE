@@ -12,7 +12,7 @@ from typing import Any, Literal
 
 RegistryMode = Literal["single", "planner", "worker", "researcher"]
 
-WRITE_TOOLS = {"write_file", "edit_file", "edit_symbol", "edit_line_range"}
+WRITE_TOOLS = {"write_file", "edit_file", "edit_symbol", "edit_line_range", "patch_file"}
 TERMINAL_TOOLS = {"run_terminal_command"}
 DISPATCH_TOOLS = {"dispatch_to_worker"}
 RESEARCH_TOOLS = {"run_research"}
