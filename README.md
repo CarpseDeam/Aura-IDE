@@ -3,7 +3,7 @@
 [![Python](https://img.shields.io/badge/python-3.10+-blue)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)]()
-[![Version](https://img.shields.io/badge/version-1.4.1-orange)]()
+[![Version](https://img.shields.io/badge/version-1.4.2-orange)]()
 
 <img src="media/AurA.ico" alt="Aura icon" width="64" height="64" align="right">
 
