@@ -17,6 +17,33 @@ _SYMBOL_NODE_TYPES = {
 }
 
 
+def _first_string(op: dict[str, Any], *keys: str) -> str | None:
+    for key in keys:
+        value = op.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _operation_symbol_name(kind: str, op: dict[str, Any]) -> str | None:
+    if kind == "replace_function":
+        return _first_string(op, "symbol_name", "function_name", "name")
+    if kind == "replace_method":
+        return _first_string(op, "symbol_name", "method_name", "name")
+    if kind == "replace_class":
+        return _first_string(op, "symbol_name", "class_name", "name")
+    if kind == "insert_after_symbol":
+        symbol_type = str(op.get("symbol_type") or "")
+        if symbol_type == "function":
+            return _first_string(op, "symbol_name", "function_name", "name")
+        if symbol_type == "method":
+            return _first_string(op, "symbol_name", "method_name", "name")
+        if symbol_type == "class":
+            return _first_string(op, "symbol_name", "class_name", "name")
+        return _first_string(op, "symbol_name", "function_name", "method_name", "class_name", "name")
+    return _first_string(op, "symbol_name", "name")
+
+
 def _dominant_newline(text: str) -> str:
     crlf = text.count("\r\n")
     lf = text.count("\n") - crlf
@@ -292,7 +319,7 @@ def propose_edit_transaction(
                 "replace_method": "method",
                 "replace_class": "class",
             }[str(kind)]
-            symbol_name = op.get("symbol_name")
+            symbol_name = _operation_symbol_name(str(kind), op)
             new_definition = op.get("new_definition")
             class_name = op.get("class_name")
             if not isinstance(symbol_name, str) or not isinstance(new_definition, str):
@@ -314,7 +341,7 @@ def propose_edit_transaction(
             )
         elif kind == "insert_after_symbol":
             symbol_type = op.get("symbol_type")
-            symbol_name = op.get("symbol_name")
+            symbol_name = _operation_symbol_name(str(kind), op)
             content = op.get("content")
             class_name = op.get("class_name")
             if not isinstance(symbol_type, str) or not isinstance(symbol_name, str) or not isinstance(content, str):

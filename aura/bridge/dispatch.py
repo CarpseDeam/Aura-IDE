@@ -346,6 +346,7 @@ class _DispatchProxy(QObject):
                 temperature=self._worker_temperature,
                 hook_name='generate_worker_code',
                 max_tool_rounds=self._max_tool_rounds,
+                explicit_validation_commands=task_spec.validation_commands,
             )
         except Exception as exc:
             from aura.config import redact_secrets
@@ -389,6 +390,17 @@ class _DispatchProxy(QObject):
             for r in relay.failed_tool_results
             if r["name"] in WRITE_TOOLS and not r.get("internal_recovery_steer")
         ]
+        source_inspection_blockers = [
+            r
+            for r in relay.failed_tool_results
+            if r.get("failure_class") == "source_inspection_command_blocked"
+        ]
+        terminal_policy_blockers = [
+            r
+            for r in relay.failed_tool_results
+            if r.get("failure_class")
+            in {"source_inspection_command_blocked", "worker_terminal_not_validation"}
+        ]
         failed_validation = _unrecovered_validation_failures(validation_results)
         validation_ran = bool(validation_results)
         quality_bounces = list(getattr(relay, "quality_bounces", []))
@@ -423,6 +435,22 @@ class _DispatchProxy(QObject):
             result_errors.append(_format_worker_write_failure(r))
 
         if not structured_failure:
+            for r in source_inspection_blockers:
+                command = str(r.get("blocked_command") or "")[:120]
+                suffix = f": {command}" if command else "."
+                result_errors.append(
+                    "Terminal source inspection was blocked; Worker should retry with structured reads"
+                    + suffix
+                )
+            for r in terminal_policy_blockers:
+                if r.get("failure_class") == "source_inspection_command_blocked":
+                    continue
+                command = str(r.get("blocked_command") or "")[:120]
+                suffix = f": {command}" if command else "."
+                result_errors.append(
+                    "Worker terminal command was blocked because it was not validation/build/test"
+                    + suffix
+                )
             # Failed validation commands are hard errors
             for v in failed_validation:
                 cmd = v["command"][:80]
@@ -475,6 +503,8 @@ class _DispatchProxy(QObject):
         has_validation_failure = bool(failed_validation)
         has_recoverable_edit_blocker = bool(recoverable_write_failures) and not relay.write_results
         has_quality_bounce_blocker = bool(quality_bounces) and not relay.write_results
+        has_source_inspection_blocker = bool(source_inspection_blockers)
+        has_terminal_policy_blocker = bool(terminal_policy_blockers)
         has_no_work = not relay.touched_files and not relay.failed_tool_results and not quality_bounces and not internal_error and not relay.api_errors
         has_unverified_acceptance = acceptance_unverified
 
@@ -486,7 +516,9 @@ class _DispatchProxy(QObject):
         if has_hard_failure:
             ok = False
             needs_followup = not has_internal_failure
-            recoverable = has_validation_failure and not has_internal_failure
+            recoverable = (
+                has_validation_failure or has_source_inspection_blocker or has_terminal_policy_blocker
+            ) and not has_internal_failure
         elif has_quality_bounce_blocker:
             ok = False
             needs_followup = True
@@ -544,6 +576,7 @@ class _DispatchProxy(QObject):
             has_validation_failure=has_validation_failure,
             has_recoverable_edit_blocker=has_recoverable_edit_blocker,
             has_quality_bounce_blocker=has_quality_bounce_blocker,
+            has_source_inspection_blocker=has_source_inspection_blocker,
             has_no_work=has_no_work,
             is_implementation=is_implementation,
             has_unverified_acceptance=has_unverified_acceptance,
@@ -631,6 +664,8 @@ class _DispatchProxy(QObject):
                 "failed_write_tools": failed_write_tools,
                 "internal_recovery_steers": internal_recovery_steers,
                 "recoverable_write_failures": recoverable_write_failures,
+                "source_inspection_blockers": source_inspection_blockers,
+                "terminal_policy_blockers": terminal_policy_blockers,
                 "quality_bounces": quality_bounces,
                 "patch_quality_unresolved": patch_quality_unresolved,
                 "terminal_results": getattr(relay, "terminal_results", []),
@@ -657,6 +692,7 @@ def _compute_outcome_status(
     has_validation_failure: bool,
     has_recoverable_edit_blocker: bool,
     has_quality_bounce_blocker: bool,
+    has_source_inspection_blocker: bool,
     has_no_work: bool,
     is_implementation: bool,
     has_unverified_acceptance: bool,
@@ -703,6 +739,8 @@ def _compute_outcome_status(
         return S.validation_failed.value
     if has_internal_failure or any(fc in {"internal_error", "worker_internal_error", "harness_error"} for fc in failure_classes):
         return S.harness_error.value
+    if has_source_inspection_blocker or "source_inspection_command_blocked" in failure_classes:
+        return S.needs_followup.value
     if has_hard_failure:
         if structured_status == "phased":
             return S.needs_followup.value

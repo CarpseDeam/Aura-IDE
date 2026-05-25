@@ -330,6 +330,65 @@ def working_tree_status(workspace_root: Path) -> tuple[bool, str, str]:
     return True, result.stdout, ""
 
 
+def working_tree_diff(workspace_root: Path) -> tuple[bool, str, str]:
+    """Return git diff output for the workspace."""
+    if not is_git_repo(workspace_root):
+        return False, "", "Not a git repository."
+
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--no-ext-diff", "--no-color"],
+            cwd=str(workspace_root),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+            **get_subprocess_kwargs(),
+        )
+    except FileNotFoundError:
+        return False, "", "git executable not found."
+    except subprocess.TimeoutExpired:
+        return False, "", "git diff timed out."
+
+    if result.returncode != 0:
+        err = result.stderr.strip() if result.stderr else "git diff failed."
+        return False, "", err
+
+    return True, result.stdout, ""
+
+
+def recent_commit_log(workspace_root: Path, limit: int = 10) -> tuple[bool, str, str]:
+    """Return recent commits as git log --oneline text."""
+    if not is_git_repo(workspace_root):
+        return False, "", "Not a git repository."
+
+    safe_limit = max(1, min(limit, 50))
+    try:
+        result = subprocess.run(
+            ["git", "log", "--oneline", f"--max-count={safe_limit}"],
+            cwd=str(workspace_root),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+            **get_subprocess_kwargs(),
+        )
+    except FileNotFoundError:
+        return False, "", "git executable not found."
+    except subprocess.TimeoutExpired:
+        return False, "", "git log timed out."
+
+    if result.returncode != 0:
+        err = result.stderr.strip() if result.stderr else "git log failed."
+        if "does not have any commits yet" in err or "bad default revision" in err:
+            return True, "", ""
+        return False, "", err
+
+    return True, result.stdout, ""
+
+
 def undo_last_commit(workspace_root: Path) -> tuple[bool, str]:
     """Soft-reset HEAD~1, keeping changes in the working directory.
 

@@ -1,0 +1,271 @@
+from __future__ import annotations
+
+import json
+import threading
+from pathlib import Path
+from unittest.mock import MagicMock, PropertyMock, patch
+
+import pytest
+
+from aura.client.events import Done, Event, ToolCallStart, ToolResult
+from aura.conversation.history import History
+from aura.conversation.manager import ConversationManager
+from aura.conversation.tools._types import ApprovalDecision, ToolExecResult
+from aura.conversation.tools.registry import ToolRegistry
+from aura.hooks import hooks
+from aura.sandbox import SandboxResult
+
+
+def _done_with_tool(tool_call_id: str, name: str, args: dict) -> Done:
+    return Done(
+        finish_reason="tool_calls",
+        full_message={
+            "role": "assistant",
+            "content": "",
+            "reasoning_content": None,
+            "tool_calls": [
+                {
+                    "id": tool_call_id,
+                    "type": "function",
+                    "function": {
+                        "name": name,
+                        "arguments": json.dumps(args),
+                    },
+                }
+            ],
+        },
+    )
+
+
+@pytest.fixture
+def worker_backend():
+    backend = MagicMock()
+    hooks.register("generate_worker_code", backend)
+    try:
+        yield backend
+    finally:
+        hooks.unregister("generate_worker_code")
+
+
+@pytest.fixture
+def worker_manager(tmp_path: Path) -> tuple[ConversationManager, MagicMock]:
+    tools = MagicMock(spec=ToolRegistry)
+    tools.tool_defs.return_value = []
+    tools.execute.return_value = ToolExecResult(ok=True, payload={"ok": True, "path": "aura/config.py"})
+    type(tools).workspace_root = PropertyMock(return_value=tmp_path)
+    type(tools).mode = PropertyMock(return_value="worker")
+    return ConversationManager(History(), tools), tools
+
+
+def _approval_cb(_request=None) -> ApprovalDecision:
+    return ApprovalDecision("approve")
+
+
+def test_worker_terminal_source_inspection_is_not_executed(
+    worker_manager: tuple[ConversationManager, MagicMock],
+    worker_backend: MagicMock,
+) -> None:
+    manager, _tools = worker_manager
+    events: list[Event] = []
+    command = 'python -c "from pathlib import Path; print(Path(\'graph_main_window.py\').read_text())"'
+    worker_backend.side_effect = [
+        iter([_done_with_tool("term1", "run_terminal_command", {"command": command})]),
+        iter([Done(finish_reason="stop", full_message={"role": "assistant", "content": "Done.", "reasoning_content": None})]),
+    ]
+
+    with patch("aura.conversation.tool_runner.SandboxExecutor") as sandbox_cls:
+        manager.send(
+            on_event=events.append,
+            approval_cb=_approval_cb,
+            cancel_event=threading.Event(),
+            model="deepseek-chat",
+            thinking="off",
+            hook_name="generate_worker_code",
+        )
+
+    sandbox_cls.assert_not_called()
+    terminal_results = [
+        event for event in events
+        if isinstance(event, ToolResult) and event.name == "run_terminal_command"
+    ]
+    assert terminal_results
+    payload = json.loads(terminal_results[-1].result)
+    assert terminal_results[-1].ok is False
+    assert payload["failure_class"] == "source_inspection_command_blocked"
+    assert payload["suggested_next_tool"] == "read_file"
+    assert payload["blocked_command"] == command
+    assert not [
+        event for event in events
+        if isinstance(event, ToolCallStart) and event.name == "run_terminal_command"
+    ]
+
+
+def test_worker_py_compile_still_executes(
+    worker_manager: tuple[ConversationManager, MagicMock],
+    worker_backend: MagicMock,
+) -> None:
+    manager, _tools = worker_manager
+    events: list[Event] = []
+    worker_backend.side_effect = [
+        iter([_done_with_tool("term1", "run_terminal_command", {"command": "python -m py_compile aura/config.py"})]),
+        iter([Done(finish_reason="stop", full_message={"role": "assistant", "content": "Done.", "reasoning_content": None})]),
+    ]
+
+    with (
+        patch("aura.conversation.tool_runner.load_settings") as load_settings,
+        patch("aura.conversation.tool_runner.SandboxExecutor") as sandbox_cls,
+    ):
+        load_settings.return_value = MagicMock(sandbox_mode="host")
+        sandbox = MagicMock()
+        sandbox.run_terminal_command.return_value = SandboxResult(
+            ok=True,
+            stdout="",
+            stderr="",
+            exit_code=0,
+        )
+        sandbox_cls.return_value = sandbox
+
+        manager.send(
+            on_event=events.append,
+            approval_cb=_approval_cb,
+            cancel_event=threading.Event(),
+            model="deepseek-chat",
+            thinking="off",
+            hook_name="generate_worker_code",
+        )
+
+    sandbox.run_terminal_command.assert_called_once()
+    terminal_results = [
+        event for event in events
+        if isinstance(event, ToolResult) and event.name == "run_terminal_command"
+    ]
+    assert terminal_results[-1].ok is True
+
+
+def test_worker_pytest_still_executes(
+    worker_manager: tuple[ConversationManager, MagicMock],
+    worker_backend: MagicMock,
+) -> None:
+    manager, _tools = worker_manager
+    events: list[Event] = []
+    command = "pytest tests/test_x.py"
+    worker_backend.side_effect = [
+        iter([_done_with_tool("term1", "run_terminal_command", {"command": command})]),
+        iter([Done(finish_reason="stop", full_message={"role": "assistant", "content": "Done.", "reasoning_content": None})]),
+    ]
+
+    with (
+        patch("aura.conversation.tool_runner.load_settings") as load_settings,
+        patch("aura.conversation.tool_runner.SandboxExecutor") as sandbox_cls,
+    ):
+        load_settings.return_value = MagicMock(sandbox_mode="host")
+        sandbox = MagicMock()
+        sandbox.run_terminal_command.return_value = SandboxResult(
+            ok=True,
+            stdout="",
+            stderr="",
+            exit_code=0,
+        )
+        sandbox_cls.return_value = sandbox
+
+        manager.send(
+            on_event=events.append,
+            approval_cb=_approval_cb,
+            cancel_event=threading.Event(),
+            model="deepseek-chat",
+            thinking="off",
+            hook_name="generate_worker_code",
+        )
+
+    sandbox.run_terminal_command.assert_called_once()
+    assert sandbox.run_terminal_command.call_args.kwargs["command"] == command
+    terminal_results = [
+        event for event in events
+        if isinstance(event, ToolResult) and event.name == "run_terminal_command"
+    ]
+    assert terminal_results[-1].ok is True
+
+
+def test_worker_explicit_validation_command_executes(
+    worker_manager: tuple[ConversationManager, MagicMock],
+    worker_backend: MagicMock,
+) -> None:
+    manager, _tools = worker_manager
+    events: list[Event] = []
+    command = "python tools/custom_validation.py --smoke"
+    worker_backend.side_effect = [
+        iter([_done_with_tool("term1", "run_terminal_command", {"command": command})]),
+        iter([Done(finish_reason="stop", full_message={"role": "assistant", "content": "Done.", "reasoning_content": None})]),
+    ]
+
+    with (
+        patch("aura.conversation.tool_runner.load_settings") as load_settings,
+        patch("aura.conversation.tool_runner.SandboxExecutor") as sandbox_cls,
+    ):
+        load_settings.return_value = MagicMock(sandbox_mode="host")
+        sandbox = MagicMock()
+        sandbox.run_terminal_command.return_value = SandboxResult(
+            ok=True,
+            stdout="ok",
+            stderr="",
+            exit_code=0,
+        )
+        sandbox_cls.return_value = sandbox
+
+        manager.send(
+            on_event=events.append,
+            approval_cb=_approval_cb,
+            cancel_event=threading.Event(),
+            model="deepseek-chat",
+            thinking="off",
+            hook_name="generate_worker_code",
+            explicit_validation_commands=[command],
+        )
+
+    sandbox.run_terminal_command.assert_called_once()
+
+
+def test_worker_structured_read_and_apply_edit_transaction_are_unaffected(
+    worker_manager: tuple[ConversationManager, MagicMock],
+    worker_backend: MagicMock,
+) -> None:
+    manager, tools = worker_manager
+    events: list[Event] = []
+    tools.execute.side_effect = [
+        ToolExecResult(ok=True, payload={"ok": True, "path": "docs/notes.md"}),
+        ToolExecResult(ok=True, payload={"ok": True, "path": "docs/notes.md"}),
+    ]
+    worker_backend.side_effect = [
+        iter([_done_with_tool("read1", "read_file", {"path": "docs/notes.md"})]),
+        iter([_done_with_tool("edit1", "apply_edit_transaction", {"path": "docs/notes.md", "operations": []})]),
+        iter([Done(finish_reason="stop", full_message={"role": "assistant", "content": "Done.", "reasoning_content": None})]),
+    ]
+
+    manager.send(
+        on_event=events.append,
+        approval_cb=_approval_cb,
+        cancel_event=threading.Event(),
+        model="deepseek-chat",
+        thinking="off",
+        hook_name="generate_worker_code",
+    )
+
+    executed_names = [
+        call.args[0] if call.args else call.kwargs["name"]
+        for call in tools.execute.call_args_list
+    ]
+    assert executed_names == ["read_file", "apply_edit_transaction"]
+
+
+def test_normal_worker_low_level_edit_tools_stay_hidden(tmp_workspace: Path) -> None:
+    names = {
+        tool["function"]["name"]
+        for tool in ToolRegistry(tmp_workspace, mode="worker").tool_defs()
+    }
+
+    assert "apply_edit_transaction" in names
+    assert "write_file" in names
+    assert "edit_file" not in names
+    assert "edit_symbol" not in names
+    assert "edit_line_range" not in names
+    assert "patch_file" not in names

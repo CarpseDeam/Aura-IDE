@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from aura.config import AppSettings
     from aura.gui.chat_view import ChatView
     from aura.gui.playground import AuraPlayground
+    from aura.gui.spec_card_host import SpecCardHost
 
 
 class WorkerEventHandler(QObject):
@@ -41,6 +42,7 @@ class WorkerEventHandler(QObject):
         chat: ChatView,
         playground: AuraPlayground,
         settings: AppSettings,
+        spec_host: SpecCardHost | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -48,6 +50,7 @@ class WorkerEventHandler(QObject):
         self._chat = chat
         self._playground = playground
         self._settings = settings
+        self._spec_host = spec_host
         self._session_usage: dict[str, dict[str, int]] = {}
 
     # ---- public property -------------------------------------------------------
@@ -107,7 +110,16 @@ class WorkerEventHandler(QObject):
         """Always show the SpecCard; auto-dispatch or wait for card interaction."""
         file_list = list(files)
         try:
-            card = self._chat.add_spec_card(tool_call_id, goal, file_list, spec, acceptance, summary)
+            if hasattr(self._chat, "prepare_spec_card"):
+                self._chat.prepare_spec_card(tool_call_id)
+            if self._spec_host is not None:
+                card = self._spec_host.add_spec_card(
+                    tool_call_id, goal, file_list, spec, acceptance, summary
+                )
+            else:
+                card = self._chat.add_spec_card(
+                    tool_call_id, goal, file_list, spec, acceptance, summary
+                )
         except Exception as exc:
             logging.exception("Failed to render worker dispatch spec card")
             try:
@@ -136,7 +148,7 @@ class WorkerEventHandler(QObject):
 
     def _on_dispatch_clicked(self, tool_call_id: str) -> None:
         """Dispatch the spec card's current values directly."""
-        card = self._chat.get_spec_card(tool_call_id)
+        card = self._get_spec_card(tool_call_id)
         if card is None:
             return
         goal, files, spec, acceptance, summary = card.current_spec()
@@ -148,7 +160,7 @@ class WorkerEventHandler(QObject):
         """Open the SpecEditDialog pre-populated with the spec card's values."""
         from aura.gui.spec_edit_dialog import SpecEditDialog
 
-        card = self._chat.get_spec_card(tool_call_id)
+        card = self._get_spec_card(tool_call_id)
         if card is None:
             return
         goal, files, spec, acceptance, summary = card.current_spec()
@@ -160,7 +172,7 @@ class WorkerEventHandler(QObject):
         """Cancel the pending dispatch."""
         accepted = self._bridge.user_cancelled_dispatch(tool_call_id)
         if not accepted:
-            card = self._chat.get_spec_card(tool_call_id)
+            card = self._get_spec_card(tool_call_id)
             if card:
                 card.mark_stale()
 
@@ -173,7 +185,7 @@ class WorkerEventHandler(QObject):
         self._playground.begin_assistant()
         self.worker_started.emit()
 
-        card = self._chat.get_spec_card(tool_call_id)
+        card = self._get_spec_card(tool_call_id)
         if card:
             card.mark_worker_running()
 
@@ -194,7 +206,7 @@ class WorkerEventHandler(QObject):
                 ok, summary, needs_followup=bool(needs_followup), status=status
             )
 
-        card = self._chat.get_spec_card(tool_call_id)
+        card = self._get_spec_card(tool_call_id)
         if card:
             card.worker_finished(ok, summary, status=status)
 
@@ -203,7 +215,7 @@ class WorkerEventHandler(QObject):
         self._playground.stop_aura()
         self._playground.worker_cancelled()
 
-        card = self._chat.get_spec_card(tool_call_id)
+        card = self._get_spec_card(tool_call_id)
         if card:
             card.worker_cancelled()
 
@@ -263,6 +275,13 @@ class WorkerEventHandler(QObject):
 
     def _on_view_worker_clicked(self, tool_call_id: str) -> None:
         """No-op placeholder for view-worker button."""
+
+    def _get_spec_card(self, tool_call_id: str):
+        if self._spec_host is not None:
+            card = self._spec_host.get_spec_card(tool_call_id)
+            if card is not None:
+                return card
+        return self._chat.get_spec_card(tool_call_id)
 
     def _on_worker_usage(
         self,

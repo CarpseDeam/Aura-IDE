@@ -762,11 +762,40 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
                                 },
                                 "symbol_name": {
                                     "type": "string",
-                                    "description": "Function, method, or class name.",
+                                    "description": (
+                                        "Canonical function, method, or class name. "
+                                        "Natural aliases function_name, method_name, name, and class_name "
+                                        "are accepted for operations where they identify the target symbol."
+                                    ),
+                                },
+                                "function_name": {
+                                    "type": "string",
+                                    "description": (
+                                        "Alias for symbol_name when targeting a function, including "
+                                        "replace_function and insert_after_symbol with symbol_type 'function'."
+                                    ),
+                                },
+                                "method_name": {
+                                    "type": "string",
+                                    "description": (
+                                        "Alias for symbol_name when targeting a method, including "
+                                        "replace_method and insert_after_symbol with symbol_type 'method'."
+                                    ),
+                                },
+                                "name": {
+                                    "type": "string",
+                                    "description": (
+                                        "Ergonomic alias for symbol_name where the operation context "
+                                        "makes the target symbol type clear."
+                                    ),
                                 },
                                 "class_name": {
                                     "type": "string",
-                                    "description": "Containing class name for method operations.",
+                                    "description": (
+                                        "Containing class name for replace_method and method insert operations. "
+                                        "For replace_class, and for insert_after_symbol with symbol_type 'class', "
+                                        "class_name may identify the target class when symbol_name is omitted."
+                                    ),
                                 },
                                 "new_definition": {
                                     "type": "string",
@@ -1030,6 +1059,8 @@ TERMINAL_TOOL_DEF: dict[str, Any] = {
             "exit code and complete output on completion. Use focused one-shot commands, "
             "not long-running watchers, dev servers, REPLs, or commands that wait for "
             "interactive input. Prefer targeted validation commands over watch mode. "
+            "In Worker mode this tool is validation-only; use read_file/read_files/"
+            "grep_search/read_file_outline for source inspection. "
             "IMPORTANT: If the user specifies a test or lint command, you MUST run it "
             "after modifying files. If the command fails, analyze the output and fix the "
             "code before finishing."

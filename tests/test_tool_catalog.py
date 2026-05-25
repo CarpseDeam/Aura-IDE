@@ -29,3 +29,32 @@ def test_worker_low_level_edit_tool_escape_hatch(monkeypatch, tmp_workspace):
     assert "edit_symbol" in names
     assert "edit_line_range" in names
     assert "patch_file" in names
+
+
+def test_apply_edit_transaction_schema_advertises_symbol_aliases(tmp_workspace):
+    registry = ToolRegistry(tmp_workspace, mode="worker")
+    tools = {
+        tool["function"]["name"]: tool
+        for tool in registry.tool_defs()
+    }
+
+    operation_properties = (
+        tools["apply_edit_transaction"]["function"]["parameters"]["properties"]
+        ["operations"]["items"]["properties"]
+    )
+
+    for name in (
+        "symbol_name",
+        "function_name",
+        "method_name",
+        "class_name",
+        "name",
+        "new_definition",
+    ):
+        assert name in operation_properties
+
+    assert (
+        tools["apply_edit_transaction"]["function"]["parameters"]["properties"]
+        ["operations"]["items"]["additionalProperties"]
+        is False
+    )

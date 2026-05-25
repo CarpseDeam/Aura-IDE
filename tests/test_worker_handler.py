@@ -71,6 +71,11 @@ def settings() -> Mock:
 
 
 @pytest.fixture
+def spec_host() -> Mock:
+    return Mock()
+
+
+@pytest.fixture
 def handler(
     bridge: Mock, chat: Mock, playground: Mock, settings: Mock
 ) -> WorkerEventHandler:
@@ -81,6 +86,18 @@ def handler(
         settings=settings,
         parent=None,
     )
+
+
+def _mock_spec_card() -> Mock:
+    card = Mock()
+    for signal_name in (
+        "dispatch_clicked",
+        "edit_clicked",
+        "cancel_clicked",
+        "view_worker_clicked",
+    ):
+        setattr(card, signal_name, Mock(connect=Mock()))
+    return card
 
 
 # Worker lifecycle delegation
@@ -321,6 +338,105 @@ class TestDispatch:
         chat.add_error.assert_called_once()
         bridge.user_dispatched.assert_not_called()
         bridge.user_cancelled_dispatch.assert_called_once_with("tc1")
+
+
+class TestActiveSpecHost:
+    """Verify active Worker plans use the pinned host when available."""
+
+    def test_dispatch_requested_uses_active_host_not_chat_footer(
+        self, bridge: Mock, chat: Mock, playground: Mock, settings: Mock, spec_host: Mock
+    ) -> None:
+        card = _mock_spec_card()
+        spec_host.add_spec_card.return_value = card
+        handler = WorkerEventHandler(
+            bridge=bridge,
+            chat=chat,
+            playground=playground,
+            settings=settings,
+            spec_host=spec_host,
+            parent=None,
+        )
+
+        handler._on_worker_dispatch_requested(
+            "tc1", "goal", ["f.py"], "spec", "acc", "summary",
+        )
+
+        chat.prepare_spec_card.assert_called_once_with("tc1")
+        spec_host.add_spec_card.assert_called_once_with(
+            "tc1", "goal", ["f.py"], "spec", "acc", "summary",
+        )
+        chat.add_spec_card.assert_not_called()
+        card.dispatch_clicked.connect.assert_called_once_with(handler._on_dispatch_clicked)
+        card.edit_clicked.connect.assert_called_once_with(handler._on_edit_spec_clicked)
+        card.cancel_clicked.connect.assert_called_once_with(handler._on_cancel_dispatch_clicked)
+
+    def test_dispatch_edit_cancel_wiring_still_uses_same_active_card(
+        self, bridge: Mock, chat: Mock, playground: Mock, settings: Mock, spec_host: Mock
+    ) -> None:
+        card = _mock_spec_card()
+        card.current_spec.return_value = ("goal", ["f.py"], "spec", "acc", "")
+        spec_host.get_spec_card.return_value = card
+        handler = WorkerEventHandler(
+            bridge=bridge,
+            chat=chat,
+            playground=playground,
+            settings=settings,
+            spec_host=spec_host,
+            parent=None,
+        )
+
+        handler._on_dispatch_clicked("tc1")
+        handler._on_cancel_dispatch_clicked("tc1")
+
+        bridge.user_dispatched.assert_called_once_with(
+            "tc1", "goal", ["f.py"], "spec", "acc", "",
+        )
+        bridge.user_cancelled_dispatch.assert_called_once_with("tc1")
+        spec_host.get_spec_card.assert_called_with("tc1")
+
+    def test_worker_lifecycle_updates_active_card(
+        self, bridge: Mock, chat: Mock, playground: Mock, settings: Mock, spec_host: Mock
+    ) -> None:
+        card = _mock_spec_card()
+        spec_host.get_spec_card.return_value = card
+        handler = WorkerEventHandler(
+            bridge=bridge,
+            chat=chat,
+            playground=playground,
+            settings=settings,
+            spec_host=spec_host,
+            parent=None,
+        )
+
+        handler._on_worker_started("tc1")
+        handler._on_worker_finished("tc1", True, "done", status="completed")
+
+        card.mark_worker_running.assert_called_once_with()
+        card.worker_finished.assert_called_once_with(True, "done", status="completed")
+
+    def test_auto_dispatch_from_active_host_still_dispatches(
+        self, bridge: Mock, chat: Mock, playground: Mock, settings: Mock, spec_host: Mock
+    ) -> None:
+        bridge.auto_dispatch = True
+        card = _mock_spec_card()
+        spec_host.add_spec_card.return_value = card
+        handler = WorkerEventHandler(
+            bridge=bridge,
+            chat=chat,
+            playground=playground,
+            settings=settings,
+            spec_host=spec_host,
+            parent=None,
+        )
+
+        handler._on_worker_dispatch_requested(
+            "tc1", "goal", ["f.py"], "spec", "acc", "summary",
+        )
+
+        card.mark_dispatched.assert_called_once_with()
+        bridge.user_dispatched.assert_called_once_with(
+            "tc1", "goal", ["f.py"], "spec", "acc", "summary",
+        )
 
 
 # Signal wiring

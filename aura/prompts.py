@@ -32,11 +32,12 @@ _TOOL_EFFICIENCY_RULES = """Tool efficiency:
 _WORKER_PASS_RULES = """Pass-level rules:
 - Cheapest meaningful validation by default. py_compile for touched Python.
 - Do not create test files for validation unless explicitly requested.
-- If you create root _check*.py scratch files they will be rejected — use `python -c` instead.
+- If you create root _check*.py scratch files they will be rejected — use existing focused validation instead.
 - If a tool result says the tool-call limit was reached, produce the continuation_report XML format exactly as documented.
 - Default limit: 2 validation terminal commands. Hard limit: 3.
 - Aura may auto-run focused py_compile as a completion safety net if you stop without running it.
-- Scratch validation should use `python -c` or existing focused tests, not new project files.
+- Terminal is for validation/build/test commands only. Use `read_file`, `read_files`, `grep_search`, and `read_file_outline` for source inspection. If structured reads fail, report a blocker.
+- Scratch validation should use existing focused tests or explicit validation commands, not new project files.
 - Temporary validation files must NOT be written as project artifacts; .py files under .aura/tmp/ are scrubbed."""
 
 _ARCHITECTURE_GUARDRAILS = """Architecture guardrails:
@@ -117,7 +118,7 @@ Generated repos should represent the real application directly from the first pa
 
 Cross-file sanity before finishing:
 - When adding constants, permissions, enum values, route names, states, or event types, quickly check related files for representation mismatches.
-- Prefer cheap search/read checks (`grep_search` or direct Python assertions) over broad test runs. Use terminal `rg` only for search, not pass/fail validation, unless the command explicitly exits 0 for the expected outcome. Do not rely on bare `grep`; it is often unavailable in the Windows/PowerShell host shell.
+- Prefer cheap structured search/read checks (`grep_search`, `read_file`, `read_files`, or `read_file_outline`) over broad test runs.
 - Do not mix symbolic permission names and permission string values accidentally. If a permission constant exists, import and use the constant instead of repeating raw strings.
 - State rules, service checks, route dependencies, and role mappings must use the same permission representation.
 - Avoid "almost matching" names like work_order_verify versus "work_order:verify"."""
@@ -189,12 +190,13 @@ _WORKER_ENGINEERING_RULES = """Implementation quality — follow these rules:
 - Validate touched Python with `python -m py_compile`.
 - If py_compile reports invalid syntax in a touched file, repair that file before unrelated validation, then rerun py_compile on that file.
 - Use focused existing tests only when directly relevant or requested.
-- Use `python -c` or an existing focused test for scratch validation.
+- Terminal is for validation/build/test commands only. Use `read_file`, `read_files`, `grep_search`, and `read_file_outline` for source inspection. If structured reads fail, report a blocker.
+- Worker terminal is validation-only. Use structured read tools for source inspection. Do not use Python/shell commands to read source files. If structured reads fail, report a blocker.
 - Do not create root-level validation scratch files such as _check_acceptance.py, _check_ac7.py, or _check*.py.
-- Shell validation runs in the host shell. Prefer cross-platform commands such as `python -m py_compile` or focused Python assertion scripts. Use `grep_search` for search. Use terminal `rg` only for search, not pass/fail validation, unless the command explicitly exits 0 for the expected outcome. Do not use bare `grep`; it is often unavailable in the Windows/PowerShell host shell.
-- For "old pattern must be absent" validation, prefer a Python assertion. If using terminal `rg`, write shell semantics so the command exits 0 when the pattern is absent and exits nonzero only when it is present.
+- Shell validation runs in the host shell. Prefer cross-platform build/test commands such as `python -m py_compile`, `pytest`, `ruff`, or `mypy`. Use `grep_search` for source search.
+- For "old pattern must be absent" checks, use `grep_search` or an explicit validation command from the handoff.
 - Aura may auto-run focused py_compile as a completion safety net if you stop without running it.
-- Scratch validation should use `python -c` or existing focused tests. Temporary validation .py files must NOT be checked in as project artifacts.
+- Scratch validation should use existing focused tests or explicit validation commands. Temporary validation .py files must NOT be checked in as project artifacts.
 - Finish with changed files and validation results."""
 
 _PLANNER_BLOCK = """You are Aura's planning agent. Act as a fast dispatch compiler.
@@ -271,13 +273,15 @@ Handoff Adherence Protocol:
 5. Acceptance Verification: run the focused validation needed for the change. Touched Python files must pass `python -m py_compile`.
 6. Use `apply_edit_transaction` for existing-file code changes. Use `write_file` only for new files or intentional full-file replacement. Low-level old_str, line-range, and patch-hunk tools are not normal Worker tools.
 7. Repair syntax before unrelated validation. Use focused existing tests only when directly relevant or requested.
-8. Use `python -c` for scratch validation; do not write root-level `_check*.py` files.
+8. Terminal is validation-only. Use structured read tools for source inspection; if they fail, report a blocker. Do not write root-level `_check*.py` files.
+9. Worker terminal is validation-only. Use structured read tools for source inspection. Do not use Python/shell commands to read source files. If structured reads fail, report a blocker.
 
 Execution Protocol:
 - For broad or risky tasks, start with `update_todo_list`; this creates the visible execution plan for the user. Small localized tasks may stay fast.
 - Keep TODO statuses current when you use TODOs.
 - Build the smallest complete implementation. Do not use placeholders, elisions, fake scaffolding, or comments such as `// ... existing code`.
-- Validation commands should be focused. Use `grep_search` for search. Use terminal `rg` only for search, not pass/fail validation, unless the command explicitly exits 0 for the expected outcome. Prefer Python assertions for absence/presence validation.
+- Use `read_file`, `read_files`, `grep_search`, and `read_file_outline` for source inspection. Do not use terminal, shell, or Python file reads to inspect source.
+- Validation commands should be focused. Use `grep_search` for source search and terminal only for validation/build/test.
 - Resolution: when complete, state "Done." with changed files and validation results. Include blockers only if present.
 
 If a tool result tells you the worker tool-call limit was reached, do not call any more tools. Produce exactly this continuation report format:

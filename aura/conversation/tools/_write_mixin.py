@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import logging
 import os
+import stat
+import tempfile
 from pathlib import Path
 
 from aura.paths import safe_relative_to
@@ -450,6 +452,27 @@ def _is_validation_scratch_path(path: str) -> bool:
     return name.startswith(("dump", "_check", "check", "tmp"))
 
 
+def _atomic_write_bytes(target: Path, data: bytes) -> None:
+    temp_path: Path | None = None
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, dir=target.parent) as tmp:
+            temp_path = Path(tmp.name)
+            tmp.write(data)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+        if target.exists():
+            os.chmod(temp_path, stat.S_IMODE(target.stat().st_mode))
+        os.replace(temp_path, target)
+        temp_path = None
+    finally:
+        if temp_path is not None:
+            try:
+                temp_path.unlink()
+            except OSError:
+                pass
+
+
 class WriteHandlersMixin:
     """Handlers for write tools — guards + approval + backup."""
 
@@ -861,7 +884,7 @@ class WriteHandlersMixin:
         # Approve — back up if file exists, write new content.
         target.parent.mkdir(parents=True, exist_ok=True)
         backup_path = _reg.backup_existing(self._root, target)
-        target.write_bytes(req.new_content.encode("utf-8"))
+        _atomic_write_bytes(target, req.new_content.encode("utf-8"))
 
         if compiler_service is not None:
             compiler_service.invalidate_workspace_index(self._root)

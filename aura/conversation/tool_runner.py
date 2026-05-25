@@ -27,6 +27,7 @@ from aura.conversation.tool_limits import (
     ToolLimitState,
     limit_reached_payload,
 )
+from aura.conversation.terminal_policy import worker_terminal_command_allowed
 from aura.conversation.tools._types import (
     ApprovalDecision,
 )
@@ -277,6 +278,7 @@ class ToolRunner:
         on_event: Any,
         cancel_event: threading.Event,
         mode: str,
+        explicit_validation_commands: list[str] | None = None,
     ) -> dict[str, Any] | None:
         command = args.get("command", "")
         if not command:
@@ -291,6 +293,30 @@ class ToolRunner:
                 )
             )
             return {"_terminal_payload": {"ok": False, "error": "command is required", "command": ""}}
+
+        if mode == "worker":
+            decision = worker_terminal_command_allowed(
+                str(command),
+                explicit_validation_commands=explicit_validation_commands,
+            )
+            if not decision.allowed:
+                blocked_payload = decision.to_blocked_payload(str(command))
+                payload = json.dumps(blocked_payload, ensure_ascii=False)
+                self._history.append_tool_result(tool_call_id, payload)
+                on_event(
+                    ToolResult(
+                        tool_call_id=tool_call_id,
+                        name="run_terminal_command",
+                        ok=False,
+                        result=payload,
+                    )
+                )
+                return {
+                    "recoverable": True,
+                    "phase_boundary": False,
+                    "reason": decision.failure_class,
+                    "_terminal_payload": blocked_payload,
+                }
 
         timeout = self._resolve_terminal_timeout(
             command=command,

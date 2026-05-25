@@ -307,6 +307,7 @@ class WorkerEventRelay(QObject):
             "end_line",
             "hunk_count",
             "backup",
+            "blocked_command",
         )
         for key in fields:
             if key in parsed:
@@ -332,12 +333,13 @@ def _is_validation_terminal_record(record: dict[str, Any]) -> bool:
 
     known_patterns = (
         r"(^|[;&|]\s*)(?:python(?:\d+(?:\.\d+)?)?|py)\s+-m\s+py_compile\b",
-        r"(^|[;&|]\s*)(?:python(?:\d+(?:\.\d+)?)?|py)\s+-m\s+pytest\b",
+        r"(^|[;&|]\s*)(?:python(?:\d+(?:\.\d+)?)?|py)\s+-m\s+(?:pytest|unittest)\b",
         r"(^|[;&|]\s*)pytest\b",
+        r"(^|[;&|]\s*)unittest\b",
         r"(^|[;&|]\s*)ruff\s+(?:check|format\s+--check)\b",
         r"(^|[;&|]\s*)mypy\b",
-        r"(^|[;&|]\s*)npm\s+(?:test|run\s+test)\b",
-        r"(^|[;&|]\s*)cargo\s+test\b",
+        r"(^|[;&|]\s*)npm\s+(?:test|run\s+(?:test|build))\b",
+        r"(^|[;&|]\s*)cargo\s+(?:test|build)\b",
         r"(^|[;&|]\s*)go\s+test\b",
     )
     if any(re.search(pattern, normalized) for pattern in known_patterns):

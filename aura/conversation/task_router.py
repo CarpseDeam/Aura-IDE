@@ -1,0 +1,137 @@
+"""Deterministic routing for user requests before model dispatch."""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from enum import Enum
+import re
+
+
+class TaskLane(str, Enum):
+    built_in_action = "built_in_action"
+    implementation = "implementation"
+    validation = "validation"
+    research = "research"
+    chat = "chat"
+
+
+@dataclass(frozen=True)
+class TaskRoute:
+    lane: TaskLane
+    action: str
+    confidence: float
+    reason: str
+
+
+def classify_user_request(text: str) -> TaskRoute:
+    """Classify a user request into the lane that should handle it."""
+    raw = str(text or "").strip()
+    normalized = _normalize(raw)
+    if not normalized:
+        return TaskRoute(TaskLane.chat, "chat", 0.4, "empty request")
+
+    built_in_action = _classify_built_in(normalized)
+    if built_in_action:
+        return TaskRoute(
+            TaskLane.built_in_action,
+            built_in_action,
+            1.0,
+            "matched built-in action",
+        )
+
+    if _looks_like_validation(normalized):
+        return TaskRoute(
+            TaskLane.validation,
+            "validation",
+            0.9,
+            "matched validation command/request",
+        )
+
+    if _looks_like_research(normalized):
+        return TaskRoute(
+            TaskLane.research,
+            "research",
+            0.85,
+            "matched research/docs lookup request",
+        )
+
+    if _looks_like_implementation(normalized):
+        return TaskRoute(
+            TaskLane.implementation,
+            "implementation",
+            0.85,
+            "matched implementation/change request",
+        )
+
+    return TaskRoute(TaskLane.chat, "chat", 0.6, "no task-lane trigger matched")
+
+
+def _normalize(text: str) -> str:
+    return " ".join(text.strip().lower().split())
+
+
+def _classify_built_in(normalized: str) -> str | None:
+    if normalized == "/undo":
+        return "undo"
+    if normalized in {
+        "undo last commit",
+        "undo most recent commit",
+        "undo commit but keep changes",
+        "soft reset",
+        "reset --soft",
+    }:
+        return "undo"
+    if re.fullmatch(
+        r"undo (?:the )?(?:last|most recent) commit(?: but keep changes)?",
+        normalized,
+    ):
+        return "undo"
+    if re.fullmatch(
+        r"undo (?:the )?(?:last|most recent) commit and keep changes",
+        normalized,
+    ):
+        return "undo"
+    if normalized == "git status":
+        return "git_status"
+    if normalized == "git diff" or normalized.startswith("git diff "):
+        return "git_diff"
+    if normalized == "git log" or normalized.startswith("git log "):
+        return "git_log"
+    if normalized == "restore snapshot":
+        return "restore_snapshot"
+    return None
+
+
+def _looks_like_validation(normalized: str) -> bool:
+    validation_patterns = (
+        r"^(?:run|execute)?\s*(?:python|py)\s+-m\s+py_compile\b",
+        r"^(?:run|execute)?\s*(?:python|py)\s+-m\s+(?:pytest|unittest)\b",
+        r"^(?:run|execute)?\s*pytest\b",
+        r"^(?:run|execute)?\s*ruff\s+(?:check|format\s+--check)\b",
+        r"^(?:run|execute)?\s*mypy\b",
+        r"^(?:run|execute)?\s*npm\s+(?:test|run\s+(?:test|build))\b",
+        r"^(?:run|execute)?\s*cargo\s+(?:test|build)\b",
+        r"^(?:run|execute)?\s*go\s+test\b",
+        r"^(?:run|execute)\s+(?:the\s+)?(?:tests|test suite|build|validation)\b",
+    )
+    return any(re.search(pattern, normalized) for pattern in validation_patterns)
+
+
+def _looks_like_research(normalized: str) -> bool:
+    return bool(
+        re.search(
+            r"\b(?:look up|lookup|research|search for|find docs|docs|documentation)\b",
+            normalized,
+        )
+    )
+
+
+def _looks_like_implementation(normalized: str) -> bool:
+    return bool(
+        re.search(
+            r"\b(?:add|build|change|create|fix|implement|modify|refactor|repair|update)\b",
+            normalized,
+        )
+    )
+
+
+__all__ = ["TaskLane", "TaskRoute", "classify_user_request"]

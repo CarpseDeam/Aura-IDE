@@ -151,6 +151,7 @@ class ConversationManager:
         temperature: float = 0.7,
         max_tool_rounds: int | None = None,
         hook_name: str = 'generate_planner_code',
+        explicit_validation_commands: list[str] | None = None,
     ) -> None:
         """Run the model -> tool -> model loop until the model stops calling tools.
 
@@ -493,6 +494,7 @@ class ConversationManager:
                         on_event=on_event,
                         cancel_event=cancel_event,
                         mode=mode,
+                        explicit_validation_commands=explicit_validation_commands,
                     )
                     if mode == "worker":
                         self._update_syntax_state_from_terminal(
@@ -889,8 +891,11 @@ class ConversationManager:
                         else "Repair that file and pass py_compile before any unrelated tool call."
                     )
                 ),
-                suggested_next_tool="edit_line_range",
-                suggested_next_action="Repair the touched file, then run python -m py_compile on it before continuing validation.",
+                suggested_next_tool="apply_edit_transaction",
+                suggested_next_action=(
+                    "Repair the touched file, then run python -m py_compile on it before continuing validation. "
+                    "Use apply_edit_transaction when possible or write_file for a full-file repair."
+                ),
                 recoverable=not repair_failed,
             )
             self._record_recovery_block(payload, f"syntax:{target}:{name}", recovery_block_counts)
@@ -1084,7 +1089,10 @@ class ConversationManager:
             if name in WRITE_TOOLS:
                 state["failed_repairs"] = int(state.get("failed_repairs", 0)) + 1
             parsed["suggested_next_tool"] = "apply_edit_transaction"
-            parsed["suggested_next_action"] = "Repair this file's Python syntax before any unrelated tool call. Use apply_edit_transaction when possible or write_file for a full-file repair."
+            parsed["suggested_next_action"] = (
+                "Repair the touched file, then run python -m py_compile on it before continuing validation. "
+                "Use apply_edit_transaction when possible or write_file for a full-file repair."
+            )
             if int(state.get("failed_repairs", 0)) > 1:
                 parsed["recoverable"] = False
                 parsed["error"] = "Syntax repair failed after one repair attempt. " + str(parsed.get("error", ""))

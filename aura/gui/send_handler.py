@@ -13,8 +13,15 @@ from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import QMessageBox
 
 from aura.config import PROVIDERS, AppSettings, ModelInfo, ThinkingMode
+from aura.conversation.task_router import TaskLane, classify_user_request
 from aura.gui.input_panel import SendPayload
-from aura.git_ops import undo_last_commit, restore_to_snapshot
+from aura.git_ops import (
+    recent_commit_log,
+    restore_to_snapshot,
+    undo_last_commit,
+    working_tree_diff,
+    working_tree_status,
+)
 
 
 class SendHandler(QObject):
@@ -72,14 +79,18 @@ class SendHandler(QObject):
         """Clear any queued messages (called on new/open conversation)."""
         self._message_queue.clear()
 
+    def process_message_queue(self, model: str, thinking: ThinkingMode) -> None:
+        """Send the next queued message, if any."""
+        self._process_message_queue(model, thinking)
+
     # ---- public API --------------------------------------------------------
 
     def handle_send(self, payload: SendPayload, model: str, thinking: ThinkingMode) -> None:
-        """Process a send payload: intercept /undo, queue if busy, or send."""
-        # Intercept /undo command
-        if payload.text.strip().lower() == "/undo":
-            self._chat.add_user("/undo")
-            self._handle_undo()
+        """Process a send payload: route built-ins, queue if busy, or send."""
+        route = classify_user_request(payload.text)
+        if route.lane == TaskLane.built_in_action:
+            self._chat.add_user(payload.text)
+            self._handle_built_in_action(route.action)
             return
 
         if self._bridge.is_running():
@@ -183,6 +194,23 @@ class SendHandler(QObject):
 
     # ---- undo --------------------------------------------------------------
 
+    def _handle_built_in_action(self, action: str) -> None:
+        """Run deterministic built-in actions without model or Worker dispatch."""
+        if action in {"undo", "restore_snapshot"}:
+            self._handle_undo()
+            return
+        if action == "git_status":
+            self._handle_git_status()
+            return
+        if action == "git_diff":
+            self._handle_git_diff()
+            return
+        if action == "git_log":
+            self._handle_git_log()
+            return
+
+        self._chat.add_error("Built-in action", f"Unsupported action: {action}")
+
     def _handle_undo(self) -> None:
         """Handle /undo command — restore to pre-worker snapshot or git reset."""
         ws_root = self._workspace_root
@@ -216,6 +244,42 @@ class SendHandler(QObject):
                 self._chat.add_info("Undo", message)
             else:
                 self._chat.add_error("Undo", message)
+
+    def _handle_git_status(self) -> None:
+        ws_root = self._workspace_root
+        if ws_root is None:
+            self._chat.add_error("Git status", "No workspace root set.")
+            return
+
+        ok, status, message = working_tree_status(ws_root)
+        if ok:
+            self._chat.add_info("Git status", status or "Working tree clean.")
+        else:
+            self._chat.add_error("Git status", message)
+
+    def _handle_git_diff(self) -> None:
+        ws_root = self._workspace_root
+        if ws_root is None:
+            self._chat.add_error("Git diff", "No workspace root set.")
+            return
+
+        ok, diff, message = working_tree_diff(ws_root)
+        if ok:
+            self._chat.add_info("Git diff", diff or "No unstaged changes.")
+        else:
+            self._chat.add_error("Git diff", message)
+
+    def _handle_git_log(self) -> None:
+        ws_root = self._workspace_root
+        if ws_root is None:
+            self._chat.add_error("Git log", "No workspace root set.")
+            return
+
+        ok, log_text, message = recent_commit_log(ws_root)
+        if ok:
+            self._chat.add_info("Git log", log_text or "No commits found.")
+        else:
+            self._chat.add_error("Git log", message)
 
     # ---- vision done slot --------------------------------------------------
 

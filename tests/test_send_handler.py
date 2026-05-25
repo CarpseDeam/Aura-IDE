@@ -51,6 +51,17 @@ def settings() -> Mock:
     return s
 
 
+@pytest.fixture(autouse=True)
+def clear_bridge_hooks():
+    from aura.hooks import hooks
+
+    for name in ("generate_planner_code", "generate_worker_code"):
+        hooks.unregister(name)
+    yield
+    for name in ("generate_planner_code", "generate_worker_code"):
+        hooks.unregister(name)
+
+
 @pytest.fixture
 def workspace_root() -> Path:
     return Path("/test/workspace")
@@ -81,7 +92,7 @@ class TestUndoIntercept:
     """Verify /undo command interception and delegation."""
 
     def test_undo_command_intercepted(
-        self, handler: SendHandler, chat: Mock
+        self, handler: SendHandler, chat: Mock, bridge: Mock
     ) -> None:
         """Sending /undo should add a user message and trigger undo logic."""
         with patch(
@@ -91,6 +102,54 @@ class TestUndoIntercept:
                 SendPayload(text="/undo", attachments=[]), "model", "off"
             )
         chat.add_user.assert_called_once_with("/undo")
+        bridge.send.assert_not_called()
+
+    def test_natural_language_undo_uses_builtin_path(
+        self, handler: SendHandler, chat: Mock, bridge: Mock
+    ) -> None:
+        """Natural-language undo should not go through bridge/model dispatch."""
+        with patch(
+            "aura.gui.send_handler.undo_last_commit", return_value=(True, "undone")
+        ) as mock_u:
+            handler.handle_send(
+                SendPayload(
+                    text="undo the most recent commit but keep changes",
+                    attachments=[],
+                ),
+                "model",
+                "off",
+            )
+
+        mock_u.assert_called_once_with(Path("/test/workspace"))
+        chat.add_user.assert_called_once_with(
+            "undo the most recent commit but keep changes"
+        )
+        chat.add_info.assert_called_once_with("Undo", "undone")
+        chat.begin_assistant.assert_not_called()
+        bridge.send.assert_not_called()
+
+    def test_git_status_uses_builtin_path(
+        self, handler: SendHandler, chat: Mock, bridge: Mock
+    ) -> None:
+        """git status should run as an app action, not as a chat/Worker request."""
+        with patch(
+            "aura.gui.send_handler.working_tree_status",
+            return_value=(True, " M aura/gui/send_handler.py\n", ""),
+        ) as mock_status:
+            handler.handle_send(
+                SendPayload(text="git status", attachments=[]),
+                "model",
+                "off",
+            )
+
+        mock_status.assert_called_once_with(Path("/test/workspace"))
+        chat.add_user.assert_called_once_with("git status")
+        chat.add_info.assert_called_once_with(
+            "Git status",
+            " M aura/gui/send_handler.py\n",
+        )
+        chat.begin_assistant.assert_not_called()
+        bridge.send.assert_not_called()
 
     def test_undo_with_snapshot_present(
         self, handler: SendHandler, bridge: Mock, chat: Mock
@@ -635,11 +694,12 @@ def qapp():
 class TestConversationBridgeModeSync:
     """Verify that switching planner_worker_mode updates both registry mode and system prompt."""
 
-    def test_planner_mode_sets_registry_and_prompt(self, qapp):
+    def test_planner_mode_sets_registry_and_prompt(self, qapp, tmp_path):
         from unittest.mock import Mock
         from aura.bridge.qt_bridge import ConversationBridge
         parent = Mock()
         bridge = ConversationBridge(parent, provider="deepseek")
+        bridge.set_workspace_root(tmp_path)
         bridge.set_custom_system_prompts(
             single="[SINGLE_MARKER]",
             planner="[PLANNER_MARKER]",
@@ -650,11 +710,12 @@ class TestConversationBridgeModeSync:
         assert bridge.history.system_prompt is not None
         assert "[PLANNER_MARKER]" in bridge.history.system_prompt
 
-    def test_single_mode_sets_registry_and_prompt(self, qapp):
+    def test_single_mode_sets_registry_and_prompt(self, qapp, tmp_path):
         from unittest.mock import Mock
         from aura.bridge.qt_bridge import ConversationBridge
         parent = Mock()
         bridge = ConversationBridge(parent, provider="deepseek")
+        bridge.set_workspace_root(tmp_path)
         bridge.set_custom_system_prompts(
             single="[SINGLE_MARKER]",
             planner="[PLANNER_MARKER]",
@@ -671,11 +732,12 @@ class TestConversationBridgeModeSync:
 class TestConversationBridgeModeSwitchBack:
     """Verify switching single -> planner -> single cleans up correctly."""
 
-    def test_single_after_planner_has_single_prompt(self, qapp):
+    def test_single_after_planner_has_single_prompt(self, qapp, tmp_path):
         from unittest.mock import Mock
         from aura.bridge.qt_bridge import ConversationBridge
         parent = Mock()
         bridge = ConversationBridge(parent, provider="deepseek")
+        bridge.set_workspace_root(tmp_path)
         bridge.set_custom_system_prompts(
             single="[SINGLE_MARKER]",
             planner="[PLANNER_MARKER]",
@@ -697,11 +759,12 @@ class TestConversationBridgeModeSwitchBack:
 class TestConversationBridgeReadOnlyIndependence:
     """Verify read_only state is independent of planner_worker_mode."""
 
-    def test_read_only_blocks_write_tools(self, qapp):
+    def test_read_only_blocks_write_tools(self, qapp, tmp_path):
         from unittest.mock import Mock
         from aura.bridge.qt_bridge import ConversationBridge
         parent = Mock()
         bridge = ConversationBridge(parent, provider="deepseek")
+        bridge.set_workspace_root(tmp_path)
         # Default is single mode
         bridge.set_read_only(False)
         tool_names = {t["function"]["name"] for t in bridge.registry.tool_defs()}
@@ -710,11 +773,12 @@ class TestConversationBridgeReadOnlyIndependence:
         tool_names = {t["function"]["name"] for t in bridge.registry.tool_defs()}
         assert "write_file" not in tool_names
 
-    def test_planner_mode_does_not_change_read_only(self, qapp):
+    def test_planner_mode_does_not_change_read_only(self, qapp, tmp_path):
         from unittest.mock import Mock
         from aura.bridge.qt_bridge import ConversationBridge
         parent = Mock()
         bridge = ConversationBridge(parent, provider="deepseek")
+        bridge.set_workspace_root(tmp_path)
         bridge.set_read_only(True)
         bridge.set_planner_worker_mode(True)
         assert bridge.registry.mode == "planner"
@@ -722,4 +786,4 @@ class TestConversationBridgeReadOnlyIndependence:
         # Read-only should still be enforced
         tool_names = {t["function"]["name"] for t in bridge.registry.tool_defs()}
         assert "write_file" not in tool_names
-        assert "dispatch_to_worker" in tool_names
+        assert "dispatch_to_worker" not in tool_names

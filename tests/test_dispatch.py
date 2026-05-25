@@ -808,6 +808,7 @@ def _status_for(**overrides):
         "has_validation_failure": False,
         "has_recoverable_edit_blocker": False,
         "has_quality_bounce_blocker": False,
+        "has_source_inspection_blocker": False,
         "has_no_work": False,
         "is_implementation": True,
         "has_unverified_acceptance": False,
@@ -848,6 +849,10 @@ def test_compute_outcome_status_distinguishes_validation_mechanics_and_harness()
     assert _status_for(
         has_validation_failure=True
     ) == WorkerOutcomeStatus.validation_failed.value
+    assert _status_for(
+        has_source_inspection_blocker=True,
+        result_errors=["Terminal source inspection was blocked."],
+    ) == WorkerOutcomeStatus.needs_followup.value
     assert _status_for(
         has_internal_failure=True
     ) == WorkerOutcomeStatus.harness_error.value

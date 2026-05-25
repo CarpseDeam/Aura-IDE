@@ -86,6 +86,157 @@ def test_failed_method_replacement_does_not_write_and_returns_symbol_not_found(t
     assert target.read_text(encoding="utf-8") == original
 
 
+def test_symbol_aliases_are_normalized_by_operation_kind(tmp_workspace: Path):
+    target = tmp_workspace / "sample.py"
+    original = (
+        "def alpha():\n"
+        "    return 1\n"
+        "\n"
+        "class Greeter:\n"
+        "    def greet(self):\n"
+        "        return 'hi'\n"
+    )
+    target.write_text(original, encoding="utf-8")
+
+    proposal = propose_edit_transaction(
+        tmp_workspace,
+        target,
+        [
+            {
+                "op": "replace_function",
+                "function_name": "alpha",
+                "new_definition": "def alpha():\n    return 2",
+            },
+            {
+                "op": "replace_method",
+                "class_name": "Greeter",
+                "method_name": "greet",
+                "new_definition": "def greet(self):\n    return 'hello'",
+            },
+            {
+                "op": "insert_after_symbol",
+                "symbol_type": "method",
+                "class_name": "Greeter",
+                "method_name": "greet",
+                "content": "\n    def wave(self):\n        return 'wave'",
+            },
+        ],
+    )
+
+    assert proposal["ok"] is True
+    assert "return 2" in proposal["new_content"]
+    assert "return 'hello'" in proposal["new_content"]
+    assert "def wave(self):" in proposal["new_content"]
+
+
+def test_replace_method_accepts_method_name_alias(tmp_path: Path):
+    path = tmp_path / "graph_items.py"
+    path.write_text(
+        "class Node:\n"
+        "    def paint(self):\n"
+        "        return 'old'\n",
+        encoding="utf-8",
+    )
+
+    result = propose_edit_transaction(
+        tmp_path,
+        path,
+        [
+            {
+                "op": "replace_method",
+                "class_name": "Node",
+                "method_name": "paint",
+                "new_definition": "def paint(self):\n    return 'new'",
+            }
+        ],
+    )
+
+    assert result["ok"] is True
+    assert "return 'new'" in result["new_content"]
+
+
+def test_replace_function_accepts_function_name_alias(tmp_workspace: Path):
+    target = tmp_workspace / "sample.py"
+    target.write_text("def alpha():\n    return 1\n", encoding="utf-8")
+
+    proposal = propose_edit_transaction(
+        tmp_workspace,
+        target,
+        [
+            {
+                "op": "replace_function",
+                "function_name": "alpha",
+                "new_definition": "def alpha():\n    return 2",
+            }
+        ],
+    )
+
+    assert proposal["ok"] is True
+    assert "return 2" in proposal["new_content"]
+
+
+def test_replace_class_accepts_class_name_alias_as_target(tmp_workspace: Path):
+    target = tmp_workspace / "sample.py"
+    target.write_text("class Greeter:\n    pass\n", encoding="utf-8")
+
+    proposal = propose_edit_transaction(
+        tmp_workspace,
+        target,
+        [
+            {
+                "op": "replace_class",
+                "class_name": "Greeter",
+                "new_definition": "class Greeter:\n    value = 1",
+            }
+        ],
+    )
+
+    assert proposal["ok"] is True
+    assert "value = 1" in proposal["new_content"]
+
+
+def test_insert_after_method_accepts_method_name_alias(tmp_workspace: Path):
+    target = tmp_workspace / "sample.py"
+    target.write_text(
+        "class Greeter:\n"
+        "    def greet(self):\n"
+        "        return 'hi'\n",
+        encoding="utf-8",
+    )
+
+    proposal = propose_edit_transaction(
+        tmp_workspace,
+        target,
+        [
+            {
+                "op": "insert_after_symbol",
+                "symbol_type": "method",
+                "class_name": "Greeter",
+                "method_name": "greet",
+                "content": "\n    def wave(self):\n        return 'wave'",
+            }
+        ],
+    )
+
+    assert proposal["ok"] is True
+    assert "def wave(self):" in proposal["new_content"]
+
+
+def test_missing_symbol_alias_failure_includes_operation_index(tmp_workspace: Path):
+    target = tmp_workspace / "sample.py"
+    target.write_text("def alpha():\n    return 1\n", encoding="utf-8")
+
+    proposal = propose_edit_transaction(
+        tmp_workspace,
+        target,
+        [{"op": "replace_function", "new_definition": "def alpha():\n    return 2"}],
+    )
+
+    assert proposal["ok"] is False
+    assert proposal["failure_class"] == "edit_transaction_invalid_operation"
+    assert proposal["operation_index"] == 0
+
+
 def test_invalid_generated_python_does_not_write_and_returns_invalid_syntax(tmp_workspace: Path):
     target = tmp_workspace / "sample.py"
     original = "def alpha():\n    return 1\n"
