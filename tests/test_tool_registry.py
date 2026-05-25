@@ -1498,13 +1498,91 @@ class TestProposeLineRangeEdit:
         assert result["ok"] is True
         assert result["new_content"] == "only line\nappended\n"
 
-    def test_edit_line_range_stale_bounds_structured_payload(self, tmp_path: Path):
+def test_edit_line_range_stale_bounds_structured_payload(self, tmp_path: Path):
         ws = tmp_path / "workspace"
         ws.mkdir()
         target = ws / "test.txt"
-        target.write_text("line1\nline2\n")
+        target.write_text("line1\\nline2\\n")
         result = propose_line_range_edit(ws, target, 5, 6, "x")
         assert result["ok"] is False
         assert "failure_class" in result
         assert result["failure_class"] == "edit_mechanics_stale_line_range"
         assert "suggested_next_action" in result
+
+
+class TestSingleModeToolDefs:
+    """Single mode exposes write tools but not dispatch_to_worker."""
+
+    def test_includes_write_file(self, tmp_path: Path):
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+        registry = ToolRegistry(workspace_root=ws, read_only=False, mode="single")
+        tool_names = {t["function"]["name"] for t in registry.tool_defs()}
+        assert "write_file" in tool_names
+
+    def test_includes_edit_file(self, tmp_path: Path):
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+        registry = ToolRegistry(workspace_root=ws, read_only=False, mode="single")
+        tool_names = {t["function"]["name"] for t in registry.tool_defs()}
+        assert "edit_file" in tool_names
+
+    def test_includes_edit_symbol(self, tmp_path: Path):
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+        registry = ToolRegistry(workspace_root=ws, read_only=False, mode="single")
+        tool_names = {t["function"]["name"] for t in registry.tool_defs()}
+        assert "edit_symbol" in tool_names
+
+    def test_includes_edit_line_range(self, tmp_path: Path):
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+        registry = ToolRegistry(workspace_root=ws, read_only=False, mode="single")
+        tool_names = {t["function"]["name"] for t in registry.tool_defs()}
+        assert "edit_line_range" in tool_names
+
+    def test_excludes_dispatch_to_worker(self, tmp_path: Path):
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+        registry = ToolRegistry(workspace_root=ws, read_only=False, mode="single")
+        tool_names = {t["function"]["name"] for t in registry.tool_defs()}
+        assert "dispatch_to_worker" not in tool_names
+
+
+class TestPlannerModeToolDefs:
+    """Planner mode exposes dispatch_to_worker but not write tools."""
+
+    def test_includes_dispatch_to_worker(self, tmp_path: Path):
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+        registry = ToolRegistry(workspace_root=ws, read_only=False, mode="planner")
+        tool_names = {t["function"]["name"] for t in registry.tool_defs()}
+        assert "dispatch_to_worker" in tool_names
+
+    def test_excludes_write_file(self, tmp_path: Path):
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+        registry = ToolRegistry(workspace_root=ws, read_only=False, mode="planner")
+        tool_names = {t["function"]["name"] for t in registry.tool_defs()}
+        assert "write_file" not in tool_names
+
+    def test_excludes_edit_file(self, tmp_path: Path):
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+        registry = ToolRegistry(workspace_root=ws, read_only=False, mode="planner")
+        tool_names = {t["function"]["name"] for t in registry.tool_defs()}
+        assert "edit_file" not in tool_names
+
+    def test_excludes_edit_symbol(self, tmp_path: Path):
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+        registry = ToolRegistry(workspace_root=ws, read_only=False, mode="planner")
+        tool_names = {t["function"]["name"] for t in registry.tool_defs()}
+        assert "edit_symbol" not in tool_names
+
+    def test_excludes_edit_line_range(self, tmp_path: Path):
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+        registry = ToolRegistry(workspace_root=ws, read_only=False, mode="planner")
+        tool_names = {t["function"]["name"] for t in registry.tool_defs()}
+        assert "edit_line_range" not in tool_names

@@ -425,14 +425,12 @@ def test_worker_cannot_finish_after_python_write_until_py_compile(tmp_path):
         side_effect=[
             iter([_done(tool_calls=[tc_write])]),
             iter([_done("Done.")]),
-            iter([_done("Still done.")]),
-            iter([_done("Finished.")]),
         ]
     )
 
     try:
         _register_worker_hook(hook)
-        with patch.object(ConversationManager, '_run_focused_py_compile', return_value=(True, "a.py: ok")):
+        with patch.object(ConversationManager, '_run_focused_py_compile', return_value=(True, "a.py: ok")) as compile_mock:
             manager.send(
                 on_event=events.append,
                 approval_cb=MagicMock(return_value=ApprovalDecision("approve")),
@@ -444,12 +442,18 @@ def test_worker_cannot_finish_after_python_write_until_py_compile(tmp_path):
     finally:
         hooks.unregister("generate_worker_code")
 
-    assert any(
-        msg.get("role") == "user"
-        and "Run python -m py_compile on the touched Python file(s)" in str(msg.get("content"))
-        for msg in history.messages
-    )
-    # Auto-py_compile passed — no failure_class
+    compile_mock.assert_called_once_with(["a.py"])
+    validation_events = [
+        ev for ev in events
+        if isinstance(ev, ToolResult)
+        and ev.name == "run_terminal_command"
+        and ev.tool_call_id == "auto_py_compile"
+    ]
+    assert len(validation_events) == 1
+    payload = json.loads(validation_events[0].result)
+    assert payload["ok"] is True
+    assert payload["command"] == "python -m py_compile a.py"
+    assert payload["auto_validation"] is True
     content = history.messages[-1]["content"]
     assert "failure_class" not in content
 
@@ -495,6 +499,58 @@ def test_recoverable_edit_mechanics_exhaustion_is_single_final_reason(tmp_worksp
     ]
     assert "Worker failed" in result.summary
     assert "old_str not found" not in result.summary
+
+
+def test_auto_py_compile_validation_is_counted_by_dispatch(tmp_workspace):
+    req = WorkerDispatchRequest(
+        goal="Create a Python module",
+        files=["a.py"],
+        spec="Create a.py with a simple value.",
+        acceptance="",
+        summary="Create a.py",
+    )
+    proxy = _DispatchProxy(
+        parent_widget=Mock(),
+        registry_factory=lambda mode: ToolRegistry(tmp_workspace, mode=mode),
+        approval_proxy=Mock(
+            request_approval=MagicMock(return_value=ApprovalDecision("approve")),
+            consume_last_event=MagicMock(return_value=None),
+        ),
+        workspace_root=tmp_workspace,
+    )
+    proxy.set_auto_commit_enabled(False)
+    tc = _tool_call("w1", "write_file", {"path": "a.py", "content": "value = 1\n"})
+    hook = MagicMock(
+        side_effect=[
+            iter([_done(tool_calls=[tc])]),
+            iter([_done("Done.")]),
+        ]
+    )
+
+    try:
+        _register_worker_hook(hook)
+        with patch.object(
+            ConversationManager,
+            "_run_focused_py_compile",
+            return_value=(True, "a.py: ok"),
+        ):
+            result = proxy._run_worker("dispatch-1", req, SimpleNamespace(cancel_event=None))
+    finally:
+        hooks.unregister("generate_worker_code")
+
+    assert result.ok is True
+    assert result.needs_followup is False
+    assert result.recoverable is False
+    assert "Worker modified files but ran no validation command." not in result.extras["caveats"]
+    assert result.extras["validation_results"] == [
+        {
+            "command": "python -m py_compile a.py",
+            "ok": True,
+            "exit_code": 0,
+            "output_preview": "a.py: ok",
+            "auto_validation": True,
+        }
+    ]
 
 
 def test_root_check_scratch_files_are_cleaned(tmp_workspace):
@@ -602,13 +658,12 @@ def test_auto_py_compile_success_when_worker_stops(tmp_path):
         side_effect=[
             iter([_done(tool_calls=[tc_write])]),
             iter([_done("Done.")]),
-            iter([_done("Still done.")]),
         ]
     )
 
     try:
         _register_worker_hook(hook)
-        with patch.object(ConversationManager, '_run_focused_py_compile', return_value=(True, "graph_main_window.py: ok")):
+        with patch.object(ConversationManager, '_run_focused_py_compile', return_value=(True, "graph_main_window.py: ok")) as compile_mock:
             manager.send(
                 on_event=events.append,
                 approval_cb=MagicMock(return_value=ApprovalDecision("approve")),
@@ -620,13 +675,18 @@ def test_auto_py_compile_success_when_worker_stops(tmp_path):
     finally:
         hooks.unregister("generate_worker_code")
 
-    # Py_compile nudge should have been sent
-    assert any(
-        msg.get("role") == "user"
-        and "Run python -m py_compile on the touched Python file(s)" in str(msg.get("content"))
-        for msg in history.messages
-    )
-    # Auto-py_compile passed — no failure_class in final message
+    compile_mock.assert_called_once_with(["graph_main_window.py"])
+    validation_events = [
+        ev for ev in events
+        if isinstance(ev, ToolResult)
+        and ev.name == "run_terminal_command"
+        and ev.tool_call_id == "auto_py_compile"
+    ]
+    assert len(validation_events) == 1
+    payload = json.loads(validation_events[0].result)
+    assert payload["ok"] is True
+    assert payload["command"] == "python -m py_compile graph_main_window.py"
+    assert payload["auto_validation"] is True
     content = history.messages[-1]["content"]
     assert "failure_class" not in content
     assert "error" not in content
@@ -658,10 +718,9 @@ def test_auto_py_compile_failure_triggers_repair_and_recovers(tmp_path):
     hook = MagicMock(
         side_effect=[
             iter([_done(tool_calls=[tc_write])]),   # 1: write original file
-            iter([_done("Done.")]),                  # 2: stop → nudge sent
-            iter([_done("Done.")]),                  # 3: stop → auto-py_compile FAIL → repair instruction
-            iter([_done(tool_calls=[tc_repair])]),   # 4: write repaired file
-            iter([_done("Done.")]),                  # 5: stop → auto-py_compile PASS → return
+            iter([_done("Done.")]),                  # 2: stop -> auto-py_compile FAIL -> repair instruction
+            iter([_done(tool_calls=[tc_repair])]),   # 3: write repaired file
+            iter([_done("Done.")]),                  # 4: stop -> auto-py_compile PASS -> return
         ]
     )
 
@@ -690,6 +749,15 @@ def test_auto_py_compile_failure_triggers_repair_and_recovers(tmp_path):
 
     # Auto-py_compile should have been called twice
     assert auto_compile_calls == 2
+    validation_events = [
+        ev for ev in events
+        if isinstance(ev, ToolResult)
+        and ev.name == "run_terminal_command"
+        and ev.tool_call_id == "auto_py_compile"
+    ]
+    assert len(validation_events) == 2
+    assert json.loads(validation_events[0].result)["ok"] is False
+    assert json.loads(validation_events[1].result)["ok"] is True
     # The focused py_compile diagnostic message should be in history
     assert any(
         msg.get("role") == "user"

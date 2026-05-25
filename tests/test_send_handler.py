@@ -14,9 +14,7 @@ from aura.gui.input_panel import Attachment, SendPayload
 from aura.gui.send_handler import SendHandler
 
 
-# ---------------------------------------------------------------------------
 # Fixtures
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture
@@ -76,9 +74,7 @@ def handler(
     )
 
 
-# ---------------------------------------------------------------------------
 # Undo intercept
-# ---------------------------------------------------------------------------
 
 
 class TestUndoIntercept:
@@ -141,9 +137,7 @@ class TestUndoIntercept:
         chat.add_error.assert_called_once_with("Undo", "No workspace root set.")
 
 
-# ---------------------------------------------------------------------------
 # Message queueing
-# ---------------------------------------------------------------------------
 
 
 class TestMessageQueueing:
@@ -205,9 +199,7 @@ class TestMessageQueueing:
         bridge.send.assert_not_called()
 
 
-# ---------------------------------------------------------------------------
 # Vision routing
-# ---------------------------------------------------------------------------
 
 
 class TestVisionRouting:
@@ -356,9 +348,7 @@ class TestVisionRouting:
         mock_thread_instance.start.assert_called_once()
 
 
-# ---------------------------------------------------------------------------
 # Multimodal assembly
-# ---------------------------------------------------------------------------
 
 
 class TestMultimodalAssembly:
@@ -559,9 +549,7 @@ class TestMultimodalAssembly:
         )
 
 
-# ---------------------------------------------------------------------------
 # Queue and workspace root helpers
-# ---------------------------------------------------------------------------
 
 
 class TestQueueHelpers:
@@ -579,9 +567,7 @@ class TestQueueHelpers:
         assert handler._workspace_root == new_root
 
 
-# ---------------------------------------------------------------------------
 # Retry last message
-# ---------------------------------------------------------------------------
 
 
 class TestRetryLastMessage:
@@ -631,3 +617,109 @@ class TestRetryLastMessage:
         assert ok is False
         chat.add_error.assert_called_once_with("Retry", "No user message to retry.")
         bridge.send.assert_not_called()
+
+
+# ConversationBridge mode/prompt sync
+
+
+@pytest.fixture(scope="module")
+def qapp():
+    """Provide a QApplication instance for ConversationBridge (QObject) tests."""
+    from PySide6.QtWidgets import QApplication
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication([])
+    return app
+
+
+class TestConversationBridgeModeSync:
+    """Verify that switching planner_worker_mode updates both registry mode and system prompt."""
+
+    def test_planner_mode_sets_registry_and_prompt(self, qapp):
+        from unittest.mock import Mock
+        from aura.bridge.qt_bridge import ConversationBridge
+        parent = Mock()
+        bridge = ConversationBridge(parent, provider="deepseek")
+        bridge.set_custom_system_prompts(
+            single="[SINGLE_MARKER]",
+            planner="[PLANNER_MARKER]",
+            worker="",
+        )
+        bridge.set_planner_worker_mode(True)
+        assert bridge.registry.mode == "planner"
+        assert bridge.history.system_prompt is not None
+        assert "[PLANNER_MARKER]" in bridge.history.system_prompt
+
+    def test_single_mode_sets_registry_and_prompt(self, qapp):
+        from unittest.mock import Mock
+        from aura.bridge.qt_bridge import ConversationBridge
+        parent = Mock()
+        bridge = ConversationBridge(parent, provider="deepseek")
+        bridge.set_custom_system_prompts(
+            single="[SINGLE_MARKER]",
+            planner="[PLANNER_MARKER]",
+            worker="",
+        )
+        bridge.set_planner_worker_mode(True)
+        bridge.set_planner_worker_mode(False)
+        assert bridge.registry.mode == "single"
+        assert bridge.history.system_prompt is not None
+        assert "[SINGLE_MARKER]" in bridge.history.system_prompt
+        assert "[PLANNER_MARKER]" not in bridge.history.system_prompt
+
+
+class TestConversationBridgeModeSwitchBack:
+    """Verify switching single -> planner -> single cleans up correctly."""
+
+    def test_single_after_planner_has_single_prompt(self, qapp):
+        from unittest.mock import Mock
+        from aura.bridge.qt_bridge import ConversationBridge
+        parent = Mock()
+        bridge = ConversationBridge(parent, provider="deepseek")
+        bridge.set_custom_system_prompts(
+            single="[SINGLE_MARKER]",
+            planner="[PLANNER_MARKER]",
+            worker="",
+        )
+        # Start in single mode (default)
+        assert bridge.registry.mode == "single"
+        # Switch to planner
+        bridge.set_planner_worker_mode(True)
+        assert bridge.registry.mode == "planner"
+        assert "[PLANNER_MARKER]" in bridge.history.system_prompt
+        # Switch back to single
+        bridge.set_planner_worker_mode(False)
+        assert bridge.registry.mode == "single"
+        assert "[SINGLE_MARKER]" in bridge.history.system_prompt
+        assert "[PLANNER_MARKER]" not in bridge.history.system_prompt
+
+
+class TestConversationBridgeReadOnlyIndependence:
+    """Verify read_only state is independent of planner_worker_mode."""
+
+    def test_read_only_blocks_write_tools(self, qapp):
+        from unittest.mock import Mock
+        from aura.bridge.qt_bridge import ConversationBridge
+        parent = Mock()
+        bridge = ConversationBridge(parent, provider="deepseek")
+        # Default is single mode
+        bridge.set_read_only(False)
+        tool_names = {t["function"]["name"] for t in bridge.registry.tool_defs()}
+        assert "write_file" in tool_names
+        bridge.set_read_only(True)
+        tool_names = {t["function"]["name"] for t in bridge.registry.tool_defs()}
+        assert "write_file" not in tool_names
+
+    def test_planner_mode_does_not_change_read_only(self, qapp):
+        from unittest.mock import Mock
+        from aura.bridge.qt_bridge import ConversationBridge
+        parent = Mock()
+        bridge = ConversationBridge(parent, provider="deepseek")
+        bridge.set_read_only(True)
+        bridge.set_planner_worker_mode(True)
+        assert bridge.registry.mode == "planner"
+        assert bridge.registry.read_only is True
+        # Read-only should still be enforced
+        tool_names = {t["function"]["name"] for t in bridge.registry.tool_defs()}
+        assert "write_file" not in tool_names
+        assert "dispatch_to_worker" in tool_names

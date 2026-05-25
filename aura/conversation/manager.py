@@ -75,11 +75,6 @@ WORKER_EDIT_RECOVERY_INSTRUCTION = (
     "Finish only after the edit is applied and touched Python files pass py_compile."
 )
 
-WORKER_PY_COMPILE_INSTRUCTION = (
-    "Run python -m py_compile on the touched Python file(s), repair syntax if it "
-    "fails, then finish."
-)
-
 WORKER_AUTO_PY_COMPILE_INSTRUCTION = (
     "Focused py_compile failed on the following Python file(s). "
     "Re-read and repair the file(s), then run python -m py_compile again. "
@@ -178,7 +173,6 @@ class ConversationManager:
         syntax_validation_required: set[str] = set()
         compiler_repair_required: dict[str, dict[str, Any]] = {}
         worker_recovery_nudge_sent = False
-        worker_py_compile_nudge_sent = False
 
         while True:
             rounds_used += 1
@@ -342,39 +336,33 @@ class ConversationManager:
                         if _is_validation_scratch_path(path)
                     )
                     if syntax_validation_required:
-                        if not worker_py_compile_nudge_sent:
-                            paths = ", ".join(sorted(syntax_validation_required))
-                            instruction = WORKER_PY_COMPILE_INSTRUCTION
-                            if paths:
-                                instruction += (
-                                    "\nTouched Python file(s) awaiting py_compile: "
-                                    + paths
-                                )
-                            self._history.append_user_text(instruction)
-                            worker_py_compile_nudge_sent = True
-                            continue
-                        # Worker ignored the nudge — auto-run focused py_compile
                         product_paths = sorted(
                             path for path in syntax_validation_required
                             if not _is_validation_scratch_path(path)
                         )
                         if product_paths:
                             all_ok, diagnostics = self._run_focused_py_compile(product_paths)
+                            self._emit_auto_py_compile_result(
+                                paths=product_paths,
+                                ok=all_ok,
+                                diagnostics=diagnostics,
+                                on_event=on_event,
+                            )
                             if all_ok:
                                 syntax_validation_required.clear()
-                                return
-                            # Auto-py_compile failed — feed diagnostics back
-                            for path in product_paths:
-                                syntax_repair_required[path] = {
-                                    "error": diagnostics,
-                                    "failed_repairs": 0,
-                                }
-                            syntax_validation_required.clear()
-                            instruction = WORKER_AUTO_PY_COMPILE_INSTRUCTION.format(
-                                diagnostics=diagnostics,
-                            )
-                            self._history.append_user_text(instruction)
-                            continue
+                            else:
+                                # Auto-py_compile failed — feed diagnostics back for repair
+                                for path in product_paths:
+                                    syntax_repair_required[path] = {
+                                        "error": diagnostics,
+                                        "failed_repairs": 0,
+                                    }
+                                syntax_validation_required.clear()
+                                instruction = WORKER_AUTO_PY_COMPILE_INSTRUCTION.format(
+                                    diagnostics=diagnostics,
+                                )
+                                self._history.append_user_text(instruction)
+                                continue
                     return
 
             _terminal_dispatch = False
@@ -739,6 +727,39 @@ class ConversationManager:
         combined = "\n".join(outputs)
         return all_ok, combined
 
+    @staticmethod
+    def _emit_auto_py_compile_result(
+        *,
+        paths: list[str],
+        ok: bool,
+        diagnostics: str,
+        on_event: EventCallback,
+    ) -> None:
+        product_paths = [
+            _normalize_worker_path(path)
+            for path in paths
+            if not _is_validation_scratch_path(path)
+        ]
+        if not product_paths:
+            return
+        command = "python -m py_compile " + " ".join(product_paths)
+        payload = {
+            "ok": ok,
+            "command": command,
+            "exit_code": 0 if ok else 1,
+            "output": diagnostics,
+            "auto_validation": True,
+        }
+        content = json.dumps(payload, ensure_ascii=False)
+        on_event(
+            ToolResult(
+                tool_call_id="auto_py_compile",
+                name="run_terminal_command",
+                ok=ok,
+                result=content,
+            )
+        )
+
     def _worker_recovery_block(
         self,
         *,
@@ -1067,7 +1088,7 @@ class ConversationManager:
         if "py_compile" not in command:
             return []
         matches = re.findall(
-            r"(?<![\\w.-])([A-Za-z0-9_./\\\\:\\-]+\.py)(?![\\w.-])",
+            r"(?<![\w.-])([A-Za-z0-9_./\\:\-]+\.py)(?![\w.-])",
             command,
         )
         targets: list[str] = []
@@ -1077,6 +1098,7 @@ class ConversationManager:
                 continue
             targets.append(target)
         return targets
+
     @staticmethod
     def _normalize_py_compile_path(raw: str) -> str:
         p = raw.strip().replace("\\", "/")

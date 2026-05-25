@@ -67,6 +67,7 @@ from aura.conversation.tools import (
 )
 from aura.prompts import (
     PLANNER_SYSTEM_PROMPT,
+    SINGLE_SYSTEM_PROMPT,
     build_tier1_context,
     inject_tier1_context,
 )
@@ -301,6 +302,7 @@ class ConversationBridge(QObject):
         self._tier1_context: str = ""
         self._auto_dispatch: bool = False
         self._pre_worker_sha: str | None = None
+        self._active_prompt_mode: str | None = None
 
         # Re-emit dispatch proxy signals on the bridge so the GUI binds once.
         self._dispatch_proxy.showSpecCard.connect(self.workerDispatchRequested)
@@ -376,18 +378,16 @@ class ConversationBridge(QObject):
     def set_planner_worker_mode(self, enabled: bool) -> None:
         self._planner_worker_mode = enabled
         self._compute_and_cache_tier1()
+        mode_key = "planner" if enabled else "single"
+        self._registry.set_mode(mode_key)
+        if self._active_prompt_mode == mode_key:
+            return  # Already set, avoid churn
         if enabled:
-            self._registry.set_mode("planner")
-            if not self._history.system_prompt or self._history.system_prompt == "":
-                sys_prompt = self._planner_system_prompt if self._planner_system_prompt else PLANNER_SYSTEM_PROMPT
-                self._history.set_system(inject_tier1_context(sys_prompt, self._tier1_context))
+            sys_prompt = self._planner_system_prompt if self._planner_system_prompt else PLANNER_SYSTEM_PROMPT
         else:
-            self._registry.set_mode("single")
-            if not self._history.system_prompt or self._history.system_prompt == "":
-                # Lazy import to avoid circular dependency at module level.
-                from aura.prompts import SINGLE_SYSTEM_PROMPT as _SYS_PROMPT
-                sys_prompt = self._single_system_prompt if self._single_system_prompt else _SYS_PROMPT
-                self._history.set_system(inject_tier1_context(sys_prompt, self._tier1_context))
+            sys_prompt = self._single_system_prompt if self._single_system_prompt else SINGLE_SYSTEM_PROMPT
+        self._history.set_system(inject_tier1_context(sys_prompt, self._tier1_context))
+        self._active_prompt_mode = mode_key
 
     def set_show_planner_reasoning(self, enabled: bool) -> None:
         self._show_planner_reasoning = enabled
@@ -400,13 +400,12 @@ class ConversationBridge(QObject):
         self._planner_system_prompt = planner
         self._dispatch_proxy.set_worker_system_prompt(worker)
         self._compute_and_cache_tier1()
-        # Apply to current history if appropriate
+        # Apply the prompt for the current mode immediately
         if self._planner_worker_mode:
-            if planner:
-                self._history.set_system(inject_tier1_context(planner, self._tier1_context))
+            sys_prompt = self._planner_system_prompt if self._planner_system_prompt else PLANNER_SYSTEM_PROMPT
         else:
-            if single:
-                self._history.set_system(inject_tier1_context(single, self._tier1_context))
+            sys_prompt = self._single_system_prompt if self._single_system_prompt else SINGLE_SYSTEM_PROMPT
+        self._history.set_system(inject_tier1_context(sys_prompt, self._tier1_context))
 
     def set_worker_model(self, model: ModelId) -> None:
         self._dispatch_proxy.set_worker_model(model)

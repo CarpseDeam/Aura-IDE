@@ -200,14 +200,15 @@ class WorkerEventRelay(QObject):
                 and "exit_code" in parsed
                 and "ok" in parsed
             ):
-                self.validation_results.append(
-                    {
-                        "command": parsed.get("command", ""),
-                        "ok": parsed.get("ok", False),
-                        "exit_code": parsed.get("exit_code", -1),
-                        "output_preview": (parsed.get("output", "") or "")[:200],
-                    }
-                )
+                record = {
+                    "command": parsed.get("command", ""),
+                    "ok": parsed.get("ok", False),
+                    "exit_code": parsed.get("exit_code", -1),
+                    "output_preview": (parsed.get("output", "") or "")[:200],
+                }
+                if parsed.get("auto_validation"):
+                    record["auto_validation"] = True
+                self.validation_results.append(record)
         elif isinstance(ev, TerminalOutput):
             self.terminalOutput.emit(tool_call_id, ev.tool_call_id, ev.text)
         elif isinstance(ev, AgentProcessStarted):

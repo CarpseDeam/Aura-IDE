@@ -372,7 +372,6 @@ class _DispatchProxy(QObject):
         ]
         failed_validation = _unrecovered_validation_failures(relay.validation_results)
         validation_ran = bool(relay.validation_results)
-        missing_validation_after_writes = has_writes and not validation_ran
 
         # Compute acceptance-unverified
         acceptance_unverified = False
@@ -431,9 +430,6 @@ class _DispatchProxy(QObject):
                 + ", ".join(cleaned_scratch_files[:5])
             )
 
-        if missing_validation_after_writes:
-            result_caveats.append("Worker modified files but ran no validation command.")
-
         if acceptance_unverified:
             result_caveats.append("Worker final report did not clearly mention validation or acceptance verification.")
 
@@ -451,7 +447,6 @@ class _DispatchProxy(QObject):
         has_hard_failure = bool(result_errors)
         has_recoverable_edit_blocker = bool(recoverable_write_failures) and not relay.write_results
         has_no_work = not relay.touched_files and not relay.failed_tool_results and not internal_error and not relay.api_errors
-        has_no_validation_after_writes = missing_validation_after_writes
         has_unverified_acceptance = acceptance_unverified
 
         # Is this a broad/risky/multi-file task that should have used TODO?
@@ -471,7 +466,7 @@ class _DispatchProxy(QObject):
             ok = False
             needs_followup = True
             recoverable = True
-        elif has_no_validation_after_writes or has_unverified_acceptance:
+        elif has_unverified_acceptance:
             ok = False
             needs_followup = True
             recoverable = True
@@ -569,6 +564,7 @@ class _DispatchProxy(QObject):
                 "failed_write_tools": failed_write_tools,
                 "internal_recovery_steers": internal_recovery_steers,
                 "recoverable_write_failures": recoverable_write_failures,
+                "validation_results": relay.validation_results,
                 "errors": result_errors,
                 "caveats": result_caveats,
                 "worker_internal_error": bool(internal_error),
@@ -789,7 +785,7 @@ def _later_py_compile_passes(results: list[dict[str, Any]], targets: set[str]) -
 def _py_compile_targets(command: str) -> list[str]:
     if "py_compile" not in command:
         return []
-    matches = re.findall(r"(?<![\\w.-])([A-Za-z0-9_./\\\\:\\-]+\.py)(?![\\w.-])", command)
+    matches = re.findall(r"(?<![\w.-])([A-Za-z0-9_./\\:\-]+\.py)(?![\w.-])", command)
     return [_normalize_py_compile_path(m) for m in matches if not m.endswith("py_compile.py")]
 
 
