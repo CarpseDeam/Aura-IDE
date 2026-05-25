@@ -9,8 +9,9 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
-from threading import Event
+from threading import Event, Thread
 from unittest.mock import ANY, MagicMock, PropertyMock, call, patch
 
 import pytest
@@ -367,43 +368,15 @@ class TestRunHostDynamicTool:
 class TestRunHostTerminal:
     """Coverage area 8: subprocess.Popen for terminal commands on host."""
 
-    def _make_mock_proc(self, lines: list[str], returncode: int = 0):
-        """Build a MagicMock that simulates Popen with streaming stdout."""
-        mock_proc = MagicMock()
-        mock_proc.returncode = returncode
-
-        # Create a mock stdout stream that yields lines then empty string
-        class FakeStream:
-            def __init__(self, content_lines: list[str]):
-                self._lines = content_lines + [""]  # "" signals EOF for readline
-                self._idx = 0
-
-            def readline(self):
-                if self._idx < len(self._lines):
-                    line = self._lines[self._idx]
-                    self._idx += 1
-                    return line
-                return ""
-
-            def __iter__(self):
-                return self
-
-            def __next__(self):
-                line = self.readline()
-                if line == "":
-                    raise StopIteration
-                return line
-
-        mock_proc.stdout = FakeStream(lines)
-        return mock_proc
-
     def test_successful_execution(self):
         executor = SandboxExecutor()
-        mock_proc = self._make_mock_proc(["line1\n", "line2\n"], returncode=0)
+        mock_proc = MagicMock()
+        expected = SandboxResult(ok=True, stdout="line1\nline2\n", stderr="", exit_code=0)
 
         with (
             patch("aura.sandbox.subprocess.Popen", return_value=mock_proc) as mock_popen,
             patch("aura.config.get_subprocess_kwargs", return_value={}),
+            patch.object(executor, "_stream_subprocess_output", return_value=expected) as mock_stream,
         ):
             result = executor._run_host_terminal(
                 command="echo hello",
@@ -421,82 +394,39 @@ class TestRunHostTerminal:
         assert args[0] == "echo hello"
         assert kwargs["shell"] is True
         assert kwargs["cwd"] == str(Path.cwd())
-
-    def test_cancellation_via_cancel_event(self):
-        executor = SandboxExecutor()
-        cancel_event = Event()
-        # Simulate the cancel being set after a few lines
-        mock_proc = MagicMock()
-        mock_proc.stdout = MagicMock()
-
-        # readline: first call returns a line, second call sets cancel and returns line, third triggers cancel path
-        def readline_side_effect():
-            if not cancel_event.is_set():
-                cancel_event.set()
-                return "output_line\n"
-            return ""
-
-        mock_proc.stdout.readline = MagicMock(side_effect=readline_side_effect)
-
-        with (
-            patch("aura.sandbox.subprocess.Popen", return_value=mock_proc),
-            patch("aura.config.get_subprocess_kwargs", return_value={}),
-        ):
-            result = executor._run_host_terminal(
-                command="echo hello",
-                timeout=30,
-                cancel_event=cancel_event,
-                on_output=None,
-            )
-
-        assert result.ok is False
-        assert "[CANCELLED]" in result.stdout
-        assert result.exit_code == -1
-        mock_proc.kill.assert_called_once()
-        mock_proc.wait.assert_called_once()
-
-    def test_timeout_expired(self):
-        executor = SandboxExecutor()
-        mock_proc = MagicMock()
-        mock_proc.returncode = -1
-        mock_proc.stdout = MagicMock()
-        mock_proc.stdout.readline = MagicMock(side_effect=["line1\n", ""])
-        # First wait() call (with timeout) raises, second succeeds (in except handler)
-        mock_proc.wait = MagicMock(
-            side_effect=[
-                subprocess.TimeoutExpired(cmd="test", timeout=30),
-                None,  # second call in except handler succeeds
-            ]
+        mock_stream.assert_called_once_with(
+            mock_proc,
+            timeout=30,
+            cancel_event=None,
+            on_output=None,
         )
 
+    def test_passes_input_data_to_stdin(self):
+        executor = SandboxExecutor()
+        mock_proc = MagicMock()
+        expected = SandboxResult(ok=True, stdout="", stderr="", exit_code=0)
+
         with (
             patch("aura.sandbox.subprocess.Popen", return_value=mock_proc),
             patch("aura.config.get_subprocess_kwargs", return_value={}),
+            patch.object(executor, "_stream_subprocess_output", return_value=expected),
         ):
             result = executor._run_host_terminal(
-                command="sleep 100",
+                command="python -c \"print('ok')\"",
                 timeout=30,
                 cancel_event=None,
                 on_output=None,
+                input_data="stdin payload",
             )
 
-        assert result.ok is False
-        assert "timed out" in result.stdout
-        assert result.exit_code == -1
-        mock_proc.kill.assert_called_once()
-        assert mock_proc.wait.call_count == 2
+        assert result.ok is True
+        mock_proc.stdin.write.assert_called_once_with("stdin payload")
+        mock_proc.stdin.close.assert_called()
 
     def test_exception_during_execution(self):
         executor = SandboxExecutor()
-        mock_proc = MagicMock()
-        mock_proc.stdout = MagicMock()
-        mock_proc.stdout.readline = MagicMock(side_effect=["line1\n", ""])
-
-        # Make wait raise a generic exception
-        mock_proc.wait = MagicMock(side_effect=RuntimeError("boom"))
-
         with (
-            patch("aura.sandbox.subprocess.Popen", return_value=mock_proc),
+            patch("aura.sandbox.subprocess.Popen", side_effect=RuntimeError("boom")),
             patch("aura.config.get_subprocess_kwargs", return_value={}),
         ):
             result = executor._run_host_terminal(
@@ -511,27 +441,6 @@ class TestRunHostTerminal:
         assert "RuntimeError" in result.stdout
         assert "boom" in result.stdout
         assert result.exit_code == -1
-
-    def test_on_output_called_with_lines(self):
-        executor = SandboxExecutor()
-        mock_proc = self._make_mock_proc(["line1\n", "line2\n", "line3\n"], returncode=0)
-
-        on_output = MagicMock()
-
-        with (
-            patch("aura.sandbox.subprocess.Popen", return_value=mock_proc),
-            patch("aura.config.get_subprocess_kwargs", return_value={}),
-        ):
-            result = executor._run_host_terminal(
-                command="echo lines",
-                timeout=30,
-                cancel_event=None,
-                on_output=on_output,
-            )
-
-        assert result.ok is True
-        assert on_output.call_count == 3
-        on_output.assert_has_calls([call("line1\n"), call("line2\n"), call("line3\n")])
 
 
 # ===================================================================
@@ -795,33 +704,16 @@ class TestRunDockerDynamicTool:
 class TestRunDockerTerminal:
     """Coverage area 13: Docker terminal command execution."""
 
-    def _make_mock_proc(self, lines, returncode=0):
-        mock_proc = MagicMock()
-        mock_proc.returncode = returncode
-
-        class FakeStream:
-            def __init__(self, content_lines):
-                self._lines = content_lines + [""]
-                self._idx = 0
-
-            def readline(self):
-                if self._idx < len(self._lines):
-                    line = self._lines[self._idx]
-                    self._idx += 1
-                    return line
-                return ""
-
-        mock_proc.stdout = FakeStream(lines)
-        return mock_proc
-
     def test_successful_execution(self):
         executor = SandboxExecutor(mode="docker")
-        mock_proc = self._make_mock_proc(["out1\n", "out2\n"], returncode=0)
+        mock_proc = MagicMock()
+        expected = SandboxResult(ok=True, stdout="out1\nout2\n", stderr="", exit_code=0)
 
         with (
             patch.object(executor, "_ensure_docker_image"),
             patch.object(executor, "_build_docker_base_args", return_value=["docker", "run", "--rm", "python:3.10-slim"]),
             patch("aura.sandbox.subprocess.Popen", return_value=mock_proc) as mock_popen,
+            patch.object(executor, "_stream_subprocess_output", return_value=expected) as mock_stream,
         ):
             result = executor._run_docker_terminal(
                 command="echo hello",
@@ -837,79 +729,19 @@ class TestRunDockerTerminal:
         # Verify bash -c wrapping
         cmd = mock_popen.call_args[0][0]
         assert cmd[-3:] == ["bash", "-c", "echo hello"]
-
-    def test_cancellation_via_cancel_event(self):
-        executor = SandboxExecutor(mode="docker")
-        cancel_event = Event()
-        mock_proc = MagicMock()
-        mock_proc.stdout = MagicMock()
-
-        def readline_side_effect():
-            if not cancel_event.is_set():
-                cancel_event.set()
-                return "output\n"
-            return ""
-
-        mock_proc.stdout.readline = MagicMock(side_effect=readline_side_effect)
-
-        with (
-            patch.object(executor, "_ensure_docker_image"),
-            patch.object(executor, "_build_docker_base_args", return_value=["docker", "run", "--rm", "python:3.10-slim"]),
-            patch("aura.sandbox.subprocess.Popen", return_value=mock_proc),
-        ):
-            result = executor._run_docker_terminal(
-                command="sleep 100",
-                timeout=30,
-                cancel_event=cancel_event,
-                on_output=None,
-            )
-
-        assert result.ok is False
-        assert "[CANCELLED]" in result.stdout
-        assert result.exit_code == -1
-        mock_proc.kill.assert_called_once()
-
-    def test_timeout_expired(self):
-        executor = SandboxExecutor(mode="docker")
-        mock_proc = MagicMock()
-        mock_proc.returncode = -1
-        mock_proc.stdout = MagicMock()
-        mock_proc.stdout.readline = MagicMock(side_effect=["line1\n", ""])
-        # First wait call (with timeout) raises TimeoutExpired, second (in except) succeeds
-        mock_proc.wait = MagicMock(
-            side_effect=[
-                subprocess.TimeoutExpired(cmd="test", timeout=30),
-                None,
-            ]
+        mock_stream.assert_called_once_with(
+            mock_proc,
+            timeout=30,
+            cancel_event=None,
+            on_output=None,
         )
-
-        with (
-            patch.object(executor, "_ensure_docker_image"),
-            patch.object(executor, "_build_docker_base_args", return_value=["docker", "run", "--rm", "python:3.10-slim"]),
-            patch("aura.sandbox.subprocess.Popen", return_value=mock_proc),
-        ):
-            result = executor._run_docker_terminal(
-                command="sleep 100",
-                timeout=30,
-                cancel_event=None,
-                on_output=None,
-            )
-
-        assert result.ok is False
-        assert "timed out" in result.stdout
-        assert result.exit_code == -1
 
     def test_exception_during_execution(self):
         executor = SandboxExecutor(mode="docker")
-        mock_proc = MagicMock()
-        mock_proc.stdout = MagicMock()
-        mock_proc.stdout.readline = MagicMock(side_effect=["line1\n", ""])
-        mock_proc.wait = MagicMock(side_effect=RuntimeError("container error"))
-
         with (
             patch.object(executor, "_ensure_docker_image"),
             patch.object(executor, "_build_docker_base_args", return_value=["docker", "run", "--rm", "python:3.10-slim"]),
-            patch("aura.sandbox.subprocess.Popen", return_value=mock_proc),
+            patch("aura.sandbox.subprocess.Popen", side_effect=RuntimeError("container error")),
         ):
             result = executor._run_docker_terminal(
                 command="bad cmd",
@@ -924,26 +756,120 @@ class TestRunDockerTerminal:
         assert "container error" in result.stdout
         assert result.exit_code == -1
 
-    def test_on_output_called(self):
+    def test_uses_shared_streaming_helper(self):
         executor = SandboxExecutor(mode="docker")
-        mock_proc = self._make_mock_proc(["a\n", "b\n"], returncode=0)
-        on_output = MagicMock()
+        mock_proc = MagicMock()
+        expected = SandboxResult(ok=False, stdout="[CANCELLED]\n", stderr="", exit_code=-1)
 
         with (
             patch.object(executor, "_ensure_docker_image"),
             patch.object(executor, "_build_docker_base_args", return_value=["docker", "run", "--rm", "python:3.10-slim"]),
             patch("aura.sandbox.subprocess.Popen", return_value=mock_proc),
+            patch.object(executor, "_stream_subprocess_output", return_value=expected) as mock_stream,
         ):
             result = executor._run_docker_terminal(
                 command="echo hi",
                 timeout=30,
                 cancel_event=None,
-                on_output=on_output,
+                on_output=None,
             )
 
+        assert result == expected
+        mock_stream.assert_called_once_with(
+            mock_proc,
+            timeout=30,
+            cancel_event=None,
+            on_output=None,
+        )
+
+
+# ===================================================================
+# Real terminal streaming behavior
+# ===================================================================
+
+
+class TestTerminalStreamingBehavior:
+    """Real-process coverage for timeout, heartbeat, streaming, and cancel."""
+
+    @staticmethod
+    def _python_command(code: str) -> str:
+        return subprocess.list2cmdline([sys.executable, "-c", code])
+
+    def test_silent_timeout_returns_promptly(self, tmp_path: Path):
+        executor = SandboxExecutor(workspace_root=tmp_path)
+        start = time.monotonic()
+
+        result = executor._run_host_terminal(
+            command=self._python_command("import time; time.sleep(5)"),
+            timeout=1,
+        )
+
+        elapsed = time.monotonic() - start
+        assert elapsed < 3.0
+        assert result.ok is False
+        assert "timed out" in result.stdout.lower()
+        assert result.exit_code == -1
+
+    def test_silent_heartbeat_emits_before_exit(self, tmp_path: Path):
+        executor = SandboxExecutor(workspace_root=tmp_path)
+        streamed: list[str] = []
+
+        result = executor._run_host_terminal(
+            command=self._python_command("import time; time.sleep(6)"),
+            timeout=10,
+            on_output=streamed.append,
+        )
+
         assert result.ok is True
-        assert on_output.call_count == 2
-        on_output.assert_has_calls([call("a\n"), call("b\n")])
+        assert any("[still running:" in chunk for chunk in streamed)
+
+    def test_streaming_output_still_works(self, tmp_path: Path):
+        executor = SandboxExecutor(workspace_root=tmp_path)
+        streamed: list[str] = []
+
+        result = executor._run_host_terminal(
+            command=self._python_command(
+                "import time; "
+                "print('line1', flush=True); "
+                "time.sleep(0.3); "
+                "print('line2', flush=True); "
+                "time.sleep(0.3); "
+                "print('line3', flush=True)"
+            ),
+            timeout=5,
+            on_output=streamed.append,
+        )
+
+        assert result.ok is True
+        assert streamed[:3] == ["line1\n", "line2\n", "line3\n"]
+        assert result.stdout == "line1\nline2\nline3\n"
+
+    def test_cancellation_kills_process_promptly(self, tmp_path: Path):
+        executor = SandboxExecutor(workspace_root=tmp_path)
+        cancel_event = Event()
+        holder: dict[str, SandboxResult] = {}
+
+        def run_command() -> None:
+            holder["result"] = executor._run_host_terminal(
+                command=self._python_command("import time; time.sleep(30)"),
+                timeout=20,
+                cancel_event=cancel_event,
+            )
+
+        start = time.monotonic()
+        worker = Thread(target=run_command)
+        worker.start()
+        time.sleep(0.5)
+        cancel_event.set()
+        worker.join(timeout=3.0)
+        elapsed = time.monotonic() - start
+
+        assert not worker.is_alive()
+        assert elapsed < 3.5
+        result = holder["result"]
+        assert result.ok is False
+        assert "[CANCELLED]" in result.stdout
+        assert result.exit_code == -1
 
 
 # ===================================================================

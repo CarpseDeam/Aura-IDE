@@ -34,6 +34,10 @@ from aura.conversation.tools.registry import ToolRegistry
 from aura.hooks import hooks
 from aura.sandbox import SandboxExecutor, SandboxResult
 
+DEFAULT_TERMINAL_TIMEOUT_SECONDS = 45
+DEFAULT_PY_COMPILE_TIMEOUT_SECONDS = 30
+MAX_TERMINAL_TIMEOUT_SECONDS = 300
+
 
 class ToolRunner:
     """Owns the execution of dispatch, research, and terminal tools."""
@@ -288,7 +292,10 @@ class ToolRunner:
             )
             return {"_terminal_payload": {"ok": False, "error": "command is required", "command": ""}}
 
-        timeout = int(args.get("timeout", 120))
+        timeout = self._resolve_terminal_timeout(
+            command=command,
+            timeout_arg=args.get("timeout"),
+        )
 
         # Emit ToolCallStart so the GUI can create a TerminalCard
         on_event(ToolCallStart(index=0, id=tool_call_id, name="run_terminal_command"))
@@ -353,3 +360,27 @@ class ToolRunner:
             loop_info = {}
         loop_info["_terminal_payload"] = payload_dict
         return loop_info
+
+    def _resolve_terminal_timeout(
+        self,
+        command: str,
+        timeout_arg: Any,
+    ) -> int:
+        """Resolve a safe timeout for terminal commands."""
+        if timeout_arg is None:
+            if self._is_py_compile_command(command):
+                return DEFAULT_PY_COMPILE_TIMEOUT_SECONDS
+            return DEFAULT_TERMINAL_TIMEOUT_SECONDS
+
+        try:
+            timeout = int(timeout_arg)
+        except (TypeError, ValueError):
+            if self._is_py_compile_command(command):
+                return DEFAULT_PY_COMPILE_TIMEOUT_SECONDS
+            return DEFAULT_TERMINAL_TIMEOUT_SECONDS
+
+        return max(1, min(timeout, MAX_TERMINAL_TIMEOUT_SECONDS))
+
+    def _is_py_compile_command(self, command: str) -> bool:
+        normalized = " ".join(command.strip().lower().split())
+        return "python -m py_compile" in normalized

@@ -868,8 +868,11 @@ TERMINAL_TOOL_DEF: dict[str, Any] = {
             "Use this to run linters (e.g. 'ruff check .'), type checkers ('mypy .'), "
             "test suites ('pytest'), install dependencies ('pip install requests'), or "
             "any other CLI tool. The command runs with the workspace as its working "
-            "directory. Stdout and stderr are both captured and streamed in real-time. "
-            "Returns the exit code and complete output on completion. "
+            "directory. Stdout and stderr are both captured and streamed in real-time, "
+            "including periodic status heartbeats if the command is quiet. Returns the "
+            "exit code and complete output on completion. Use focused one-shot commands, "
+            "not long-running watchers, dev servers, REPLs, or commands that wait for "
+            "interactive input. Prefer targeted validation commands over watch mode. "
             "IMPORTANT: If the user specifies a test or lint command, you MUST run it "
             "after modifying files. If the command fails, analyze the output and fix the "
             "code before finishing."
@@ -883,8 +886,8 @@ TERMINAL_TOOL_DEF: dict[str, Any] = {
                 },
                 "timeout": {
                     "type": "integer",
-                    "description": "Maximum seconds to wait before killing the command. Default: 120.",
-                    "default": 120,
+                    "description": "Maximum seconds to wait before killing the command. Default: 45. Prefer short focused runs; very large values may be reduced for safety.",
+                    "default": 45,
                 },
             },
             "required": ["command"],

@@ -1498,17 +1498,16 @@ class TestProposeLineRangeEdit:
         assert result["ok"] is True
         assert result["new_content"] == "only line\nappended\n"
 
-def test_edit_line_range_stale_bounds_structured_payload(self, tmp_path: Path):
-        ws = tmp_path / "workspace"
-        ws.mkdir()
-        target = ws / "test.txt"
-        target.write_text("line1\\nline2\\n")
-        result = propose_line_range_edit(ws, target, 5, 6, "x")
-        assert result["ok"] is False
-        assert "failure_class" in result
-        assert result["failure_class"] == "edit_mechanics_stale_line_range"
-        assert "suggested_next_action" in result
-
+def test_edit_line_range_stale_bounds_structured_payload(tmp_path: Path):
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    target = ws / "test.txt"
+    target.write_text("line1\\nline2\\n")
+    result = propose_line_range_edit(ws, target, 5, 6, "x")
+    assert result["ok"] is False
+    assert "failure_class" in result
+    assert result["failure_class"] == "edit_mechanics_stale_line_range"
+    assert "suggested_next_action" in result
 
 class TestSingleModeToolDefs:
     """Single mode exposes write tools but not dispatch_to_worker."""

@@ -7,9 +7,12 @@ from __future__ import annotations
 
 import json
 import logging
+import queue
 import shutil
 import subprocess
 import sys
+import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -25,6 +28,8 @@ SANDBOX_DOCKER_IMAGE = "python:3.10-slim"
 DOCKER_MEMORY_LIMIT = "2g"
 DOCKER_CPU_LIMIT = "2"
 DOCKER_PIDS_LIMIT = 200
+HEARTBEAT_INTERVAL_SECONDS = 5.0
+PROCESS_SHUTDOWN_GRACE_SECONDS = 1.0
 
 
 @dataclass(frozen=True)
@@ -274,10 +279,8 @@ class SandboxExecutor:
         extra = get_subprocess_kwargs()
         popen_kwargs.update(extra)
 
-        output_lines: list[str] = []
         try:
             proc = subprocess.Popen(command, **popen_kwargs)
-            
             if input_data and proc.stdin:
                 try:
                     proc.stdin.write(input_data)
@@ -289,43 +292,22 @@ class SandboxExecutor:
                     except Exception:
                         pass
 
-            assert proc.stdout is not None
-
-            for line in iter(proc.stdout.readline, ""):
-                if cancel_event is not None and cancel_event.is_set():
-                    proc.kill()
-                    proc.wait()
-                    output_lines.append("\n[CANCELLED]\n")
-                    return SandboxResult(
-                        ok=False,
-                        stdout="".join(output_lines),
-                        stderr="",
-                        exit_code=-1,
-                    )
-                output_lines.append(line)
-                if on_output is not None:
-                    on_output(line)
-
-            proc.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
-            output_lines.append(f"\n[ERROR: Command timed out after {timeout} seconds]\n")
+            return self._stream_subprocess_output(
+                proc,
+                timeout=timeout,
+                cancel_event=cancel_event,
+                on_output=on_output,
+            )
         except Exception as exc:
-            output_lines.append(f"\n[ERROR: {type(exc).__name__}: {exc}]\n")
+            output = f"\n[ERROR: {type(exc).__name__}: {exc}]\n"
+            if on_output is not None:
+                on_output(output)
             return SandboxResult(
                 ok=False,
-                stdout="".join(output_lines),
+                stdout=output,
                 stderr="",
                 exit_code=-1,
             )
-
-        return SandboxResult(
-            ok=proc.returncode == 0,
-            stdout="".join(output_lines),
-            stderr="",
-            exit_code=proc.returncode,
-        )
 
     # ---- Docker execution ---------------------------------------------------
 
@@ -475,8 +457,6 @@ class SandboxExecutor:
         # Run the command via bash -c inside the container
         cmd = docker_args + ["bash", "-c", command]
 
-        output_lines: list[str] = []
-
         try:
             proc = subprocess.Popen(
                 cmd,
@@ -488,48 +468,181 @@ class SandboxExecutor:
                 bufsize=1,
                 **({} if sys.platform != "win32" else {"creationflags": subprocess.CREATE_NO_WINDOW}),
             )
-            
+
             if input_data and proc.stdin:
-                proc.stdin.write(input_data)
-                proc.stdin.close()
+                try:
+                    proc.stdin.write(input_data)
+                    proc.stdin.close()
+                except (BrokenPipeError, ConnectionResetError):
+                    try:
+                        proc.stdin.close()
+                    except Exception:
+                        pass
 
-            assert proc.stdout is not None
-
-            for line in iter(proc.stdout.readline, ""):
-                if cancel_event is not None and cancel_event.is_set():
-                    proc.kill()
-                    proc.wait()
-                    output_lines.append("\n[CANCELLED]\n")
-                    return SandboxResult(
-                        ok=False,
-                        stdout="".join(output_lines),
-                        stderr="",
-                        exit_code=-1,
-                    )
-                output_lines.append(line)
-                if on_output is not None:
-                    on_output(line)
-
-            proc.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
-            output_lines.append(f"\n[ERROR: Command timed out after {timeout} seconds]\n")
+            return self._stream_subprocess_output(
+                proc,
+                timeout=timeout,
+                cancel_event=cancel_event,
+                on_output=on_output,
+            )
         except Exception as exc:
-            output_lines.append(f"\n[ERROR: {type(exc).__name__}: {exc}]\n")
+            output = f"\n[ERROR: {type(exc).__name__}: {exc}]\n"
+            if on_output is not None:
+                on_output(output)
             return SandboxResult(
                 ok=False,
-                stdout="".join(output_lines),
+                stdout=output,
                 stderr="",
                 exit_code=-1,
             )
 
+    def _stream_subprocess_output(
+        self,
+        proc: subprocess.Popen[str],
+        timeout: int,
+        cancel_event: Any = None,
+        on_output: Any = None,
+    ) -> SandboxResult:
+        """Stream process output while enforcing cancellation and timeouts."""
+        assert proc.stdout is not None
+
+        output_lines: list[str] = []
+        output_queue: queue.Queue[str | None] = queue.Queue()
+
+        def emit(text: str) -> None:
+            output_lines.append(text)
+            if on_output is not None:
+                on_output(text)
+
+        def reader() -> None:
+            try:
+                for line in iter(proc.stdout.readline, ""):
+                    output_queue.put(line)
+            except Exception as exc:
+                output_queue.put(f"\n[ERROR: {type(exc).__name__}: {exc}]\n")
+            finally:
+                output_queue.put(None)
+                try:
+                    proc.stdout.close()
+                except Exception:
+                    pass
+
+        reader_thread = threading.Thread(target=reader, daemon=True)
+        reader_thread.start()
+
+        start_time = time.monotonic()
+        deadline = start_time + max(0, timeout)
+        last_output_time = start_time
+        last_heartbeat_time = start_time
+        stream_closed = False
+
+        while True:
+            drained_output = False
+            while True:
+                try:
+                    item = output_queue.get_nowait()
+                except queue.Empty:
+                    break
+                if item is None:
+                    stream_closed = True
+                    break
+                emit(item)
+                last_output_time = time.monotonic()
+                last_heartbeat_time = last_output_time
+                drained_output = True
+
+            if cancel_event is not None and cancel_event.is_set():
+                self._stop_process(proc)
+                emit("\n[CANCELLED]\n")
+                self._drain_output_queue(output_queue, emit)
+                return SandboxResult(
+                    ok=False,
+                    stdout="".join(output_lines),
+                    stderr="",
+                    exit_code=-1,
+                )
+
+            now = time.monotonic()
+            if now >= deadline and proc.poll() is None:
+                self._stop_process(proc)
+                emit(f"\n[ERROR: Command timed out after {timeout} seconds]\n")
+                self._drain_output_queue(output_queue, emit)
+                return SandboxResult(
+                    ok=False,
+                    stdout="".join(output_lines),
+                    stderr="",
+                    exit_code=-1,
+                )
+
+            if (
+                proc.poll() is None
+                and now - last_output_time >= HEARTBEAT_INTERVAL_SECONDS
+                and now - last_heartbeat_time >= HEARTBEAT_INTERVAL_SECONDS
+            ):
+                elapsed = int(now - start_time)
+                emit(
+                    f"[still running: {elapsed}s / timeout {timeout}s]\n"
+                )
+                last_heartbeat_time = now
+                drained_output = True
+
+            if proc.poll() is not None and stream_closed:
+                break
+
+            if not drained_output:
+                try:
+                    item = output_queue.get(timeout=0.1)
+                except queue.Empty:
+                    continue
+                if item is None:
+                    stream_closed = True
+                else:
+                    emit(item)
+                    last_output_time = time.monotonic()
+                    last_heartbeat_time = last_output_time
+
+        self._drain_output_queue(output_queue, emit)
         return SandboxResult(
             ok=proc.returncode == 0,
             stdout="".join(output_lines),
             stderr="",
             exit_code=proc.returncode,
         )
+
+    def _drain_output_queue(
+        self,
+        output_queue: queue.Queue[str | None],
+        emit: Any,
+    ) -> None:
+        """Drain any queued output after a process exits or is stopped."""
+        while True:
+            try:
+                item = output_queue.get_nowait()
+            except queue.Empty:
+                return
+            if item is None:
+                return
+            emit(item)
+
+    def _stop_process(self, proc: subprocess.Popen[str]) -> None:
+        """Terminate a process promptly, then kill if it does not exit."""
+        try:
+            if proc.poll() is not None:
+                return
+            proc.terminate()
+            try:
+                proc.wait(timeout=PROCESS_SHUTDOWN_GRACE_SECONDS)
+                return
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=PROCESS_SHUTDOWN_GRACE_SECONDS)
+        except Exception:
+            try:
+                proc.kill()
+                proc.wait(timeout=PROCESS_SHUTDOWN_GRACE_SECONDS)
+            except Exception:
+                pass
+
 
 
 # ---------------------------------------------------------------------------

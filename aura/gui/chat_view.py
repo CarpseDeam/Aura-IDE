@@ -428,6 +428,21 @@ class ChatView(QScrollArea):
                 lambda text, c=controller, card=card: card.set_result(c._state == "done", text)
             )
 
+        elif name == "run_terminal_command":
+            card = TerminalCard(command="...", parent=self, start_collapsed=False)
+            self._terminal_cards[tool_call_id] = card
+            if not ac._tool_cluster.isVisible():
+                ac._tool_cluster.setVisible(True)
+            ac._tool_cluster_layout.addWidget(card)
+            self._tool_owner[tool_call_id] = ac
+
+            controller.command_resolved.connect(card.set_command)
+            controller.result_finalized.connect(
+                lambda data, c=card: c.set_result(
+                    int(data.get("exit_code", -1)) if isinstance(data, dict) else -1
+                )
+            )
+
         else:
             card = ac.add_tool_card(tool_call_id, name)
             self._tool_owner[tool_call_id] = ac
@@ -501,6 +516,8 @@ class ChatView(QScrollArea):
                     pass
 
             controller.finalize(ok, result_text)
+            if controller.tool_name == "run_terminal_command":
+                self._terminal_cards.pop(tool_call_id, None)
             self._scroll_to_bottom()
 
     def append_terminal_output(self, tool_call_id: str, text: str) -> None:
