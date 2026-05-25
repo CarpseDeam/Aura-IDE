@@ -16,9 +16,12 @@ the supplied DispatchCallback rather than the registry.
 from __future__ import annotations
 
 import hashlib
+import subprocess
+import sys
 import json
 import re
 import threading
+from pathlib import Path
 from typing import Any, Callable
 
 from aura.client import (
@@ -77,6 +80,13 @@ WORKER_PY_COMPILE_INSTRUCTION = (
     "fails, then finish."
 )
 
+WORKER_AUTO_PY_COMPILE_INSTRUCTION = (
+    "Focused py_compile failed on the following Python file(s). "
+    "Re-read and repair the file(s), then run python -m py_compile again. "
+    "Finish only after py_compile passes.\n\n"
+    "Diagnostic output:\n{diagnostics}"
+)
+
 WORKER_COMPILER_REPAIR_INSTRUCTION = (
     "Craft/compiler rejected the proposed code with a precise checker error. "
     "Re-read the file, repair the proposed code once, then retry with a different "
@@ -84,6 +94,23 @@ WORKER_COMPILER_REPAIR_INSTRUCTION = (
     "a full replacement is safer. Do not narrate; use tools. Finish only after "
     "the edit applies and touched Python files pass py_compile."
 )
+
+
+def _normalize_worker_path(path: str) -> str:
+    normalized = str(path).replace("\\", "/")
+    if normalized.startswith("./"):
+        normalized = normalized[2:]
+    while "//" in normalized:
+        normalized = normalized.replace("//", "/")
+    return normalized
+
+
+def _is_validation_scratch_path(path: str) -> bool:
+    normalized = _normalize_worker_path(path)
+    if not (normalized.startswith(".aura/tmp/") and normalized.endswith(".py")):
+        return False
+    name = normalized.rsplit("/", 1)[-1]
+    return name.startswith(("dump", "_check", "check", "tmp"))
 
 
 class ConversationManager:
@@ -310,6 +337,10 @@ class ConversationManager:
                             ),
                         )
                         return
+                    syntax_validation_required.difference_update(
+                        path for path in set(syntax_validation_required)
+                        if _is_validation_scratch_path(path)
+                    )
                     if syntax_validation_required:
                         if not worker_py_compile_nudge_sent:
                             paths = ", ".join(sorted(syntax_validation_required))
@@ -322,17 +353,29 @@ class ConversationManager:
                             self._history.append_user_text(instruction)
                             worker_py_compile_nudge_sent = True
                             continue
-                        self._finish_worker_unrecoverable(
-                            on_event,
-                            failure_class="syntax_validation_required",
-                            error=(
-                                "Worker stopped before running py_compile on touched "
-                                "Python file(s): "
-                                + ", ".join(sorted(syntax_validation_required))
-                            ),
+                        # Worker ignored the nudge — auto-run focused py_compile
+                        product_paths = sorted(
+                            path for path in syntax_validation_required
+                            if not _is_validation_scratch_path(path)
                         )
-                        return
-                return
+                        if product_paths:
+                            all_ok, diagnostics = self._run_focused_py_compile(product_paths)
+                            if all_ok:
+                                syntax_validation_required.clear()
+                                return
+                            # Auto-py_compile failed — feed diagnostics back
+                            for path in product_paths:
+                                syntax_repair_required[path] = {
+                                    "error": diagnostics,
+                                    "failed_repairs": 0,
+                                }
+                            syntax_validation_required.clear()
+                            instruction = WORKER_AUTO_PY_COMPILE_INSTRUCTION.format(
+                                diagnostics=diagnostics,
+                            )
+                            self._history.append_user_text(instruction)
+                            continue
+                    return
 
             _terminal_dispatch = False
             _worker_phase_boundary_info: dict[str, Any] | None = None
@@ -644,6 +687,58 @@ class ConversationManager:
         on_event(ContentDelta(text=content))
         on_event(Done(finish_reason="stop", full_message=full_message))
 
+    def _run_focused_py_compile(
+        self,
+        paths: list[str],
+    ) -> tuple[bool, str]:
+        """Run python -m py_compile on each touched product Python file.
+
+        Returns (all_succeeded, combined_output).
+        Uses sys.executable, cwd=workspace root, timeout=30s.
+        Normalizes paths safely (backslash/slash, strip leading "./").
+        Preserves dot-prefixed directories like .aura.
+        """
+        if not paths:
+            return True, ""
+        workspace_root = self._tools.workspace_root
+        compiler = sys.executable
+        outputs: list[str] = []
+        all_ok = True
+        for path in sorted(paths):
+            normalized = _normalize_worker_path(path)
+            if _is_validation_scratch_path(normalized):
+                continue
+            full_path = Path(workspace_root) / normalized
+            if not full_path.exists():
+                outputs.append(f"{normalized}: file not found — cannot py_compile")
+                all_ok = False
+                continue
+            try:
+                result = subprocess.run(
+                    [compiler, "-m", "py_compile", str(full_path)],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    cwd=workspace_root,
+                )
+                if result.returncode != 0:
+                    all_ok = False
+                    err = result.stderr.strip() or result.stdout.strip() or "py_compile failed"
+                    outputs.append(f"{normalized}: {err}")
+                else:
+                    outputs.append(f"{normalized}: ok")
+            except subprocess.TimeoutExpired:
+                all_ok = False
+                outputs.append(f"{normalized}: timed out after 30s")
+            except FileNotFoundError:
+                all_ok = False
+                outputs.append(f"{normalized}: sys.executable not found")
+            except OSError as exc:
+                all_ok = False
+                outputs.append(f"{normalized}: OSError: {exc}")
+        combined = "\n".join(outputs)
+        return all_ok, combined
+
     def _worker_recovery_block(
         self,
         *,
@@ -794,12 +889,13 @@ class ConversationManager:
                 edit_fallback_required.pop(path, None)
                 line_range_reread_required.pop(path, None)
                 compiler_repair_required.pop(path, None)
-                if self._is_python_path(path):
+                if self._is_python_path(path) and not _is_validation_scratch_path(path):
                     syntax_validation_required.add(path)
                 if path in syntax_repair_required:
                     syntax_repair_required[path]["repair_attempted"] = True
                     syntax_repair_required[path]["awaiting_validation"] = True
-                    syntax_validation_required.add(path)
+                    if not _is_validation_scratch_path(path):
+                        syntax_validation_required.add(path)
             return content
 
         if name in ("edit_file", "edit_symbol", "edit_line_range"):
@@ -879,7 +975,10 @@ class ConversationManager:
         if not isinstance(payload, dict):
             return
         command = str(payload.get("command") or args.get("command") or "")
-        targets = self._py_compile_targets(command)
+        targets = [
+            path for path in self._py_compile_targets(command)
+            if not _is_validation_scratch_path(path)
+        ]
         if not targets:
             return
         if payload.get("ok"):
@@ -967,9 +1066,17 @@ class ConversationManager:
     def _py_compile_targets(command: str) -> list[str]:
         if "py_compile" not in command:
             return []
-        matches = re.findall(r"(?<![\\w.-])([A-Za-z0-9_./\\\\:\\-]+\.py)(?![\\w.-])", command)
-        return [_normalize_py_compile_path(m) for m in matches if not m.endswith("py_compile.py")]
-
+        matches = re.findall(
+            r"(?<![\\w.-])([A-Za-z0-9_./\\\\:\\-]+\.py)(?![\\w.-])",
+            command,
+        )
+        targets: list[str] = []
+        for match in matches:
+            target = _normalize_worker_path(match)
+            if target.endswith("py_compile.py"):
+                continue
+            targets.append(target)
+        return targets
     @staticmethod
     def _normalize_py_compile_path(raw: str) -> str:
         p = raw.strip().replace("\\", "/")

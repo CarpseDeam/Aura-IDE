@@ -426,19 +426,21 @@ def test_worker_cannot_finish_after_python_write_until_py_compile(tmp_path):
             iter([_done(tool_calls=[tc_write])]),
             iter([_done("Done.")]),
             iter([_done("Still done.")]),
+            iter([_done("Finished.")]),
         ]
     )
 
     try:
         _register_worker_hook(hook)
-        manager.send(
-            on_event=events.append,
-            approval_cb=MagicMock(return_value=ApprovalDecision("approve")),
-            cancel_event=threading.Event(),
-            model="test-model",
-            thinking="off",
-            hook_name="generate_worker_code",
-        )
+        with patch.object(ConversationManager, '_run_focused_py_compile', return_value=(True, "a.py: ok")):
+            manager.send(
+                on_event=events.append,
+                approval_cb=MagicMock(return_value=ApprovalDecision("approve")),
+                cancel_event=threading.Event(),
+                model="test-model",
+                thinking="off",
+                hook_name="generate_worker_code",
+            )
     finally:
         hooks.unregister("generate_worker_code")
 
@@ -447,8 +449,9 @@ def test_worker_cannot_finish_after_python_write_until_py_compile(tmp_path):
         and "Run python -m py_compile on the touched Python file(s)" in str(msg.get("content"))
         for msg in history.messages
     )
-    final_payload = json.loads(history.messages[-1]["content"])
-    assert final_payload["failure_class"] == "syntax_validation_required"
+    # Auto-py_compile passed — no failure_class
+    content = history.messages[-1]["content"]
+    assert "failure_class" not in content
 
 
 def test_recoverable_edit_mechanics_exhaustion_is_single_final_reason(tmp_workspace):
@@ -574,3 +577,169 @@ def test_recovered_py_compile_failure_is_not_final_validation_failure():
         {"command": "python -m py_compile aura/example.py", "ok": False, "exit_code": 1},
     ])
     assert len(unrecovered) == 1
+
+def test_auto_py_compile_success_when_worker_stops(tmp_path):
+    """Test A: Auto py_compile success — worker writes .py file, stops without
+    py_compile, manager auto-runs focused py_compile which passes."""
+    history = History()
+    tools = MagicMock(spec=ToolRegistry)
+    tools.tool_defs.return_value = []
+    type(tools).mode = PropertyMock(return_value="worker")
+    type(tools).workspace_root = PropertyMock(return_value=tmp_path)
+    tools.execute.return_value = ToolExecResult(
+        ok=True,
+        payload={
+            "ok": True,
+            "path": "graph_main_window.py",
+            "applied": "write_file",
+            "is_new_file": False,
+        },
+    )
+    manager = ConversationManager(history, tools)
+    events = []
+    tc_write = _tool_call("w1", "write_file", {"path": "graph_main_window.py", "content": "x = 1\n"})
+    hook = MagicMock(
+        side_effect=[
+            iter([_done(tool_calls=[tc_write])]),
+            iter([_done("Done.")]),
+            iter([_done("Still done.")]),
+        ]
+    )
+
+    try:
+        _register_worker_hook(hook)
+        with patch.object(ConversationManager, '_run_focused_py_compile', return_value=(True, "graph_main_window.py: ok")):
+            manager.send(
+                on_event=events.append,
+                approval_cb=MagicMock(return_value=ApprovalDecision("approve")),
+                cancel_event=threading.Event(),
+                model="test-model",
+                thinking="off",
+                hook_name="generate_worker_code",
+            )
+    finally:
+        hooks.unregister("generate_worker_code")
+
+    # Py_compile nudge should have been sent
+    assert any(
+        msg.get("role") == "user"
+        and "Run python -m py_compile on the touched Python file(s)" in str(msg.get("content"))
+        for msg in history.messages
+    )
+    # Auto-py_compile passed — no failure_class in final message
+    content = history.messages[-1]["content"]
+    assert "failure_class" not in content
+    assert "error" not in content
+
+
+def test_auto_py_compile_failure_triggers_repair_and_recovers(tmp_path):
+    """Test B: Auto py_compile fails, repair instruction sent, Worker fixes,
+    auto-py_compile passes on retry."""
+    history = History()
+    tools = MagicMock(spec=ToolRegistry)
+    tools.tool_defs.return_value = []
+    type(tools).mode = PropertyMock(return_value="worker")
+    type(tools).workspace_root = PropertyMock(return_value=tmp_path)
+    # Two writes: original, then repair
+    tools.execute.side_effect = [
+        ToolExecResult(
+            ok=True,
+            payload={"ok": True, "path": "bad_syntax.py", "applied": "write_file", "is_new_file": False},
+        ),
+        ToolExecResult(
+            ok=True,
+            payload={"ok": True, "path": "bad_syntax.py", "applied": "write_file", "is_new_file": False},
+        ),
+    ]
+    manager = ConversationManager(history, tools)
+    events = []
+    tc_write = _tool_call("w1", "write_file", {"path": "bad_syntax.py", "content": "x = 1\n"})
+    tc_repair = _tool_call("w2", "write_file", {"path": "bad_syntax.py", "content": "x = 1\n"})
+    hook = MagicMock(
+        side_effect=[
+            iter([_done(tool_calls=[tc_write])]),   # 1: write original file
+            iter([_done("Done.")]),                  # 2: stop → nudge sent
+            iter([_done("Done.")]),                  # 3: stop → auto-py_compile FAIL → repair instruction
+            iter([_done(tool_calls=[tc_repair])]),   # 4: write repaired file
+            iter([_done("Done.")]),                  # 5: stop → auto-py_compile PASS → return
+        ]
+    )
+
+    auto_compile_calls = 0
+
+    def _fake_compile(paths):
+        nonlocal auto_compile_calls
+        auto_compile_calls += 1
+        if auto_compile_calls == 1:
+            return (False, "bad_syntax.py: SyntaxError: invalid syntax at line 1")
+        return (True, "bad_syntax.py: ok")
+
+    try:
+        _register_worker_hook(hook)
+        with patch.object(ConversationManager, '_run_focused_py_compile', side_effect=_fake_compile):
+            manager.send(
+                on_event=events.append,
+                approval_cb=MagicMock(return_value=ApprovalDecision("approve")),
+                cancel_event=threading.Event(),
+                model="test-model",
+                thinking="off",
+                hook_name="generate_worker_code",
+            )
+    finally:
+        hooks.unregister("generate_worker_code")
+
+    # Auto-py_compile should have been called twice
+    assert auto_compile_calls == 2
+    # The focused py_compile diagnostic message should be in history
+    assert any(
+        msg.get("role") == "user"
+        and "Focused py_compile failed" in str(msg.get("content"))
+        for msg in history.messages
+    )
+    # Final completion — no failure_class
+    content = history.messages[-1]["content"]
+    assert "failure_class" not in content
+    assert "error" not in content
+
+
+def test_auto_py_compile_scratch_paths_filtered():
+    """Test C: Scratch validation paths (.aura/tmp/...) are filtered from
+    syntax_validation_required by _is_validation_scratch_path."""
+    from aura.conversation.manager import _is_validation_scratch_path
+
+    # Scratch paths should be marked as scratch
+    assert _is_validation_scratch_path(".aura/tmp/dump_doubleclick.py"), "dump_* should be scratch"
+    assert _is_validation_scratch_path(".aura/tmp/_check_something.py"), "_check_* should be scratch"
+    assert _is_validation_scratch_path(".aura/tmp/tmp_tempfile.py"), "tmp_* in .aura/tmp/ should be scratch"
+    assert _is_validation_scratch_path(".aura/tmp/check_test.py"), "check* in .aura/tmp/ should be scratch"
+
+    # Product paths should NOT be scratch
+    assert not _is_validation_scratch_path("graph_main_window.py"), "product paths should NOT be scratch"
+    assert not _is_validation_scratch_path(".aura/tools/some_tool.py"), "non-tmp .aura paths should NOT be scratch"
+    assert not _is_validation_scratch_path(".aura/tmp/foo.py"), "foo.py in .aura/tmp/ should NOT be scratch (name doesn't start with dump/_check/check/tmp)"
+
+    # Non-.py files should not be scratch
+    assert not _is_validation_scratch_path(".aura/tmp/dump_data.json"), "non-.py should NOT be scratch"
+
+
+def test_normalize_worker_path_variants():
+    """Test D: _normalize_worker_path handles ./ prefix, slashes, and preserves
+    dot-prefixed directories."""
+    from aura.conversation.manager import _normalize_worker_path, _is_validation_scratch_path
+
+    # Leading ./ is stripped
+    assert _normalize_worker_path("./graph_main_window.py") == "graph_main_window.py"
+    assert _normalize_worker_path("./workers.py") == "workers.py"
+
+    # No-op for clean relative paths
+    assert _normalize_worker_path("graph_main_window.py") == "graph_main_window.py"
+    assert _normalize_worker_path("video_workflow.py") == "video_workflow.py"
+
+    # Dot-prefixed directories preserved
+    assert _normalize_worker_path(".aura/tmp/foo.py") == ".aura/tmp/foo.py"
+    assert _normalize_worker_path(".venv/lib/site.py") == ".venv/lib/site.py"
+
+    # Backslash normalized to forward slash (Windows path separator)
+    # Note: .\\foo means "./foo" (current-dir/foo), NOT ".foo" (dot-prefixed dir)
+    assert _normalize_worker_path(".aura\\tmp\\dump_bar.py") == ".aura/tmp/dump_bar.py"
+    assert _is_validation_scratch_path(".aura\\tmp\\dump_bar.py"), "normalized backslash path should be scratch"

@@ -32,9 +32,12 @@ _TOOL_EFFICIENCY_RULES = """Tool efficiency:
 _WORKER_PASS_RULES = """Pass-level rules:
 - Cheapest meaningful validation by default. py_compile for touched Python.
 - Do not create test files for validation unless explicitly requested.
-- If you create root _check*.py scratch files they will be rejected — use `python -c` or `.aura/tmp` instead.
+- If you create root _check*.py scratch files they will be rejected — use `python -c` instead.
 - If a tool result says the tool-call limit was reached, produce the continuation_report XML format exactly as documented.
-- Default limit: 2 validation terminal commands. Hard limit: 3."""
+- Default limit: 2 validation terminal commands. Hard limit: 3.
+- Aura may auto-run focused py_compile as a completion safety net if you stop without running it.
+- Scratch validation should use `python -c` or existing focused tests, not new project files.
+- Temporary validation files must NOT be written as project artifacts; .py files under .aura/tmp/ are scrubbed."""
 
 _ARCHITECTURE_GUARDRAILS = """Architecture guardrails:
 - Avoid god files and monolithic classes.
@@ -186,10 +189,12 @@ _WORKER_ENGINEERING_RULES = """Implementation quality — follow these rules:
 - Validate touched Python with `python -m py_compile`.
 - If py_compile reports invalid syntax in a touched file, repair that file before unrelated validation, then rerun py_compile on that file.
 - Use focused existing tests only when directly relevant or requested.
-- Use `python -c`, an existing focused test, or `.aura/tmp` with cleanup for scratch validation.
+- Use `python -c` or an existing focused test for scratch validation.
 - Do not create root-level validation scratch files such as _check_acceptance.py, _check_ac7.py, or _check*.py.
 - Shell validation runs in the host shell. Prefer cross-platform commands such as `python -m py_compile`, focused Python assertion scripts, or `rg` when available. Do not use bare `grep`; it is not portable on Windows/PowerShell.
 - For "old pattern must be absent" validation, use a command that exits 0 when the pattern is absent and exits nonzero only when it is present.
+- Aura may auto-run focused py_compile as a completion safety net if you stop without running it.
+- Scratch validation should use `python -c` or existing focused tests. Temporary validation .py files must NOT be checked in as project artifacts.
 - Finish with changed files and validation results."""
 
 _PLANNER_BLOCK = """You are Aura's planning agent. Act as a fast dispatch compiler.
@@ -264,7 +269,7 @@ Handoff Adherence Protocol:
 3. Acceptance Verification: run the focused validation needed for the change. Touched Python files must pass `python -m py_compile`.
 4. If `edit_symbol` or `edit_file` misses, reread and switch to `edit_line_range` with exact line numbers, or use `write_file` when a full replacement is safer.
 5. Repair syntax before unrelated validation. Use focused existing tests only when directly relevant or requested.
-6. Use `python -c` or `.aura/tmp` for scratch validation; do not write root-level `_check*.py` files.
+6. Use `python -c` for scratch validation; do not write root-level `_check*.py` files.
 
 Execution Protocol:
 - For broad or risky tasks, start with `update_todo_list`; this creates the visible execution plan for the user. Small localized tasks may stay fast.
