@@ -269,15 +269,26 @@ class WorkerEventHandler(QObject):
         if card:
             card.worker_finished(ok, summary, status=status)
         if self._active_workflow is not None and self._active_workflow.tool_call_id == tool_call_id:
+            metadata = self._worker_result_metadata(tool_call_id)
             self._set_active_workflow(
                 self._active_workflow.finish(
                     ok=ok,
                     summary=summary,
                     needs_followup=bool(needs_followup),
                     status=status,
+                    modified_files=metadata.get("modified_files"),
+                    validation=metadata.get("validation"),
+                    extras=metadata.get("extras"),
                 )
             )
         self._clear_active_spec_card(tool_call_id)
+
+    def _worker_result_metadata(self, tool_call_id: str) -> dict:
+        getter = getattr(self._bridge, "worker_result_metadata", None)
+        if not callable(getter):
+            return {}
+        metadata = getter(tool_call_id)
+        return metadata if isinstance(metadata, dict) else {}
 
     def _on_worker_cancelled(self, tool_call_id: str) -> None:
         """Stop worker aura and forward cancel to playground/spec card."""

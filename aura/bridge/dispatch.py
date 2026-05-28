@@ -138,6 +138,7 @@ class _DispatchProxy(QObject):
         self._pending: dict[str, _DispatchPending] = {}
         # Records of each completed dispatch for persistence.
         self._records: list[WorkerDispatchRecord] = []
+        self._result_metadata: dict[str, dict[str, Any]] = {}
 
     # ---- config -----------------------------------------------------------
 
@@ -176,6 +177,9 @@ class _DispatchProxy(QObject):
 
     def clear_records(self) -> None:
         self._records.clear()
+
+    def result_metadata(self, tool_call_id: str) -> dict[str, Any]:
+        return dict(self._result_metadata.get(tool_call_id, {}))
 
     # ---- planner-thread side ---------------------------------------------
 
@@ -608,8 +612,33 @@ class _DispatchProxy(QObject):
             validation_results=validation_results,
             not_applied_writes=not_applied_writes,
             status=status,
+            internal_error=internal_error,
         )
         modified_files = _applied_modified_files(relay.write_results)
+        extras = {
+            "writes": relay.write_results,
+            "not_applied_writes": not_applied_writes,
+            "write_outcome": _final_write_outcome(relay.write_results, not_applied_writes, internal_error),
+            "failed_write_tools": failed_write_tools,
+            "internal_recovery_steers": internal_recovery_steers,
+            "recoverable_write_failures": recoverable_write_failures,
+            "source_inspection_blockers": source_inspection_blockers,
+            "terminal_policy_blockers": terminal_policy_blockers,
+            "quality_bounces": quality_bounces,
+            "patch_quality_unresolved": patch_quality_unresolved,
+            "terminal_results": getattr(relay, "terminal_results", []),
+            "validation_results": validation_results,
+            "errors": result_errors,
+            "caveats": result_caveats,
+            "worker_internal_error": bool(internal_error),
+            "internal_error": internal_error or "",
+            "phase_boundary": relay.phase_boundary_info or {},
+            "limit": (
+                relay.phase_boundary_info
+                if relay.phase_boundary_info and relay.phase_boundary_info.get("limit_reached")
+                else {}
+            ),
+        }
 
         spec_dict = req.to_dict()
         spec_dict["task_spec"] = task_spec.to_dict()
@@ -649,6 +678,11 @@ class _DispatchProxy(QObject):
             except Exception:
                 pass  # Never block the chat on git failures
 
+        self._result_metadata[tool_call_id] = {
+            "modified_files": modified_files,
+            "validation": continuation.get("validation_text"),
+            "extras": extras,
+        }
         self.workerFinished.emit(tool_call_id, ok, summary, needs_followup, status)
         return WorkerDispatchResult(
             ok=ok,
@@ -666,30 +700,7 @@ class _DispatchProxy(QObject):
             modified_files=modified_files,
             validation=continuation.get("validation_text"),
             suggested_next_spec=continuation.get("recommended_next_step"),
-            extras={
-                "writes": relay.write_results,
-                "not_applied_writes": not_applied_writes,
-                "write_outcome": _final_write_outcome(relay.write_results, not_applied_writes, internal_error),
-                "failed_write_tools": failed_write_tools,
-                "internal_recovery_steers": internal_recovery_steers,
-                "recoverable_write_failures": recoverable_write_failures,
-                "source_inspection_blockers": source_inspection_blockers,
-                "terminal_policy_blockers": terminal_policy_blockers,
-                "quality_bounces": quality_bounces,
-                "patch_quality_unresolved": patch_quality_unresolved,
-                "terminal_results": getattr(relay, "terminal_results", []),
-                "validation_results": validation_results,
-                "errors": result_errors,
-                "caveats": result_caveats,
-                "worker_internal_error": bool(internal_error),
-                "internal_error": internal_error or "",
-                "phase_boundary": relay.phase_boundary_info or {},
-                "limit": (
-                    relay.phase_boundary_info
-                    if relay.phase_boundary_info and relay.phase_boundary_info.get("limit_reached")
-                    else {}
-                ),
-            },
+            extras=extras,
         )
 
 
@@ -822,7 +833,7 @@ def _format_spec_as_user_message(task: WorkerTaskSpec | WorkerDispatchRequest) -
         "- Use update_todo_list for broad or risky work; small localized tasks may proceed directly after reading.",
         "- Build the smallest complete implementation.",
         "- Own exact edits, validation, and code-quality decisions.",
-        "- Use grep_search for searching. If terminal rg/grep/findstr is used for absence checks, make intended no-match exit 0 or use a Python assertion.",
+        "- Use grep_search for searching.",
         "- Code must work and be easy to work on.",
         "- Avoid public-library, tutorial, or demo ceremony unless requested.",
         "- Avoid module summary docstrings and Args/Returns/Raises in normal app/tool code.",
@@ -1099,6 +1110,7 @@ def _build_worker_summary(
     validation_results: list[dict[str, Any]] | None = None,
     not_applied_writes: list[dict[str, Any]] | None = None,
     status: str | None = None,
+    internal_error: str | None = None,
 ) -> str:
     lines: list[str] = []
     continuation = continuation or {}
@@ -1141,7 +1153,7 @@ def _build_worker_summary(
     lines.append("")
     lines.append("Structured receipt:")
     lines.append(f"  - Final status: {status or 'unknown'}")
-    lines.append(f"  - Write outcome: {_final_write_outcome(writes, not_applied_writes, None)}")
+    lines.append(f"  - Write outcome: {_final_write_outcome(writes, not_applied_writes, internal_error)}")
 
     # 2. Planner's intended summary (if no errors, or as context)
     if req.summary:

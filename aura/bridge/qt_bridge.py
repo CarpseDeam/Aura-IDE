@@ -352,6 +352,9 @@ class ConversationBridge(QObject):
     def clear_dispatch_records(self) -> None:
         self._dispatch_proxy.clear_records()
 
+    def worker_result_metadata(self, tool_call_id: str) -> dict:
+        return self._dispatch_proxy.result_metadata(tool_call_id)
+
     def set_workspace_root(self, root) -> None:
         self._registry.set_workspace_root(root)
         self._dispatch_proxy.set_workspace_root(root)
