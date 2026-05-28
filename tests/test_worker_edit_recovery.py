@@ -593,9 +593,69 @@ def test_root_check_scratch_file_write_is_rejected_before_approval(tmp_workspace
 
     assert result.ok is False
     assert result.payload["failure_class"] == "validation_scratch_banned"
+    assert result.payload["applied"] is False
+    assert result.payload["write_outcome"].startswith("not_applied_")
     assert result.payload["suggested_next_tool"] == "run_terminal_command"
     assert approve_cb.call_count == 0
     assert not (tmp_workspace / "_check_acceptance.py").exists()
+
+
+def test_write_file_invalid_python_blocks_before_approval_when_craft_disabled(tmp_workspace, monkeypatch):
+    registry = ToolRegistry(tmp_workspace, mode="worker")
+    approve_cb = MagicMock(return_value=ApprovalDecision("approve"))
+    monkeypatch.setenv("AURA_CRAFT", "0")
+
+    result = registry.execute(
+        "write_file",
+        {"path": "broken.py", "content": "def broken(:\n    pass\n"},
+        approve_cb,
+        False,
+    )
+
+    assert result.ok is False
+    assert result.payload["failure_class"] == "syntax_invalid"
+    assert result.payload["applied"] is False
+    assert result.payload["write_outcome"] == "not_applied_craft_rejected"
+    assert approve_cb.call_count == 0
+    assert not (tmp_workspace / "broken.py").exists()
+
+
+def test_edit_file_invalid_python_blocks_before_approval_when_craft_disabled(tmp_workspace, monkeypatch):
+    target = tmp_workspace / "target.py"
+    original = "def ok():\n    return 1\n"
+    target.write_text(original, encoding="utf-8")
+    registry = ToolRegistry(tmp_workspace, mode="worker")
+    approve_cb = MagicMock(return_value=ApprovalDecision("approve"))
+    monkeypatch.setenv("AURA_CRAFT", "0")
+
+    result = registry.execute(
+        "edit_file",
+        {"path": "target.py", "old_str": "def ok():\n    return 1", "new_str": "def ok(:\n    return 2"},
+        approve_cb,
+        False,
+    )
+
+    assert result.ok is False
+    assert result.payload["failure_class"] == "syntax_invalid"
+    assert result.payload["applied"] is False
+    assert result.payload["write_outcome"] == "not_applied_craft_rejected"
+    assert approve_cb.call_count == 0
+    assert target.read_text(encoding="utf-8") == original
+
+
+def test_apply_edit_transaction_arg_error_has_not_applied_truth(tmp_workspace):
+    registry = ToolRegistry(tmp_workspace, mode="worker")
+
+    result = registry.execute(
+        "apply_edit_transaction",
+        {"path": "target.py", "operations": "not-a-list"},
+        MagicMock(return_value=ApprovalDecision("approve")),
+        False,
+    )
+
+    assert result.ok is False
+    assert result.payload["applied"] is False
+    assert result.payload["write_outcome"].startswith("not_applied_")
 
 
 def test_edit_line_range_applied_result_includes_line_metadata(tmp_workspace):
@@ -613,7 +673,8 @@ def test_edit_line_range_applied_result_includes_line_metadata(tmp_workspace):
 
     assert result.ok is True
     assert result.payload["path"] == "target.py"
-    assert result.payload["applied"] == "edit_line_range"
+    assert result.payload["applied"] is True
+    assert result.payload["applied_tool"] == "edit_line_range"
     assert result.payload["start_line"] == 2
     assert result.payload["end_line"] == 3
     assert "backup" in result.payload

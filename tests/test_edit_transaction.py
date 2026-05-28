@@ -55,7 +55,8 @@ def test_multi_operation_one_file_python_edit_succeeds_through_one_transaction(t
 
     payload = result.payload
     assert result.ok is True
-    assert payload["applied"] == "apply_edit_transaction"
+    assert payload["applied"] is True
+    assert payload["applied_tool"] == "apply_edit_transaction"
     assert payload["operation_count"] == 3
     content = target.read_text(encoding="utf-8")
     assert "return 2" in content

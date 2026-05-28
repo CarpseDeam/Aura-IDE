@@ -208,7 +208,7 @@ def _humanizer_gate_error(rel_path: str, result, blocking_issues: list) -> ToolE
 
     return ToolExecResult(
         ok=False,
-        payload={
+        payload=_mark_not_applied({
             "ok": False,
             "error": "Aura humanizer rejected generated Python before approval.",
             "failure_class": "compiler_rejected",
@@ -219,7 +219,7 @@ def _humanizer_gate_error(rel_path: str, result, blocking_issues: list) -> ToolE
             "issue_count": getattr(report, "issue_count", 0) if report else 0,
             "blocking_issue_count": len(blocking_issues),
             "issues": issues_payload,
-        },
+        }),
     )
 
 
@@ -464,6 +464,31 @@ def _mark_not_applied(payload: dict, failure_class: str | None = None) -> dict:
     return payload
 
 
+def _python_syntax_error_payload(proposal: dict) -> dict | None:
+    path = str(proposal.get("rel_path") or proposal.get("path") or "")
+    if not path.endswith(".py"):
+        return None
+    try:
+        compile(str(proposal.get("new_content") or ""), path or "<proposal>", "exec")
+    except SyntaxError as exc:
+        return _mark_not_applied(
+            {
+                "ok": False,
+                "path": path,
+                "rel_path": path,
+                "error": f"replacement produces invalid Python: {exc}",
+                "failure_class": "syntax_invalid",
+                "syntax_valid": False,
+                "suggested_next_tool": "apply_edit_transaction",
+                "suggested_next_action": (
+                    "Repair the Python syntax in this file before any unrelated tool call."
+                ),
+            },
+            "syntax_invalid",
+        )
+    return None
+
+
 def _is_new_root_validation_scratch(root: Path, target: Path) -> bool:
     return (
         target.parent == root
@@ -517,11 +542,11 @@ class WriteHandlersMixin:
 
     def _handle_write_file(self, args, approval_cb, reject_all) -> ToolExecResult:
         if self._read_only:
-            return ToolExecResult(ok=False, payload={"ok": False, "error": "Read-Only Mode is enabled — write tools are disabled.", "failure_class": "read_only"})
+            return ToolExecResult(ok=False, payload=_mark_not_applied({"ok": False, "error": "Read-Only Mode is enabled — write tools are disabled.", "failure_class": "read_only"}))
         if self._mode == "planner":
             return ToolExecResult(
                 ok=False,
-                payload={
+                payload=_mark_not_applied({
                     "ok": False,
                     "error": (
                         "Planner cannot write directly. "
@@ -529,17 +554,17 @@ class WriteHandlersMixin:
                         "Include your intended edits in the 'spec' field of the dispatch."
                     ),
                     "failure_class": "internal_error",
-                },
+                }),
             )
         return self._handle_write("write_file", args, approval_cb, reject_all)
 
     def _handle_apply_edit_transaction(self, args, approval_cb, reject_all) -> ToolExecResult:
         if self._read_only:
-            return ToolExecResult(ok=False, payload={"ok": False, "error": "Read-Only Mode is enabled — write tools are disabled.", "failure_class": "read_only"})
+            return ToolExecResult(ok=False, payload=_mark_not_applied({"ok": False, "error": "Read-Only Mode is enabled — write tools are disabled.", "failure_class": "read_only"}))
         if self._mode == "planner":
             return ToolExecResult(
                 ok=False,
-                payload={
+                payload=_mark_not_applied({
                     "ok": False,
                     "error": (
                         "Planner cannot write directly. "
@@ -547,17 +572,17 @@ class WriteHandlersMixin:
                         "Include your intended edits in the 'spec' field of the dispatch."
                     ),
                     "failure_class": "internal_error",
-                },
+                }),
             )
         return self._handle_write("apply_edit_transaction", args, approval_cb, reject_all)
 
     def _handle_edit_file(self, args, approval_cb, reject_all) -> ToolExecResult:
         if self._read_only:
-            return ToolExecResult(ok=False, payload={"ok": False, "error": "Read-Only Mode is enabled — write tools are disabled.", "failure_class": "read_only"})
+            return ToolExecResult(ok=False, payload=_mark_not_applied({"ok": False, "error": "Read-Only Mode is enabled — write tools are disabled.", "failure_class": "read_only"}))
         if self._mode == "planner":
             return ToolExecResult(
                 ok=False,
-                payload={
+                payload=_mark_not_applied({
                     "ok": False,
                     "error": (
                         "Planner cannot write directly. "
@@ -565,17 +590,17 @@ class WriteHandlersMixin:
                         "Include your intended edits in the 'spec' field of the dispatch."
                     ),
                     "failure_class": "internal_error",
-                },
+                }),
             )
         return self._handle_write("edit_file", args, approval_cb, reject_all)
 
     def _handle_edit_symbol(self, args, approval_cb, reject_all) -> ToolExecResult:
         if self._read_only:
-            return ToolExecResult(ok=False, payload={"ok": False, "error": "Read-Only Mode is enabled — write tools are disabled.", "failure_class": "read_only"})
+            return ToolExecResult(ok=False, payload=_mark_not_applied({"ok": False, "error": "Read-Only Mode is enabled — write tools are disabled.", "failure_class": "read_only"}))
         if self._mode == "planner":
             return ToolExecResult(
                 ok=False,
-                payload={
+                payload=_mark_not_applied({
                     "ok": False,
                     "error": (
                         "Planner cannot write directly. "
@@ -583,17 +608,17 @@ class WriteHandlersMixin:
                         "Include your intended edits in the 'spec' field of the dispatch."
                     ),
                     "failure_class": "internal_error",
-                },
+                }),
             )
         return self._handle_write("edit_symbol", args, approval_cb, reject_all)
 
     def _handle_edit_line_range(self, args, approval_cb, reject_all) -> ToolExecResult:
         if self._read_only:
-            return ToolExecResult(ok=False, payload={"ok": False, "error": "Read-Only Mode is enabled — write tools are disabled.", "failure_class": "read_only"})
+            return ToolExecResult(ok=False, payload=_mark_not_applied({"ok": False, "error": "Read-Only Mode is enabled — write tools are disabled.", "failure_class": "read_only"}))
         if self._mode == "planner":
             return ToolExecResult(
                 ok=False,
-                payload={
+                payload=_mark_not_applied({
                     "ok": False,
                     "error": (
                         "Planner cannot write directly. "
@@ -601,17 +626,17 @@ class WriteHandlersMixin:
                         "Include your intended edits in the 'spec' field of the dispatch."
                     ),
                     "failure_class": "internal_error",
-                },
+                }),
             )
         return self._handle_write("edit_line_range", args, approval_cb, reject_all)
 
     def _handle_patch_file(self, args, approval_cb, reject_all) -> ToolExecResult:
         if self._read_only:
-            return ToolExecResult(ok=False, payload={"ok": False, "error": "Read-Only Mode is enabled — write tools are disabled.", "failure_class": "read_only"})
+            return ToolExecResult(ok=False, payload=_mark_not_applied({"ok": False, "error": "Read-Only Mode is enabled — write tools are disabled.", "failure_class": "read_only"}))
         if self._mode == "planner":
             return ToolExecResult(
                 ok=False,
-                payload={
+                payload=_mark_not_applied({
                     "ok": False,
                     "error": (
                         "Planner cannot write directly. "
@@ -619,7 +644,7 @@ class WriteHandlersMixin:
                         "Include your intended edits in the 'spec' field of the dispatch."
                     ),
                     "failure_class": "internal_error",
-                },
+                }),
             )
         return self._handle_write("patch_file", args, approval_cb, reject_all)
 
@@ -647,7 +672,7 @@ class WriteHandlersMixin:
             if _is_validation_scratch_path(rel_path):
                 return ToolExecResult(
                     ok=False,
-                    payload={
+                    payload=_mark_not_applied({
                         "ok": False,
                         "path": rel_path,
                         "rel_path": rel_path,
@@ -662,12 +687,12 @@ class WriteHandlersMixin:
                             "Use python -c for scratch validation, or create and remove "
                             "a temporary file inside one terminal command."
                         ),
-                    },
+                    }),
                 )
             if _is_new_root_validation_scratch(self._root, target):
                 return ToolExecResult(
                     ok=False,
-                    payload={
+                    payload=_mark_not_applied({
                         "ok": False,
                         "path": rel_path,
                         "rel_path": rel_path,
@@ -678,14 +703,14 @@ class WriteHandlersMixin:
                             "Use python -c, an existing focused test, or .aura/tmp "
                             "with cleanup."
                         ),
-                    },
+                    }),
                 )
 
         if name == "write_file":
             content = args.get("content", "")
             if not isinstance(content, str):
                 return ToolExecResult(
-                    ok=False, payload={"ok": False, "error": "content must be a string", "failure_class": "internal_error"}
+                    ok=False, payload=_mark_not_applied({"ok": False, "error": "content must be a string", "failure_class": "internal_error"})
                 )
             proposal = _reg.propose_write(self._root, target, content)
             if not proposal.get("ok", False):
@@ -696,6 +721,9 @@ class WriteHandlersMixin:
                 gate_error = _maybe_humanize_proposal(proposal)
                 if gate_error is not None:
                     return gate_error
+            syntax_error = _python_syntax_error_payload(proposal)
+            if syntax_error is not None:
+                return ToolExecResult(ok=False, payload=syntax_error)
 
             craft_error = _run_compiler_pipeline(proposal, "write_file", contract=self.get_contract(), workspace_root=self._root)
             if craft_error is not None:
@@ -715,17 +743,17 @@ class WriteHandlersMixin:
             if not isinstance(operations, list):
                 return ToolExecResult(
                     ok=False,
-                    payload={"ok": False, "error": "operations must be a list", "failure_class": "edit_transaction_invalid_operation"},
+                    payload=_mark_not_applied({"ok": False, "error": "operations must be a list", "failure_class": "edit_transaction_invalid_operation"}),
                 )
             if expected_file_hash is not None and not isinstance(expected_file_hash, str):
                 return ToolExecResult(
                     ok=False,
-                    payload={"ok": False, "error": "expected_file_hash must be a string when supplied", "failure_class": "edit_transaction_invalid_operation"},
+                    payload=_mark_not_applied({"ok": False, "error": "expected_file_hash must be a string when supplied", "failure_class": "edit_transaction_invalid_operation"}),
                 )
             if description is not None and not isinstance(description, str):
                 return ToolExecResult(
                     ok=False,
-                    payload={"ok": False, "error": "description must be a string when supplied", "failure_class": "edit_transaction_invalid_operation"},
+                    payload=_mark_not_applied({"ok": False, "error": "description must be a string when supplied", "failure_class": "edit_transaction_invalid_operation"}),
                 )
             proposal = _reg.propose_edit_transaction(
                 self._root,
@@ -757,11 +785,14 @@ class WriteHandlersMixin:
             if not isinstance(old_str, str) or not isinstance(new_str, str):
                 return ToolExecResult(
                     ok=False,
-                    payload={"ok": False, "error": "old_str and new_str must be strings", "failure_class": "internal_error"},
+                    payload=_mark_not_applied({"ok": False, "error": "old_str and new_str must be strings", "failure_class": "internal_error"}),
                 )
             proposal = _reg.propose_edit(self._root, target, old_str, new_str)
             if not proposal.get("ok", False):
                 return ToolExecResult(ok=False, payload=_mark_not_applied(proposal))
+            syntax_error = _python_syntax_error_payload(proposal)
+            if syntax_error is not None:
+                return ToolExecResult(ok=False, payload=syntax_error)
 
             # Humanizer: observe-only for existing file edits
             _maybe_observe_humanizer(proposal)
@@ -786,17 +817,17 @@ class WriteHandlersMixin:
             if not isinstance(start_line, int) or not isinstance(end_line, int) or not isinstance(new_str, str):
                 return ToolExecResult(
                     ok=False,
-                    payload={"ok": False, "error": "start_line and end_line must be integers, new_str must be a string", "failure_class": "internal_error"},
+                    payload=_mark_not_applied({"ok": False, "error": "start_line and end_line must be integers, new_str must be a string", "failure_class": "internal_error"}),
                 )
             if expected_old_str is not None and not isinstance(expected_old_str, str):
                 return ToolExecResult(
                     ok=False,
-                    payload={"ok": False, "error": "expected_old_str must be a string when supplied", "failure_class": "internal_error"},
+                    payload=_mark_not_applied({"ok": False, "error": "expected_old_str must be a string when supplied", "failure_class": "internal_error"}),
                 )
             if expected_old_hash is not None and not isinstance(expected_old_hash, str):
                 return ToolExecResult(
                     ok=False,
-                    payload={"ok": False, "error": "expected_old_hash must be a string when supplied", "failure_class": "internal_error"},
+                    payload=_mark_not_applied({"ok": False, "error": "expected_old_hash must be a string when supplied", "failure_class": "internal_error"}),
                 )
             proposal = _reg.propose_line_range_edit(
                 self._root,
@@ -829,17 +860,17 @@ class WriteHandlersMixin:
             if not isinstance(edits, list):
                 return ToolExecResult(
                     ok=False,
-                    payload={"ok": False, "error": "edits must be a list", "failure_class": "internal_error"},
+                    payload=_mark_not_applied({"ok": False, "error": "edits must be a list", "failure_class": "internal_error"}),
                 )
             if expected_file_hash is not None and not isinstance(expected_file_hash, str):
                 return ToolExecResult(
                     ok=False,
-                    payload={"ok": False, "error": "expected_file_hash must be a string when supplied", "failure_class": "internal_error"},
+                    payload=_mark_not_applied({"ok": False, "error": "expected_file_hash must be a string when supplied", "failure_class": "internal_error"}),
                 )
             if description is not None and not isinstance(description, str):
                 return ToolExecResult(
                     ok=False,
-                    payload={"ok": False, "error": "description must be a string when supplied", "failure_class": "internal_error"},
+                    payload=_mark_not_applied({"ok": False, "error": "description must be a string when supplied", "failure_class": "internal_error"}),
                 )
             proposal = _reg.propose_patch_file(
                 self._root,
@@ -871,7 +902,7 @@ class WriteHandlersMixin:
             if not isinstance(symbol_type, str) or not isinstance(symbol_name, str) or not isinstance(new_definition, str):
                 return ToolExecResult(
                     ok=False,
-                    payload={"ok": False, "error": "symbol_type, symbol_name, and new_definition must be strings", "failure_class": "internal_error"},
+                    payload=_mark_not_applied({"ok": False, "error": "symbol_type, symbol_name, and new_definition must be strings", "failure_class": "internal_error"}),
                 )
             proposal = _reg.propose_edit_symbol(
                 self._root, target, symbol_type, symbol_name, new_definition, class_name

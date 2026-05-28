@@ -795,20 +795,20 @@ for i in items:
                 "ok": True,
                 "rel_path": "existing.py",
                 "old_content": "old code",
-                "new_content": "new code",
+                "new_content": "value = 2\n",
                 "is_new_file": False,
             }
 
             result = _handler("edit_file")(
                 registry,
-                {"path": "existing.py", "old_str": "old code", "new_str": "new code"},
+                {"path": "existing.py", "old_str": "old code", "new_str": "value = 2\n"},
                 approve_cb,
                 False,
             )
 
         assert result.ok is True
         req = approve_cb.call_args[0][0]
-        assert req.new_content == "new code"
+        assert req.new_content == "value = 2\n"
         # Humanizer may be called in observe mode, but content must not change
         # (observe mode is tested separately)
 
@@ -824,13 +824,13 @@ for i in items:
                 "ok": True,
                 "rel_path": "new.py",
                 "old_content": "",
-                "new_content": self.RAW_PYTHON,
+                "new_content": self.CLEAN_PYTHON,
                 "is_new_file": True,
             }
 
             result = _handler("write_file")(
                 registry,
-                {"path": "new.py", "content": self.RAW_PYTHON},
+                {"path": "new.py", "content": self.CLEAN_PYTHON},
                 approve_cb,
                 False,
             )
@@ -838,7 +838,7 @@ for i in items:
         assert result.ok is True
         req = approve_cb.call_args[0][0]
         # Content must be unchanged in observe mode
-        assert req.new_content == self.RAW_PYTHON
+        assert req.new_content == self.CLEAN_PYTHON
 
     def test_kill_switch_disables_behavior(
         self, registry: ToolRegistry, approve_cb: MagicMock, monkeypatch
@@ -853,20 +853,20 @@ for i in items:
                 "ok": True,
                 "rel_path": "new.py",
                 "old_content": "",
-                "new_content": self.RAW_PYTHON,
+                "new_content": self.CLEAN_PYTHON,
                 "is_new_file": True,
             }
 
             result = _handler("write_file")(
                 registry,
-                {"path": "new.py", "content": self.RAW_PYTHON},
+                {"path": "new.py", "content": self.CLEAN_PYTHON},
                 approve_cb,
                 False,
             )
 
         assert result.ok is True
         req = approve_cb.call_args[0][0]
-        assert req.new_content == self.RAW_PYTHON
+        assert req.new_content == self.CLEAN_PYTHON
         mock_hp_cls.assert_not_called()
 
     # edit_symbol humanizer integration
@@ -1011,13 +1011,13 @@ for i in items:
                 "ok": True,
                 "rel_path": "existing.py",
                 "old_content": "old code",
-                "new_content": "new code",
+                "new_content": "value = 2\n",
                 "is_new_file": False,
             }
 
             result = _handler("edit_file")(
                 registry,
-                {"path": "existing.py", "old_str": "old code", "new_str": "new code"},
+                {"path": "existing.py", "old_str": "old code", "new_str": "value = 2\n"},
                 approve_cb,
                 False,
             )
@@ -1025,7 +1025,7 @@ for i in items:
         assert result.ok is True
         mock_hp_cls.assert_not_called()
         req = approve_cb.call_args[0][0]
-        assert req.new_content == "new code"
+        assert req.new_content == "value = 2\n"
 
     def test_edit_file_humanizer_gated_by_env_var_enabled(
         self, registry: ToolRegistry, approve_cb: MagicMock, monkeypatch
@@ -1041,12 +1041,12 @@ for i in items:
                 "ok": True,
                 "rel_path": "existing.py",
                 "old_content": "old code",
-                "new_content": "new code",
+                "new_content": "value = 2\n",
                 "is_new_file": False,
             }
             mock_hp = MagicMock()
             mock_hp.humanize_code.return_value = MagicMock(
-                text="cleaned code",
+                text="value = 3\n",
                 syntax_fallback=False,
                 error=None,
                 changed=True,
@@ -1058,7 +1058,7 @@ for i in items:
 
             result = _handler("edit_file")(
                 registry,
-                {"path": "existing.py", "old_str": "old code", "new_str": "new code"},
+                {"path": "existing.py", "old_str": "old code", "new_str": "value = 2\n"},
                 approve_cb,
                 False,
             )
@@ -1067,7 +1067,7 @@ for i in items:
         mock_hp.humanize_code.assert_called_once()
         req = approve_cb.call_args[0][0]
         # edit_file never replaces content
-        assert req.new_content == "new code"
+        assert req.new_content == "value = 2\n"
 
     def test_edit_file_observe_never_changes_content(
         self, registry: ToolRegistry, approve_cb: MagicMock, monkeypatch
@@ -1083,12 +1083,12 @@ for i in items:
                 "ok": True,
                 "rel_path": "existing.py",
                 "old_content": "old code",
-                "new_content": "new code",
+                "new_content": "value = 2\n",
                 "is_new_file": False,
             }
             mock_hp = MagicMock()
             mock_hp.humanize_code.return_value = MagicMock(
-                text="cleaned code",
+                text="value = 3\n",
                 syntax_fallback=False,
                 error=None,
                 changed=True,
@@ -1097,7 +1097,7 @@ for i in items:
 
             result = _handler("edit_file")(
                 registry,
-                {"path": "existing.py", "old_str": "old code", "new_str": "new code"},
+                {"path": "existing.py", "old_str": "old code", "new_str": "value = 2\n"},
                 approve_cb,
                 False,
             )
@@ -1105,7 +1105,7 @@ for i in items:
         assert result.ok is True
         req = approve_cb.call_args[0][0]
         # edit_file never replaces content regardless of observe mode
-        assert req.new_content == "new code"
+        assert req.new_content == "value = 2\n"
         mock_hp.humanize_code.assert_called_once()
 
 
@@ -1132,7 +1132,8 @@ class TestEditFile:
             )
 
         assert result.ok is True
-        assert result.payload["applied"] == "edit_file"
+        assert result.payload["applied"] is True
+        assert result.payload["applied_tool"] == "edit_file"
 
     def test_rejected(self, registry: ToolRegistry, reject_cb: MagicMock):
         with patch("aura.conversation.tools.registry.propose_edit") as mock_pe:
@@ -1202,7 +1203,8 @@ class TestEditSymbol:
             )
 
         assert result.ok is True
-        assert result.payload["applied"] == "edit_symbol"
+        assert result.payload["applied"] is True
+        assert result.payload["applied_tool"] == "edit_symbol"
 
     def test_valid_method(self, registry: ToolRegistry, approve_cb: MagicMock):
         with (

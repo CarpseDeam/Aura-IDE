@@ -609,13 +609,7 @@ class _DispatchProxy(QObject):
             not_applied_writes=not_applied_writes,
             status=status,
         )
-        modified_files = continuation.get("modified_files") or [
-            str(w["path"]) for w in relay.write_results if isinstance(w.get("path"), str) and w.get("path")
-        ]
-        modified_files = [
-            path for path in modified_files
-            if not _is_validation_scratch_path(str(path))
-        ]
+        modified_files = _applied_modified_files(relay.write_results)
 
         spec_dict = req.to_dict()
         spec_dict["task_spec"] = task_spec.to_dict()
@@ -1231,6 +1225,17 @@ def _final_write_outcome(
     if not_applied_writes:
         return str(not_applied_writes[-1].get("write_outcome") or "not_applied_edit_mechanics_blocked")
     return "no_write_needed"
+
+
+def _applied_modified_files(writes: list[dict[str, Any]]) -> list[str]:
+    return [
+        str(w["path"])
+        for w in writes
+        if w.get("applied") is True
+        and isinstance(w.get("path"), str)
+        and w.get("path")
+        and not _is_validation_scratch_path(str(w.get("path")))
+    ]
 
 
 def _check_read_before_edit(

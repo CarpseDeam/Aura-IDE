@@ -30,7 +30,8 @@ def test_patch_file_applies_multiple_hunks_atomically(tmp_workspace):
     )
 
     assert result.ok is True
-    assert result.payload["applied"] == "patch_file"
+    assert result.payload["applied"] is True
+    assert result.payload["applied_tool"] == "patch_file"
     assert result.payload["hunk_count"] == 2
     assert target.read_text(encoding="utf-8") == "alpha = 10\nbeta = 2\ngamma = 30\n"
 

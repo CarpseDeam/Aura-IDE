@@ -10,6 +10,7 @@ from aura.conversation.dispatch import (
     normalize_outcome_status,
 )
 from aura.bridge.dispatch import (
+    _applied_modified_files,
     _build_worker_summary,
     _compute_outcome_status,
     _final_report_claims_failure,
@@ -765,6 +766,16 @@ def test_worker_result_ok_true_when_writes_and_passing_validation():
     assert result.ok
     payload = result.to_tool_payload()
     assert payload["ok"] is True
+
+
+def test_modified_files_are_derived_from_applied_write_receipts_only():
+    writes = [
+        {"path": "changed.py", "applied": True, "write_outcome": "applied"},
+        {"path": "claimed.py", "applied": False, "write_outcome": "not_applied_craft_rejected"},
+        {"path": ".aura/tmp/_check_acceptance.py", "applied": True, "write_outcome": "applied"},
+    ]
+
+    assert _applied_modified_files(writes) == ["changed.py"]
 
 
 def test_worker_result_needs_followup_not_terminal():

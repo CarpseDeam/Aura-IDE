@@ -636,7 +636,7 @@ class TestDispatchActions:
             "wt1",
             "write_file",
             True,
-            '{"ok": true, "path": "aura/auth.py"}',
+            '{"ok": true, "path": "aura/auth.py", "applied": true}',
             {},
         )
         assert handler.active_workflow.changed_files == ("aura/auth.py",)

@@ -18,7 +18,7 @@ def test_workflow_tracks_write_and_validation_result() -> None:
     state = state.absorb_worker_tool_result(
         "write_file",
         True,
-        json.dumps({"ok": True, "path": "aura/auth.py"}),
+        json.dumps({"ok": True, "path": "aura/auth.py", "applied": True}),
     )
     state = state.absorb_worker_tool_result(
         "run_terminal_command",
