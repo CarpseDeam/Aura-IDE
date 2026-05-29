@@ -221,47 +221,30 @@ class SpecCard(QFrame):
         """Create the button row widget. Returns (row_widget, dispatch_btn, edit_btn, cancel_btn)."""
         buttons_row = QWidget(self)
         btn_layout = QHBoxLayout(buttons_row)
-        btn_layout.setContentsMargins(0, 4, 0, 0)
-        btn_layout.setSpacing(8)
+        btn_layout.setContentsMargins(0, 8, 0, 0)
+        btn_layout.setSpacing(10)
 
         dispatch_btn = QPushButton("Dispatch", parent=buttons_row)
         dispatch_btn.setObjectName("primary")
+        dispatch_btn.setMinimumHeight(34)
+        dispatch_btn.setMinimumWidth(128)
         dispatch_btn.clicked.connect(self._on_dispatch)
         btn_layout.addWidget(dispatch_btn)
 
         edit_btn = QPushButton("Edit Spec", parent=buttons_row)
+        edit_btn.setMinimumHeight(32)
+        edit_btn.setMinimumWidth(96)
         edit_btn.clicked.connect(lambda: self.edit_clicked.emit(self._tool_call_id))
         btn_layout.addWidget(edit_btn)
 
-        # Steering buttons — disabled, with reduced visual weight
-        steering_style = (
-            f"color: {FG_MUTED}; background: {BG_ALT}; "
-            f"border: 1px solid {BORDER}; border-radius: 5px; padding: 5px 12px;"
-        )
-        self._make_smaller_btn = QPushButton("Make Smaller", parent=buttons_row)
-        self._make_smaller_btn.setEnabled(False)
-        self._make_smaller_btn.setToolTip("Spec rewrite controls coming soon")
-        self._make_smaller_btn.setStyleSheet(steering_style)
-        btn_layout.addWidget(self._make_smaller_btn)
-
-        self._make_safer_btn = QPushButton("Make Safer", parent=buttons_row)
-        self._make_safer_btn.setEnabled(False)
-        self._make_safer_btn.setToolTip("Spec rewrite controls coming soon")
-        self._make_safer_btn.setStyleSheet(steering_style)
-        btn_layout.addWidget(self._make_safer_btn)
-
-        self._go_deeper_btn = QPushButton("Go Deeper", parent=buttons_row)
-        self._go_deeper_btn.setEnabled(False)
-        self._go_deeper_btn.setToolTip("Spec rewrite controls coming soon")
-        self._go_deeper_btn.setStyleSheet(steering_style)
-        btn_layout.addWidget(self._go_deeper_btn)
+        btn_layout.addStretch(1)
 
         cancel_btn = QPushButton("Cancel", parent=buttons_row)
         cancel_btn.setObjectName("danger")
+        cancel_btn.setMinimumHeight(32)
+        cancel_btn.setMinimumWidth(88)
         cancel_btn.clicked.connect(self._on_cancel)
         btn_layout.addWidget(cancel_btn)
-
-        btn_layout.addStretch(1)
 
         return buttons_row, dispatch_btn, edit_btn, cancel_btn
 
@@ -504,9 +487,6 @@ class SpecCard(QFrame):
         self._dispatch_btn.setEnabled(False)
         self._edit_btn.setEnabled(False)
         self._cancel_btn.setEnabled(False)
-        self._make_smaller_btn.setEnabled(False)
-        self._make_safer_btn.setEnabled(False)
-        self._go_deeper_btn.setEnabled(False)
 
     def worker_finished(self, ok: bool, summary: str, status: str | None = None) -> None:
         """Update status when worker completes."""
