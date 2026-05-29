@@ -1,4 +1,5 @@
 """Updater dialog for Aura, supporting both Git and packaged updates."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -168,6 +169,7 @@ class UpdateDialog(QDialog):
     def _on_action(self) -> None:
         if is_packaged():
             from PySide6.QtWidgets import QMessageBox
+
             reply = QMessageBox.question(
                 self,
                 "Install Update",
@@ -185,6 +187,7 @@ class UpdateDialog(QDialog):
 
     def _start_worker(self, action: str) -> None:
         if self._thread is not None:
+            self._append_output("Another update operation is still running. Please wait.")
             return
 
         self._set_busy(True)
@@ -202,7 +205,8 @@ class UpdateDialog(QDialog):
         self._thread.start()
 
     def _clear_worker(self) -> None:
-        pass
+        self._thread = None
+        self._worker = None
 
     def _set_busy(self, busy: bool) -> None:
         self._check_btn.setEnabled(not busy)
@@ -212,7 +216,7 @@ class UpdateDialog(QDialog):
                 can_act = self._last_status.can_install
             else:
                 can_act = self._last_status.can_pull
-        
+
         self._action_btn.setEnabled((not busy) and can_act)
         if busy:
             self._action_btn.setEnabled(False)
@@ -259,14 +263,13 @@ class UpdateDialog(QDialog):
                 self._summary.setText("Update script launched. Aura will now exit.")
                 from PySide6.QtCore import QTimer
                 from PySide6.QtWidgets import QApplication
+
                 # Automatically exit after a short delay to allow the script to take over
                 QTimer.singleShot(2000, QApplication.quit)
             else:
                 old_commit = _short(result.old_commit)
                 new_commit = _short(result.new_commit)
-                self._summary.setText(
-                    "Update succeeded. Restart Aura to use the updated code."
-                )
+                self._summary.setText("Update succeeded. Restart Aura to use the updated code.")
                 self._state_label.setText("Update succeeded")
                 self._row3_val.setText(new_commit or "(unknown)")
                 self._append_output(f"Old commit: {old_commit or '(unknown)'}")
@@ -290,9 +293,7 @@ class UpdateDialog(QDialog):
         if status.state == "ahead":
             return f"Ahead by {status.ahead} commit(s)"
         if status.state == "diverged":
-            return (
-                f"Diverged: ahead {status.ahead}, behind {status.behind}"
-            )
+            return f"Diverged: ahead {status.ahead}, behind {status.behind}"
         if status.state == "no_upstream":
             return "No upstream configured"
         if status.state == "not_git":
