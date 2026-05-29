@@ -595,6 +595,7 @@ class _DispatchProxy(QObject):
             is_implementation=is_implementation,
             has_unverified_acceptance=has_unverified_acceptance,
             has_hard_failure=has_hard_failure,
+            has_applied_writes=bool(relay.write_results),
             result_errors=result_errors,
             result_caveats=result_caveats,
             continuation=summary_continuation,
@@ -720,6 +721,7 @@ def _compute_outcome_status(
     result_errors: list[str],
     result_caveats: list[str],
     continuation: dict[str, Any],
+    has_applied_writes: bool = False,
     structured_failure: dict[str, Any] | None = None,
     write_failures: list[dict[str, Any]] | None = None,
 ) -> str:
@@ -750,9 +752,12 @@ def _compute_outcome_status(
         or has_quality_bounce_blocker
     ):
         return S.craft_bounced.value
-    if has_recoverable_edit_blocker or any(
-        fc == "edit_mechanics_blocked" or fc in EDIT_TRANSACTION_FAILURE_CLASSES
-        for fc in failure_classes
+    if has_recoverable_edit_blocker or (
+        not has_applied_writes
+        and any(
+            fc == "edit_mechanics_blocked" or fc in EDIT_TRANSACTION_FAILURE_CLASSES
+            for fc in failure_classes
+        )
     ):
         return S.edit_mechanics_blocked.value
     if has_validation_failure or any(fc.startswith("validation_") for fc in failure_classes):

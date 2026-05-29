@@ -640,14 +640,14 @@ def test_approval_proxy_active_dialog_cancellation():
     with patch("aura.bridge.approval_proxy.DiffApprovalDialog") as mock_dlg_cls:
         mock_dlg = Mock()
         mock_dlg_cls.return_value = mock_dlg
-        
+
         # When dlg.exec() is called, we will simulate calling cancel_active_dialog
         def fake_exec():
             # While exec is running, the active_dialog must be set
             assert proxy._active_dialog is mock_dlg
             proxy.cancel_active_dialog()
             return 0
-            
+
         mock_dlg.exec.side_effect = fake_exec
         mock_dlg.decision.return_value = Mock(action="reject")
 
@@ -824,6 +824,7 @@ def _status_for(**overrides):
         "is_implementation": True,
         "has_unverified_acceptance": False,
         "has_hard_failure": True,
+        "has_applied_writes": False,
         "result_errors": ["failed"],
         "result_caveats": [],
         "continuation": {},
@@ -879,3 +880,25 @@ def test_compute_outcome_status_completed_with_caveats_requires_ok():
         result_caveats=["minor caveat"],
     ) == WorkerOutcomeStatus.completed_with_caveats.value
 
+
+def test_recovered_write_failure_does_not_cause_edit_mechanics_blocked():
+    """A worker that recovered from a failed edit and applied writes should NOT be edit_mechanics_blocked."""
+    assert _status_for(
+        ok=True,
+        needs_followup=False,
+        recoverable=False,
+        has_hard_failure=False,
+        result_errors=[],
+        write_failures=[{"failure_class": "edit_transaction_not_applicable"}],
+        has_applied_writes=True,
+    ) != WorkerOutcomeStatus.edit_mechanics_blocked.value
+    # With writes applied and no hard errors, should be completed
+    assert _status_for(
+        ok=True,
+        needs_followup=False,
+        recoverable=False,
+        has_hard_failure=False,
+        result_errors=[],
+        write_failures=[{"failure_class": "edit_transaction_not_applicable"}],
+        has_applied_writes=True,
+    ) == WorkerOutcomeStatus.completed.value
