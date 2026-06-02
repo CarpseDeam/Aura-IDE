@@ -1117,103 +1117,190 @@ def _build_worker_summary(
     status: str | None = None,
     internal_error: str | None = None,
 ) -> str:
-    lines: list[str] = []
     continuation = continuation or {}
     caveats = caveats or []
     validation_results = validation_results or []
     not_applied_writes = not_applied_writes or []
 
-    # Severity prefix
-    if continuation.get("status") == "patch_quality_unresolved":
-        reason = continuation.get("reason", "") or (errors[0] if errors else "Patch quality needs repair.")
-        lines.append(f"Patch quality needs repair: {reason}")
-    elif errors:
-        first_error = errors[0]
-        if _is_internal_error_summary(first_error):
-            lines.append(f"Harness error — {first_error}")
-        elif first_error.startswith("Validation command failed"):
-            lines.append(f"Validation failed — {first_error}")
+    # Derive status if not provided (backward compat for callers without status)
+    if not status:
+        if continuation.get("status") == "patch_quality_unresolved":
+            status = "craft_bounced"
+        elif errors:
+            if _is_internal_error_summary(errors[0]):
+                status = "harness_error"
+            elif errors[0].startswith("Validation command failed"):
+                status = "validation_failed"
+            else:
+                status = "needs_followup"
+        elif continuation.get("status") == "needs_followup":
+            status = "needs_followup"
+        elif caveats:
+            status = "completed_with_caveats"
         else:
-            lines.append(f"Worker needs follow-up — {first_error}")
-    elif continuation.get("status") == "needs_followup":
-        reason = continuation.get("reason", "") or (caveats[0] if caveats else "needs further work")
-        lines.append(f"Worker needs follow-up — {reason}")
-    elif caveats:
-        lines.append(f"Worker completed with caveats — {caveats[0]}")
+            status = "completed"
+
+    STATUS_LABELS = {
+        "completed": "✅  Worker completed successfully",
+        "completed_with_caveats": "✅  Worker completed with caveats",
+        "needs_followup": "⚠️  Worker needs follow-up",
+        "validation_failed": "❌  Validation failed",
+        "edit_mechanics_blocked": "⚠️  Edit mechanics blocked",
+        "craft_bounced": "⚠️  Patch quality needs repair",
+        "craft_rejected": "❌  Craft rejected",
+        "scope_mismatch": "⚠️  Scope mismatch",
+        "approval_rejected": "❌  Approval rejected",
+        "cancelled": "🔶  Worker cancelled",
+        "harness_error": "❌  Harness error",
+    }
+    ACTION_LABELS = {
+        "completed": "None — ready for review",
+        "completed_with_caveats": "Review caveats below",
+        "needs_followup": "Re-dispatch with follow-up",
+        "validation_failed": "Fix validation failure — see below",
+        "edit_mechanics_blocked": "Re-dispatch — edit tool failure",
+        "craft_bounced": "Re-dispatch — patch repair needed",
+        "craft_rejected": "Review and re-specify",
+        "scope_mismatch": "Review and re-specify",
+        "approval_rejected": "N/A — was not approved",
+        "cancelled": "N/A — was cancelled",
+        "harness_error": "Check logs and retry",
+    }
+
+    status_label = STATUS_LABELS.get(status, "❓  Unknown outcome")
+    action_needed = ACTION_LABELS.get(status, "Review details below")
+
+    BORDER = "\u2550" * 38
+    DIVIDER = "\u2500" * 38
+
+    lines: list[str] = []
+
+    # === Files changed count ===
+    edited_count = sum(1 for w in writes if not w.get("is_new_file"))
+    new_count = sum(1 for w in writes if w.get("is_new_file"))
+    total_count = len(writes)
+    if total_count > 0:
+        files_changed_str = f"{total_count} ({edited_count} edited, {new_count} new)"
     else:
-        lines.append("Worker completed successfully.")
+        files_changed_str = "0"
 
-    # 1. Errors first
-    if errors:
-        for err in errors:
-            lines.append(f"  - {err}")
+    # === Validation glance ===
+    py_compile_results = [v for v in validation_results if "py_compile" in str(v.get("command", ""))]
+    if not validation_results:
+        validation_str = "\u2014 (not yet verified)"
+    elif py_compile_results:
+        pc_passed = sum(1 for v in py_compile_results if v.get("ok"))
+        pc_total = len(py_compile_results)
+        pc_ok = pc_passed == pc_total
+        pc_prefix = "\u2713" if pc_ok else "\u2717"
+        validation_str = f"{pc_prefix} py_compile ({pc_passed}/{pc_total} passed)"
+    else:
+        passed = sum(1 for v in validation_results if v.get("ok"))
+        total = len(validation_results)
+        ok = passed == total
+        prefix = "\u2713" if ok else "\u2717"
+        validation_str = f"{prefix} {passed}/{total} passed"
 
-    if caveats:
-        if lines:
-            lines.append("")
-        lines.append("Worker validation caveats:")
-        for caveat in caveats:
-            lines.append(f"  - {caveat}")
+    # === Top section ===
+    lines.append(BORDER)
+    lines.append(f" {status_label}")
+    lines.append(DIVIDER)
 
-    lines.append("")
-    lines.append("Structured receipt:")
-    lines.append(f"  - Final status: {status or 'unknown'}")
-    lines.append(f"  - Write outcome: {_final_write_outcome(writes, not_applied_writes, internal_error)}")
+    # Glance line
+    lines.append(f" Files changed   : {files_changed_str}")
+    lines.append(f" Validation      : {validation_str}")
+    lines.append(f" Action needed   : {action_needed}")
+    lines.append(DIVIDER)
 
-    # 2. Planner's intended summary (if no errors, or as context)
-    if req.summary:
-        if lines:
-            lines.append("")
-        lines.append(req.summary.strip())
-
-    # 3. List of modified files
+    # === Modified files ===
     if writes:
-        lines.append("Files modified:")
+        lines.append("")
+        lines.append(" Modified files:")
         for w in writes:
-            tag = "(new)" if w.get("is_new_file") else f"({w.get('applied_tool') or w.get('tool')})"
-            outcome = w.get("write_outcome") or "applied"
-            lines.append(f"  - {w.get('path')} {tag} [{outcome}]")
+            tag = "(new)" if w.get("is_new_file") else "(edit)"
+            path = str(w.get("path") or "").strip()
+            lines.append(f"  \u2022 {path}   {tag}")
     else:
-        lines.append("Files modified:")
-        lines.append("  - none")
+        lines.append("")
+        lines.append(" Worker made no changes.")
 
-    if not_applied_writes:
-        lines.append("Not-applied write attempts:")
-        for w in not_applied_writes[:5]:
-            path = w.get("path") or "(unknown path)"
-            outcome = w.get("write_outcome") or "not_applied"
-            failure = w.get("failure_class") or ""
-            lines.append(f"  - {path} [{outcome}] {failure}".rstrip())
-
+    # === Validation detail ===
     if validation_results:
-        lines.append("Validation commands:")
-        for item in validation_results:
-            command = str(item.get("command") or "")
-            exit_code = item.get("exit_code")
-            verdict = "passed" if item.get("ok") else "failed"
-            suffix = f" exit {exit_code}" if exit_code is not None else ""
-            lines.append(f"  - {command}: {verdict}{suffix}")
-    else:
-        lines.append("Validation commands:")
-        lines.append("  - none recorded")
+        passed_v = [v for v in validation_results if v.get("ok")]
+        failed_v = [v for v in validation_results if not v.get("ok")]
 
-    if continuation.get("remaining"):
-        if lines:
+        if passed_v:
             lines.append("")
-        lines.append("Worker returned for planner follow-up. Remaining work:")
-        for item in continuation["remaining"]:
-            lines.append(f"  - {item}")
+            lines.append(" Validation:")
+            for v in passed_v:
+                cmd = str(v.get("command") or "")
+                lines.append(f"  \u2022 {cmd}  \u2192  passed")
 
-    if continuation.get("validation_text"):
-        if lines:
+        if failed_v:
             lines.append("")
-        lines.append("Validation:")
-        lines.append(str(continuation["validation_text"]).strip())
+            lines.append(" Validation failures:")
+            for v in failed_v:
+                cmd = str(v.get("command") or "")
+                exit_code = v.get("exit_code")
+                exit_str = f" (exit {exit_code})" if exit_code is not None else ""
+                lines.append(f"  \u2022 {cmd}  \u2192  failed{exit_str}")
+                output = v.get("output") or v.get("output_preview") or ""
+                if output:
+                    first_line = output.strip().split("\n")[0][:200]
+                    if first_line:
+                        lines.append(f"    {first_line}")
 
-    if not lines:
-        lines.append("Worker finished with no changes.")
+    # === Harness errors ===
+    if internal_error:
+        lines.append("")
+        lines.append(" Harness errors:")
+        lines.append(f"  \u2022 {internal_error}")
 
-    return "\n".join(lines).strip()
+    # === Other errors (filter harness prefix to avoid duplication) ===
+    other_errors: list[str] = []
+    for err in errors:
+        if internal_error and ("Harness error" in err or "internal Worker exception" in err):
+            continue
+        other_errors.append(err)
+    if other_errors:
+        lines.append("")
+        lines.append(" Errors:")
+        for err in other_errors:
+            lines.append(f"  \u2022 {err}")
+
+    # === Caveats ===
+    if caveats:
+        lines.append("")
+        lines.append(" Caveats:")
+        for c in caveats:
+            lines.append(f"  \u2022 {c}")
+
+    # === Failed writes ===
+    if not_applied_writes:
+        lines.append("")
+        lines.append(" Failed writes:")
+        for w in not_applied_writes[:5]:
+            path = str(w.get("path") or "(unknown path)")
+            failure = str(w.get("failure_class") or "")
+            lines.append(f"  \u2022 {path}   ({failure})")
+
+    # === Summary ===
+    if req.summary:
+        lines.append("")
+        lines.append(" Summary:")
+        for s_line in req.summary.strip().split("\n"):
+            lines.append(f" {s_line}")
+
+    # === Remaining work ===
+    remaining = continuation.get("remaining", [])
+    if remaining:
+        lines.append("")
+        lines.append(" Remaining work:")
+        for item in remaining:
+            lines.append(f"  \u2022 {item}")
+
+    lines.append(BORDER)
+    return "\n".join(lines)
 
 
 def _is_internal_error_summary(error: str) -> bool:
