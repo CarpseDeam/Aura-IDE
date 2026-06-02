@@ -254,7 +254,7 @@ class SpecApprovalDialog(QDialog):
     @staticmethod
     def _format_files(files: list[str]) -> str:
         if not files:
-            return "(no files listed)"
+            return "(files discovered as needed)"
         return "  ".join(f"• {p}" for p in files)
 
     def _on_edit_spec(self) -> None:

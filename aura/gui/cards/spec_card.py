@@ -330,7 +330,7 @@ class SpecCard(QFrame):
                 child.widget().deleteLater()
 
         if not self._files:
-            lbl = QLabel("No files listed", parent=self._files_container)
+            lbl = QLabel("Files will be discovered as needed", parent=self._files_container)
             lbl.setStyleSheet(
                 f"color: {FG_MUTED}; font-style: italic; font-size: 11px;"
             )
@@ -352,7 +352,7 @@ class SpecCard(QFrame):
     def _format_files(files: list[str]) -> str:
         """Format file list for display in plain text contexts."""
         if not files:
-            return "(no files listed)"
+            return "(files discovered as needed)"
         return "  ".join(f"• {p}" for p in files)
 
     def _compute_strategy_text(self) -> str:
