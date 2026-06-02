@@ -351,7 +351,18 @@ class ChatView(QScrollArea):
         self._remove_failed_write_cards_from_assistant(ac)
 
     def _remove_failed_write_cards_from_assistant(self, ac: AssistantCard) -> None:
-        """Remove failed CodeWriterCards from an assistant card's tool cluster."""
+        """Remove failed CodeWriterCards from an assistant card's tool cluster.
+
+        Failed write cards belong in the Worker Log/playground, not the main
+        chat.  This is called:
+        - after dispatch_to_worker completes,
+        - at the end of each assistant turn (assistant_done).
+
+        Worker write tool calls are routed to the playground, but during
+        conversation replay or single-mode execution a failed write card can
+        appear in the main chat — we remove it here so the main chat ends
+        with the assistant summary, not a scary "Failed ✗" card.
+        """
         tool_cluster = ac._tool_cluster if hasattr(ac, '_tool_cluster') else None
         if tool_cluster is None:
             return
@@ -363,7 +374,13 @@ class ChatView(QScrollArea):
             if item is None:
                 continue
             widget = item.widget()
-            if isinstance(widget, CodeWriterCard) and widget.state == "failed":
+            if not isinstance(widget, CodeWriterCard):
+                continue
+            try:
+                is_failed = widget._state == CodeWriterCard.STATE_FAILED
+            except AttributeError:
+                continue
+            if is_failed:
                 layout.removeWidget(widget)
                 widget.setParent(None)
                 widget.deleteLater()
@@ -627,6 +644,10 @@ class ChatView(QScrollArea):
         if ac is None:
             return
         ac.finalize_content()
+        # Clean up any failed CodeWriterCards — write failures belong in
+        # the Worker Log, not the main chat.  Call before stopping the aura
+        # so the user sees a clean assistant summary as the final item.
+        self._remove_failed_write_cards_from_assistant(ac)
         # Stop the breathing glow — content is complete, no need to pulse anymore.
         if self._current_aura is not None:
             self._current_aura.stop_aura()
