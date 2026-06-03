@@ -262,7 +262,8 @@ def filter_delta_issues(
     - Contract gate issues (CONTRACT_*)
     - Unsafe operation checks (destructive_operation, codes starting with forbidden_)
 
-    Only filters pre-existing diagnostics that are NOT on or near changed lines.
+    Pre-existing diagnostics are reported as caveats by the compiler and do not
+    block unrelated writes.
     """
     if is_new_file or not original_issues:
         return proposed_issues
@@ -286,10 +287,7 @@ def filter_delta_issues(
         key = compute_issue_key(issue)
         is_pre_existing = key in original_keys
 
-        if is_pre_existing:
-            if line_near_changed_ranges(issue.line, changed_ranges):
-                filtered.append(issue)
-        else:
+        if not is_pre_existing:
             filtered.append(issue)
 
     return filtered

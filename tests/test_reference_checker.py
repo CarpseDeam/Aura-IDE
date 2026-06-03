@@ -231,3 +231,25 @@ def test_nested_try_except_aliases(tmp_workspace: Path):
         for issue in issues
         for name in ("inner_err", "outer_err")
     )
+
+
+def test_builtin_open_does_not_resolve_to_unrelated_workspace_method(tmp_workspace: Path):
+    rc = ReferenceChecker()
+    drawer_dir = tmp_workspace / "aura" / "gui"
+    drawer_dir.mkdir(parents=True)
+    (drawer_dir / "terminal_drawer.py").write_text(
+        "class TerminalDrawer:\n"
+        "    def open(self):\n"
+        "        pass\n"
+    )
+    target = tmp_workspace / "aura" / "updater.py"
+    code = (
+        "def write_payload(path, payload):\n"
+        "    with open(path, \"wb\") as handle:\n"
+        "        handle.write(payload)\n"
+    )
+
+    issues = rc.check(MockCapsule(proposed_code=code, path=target), workspace_root=tmp_workspace)
+
+    assert not any(issue.code == "call-signature" and "TerminalDrawer.open" in issue.message for issue in issues)
+    assert not any(issue.code == "call-signature" and "open" in issue.message for issue in issues)

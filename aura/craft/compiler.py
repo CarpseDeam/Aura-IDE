@@ -1,6 +1,6 @@
 from __future__ import annotations
 import ast
-from .types import ProposalCapsule, CraftIssue, CompiledPatch, CompilerBounce, CompilerReject, CraftDecision, filter_delta_issues
+from .types import ProposalCapsule, CraftIssue, CraftIssueSeverity, CompiledPatch, CompilerBounce, CompilerReject, CraftDecision, filter_delta_issues
 from .engine import CraftEngine
 from .contract_gate import ContractGate
 import dataclasses
@@ -76,6 +76,7 @@ class CompilerService:
             "failure_class": "",
             "write_outcome": "",
             "checks_warned": [],
+            "craft_warnings": [],
         }
 
         # Stage 0: SafeMutator
@@ -86,10 +87,16 @@ class CompilerService:
                 capsule.ast_tree = ast.parse(cleaned)
             except SyntaxError:
                 pass
+        elif capsule.ast_tree is None:
+            try:
+                capsule.ast_tree = ast.parse(capsule.proposed_code)
+            except SyntaxError:
+                pass
                 
         # Stage 1: Existing CraftEngine checks
         decision = self._engine.process_proposal(capsule)
         decision.metadata.update(metadata)
+        decision = self._downgrade_soft_decision(decision)
         if any(issue.code == "syntax-error" for issue in decision.issues):
             decision.metadata.update(
                 {
@@ -129,6 +136,7 @@ class CompilerService:
                         "write_outcome": "not_applied_craft_rejected",
                     }
                 )
+                decision = self._downgrade_soft_decision(decision)
 
         # Stage 3: Reference Validation
         proposed_ref_issues = self._ref_checker.check(capsule, workspace_root=workspace_root)
@@ -165,27 +173,35 @@ class CompilerService:
                     set(decision.metadata.get("checks_warned", [])) | {"reference_checker"}
                 )
             if filtered_ref_issues:
-                decision.metadata["introduced_environment_issues"] = [
-                    _issue_payload(issue) for issue in filtered_ref_issues
-                ]
-                decision.metadata["failure_class"] = "introduced_environment_issue"
-                decision.metadata["write_outcome"] = "not_applied_craft_rejected"
+                hard_ref_issues = [issue for issue in filtered_ref_issues if issue.severity == CraftIssueSeverity.HARD]
+                soft_ref_issues = [issue for issue in filtered_ref_issues if issue.severity == CraftIssueSeverity.SOFT]
+                if soft_ref_issues:
+                    _record_warnings(decision.metadata, soft_ref_issues, "reference_checker")
+                if hard_ref_issues:
+                    decision.metadata["introduced_environment_issues"] = [
+                        _issue_payload(issue) for issue in hard_ref_issues
+                    ]
+                    decision.metadata["failure_class"] = "introduced_environment_issue"
+                    decision.metadata["write_outcome"] = "not_applied_craft_rejected"
 
             # Merge filtered reference issues into the decision
             if filtered_ref_issues:
+                hard_ref_issues = [issue for issue in filtered_ref_issues if issue.severity == CraftIssueSeverity.HARD]
                 if decision.approved:
-                    decision = CraftDecision(
-                        approved=False,
-                        issues=filtered_ref_issues,
-                        cleaned_code=capsule.proposed_code,
-                        metadata=dict(decision.metadata),
-                    )
-                else:
+                    if hard_ref_issues:
+                        decision = CraftDecision(
+                            approved=False,
+                            issues=hard_ref_issues,
+                            cleaned_code=capsule.proposed_code,
+                            metadata=dict(decision.metadata),
+                        )
+                elif hard_ref_issues:
                     existing_issues_set = {(issue.code, issue.line) for issue in decision.issues}
-                    for new_issue in filtered_ref_issues:
+                    for new_issue in hard_ref_issues:
                         if (new_issue.code, new_issue.line) not in existing_issues_set:
                             decision.issues.append(new_issue)
                             existing_issues_set.add((new_issue.code, new_issue.line))
+                decision = self._downgrade_soft_decision(decision)
                         
         # Final Stage: CodeFormatter
         if decision.approved:
@@ -195,6 +211,25 @@ class CompilerService:
             else:
                 decision.metadata["write_outcome"] = "applied"
         
+        return decision
+
+    def _downgrade_soft_decision(self, decision: CraftDecision) -> CraftDecision:
+        soft_issues = [issue for issue in decision.issues if issue.severity == CraftIssueSeverity.SOFT]
+        hard_issues = [issue for issue in decision.issues if issue.severity == CraftIssueSeverity.HARD]
+        if soft_issues:
+            _record_warnings(decision.metadata, soft_issues, "craft_engine")
+        if decision.approved or hard_issues:
+            decision.issues = hard_issues
+            decision.approved = not hard_issues
+            return decision
+
+        decision.issues = []
+        decision.approved = True
+        decision.metadata["quality_bounce"] = False
+        if decision.metadata.get("failure_class") == "quality_bounce":
+            decision.metadata["failure_class"] = ""
+        if decision.metadata.get("write_outcome") == "not_applied_craft_rejected":
+            decision.metadata["write_outcome"] = ""
         return decision
     
     def _build_repair_instructions(self, issues: list[CraftIssue]) -> str:
@@ -225,6 +260,30 @@ def _issue_payload(issue: CraftIssue) -> dict:
         "suggestion": getattr(issue, "suggestion", ""),
         "severity": getattr(severity, "value", str(severity)),
     }
+
+
+def _record_warnings(metadata: dict, issues: list[CraftIssue], check_name: str) -> None:
+    if not issues:
+        return
+    existing = {
+        (
+            item.get("code"),
+            item.get("line"),
+            item.get("column"),
+            item.get("message"),
+        )
+        for item in metadata.get("craft_warnings", [])
+        if isinstance(item, dict)
+    }
+    warnings = list(metadata.get("craft_warnings", []))
+    for issue in issues:
+        payload = _issue_payload(issue)
+        key = (payload.get("code"), payload.get("line"), payload.get("column"), payload.get("message"))
+        if key not in existing:
+            warnings.append(payload)
+            existing.add(key)
+    metadata["craft_warnings"] = warnings
+    metadata["checks_warned"] = sorted(set(metadata.get("checks_warned", [])) | {check_name})
 
 # Module-level singleton
 compiler_service = CompilerService()

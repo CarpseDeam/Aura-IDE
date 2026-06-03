@@ -41,7 +41,7 @@ def test_pre_existing_issues_filtered_outside_changed_ranges(compiler):
     result = compiler.process_proposal(cap)
     assert result.__class__.__name__ == "CompiledPatch", f"Expected CompiledPatch, got {result.__class__.__name__} with issues: {getattr(result, 'issues', [])}"
 
-def test_pre_existing_issue_near_changes_blocks(compiler):
+def test_pre_existing_issue_near_changes_warns(compiler):
     original_code = "def foo():\n    return undefined_var\n"
     proposed_code = "def foo():\n    print('added')\n    return undefined_var\n"
     
@@ -64,9 +64,9 @@ def test_pre_existing_issue_near_changes_blocks(compiler):
     )
     
     result = compiler.process_proposal(cap)
-    assert result.__class__.__name__ == "CompilerBounce"
-    assert len(result.issues) == 1
-    assert result.issues[0].code == "undefined-name"
+    assert result.__class__.__name__ == "CompiledPatch"
+    assert result.metadata["pre_existing_environment_issues"][0]["code"] == "undefined-name"
+    assert "reference_checker" in result.checks_warned
 
 def test_new_issues_block(compiler):
     original_code = "def foo():\n    return True\n"
@@ -92,6 +92,38 @@ def test_new_issues_block(compiler):
     assert result.__class__.__name__ == "CompilerBounce"
     assert len(result.issues) == 1
     assert result.issues[0].code == "undefined-name"
+
+def test_soft_issues_warn_without_compiler_bounce(compiler):
+    original_code = "def foo():\n    return True\n"
+    proposed_code = "def foo():\n    return True\n\ndef bar():\n    return True\n"
+
+    issue = CraftIssue(
+        line=4,
+        column=0,
+        code="call-signature",
+        message="Low-confidence signature concern.",
+        suggestion="Review the call.",
+        severity=CraftIssueSeverity.SOFT,
+    )
+    compiler._ref_checker.mock_issues[original_code] = []
+    compiler._ref_checker.mock_issues[proposed_code] = [issue]
+
+    import ast
+    cap = ProposalCapsule(
+        path=Path("test.py"),
+        language="python",
+        tool_name="test",
+        original_code=original_code,
+        proposed_code=proposed_code,
+        changed_line_ranges=[(4, 6)],
+        is_new_file=False,
+        ast_tree=ast.parse(proposed_code)
+    )
+
+    result = compiler.process_proposal(cap)
+    assert result.__class__.__name__ == "CompiledPatch"
+    assert "reference_checker" in result.checks_warned
+    assert result.metadata["craft_warnings"][0]["code"] == "call-signature"
 
 def test_new_files_block_on_all(compiler):
     proposed_code = "def foo():\n    return undefined_var\n"

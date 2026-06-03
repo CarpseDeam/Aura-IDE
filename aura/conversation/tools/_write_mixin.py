@@ -375,6 +375,10 @@ def _run_compiler_pipeline(proposal: dict, tool_name: str, contract: ExplicitSpe
             proposal["new_content"] = result.cleaned_code
             proposal["craft_metadata"] = dict(result.metadata)
             proposal["write_outcome"] = str(result.metadata.get("write_outcome") or "applied")
+            if result.checks_warned:
+                proposal["checks_warned"] = list(result.checks_warned)
+            if result.metadata.get("craft_warnings"):
+                proposal["craft_warnings"] = result.metadata.get("craft_warnings")
             if result.metadata.get("pre_existing_environment_issues"):
                 proposal["pre_existing_environment_issues"] = result.metadata.get("pre_existing_environment_issues")
             return None
@@ -980,6 +984,10 @@ class WriteHandlersMixin:
         }
         if proposal.get("pre_existing_environment_issues"):
             payload["pre_existing_environment_issues"] = proposal.get("pre_existing_environment_issues")
+        if proposal.get("checks_warned"):
+            payload["checks_warned"] = proposal.get("checks_warned")
+        if proposal.get("craft_warnings"):
+            payload["craft_warnings"] = proposal.get("craft_warnings")
         if proposal.get("craft_metadata"):
             payload["craft_metadata"] = proposal.get("craft_metadata")
         if name == "edit_line_range":

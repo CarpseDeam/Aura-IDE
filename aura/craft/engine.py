@@ -505,7 +505,7 @@ class CraftEngine:
             code="destructive_operation",
             message=f"{label} call in new Aura-owned file. Destructive filesystem operations require explicit specification.",
             suggestion="Remove the destructive operation unless the task explicitly requires it.",
-            severity=CraftIssueSeverity.SOFT,
+            severity=CraftIssueSeverity.HARD,
         )
 
     def _check_extra_public_api(self, tree: ast.AST, capsule: ProposalCapsule) -> list[CraftIssue]:
@@ -610,7 +610,7 @@ class CraftEngine:
                     code="forbidden_public_method",
                     message=f"Function '{node.name}' is not allowed in this context.",
                     suggestion=f"Remove '{node.name}' or rename it.",
-                    severity=CraftIssueSeverity.SOFT,
+                    severity=CraftIssueSeverity.HARD,
                 ))
         return issues
 
@@ -641,7 +641,7 @@ class CraftEngine:
                     code="forbidden_call",
                     message=f"Call to '{name}' is not allowed in this context.",
                     suggestion=f"Remove the call to '{name}'.",
-                    severity=CraftIssueSeverity.SOFT,
+                    severity=CraftIssueSeverity.HARD,
                 ))
         return issues
 

@@ -35,6 +35,8 @@ _MODULE_GLOBALS = frozenset({
     "__builtins__",
 })
 
+_BUILTIN_NAMES = frozenset(dir(builtins))
+
 def _is_skip_dir(name: str) -> bool:
     return name in _SKIP_DIRS
 
@@ -386,60 +388,102 @@ class ReferenceChecker:
         imported_names: dict[str, str],
     ) -> list[CraftIssue]:
         issues: list[CraftIssue] = []
+        local_functions, local_classes, instance_types = self._collect_local_call_context(tree, imported_names)
 
         for node in ast.walk(tree):
             if isinstance(node, ast.Call):
-                issue = self._check_single_call(node, local_defs, imported_names)
+                issue = self._check_single_call(
+                    node,
+                    local_defs,
+                    imported_names,
+                    local_functions,
+                    local_classes,
+                    instance_types,
+                )
                 if issue:
                     issues.append(issue)
 
             elif isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load):
-                issue = self._check_attribute(node, local_defs, imported_names)
+                issue = self._check_attribute(node, imported_names, local_classes, instance_types)
                 if issue:
                     issues.append(issue)
 
         return issues
+
+    def _collect_local_call_context(
+        self,
+        tree: ast.Module,
+        imported_names: dict[str, str],
+    ) -> tuple[dict[str, _FuncSig], dict[str, _ClassInfo], dict[str, str]]:
+        local_functions: dict[str, _FuncSig] = {}
+        local_classes: dict[str, _ClassInfo] = {}
+        instance_types: dict[str, str] = {}
+
+        for node in ast.iter_child_nodes(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                local_functions[node.name] = self._extract_signature(node)
+            elif isinstance(node, ast.ClassDef):
+                local_classes[node.name] = self._extract_class_info(node)
+
+        class_names = set(local_classes)
+        class_names.update(name for name, target in imported_names.items() if self._find_class(target) is not None)
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Assign):
+                continue
+            if not isinstance(node.value, ast.Call):
+                continue
+            cls_name = self._class_name_from_constructor(node.value.func, imported_names, local_classes)
+            if cls_name is None or cls_name not in class_names:
+                continue
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    instance_types[target.id] = cls_name
+
+        return local_functions, local_classes, instance_types
 
     def _resolve_callee(
         self,
         func_node: ast.expr,
         local_defs: set[str],
         imported_names: dict[str, str],
-    ) -> tuple[str | None, str | None]:
-        """Resolve a call target to (module_path, symbol_name) if possible.
+        local_functions: dict[str, _FuncSig],
+        local_classes: dict[str, _ClassInfo],
+        instance_types: dict[str, str],
+    ) -> tuple[str | None, str | None, _FuncSig | None]:
+        """Resolve a call target to (module_path, symbol_name, signature) if possible.
 
-        Returns (None, None) when we cannot resolve to a workspace symbol.
+        Returns (None, None, None) when we cannot resolve with high confidence.
         """
         if isinstance(func_node, ast.Name):
             name = func_node.id
-            if name in local_defs:
-                return None, None  # local, not in workspace index
+            if name in _BUILTIN_NAMES:
+                return None, None, None
+            if name in local_functions:
+                return None, name, local_functions[name]
+            if name in local_classes:
+                return None, name, local_classes[name].methods.get("__init__")
             if name in imported_names:
                 full = imported_names[name]
                 parts = full.rsplit(".", 1)
                 if len(parts) == 2:
-                    return parts[0], parts[1]
-                return None, parts[0]
-            # Bare name not imported — try workspace modules
-            if self._workspace_functions:
-                for key in self._workspace_functions:
-                    if key.endswith(f".{name}") or key == name:
-                        parts = key.rsplit(".", 1)
-                        if len(parts) == 2:
-                            return parts[0], parts[1]
-                        return None, parts[0]
-            return None, None
+                    return parts[0], parts[1], None
+                return None, parts[0], None
+            if name in local_defs:
+                return None, None, None
+            return None, None, None
 
         elif isinstance(func_node, ast.Attribute):
-            # obj.method() — try to resolve obj to a known class
-            obj_name = self._resolve_obj_name(func_node.value)
-            if obj_name and self._workspace_classes:
-                for cls_key, cls_info in self._workspace_classes.items():
-                    if cls_key.endswith(f".{obj_name}") or cls_key == obj_name:
-                        return cls_key, func_node.attr
-            return None, None
+            if isinstance(func_node.value, ast.Name):
+                imported_target = imported_names.get(func_node.value.id)
+                if imported_target and f"{imported_target}.{func_node.attr}" in self._workspace_functions:
+                    return imported_target, func_node.attr, None
+            cls_info = self._resolve_attribute_owner(func_node.value, imported_names, local_classes, instance_types)
+            if cls_info is not None:
+                return cls_info.name, func_node.attr, cls_info.methods.get(func_node.attr)
+            return None, None, None
 
-        return None, None
+        return None, None, None
 
     @staticmethod
     def _resolve_obj_name(node: ast.expr) -> str | None:
@@ -455,13 +499,23 @@ class ReferenceChecker:
         call_node: ast.Call,
         local_defs: set[str],
         imported_names: dict[str, str],
+        local_functions: dict[str, _FuncSig],
+        local_classes: dict[str, _ClassInfo],
+        instance_types: dict[str, str],
     ) -> CraftIssue | None:
-        module_path, symbol = self._resolve_callee(call_node.func, local_defs, imported_names)
+        module_path, symbol, resolved_sig = self._resolve_callee(
+            call_node.func,
+            local_defs,
+            imported_names,
+            local_functions,
+            local_classes,
+            instance_types,
+        )
         if module_path is None and symbol is None:
             return None
 
         # Look up the function signature
-        sig = self._find_signature(module_path, symbol)
+        sig = resolved_sig or self._find_signature(module_path, symbol)
         if sig is None:
             return None
 
@@ -550,41 +604,65 @@ class ReferenceChecker:
             key = f"{module_path}.{symbol}"
             if key in self._workspace_functions:
                 return self._workspace_functions[key]
-
-        # Try bare symbol across all modules
-        for key, sig in self._workspace_functions.items():
-            if key.endswith(f".{symbol}") or key == symbol:
-                return sig
-
-        if module_path:
             cls_key = f"{module_path}.{symbol}"
             if cls_key in self._workspace_classes:
                 return self._workspace_classes[cls_key].methods.get("__init__")
-        else:
-            for cls_key, cls_info in self._workspace_classes.items():
-                if cls_key.endswith(f".{symbol}") or cls_key == symbol:
-                    return cls_info.methods.get("__init__")
+            return None
 
+        return None
+
+    def _find_class(self, full_name: str) -> _ClassInfo | None:
+        if full_name in self._workspace_classes:
+            return self._workspace_classes[full_name]
+        return None
+
+    def _class_name_from_constructor(
+        self,
+        func_node: ast.expr,
+        imported_names: dict[str, str],
+        local_classes: dict[str, _ClassInfo],
+    ) -> str | None:
+        if not isinstance(func_node, ast.Name):
+            return None
+        name = func_node.id
+        if name in local_classes:
+            return name
+        if name in imported_names and self._find_class(imported_names[name]) is not None:
+            return name
+        return None
+
+    def _resolve_attribute_owner(
+        self,
+        value_node: ast.expr,
+        imported_names: dict[str, str],
+        local_classes: dict[str, _ClassInfo],
+        instance_types: dict[str, str],
+    ) -> _ClassInfo | None:
+        if not isinstance(value_node, ast.Name):
+            return None
+        name = value_node.id
+        if name in local_classes:
+            return local_classes[name]
+        if name in instance_types:
+            cls_name = instance_types[name]
+            if cls_name in local_classes:
+                return local_classes[cls_name]
+            imported_full = imported_names.get(cls_name)
+            if imported_full:
+                return self._find_class(imported_full)
+        if name in imported_names:
+            return self._find_class(imported_names[name])
         return None
 
     def _check_attribute(
         self,
         attr_node: ast.Attribute,
-        local_defs: set[str],
         imported_names: dict[str, str],
+        local_classes: dict[str, _ClassInfo],
+        instance_types: dict[str, str],
     ) -> CraftIssue | None:
         """Check that obj.attr exists when obj resolves to a known workspace class."""
-        obj_name = self._resolve_obj_name(attr_node.value)
-        if obj_name is None:
-            return None
-
-        # Find the class in workspace index
-        cls_info = None
-        for cls_key, ci in self._workspace_classes.items():
-            if cls_key.endswith(f".{obj_name}") or cls_key == obj_name:
-                cls_info = ci
-                break
-
+        cls_info = self._resolve_attribute_owner(attr_node.value, imported_names, local_classes, instance_types)
         if cls_info is None:
             return None
 
@@ -604,7 +682,7 @@ class ReferenceChecker:
             line=attr_node.lineno,
             column=attr_node.col_offset,
             code="missing-attribute",
-            message=f"Class '{obj_name}' has no attribute '{attr}'.",
+            message=f"Class '{cls_info.name}' has no attribute '{attr}'.",
             suggestion="Check the attribute name or define it on the class.",
             severity=CraftIssueSeverity.HARD,
         )
