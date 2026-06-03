@@ -36,6 +36,8 @@ Aura has been **heavily dogfooded on its own codebase** — it wrote most of its
 
 If you find Aura useful, consider starring the repo to help others discover it.
 
+[![Support Aura](https://img.shields.io/badge/Buy%20me%20a%20coffee-support%20Aura-yellow?logo=buymeacoffee)](https://buymeacoffee.com/snowballkori)
+
 ---
 
 ## Table of Contents
