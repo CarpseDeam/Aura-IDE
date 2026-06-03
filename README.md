@@ -412,7 +412,7 @@ Aura stores a searchable history of past tasks and saved notes in a local SQLite
 
 Aura can update itself automatically:
 
-- **Packaged Windows Builds** — Aura checks GitHub Releases on startup. If a newer version is available, the "Update" button in the toolbar is highlighted. One click downloads the latest release ZIP and installs it via an external updater script.
+- **Packaged Windows Builds** — Aura checks GitHub Releases on startup. If a newer version is available, the "Update" button in the toolbar is highlighted. One click downloads the latest installer (`AuraSetup-X.Y.Z.exe`), launches it silently, and Aura exits. The installer replaces the app files and relaunches Aura. No admin rights are required — Aura installs per-user into `%LOCALAPPDATA%\Aura`.
 - **Source Installations** — If running from a git checkout, Aura can pull the latest changes directly from the repository using a fast-forward merge.
 - **Update status check** — The toolbar shows when a newer version is available.
 - **Safety** — The updater never touches your workspaces, `.aura` project folders, or user configuration.
@@ -501,6 +501,14 @@ MCP tools are available in all conversation modes (Planner, Worker, Single, and 
 - (Optional) [Ollama](https://ollama.com/) running locally with `llama3.2-vision` for screenshot preprocessing
 - (Optional) [Git](https://git-scm.com/) for auto-commit and `/undo` support
 - (Optional) [Docker](https://docker.com/) for sandboxed execution mode
+
+### Windows Installer (Recommended)
+
+Download the latest `AuraSetup-X.Y.Z.exe` from the [Releases](https://github.com/CarpseDeam/Aura-IDE/releases) page.
+
+Run the installer — no admin rights needed. Aura installs per-user to `%LOCALAPPDATA%\Aura`, with a Start Menu shortcut. The installer can launch Aura when finished.
+
+To update, use Aura's in-app update button, or download the new installer from Releases and run it.
 
 ### Install From Source
 
@@ -785,6 +793,9 @@ aura/
         ├── terminal_card.py
         ├── tool_call_card.py
         └── user_card.py
+scripts/
+├── installer/
+│   └── Aura.iss          # Inno Setup script for Windows installer
 ```
 
 ---
@@ -823,13 +834,23 @@ python scripts/smoke_client.py
 ### Build Options
 
 ```bash
-python scripts/build_exe.py     # Build a standalone executable (PyInstaller)
-python scripts/build_nuitka.py  # Build with Nuitka using the current version
+python scripts/build_nuitka.py           # Build with Nuitka (ZIP only)
+python scripts/build_nuitka.py --installer  # Build with Nuitka + Windows installer
 ```
 
 ### Release Process
 
-To publish a Windows release, bump `aura/version.py`, `pyproject.toml`, and the README version badge, then run `python scripts/build_nuitka.py`. Create a GitHub Release tagged `vX.Y.Z` and manually upload `build/Aura-Windows-x64.zip`.
+To publish a Windows release, bump `aura/version.py`, `pyproject.toml`, and the README version badge, then run:
+
+```bash
+python scripts/build_nuitka.py --installer
+```
+
+This produces:
+- `build/AuraSetup-X.Y.Z.exe` — the installer (primary release asset)
+- `build/Aura-Windows-x64.zip` — portable archive (optional fallback)
+
+Create a GitHub Release tagged `vX.Y.Z` and upload both artifacts. The installer asset name must match the pattern `AuraSetup-X.Y.Z.exe` for the in-app updater to detect it.
 
 ### Requirements
 
