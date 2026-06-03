@@ -1,8 +1,11 @@
 """Updater logic for Aura, supporting both Git source installs and packaged releases."""
+
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -55,7 +58,7 @@ class GitHubRelease:
     html_url: str
 
     @property
-    def packaged_asset(self) -> GitHubAsset | None:
+    def zip_asset(self) -> GitHubAsset | None:
         """Find a ZIP asset likely to be the Windows packaged app."""
         # Prefer exact match
         for asset in self.assets:
@@ -71,6 +74,51 @@ class GitHubRelease:
             if name.endswith(".zip") and ("windows" in name or "win" in name or "aura" in name):
                 return asset
         return None
+
+    @property
+    def installer_asset(self) -> GitHubAsset | None:
+        """Find an installer executable asset for this release."""
+        # 1. Exact match for AuraSetup-{version}.exe
+        exact_name = f"AuraSetup-{self.version}.exe"
+        for asset in self.assets:
+            if asset.name == exact_name:
+                return asset
+        # 2. Regex patterns matching common installer naming conventions
+        patterns = [
+            r"AuraSetup-\d+\.\d+\.\d+\.exe",
+            r"Aura-Setup-\d+\.\d+\.\d+\.exe",
+            r"AuraInstaller-\d+\.\d+\.\d+\.exe",
+        ]
+        for asset in self.assets:
+            for pat in patterns:
+                if re.match(pat + "$", asset.name):
+                    return asset
+        # 3. Fallback: any .exe starting with "Aura" containing "Setup" or "Installer"
+        for asset in self.assets:
+            name = asset.name
+            if name.endswith(".exe") and name.startswith("Aura"):
+                lower = name.lower()
+                if "setup" in lower or "installer" in lower:
+                    return asset
+        return None
+
+    @property
+    def installer_checksum_url(self) -> str | None:
+        """URL of a companion SHA-256 checksum file for the installer asset, if any."""
+        if self.installer_asset is None:
+            return None
+        base = self.installer_asset.name
+        for suffix in (".sha256", ".sha256sum"):
+            companion_name = base + suffix
+            for asset in self.assets:
+                if asset.name == companion_name:
+                    return asset.url
+        return None
+
+    @property
+    def packaged_asset(self) -> GitHubAsset | None:
+        """Deprecated: use installer_asset or zip_asset instead."""
+        return self.installer_asset or self.zip_asset
 
 
 UpdateState = Literal[
@@ -115,6 +163,7 @@ class UpdateStatus:
     latest_version: str | None = None
     release: GitHubRelease | None = None
     is_packaged: bool = False
+    has_installer_asset: bool = False
 
     @property
     def can_install(self) -> bool:
@@ -122,7 +171,7 @@ class UpdateStatus:
         return (
             self.is_packaged
             and self.release is not None
-            and self.release.packaged_asset is not None
+            and self.release.installer_asset is not None
             and self.state == "behind"
         )
 
@@ -215,14 +264,22 @@ def _get_packaged_update_status(
 
     if latest_v > current_v:
         state: UpdateState = "behind"
-        asset = release.packaged_asset
-        if asset:
+        if release.installer_asset is not None:
             message = f"A newer version of Aura is available: {release.tag}"
+            has_installer_asset = True
+        elif release.zip_asset is not None:
+            message = (
+                f"Version {release.tag} is available, but no installer was found for "
+                f"this release. You can download it manually or use the legacy ZIP update."
+            )
+            has_installer_asset = False
         else:
-            message = f"Version {release.tag} is available, but no Windows ZIP asset was found."
+            message = f"Version {release.tag} is available, but no Windows asset was found."
+            has_installer_asset = False
     else:
         state = "up_to_date"
         message = "Aura is up to date."
+        has_installer_asset = False
 
     return UpdateStatus(
         repo_root=None,
@@ -233,6 +290,7 @@ def _get_packaged_update_status(
         current_version=__version__,
         latest_version=release.version,
         release=release,
+        has_installer_asset=has_installer_asset,
     )
 
 
@@ -258,135 +316,180 @@ def find_extracted_app_root(staging_dir: Path) -> Path:
 def install_packaged_update(
     release: GitHubRelease,
     output_callback: Callable[[str], None] | None = None,
+    prefer_installer: bool = True,
 ) -> PullResult:
-    """Download and install a packaged update."""
-    asset = release.packaged_asset
-    if not asset:
-        msg = "No compatible packaged ZIP asset found in the latest release."
-        return PullResult(False, None, message=msg, error=msg)
+    """Download and install a packaged update, preferring installer when available."""
 
-    temp_dir = Path(tempfile.mkdtemp(prefix="aura-update-"))
-    try:
-        zip_path = temp_dir / asset.name
+    # --- Installer-based update path ---
+    if prefer_installer and release.installer_asset is not None:
+        temp_dir = Path(tempfile.mkdtemp(prefix="aura-update-"))
+        try:
+            installer_path = _download_asset(release.installer_asset, temp_dir, output_callback)
+
+            # Optional checksum verification
+            checksum_url = release.installer_checksum_url
+            if checksum_url:
+                if output_callback:
+                    output_callback("Verifying installer checksum...")
+                checksum_asset = GitHubAsset(
+                    name=release.installer_asset.name + ".sha256",
+                    url=checksum_url,
+                    size=0,
+                )
+                checksum_path = _download_asset(checksum_asset, temp_dir, output_callback)
+                content = checksum_path.read_text(encoding="utf-8").strip()
+                expected_sha256 = content.split()[0] if content else ""
+                if not _verify_checksum(installer_path, expected_sha256):
+                    msg = "Installer checksum verification failed. The download may be corrupted."
+                    return PullResult(False, None, message=msg, error=msg)
+
+            launched = _launch_installer(installer_path, output_callback)
+            if not launched:
+                msg = "Failed to launch the installer."
+                return PullResult(False, None, message=msg, error=msg)
+
+            if output_callback:
+                output_callback("Installer launched. Aura will now exit to complete the update.")
+            return PullResult(True, None, message="Installer launched. Quitting Aura...")
+        except Exception as exc:
+            logger.exception("Installer update failed")
+            return PullResult(False, None, message=f"Installer update failed: {exc}", error=str(exc))
+
+    # --- Legacy ZIP fallback path ---
+    asset = release.zip_asset
+    if asset is not None:
         if output_callback:
-            output_callback(f"Downloading {asset.name}...")
+            output_callback("No installer found; falling back to legacy ZIP update mechanism.")
 
-        with httpx.Client(follow_redirects=True, timeout=300) as client:
-            with client.stream("GET", asset.url) as resp:
-                resp.raise_for_status()
-                with open(zip_path, "wb") as f:
-                    for chunk in resp.iter_bytes():
-                        f.write(chunk)
+        temp_dir = Path(tempfile.mkdtemp(prefix="aura-update-"))
+        try:
+            zip_path = temp_dir / asset.name
+            if output_callback:
+                output_callback(f"Downloading {asset.name}...")
 
-        if output_callback:
-            output_callback("Extracting update...")
+            with httpx.Client(follow_redirects=True, timeout=300) as client:
+                with client.stream("GET", asset.url) as resp:
+                    resp.raise_for_status()
+                    with open(zip_path, "wb") as f:
+                        for chunk in resp.iter_bytes():
+                            f.write(chunk)
 
-        extract_dir = temp_dir / "extracted"
-        extract_dir.mkdir(parents=True, exist_ok=True)
-        with zipfile.ZipFile(zip_path, "r") as zip_ref:
-            for member in zip_ref.infolist():
-                member_path = Path(member.filename)
-                if member_path.is_absolute() or ".." in member_path.parts:
-                    logger.warning("Skipping unsafe zip member: %s", member.filename)
-                    continue
-                
-                target = (extract_dir / member.filename).resolve()
-                try:
-                    if not target.is_relative_to(extract_dir.resolve()):
+            if output_callback:
+                output_callback("Extracting update...")
+
+            extract_dir = temp_dir / "extracted"
+            extract_dir.mkdir(parents=True, exist_ok=True)
+            with zipfile.ZipFile(zip_path, "r") as zip_ref:
+                for member in zip_ref.infolist():
+                    member_path = Path(member.filename)
+                    if member_path.is_absolute() or ".." in member_path.parts:
+                        logger.warning("Skipping unsafe zip member: %s", member.filename)
+                        continue
+
+                    target = (extract_dir / member.filename).resolve()
+                    try:
+                        if not target.is_relative_to(extract_dir.resolve()):
+                            logger.warning("Skipping zip member escaping extract_dir: %s", member.filename)
+                            continue
+                    except ValueError:
                         logger.warning("Skipping zip member escaping extract_dir: %s", member.filename)
                         continue
-                except ValueError:
-                    logger.warning("Skipping zip member escaping extract_dir: %s", member.filename)
-                    continue
-                    
-                zip_ref.extract(member, extract_dir)
 
-        try:
-            new_app_dir = find_extracted_app_root(extract_dir)
-        except RuntimeError as exc:
-            return PullResult(False, None, message=str(exc), error=str(exc))
-
-        current_app_dir = get_current_app_dir()
-        
-        # --- Strict Validation before Robocopy ---
-        if not current_app_dir.exists():
-            return PullResult(False, None, message="Current app directory does not exist.")
-        if not (current_app_dir / "Aura.exe").exists() or not (current_app_dir / "media").exists():
-            return PullResult(False, None, message="Current app is missing critical files (Aura.exe or media folder).")
-            
-        has_runtime_marker = any(
-            (current_app_dir / marker).exists()
-            for marker in (
-                "PySide6",
-                "qt.conf",
-                "python3.dll",
-                "python310.dll",
-                "python311.dll",
-                "python312.dll",
-            )
-        )
-        if not has_runtime_marker:
-            return PullResult(False, None, message="Current app directory lacks expected packaged runtime markers.")
-            
-        current_name = current_app_dir.name.lower()
-        if current_name != "aura.dist" and "aura" not in current_name:
-            return PullResult(False, None, message="Current app directory does not look like a packaged Aura install.")
-            
-        home_dir = Path.home().resolve()
-        temp_root = Path(tempfile.gettempdir()).resolve()
-        curr_resolved = current_app_dir.resolve()
-        if curr_resolved == home_dir or curr_resolved == temp_root or curr_resolved.parent == curr_resolved:
-            return PullResult(False, None, message="Current app directory is a protected system directory.")
-            
-        if not (new_app_dir / "Aura.exe").exists() or not (new_app_dir / "media").exists():
-            return PullResult(False, None, message="Extracted update is missing critical files.")
-            
-        try:
-            if not new_app_dir.resolve().is_relative_to(temp_dir.resolve()):
-                return PullResult(False, None, message="Extracted update is outside the temporary directory.")
-        except ValueError:
-            return PullResult(False, None, message="Extracted update is outside the temporary directory.")
-        # -----------------------------------------
-
-        if sys.platform == "win32":
-            current_exe = Path(sys.executable).resolve()
-            updater_exe = get_windows_updater_helper(current_app_dir)
-            cmd = _build_windows_updater_command(
-                updater_exe,
-                new_app_dir,
-                current_app_dir,
-                current_exe,
-                os.getpid(),
-            )
-
-            if output_callback:
-                output_callback(f"Found new version in {new_app_dir}")
-                output_callback("Launching external updater...")
+                    zip_ref.extract(member, extract_dir)
 
             try:
-                _launch_windows_updater(
-                    updater_exe=updater_exe,
-                    argv=cmd,
-                    extracted_dir=new_app_dir,
-                    install_dir=current_app_dir,
-                    output_callback=output_callback,
+                new_app_dir = find_extracted_app_root(extract_dir)
+            except RuntimeError as exc:
+                return PullResult(False, None, message=str(exc), error=str(exc))
+
+            current_app_dir = get_current_app_dir()
+
+            # --- Strict Validation before Robocopy ---
+            if not current_app_dir.exists():
+                return PullResult(False, None, message="Current app directory does not exist.")
+            if not (current_app_dir / "Aura.exe").exists() or not (current_app_dir / "media").exists():
+                return PullResult(
+                    False, None, message="Current app is missing critical files (Aura.exe or media folder)."
                 )
-            except Exception as exc:
-                attempted = _format_update_launch_details(updater_exe, cmd)
-                msg = f"Failed to launch updater: {exc}\n{attempted}"
-                logger.exception("Packaged updater launch failed\n%s", attempted)
-                return PullResult(False, None, message=msg, error=str(exc))
 
-            if output_callback:
-                output_callback("Aura will now exit to complete the update.")
-            return PullResult(True, None, message="Update helper launched. Quitting Aura...")
-        else:
-            msg = "Packaged updates are currently only supported on Windows."
-            return PullResult(False, None, message=msg, error=msg)
+            has_runtime_marker = any(
+                (current_app_dir / marker).exists()
+                for marker in (
+                    "PySide6",
+                    "qt.conf",
+                    "python3.dll",
+                    "python310.dll",
+                    "python311.dll",
+                    "python312.dll",
+                )
+            )
+            if not has_runtime_marker:
+                return PullResult(False, None, message="Current app directory lacks expected packaged runtime markers.")
 
-    except Exception as exc:
-        logger.exception("Packaged update failed")
-        return PullResult(False, None, message=f"Update failed: {exc}", error=str(exc))
+            current_name = current_app_dir.name.lower()
+            if current_name != "aura.dist" and "aura" not in current_name:
+                return PullResult(
+                    False, None, message="Current app directory does not look like a packaged Aura install."
+                )
+
+            home_dir = Path.home().resolve()
+            temp_root = Path(tempfile.gettempdir()).resolve()
+            curr_resolved = current_app_dir.resolve()
+            if curr_resolved == home_dir or curr_resolved == temp_root or curr_resolved.parent == curr_resolved:
+                return PullResult(False, None, message="Current app directory is a protected system directory.")
+
+            if not (new_app_dir / "Aura.exe").exists() or not (new_app_dir / "media").exists():
+                return PullResult(False, None, message="Extracted update is missing critical files.")
+
+            try:
+                if not new_app_dir.resolve().is_relative_to(temp_dir.resolve()):
+                    return PullResult(False, None, message="Extracted update is outside the temporary directory.")
+            except ValueError:
+                return PullResult(False, None, message="Extracted update is outside the temporary directory.")
+
+            if sys.platform == "win32":
+                current_exe = Path(sys.executable).resolve()
+                updater_exe = get_windows_updater_helper(current_app_dir)
+                cmd = _build_windows_updater_command(
+                    updater_exe,
+                    new_app_dir,
+                    current_app_dir,
+                    current_exe,
+                    os.getpid(),
+                )
+
+                if output_callback:
+                    output_callback(f"Found new version in {new_app_dir}")
+                    output_callback("Launching external updater...")
+
+                try:
+                    _launch_windows_updater(
+                        updater_exe=updater_exe,
+                        argv=cmd,
+                        extracted_dir=new_app_dir,
+                        install_dir=current_app_dir,
+                        output_callback=output_callback,
+                    )
+                except Exception as exc:
+                    attempted = _format_update_launch_details(updater_exe, cmd)
+                    msg = f"Failed to launch updater: {exc}\n{attempted}"
+                    logger.exception("Packaged updater launch failed\n%s", attempted)
+                    return PullResult(False, None, message=msg, error=str(exc))
+
+                if output_callback:
+                    output_callback("Aura will now exit to complete the update.")
+                return PullResult(True, None, message="Update helper launched. Quitting Aura...")
+            else:
+                msg = "Packaged updates are currently only supported on Windows."
+                return PullResult(False, None, message=msg, error=msg)
+
+        except Exception as exc:
+            logger.exception("Packaged update failed")
+            return PullResult(False, None, message=f"Update failed: {exc}", error=str(exc))
+
+    # --- No compatible asset ---
+    msg = "No compatible packaged asset found in the latest release."
+    return PullResult(False, None, message=msg, error=msg)
 
 
 def get_windows_updater_helper(install_dir: Path | None = None) -> Path:
@@ -592,18 +695,12 @@ def _get_git_update_status(
     """Fetch upstream refs and classify Aura's source checkout update state."""
     root = repo_root or get_app_repo_root()
     if root is None:
-        msg = (
-            "Git update is only available for source installs. "
-            "Please update from GitHub manually."
-        )
+        msg = "Git update is only available for source installs. Please update from GitHub manually."
         return UpdateStatus(None, False, state="not_git", message=msg)
 
     repo_check = run_git_command(root, ["rev-parse", "--is-inside-work-tree"], timeout=10)
     if repo_check.returncode != 0 or repo_check.stdout.strip() != "true":
-        msg = (
-            "Git update is only available for source installs. "
-            "Please update from GitHub manually."
-        )
+        msg = "Git update is only available for source installs. Please update from GitHub manually."
         return UpdateStatus(root, False, state="not_git", message=msg, error=repo_check.output)
 
     branch_result = run_git_command(root, ["branch", "--show-current"], timeout=10)
@@ -737,10 +834,7 @@ def pull_latest(
     """Fast-forward Aura's source checkout when it is safe to do so."""
     root = repo_root or get_app_repo_root()
     if root is None:
-        msg = (
-            "Git update is only available for source installs. "
-            "Please update from GitHub manually."
-        )
+        msg = "Git update is only available for source installs. Please update from GitHub manually."
         return PullResult(False, None, message=msg, error=msg)
 
     status = _get_git_update_status(root, output_callback=output_callback)
@@ -766,9 +860,7 @@ def pull_latest(
         output_callback=output_callback,
     )
     new_commit = _full_head(root)
-    output = "\n".join(
-        part for part in (status.git_output, pull_result.output) if part
-    ).strip()
+    output = "\n".join(part for part in (status.git_output, pull_result.output) if part).strip()
 
     if pull_result.returncode != 0:
         msg = "git pull --ff-only failed."
@@ -791,3 +883,83 @@ def pull_latest(
         message=msg,
         git_output=output,
     )
+
+
+# --- Helper functions for installer-based updates ---
+
+
+def _download_asset(
+    asset: GitHubAsset,
+    temp_dir: Path,
+    output_callback: Callable[[str], None] | None = None,
+) -> Path:
+    """Download a GitHub asset to a temporary directory and return the local path."""
+    local_path = temp_dir / asset.name
+    if output_callback:
+        output_callback(f"Downloading {asset.name}...")
+    with httpx.Client(follow_redirects=True, timeout=300) as client:
+        with client.stream("GET", asset.url) as resp:
+            resp.raise_for_status()
+            with open(local_path, "wb") as f:
+                for chunk in resp.iter_bytes():
+                    f.write(chunk)
+    return local_path
+
+
+def _launch_installer(
+    installer_path: Path,
+    output_callback: Callable[[str], None] | None = None,
+) -> bool:
+    """Launch a Windows InnoSetup installer with silent flags.
+
+    Returns True if the installer was launched successfully.
+    """
+    if sys.platform != "win32":
+        if output_callback:
+            output_callback("Installer updates are only supported on Windows.")
+        return False
+    flags = [
+        "/VERYSILENT",
+        "/SUPPRESSMSGBOXES",
+        "/CURRENTUSER",
+        "/NORESTART",
+        "/LAUNCHAFTER",
+    ]
+    cmd = [str(installer_path), *flags]
+    if output_callback:
+        output_callback(f"Launching installer: {installer_path.name}")
+    subprocess.Popen(
+        cmd,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        close_fds=True,
+    )
+    return True
+
+
+def _verify_checksum(
+    file_path: Path | str | None,
+    expected_sha256: str | None,
+) -> bool:
+    """Verify a file's SHA-256 checksum against an expected value.
+
+    Returns True if no checksum was provided (skip), or if the checksum matches.
+    """
+    if not expected_sha256:
+        logger.info("No checksum provided, skipping verification.")
+        return True
+    if file_path is None:
+        return False
+    path = Path(file_path)
+    if not path.exists():
+        return False
+    sha256 = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            sha256.update(chunk)
+    actual = sha256.hexdigest()
+    if actual.lower() == expected_sha256.lower():
+        return True
+    logger.error("Checksum mismatch: expected %s, got %s", expected_sha256, actual)
+    return False
