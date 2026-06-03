@@ -151,3 +151,45 @@ class B:
     assert len(dataclass_issues) == 1
     assert "'c'" in dataclass_issues[0].message
     assert "'B'" in dataclass_issues[0].message
+
+
+def test_dotted_expected_symbols_pass_for_class_members():
+    code = """
+from dataclasses import dataclass
+
+@dataclass
+class GitHubRelease:
+    installer_asset: str
+
+    @property
+    def preferred_asset(self):
+        return self.installer_asset
+
+class UpdateStatus:
+    has_installer = True
+"""
+    contract = ExplicitSpecContract(
+        expected_public_symbols=[
+            "GitHubRelease.installer_asset",
+            "GitHubRelease.preferred_asset",
+            "UpdateStatus.has_installer",
+        ],
+    )
+    capsule = _make_capsule(code, contract)
+    gate = ContractGate()
+    issues = gate.verify(capsule)
+    assert not any(i.code == "CONTRACT_MISSING_SYMBOL" for i in issues)
+
+
+def test_dotted_expected_symbols_block_when_class_member_missing():
+    code = """
+class GitHubRelease:
+    installer_asset: str
+"""
+    contract = ExplicitSpecContract(
+        expected_public_symbols=["GitHubRelease.preferred_asset"],
+    )
+    capsule = _make_capsule(code, contract)
+    gate = ContractGate()
+    issues = gate.verify(capsule)
+    assert any(i.code == "CONTRACT_MISSING_SYMBOL" for i in issues)

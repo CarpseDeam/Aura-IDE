@@ -578,7 +578,7 @@ class ReferenceChecker:
                     f"positional argument(s) but {pos_args} were provided."
                 ),
                 suggestion="Provide the required positional arguments.",
-                severity=CraftIssueSeverity.HARD,
+                severity=CraftIssueSeverity.SOFT,
             )
 
         if pos_args > effective_max:
@@ -592,7 +592,7 @@ class ReferenceChecker:
                     f"positional argument(s) but {pos_args} were provided."
                 ),
                 suggestion="Remove excess positional arguments or use keyword arguments.",
-                severity=CraftIssueSeverity.HARD,
+                severity=CraftIssueSeverity.SOFT,
             )
 
         return None
@@ -684,5 +684,5 @@ class ReferenceChecker:
             code="missing-attribute",
             message=f"Class '{cls_info.name}' has no attribute '{attr}'.",
             suggestion="Check the attribute name or define it on the class.",
-            severity=CraftIssueSeverity.HARD,
+            severity=CraftIssueSeverity.SOFT,
         )

@@ -1,8 +1,5 @@
 from __future__ import annotations
 import ast
-import re
-from dataclasses import dataclass
-
 from aura.craft.types import ProposalCapsule, CraftIssue, ExplicitSpecContract, CraftIssueSeverity
 
 
@@ -44,22 +41,57 @@ class ContractGate:
             return issues
 
         defined_symbols = set()
+        class_members: dict[str, set[str]] = {}
         for node in capsule.ast_tree.body:
             if isinstance(node, ast.FunctionDef) or isinstance(node, ast.AsyncFunctionDef):
                 defined_symbols.add(node.name)
             elif isinstance(node, ast.ClassDef):
                 defined_symbols.add(node.name)
+                class_members[node.name] = self._collect_class_members(node)
         
         for expected_symbol in capsule.contract.expected_public_symbols:
-            if expected_symbol not in defined_symbols:
-                issues.append(CraftIssue(
-                    line=1, column=0,
-                    code="CONTRACT_MISSING_SYMBOL",
-                    message=f"Contract requires public symbol '{expected_symbol}' but it was not found.",
-                    suggestion="Implement the required public symbol.",
-                    severity=CraftIssueSeverity.HARD
-                ))
+            if self._expected_symbol_exists(expected_symbol, defined_symbols, class_members):
+                continue
+
+            issues.append(CraftIssue(
+                line=1, column=0,
+                code="CONTRACT_MISSING_SYMBOL",
+                message=f"Contract requires public symbol '{expected_symbol}' but it was not found.",
+                suggestion="Implement the required public symbol.",
+                severity=CraftIssueSeverity.HARD
+            ))
         return issues
+
+    @staticmethod
+    def _collect_class_members(node: ast.ClassDef) -> set[str]:
+        members: set[str] = set()
+        for item in node.body:
+            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                members.add(item.name)
+            elif isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name):
+                members.add(item.target.id)
+            elif isinstance(item, ast.Assign):
+                for target in item.targets:
+                    if isinstance(target, ast.Name):
+                        members.add(target.id)
+        return members
+
+    @staticmethod
+    def _expected_symbol_exists(
+        expected_symbol: str,
+        defined_symbols: set[str],
+        class_members: dict[str, set[str]],
+    ) -> bool:
+        if expected_symbol in defined_symbols:
+            return True
+
+        if "." not in expected_symbol:
+            return False
+
+        class_name, member_name = expected_symbol.split(".", 1)
+        if not class_name or not member_name:
+            return False
+        return member_name in class_members.get(class_name, set())
     
     def _check_forbidden_methods(self, capsule: ProposalCapsule) -> list[CraftIssue]:
         """Check that no forbidden public methods were added."""

@@ -1,7 +1,7 @@
 import pytest
 from pathlib import Path
 from aura.craft.compiler import CompilerService
-from aura.craft.types import ProposalCapsule, CraftIssue, CraftIssueSeverity, ExplicitSpecContract
+from aura.craft.types import ProposalCapsule, CraftIssue, CraftIssueSeverity, ExplicitSpecContract, OwnershipContext
 from aura.craft.reference_checker import ReferenceChecker
 
 class MockReferenceChecker(ReferenceChecker):
@@ -125,6 +125,71 @@ def test_soft_issues_warn_without_compiler_bounce(compiler):
     assert "reference_checker" in result.checks_warned
     assert result.metadata["craft_warnings"][0]["code"] == "call-signature"
 
+def test_call_signature_issues_are_warnings_not_compiler_bounce(tmp_workspace: Path):
+    (tmp_workspace / "helpers.py").write_text("def needs_one(value):\n    return value\n", encoding="utf-8")
+    proposed_code = "from helpers import needs_one\n\nresult = needs_one(1, 2)\n"
+
+    cap = ProposalCapsule(
+        path=Path("main.py"),
+        language="python",
+        tool_name="test",
+        original_code="",
+        proposed_code=proposed_code,
+        changed_line_ranges=[(1, 4)],
+        is_new_file=True,
+    )
+
+    svc = CompilerService()
+    result = svc.process_proposal(cap, workspace_root=tmp_workspace)
+    assert result.__class__.__name__ == "CompiledPatch"
+    assert "reference_checker" in result.checks_warned
+    assert any(issue["code"] == "call-signature" for issue in result.metadata["craft_warnings"])
+
+def test_missing_attribute_issues_are_warnings_not_compiler_bounce(tmp_workspace: Path):
+    (tmp_workspace / "models.py").write_text("class Thing:\n    pass\n", encoding="utf-8")
+    proposed_code = "from models import Thing\n\nthing = Thing()\nvalue = thing.missing\n"
+
+    cap = ProposalCapsule(
+        path=Path("main.py"),
+        language="python",
+        tool_name="test",
+        original_code="",
+        proposed_code=proposed_code,
+        changed_line_ranges=[(1, 5)],
+        is_new_file=True,
+    )
+
+    svc = CompilerService()
+    result = svc.process_proposal(cap, workspace_root=tmp_workspace)
+    assert result.__class__.__name__ == "CompiledPatch"
+    assert "reference_checker" in result.checks_warned
+    assert any(issue["code"] == "missing-attribute" for issue in result.metadata["craft_warnings"])
+
+def test_soft_style_issues_warn_without_compiler_bounce():
+    proposed_code = (
+        "data = 1\n"
+        "result = 2\n"
+        "item = 3\n"
+        "value = 4\n"
+        "output = 5\n"
+    )
+    cap = ProposalCapsule(
+        path=Path("style.py"),
+        language="python",
+        tool_name="test",
+        original_code="",
+        proposed_code=proposed_code,
+        changed_line_ranges=[(1, 6)],
+        is_new_file=True,
+        ownership_context=OwnershipContext.FOREIGN,
+    )
+
+    svc = CompilerService()
+    result = svc.process_proposal(cap)
+    assert result.__class__.__name__ == "CompiledPatch"
+    assert "craft_engine" in result.checks_warned
+    assert any(issue["code"] == "generic_name_density" for issue in result.metadata["craft_warnings"])
+
 def test_new_files_block_on_all(compiler):
     proposed_code = "def foo():\n    return undefined_var\n"
     
@@ -167,6 +232,24 @@ def test_syntax_errors_still_block():
     assert result.__class__.__name__ == "CompilerBounce"
     assert any(i.code == "syntax-error" for i in result.issues)
 
+def test_stub_bodies_still_block():
+    proposed_code = "def unfinished():\n    pass\n"
+
+    cap = ProposalCapsule(
+        path=Path("test.py"),
+        language="python",
+        tool_name="test",
+        original_code="",
+        proposed_code=proposed_code,
+        changed_line_ranges=[(1, 3)],
+        is_new_file=True,
+    )
+
+    svc = CompilerService()
+    result = svc.process_proposal(cap)
+    assert result.__class__.__name__ == "CompilerBounce"
+    assert any(i.code == "stub-body-pass" for i in result.issues)
+
 def test_contract_gate_issues_still_block():
     original_code = "def foo():\n    return True\n"
     proposed_code = "def foo():\n    return True\ndef bar():\n    return True\n"
@@ -190,3 +273,44 @@ def test_contract_gate_issues_still_block():
     result = svc.process_proposal(cap)
     assert result.__class__.__name__ == "CompilerBounce"
     assert any(i.code.startswith("CONTRACT_") for i in result.issues)
+
+def test_repair_instructions_contain_only_hard_blocking_issues(compiler):
+    original_code = "def foo():\n    return True\n"
+    proposed_code = "def foo():\n    return missing\n"
+
+    hard_issue = CraftIssue(
+        line=2,
+        column=11,
+        code="undefined-name",
+        message="Name 'missing' is used but never defined.",
+        suggestion="Define or import the name before using it.",
+        severity=CraftIssueSeverity.HARD,
+    )
+    soft_issue = CraftIssue(
+        line=2,
+        column=11,
+        code="call-signature",
+        message="Low-confidence signature concern.",
+        suggestion="Review the call.",
+        severity=CraftIssueSeverity.SOFT,
+    )
+    compiler._ref_checker.mock_issues[original_code] = []
+    compiler._ref_checker.mock_issues[proposed_code] = [hard_issue, soft_issue]
+
+    import ast
+    cap = ProposalCapsule(
+        path=Path("test.py"),
+        language="python",
+        tool_name="test",
+        original_code=original_code,
+        proposed_code=proposed_code,
+        changed_line_ranges=[(2, 3)],
+        is_new_file=False,
+        ast_tree=ast.parse(proposed_code)
+    )
+
+    result = compiler.process_proposal(cap)
+    assert result.__class__.__name__ == "CompilerBounce"
+    assert "undefined-name" in result.repair_instructions
+    assert "call-signature" not in result.repair_instructions
+    assert all(issue.severity == CraftIssueSeverity.HARD for issue in result.issues)

@@ -75,9 +75,11 @@ class TestWriteMixinCompiler:
         assert result.payload["applied"] is False
         assert result.payload["quality_bounce"] is True
         assert result.payload["path"] == "a.py"
-        assert result.payload["tool_name"] == "edit_file"
         assert result.payload["repair_instructions"] == "Define missing before use."
         assert result.payload["craft_issues"][0]["code"] == "undefined-name"
+        assert "tool_name" not in result.payload
+        assert "craft_metadata" not in result.payload
+        assert "pre_existing_environment_issues" not in result.payload
 
     @pytest.mark.usefixtures("enable_craft")
     def test_new_python_write_enters_craft(self, tmp_workspace):

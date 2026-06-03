@@ -234,6 +234,7 @@ class CompilerService:
     
     def _build_repair_instructions(self, issues: list[CraftIssue]) -> str:
         """Build human-readable repair instructions from issues list."""
+        issues = [issue for issue in issues if issue.severity == CraftIssueSeverity.HARD]
         lines = ["Your code changes were rejected by the compiler. Please fix the following issues:"]
         for issue in issues:
             lines.append(f"- Line {issue.line}: [{issue.code}] {issue.message}")

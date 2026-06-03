@@ -385,6 +385,10 @@ def _run_compiler_pipeline(proposal: dict, tool_name: str, contract: ExplicitSpe
             
         if isinstance(result, CompilerBounce):
             _log.info("[craft:bounce] %s bounced (attempt %d/%d)", rel_path, result.attempt_number, result.max_attempts)
+            hard_issues = [
+                issue for issue in result.issues
+                if str(getattr(getattr(issue, "severity", ""), "value", getattr(issue, "severity", ""))) == "hard"
+            ]
             return ToolExecResult(
                 ok=True,
                 payload={
@@ -393,15 +397,11 @@ def _run_compiler_pipeline(proposal: dict, tool_name: str, contract: ExplicitSpe
                     "write_outcome": str(result.metadata.get("write_outcome") or "not_applied_craft_rejected"),
                     "failure_class": str(result.metadata.get("failure_class") or "compiler_rejected"),
                     "syntax_valid": bool(result.metadata.get("syntax_valid", True)),
-                    "pre_existing_environment_issues": result.metadata.get("pre_existing_environment_issues", []),
-                    "introduced_environment_issues": result.metadata.get("introduced_environment_issues", []),
                     "quality_bounce": True,
                     "path": rel_path,
-                    "tool_name": tool_name,
                     "repair_instructions": result.repair_instructions,
                     "is_new_file": is_new_file,
-                    "craft_issues": [_craft_issue_payload(issue) for issue in result.issues],
-                    "craft_metadata": dict(result.metadata),
+                    "craft_issues": [_craft_issue_payload(issue) for issue in hard_issues],
                     "suggested_next_action": "Repair the proposed patch and retry this file.",
                 },
             )
