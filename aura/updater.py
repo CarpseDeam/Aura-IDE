@@ -196,6 +196,9 @@ class PullResult:
     message: str = ""
     git_output: str = ""
     error: str | None = None
+    target_version: str | None = None
+    installer_path: Path | None = None
+    launch_pending: bool = False
 
 
 def get_latest_release(timeout: int = 15) -> GitHubRelease | None:
@@ -323,50 +326,14 @@ def install_packaged_update(
 
     # --- Installer-based update path ---
     if prefer_installer and release.installer_asset is not None:
-        staging_dir = get_installer_staging_dir(release.version)
-        try:
-            installer_name = f"AuraSetup-{release.version}.exe"
-            installer_path = _download_asset(
-                release.installer_asset,
-                staging_dir,
-                output_callback,
-                filename=installer_name,
-            )
-            if output_callback:
-                output_callback(f"Downloaded installer: {installer_path}")
-
-            # Optional checksum verification
-            checksum_url = release.installer_checksum_url
-            if checksum_url:
-                if output_callback:
-                    output_callback("Verifying installer checksum...")
-                checksum_asset = GitHubAsset(
-                    name=release.installer_asset.name + ".sha256",
-                    url=checksum_url,
-                    size=0,
-                )
-                checksum_path = _download_asset(checksum_asset, staging_dir, output_callback)
-                content = checksum_path.read_text(encoding="utf-8").strip()
-                expected_sha256 = content.split()[0] if content else ""
-                if not _verify_checksum(installer_path, expected_sha256):
-                    msg = "Installer checksum verification failed. The download may be corrupted."
-                    return PullResult(False, None, message=msg, error=msg)
-
-            launched = _launch_installer(installer_path, output_callback)
-            if not launched:
-                msg = "Failed to launch the installer.\n" + _format_installer_launch_details(installer_path)
-                return PullResult(False, None, message=msg, error=msg)
-
-            if output_callback:
-                output_callback("Installer launched. Aura will now exit to complete the update.")
-            return PullResult(True, None, message="Installer launched. Quitting Aura...")
-        except Exception as exc:
-            logger.exception("Installer update failed")
-            msg = (
-                f"Installer update failed: {exc}\n"
-                f"Downloaded installer: {staging_dir / f'AuraSetup-{release.version}.exe'}"
-            )
-            return PullResult(False, None, message=msg, error=str(exc))
+        result = download_packaged_installer(release, output_callback=output_callback)
+        if not result.success or result.installer_path is None:
+            return result
+        return launch_downloaded_installer(
+            result.installer_path,
+            output_callback=output_callback,
+            target_version=release.version,
+        )
 
     # --- Legacy ZIP fallback path ---
     asset = release.zip_asset
@@ -899,6 +866,105 @@ def pull_latest(
 
 
 # --- Helper functions for installer-based updates ---
+
+
+def download_packaged_installer(
+    release: GitHubRelease,
+    output_callback: Callable[[str], None] | None = None,
+) -> PullResult:
+    """Download a packaged installer and return a launch-pending result for the UI."""
+    if release.installer_asset is None:
+        msg = "No installer asset found in the latest release."
+        return PullResult(False, None, message=msg, error=msg, target_version=release.version)
+
+    staging_dir = get_installer_staging_dir(release.version)
+    installer_path = staging_dir / f"AuraSetup-{release.version}.exe"
+    try:
+        installer_path = _download_asset(
+            release.installer_asset,
+            staging_dir,
+            output_callback,
+            filename=installer_path.name,
+        )
+        if output_callback:
+            output_callback(f"Downloaded installer: {installer_path}")
+
+        checksum_url = release.installer_checksum_url
+        if checksum_url:
+            if output_callback:
+                output_callback("Verifying installer checksum...")
+            checksum_asset = GitHubAsset(
+                name=release.installer_asset.name + ".sha256",
+                url=checksum_url,
+                size=0,
+            )
+            checksum_path = _download_asset(checksum_asset, staging_dir, output_callback)
+            content = checksum_path.read_text(encoding="utf-8").strip()
+            expected_sha256 = content.split()[0] if content else ""
+            if not _verify_checksum(installer_path, expected_sha256):
+                msg = "Installer checksum verification failed. The download may be corrupted."
+                return PullResult(
+                    False,
+                    None,
+                    message=msg,
+                    error=msg,
+                    target_version=release.version,
+                    installer_path=installer_path,
+                )
+
+        msg = (
+            f"Installer downloaded for Aura {release.version}.\n"
+            f"Downloaded installer: {installer_path}"
+        )
+        return PullResult(
+            True,
+            None,
+            message=msg,
+            target_version=release.version,
+            installer_path=installer_path,
+            launch_pending=True,
+        )
+    except Exception as exc:
+        logger.exception("Installer download failed")
+        msg = f"Installer download failed: {exc}\nDownloaded installer: {installer_path}"
+        return PullResult(
+            False,
+            None,
+            message=msg,
+            error=str(exc),
+            target_version=release.version,
+            installer_path=installer_path,
+        )
+
+
+def launch_downloaded_installer(
+    installer_path: Path,
+    output_callback: Callable[[str], None] | None = None,
+    *,
+    target_version: str | None = None,
+) -> PullResult:
+    """Launch a staged installer and return whether Aura may quit."""
+    launched = _launch_installer(installer_path, output_callback)
+    if not launched:
+        msg = "Failed to launch the installer.\n" + _format_installer_launch_details(installer_path)
+        return PullResult(
+            False,
+            None,
+            message=msg,
+            error=msg,
+            target_version=target_version,
+            installer_path=installer_path,
+        )
+
+    if output_callback:
+        output_callback("Installer launched. Aura will now exit to complete the update.")
+    return PullResult(
+        True,
+        None,
+        message="Installer launched. Quitting Aura...",
+        target_version=target_version,
+        installer_path=installer_path,
+    )
 
 
 def get_installer_staging_dir(version: str) -> Path:

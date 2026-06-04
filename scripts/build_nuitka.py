@@ -289,7 +289,7 @@ def create_installer(dist_dir: Path, version: str, installer_flag: bool | None) 
 
 
 def create_nuitka_command(
-    python_exe: Path,
+    python_exe: Path | None = None,
     *,
     low_memory: bool = True,
     jobs: int = DEFAULT_NUITKA_JOBS,
@@ -297,6 +297,7 @@ def create_nuitka_command(
     """Create the Nuitka command used for release builds."""
     if jobs == 0:
         raise SystemExit("--jobs cannot be 0.")
+    python_exe = python_exe or Path(sys.executable)
 
     cmd = [
         str(python_exe),

@@ -11,10 +11,12 @@ from aura.updater import (
     GitCommandResult,
     GitHubAsset,
     GitHubRelease,
+    download_packaged_installer,
     find_extracted_app_root,
     get_app_repo_root,
     get_update_status,
     install_packaged_update,
+    launch_downloaded_installer,
     pull_latest,
 )
 
@@ -211,6 +213,35 @@ def test_installer_update_stages_in_localappdata_update_folder(monkeypatch, tmp_
     assert (expected_dir / "AuraSetup-1.4.6.exe").exists()
 
 
+def test_download_packaged_installer_returns_launch_pending_without_launch(monkeypatch, tmp_path: Path) -> None:
+    local_app_data = tmp_path / "LocalAppData"
+    release = _installer_release()
+
+    def fake_download_asset(
+        asset: GitHubAsset,
+        temp_dir: Path,
+        output_callback=None,
+        *,
+        filename: str | None = None,
+    ) -> Path:
+        path = temp_dir / (filename or asset.name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"installer")
+        return path
+
+    monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
+    monkeypatch.setattr(updater, "_download_asset", fake_download_asset)
+    monkeypatch.setattr(updater, "_launch_installer", lambda *args, **kwargs: pytest.fail("launch should be deferred"))
+
+    result = download_packaged_installer(release)
+
+    installer_path = local_app_data / "Aura" / "updates" / "1.4.6" / "AuraSetup-1.4.6.exe"
+    assert result.success is True
+    assert result.launch_pending is True
+    assert result.target_version == "1.4.6"
+    assert result.installer_path == installer_path
+
+
 def test_installer_shell_execute_failure_returns_pull_result_false_with_path(monkeypatch, tmp_path: Path) -> None:
     local_app_data = tmp_path / "LocalAppData"
     release = _installer_release()
@@ -242,6 +273,23 @@ def test_installer_shell_execute_failure_returns_pull_result_false_with_path(mon
     assert "If the installer does not appear, run this file manually" in result.message
     assert f"Downloaded installer: {installer_path}" in output
     assert "Installer launch failed: ShellExecuteW returned 31" in output
+
+
+def test_launch_downloaded_installer_failure_returns_pull_result_false(monkeypatch, tmp_path: Path) -> None:
+    installer_path = tmp_path / "AuraSetup-1.4.6.exe"
+    installer_path.write_bytes(b"installer")
+    output: list[str] = []
+
+    monkeypatch.setattr(updater.sys, "platform", "win32")
+    monkeypatch.setattr(updater, "_shellexecute_installer", lambda installer_path, flags: 31)
+
+    result = launch_downloaded_installer(installer_path, output_callback=output.append, target_version="1.4.6")
+
+    assert result.success is False
+    assert result.target_version == "1.4.6"
+    assert result.installer_path == installer_path
+    assert str(installer_path) in result.message
+    assert "Aura will now exit" not in output
 
 
 def test_installer_shell_execute_success_returns_pull_result_true(monkeypatch, tmp_path: Path) -> None:

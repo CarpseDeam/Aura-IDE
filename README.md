@@ -3,7 +3,7 @@
 [![Python](https://img.shields.io/badge/python-3.10+-blue)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)]()
-[![Version](https://img.shields.io/badge/version-1.4.6-orange)]()
+[![Version](https://img.shields.io/badge/version-1.4.7-orange)]()
 <p>
   <a href="https://www.producthunt.com/products/aura-ide?embed=true&utm_source=badge-featured&utm_medium=badge&utm_campaign=badge-aura-ide" target="_blank" rel="noopener noreferrer">
     <img alt="Aura IDE - Open source AI coding harness you control | Product Hunt" width="150" height="54" src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1162818&theme=light&t=1780584703498">
@@ -419,7 +419,7 @@ Aura stores a searchable history of past tasks and saved notes in a local SQLite
 
 Aura can update itself automatically:
 
-- **Packaged Windows Builds** — Aura checks GitHub Releases on startup. If a newer version is available, the "Update" button in the toolbar is highlighted. One click downloads the latest installer (`AuraSetup-X.Y.Z.exe`) to `%LOCALAPPDATA%\Aura\updates\X.Y.Z\`, opens the installer wizard, and exits Aura only after the installer launch is confirmed. If launch fails, Aura stays open and shows the downloaded installer path for manual recovery. No admin rights are required — Aura installs per-user into `%LOCALAPPDATA%\Aura`.
+- **Packaged Windows Builds** — Aura checks GitHub Releases on startup. If a newer version is available, the "Update" button in the toolbar is highlighted. One click downloads the latest installer (`AuraSetup-X.Y.Z.exe`) to `%LOCALAPPDATA%\Aura\updates\X.Y.Z\`, then shows a confirmation dialog with the target version and exact installer path. Aura exits only after the user clicks Open Installer and the installer launch is confirmed. If launch fails, Aura stays open and shows the downloaded installer path for manual recovery. No admin rights are required — Aura installs per-user into `%LOCALAPPDATA%\Aura`.
 - **Source Installations** — If running from a git checkout, Aura can pull the latest changes directly from the repository using a fast-forward merge.
 - **Update status check** — The toolbar shows when a newer version is available.
 - **Safety** — The updater never touches your workspaces, `.aura` project folders, or user configuration.

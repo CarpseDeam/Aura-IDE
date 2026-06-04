@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QVBoxLayout,
@@ -21,9 +22,10 @@ from aura.updater import (
     GitHubRelease,
     PullResult,
     UpdateStatus,
+    download_packaged_installer,
     get_update_status,
-    install_packaged_update,
     is_packaged,
+    launch_downloaded_installer,
     pull_latest,
 )
 
@@ -48,7 +50,7 @@ class UpdateWorker(QObject):
             result = pull_latest(self._repo_root, output_callback=self.output.emit)
         elif self._action == "install":
             if self._release:
-                result = install_packaged_update(self._release, output_callback=self.output.emit)
+                result = download_packaged_installer(self._release, output_callback=self.output.emit)
             else:
                 result = PullResult(False, None, message="No release selected.")
         else:
@@ -168,21 +170,7 @@ class UpdateDialog(QDialog):
 
     def _on_action(self) -> None:
         if is_packaged():
-            from PySide6.QtWidgets import QMessageBox
-
-            reply = QMessageBox.question(
-                self,
-                "Install Update",
-                "Aura will close after the installer opens. Complete the installer, then relaunch Aura.\n\n"
-                "If the installer cannot be opened, Aura will stay open and show the downloaded installer path.\n\n"
-                "Continue?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.Yes,
-            )
-            if reply != QMessageBox.StandardButton.Yes:
-                return
             self._append_output("Downloading installer update...")
-            self._append_output("Aura will close after the installer opens. Complete the installer, then relaunch Aura.")
             self._start_worker("install")
         else:
             self._append_output("Running git pull --ff-only...")
@@ -261,14 +249,14 @@ class UpdateDialog(QDialog):
         if result.error:
             self._append_output(result.error)
 
+        if is_packaged() and result.success and result.launch_pending and result.installer_path is not None:
+            self._show_installer_open_confirmation(result)
+            return
+
         if result.success:
             if is_packaged():
                 self._summary.setText("Installer launched. Aura will now exit to complete the update.")
-                from PySide6.QtCore import QTimer
-                from PySide6.QtWidgets import QApplication
-
-                # Automatically exit after a short delay to allow the script to take over
-                QTimer.singleShot(2000, QApplication.quit)
+                self._request_app_quit()
             else:
                 old_commit = _short(result.old_commit)
                 new_commit = _short(result.new_commit)
@@ -284,6 +272,51 @@ class UpdateDialog(QDialog):
             self._summary.setText(result.message or "Update failed.")
             if is_packaged() and "Downloaded installer:" in result.message:
                 self._append_output("Aura is still running. Use the installer path above to run the update manually.")
+
+    def _show_installer_open_confirmation(self, result: PullResult) -> None:
+        installer_path = result.installer_path
+        if installer_path is None:
+            self._summary.setText("Installer download finished, but the installer path was not available.")
+            return
+
+        self._summary.setText(
+            f"Aura {result.target_version or '(unknown)'} is ready to install. "
+            "Open the installer to continue."
+        )
+        if not self._confirm_open_installer(result):
+            self._append_output("Installer launch canceled. Aura is still running.")
+            self._append_output(f"Run this file manually when ready: {installer_path}")
+            return
+
+        launch_result = launch_downloaded_installer(
+            installer_path,
+            output_callback=self._append_output,
+            target_version=result.target_version,
+        )
+        self._show_pull_result(launch_result)
+
+    def _confirm_open_installer(self, result: PullResult) -> bool:
+        installer_path = result.installer_path
+        version = result.target_version or "(unknown)"
+        message_box = QMessageBox(self)
+        message_box.setWindowTitle("Open Aura Installer")
+        message_box.setIcon(QMessageBox.Icon.Information)
+        message_box.setText(f"Open the Aura {version} installer?")
+        message_box.setInformativeText(
+            "Aura will close after launching the installer.\n\n"
+            f"Downloaded installer:\n{installer_path}"
+        )
+        open_button = message_box.addButton("Open Installer", QMessageBox.ButtonRole.AcceptRole)
+        message_box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        message_box.setDefaultButton(open_button)
+        message_box.exec()
+        return message_box.clickedButton() == open_button
+
+    def _request_app_quit(self) -> None:
+        from PySide6.QtCore import QTimer
+        from PySide6.QtWidgets import QApplication
+
+        QTimer.singleShot(2000, QApplication.quit)
 
     def _state_text(self, status: UpdateStatus) -> str:
         if status.state == "up_to_date":
