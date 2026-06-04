@@ -25,6 +25,7 @@ AppUpdatesURL={#MyAppURL}
 DefaultDirName={localappdata}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 PrivilegesRequired=lowest
+PrivilegesRequiredOverridesAllowed=commandline
 OutputDir=..\..\build
 OutputBaseFilename=AuraSetup-{#MyAppVersion}
 SetupIconFile=..\..\media\AurA.ico

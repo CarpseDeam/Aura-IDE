@@ -173,13 +173,16 @@ class UpdateDialog(QDialog):
             reply = QMessageBox.question(
                 self,
                 "Install Update",
-                "Aura will close and launch the installer.\n\nThe installer will replace the app files and relaunch Aura.\n\nContinue?",
+                "Aura will close after the installer opens. Complete the installer, then relaunch Aura.\n\n"
+                "If the installer cannot be opened, Aura will stay open and show the downloaded installer path.\n\n"
+                "Continue?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.Yes,
             )
             if reply != QMessageBox.StandardButton.Yes:
                 return
-            self._append_output("Downloading and installing update...")
+            self._append_output("Downloading installer update...")
+            self._append_output("Aura will close after the installer opens. Complete the installer, then relaunch Aura.")
             self._start_worker("install")
         else:
             self._append_output("Running git pull --ff-only...")
@@ -279,6 +282,8 @@ class UpdateDialog(QDialog):
                 self._action_btn.setEnabled(False)
         else:
             self._summary.setText(result.message or "Update failed.")
+            if is_packaged() and "Downloaded installer:" in result.message:
+                self._append_output("Aura is still running. Use the installer path above to run the update manually.")
 
     def _state_text(self, status: UpdateStatus) -> str:
         if status.state == "up_to_date":

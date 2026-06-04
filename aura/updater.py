@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 GITHUB_RELEASES_URL = "https://api.github.com/repos/CarpseDeam/Aura-IDE/releases/latest"
 WINDOWS_UPDATER_HELPER_NAME = "AuraUpdater.cmd"
+INSTALLER_LAUNCH_METHOD = "ShellExecuteW/open"
 
 
 def is_packaged() -> bool:
@@ -322,9 +323,17 @@ def install_packaged_update(
 
     # --- Installer-based update path ---
     if prefer_installer and release.installer_asset is not None:
-        temp_dir = Path(tempfile.mkdtemp(prefix="aura-update-"))
+        staging_dir = get_installer_staging_dir(release.version)
         try:
-            installer_path = _download_asset(release.installer_asset, temp_dir, output_callback)
+            installer_name = f"AuraSetup-{release.version}.exe"
+            installer_path = _download_asset(
+                release.installer_asset,
+                staging_dir,
+                output_callback,
+                filename=installer_name,
+            )
+            if output_callback:
+                output_callback(f"Downloaded installer: {installer_path}")
 
             # Optional checksum verification
             checksum_url = release.installer_checksum_url
@@ -336,7 +345,7 @@ def install_packaged_update(
                     url=checksum_url,
                     size=0,
                 )
-                checksum_path = _download_asset(checksum_asset, temp_dir, output_callback)
+                checksum_path = _download_asset(checksum_asset, staging_dir, output_callback)
                 content = checksum_path.read_text(encoding="utf-8").strip()
                 expected_sha256 = content.split()[0] if content else ""
                 if not _verify_checksum(installer_path, expected_sha256):
@@ -345,7 +354,7 @@ def install_packaged_update(
 
             launched = _launch_installer(installer_path, output_callback)
             if not launched:
-                msg = "Failed to launch the installer."
+                msg = "Failed to launch the installer.\n" + _format_installer_launch_details(installer_path)
                 return PullResult(False, None, message=msg, error=msg)
 
             if output_callback:
@@ -353,7 +362,11 @@ def install_packaged_update(
             return PullResult(True, None, message="Installer launched. Quitting Aura...")
         except Exception as exc:
             logger.exception("Installer update failed")
-            return PullResult(False, None, message=f"Installer update failed: {exc}", error=str(exc))
+            msg = (
+                f"Installer update failed: {exc}\n"
+                f"Downloaded installer: {staging_dir / f'AuraSetup-{release.version}.exe'}"
+            )
+            return PullResult(False, None, message=msg, error=str(exc))
 
     # --- Legacy ZIP fallback path ---
     asset = release.zip_asset
@@ -888,13 +901,24 @@ def pull_latest(
 # --- Helper functions for installer-based updates ---
 
 
+def get_installer_staging_dir(version: str) -> Path:
+    """Return the stable per-user folder used for a downloaded installer."""
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    local_root = Path(local_app_data) if local_app_data else Path.home() / "AppData" / "Local"
+    safe_version = re.sub(r"[^A-Za-z0-9._-]", "_", version)
+    return local_root / "Aura" / "updates" / safe_version
+
+
 def _download_asset(
     asset: GitHubAsset,
     temp_dir: Path,
     output_callback: Callable[[str], None] | None = None,
+    *,
+    filename: str | None = None,
 ) -> Path:
     """Download a GitHub asset to a temporary directory and return the local path."""
-    local_path = temp_dir / asset.name
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    local_path = temp_dir / (filename or asset.name)
     if output_callback:
         output_callback(f"Downloading {asset.name}...")
     with httpx.Client(follow_redirects=True, timeout=300) as client:
@@ -910,32 +934,70 @@ def _launch_installer(
     installer_path: Path,
     output_callback: Callable[[str], None] | None = None,
 ) -> bool:
-    """Launch a Windows InnoSetup installer with silent flags.
+    """Launch a Windows Inno Setup installer through the shell.
 
-    Returns True if the installer was launched successfully.
+    Returns True only when ShellExecuteW reports a successful launch handoff.
     """
     if sys.platform != "win32":
         if output_callback:
             output_callback("Installer updates are only supported on Windows.")
+            output_callback(f"If the installer does not appear, run this file manually: {installer_path}")
         return False
-    flags = [
-        "/VERYSILENT",
-        "/SUPPRESSMSGBOXES",
-        "/CURRENTUSER",
-        "/NORESTART",
-        "LAUNCHAFTERUPDATE=1",
-    ]
-    cmd = [str(installer_path), *flags]
+
+    if not installer_path.exists() or not installer_path.is_file():
+        if output_callback:
+            output_callback(f"Installer file is missing: {installer_path}")
+            output_callback(f"If the installer does not appear, run this file manually: {installer_path}")
+        return False
+
+    flags = ["/CURRENTUSER", "/LAUNCHAFTERUPDATE=1"]
+    details = _format_installer_launch_details(installer_path)
+    logger.info("Launching installer\n%s", details)
     if output_callback:
-        output_callback(f"Launching installer: {installer_path.name}")
-    subprocess.Popen(
-        cmd,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        close_fds=True,
-    )
+        output_callback(f"Launching installer: {installer_path}")
+        output_callback(f"Launch method: {INSTALLER_LAUNCH_METHOD}")
+        output_callback(f"If the installer does not appear, run this file manually: {installer_path}")
+
+    try:
+        result = _shellexecute_installer(installer_path, flags)
+    except Exception as exc:
+        logger.exception("ShellExecuteW installer launch failed")
+        if output_callback:
+            output_callback(f"Installer launch failed: {exc}")
+        return False
+
+    if result <= 32:
+        msg = f"Installer launch failed: ShellExecuteW returned {result}"
+        logger.error("%s\n%s", msg, details)
+        if output_callback:
+            output_callback(msg)
+        return False
+
     return True
+
+
+def _format_installer_launch_details(installer_path: Path) -> str:
+    return (
+        f"Downloaded installer: {installer_path}\n"
+        f"Launch method: {INSTALLER_LAUNCH_METHOD}\n"
+        f"If the installer does not appear, run this file manually: {installer_path}"
+    )
+
+
+def _shellexecute_installer(installer_path: Path, flags: list[str]) -> int:
+    """Use ShellExecuteW/open to start the GUI installer visibly."""
+    import ctypes
+
+    parameters = subprocess.list2cmdline(flags)
+    result = ctypes.windll.shell32.ShellExecuteW(
+        None,
+        "open",
+        str(installer_path),
+        parameters,
+        str(installer_path.parent),
+        1,
+    )
+    return int(result)
 
 
 def _verify_checksum(

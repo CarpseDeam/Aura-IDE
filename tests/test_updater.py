@@ -9,11 +9,23 @@ import pytest
 import aura.updater as updater
 from aura.updater import (
     GitCommandResult,
+    GitHubAsset,
+    GitHubRelease,
     find_extracted_app_root,
     get_app_repo_root,
     get_update_status,
+    install_packaged_update,
     pull_latest,
 )
+
+
+def _installer_release(version: str = "1.4.6") -> GitHubRelease:
+    return GitHubRelease(
+        tag=f"v{version}",
+        version=version,
+        assets=[GitHubAsset(name=f"AuraSetup-{version}.exe", url="https://example.invalid/installer.exe", size=123)],
+        html_url="https://example.invalid/release",
+    )
 
 
 def test_find_extracted_app_root_uses_flattened_zip_root(tmp_path: Path) -> None:
@@ -167,6 +179,117 @@ def test_launch_windows_updater_rejects_missing_extracted_dir(tmp_path: Path) ->
             extracted_dir=extracted_dir,
             install_dir=install_dir,
         )
+
+
+def test_installer_update_stages_in_localappdata_update_folder(monkeypatch, tmp_path: Path) -> None:
+    local_app_data = tmp_path / "LocalAppData"
+    release = _installer_release()
+    downloads: list[tuple[Path, str | None]] = []
+
+    def fake_download_asset(
+        asset: GitHubAsset,
+        temp_dir: Path,
+        output_callback=None,
+        *,
+        filename: str | None = None,
+    ) -> Path:
+        downloads.append((temp_dir, filename))
+        path = temp_dir / (filename or asset.name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"installer")
+        return path
+
+    monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
+    monkeypatch.setattr(updater, "_download_asset", fake_download_asset)
+    monkeypatch.setattr(updater, "_launch_installer", lambda installer_path, output_callback=None: True)
+
+    result = install_packaged_update(release)
+
+    expected_dir = local_app_data / "Aura" / "updates" / "1.4.6"
+    assert result.success is True
+    assert downloads == [(expected_dir, "AuraSetup-1.4.6.exe")]
+    assert (expected_dir / "AuraSetup-1.4.6.exe").exists()
+
+
+def test_installer_shell_execute_failure_returns_pull_result_false_with_path(monkeypatch, tmp_path: Path) -> None:
+    local_app_data = tmp_path / "LocalAppData"
+    release = _installer_release()
+    output: list[str] = []
+
+    def fake_download_asset(
+        asset: GitHubAsset,
+        temp_dir: Path,
+        output_callback=None,
+        *,
+        filename: str | None = None,
+    ) -> Path:
+        path = temp_dir / (filename or asset.name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"installer")
+        return path
+
+    monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
+    monkeypatch.setattr(updater, "_download_asset", fake_download_asset)
+    monkeypatch.setattr(updater.sys, "platform", "win32")
+    monkeypatch.setattr(updater, "_shellexecute_installer", lambda installer_path, flags: 31)
+
+    result = install_packaged_update(release, output_callback=output.append)
+
+    installer_path = local_app_data / "Aura" / "updates" / "1.4.6" / "AuraSetup-1.4.6.exe"
+    assert result.success is False
+    assert str(installer_path) in result.message
+    assert "Launch method: ShellExecuteW/open" in result.message
+    assert "If the installer does not appear, run this file manually" in result.message
+    assert f"Downloaded installer: {installer_path}" in output
+    assert "Installer launch failed: ShellExecuteW returned 31" in output
+
+
+def test_installer_shell_execute_success_returns_pull_result_true(monkeypatch, tmp_path: Path) -> None:
+    local_app_data = tmp_path / "LocalAppData"
+    release = _installer_release()
+    launched: list[tuple[Path, list[str]]] = []
+    output: list[str] = []
+
+    def fake_download_asset(
+        asset: GitHubAsset,
+        temp_dir: Path,
+        output_callback=None,
+        *,
+        filename: str | None = None,
+    ) -> Path:
+        path = temp_dir / (filename or asset.name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"installer")
+        return path
+
+    def fake_shellexecute(installer_path: Path, flags: list[str]) -> int:
+        launched.append((installer_path, flags))
+        return 33
+
+    monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
+    monkeypatch.setattr(updater, "_download_asset", fake_download_asset)
+    monkeypatch.setattr(updater.sys, "platform", "win32")
+    monkeypatch.setattr(updater, "_shellexecute_installer", fake_shellexecute)
+
+    result = install_packaged_update(release, output_callback=output.append)
+
+    installer_path = local_app_data / "Aura" / "updates" / "1.4.6" / "AuraSetup-1.4.6.exe"
+    assert result.success is True
+    assert launched == [(installer_path, ["/CURRENTUSER", "/LAUNCHAFTERUPDATE=1"])]
+    assert "Launch method: ShellExecuteW/open" in output
+
+
+def test_missing_installer_launch_gives_manual_recovery_instructions(monkeypatch, tmp_path: Path) -> None:
+    output: list[str] = []
+    installer_path = tmp_path / "missing" / "AuraSetup-1.4.6.exe"
+
+    monkeypatch.setattr(updater.sys, "platform", "win32")
+
+    launched = updater._launch_installer(installer_path, output_callback=output.append)
+
+    assert launched is False
+    assert f"Installer file is missing: {installer_path}" in output
+    assert f"If the installer does not appear, run this file manually: {installer_path}" in output
 
 
 def test_get_update_status_reports_not_git(monkeypatch) -> None:

@@ -419,7 +419,7 @@ Aura stores a searchable history of past tasks and saved notes in a local SQLite
 
 Aura can update itself automatically:
 
-- **Packaged Windows Builds** — Aura checks GitHub Releases on startup. If a newer version is available, the "Update" button in the toolbar is highlighted. One click downloads the latest installer (`AuraSetup-X.Y.Z.exe`), launches it silently, and Aura exits. The installer replaces the app files and relaunches Aura. No admin rights are required — Aura installs per-user into `%LOCALAPPDATA%\Aura`.
+- **Packaged Windows Builds** — Aura checks GitHub Releases on startup. If a newer version is available, the "Update" button in the toolbar is highlighted. One click downloads the latest installer (`AuraSetup-X.Y.Z.exe`) to `%LOCALAPPDATA%\Aura\updates\X.Y.Z\`, opens the installer wizard, and exits Aura only after the installer launch is confirmed. If launch fails, Aura stays open and shows the downloaded installer path for manual recovery. No admin rights are required — Aura installs per-user into `%LOCALAPPDATA%\Aura`.
 - **Source Installations** — If running from a git checkout, Aura can pull the latest changes directly from the repository using a fast-forward merge.
 - **Update status check** — The toolbar shows when a newer version is available.
 - **Safety** — The updater never touches your workspaces, `.aura` project folders, or user configuration.
