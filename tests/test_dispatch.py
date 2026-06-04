@@ -771,6 +771,7 @@ def test_worker_result_ok_true_when_writes_and_passing_validation():
 def test_modified_files_are_derived_from_applied_write_receipts_only():
     writes = [
         {"path": "changed.py", "applied": True, "write_outcome": "applied"},
+        {"path": "changed.py", "applied": True, "write_outcome": "applied"},
         {"path": "claimed.py", "applied": False, "write_outcome": "not_applied_craft_rejected"},
         {"path": ".aura/tmp/_check_acceptance.py", "applied": True, "write_outcome": "applied"},
     ]
@@ -902,3 +903,42 @@ def test_recovered_write_failure_does_not_cause_edit_mechanics_blocked():
         write_failures=[{"failure_class": "edit_transaction_not_applicable"}],
         has_applied_writes=True,
     ) == WorkerOutcomeStatus.completed.value
+
+
+def test_unrecovered_write_failure_after_prior_write_blocks_completion():
+    assert _status_for(
+        ok=False,
+        needs_followup=True,
+        recoverable=True,
+        has_hard_failure=False,
+        result_errors=[],
+        has_recoverable_edit_blocker=True,
+        has_applied_writes=True,
+        write_failures=[{"failure_class": "edit_mechanics_old_str_not_found"}],
+    ) == WorkerOutcomeStatus.edit_mechanics_blocked.value
+
+
+def test_validation_not_run_after_files_changed_is_needs_followup():
+    assert _status_for(
+        ok=False,
+        needs_followup=True,
+        recoverable=True,
+        has_hard_failure=False,
+        result_errors=[],
+        has_applied_writes=True,
+        has_unverified_acceptance=True,
+        result_caveats=["Files changed but validation did not run."],
+    ) == WorkerOutcomeStatus.needs_followup.value
+
+
+def test_environment_caveat_is_not_edit_mechanics_failure():
+    assert _status_for(
+        ok=True,
+        needs_followup=False,
+        recoverable=False,
+        has_hard_failure=False,
+        result_errors=[],
+        has_applied_writes=True,
+        result_caveats=["Pre-existing environment issue on a.py: yaml import missing"],
+        write_failures=[{"failure_class": "pre_existing_environment_issue"}],
+    ) == WorkerOutcomeStatus.completed_with_caveats.value

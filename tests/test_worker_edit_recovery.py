@@ -179,6 +179,9 @@ def test_repeated_identical_edit_attempt_is_blocked_and_redirected(tmp_path):
     )
     final_payload = json.loads(history.messages[-1]["content"])
     assert final_payload["failure_class"] == "worker_recovery_exhausted"
+    assert final_payload["details"]["path"] == "a.py"
+    assert final_payload["details"]["tool"] == "edit_file"
+    assert final_payload["details"]["failure_class"] == "edit_mechanics_old_str_not_found"
 
 
 def test_repeated_recovery_blocks_remain_internal_steering(tmp_path):
@@ -510,9 +513,12 @@ def test_recoverable_edit_mechanics_exhaustion_is_single_final_reason(tmp_worksp
     assert result.recoverable is False
     assert result.extras["failed_write_tools"] == []
     assert result.extras["errors"] == [
-        "Worker stopped before recovering from a recoverable edit mechanics failure. (worker_recovery_exhausted)."
+        "Worker stopped before recovering from a recoverable edit mechanics failure. "
+        "(worker_recovery_exhausted). Path: a.py. Tool: edit_file. "
+        "Reason: edit_mechanics_old_str_not_found."
     ]
-    assert result.summary.startswith("Worker needs follow-up")
+    assert result.status == "edit_mechanics_blocked"
+    assert "Edit mechanics blocked" in result.summary
     assert "old_str not found" not in result.summary
 
 

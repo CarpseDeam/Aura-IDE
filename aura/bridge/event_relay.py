@@ -215,20 +215,31 @@ class WorkerEventRelay(QObject):
                         self.edited_existing_files.append(path)
             elif ev.name in WRITE_TOOLS and isinstance(parsed, dict):
                 if parsed.get("applied") is False or str(parsed.get("write_outcome") or "").startswith("not_applied_"):
-                    self.not_applied_writes.append(
-                        {
-                            "tool": ev.name,
-                            "path": parsed.get("path") or parsed.get("rel_path"),
-                            "applied": False,
-                            "write_outcome": parsed.get("write_outcome") or "not_applied_edit_mechanics_blocked",
-                            "failure_class": parsed.get("failure_class", ""),
-                            "error": parsed.get("error", ""),
-                            "quality_bounce": bool(parsed.get("quality_bounce")),
-                            "craft_issues": parsed.get("craft_issues", []),
-                            "pre_existing_environment_issues": parsed.get("pre_existing_environment_issues", []),
-                            "introduced_environment_issues": parsed.get("introduced_environment_issues", []),
-                        }
-                    )
+                    write_record = {
+                        "tool": ev.name,
+                        "path": parsed.get("path") or parsed.get("rel_path"),
+                        "applied": False,
+                        "write_outcome": parsed.get("write_outcome") or "not_applied_edit_mechanics_blocked",
+                        "failure_class": parsed.get("failure_class", ""),
+                        "error": parsed.get("error", ""),
+                        "quality_bounce": bool(parsed.get("quality_bounce")),
+                        "craft_issues": parsed.get("craft_issues", []),
+                        "pre_existing_environment_issues": parsed.get("pre_existing_environment_issues", []),
+                        "introduced_environment_issues": parsed.get("introduced_environment_issues", []),
+                    }
+                    for key in (
+                        "operation_index",
+                        "failed_operation",
+                        "reason",
+                        "stale",
+                        "ambiguous",
+                        "not_found",
+                        "candidate_count",
+                        "candidates",
+                    ):
+                        if key in parsed:
+                            write_record[key] = parsed[key]
+                    self.not_applied_writes.append(write_record)
             # Track reads for read-before-edit enforcement
             if ev.ok and ev.name == "read_file" and isinstance(parsed, dict):
                 path = parsed.get("path")
@@ -349,6 +360,14 @@ class WorkerEventRelay(QObject):
             "pre_existing_environment_issues",
             "introduced_environment_issues",
             "syntax_valid",
+            "operation_index",
+            "failed_operation",
+            "reason",
+            "stale",
+            "ambiguous",
+            "not_found",
+            "candidate_count",
+            "candidates",
         )
         for key in fields:
             if key in parsed:

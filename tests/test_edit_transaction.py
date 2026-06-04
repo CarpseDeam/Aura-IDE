@@ -64,6 +64,159 @@ def test_multi_operation_one_file_python_edit_succeeds_through_one_transaction(t
     assert "def omega()" in content
 
 
+def test_same_file_text_operations_use_updated_in_memory_buffer(tmp_workspace: Path):
+    target = tmp_workspace / "sample.txt"
+    target.write_bytes(b"alpha\nbeta\n")
+
+    proposal = propose_edit_transaction(
+        tmp_workspace,
+        target,
+        [
+            {"op": "replace_text_once", "old": "alpha", "new": "gamma"},
+            {"op": "replace_text_once", "old": "gamma", "new": "delta"},
+        ],
+    )
+
+    assert proposal["ok"] is True
+    assert proposal["new_content"] == "delta\nbeta\n"
+    assert target.read_text(encoding="utf-8") == "alpha\nbeta\n"
+
+
+def test_stale_exact_text_failure_reports_not_found_details(tmp_workspace: Path):
+    target = tmp_workspace / "sample.txt"
+    target.write_text("current\n", encoding="utf-8")
+
+    proposal = propose_edit_transaction(
+        tmp_workspace,
+        target,
+        [{"op": "replace_text_once", "old": "stale", "new": "updated"}],
+    )
+
+    assert proposal["ok"] is False
+    assert proposal["failure_class"] == "edit_transaction_not_applicable"
+    assert proposal["operation_index"] == 0
+    assert proposal["failed_operation"]["old"] == "stale"
+    assert proposal["reason"] == "not_found"
+    assert proposal["not_found"] is True
+    assert proposal["ambiguous"] is False
+    assert proposal["candidate_count"] == 0
+
+
+def test_ambiguous_old_text_failure_reports_candidate_count(tmp_workspace: Path):
+    target = tmp_workspace / "sample.txt"
+    target.write_text("item\nitem\n", encoding="utf-8")
+
+    proposal = propose_edit_transaction(
+        tmp_workspace,
+        target,
+        [{"op": "replace_text_once", "old": "item", "new": "done"}],
+    )
+
+    assert proposal["ok"] is False
+    assert proposal["failure_class"] == "edit_transaction_ambiguous_symbol"
+    assert proposal["reason"] == "ambiguous"
+    assert proposal["ambiguous"] is True
+    assert proposal["candidate_count"] == 2
+    assert len(proposal["candidates"]) == 2
+
+
+def test_newline_normalization_recovery_succeeds_only_when_unique(tmp_workspace: Path):
+    target = tmp_workspace / "sample.txt"
+    target.write_bytes(b"one\r\ntwo\r\n")
+
+    unique = propose_edit_transaction(
+        tmp_workspace,
+        target,
+        [{"op": "replace_text_once", "old": "one\ntwo", "new": "1\n2"}],
+    )
+
+    assert unique["ok"] is True
+    assert unique["new_content"] == "1\r\n2\r\n"
+
+    target.write_bytes(b"one\r\ntwo\r\none\r\ntwo\r\n")
+    ambiguous = propose_edit_transaction(
+        tmp_workspace,
+        target,
+        [{"op": "replace_text_once", "old": "one\ntwo", "new": "1\n2"}],
+    )
+
+    assert ambiguous["ok"] is False
+    assert ambiguous["ambiguous"] is True
+    assert ambiguous["candidate_count"] == 2
+
+
+def test_trimmed_whitespace_recovery_succeeds_only_when_unique(tmp_workspace: Path):
+    target = tmp_workspace / "sample.txt"
+    target.write_bytes(b"\tvalue = 1\n")
+
+    unique = propose_edit_transaction(
+        tmp_workspace,
+        target,
+        [{"op": "replace_text_once", "old": "    value = 1\n", "new": "value = 2\n"}],
+    )
+
+    assert unique["ok"] is True
+    assert unique["new_content"] == "value = 2\n"
+
+    target.write_bytes(b"\tvalue = 1\n  value = 1\n")
+    ambiguous = propose_edit_transaction(
+        tmp_workspace,
+        target,
+        [{"op": "replace_text_once", "old": "    value = 1\n", "new": "value = 2\n"}],
+    )
+
+    assert ambiguous["ok"] is False
+    assert ambiguous["ambiguous"] is True
+    assert ambiguous["candidate_count"] == 2
+
+
+def test_surrounding_context_recovery_requires_unique_context(tmp_workspace: Path):
+    target = tmp_workspace / "sample.txt"
+    target.write_bytes(b"before unique\nold current\nafter unique\n")
+
+    proposal = propose_edit_transaction(
+        tmp_workspace,
+        target,
+        [
+            {
+                "op": "replace_text_once",
+                "old": "old stale",
+                "new": "old fixed\n",
+                "before": "before unique\n",
+                "after": "after unique",
+            }
+        ],
+    )
+
+    assert proposal["ok"] is True
+    assert proposal["new_content"] == "before unique\nold fixed\nafter unique\n"
+
+
+def test_same_file_operation_conflict_fails_before_writing(tmp_workspace: Path):
+    target = tmp_workspace / "sample.txt"
+    original = "alpha\nbeta\n"
+    target.write_text(original, encoding="utf-8")
+
+    registry = ToolRegistry(tmp_workspace, mode="worker")
+    result = TOOL_HANDLERS["apply_edit_transaction"](
+        registry,
+        {
+            "path": "sample.txt",
+            "operations": [
+                {"op": "replace_text_once", "old": "alpha", "new": "gamma"},
+                {"op": "replace_text_once", "old": "alpha", "new": "delta"},
+            ],
+        },
+        _approve,
+        False,
+    )
+
+    assert result.ok is False
+    assert result.payload["applied"] is False
+    assert result.payload["failed_operation"]["old"] == "alpha"
+    assert target.read_text(encoding="utf-8") == original
+
+
 def test_failed_method_replacement_does_not_write_and_returns_symbol_not_found(tmp_workspace: Path):
     target = tmp_workspace / "sample.py"
     original = "class Greeter:\n    def greet(self):\n        return 'hi'\n"

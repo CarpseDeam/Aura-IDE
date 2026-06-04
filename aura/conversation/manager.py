@@ -398,6 +398,10 @@ class ConversationManager:
                                 "Worker stopped before recovering from a recoverable edit "
                                 "mechanics failure."
                             ),
+                            details=self._edit_recovery_details(
+                                edit_fallback_required,
+                                line_range_reread_required,
+                            ),
                         )
                         return
                     syntax_validation_required.difference_update(
@@ -855,12 +859,15 @@ class ConversationManager:
         *,
         failure_class: str,
         error: str,
+        details: dict[str, Any] | None = None,
     ) -> None:
         payload = {
             "ok": False,
             "failure_class": failure_class,
             "error": error,
         }
+        if details:
+            payload["details"] = details
         content = json.dumps(payload, ensure_ascii=False)
         full_message = {
             "role": "assistant",
@@ -870,6 +877,38 @@ class ConversationManager:
         self._history.append_assistant(full_message)
         on_event(ContentDelta(text=content))
         on_event(Done(finish_reason="stop", full_message=full_message))
+
+    @staticmethod
+    def _edit_recovery_details(
+        edit_fallback_required: dict[str, dict[str, Any]],
+        line_range_reread_required: dict[str, dict[str, Any]],
+    ) -> dict[str, Any]:
+        pending = edit_fallback_required or line_range_reread_required
+        if not pending:
+            return {}
+        path = sorted(pending)[0]
+        record = pending[path]
+        details: dict[str, Any] = {
+            "path": path,
+            "tool": record.get("tool") or record.get("name") or "",
+            "failure_class": record.get("failure_class") or "",
+            "error": record.get("error") or "",
+        }
+        for key in (
+            "operation_index",
+            "failed_operation",
+            "reason",
+            "stale",
+            "ambiguous",
+            "not_found",
+            "candidate_count",
+            "candidates",
+            "suggested_next_tool",
+            "suggested_next_action",
+        ):
+            if key in record:
+                details[key] = record[key]
+        return details
 
     def _run_focused_py_compile(
         self,
@@ -1244,6 +1283,7 @@ class ConversationManager:
         elif path and failure_class in EDIT_MECHANICS_FAILURE_CLASSES:
             parsed.setdefault("applied", False)
             parsed.setdefault("write_outcome", "not_applied_edit_mechanics_blocked")
+            parsed.setdefault("tool", name)
             edit_fallback_required[path] = parsed
             parsed["recoverable"] = True
             parsed["suggested_next_tool"] = "apply_edit_transaction"
@@ -1252,6 +1292,7 @@ class ConversationManager:
         elif path and failure_class == "edit_mechanics_stale_line_range":
             parsed.setdefault("applied", False)
             parsed.setdefault("write_outcome", "not_applied_edit_mechanics_blocked")
+            parsed.setdefault("tool", name)
             line_range_reread_required[path] = parsed
             parsed["recoverable"] = True
             parsed["suggested_next_tool"] = "read_file"
@@ -1260,6 +1301,7 @@ class ConversationManager:
         elif path and failure_class in {"patch_hunk_not_found", "patch_hunk_ambiguous"}:
             parsed.setdefault("applied", False)
             parsed.setdefault("write_outcome", "not_applied_edit_mechanics_blocked")
+            parsed.setdefault("tool", name)
             edit_fallback_required[path] = parsed
             parsed["recoverable"] = True
             parsed["suggested_next_tool"] = "apply_edit_transaction"

@@ -822,6 +822,22 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
                                     "type": "string",
                                     "description": "Replacement text for replace_text_once.",
                                 },
+                                "before": {
+                                    "type": "string",
+                                    "description": (
+                                        "Optional unique surrounding context before stale old text for "
+                                        "replace_text_once recovery. Used only when exact/newline/trimmed "
+                                        "matching cannot safely locate old."
+                                    ),
+                                },
+                                "after": {
+                                    "type": "string",
+                                    "description": (
+                                        "Optional unique surrounding context after stale old text for "
+                                        "replace_text_once recovery. Used only when exact/newline/trimmed "
+                                        "matching cannot safely locate old."
+                                    ),
+                                },
                                 "text": {
                                     "type": "string",
                                     "description": "Exact text block to remove for remove_text_once or remove_text_all.",

@@ -409,12 +409,14 @@ class _DispatchProxy(QObject):
         validation_ran = bool(validation_results)
         quality_bounces = list(getattr(relay, "quality_bounces", []))
         not_applied_writes = list(getattr(relay, "not_applied_writes", []))
+        unrecovered_not_applied_writes = _unrecovered_not_applied_writes(relay.tool_results)
 
         # Compute acceptance-unverified
         acceptance_unverified = False
         if req.acceptance.strip():
             if not is_partial and not claimed_validation and not validation_ran:
                 acceptance_unverified = True
+        validation_not_run = bool(relay.write_results) and not validation_ran
 
         # Build structured errors and caveats
         result_errors = list(relay.api_errors)
@@ -484,6 +486,8 @@ class _DispatchProxy(QObject):
 
         if recoverable_write_failures and not relay.write_results and not structured_failure:
             result_caveats.append(_format_recoverable_write_failure(recoverable_write_failures[0]))
+        if validation_not_run:
+            result_caveats.append("Files changed but validation did not run.")
 
         if cleaned_scratch_files:
             result_caveats.append(
@@ -515,12 +519,23 @@ class _DispatchProxy(QObject):
         has_hard_failure = bool(result_errors)
         has_internal_failure = bool(internal_error or relay.api_errors)
         has_validation_failure = bool(failed_validation)
-        has_recoverable_edit_blocker = (bool(recoverable_write_failures) or bool(not_applied_writes)) and not relay.write_results
+        structured_recovery_exhausted = structured_failure.get("failure_class") == "worker_recovery_exhausted"
+        has_recoverable_edit_blocker = (
+            bool(unrecovered_not_applied_writes)
+            or (
+                structured_recovery_exhausted
+                and (bool(recoverable_write_failures) or bool(not_applied_writes))
+            )
+            or (
+                bool(recoverable_write_failures)
+                and not relay.write_results
+            )
+        )
         has_quality_bounce_blocker = bool(quality_bounces) and not relay.write_results
         has_source_inspection_blocker = bool(source_inspection_blockers)
         has_terminal_policy_blocker = bool(terminal_policy_blockers)
         has_no_work = not relay.touched_files and not relay.failed_tool_results and not quality_bounces and not internal_error and not relay.api_errors
-        has_unverified_acceptance = acceptance_unverified
+        has_unverified_acceptance = acceptance_unverified or validation_not_run
 
         # Is this a broad/risky/multi-file task that should have used TODO?
         files_count = len(req.files)
@@ -568,6 +583,9 @@ class _DispatchProxy(QObject):
             if result_caveats:
                 if not summary_continuation.get("reason"):
                     summary_continuation["reason"] = result_caveats[0]
+        if validation_not_run and not has_recoverable_edit_blocker:
+            summary_continuation["status"] = "validation_not_run"
+            summary_continuation["reason"] = "Files changed but validation did not run."
         if patch_quality_unresolved:
             summary_continuation["status"] = "patch_quality_unresolved"
             summary_continuation["reason"] = str(
@@ -619,6 +637,7 @@ class _DispatchProxy(QObject):
         extras = {
             "writes": relay.write_results,
             "not_applied_writes": not_applied_writes,
+            "unrecovered_not_applied_writes": unrecovered_not_applied_writes,
             "write_outcome": _final_write_outcome(relay.write_results, not_applied_writes, internal_error),
             "failed_write_tools": failed_write_tools,
             "internal_recovery_steers": internal_recovery_steers,
@@ -633,6 +652,7 @@ class _DispatchProxy(QObject):
             "caveats": result_caveats,
             "worker_internal_error": bool(internal_error),
             "internal_error": internal_error or "",
+            "validation_not_run": validation_not_run,
             "phase_boundary": relay.phase_boundary_info or {},
             "limit": (
                 relay.phase_boundary_info
@@ -662,12 +682,7 @@ class _DispatchProxy(QObject):
             try:
                 from aura.git_ops import auto_commit
 
-                written_files = [
-                    w["path"] for w in relay.write_results
-                    if isinstance(w.get("path"), str)
-                    and w.get("path")
-                    and not _is_validation_scratch_path(str(w.get("path")))
-                ]
+                written_files = _applied_modified_files(relay.write_results)
                 if written_files:
                     def _do_commit(root, goal, files, summary):
                         auto_commit(root, goal, files, summary)
@@ -930,6 +945,19 @@ def _parse_structured_worker_failure(content: str) -> dict[str, Any]:
 def _format_structured_worker_failure(result: dict[str, Any]) -> str:
     error = str(result.get("error") or "Harness error.")
     failure_class = str(result.get("failure_class") or "worker_failed")
+    detail = result.get("details")
+    if isinstance(detail, dict) and detail:
+        path = str(detail.get("path") or "")
+        tool = str(detail.get("tool") or "")
+        reason = str(detail.get("reason") or detail.get("failure_class") or "")
+        op = detail.get("failed_operation")
+        op_text = ""
+        if isinstance(op, dict) and op:
+            op_text = f" Failed operation: {json.dumps(op, ensure_ascii=False, sort_keys=True)}."
+        target = f" Path: {path}." if path else ""
+        tool_text = f" Tool: {tool}." if tool else ""
+        reason_text = f" Reason: {reason}." if reason else ""
+        return f"{error} ({failure_class}).{target}{tool_text}{reason_text}{op_text}"
     return f"{error} ({failure_class})."
 
 
@@ -957,7 +985,11 @@ def _format_recoverable_write_failure(result: dict[str, Any]) -> str:
     error = str(result.get("error") or result.get("result_preview") or "recoverable edit mechanics failure")
     suggested = str(result.get("suggested_next_tool") or result.get("suggested_tool") or "apply_edit_transaction")
     target = f" on {path}" if path else ""
-    return f"Recoverable edit mechanics failure from {name}{target}: {error}. Next tactic: {suggested}."
+    op = result.get("failed_operation")
+    op_text = ""
+    if isinstance(op, dict) and op:
+        op_text = f" Failed operation: {json.dumps(op, ensure_ascii=False, sort_keys=True)}."
+    return f"Recoverable edit mechanics failure from {name}{target}: {error}. Next tactic: {suggested}.{op_text}"
 
 
 def _unrecovered_validation_failures(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1331,15 +1363,50 @@ def _final_write_outcome(
     return "no_write_needed"
 
 
+def _is_edit_mechanics_not_applied(record: dict[str, Any]) -> bool:
+    failure_class = str(record.get("failure_class") or "")
+    write_outcome = str(record.get("write_outcome") or "")
+    if write_outcome == "not_applied_edit_mechanics_blocked":
+        return True
+    return (
+        failure_class in RECOVERABLE_WORKER_WRITE_FAILURE_CLASSES
+        or failure_class in EDIT_TRANSACTION_FAILURE_CLASSES
+        or failure_class == "edit_mechanics_blocked"
+    )
+
+
+def _unrecovered_not_applied_writes(tool_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    pending: dict[str, dict[str, Any]] = {}
+    for result in tool_results:
+        if result.get("name") not in WRITE_TOOLS:
+            continue
+        path = str(result.get("path") or result.get("rel_path") or "")
+        if not path:
+            continue
+        if result.get("ok") and result.get("applied") is True:
+            pending.pop(path, None)
+            continue
+        if result.get("applied") is False or str(result.get("write_outcome") or "").startswith("not_applied_"):
+            if _is_edit_mechanics_not_applied(result):
+                pending[path] = result
+    return list(pending.values())
+
+
 def _applied_modified_files(writes: list[dict[str, Any]]) -> list[str]:
-    return [
-        str(w["path"])
-        for w in writes
-        if w.get("applied") is True
-        and isinstance(w.get("path"), str)
-        and w.get("path")
-        and not _is_validation_scratch_path(str(w.get("path")))
-    ]
+    files: list[str] = []
+    seen: set[str] = set()
+    for write in writes:
+        path = write.get("path")
+        if (
+            write.get("applied") is True
+            and isinstance(path, str)
+            and path
+            and not _is_validation_scratch_path(path)
+            and path not in seen
+        ):
+            files.append(path)
+            seen.add(path)
+    return files
 
 
 def _check_read_before_edit(
