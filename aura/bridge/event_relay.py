@@ -357,6 +357,7 @@ class WorkerEventRelay(QObject):
             "backup",
             "blocked_command",
             "missing_dependency",
+            "missing_tool",
             "environment_setup_needed",
             "write_outcome",
             "pre_existing_environment_issues",

@@ -62,7 +62,7 @@ from aura.conversation.tools._types import (
     ApprovalRequest,
 )
 from aura.conversation.tools.registry import ToolRegistry
-from aura.python_env import detect_project_python_env, quote_command_arg
+from aura.project_env import preferred_python_for_compile, quote_command_arg
 
 EventCallback = Callable[[Event], None]
 
@@ -925,8 +925,7 @@ class ConversationManager:
         if not paths:
             return True, ""
         workspace_root = self._tools.workspace_root
-        env = detect_project_python_env(Path(workspace_root))
-        compiler = str(env.python_for_compile)
+        compiler = str(preferred_python_for_compile(Path(workspace_root)))
         outputs: list[str] = []
         all_ok = True
         for path in sorted(paths):
@@ -979,8 +978,7 @@ class ConversationManager:
         ]
         if not product_paths:
             return
-        env = detect_project_python_env(Path(self._tools.workspace_root))
-        compiler = quote_command_arg(env.python_for_compile)
+        compiler = quote_command_arg(preferred_python_for_compile(Path(self._tools.workspace_root)))
         command = compiler + " -m py_compile " + " ".join(product_paths)
         payload = {
             "ok": ok,

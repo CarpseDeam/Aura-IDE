@@ -146,7 +146,8 @@ def test_worker_pytest_missing_from_project_env_reports_setup_needed(
     worker_manager: tuple[ConversationManager, MagicMock],
     worker_backend: MagicMock,
 ) -> None:
-    manager, _tools = worker_manager
+    manager, tools = worker_manager
+    (tools.workspace_root / "pyproject.toml").write_text("[project]\nname = 'demo'\n", encoding="utf-8")
     events: list[Event] = []
     command = "pytest tests/test_x.py"
     worker_backend.side_effect = [

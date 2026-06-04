@@ -22,6 +22,36 @@ PROJECT_PYTHON_MODULE_TOOLS = {
     "mypy": "mypy",
 }
 
+PYTHON_PROJECT_MARKERS = (
+    "pyproject.toml",
+    "setup.py",
+    "setup.cfg",
+    "requirements.txt",
+    "requirements-dev.txt",
+    "Pipfile",
+    "poetry.lock",
+    "uv.lock",
+    "tox.ini",
+    "pytest.ini",
+    "mypy.ini",
+    "ruff.toml",
+    ".ruff.toml",
+    ".python-version",
+)
+
+SKIPPED_PROJECT_DIRS = {
+    ".git",
+    ".hg",
+    ".svn",
+    ".venv",
+    "venv",
+    "__pycache__",
+    "node_modules",
+    "dist",
+    "build",
+    ".aura",
+}
+
 
 @dataclass(frozen=True)
 class ProjectPythonEnv:
@@ -55,6 +85,44 @@ def detect_project_python_env(workspace_root: Path) -> ProjectPythonEnv:
         if candidate.is_file():
             return ProjectPythonEnv(root=root, python=candidate)
     return ProjectPythonEnv(root=root, python=None)
+
+
+def detect_python_toolchain(workspace_root: Path) -> ProjectPythonEnv | None:
+    """Return the Python environment only when this workspace looks Python-related."""
+    root = Path(workspace_root)
+    env = detect_project_python_env(root)
+    if env.has_venv or python_project_detected(root):
+        return env
+    return None
+
+
+def python_project_detected(workspace_root: Path) -> bool:
+    root = Path(workspace_root)
+    if any((root / marker).exists() for marker in PYTHON_PROJECT_MARKERS):
+        return True
+    return _has_python_file(root)
+
+
+def python_relevant_to_command(workspace_root: Path, command: str) -> bool:
+    if python_project_detected(workspace_root) or detect_project_python_env(workspace_root).has_venv:
+        return True
+    return _python_interpreter_command_uses_python_tool(command)
+
+
+def _has_python_file(root: Path) -> bool:
+    if not root.exists() or not root.is_dir():
+        return False
+    try:
+        for child in root.iterdir():
+            if child.name in SKIPPED_PROJECT_DIRS:
+                continue
+            if child.is_file() and child.suffix == ".py":
+                return True
+            if child.is_dir() and _has_python_file(child):
+                return True
+    except OSError:
+        return False
+    return False
 
 
 def project_module_available(workspace_root: Path, module_name: str) -> bool:
@@ -107,6 +175,10 @@ def build_project_tool_command(
     *,
     explicit: bool = False,
 ) -> PythonCommandPlan:
+    if not python_relevant_to_command(workspace_root, command):
+        original = str(command or "")
+        return PythonCommandPlan(command=original, original_command=original)
+
     env = detect_project_python_env(workspace_root)
     original = str(command or "")
     if env.python is None:
@@ -230,6 +302,27 @@ def _first_python_module_tool(command: str) -> str | None:
         if tool:
             return tool
     return None
+
+
+def _python_interpreter_command_uses_python_tool(command: str) -> bool:
+    for segment in _split_shell_segments(str(command or "")):
+        try:
+            tokens = shlex.split(segment.text, posix=False)
+        except ValueError:
+            tokens = segment.text.split()
+        if not tokens:
+            continue
+        first = tokens[0].strip("'\"").replace("\\", "/").rsplit("/", 1)[-1].lower()
+        if first.endswith(".exe"):
+            first = first[:-4]
+        if first in {"python", "python3", "py"}:
+            lowered = [token.strip("'\"").lower() for token in tokens]
+            if "py_compile" in lowered:
+                return True
+            for idx, token in enumerate(lowered[:-1]):
+                if token == "-m" and lowered[idx + 1] in PROJECT_PYTHON_MODULE_TOOLS:
+                    return True
+    return False
 
 
 def _python_module_tool_for_segment(segment: str) -> str | None:

@@ -33,10 +33,10 @@ from aura.conversation.tools._types import (
 )
 from aura.conversation.tools.registry import ToolRegistry
 from aura.hooks import hooks
-from aura.python_env import (
-    build_project_python_command,
-    build_project_tool_command,
-    project_env_missing_dependency_payload,
+from aura.project_env import (
+    build_project_command,
+    build_project_command_rewrite,
+    project_environment_missing_payload,
 )
 from aura.sandbox import SandboxExecutor, SandboxResult
 
@@ -327,16 +327,18 @@ class ToolRunner:
                     "_terminal_payload": blocked_payload,
                 }
 
-            command_plan = build_project_tool_command(
+            command_plan = build_project_command(
                 self._workspace_root,
                 str(command),
                 explicit=explicit,
             )
-            if command_plan.missing_dependency:
-                blocked_payload = project_env_missing_dependency_payload(
+            if command_plan.missing_tool:
+                blocked_payload = project_environment_missing_payload(
                     str(command),
-                    command_plan.missing_dependency,
+                    command_plan.missing_tool,
                     explicit=explicit,
+                    failure_class=command_plan.failure_class or "project_environment_missing_tool",
+                    toolchain=command_plan.toolchain,
                 )
                 payload = json.dumps(blocked_payload, ensure_ascii=False)
                 self._history.append_tool_result(tool_call_id, payload)
@@ -351,12 +353,12 @@ class ToolRunner:
                 return {
                     "recoverable": True,
                     "phase_boundary": False,
-                    "reason": "project_environment_missing_dependency",
+                    "reason": command_plan.failure_class or "project_environment_missing_tool",
                     "_terminal_payload": blocked_payload,
                 }
             command = command_plan.command
         else:
-            command = build_project_python_command(
+            command = build_project_command_rewrite(
                 self._workspace_root,
                 str(command),
             ).command

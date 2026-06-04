@@ -1103,7 +1103,7 @@ TERMINAL_TOOL_DEF: dict[str, Any] = {
         "name": "run_terminal_command",
         "description": (
             "Execute a shell command in the workspace directory and stream its output. "
-            "Use this to run linters (e.g. 'ruff check .'), type checkers ('mypy .'), "
+            "Use this to run project validation/build commands: linters, type checkers, "
             "test suites explicitly requested by the user, or other validation/build "
             "commands. The command runs with the workspace as its working "
             "directory. Stdout and stderr are both captured and streamed in real-time, "
@@ -1113,10 +1113,10 @@ TERMINAL_TOOL_DEF: dict[str, Any] = {
             "interactive input. Prefer targeted validation commands over watch mode. "
             "In Worker mode this tool is validation-only; use read_file/read_files/"
             "grep_search/read_file_outline for source inspection. "
-            "Python validation prefers the project-local .venv interpreter when present. "
-            "Do not run global pip installs. Project environment setup requires explicit "
-            "user approval: 'python -m venv .venv' and then a .venv Python pip install "
-            "command such as '.venv/Scripts/python.exe -m pip install -r requirements.txt'. "
+            "Prefer detected project-local tools. For Python projects, validation prefers "
+            "the project-local .venv interpreter when present. Do not run global installs "
+            "for any ecosystem. Project environment setup requires explicit user approval, "
+            "for example 'python -m venv .venv' followed by a .venv Python pip install. "
             "IMPORTANT: If the user specifies a test or lint command, you MUST run it "
             "after modifying files. If the command fails, analyze the output and fix the "
             "code before finishing."
@@ -1126,7 +1126,7 @@ TERMINAL_TOOL_DEF: dict[str, Any] = {
             "properties": {
                 "command": {
                     "type": "string",
-                    "description": "The shell command to execute, e.g. 'python -m py_compile aura/app.py', 'pytest tests/' when explicitly requested, or 'mypy .'. Executed via the system shell.",
+                    "description": "The shell command to execute, e.g. 'python -m py_compile aura/app.py' for touched Python files, 'npm test' for a Node project when available/requested, or another focused validation/build command. Executed via the system shell.",
                 },
                 "timeout": {
                     "type": "integer",
@@ -1145,7 +1145,7 @@ DIAGNOSTIC_TOOL_DEF: dict[str, Any] = {
         "name": "run_diagnostic_command",
         "description": (
             "Execute a short, read-only diagnostic command in the workspace. "
-            "Use this to validate code (py_compile, pytest), inspect git state (status, diff, log), "
+            "Use this to validate code with project-specific read-only commands, inspect git state (status, diff, log), "
             "or search the filesystem (rg, ls, cat). "
             "Rejects mutating, installing, or dangerous commands. "
             "Returns stdout, stderr, exit_code, timed_out, and the original command. "
@@ -1161,7 +1161,7 @@ DIAGNOSTIC_TOOL_DEF: dict[str, Any] = {
                             "A read-only diagnostic command. Examples: "
                             "'python -m py_compile aura/gui/left_pane.py', "
                             "'git status', 'git diff', "
-                            "'pytest tests/test_gui.py -x -q', "
+                            "'npm test', 'cargo test', "
                             "'rg \"class LeftPane\" aura/', "
                             "'ls aura/conversation/tools/'. "
                             "Use 'rg' instead of bare grep for shell searches, or use grep_search when you want structured matches. "

@@ -465,11 +465,12 @@ class _DispatchProxy(QObject):
                     + suffix
                 )
             for r in environment_setup_blockers:
-                dependency = str(r.get("missing_dependency") or "dependency")
+                dependency = str(r.get("missing_dependency") or r.get("missing_tool") or "tool/dependency")
                 command = str(r.get("blocked_command") or "")[:120]
                 suffix = f": {command}" if command else "."
+                label = "dependency" if r.get("missing_dependency") else "tool"
                 result_errors.append(
-                    f"Project environment missing dependency '{dependency}'"
+                    f"Project environment missing {label} '{dependency}'"
                     + suffix
                 )
             # Failed validation commands are hard errors
@@ -802,7 +803,7 @@ def _compute_outcome_status(
         return S.harness_error.value
     if has_source_inspection_blocker or "source_inspection_command_blocked" in failure_classes:
         return S.needs_followup.value
-    if has_environment_setup_blocker or "project_environment_missing_dependency" in failure_classes:
+    if has_environment_setup_blocker or any(fc.startswith("project_environment_missing_") for fc in failure_classes):
         return S.needs_followup.value
     if has_hard_failure:
         if structured_status == "phased":

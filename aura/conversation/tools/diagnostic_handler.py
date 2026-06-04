@@ -3,13 +3,20 @@ import shlex
 import subprocess
 from pathlib import Path
 
-from aura.python_env import build_project_tool_command
+from aura.project_env import build_project_command
 
 ALLOWED_EXECUTABLES = {
     "python",
     "python3",
     "py",
     "pytest",
+    "ruff",
+    "mypy",
+    "npm",
+    "cargo",
+    "go",
+    "make",
+    "cmake",
     "git",
     "rg",
     "ls",
@@ -121,20 +128,26 @@ def run_diagnostic_command(command: str, timeout: int = 30, workspace_root: Path
         raise ValueError("workspace_root is required")
     workspace_root = Path(workspace_root).resolve()
 
-    command_plan = build_project_tool_command(workspace_root, command, explicit=True)
-    if command_plan.missing_dependency:
+    command_plan = build_project_command(workspace_root, command, explicit=True)
+    if command_plan.missing_tool:
+        missing_text = (
+            f"Project environment is missing dependency '{command_plan.missing_tool}'. "
+            "Install it into the project .venv before running this command."
+            if command_plan.failure_class == "project_environment_missing_dependency"
+            else (
+                f"Project environment is missing tool '{command_plan.missing_tool}'. "
+                "Install or configure it in the project-local toolchain before running this command."
+            )
+        )
         return {
             "ok": False,
             "stdout": "",
-            "stderr": (
-                f"Project environment is missing dependency '{command_plan.missing_dependency}'. "
-                "Install it into the project .venv before running this command."
-            ),
+            "stderr": missing_text,
             "exit_code": -1,
             "timed_out": False,
             "command": command,
-            "failure_class": "project_environment_missing_dependency",
-            "missing_dependency": command_plan.missing_dependency,
+            "failure_class": command_plan.failure_class,
+            "missing_tool": command_plan.missing_tool,
             "environment_setup_needed": True,
         }
     command = command_plan.command
