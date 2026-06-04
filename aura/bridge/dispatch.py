@@ -1206,11 +1206,12 @@ def _build_worker_summary(
     DIVIDER = "\u2500" * 38
 
     lines: list[str] = []
+    displayed_writes = _dedupe_summary_writes(writes)
 
     # === Files changed count ===
-    edited_count = sum(1 for w in writes if not w.get("is_new_file"))
-    new_count = sum(1 for w in writes if w.get("is_new_file"))
-    total_count = len(writes)
+    edited_count = sum(1 for w in displayed_writes if not w.get("is_new_file"))
+    new_count = sum(1 for w in displayed_writes if w.get("is_new_file"))
+    total_count = len(displayed_writes)
     if total_count > 0:
         files_changed_str = f"{total_count} ({edited_count} edited, {new_count} new)"
     else:
@@ -1245,10 +1246,10 @@ def _build_worker_summary(
     lines.append(DIVIDER)
 
     # === Modified files ===
-    if writes:
+    if displayed_writes:
         lines.append("")
         lines.append(" Modified files:")
-        for w in writes:
+        for w in displayed_writes:
             tag = "(new)" if w.get("is_new_file") else "(edit)"
             path = str(w.get("path") or "").strip()
             lines.append(f"  \u2022 {path}   {tag}")
@@ -1333,6 +1334,25 @@ def _build_worker_summary(
 
     lines.append(BORDER)
     return "\n".join(lines)
+
+
+def _dedupe_summary_writes(writes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: list[dict[str, Any]] = []
+    by_path: dict[str, dict[str, Any]] = {}
+    for write in writes:
+        path = str(write.get("path") or "").strip()
+        if not path:
+            continue
+        existing = by_path.get(path)
+        if existing is None:
+            record = dict(write)
+            record["path"] = path
+            deduped.append(record)
+            by_path[path] = record
+            continue
+        if write.get("is_new_file"):
+            existing["is_new_file"] = True
+    return deduped
 
 
 def _is_internal_error_summary(error: str) -> bool:

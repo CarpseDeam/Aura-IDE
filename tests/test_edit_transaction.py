@@ -98,6 +98,7 @@ def test_stale_exact_text_failure_reports_not_found_details(tmp_workspace: Path)
     assert proposal["failed_operation"]["old"] == "stale"
     assert proposal["reason"] == "not_found"
     assert proposal["not_found"] is True
+    assert proposal["stale"] is False
     assert proposal["ambiguous"] is False
     assert proposal["candidate_count"] == 0
 

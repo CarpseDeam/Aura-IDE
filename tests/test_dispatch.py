@@ -779,6 +779,26 @@ def test_modified_files_are_derived_from_applied_write_receipts_only():
     assert _applied_modified_files(writes) == ["changed.py"]
 
 
+def test_worker_summary_dedupes_duplicate_modified_file_rows_and_count():
+    summary = _build_worker_summary(
+        WorkerDispatchRequest(goal="Fix", files=["a.py"], spec="spec", acceptance=""),
+        History(),
+        [
+            {"tool": "apply_edit_transaction", "path": "a.py", "applied": True, "is_new_file": False},
+            {"tool": "apply_edit_transaction", "path": "a.py", "applied": True, "is_new_file": False},
+            {"tool": "write_file", "path": "b.py", "applied": True, "is_new_file": True},
+        ],
+        [],
+        {},
+        [],
+        validation_results=[{"command": "python -m py_compile a.py b.py", "ok": True, "exit_code": 0}],
+    )
+
+    assert "Files changed   : 2 (1 edited, 1 new)" in summary
+    assert summary.count("a.py   (edit)") == 1
+    assert summary.count("b.py   (new)") == 1
+
+
 def test_worker_result_needs_followup_not_terminal():
     """WorkerDispatchResult with ok=False and recoverable=True should not be terminal."""
     result = WorkerDispatchResult(

@@ -118,7 +118,7 @@ def _exact_text_failure(
         ),
         "error": error,
         "reason": reason,
-        "stale": reason == "stale" or not_found,
+        "stale": reason == "stale",
         "ambiguous": ambiguous,
         "not_found": not_found,
         "candidate_count": candidate_count,
