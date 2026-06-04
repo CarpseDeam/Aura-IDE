@@ -134,6 +134,7 @@ class WorkerEventHandler(QObject):
                 card = self._spec_host.add_spec_card(
                     tool_call_id, goal, file_list, spec, acceptance, summary
                 )
+                self._chat.scroll_to_bottom(force=True)
             else:
                 card = self._chat.add_spec_card(
                     tool_call_id, goal, file_list, spec, acceptance, summary
@@ -206,6 +207,7 @@ class WorkerEventHandler(QObject):
         dlg = SpecEditDialog(goal, files, spec, acceptance, summary, parent=self.parent())
         if dlg.exec() == SpecEditDialog.DialogCode.Accepted:
             card.update_spec(dlg.goal(), dlg.files(), dlg.spec(), dlg.acceptance(), dlg.summary())
+            self._chat.scroll_to_bottom(force=True)
 
     def _on_cancel_dispatch_clicked(self, tool_call_id: str) -> None:
         """Cancel the pending dispatch."""
@@ -266,6 +268,15 @@ class WorkerEventHandler(QObject):
         card = self._get_spec_card(tool_call_id)
         if card:
             card.worker_finished(ok, summary, status=status)
+        goal = self._worker_summary_goal(tool_call_id, card)
+        self._chat.add_worker_summary(
+            tool_call_id,
+            goal,
+            ok,
+            summary,
+            needs_followup=bool(needs_followup),
+            status=status,
+        )
         if self._active_workflow is not None and self._active_workflow.tool_call_id == tool_call_id:
             metadata = self._worker_result_metadata(tool_call_id)
             self._set_active_workflow(
@@ -287,6 +298,18 @@ class WorkerEventHandler(QObject):
             return {}
         metadata = getter(tool_call_id)
         return metadata if isinstance(metadata, dict) else {}
+
+    def _worker_summary_goal(self, tool_call_id: str, card) -> str:
+        if card is not None and hasattr(card, "current_spec"):
+            try:
+                goal, _files, _spec, _acceptance, _summary = card.current_spec()
+                if goal:
+                    return str(goal)
+            except Exception:
+                logging.exception("Failed to read worker spec card goal")
+        if self._active_workflow is not None and self._active_workflow.tool_call_id == tool_call_id:
+            return self._active_workflow.task_title or "Worker task"
+        return "Worker task"
 
     def _on_worker_cancelled(self, tool_call_id: str) -> None:
         """Stop worker aura and forward cancel to playground/spec card."""
@@ -436,6 +459,7 @@ class WorkerEventHandler(QObject):
             self._spec_host.remove_spec_card(tool_call_id)
         elif hasattr(self._chat, "remove_spec_card"):
             self._chat.remove_spec_card(tool_call_id)
+        self._chat.scroll_to_bottom(force=True)
 
     def _on_worker_usage(
         self,

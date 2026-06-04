@@ -38,6 +38,7 @@ class ChatView(QScrollArea):
     mermaid_detected = Signal(str)  # emits the raw mermaid code
     _CODE_TOOL_NAMES = {"write_file", "apply_edit_transaction", "edit_file", "edit_symbol", "edit_line_range", "patch_file"}
     _BOTTOM_THRESHOLD_PX = 64
+    _BOTTOM_SAFE_MARGIN_PX = 44
 
     def __init__(self) -> None:
         super().__init__()
@@ -46,7 +47,7 @@ class ChatView(QScrollArea):
 
         container = QWidget()
         self._layout = QVBoxLayout(container)
-        self._layout.setContentsMargins(20, 20, 20, 20)
+        self._layout.setContentsMargins(20, 20, 20, self._BOTTOM_SAFE_MARGIN_PX)
         self._layout.setSpacing(32)
         self._layout.addStretch(1)
         self.setWidget(container)
@@ -195,6 +196,10 @@ class ChatView(QScrollArea):
     def set_spec_card_host(self, host: Any | None) -> None:
         """Attach a pinned host used for active Worker spec cards."""
         self._spec_card_host = host
+
+    def _scroll_after_bottom_layout_change(self) -> None:
+        """Force delayed bottom sync after UI below the chat changes height."""
+        self.scroll_to_bottom(force=True)
 
     def _show_empty_hint(self) -> None:
         hint = QLabel(
@@ -558,8 +563,8 @@ class ChatView(QScrollArea):
                 controller.finalize(ok, result_text)
 
                 # THEN update spec card for not-started scenarios (stale/cancelled/expired).
-                # Do NOT insert a WorkerSummaryCard — the Planner/assistant produces the
-                # user-facing final summary after receiving the dispatch result.
+                # Completed dispatches get one deduped final summary card so
+                # live UI and persisted replay show the same terminal state.
                 if dispatch_not_started:
                     spec_card = self.get_spec_card(tool_call_id)
                     if spec_card:
@@ -575,6 +580,21 @@ class ChatView(QScrollArea):
                 # If a CodeWriterCard somehow ended up in the tool cluster in
                 # Failed state, remove it so it doesn't appear as the final item.
                 self._cleanup_failed_code_cards(tool_call_id)
+
+                if summary and not dispatch_not_started:
+                    goal = (
+                        controller.goal
+                        or self._tool_goal_from_args(controller.buffer)
+                        or "Worker task"
+                    )
+                    self.add_worker_summary(
+                        tool_call_id,
+                        goal,
+                        ok,
+                        summary,
+                        needs_followup=needs_followup,
+                        status=status,
+                    )
 
             elif controller.tool_name == "run_research":
                 report = ""
@@ -600,6 +620,15 @@ class ChatView(QScrollArea):
                     self._terminal_cards.pop(tool_call_id, None)
 
             self._scroll_to_bottom()
+
+    def _tool_goal_from_args(self, args_text: str) -> str:
+        try:
+            data = json.loads(args_text)
+        except (json.JSONDecodeError, TypeError):
+            return ""
+        if not isinstance(data, dict):
+            return ""
+        return str(data.get("goal") or data.get("objective") or "").strip()
 
     def append_terminal_output(self, tool_call_id: str, text: str) -> None:
         """Append a chunk of stdout/stderr to the TerminalCard."""
@@ -679,19 +708,22 @@ class ChatView(QScrollArea):
         self._remove_plan_writer_card(tool_call_id)
 
         if self._spec_card_host is not None:
-            return self._spec_card_host.add_spec_card(
+            card = self._spec_card_host.add_spec_card(
                 tool_call_id, goal, files, spec, acceptance, summary
             )
+            self._scroll_after_bottom_layout_change()
+            return card
 
         existing = self._spec_cards.get(tool_call_id)
         if existing is not None:
             existing.update_spec(goal, files, spec, acceptance, summary)
+            self._scroll_after_bottom_layout_change()
             return existing
         card = SpecCard(tool_call_id, goal, files, spec, acceptance, summary=summary, parent=self)
         ac = self.current_assistant()
         ac.add_footer_widget(card)
         self._spec_cards[tool_call_id] = card
-        self._scroll_to_bottom()
+        self._scroll_after_bottom_layout_change()
         return card
 
     def get_spec_card(self, tool_call_id: str) -> SpecCard | None:
@@ -705,6 +737,7 @@ class ChatView(QScrollArea):
     def remove_spec_card(self, tool_call_id: str) -> None:
         if self._spec_card_host is not None:
             self._spec_card_host.remove_spec_card(tool_call_id)
+            self._scroll_after_bottom_layout_change()
             return
 
         card = self._spec_cards.pop(tool_call_id, None)
@@ -717,6 +750,7 @@ class ChatView(QScrollArea):
                 layout.removeWidget(card)
         card.setParent(None)
         card.deleteLater()
+        self._scroll_after_bottom_layout_change()
 
     def add_worker_summary(
         self, tool_call_id: str, goal: str, ok: bool, summary: str,
@@ -727,7 +761,7 @@ class ChatView(QScrollArea):
         existing = self._worker_summary_cards.get(tool_call_id)
         if existing is not None:
             existing.update_summary(goal, ok, summary, needs_followup=needs_followup, status=status)
-            self._scroll_to_bottom()
+            self._scroll_after_bottom_layout_change()
             return
         card = WorkerSummaryCard(
             tool_call_id, goal, ok, summary,

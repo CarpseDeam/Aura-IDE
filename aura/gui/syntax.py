@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,7 @@ from aura.gui.theme import DIFF_ADD_BG, DIFF_DEL_BG, FG_DIM, SUCCESS, DANGER
 # Global cache to avoid redundant lookups during bulk replay
 _STYLE_CACHE: dict[str, Any] = {}
 _LEXER_CACHE: dict[str, Any] = {}
+logger = logging.getLogger(__name__)
 
 
 def _get_cached_style(name: str = "dracula") -> Any:
@@ -69,6 +71,7 @@ class PygmentsHighlighter(QSyntaxHighlighter):
         self._style = _get_cached_style("dracula")
         self._format_cache: dict[tuple, QTextCharFormat] = {}
         self._lexer = _get_cached_lexer(language)
+        self._highlight_error_logged = False
         super().__init__(parent)
 
     def set_language(self, language: str) -> None:
@@ -85,35 +88,49 @@ class PygmentsHighlighter(QSyntaxHighlighter):
         # QSyntaxHighlighter processes block by block. 
         # For most lexers, this is acceptable for a chat UI.
         offset = 0
-        for token, content in self._lexer.get_tokens(text):
-            length = len(content)
-            if length == 0:
-                continue
-            fmt = self._get_format(token)
-            self.setFormat(offset, length, fmt)
-            offset += length
+        try:
+            for token, content in self._lexer.get_tokens(text):
+                length = len(content)
+                if length == 0:
+                    continue
+                fmt = self._get_format(token)
+                self.setFormat(offset, length, fmt)
+                offset += length
+        except Exception:
+            if not self._highlight_error_logged:
+                logger.exception("Syntax highlighting failed; leaving block unformatted")
+                self._highlight_error_logged = True
 
     def _get_format(self, token) -> QTextCharFormat:
         """Get or create a QTextCharFormat for a given Pygments token."""
         if token in self._format_cache:
             return self._format_cache[token]
 
-        style_attr = self._style.style_for_token(token)
+        style_attr = self._style_attr_for_token(token)
         fmt = QTextCharFormat()
 
-        if style_attr["color"]:
+        if style_attr.get("color"):
             fmt.setForeground(QColor(f"#{style_attr['color']}"))
-        if style_attr["bgcolor"]:
+        if style_attr.get("bgcolor"):
             fmt.setBackground(QColor(f"#{style_attr['bgcolor']}"))
-        if style_attr["bold"]:
+        if style_attr.get("bold"):
             fmt.setFontWeight(QFont.Weight.Bold)
-        if style_attr["italic"]:
+        if style_attr.get("italic"):
             fmt.setFontItalic(True)
-        if style_attr["underline"]:
+        if style_attr.get("underline"):
             fmt.setFontUnderline(True)
 
         self._format_cache[token] = fmt
         return fmt
+
+    def _style_attr_for_token(self, token) -> dict[str, Any]:
+        current = token
+        while current is not None:
+            try:
+                return self._style.style_for_token(current)
+            except KeyError:
+                current = getattr(current, "parent", None)
+        return {}
 
 
 class DiffHighlighter(PygmentsHighlighter):
@@ -174,10 +191,15 @@ class DiffHighlighter(PygmentsHighlighter):
         # Token-level syntax highlighting on the code portion (offset = 1)
         if code:
             offset = 1
-            for token, content in self._lexer.get_tokens(code):
-                length = len(content)
-                if length == 0:
-                    continue
-                fmt = self._get_format(token)
-                self.setFormat(offset, length, fmt)
-                offset += length
+            try:
+                for token, content in self._lexer.get_tokens(code):
+                    length = len(content)
+                    if length == 0:
+                        continue
+                    fmt = self._get_format(token)
+                    self.setFormat(offset, length, fmt)
+                    offset += length
+            except Exception:
+                if not self._highlight_error_logged:
+                    logger.exception("Diff syntax highlighting failed; leaving block partially formatted")
+                    self._highlight_error_logged = True
