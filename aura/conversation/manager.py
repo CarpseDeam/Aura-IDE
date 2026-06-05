@@ -16,10 +16,9 @@ the supplied DispatchCallback rather than the registry.
 from __future__ import annotations
 
 import hashlib
-import subprocess
-import sys
 import json
 import re
+import subprocess
 import threading
 from pathlib import Path
 from typing import Any, Callable
@@ -38,8 +37,11 @@ from aura.client import (
     Usage,
     WorkerDispatchRequested,
 )
-from aura.hooks import hooks
 from aura.config import ModelId, ThinkingMode
+from aura.conversation.dependency_setup import (
+    project_install_command,
+    setup_commands_match,
+)
 from aura.conversation.dispatch import (
     DispatchCallback,
     WorkerDispatchRequest,
@@ -48,25 +50,21 @@ from aura.conversation.dispatch import (
     infer_outcome_status,
 )
 from aura.conversation.history import History
-from aura.conversation.dependency_setup import (
-    missing_import_modules_from_issues,
-    plan_dependency_setup,
-    project_install_command,
-)
 from aura.conversation.loop_detection import LoopDetector
-from aura.conversation.tool_runner import ToolRunner
 from aura.conversation.tool_limits import (
     MAX_WORKER_REDISPATCHES_PER_USER_TURN,
-    ToolLimitState,
     WRITE_TOOLS,
+    ToolLimitState,
     limit_reached_payload,
 )
+from aura.conversation.tool_runner import ToolRunner
 from aura.conversation.tools._types import (
     ApprovalCallback,
     ApprovalDecision,
     ApprovalRequest,
 )
 from aura.conversation.tools.registry import ToolRegistry
+from aura.hooks import hooks
 from aura.project_env import preferred_python_for_compile, quote_command_arg
 
 EventCallback = Callable[[Event], None]
@@ -935,7 +933,8 @@ class ConversationManager:
             return "Dependency setup is required before retrying the rejected write."
         path = sorted(dependency_setup_required)[0]
         state = dependency_setup_required[path]
-        package = str(state.get("package") or state.get("module") or "dependency")
+        packages = ConversationManager._dependency_setup_packages(state)
+        package_label = ", ".join(f"'{package}'" for package in packages) if packages else "the dependency"
         dep_file = str(state.get("dependency_file") or "dependency file")
         setup_command = str(state.get("setup_command") or "")
         declared = bool(state.get("declared"))
@@ -944,9 +943,9 @@ class ConversationManager:
             "Do not create placeholder modules to bypass unresolved imports.",
         ]
         if declared:
-            lines.append(f"The dependency '{package}' is already declared. Run the project-local setup command.")
+            lines.append(f"{package_label} already declared. Run the project-local setup command.")
         else:
-            lines.append(f"Add '{package}' to {dep_file}, then run the project-local setup command.")
+            lines.append(f"Add {package_label} to {dep_file}, then run the project-local setup command.")
         if setup_command:
             lines.append(f"Setup command: {setup_command}")
         lines.append("After setup succeeds, retry the original write once.")
@@ -1338,8 +1337,14 @@ class ConversationManager:
 
         if name == "run_terminal_command":
             command = " ".join(str(args.get("command") or "").strip().split())
-            expected = " ".join(setup_command.strip().split())
-            if command == expected and declared:
+            if (
+                declared
+                and setup_commands_match(
+                    setup_command,
+                    command,
+                    workspace_root=Path(self._tools.workspace_root),
+                )
+            ):
                 return None
 
         if name in WRITE_TOOLS:
@@ -1349,8 +1354,11 @@ class ConversationManager:
             if requested_path == target and setup_done:
                 return None
 
+        packages = self._dependency_setup_packages(state)
+        missing_label = ", ".join(packages) if packages else str(state.get("package") or state.get("module") or "")
         if not declared:
-            action = f"Add the dependency to {dependency_file}; do not create placeholder modules."
+            dependency_label = ", ".join(f"'{package}'" for package in packages) if packages else "the dependency"
+            action = f"Add {dependency_label} to {dependency_file}; do not create placeholder modules."
             next_tool = "write_file"
         elif not setup_done:
             action = f"Run project-local dependency setup: {setup_command}"
@@ -1367,11 +1375,20 @@ class ConversationManager:
             suggested_next_action=action,
             recoverable=True,
         )
-        payload["missing_dependency"] = state.get("package") or state.get("module") or ""
+        payload["missing_dependency"] = missing_label
+        payload["missing_dependencies"] = packages
         payload["dependency_file"] = dependency_file
         payload["setup_command"] = setup_command
         self._record_recovery_block(payload, f"dependency-setup:{target}:{name}", recovery_block_counts)
         return self._blocked_tool_result(tool_call_id, name, payload)
+
+    @staticmethod
+    def _dependency_setup_packages(state: dict[str, Any]) -> list[str]:
+        packages = state.get("packages")
+        if isinstance(packages, list):
+            return [str(package) for package in packages if str(package)]
+        package = str(state.get("package") or "")
+        return [package] if package else []
 
     def _record_dependency_setup_required(
         self,
@@ -1381,18 +1398,46 @@ class ConversationManager:
         parsed: dict[str, Any],
         dependency_setup_required: dict[str, dict[str, Any]],
     ) -> None:
+        modules = self._payload_values(parsed, "missing_modules", "missing_module", "module")
+        packages = self._payload_values(parsed, "missing_dependencies", "missing_dependency", "package")
         prior = dependency_setup_required.get(path)
         if prior and prior.get("setup_done"):
+            prior_packages = set(self._dependency_setup_packages(prior))
+            new_packages = set(packages)
+            if new_packages - prior_packages:
+                prior["modules"] = sorted(set(self._payload_values(prior, "modules", "module")) | set(modules))
+                prior["packages"] = sorted(prior_packages | new_packages)
+                prior["module"] = prior["modules"][0] if prior["modules"] else str(prior.get("module") or "")
+                prior["package"] = prior["packages"][0] if prior["packages"] else str(prior.get("package") or "")
+                prior["declared"] = bool(parsed.get("dependency_declared"))
+                prior["dependency_file"] = parsed.get("dependency_file") or prior.get("dependency_file") or ""
+                prior["setup_command"] = parsed.get("setup_command") or prior.get("setup_command") or ""
+                prior["setup_done"] = False
+                prior["setup_failed"] = False
+                return
             prior["setup_failed"] = True
             parsed["recoverable"] = False
             parsed["failure_class"] = "project_environment_setup_failed"
             parsed["error"] = "Dependency setup failed. Details are in Worker Log."
             return
+        if prior:
+            prior["modules"] = sorted(set(self._payload_values(prior, "modules", "module")) | set(modules))
+            prior["packages"] = sorted(set(self._dependency_setup_packages(prior)) | set(packages))
+            prior["module"] = prior["modules"][0] if prior["modules"] else str(prior.get("module") or "")
+            prior["package"] = prior["packages"][0] if prior["packages"] else str(prior.get("package") or "")
+            prior["declared"] = bool(prior.get("declared")) and bool(parsed.get("dependency_declared"))
+            prior["dependency_file"] = parsed.get("dependency_file") or prior.get("dependency_file") or ""
+            prior["setup_command"] = parsed.get("setup_command") or prior.get("setup_command") or ""
+            if prior["setup_command"] == "python -m venv .venv" and prior["declared"]:
+                prior["venv_pending"] = True
+            return
 
         state = {
             "tool": tool,
-            "module": parsed.get("missing_module") or parsed.get("module") or "",
-            "package": parsed.get("missing_dependency") or parsed.get("package") or "",
+            "module": modules[0] if modules else "",
+            "modules": modules,
+            "package": packages[0] if packages else "",
+            "packages": packages,
             "declared": bool(parsed.get("dependency_declared")),
             "dependency_file": parsed.get("dependency_file") or "",
             "setup_command": parsed.get("setup_command") or "",
@@ -1402,6 +1447,21 @@ class ConversationManager:
         if state["setup_command"] == "python -m venv .venv" and state["declared"]:
             state["venv_pending"] = True
         dependency_setup_required[path] = state
+
+    @staticmethod
+    def _payload_values(payload: dict[str, Any], list_key: str, *scalar_keys: str) -> list[str]:
+        values: list[str] = []
+        raw_values = payload.get(list_key)
+        if isinstance(raw_values, list):
+            for value in raw_values:
+                text = str(value or "")
+                if text and text not in values:
+                    values.append(text)
+        for key in scalar_keys:
+            text = str(payload.get(key) or "")
+            if text and text not in values:
+                values.append(text)
+        return values
 
     @staticmethod
     def _mark_dependency_file_write_applied(
@@ -1425,12 +1485,29 @@ class ConversationManager:
         payload = loop_info.get("_terminal_payload") if isinstance(loop_info, dict) else None
         if not isinstance(payload, dict):
             return
-        command = " ".join(str(payload.get("command") or args.get("command") or "").strip().split())
-        if not command:
+        commands = [
+            payload.get("requested_command"),
+            payload.get("original_command"),
+            args.get("command"),
+            payload.get("command"),
+        ]
+        observed_commands = [
+            " ".join(str(command or "").strip().split())
+            for command in commands
+            if str(command or "").strip()
+        ]
+        if not observed_commands:
             return
         for state in dependency_setup_required.values():
             expected = " ".join(str(state.get("setup_command") or "").strip().split())
-            if command != expected:
+            if not any(
+                setup_commands_match(
+                    expected,
+                    command,
+                    workspace_root=Path(self._tools.workspace_root),
+                )
+                for command in observed_commands
+            ):
                 continue
             if not payload.get("ok"):
                 state["setup_failed"] = True

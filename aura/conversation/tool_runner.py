@@ -23,11 +23,11 @@ from aura.conversation.dispatch import (
 from aura.conversation.history import History
 from aura.conversation.loop_detection import LoopDetector
 from aura.conversation.spec_quality import validate_worker_dispatch_spec
+from aura.conversation.terminal_policy import worker_terminal_command_allowed
 from aura.conversation.tool_limits import (
     ToolLimitState,
     limit_reached_payload,
 )
-from aura.conversation.terminal_policy import worker_terminal_command_allowed
 from aura.conversation.tools._types import (
     ApprovalDecision,
 )
@@ -286,6 +286,7 @@ class ToolRunner:
         explicit_validation_commands: list[str] | None = None,
     ) -> dict[str, Any] | None:
         command = args.get("command", "")
+        requested_command = str(command or "")
         if not command:
             payload = json.dumps({"ok": False, "error": "command is required"})
             self._history.append_tool_result(tool_call_id, payload)
@@ -358,11 +359,14 @@ class ToolRunner:
                     "_terminal_payload": blocked_payload,
                 }
             command = command_plan.command
+            original_command = command_plan.original_command or requested_command
         else:
-            command = build_project_command_rewrite(
+            command_plan = build_project_command_rewrite(
                 self._workspace_root,
                 str(command),
-            ).command
+            )
+            command = command_plan.command
+            original_command = command_plan.original_command or requested_command
 
         timeout = self._resolve_terminal_timeout(
             command=command,
@@ -406,6 +410,8 @@ class ToolRunner:
             "exit_code": exit_code,
             "output": full_output,
             "command": command,
+            "requested_command": requested_command,
+            "original_command": original_command,
         }
         payload = json.dumps(payload_dict, ensure_ascii=False)
 

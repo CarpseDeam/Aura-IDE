@@ -1,10 +1,10 @@
 """Worker terminal command policy."""
 from __future__ import annotations
 
-from dataclasses import dataclass
-from pathlib import Path
 import re
 import shlex
+from dataclasses import dataclass
+from pathlib import Path
 
 from aura.conversation.dependency_setup import (
     safe_project_environment_setup_command,
@@ -12,7 +12,8 @@ from aura.conversation.dependency_setup import (
 )
 
 SOURCE_INSPECTION_ERROR = (
-    "Worker terminal is validation-only. Use structured read tools for source inspection."
+    "Worker terminal supports validation/build commands and safe project-local dependency setup. "
+    "Use structured read tools for source inspection."
 )
 SOURCE_INSPECTION_NEXT_ACTION = (
     "Use read_file, read_files, grep_search, read_file_outline, find_usages, or "
@@ -62,9 +63,6 @@ def worker_terminal_command_allowed(
     workspace_root: Path | str | None = None,
 ) -> TerminalPolicyDecision:
     """Return whether a normal Worker may run *command* in terminal."""
-    if _matches_explicit_validation(command, explicit_validation_commands):
-        return TerminalPolicyDecision(True, "explicit validation command", "", "", "")
-
     root = Path(workspace_root) if workspace_root is not None else None
     if unsafe_global_environment_setup_command(command) and not safe_project_environment_setup_command(
         command,
@@ -91,6 +89,17 @@ def worker_terminal_command_allowed(
                 "through .venv Python or a project manager such as uv, poetry, or pdm."
             ),
         )
+    if _looks_like_source_inspection(_normalize_command(command)):
+        return TerminalPolicyDecision(
+            False,
+            SOURCE_INSPECTION_ERROR,
+            "source_inspection_command_blocked",
+            "read_file",
+            SOURCE_INSPECTION_NEXT_ACTION,
+        )
+    if _matches_explicit_validation(command, explicit_validation_commands):
+        return TerminalPolicyDecision(True, "explicit validation command", "", "", "")
+
     classification = classify_worker_terminal_command(command)
     if classification == "validation":
         return TerminalPolicyDecision(True, "validation command", "", "", "")
@@ -105,7 +114,10 @@ def worker_terminal_command_allowed(
 
     return TerminalPolicyDecision(
         False,
-        "Worker terminal is validation-only. This command is not a recognized validation/build/test command.",
+        (
+            "Worker terminal supports validation/build commands and safe project-local dependency setup. "
+            "This command is not recognized as one of those allowed command types."
+        ),
         "worker_terminal_not_validation",
         "typed_blocker",
         "Run only validation/build/test commands, or report a typed blocker if validation cannot be performed with available tools.",

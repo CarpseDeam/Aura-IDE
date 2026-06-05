@@ -1,11 +1,12 @@
 """Focused tests for Craft compiler integration in write tools."""
 
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
-from aura.conversation.tools.registry import ToolRegistry
-from aura.conversation.tools._write_mixin import WriteHandlersMixin, _run_compiler_pipeline
+import pytest
+
 from aura.conversation.tools._types import ToolExecResult
+from aura.conversation.tools._write_mixin import WriteHandlersMixin, _run_compiler_pipeline
+from aura.conversation.tools.registry import ToolRegistry
 from aura.craft.types import CompilerBounce, CraftIssue, CraftIssueSeverity
 
 
@@ -124,6 +125,59 @@ class TestWriteMixinCompiler:
         assert result.payload["dependency_file"] == "pyproject.toml"
         assert result.payload["setup_command"] == "python -m venv .venv"
         assert "quality_bounce" not in result.payload
+
+    @pytest.mark.usefixtures("enable_craft")
+    def test_multiple_broken_imports_are_reported_in_one_dependency_setup_payload(self, tmp_workspace):
+        (tmp_workspace / "pyproject.toml").write_text(
+            "[project]\nname = 'demo'\ndependencies = []\n",
+            encoding="utf-8",
+        )
+        proposal = {
+            "ok": True,
+            "rel_path": "app.py",
+            "old_content": "",
+            "new_content": "from fastapi import FastAPI\nimport httpx\n",
+            "is_new_file": True,
+        }
+        issues = [
+            CraftIssue(
+                line=1,
+                column=0,
+                code="broken-import",
+                message="Import source 'fastapi' could not be resolved in workspace or stdlib.",
+                suggestion="Install the missing package or correct the import path.",
+                severity=CraftIssueSeverity.HARD,
+            ),
+            CraftIssue(
+                line=2,
+                column=0,
+                code="broken-import",
+                message="Import source 'httpx' could not be resolved in workspace or stdlib.",
+                suggestion="Install the missing package or correct the import path.",
+                severity=CraftIssueSeverity.HARD,
+            ),
+        ]
+
+        with patch("aura.conversation.tools._write_mixin.compiler_service.process_proposal") as process:
+            process.side_effect = lambda capsule, workspace_root=None: CompilerBounce(
+                capsule=capsule,
+                issues=issues,
+                repair_instructions="Install the missing packages.",
+                attempt_number=1,
+                max_attempts=2,
+            )
+
+            result = _run_compiler_pipeline(proposal, "write_file", workspace_root=tmp_workspace)
+
+        assert result is not None
+        assert result.ok is True
+        assert result.payload["dependency_setup_needed"] is True
+        assert result.payload["dependency_declared"] is False
+        assert result.payload["missing_modules"] == ["fastapi", "httpx"]
+        assert result.payload["missing_dependencies"] == ["fastapi", "httpx"]
+        assert result.payload["undeclared_dependencies"] == ["fastapi", "httpx"]
+        assert "fastapi" in result.payload["suggested_next_action"]
+        assert "httpx" in result.payload["suggested_next_action"]
 
     @pytest.mark.usefixtures("enable_craft")
     def test_new_python_write_enters_craft(self, tmp_workspace):

@@ -19,20 +19,28 @@ import stat
 import tempfile
 from pathlib import Path
 
-from aura.paths import safe_relative_to
-
 from aura.conversation.dependency_setup import (
     missing_import_modules_from_issues,
     plan_dependency_setup,
 )
 from aura.conversation.tools._types import ApprovalRequest, ToolExecResult
+from aura.paths import safe_relative_to
 
 # Import the registry module so we can look up functions at call time.
 # This creates a circular import, but Python handles it because
 # `registry` is already in sys.modules by the time this module is loaded.
 
 try:
-    from aura.craft import CraftEngine, ProposalCapsule, ChangeIntent, line_in_ranges, CompilerService, CompiledPatch, CompilerBounce, CompilerReject, ExplicitSpecContract, OwnershipContext
+    from aura.craft import (
+        CompiledPatch,
+        CompilerBounce,
+        CompilerReject,
+        CompilerService,
+        CraftEngine,
+        ExplicitSpecContract,
+        OwnershipContext,
+        ProposalCapsule,
+    )
     from aura.craft.compiler import compiler_service
 except ImportError:
     CraftEngine = None
@@ -320,6 +328,7 @@ def _maybe_humanize_proposal(proposal: dict) -> ToolExecResult | None:
 
 import difflib
 
+
 def _compute_craft_line_ranges(proposal: dict) -> list[tuple[int, int]]:
     proposed_lines = proposal.get("new_content", "").splitlines()
     if proposal.get("is_new_file"):
@@ -351,15 +360,28 @@ def _dependency_setup_payload(
     modules = missing_import_modules_from_issues(issue_payloads)
     if not modules:
         return None
-    plan = plan_dependency_setup(Path(workspace_root), modules[0])
-    if plan is None:
+    plans = []
+    seen_packages: set[str] = set()
+    for module in modules:
+        plan = plan_dependency_setup(Path(workspace_root), module)
+        if plan is None or plan.package in seen_packages:
+            continue
+        plans.append(plan)
+        seen_packages.add(plan.package)
+    if not plans:
         return None
+    plan = plans[0]
+    missing_modules = [item.module for item in plans]
+    missing_dependencies = [item.package for item in plans]
+    undeclared_dependencies = [item.package for item in plans if not item.declared]
+    all_declared = not undeclared_dependencies
 
     action = (
         f"Run project-local dependency setup: {plan.setup_command}"
-        if plan.declared
+        if all_declared
         else (
-            f"Add '{plan.package}' to {plan.dependency_file}, then run "
+            f"Add {', '.join(repr(package) for package in undeclared_dependencies)} "
+            f"to {plan.dependency_file}, then run "
             f"project-local dependency setup: {plan.setup_command}"
         )
     )
@@ -372,12 +394,15 @@ def _dependency_setup_payload(
         "path": rel_path,
         "is_new_file": is_new_file,
         "missing_module": plan.module,
+        "missing_modules": missing_modules,
         "missing_dependency": plan.package,
-        "dependency_declared": plan.declared,
+        "missing_dependencies": missing_dependencies,
+        "undeclared_dependencies": undeclared_dependencies,
+        "dependency_declared": all_declared,
         "dependency_file": plan.dependency_file,
         "setup_command": plan.setup_command,
         "craft_issues": issue_payloads,
-        "suggested_next_tool": "run_terminal_command" if plan.declared else "write_file",
+        "suggested_next_tool": "run_terminal_command" if all_declared else "write_file",
         "suggested_next_action": (
             action
             + ". Do not create placeholder modules. After setup succeeds, retry the original write once."

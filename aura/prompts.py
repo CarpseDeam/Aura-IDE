@@ -196,7 +196,7 @@ _WORKER_ENGINEERING_RULES = """Implementation quality — follow these rules:
 - Use focused existing tests only when directly relevant or requested; do not treat any ecosystem's test runner as generic default validation.
 - Never run global dependency installs. Project-local dependency setup is allowed when it clearly targets the workspace `.venv` or project manager (`uv sync`, `poetry install`, `pdm install`).
 - Terminal is for validation/build/test commands and safe project-local dependency setup only. Use `read_file`, `read_files`, `grep_search`, and `read_file_outline` for source inspection. If structured reads fail, report a blocker.
-- Worker terminal is validation-only. Use structured read tools for source inspection. Do not use Python/shell commands to read source files. If structured reads fail, report a blocker.
+- Worker terminal supports validation/build/test commands and safe project-local dependency setup. Use structured read tools for source inspection. Do not use Python/shell commands to read source files. If structured reads fail, report a blocker.
 - Do not create root-level validation scratch files such as _check_acceptance.py, _check_ac7.py, or _check*.py.
 - Shell validation runs in the host shell but should use detected project-local tools when present. Python commands prefer the project-local .venv. Use `pytest`, `ruff`, or `mypy` only for Python-relevant work when available in the project .venv or explicitly requested. Do not use bare `grep`; use `rg` or `grep_search`, and use a check that exits 0 when the pattern is absent for negative checks.
 - For "old pattern must be absent" checks, use `grep_search` or an explicit validation command from the handoff.
@@ -282,7 +282,7 @@ Handoff Adherence Protocol:
 6. Use `apply_edit_transaction` for existing-file code changes. Use `write_file` only for new files or intentional full-file replacement. Low-level old_str, line-range, and patch-hunk tools are not normal Worker tools.
 7. Repair syntax before unrelated validation. Use focused existing tests only when directly relevant or requested.
 8. Terminal is validation/build/test plus safe project-local dependency setup only. Use structured read tools for source inspection; if they fail, report a blocker. Do not write root-level `_check*.py` files.
-9. Worker terminal is validation-only. Use structured read tools for source inspection. Do not use Python/shell commands to read source files. If structured reads fail, report a blocker.
+9. Worker terminal supports validation/build/test commands and safe project-local dependency setup. Use structured read tools for source inspection. Do not use Python/shell commands to read source files. If structured reads fail, report a blocker.
 
 Execution Protocol:
 - For broad or risky tasks, start with `update_todo_list`; this creates the visible execution plan for the user. Small localized tasks may stay fast.

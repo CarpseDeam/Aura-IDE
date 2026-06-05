@@ -11,7 +11,10 @@ from pathlib import Path
 try:
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover - Python < 3.11 fallback
-    tomllib = None
+    try:
+        import tomli as tomllib
+    except ModuleNotFoundError:
+        tomllib = None
 
 
 DEPENDENCY_FILES = (
@@ -67,9 +70,11 @@ def safe_project_environment_setup_command(
     lowered = [_clean_token(token).lower().replace("\\", "/") for token in tokens]
 
     if lowered in (["uv", "sync"], ["uv", "sync", "--all-extras"], ["uv", "sync", "--dev"]):
-        return True
-    if lowered == ["poetry", "install"] or lowered == ["pdm", "install"]:
-        return True
+        return _project_manager_evidence_exists(workspace_root, {"pyproject.toml", "uv.lock"})
+    if lowered == ["poetry", "install"]:
+        return _project_manager_evidence_exists(workspace_root, {"pyproject.toml", "poetry.lock"})
+    if lowered == ["pdm", "install"]:
+        return _project_manager_evidence_exists(workspace_root, {"pyproject.toml", "pdm.lock", "pdm.toml"})
 
     if _is_python_m_venv_dotvenv(lowered):
         return workspace_root is not None and not _workspace_venv_exists(Path(workspace_root))
@@ -187,6 +192,25 @@ def project_install_command(workspace_root: Path, dependency_file: str | None = 
     return f"{python} -m pip install -e ."
 
 
+def setup_commands_match(
+    expected_command: str,
+    observed_command: str,
+    *,
+    workspace_root: Path | None = None,
+) -> bool:
+    """Compare setup commands while accepting rewritten workspace .venv Python paths."""
+    expected = _normalize_command(expected_command)
+    observed = _normalize_command(observed_command)
+    if not expected or not observed:
+        return False
+    if expected == observed:
+        return True
+
+    expected_tokens = _canonical_setup_tokens(expected, workspace_root=workspace_root)
+    observed_tokens = _canonical_setup_tokens(observed, workspace_root=workspace_root)
+    return expected_tokens is not None and expected_tokens == observed_tokens
+
+
 def missing_import_modules_from_issues(issues: object) -> list[str]:
     modules: list[str] = []
     if not isinstance(issues, list):
@@ -207,6 +231,13 @@ def missing_import_modules_from_issues(issues: object) -> list[str]:
 
 def _is_python_m_venv_dotvenv(tokens: list[str]) -> bool:
     return len(tokens) == 4 and tokens[0] in {"python", "python3", "py"} and tokens[1:4] == ["-m", "venv", ".venv"]
+
+
+def _project_manager_evidence_exists(workspace_root: Path | None, filenames: set[str]) -> bool:
+    if workspace_root is None:
+        return False
+    root = Path(workspace_root)
+    return any((root / filename).exists() for filename in filenames)
 
 
 def _is_workspace_venv_pip_install(tokens: list[str], *, workspace_root: Path | None) -> bool:
@@ -243,6 +274,19 @@ def _is_workspace_venv_python(value: str, *, workspace_root: Path | None) -> boo
         except OSError:
             return False
     return False
+
+
+def _canonical_setup_tokens(command: str, *, workspace_root: Path | None) -> list[str] | None:
+    segments = _split_command_segments(command)
+    if len(segments) != 1:
+        return None
+    tokens = _split_tokens(segments[0])
+    if not tokens:
+        return None
+    first = _clean_token(tokens[0])
+    if _is_workspace_venv_python(first, workspace_root=workspace_root):
+        return ["<workspace-venv-python>", *[_clean_token(token).lower().replace("\\", "/") for token in tokens[1:]]]
+    return [_clean_token(token).lower().replace("\\", "/") for token in tokens]
 
 
 def _workspace_venv_exists(workspace_root: Path) -> bool:
@@ -385,5 +429,6 @@ __all__ = [
     "preferred_setup_command",
     "project_install_command",
     "safe_project_environment_setup_command",
+    "setup_commands_match",
     "unsafe_global_environment_setup_command",
 ]

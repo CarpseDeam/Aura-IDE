@@ -28,7 +28,10 @@ def test_worker_terminal_policy_blocks_source_inspection_commands() -> None:
         payload = decision.to_blocked_payload(command)
         assert decision.allowed is False
         assert payload["failure_class"] == "source_inspection_command_blocked"
-        assert payload["error"] == "Worker terminal is validation-only. Use structured read tools for source inspection."
+        assert payload["error"] == (
+            "Worker terminal supports validation/build commands and safe project-local dependency setup. "
+            "Use structured read tools for source inspection."
+        )
         assert payload["suggested_next_tool"] == "read_file"
         assert payload["suggested_next_action"] == (
             "Use read_file, read_files, grep_search, read_file_outline, find_usages, or "
@@ -93,6 +96,38 @@ def test_worker_terminal_policy_allows_project_local_dependency_setup(tmp_path) 
         r".venv\Scripts\python.exe -m pip install -r requirements-dev.txt",
         ".venv/bin/python -m pip install -e .",
         ".venv/bin/python -m pip install -r requirements.txt",
+    ]
+
+    for command in commands:
+        assert classify_worker_terminal_command(command) == "project_environment_setup"
+        decision = worker_terminal_command_allowed(command, workspace_root=tmp_path)
+        assert decision.allowed is True
+        assert decision.failure_class == ""
+
+
+def test_worker_terminal_policy_allows_project_manager_setup_with_project_evidence(tmp_path) -> None:
+    commands_and_files = [
+        ("uv sync", "pyproject.toml"),
+        ("uv sync --all-extras", "uv.lock"),
+        ("uv sync --dev", "pyproject.toml"),
+        ("poetry install", "poetry.lock"),
+        ("pdm install", "pdm.toml"),
+    ]
+
+    for command, filename in commands_and_files:
+        workspace = tmp_path / command.replace(" ", "_").replace("-", "_")
+        workspace.mkdir()
+        (workspace / filename).write_text("", encoding="utf-8")
+
+        assert classify_worker_terminal_command(command) == "project_environment_setup"
+        decision = worker_terminal_command_allowed(command, workspace_root=workspace)
+
+        assert decision.allowed is True
+        assert decision.failure_class == ""
+
+
+def test_worker_terminal_policy_blocks_project_manager_setup_without_project_evidence(tmp_path) -> None:
+    commands = [
         "uv sync",
         "uv sync --all-extras",
         "uv sync --dev",
@@ -101,10 +136,11 @@ def test_worker_terminal_policy_allows_project_local_dependency_setup(tmp_path) 
     ]
 
     for command in commands:
-        assert classify_worker_terminal_command(command) == "project_environment_setup"
         decision = worker_terminal_command_allowed(command, workspace_root=tmp_path)
-        assert decision.allowed is True
-        assert decision.failure_class == ""
+        payload = decision.to_blocked_payload(command)
+
+        assert decision.allowed is False
+        assert payload["failure_class"] == "project_environment_setup_blocked"
 
 
 def test_worker_terminal_policy_allows_absolute_workspace_venv_python_pip_install(tmp_path) -> None:
@@ -154,6 +190,19 @@ def test_worker_terminal_policy_blocks_global_dependency_setup() -> None:
         payload = decision.to_blocked_payload(command)
         assert decision.allowed is False
         assert payload["failure_class"] == "global_environment_setup_blocked"
+
+
+def test_worker_terminal_policy_blocks_explicit_global_dependency_setup() -> None:
+    command = "pip install fastapi"
+
+    decision = worker_terminal_command_allowed(
+        command,
+        explicit_validation_commands=[command],
+    )
+    payload = decision.to_blocked_payload(command)
+
+    assert decision.allowed is False
+    assert payload["failure_class"] == "global_environment_setup_blocked"
 
 
 def test_worker_terminal_policy_blocks_generic_git_reset() -> None:

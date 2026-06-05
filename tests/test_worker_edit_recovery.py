@@ -3,11 +3,11 @@ from __future__ import annotations
 import json
 import threading
 from types import SimpleNamespace
-from unittest.mock import MagicMock, PropertyMock, Mock, patch
+from unittest.mock import MagicMock, Mock, PropertyMock, patch
 
 from aura.bridge.dispatch import (
-    _DispatchProxy,
     _cleanup_new_root_check_files,
+    _DispatchProxy,
     _format_worker_write_failure,
     _is_recoverable_worker_write_failure,
     _root_check_files,
@@ -155,6 +155,126 @@ def test_dependency_setup_pending_blocks_placeholder_module_write(tmp_path):
     assert payload["failure_class"] == "project_environment_setup_needed"
     assert payload["suggested_next_tool"] == "write_file"
     assert "placeholder" in payload["suggested_next_action"]
+
+
+def test_dependency_setup_matches_rewritten_absolute_workspace_venv_python(tmp_path):
+    history = History()
+    tools = MagicMock(spec=ToolRegistry)
+    type(tools).mode = PropertyMock(return_value="worker")
+    type(tools).workspace_root = PropertyMock(return_value=tmp_path)
+    manager = ConversationManager(history, tools)
+    python = tmp_path / ".venv" / "Scripts" / "python.exe"
+    python.parent.mkdir(parents=True)
+    python.write_text("", encoding="utf-8")
+    dependency_setup_required = {
+        "app.py": {
+            "tool": "write_file",
+            "module": "fastapi",
+            "modules": ["fastapi"],
+            "package": "fastapi",
+            "packages": ["fastapi"],
+            "declared": True,
+            "dependency_file": "pyproject.toml",
+            "setup_command": r".venv\Scripts\python.exe -m pip install -e .",
+            "setup_done": False,
+            "setup_failed": False,
+        }
+    }
+
+    manager._update_dependency_setup_state_from_terminal(
+        args={"command": r".venv\Scripts\python.exe -m pip install -e ."},
+        loop_info={
+            "_terminal_payload": {
+                "ok": True,
+                "command": f"{python} -m pip install -e .",
+                "requested_command": r".venv\Scripts\python.exe -m pip install -e .",
+            }
+        },
+        dependency_setup_required=dependency_setup_required,
+    )
+
+    assert dependency_setup_required["app.py"]["setup_done"] is True
+    assert dependency_setup_required["app.py"]["setup_failed"] is False
+
+
+def test_dependency_setup_tracks_new_missing_package_after_setup_without_false_failure(tmp_path):
+    history = History()
+    tools = MagicMock(spec=ToolRegistry)
+    type(tools).mode = PropertyMock(return_value="worker")
+    type(tools).workspace_root = PropertyMock(return_value=tmp_path)
+    manager = ConversationManager(history, tools)
+    dependency_setup_required = {
+        "app.py": {
+            "tool": "write_file",
+            "module": "fastapi",
+            "modules": ["fastapi"],
+            "package": "fastapi",
+            "packages": ["fastapi"],
+            "declared": True,
+            "dependency_file": "pyproject.toml",
+            "setup_command": r".venv\Scripts\python.exe -m pip install -e .",
+            "setup_done": True,
+            "setup_failed": False,
+        }
+    }
+
+    manager._record_dependency_setup_required(
+        path="app.py",
+        tool="write_file",
+        parsed={
+            "missing_module": "httpx",
+            "missing_dependency": "httpx",
+            "dependency_declared": False,
+            "dependency_file": "pyproject.toml",
+            "setup_command": r".venv\Scripts\python.exe -m pip install -e .",
+        },
+        dependency_setup_required=dependency_setup_required,
+    )
+
+    state = dependency_setup_required["app.py"]
+    assert state["setup_failed"] is False
+    assert state["setup_done"] is False
+    assert state["declared"] is False
+    assert state["packages"] == ["fastapi", "httpx"]
+
+
+def test_dependency_setup_merges_multiple_missing_packages_for_same_pending_path(tmp_path):
+    history = History()
+    tools = MagicMock(spec=ToolRegistry)
+    type(tools).mode = PropertyMock(return_value="worker")
+    type(tools).workspace_root = PropertyMock(return_value=tmp_path)
+    manager = ConversationManager(history, tools)
+    dependency_setup_required: dict[str, dict] = {}
+
+    manager._record_dependency_setup_required(
+        path="app.py",
+        tool="write_file",
+        parsed={
+            "missing_module": "fastapi",
+            "missing_dependency": "fastapi",
+            "dependency_declared": False,
+            "dependency_file": "pyproject.toml",
+            "setup_command": r".venv\Scripts\python.exe -m pip install -e .",
+        },
+        dependency_setup_required=dependency_setup_required,
+    )
+    manager._record_dependency_setup_required(
+        path="app.py",
+        tool="write_file",
+        parsed={
+            "missing_module": "httpx",
+            "missing_dependency": "httpx",
+            "dependency_declared": False,
+            "dependency_file": "pyproject.toml",
+            "setup_command": r".venv\Scripts\python.exe -m pip install -e .",
+        },
+        dependency_setup_required=dependency_setup_required,
+    )
+
+    state = dependency_setup_required["app.py"]
+    assert state["modules"] == ["fastapi", "httpx"]
+    assert state["packages"] == ["fastapi", "httpx"]
+    assert state["setup_failed"] is False
 
 
 def test_repeated_identical_edit_attempt_is_blocked_and_redirected(tmp_path):
@@ -931,7 +1051,7 @@ def test_auto_py_compile_scratch_paths_filtered():
 def test_normalize_worker_path_variants():
     """Test D: _normalize_worker_path handles ./ prefix, slashes, and preserves
     dot-prefixed directories."""
-    from aura.conversation.manager import _normalize_worker_path, _is_validation_scratch_path
+    from aura.conversation.manager import _is_validation_scratch_path, _normalize_worker_path
 
     # Leading ./ is stripped
     assert _normalize_worker_path("./graph_main_window.py") == "graph_main_window.py"
