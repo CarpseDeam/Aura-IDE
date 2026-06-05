@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-from typing import Any
 
 from PySide6.QtCore import QEasingCurve, QEvent, QPropertyAnimation, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
@@ -29,7 +28,6 @@ from aura.gui.theme import (
     ACCENT,
     FG_ITALIC,
 )
-
 
 class ChatView(QScrollArea):
     """Vertical, scrollable column of cards."""
@@ -58,7 +56,6 @@ class ChatView(QScrollArea):
         self._tool_owner: dict[str, AssistantCard] = {}
         # Map dispatch tool_call_id -> SpecCard.
         self._spec_cards: dict[str, SpecCard] = {}
-        self._spec_card_host: Any | None = None
         # Map tool_call_id -> TerminalCard.
         self._terminal_cards: dict[str, TerminalCard] = {}
         # Map tool_call_id -> ToolStreamController.
@@ -193,10 +190,6 @@ class ChatView(QScrollArea):
     def set_compact_tools(self, enabled: bool) -> None:
         self._compact_tools = enabled
 
-    def set_spec_card_host(self, host: Any | None) -> None:
-        """Attach a pinned host used for active Worker spec cards."""
-        self._spec_card_host = host
-
     def _scroll_after_bottom_layout_change(self) -> None:
         """Force delayed bottom sync after UI below the chat changes height."""
         self.scroll_to_bottom(force=True)
@@ -223,8 +216,6 @@ class ChatView(QScrollArea):
         self._current_aura = None
         self._tool_owner.clear()
         self._spec_cards.clear()
-        if self._spec_card_host is not None:
-            self._spec_card_host.clear()
         self._plan_writer_cards.clear()
         self._worker_summary_cards.clear()
         self._terminal_cards.clear()
@@ -707,13 +698,6 @@ class ChatView(QScrollArea):
         # Remove the in-flight plan writer card for this call ID (baton pass).
         self._remove_plan_writer_card(tool_call_id)
 
-        if self._spec_card_host is not None:
-            card = self._spec_card_host.add_spec_card(
-                tool_call_id, goal, files, spec, acceptance, summary
-            )
-            self._scroll_after_bottom_layout_change()
-            return card
-
         existing = self._spec_cards.get(tool_call_id)
         if existing is not None:
             existing.update_spec(goal, files, spec, acceptance, summary)
@@ -727,19 +711,9 @@ class ChatView(QScrollArea):
         return card
 
     def get_spec_card(self, tool_call_id: str) -> SpecCard | None:
-        card = self._spec_cards.get(tool_call_id)
-        if card is not None:
-            return card
-        if self._spec_card_host is not None:
-            return self._spec_card_host.get_spec_card(tool_call_id)
-        return None
+        return self._spec_cards.get(tool_call_id)
 
     def remove_spec_card(self, tool_call_id: str) -> None:
-        if self._spec_card_host is not None:
-            self._spec_card_host.remove_spec_card(tool_call_id)
-            self._scroll_after_bottom_layout_change()
-            return
-
         card = self._spec_cards.pop(tool_call_id, None)
         if card is None:
             return

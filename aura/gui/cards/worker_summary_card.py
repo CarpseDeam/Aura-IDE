@@ -75,7 +75,8 @@ class WorkerSummaryCard(QFrame):
         self._goal_label.setText(goal)
         self._goal_label.setVisible(bool(goal))
 
-        self._body.setText(_render_markdown_with_code(summary, color=FG))
+        sanitized = self._sanitize_summary(summary)
+        self._body.setText(_render_markdown_with_code(sanitized, color=FG))
         self._body.setVisible(bool(summary))
 
     @staticmethod
@@ -120,3 +121,63 @@ class WorkerSummaryCard(QFrame):
         if needs_followup:
             return "Worker needs follow-up", WARN
         return "Worker needs follow-up", WARN
+
+    @staticmethod
+    def _sanitize_summary(summary: str) -> str:
+        """Strip raw internal detail from worker summary text before rendering."""
+        if summary.strip() == "Worker made no changes.":
+            return summary
+
+        SECTION_HEADERS = {
+            "Modified files:", "Validation:", "Validation failures:",
+            "Harness errors:", "Errors:", "Caveats:", "Failed writes:",
+            "Summary:", "Remaining work:",
+        }
+
+        lines = summary.splitlines()
+        out: list[str] = []
+        skip_section = False
+
+        for line in lines:
+            stripped = line.strip()
+
+            # Detect section headers to skip
+            if any(stripped.startswith(h) for h in SECTION_HEADERS):
+                skip_section = True
+                continue
+
+            if skip_section:
+                # End section on blank line or border
+                if not stripped:
+                    skip_section = False
+                    continue
+                if stripped.startswith("═══") or stripped.startswith("───"):
+                    skip_section = False
+                    out.append(line)
+                continue
+
+            # Garbage patterns
+            if "CONTRACT_MISSING_SYMBOL" in line:
+                continue
+            if "Write tool" in line and "failed" in line.lower():
+                continue
+            if "Exceeded max tool rounds" in line:
+                continue
+            if "quality bounce" in line.lower():
+                continue
+            if "compiler rejected" in line.lower():
+                continue
+
+            out.append(line)
+
+        result = "\n".join(out).strip()
+        if not result:
+            return summary
+
+        if len(result) > 600:
+            result = result[:597] + "..."
+
+        if "Details are available in Worker Log." not in result:
+            result += "\n\nDetails are available in Worker Log."
+
+        return result

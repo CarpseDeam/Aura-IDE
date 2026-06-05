@@ -39,7 +39,6 @@ from aura.gui.main_window_toolbar import MainWindowToolbar
 from aura.gui.onboarding_dialog import OnboardingDialog
 from aura.gui.playground import AuraPlayground
 from aura.gui.send_handler import SendHandler
-from aura.gui.spec_card_host import SpecCardHost
 from aura.gui.settings_dialog import SettingsDialog
 from aura.gui.status_bar import AuraStatusBar
 from aura.gui.update_dialog import UpdateDialog, UpdateWorker
@@ -136,10 +135,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             self._chat.set_compact_tools(True)
         center_layout.addWidget(self._chat, 1)
 
-        self._spec_card_host = SpecCardHost(parent=center)
-        self._chat.set_spec_card_host(self._spec_card_host)
-        center_layout.addWidget(self._spec_card_host, 0)
-
         self._input = InputPanel(self._workspace_root, parent=self)
 
         # Send handler — owns message queue, vision routing, undo logic.
@@ -171,7 +166,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             chat=self._chat,
             playground=self._playground,
             settings=self._settings,
-            spec_host=self._spec_card_host,
             parent=self,
         )
         self._worker_handler.usage_updated.connect(self._refresh_status_bar)

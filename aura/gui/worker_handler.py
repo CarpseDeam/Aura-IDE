@@ -21,7 +21,6 @@ if TYPE_CHECKING:
     from aura.config import AppSettings
     from aura.gui.chat_view import ChatView
     from aura.gui.playground import AuraPlayground
-    from aura.gui.spec_card_host import SpecCardHost
 
 class WorkerEventHandler(QObject):
     """Owns worker signal wiring and forwards bridge worker events to the
@@ -43,7 +42,6 @@ class WorkerEventHandler(QObject):
         chat: ChatView,
         playground: AuraPlayground,
         settings: AppSettings,
-        spec_host: SpecCardHost | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -51,7 +49,6 @@ class WorkerEventHandler(QObject):
         self._chat = chat
         self._playground = playground
         self._settings = settings
-        self._spec_host = spec_host
         self._session_usage: dict[str, dict[str, int]] = {}
         self._active_workflow: WorkflowState | None = None
         self._wired_spec_cards: set[str] = set()
@@ -130,15 +127,9 @@ class WorkerEventHandler(QObject):
         try:
             if hasattr(self._chat, "prepare_spec_card"):
                 self._chat.prepare_spec_card(tool_call_id)
-            if self._spec_host is not None:
-                card = self._spec_host.add_spec_card(
-                    tool_call_id, goal, file_list, spec, acceptance, summary
-                )
-                self._chat.scroll_to_bottom(force=True)
-            else:
-                card = self._chat.add_spec_card(
-                    tool_call_id, goal, file_list, spec, acceptance, summary
-                )
+            card = self._chat.add_spec_card(
+                tool_call_id, goal, file_list, spec, acceptance, summary
+            )
         except Exception as exc:
             logging.exception("Failed to render worker dispatch spec card")
             try:
@@ -419,10 +410,6 @@ class WorkerEventHandler(QObject):
         self._clear_active_spec_card(tool_call_id)
 
     def _get_spec_card(self, tool_call_id: str):
-        if self._spec_host is not None:
-            card = self._spec_host.get_spec_card(tool_call_id)
-            if card is not None:
-                return card
         return self._chat.get_spec_card(tool_call_id)
 
     def _set_active_workflow(self, state: WorkflowState) -> None:
@@ -455,10 +442,7 @@ class WorkerEventHandler(QObject):
 
     def _clear_active_spec_card(self, tool_call_id: str) -> None:
         """Remove the active plan card once the workflow reaches a terminal state."""
-        if self._spec_host is not None:
-            self._spec_host.remove_spec_card(tool_call_id)
-        elif hasattr(self._chat, "remove_spec_card"):
-            self._chat.remove_spec_card(tool_call_id)
+        self._chat.remove_spec_card(tool_call_id)
         self._chat.scroll_to_bottom(force=True)
 
     def _on_worker_usage(
