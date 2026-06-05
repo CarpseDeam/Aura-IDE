@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 import os
-import sys
 
 import pytest
 
-from aura.conversation.project_profile import detect_project_profile, ProjectProfile
-
+from aura.conversation.project_profile import detect_project_profile
 
 # Platform helpers
 
@@ -24,9 +22,7 @@ def _venv_executable(tmp_path) -> str:
         (bindir / "python").write_text("fake")
         return ".venv/bin/python"
 
-
 # Tests
-
 
 class TestPythonPyprojectTomlWithVenv:
     """Python pyproject.toml with PEP 621 deps + .venv."""
@@ -48,7 +44,6 @@ dependencies = ["fastapi", "pydantic>=2.0", "httpx"]
         assert profile.setup_command is not None
         assert "pyproject.toml" in profile.manifests
 
-
 class TestPythonPyprojectTomlWithUvLock:
     """Python pyproject.toml + uv.lock → uv package manager."""
 
@@ -65,7 +60,6 @@ dependencies = ["fastapi"]
         assert profile.package_manager == "uv"
         assert profile.setup_command == "uv sync"
         assert "uv.lock" in profile.lockfiles
-
 
 class TestPythonRequirementsTxtWithoutVenv:
     """requirements.txt with deps, no .venv."""
@@ -85,7 +79,6 @@ httpx
         assert "pydantic" in profile.declared_dependencies
         assert "httpx" in profile.declared_dependencies
         assert profile.project_types == ("python",)
-
 
 class TestPythonPyprojectTomlWithPoetry:
     """pyproject.toml with [tool.poetry] → poetry package manager."""
@@ -107,7 +100,6 @@ pytest = "^7.0"
         assert profile.package_manager == "poetry"
         assert "requests" in profile.declared_dependencies
         assert "pytest" in profile.declared_dependencies
-
 
 class TestNodePackageJson:
     """package.json with dependencies and scripts."""
@@ -142,7 +134,6 @@ class TestNodePackageJson:
         assert "lodash" in profile.declared_dependencies
         assert "jest" in profile.declared_dependencies
 
-
 class TestRustCargoToml:
     """Cargo.toml → Rust project."""
 
@@ -159,7 +150,6 @@ version = "0.1.0"
         assert profile.package_manager == "cargo"
         assert profile.setup_command == "cargo fetch"
 
-
 class TestGoGoMod:
     """go.mod → Go project."""
 
@@ -175,7 +165,6 @@ go 1.21
         assert profile.project_types == ("go",)
         assert profile.package_manager == "go"
         assert profile.setup_command == "go mod download"
-
 
 class TestMixedPythonAndNode:
     """pyproject.toml + package.json → both types detected."""
@@ -201,7 +190,6 @@ dependencies = ["fastapi"]
         assert "pyproject.toml" in profile.manifests
         assert "package.json" in profile.manifests
 
-
 class TestEmptyDirectory:
     """No project files → empty profile."""
 
@@ -214,7 +202,6 @@ class TestEmptyDirectory:
         assert profile.package_manager is None
         assert profile.has_venv is False
 
-
 class TestFileNotFoundError:
     """Non-existent path raises FileNotFoundError."""
 
@@ -222,7 +209,6 @@ class TestFileNotFoundError:
         nonexistent = tmp_path / "does_not_exist"
         with pytest.raises(FileNotFoundError):
             detect_project_profile(nonexistent)
-
 
 class TestSummarize:
     """summarize() output contains expected key terms."""

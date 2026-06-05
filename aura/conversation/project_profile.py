@@ -5,10 +5,18 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-try:
-    import tomllib  # Python 3.11+
-except ModuleNotFoundError:
-    tomllib = None  # type: ignore[assignment]
+import sys as _sys
+import importlib
+
+if _sys.version_info >= (3, 11):
+    import tomllib
+
+    tomllib = tomllib  # satisfy type checkers
+else:
+    try:
+        tomllib = importlib.import_module("tomli")
+    except ModuleNotFoundError:
+        tomllib = None
 
 
 # Filename sets used for scanning
@@ -188,7 +196,6 @@ def _node_scripts_from_package_json(path: Path) -> tuple[tuple[str, str], ...]:
 def _python_validation_commands(
     root: Path,
     manifests: set[str],
-    node_scripts: tuple[tuple[str, str], ...],
 ) -> list[str]:
     cmds: list[str] = []
 
@@ -240,12 +247,24 @@ def _python_validation_commands(
         except configparser.Error:
             pass
 
-    script_map = dict(node_scripts)
-    for candidate in ("test", "lint", "build", "typecheck"):
-        if candidate in script_map and f"npm run {candidate}" not in cmds:
-            cmds.append(f"npm run {candidate}")
-
     return cmds
+
+
+def _node_validation_commands(node_scripts: tuple[tuple[str, str], ...]) -> list[str]:
+    cmds: list[str] = []
+    script_names = {name for name, _ in node_scripts}
+    for candidate in ("test", "build", "lint", "typecheck"):
+        if candidate in script_names:
+            cmds.append(f"npm run {candidate}")
+    return cmds
+
+
+def _rust_validation_commands() -> list[str]:
+    return ["cargo test", "cargo build"]
+
+
+def _go_validation_commands() -> list[str]:
+    return ["go test ./..."]
 
 
 # Main detection entry point
@@ -392,12 +411,15 @@ def detect_project_profile(workspace_root: str | Path) -> ProjectProfile:
         setup_command = "go mod download"
 
     # --- validation commands ---
-    validation_cmds = _python_validation_commands(root, found_manifests, node_scripts)
-
-    if "rust" in project_types and "cargo test" not in validation_cmds:
-        validation_cmds.append("cargo test")
-    if "go" in project_types and "go test ./..." not in validation_cmds:
-        validation_cmds.append("go test ./...")
+    validation_cmds: list[str] = []
+    if "python" in project_types:
+        validation_cmds.extend(_python_validation_commands(root, found_manifests))
+    if "node" in project_types:
+        validation_cmds.extend(_node_validation_commands(node_scripts))
+    if "rust" in project_types:
+        validation_cmds.extend(_rust_validation_commands())
+    if "go" in project_types:
+        validation_cmds.extend(_go_validation_commands())
 
     return ProjectProfile(
         workspace_root=str(root),
