@@ -56,7 +56,7 @@ def _run_app(log_path: Path, args: argparse.Namespace, qt_argv: list[str]) -> in
 
     from PySide6.QtCore import QCoreApplication, QTimer, Qt
     from PySide6.QtGui import QGuiApplication, QIcon
-    from PySide6.QtWidgets import QApplication, QMessageBox
+    from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
     app_name = "Aura"
 
@@ -82,7 +82,6 @@ def _run_app(log_path: Path, args: argparse.Namespace, qt_argv: list[str]) -> in
     apply_theme(app)
     logger.info("theme apply end")
 
-    # Check if any provider has an API key configured (env var or stored).
     logger.info("settings load start")
     settings = load_settings()
     logger.info("settings load end")
@@ -91,21 +90,24 @@ def _run_app(log_path: Path, args: argparse.Namespace, qt_argv: list[str]) -> in
     has_any_key = any(get_api_key(pid) is not None for pid in PROVIDERS)
     has_selected_key = get_api_key(selected_provider) is not None
 
+    _should_open_api_settings = False
+
     if args.startup_smoke:
         logger.info("startup smoke mode: skipping API key warnings")
     elif not has_any_key:
-        # No provider at all has a key — show a warning but don't block.
-        logger.info("API key warning start")
-        QMessageBox.warning(
-            None,
-            APP_NAME,
-            "No API key found for any provider.\n\n"
-            "Set one of the following environment variables or open "
-            "Settings → API Key to paste a key:\n"
-            + "\n".join(f"  • {cfg.env_key}  ({cfg.label})" for cfg in PROVIDERS.values())
-            + "\n\nThe app will open, but chat will fail until a key is configured.",
-        )
-        logger.info("API key warning end")
+        # No provider at all has a key — show the setup dialog.
+        logger.info("no API keys found — showing setup dialog")
+        from aura.gui.setup_dialog import SetupDialog
+        dlg = SetupDialog()
+        result = dlg.exec()
+        if dlg._continue_readonly:
+            logger.info("user chose Continue Read-only")
+        elif result == QDialog.DialogCode.Accepted:
+            logger.info("user chose Open API Settings")
+            _should_open_api_settings = True
+        else:
+            logger.info("user chose Exit")
+            return 0
     elif not has_selected_key:
         # Selected provider doesn't have a key, but another one does.
         cfg = PROVIDERS[selected_provider]
@@ -130,6 +132,10 @@ def _run_app(log_path: Path, args: argparse.Namespace, qt_argv: list[str]) -> in
     logger.info("win.show start")
     win.show()
     logger.info("win.show end")
+
+    if _should_open_api_settings:
+        logger.info("opening API settings post-startup")
+        QTimer.singleShot(100, win.open_api_settings)
 
     if args.startup_smoke:
         logger.info("startup smoke mode: scheduling quit")

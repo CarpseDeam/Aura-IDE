@@ -33,6 +33,7 @@ class SettingsDialog(QDialog):
         workspace_root: Path | None,
         on_change_root: Callable[[], None],
         parent: QWidget | None = None,
+        open_api_keys_tab: bool = False,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(f"{APP_NAME} — Settings")
@@ -45,7 +46,7 @@ class SettingsDialog(QDialog):
         outer.setContentsMargins(20, 18, 20, 14)
         outer.setSpacing(14)
 
-        tabs = QTabWidget(self)
+        self._tabs = QTabWidget(self)
 
         from aura.gui.settings_pages.models_page import ModelsPage
         from aura.gui.settings_pages.api_keys_page import ApiKeysPage
@@ -77,9 +78,9 @@ class SettingsDialog(QDialog):
             scroll.setWidgetResizable(True)
             scroll.setFrameShape(QScrollArea.Shape.NoFrame)
             scroll.setWidget(page)
-            tabs.addTab(scroll, label)
+            self._tabs.addTab(scroll, label)
 
-        outer.addWidget(tabs, 1)
+        outer.addWidget(self._tabs, 1)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -87,6 +88,9 @@ class SettingsDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         outer.addWidget(buttons)
+
+        if open_api_keys_tab:
+            self._tabs.setCurrentIndex(1)
 
     # --- Thread cleanup ---
 

@@ -648,6 +648,58 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             self._toolbar.set_auto_approve(self._settings.auto_approve)
             self._refresh_status_bar()
 
+    def open_api_settings(self) -> None:
+        """Open settings dialog directly to the API Keys tab."""
+        dlg = SettingsDialog(
+            settings=self._settings,
+            workspace_root=self._workspace_root,
+            on_change_root=self._on_change_root,
+            parent=self,
+            open_api_keys_tab=True,
+        )
+        if dlg.exec() == SettingsDialog.DialogCode.Accepted:
+            self._settings = dlg.result_settings()
+            self._send_handler.update_settings(self._settings)
+            self._persistence.update_settings(self._settings)
+            self._worker_handler.update_settings(self._settings)
+            self._toolbar.update_settings(self._settings)
+
+            # Always refresh combos to pick up dynamically fetched models
+            self._left_pane.populate_models(
+                self._settings.planner_provider,
+                self._settings.worker_provider,
+            )
+            self._bridge.set_planner_provider(self._settings.planner_provider)
+            self._bridge.set_worker_provider(self._settings.worker_provider)
+
+            # Apply to current widgets.
+            if self._settings.planner_worker_mode:
+                self.set_model(self._settings.default_planner_model)
+                self.set_thinking(self._settings.default_planner_thinking)
+            else:
+                self.set_model(self._settings.default_model)
+                self.set_thinking(self._settings.default_thinking)
+            self.set_worker_model(self._settings.default_worker_model)
+            self.set_worker_thinking(self._settings.default_worker_thinking)
+            self._set_sidebar_planner_worker_mode(self._settings.planner_worker_mode)
+            self._apply_planner_worker_mode_to_bridge(self._settings.planner_worker_mode)
+            self._bridge.set_show_planner_reasoning(self._settings.show_planner_reasoning)
+            self._bridge.set_worker_model(self._settings.default_worker_model)
+            self._bridge.set_worker_thinking(self._settings.default_worker_thinking)
+            self._bridge.set_temperature(self._settings.temperature)
+            self._bridge.set_worker_temperature(self._settings.worker_temperature)
+            self._bridge.set_custom_system_prompts(
+                self._settings.system_prompt,
+                self._settings.planner_system_prompt,
+                self._settings.worker_system_prompt,
+            )
+            self._bridge.set_auto_commit_enabled(self._settings.auto_commit_enabled)
+            self._bridge.set_auto_dispatch(self._settings.auto_dispatch)
+            self._bridge.set_auto_approve(self._settings.auto_approve)
+            self._toolbar.set_auto_dispatch(self._settings.auto_dispatch)
+            self._toolbar.set_auto_approve(self._settings.auto_approve)
+            self._refresh_status_bar()
+
     def _on_open_update(self) -> None:
         dlg = UpdateDialog(self)
         dlg.exec()

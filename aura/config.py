@@ -33,9 +33,7 @@ from aura.settings import (
     DEFAULT_VISION_ENDPOINT,
 )
 
-# ---------------------------------------------------------------------------
 # Backward-compatible aliases
-# ---------------------------------------------------------------------------
 
 DEEPSEEK_BASE_URL: str = provider_registry.get("deepseek").base_url
 ENV_API_KEY: str = provider_registry.get("deepseek").env_key
@@ -43,15 +41,11 @@ ENV_API_KEY: str = provider_registry.get("deepseek").env_key
 # Deprecated module-level model dict — kept for backward compat with smoke scripts.
 MODELS: dict[str, ModelInfo] = dict(provider_registry.get("deepseek").models)
 
-# ---------------------------------------------------------------------------
 # Tavily (web search) API key
-# ---------------------------------------------------------------------------
 
 TAVILY_API_KEY_ENV: str = "TAVILY_API_KEY"
 
-# ---------------------------------------------------------------------------
 # Convenience accessors
-# ---------------------------------------------------------------------------
 
 
 def get_provider(provider_id: str) -> ProviderConfig:
@@ -85,7 +79,8 @@ def resolve_api_key(provider_id: str) -> str:
         cfg = provider_registry.get(provider_id)
         raise RuntimeError(
             f"No API key found for {cfg.label}. "
-            f"Set the {cfg.env_key} environment variable."
+            f"Set the {cfg.env_key} environment variable or "
+            f"open Settings → API Keys to add one."
         )
     return key
 
@@ -94,6 +89,14 @@ def has_api_key(provider_id: str | None = None) -> bool:
     """If provider_id is None, checks the default provider (deepseek)."""
     pid = provider_id if provider_id is not None else DEFAULT_PROVIDER
     return get_api_key(pid) is not None
+
+
+def has_usable_provider_credentials() -> bool:
+    """Return True if at least one provider has a usable API key (env var or stored)."""
+    for pid in provider_registry.ids():
+        if get_api_key(pid) is not None:
+            return True
+    return False
 
 
 def require_api_key() -> str:
@@ -241,16 +244,12 @@ def redact_secrets(text: str) -> str:
     return redacted
 
 
-# ---------------------------------------------------------------------------
 # Pricing helpers
-# ---------------------------------------------------------------------------
 
 PRICING: dict[str, dict[str, float]] = dict(provider_registry.get("deepseek").pricing)
 
 
-# ---------------------------------------------------------------------------
 # Hard limits
-# ---------------------------------------------------------------------------
 
 MAX_TOOL_ROUNDS = 50
 MAX_READ_BYTES = 200 * 1024
@@ -271,9 +270,7 @@ SKIP_DIRS = {
 }
 SKIP_FILE_SUFFIXES = {".import"}
 
-# ---------------------------------------------------------------------------
 # Codebase index (BM25 search_codebase tool)
-# ---------------------------------------------------------------------------
 
 CODEBASE_INDEX_EXTENSIONS: set[str] = {
     ".py", ".js", ".ts", ".jsx", ".tsx", ".gd", ".cpp", ".c", ".h", ".hpp",
@@ -289,9 +286,7 @@ CODEBASE_INDEX_MAX_FILE_BYTES: int = 128 * 1024
 SEARCH_CODEBASE_TOP_K: int = 5
 
 
-# ---------------------------------------------------------------------------
 # Paths and file helpers
-# ---------------------------------------------------------------------------
 
 
 def get_subprocess_kwargs() -> dict[str, Any]:
