@@ -379,12 +379,20 @@ class _DispatchProxy(QObject):
         is_partial = bool(continuation.get("status") == "needs_followup" or continuation.get("remaining"))
         claimed_validation = _final_report_claims_validation(final_report) or bool(continuation.get("validation_text"))
 
-        _filter_scratch_write_records(relay)
+        preserve_scratch_records = _request_allows_root_check_files(req)
+        diagnostic_environment_caveats = (
+            []
+            if preserve_scratch_records
+            else _diagnostic_environment_caveats(relay)
+        )
+        _filter_scratch_write_records(relay, preserve_scratch=preserve_scratch_records)
         validation_results = _validation_results_for_task(
             relay.validation_results,
             getattr(relay, "terminal_results", []),
             task_spec.validation_commands,
         )
+        if not preserve_scratch_records:
+            validation_results = _filter_scratch_validation_results(validation_results)
         has_writes = bool(relay.write_results)
         internal_recovery_steers = [
             r for r in relay.failed_tool_results if r.get("internal_recovery_steer")
@@ -430,6 +438,14 @@ class _DispatchProxy(QObject):
             result_errors.insert(0, "Harness error due to an internal Worker exception.")
 
         structured_failure = _parse_structured_worker_failure(final_report)
+        if (
+            diagnostic_environment_caveats
+            and structured_failure.get("failure_class") == "patch_quality_unresolved"
+            and not relay.write_results
+            and not getattr(relay, "quality_bounces", [])
+            and not getattr(relay, "not_applied_writes", [])
+        ):
+            structured_failure = {}
         patch_quality_unresolved = (
             structured_failure
             if structured_failure.get("failure_class") == "patch_quality_unresolved"
@@ -503,6 +519,9 @@ class _DispatchProxy(QObject):
             result_caveats.append(_format_recoverable_write_failure(recoverable_write_failures[0]))
         if validation_not_run:
             result_caveats.append("Files changed but validation did not run.")
+        for caveat in diagnostic_environment_caveats:
+            if caveat not in result_caveats:
+                result_caveats.append(caveat)
 
         if cleaned_scratch_files:
             result_caveats.append(
@@ -550,6 +569,7 @@ class _DispatchProxy(QObject):
         has_source_inspection_blocker = bool(source_inspection_blockers)
         has_terminal_policy_blocker = bool(terminal_policy_blockers)
         has_environment_setup_blocker = bool(environment_setup_blockers)
+        has_diagnostic_environment_blocker = bool(diagnostic_environment_caveats) and not relay.write_results
         has_no_work = not relay.touched_files and not relay.failed_tool_results and not quality_bounces and not internal_error and not relay.api_errors
         has_unverified_acceptance = acceptance_unverified or validation_not_run
 
@@ -572,6 +592,10 @@ class _DispatchProxy(QObject):
             needs_followup = True
             recoverable = True
         elif has_recoverable_edit_blocker:
+            ok = False
+            needs_followup = True
+            recoverable = True
+        elif has_diagnostic_environment_blocker:
             ok = False
             needs_followup = True
             recoverable = True
@@ -605,6 +629,9 @@ class _DispatchProxy(QObject):
         if validation_not_run and not has_recoverable_edit_blocker:
             summary_continuation["status"] = "validation_not_run"
             summary_continuation["reason"] = "Files changed but validation did not run."
+        if has_diagnostic_environment_blocker and not summary_continuation.get("status"):
+            summary_continuation["status"] = "needs_followup"
+            summary_continuation["reason"] = diagnostic_environment_caveats[0]
         if patch_quality_unresolved:
             summary_continuation["status"] = "patch_quality_unresolved"
             summary_continuation["reason"] = str(
@@ -628,7 +655,7 @@ class _DispatchProxy(QObject):
             has_recoverable_edit_blocker=has_recoverable_edit_blocker,
             has_quality_bounce_blocker=has_quality_bounce_blocker,
             has_source_inspection_blocker=has_source_inspection_blocker,
-            has_environment_setup_blocker=has_environment_setup_blocker,
+            has_environment_setup_blocker=has_environment_setup_blocker or has_diagnostic_environment_blocker,
             has_no_work=has_no_work,
             is_implementation=is_implementation,
             has_unverified_acceptance=has_unverified_acceptance,
@@ -1336,7 +1363,8 @@ def _build_worker_summary(
     if not_applied_writes:
         lines.append("")
         lines.append(" Failed writes:")
-        for w in not_applied_writes[:5]:
+        deduped_not_applied = _dedupe_summary_writes(not_applied_writes)
+        for w in deduped_not_applied[:5]:
             path = str(w.get("path") or "(unknown path)")
             failure = str(w.get("failure_class") or "")
             lines.append(f"  \u2022 {path}   ({failure})")
@@ -1485,10 +1513,124 @@ def _normalize_worker_path(path: str) -> str:
 
 def _is_validation_scratch_path(path: str) -> bool:
     normalized = _normalize_worker_path(path)
-    if not (normalized.startswith(".aura/tmp/") and normalized.endswith(".py")):
-        return False
     name = normalized.rsplit("/", 1)[-1]
-    return name.startswith(("dump", "_check", "check", "tmp"))
+    if not name.endswith(".py"):
+        return False
+    if normalized.startswith(".aura/tmp/"):
+        return _is_scratch_python_name(name)
+    if "/" not in normalized:
+        return _is_scratch_python_name(name)
+    return False
+
+
+def _is_scratch_python_name(name: str) -> bool:
+    return name.startswith(
+        (
+            "dump",
+            "_check",
+            "check",
+            "tmp",
+            "_tmp",
+            "_inspect",
+            "inspect",
+            "diagnostic",
+            "_diagnostic",
+        )
+    )
+
+
+def _filter_scratch_validation_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    filtered: list[dict[str, Any]] = []
+    for result in results:
+        command = str(result.get("command") or "")
+        targets = _py_compile_targets(command)
+        if targets and all(_is_validation_scratch_path(target) for target in targets):
+            continue
+        filtered.append(result)
+    return filtered
+
+
+def _diagnostic_environment_caveats(relay: Any) -> list[str]:
+    dependencies: list[str] = []
+    records: list[dict[str, Any]] = []
+    for attr in ("quality_bounces", "not_applied_writes", "failed_tool_results"):
+        value = getattr(relay, attr, [])
+        if isinstance(value, list):
+            records.extend(item for item in value if isinstance(item, dict))
+
+    for record in records:
+        path = str(record.get("path") or record.get("rel_path") or "")
+        if not _is_validation_scratch_path(path):
+            continue
+        _collect_missing_dependencies(record, dependencies)
+
+    for result in getattr(relay, "terminal_results", []):
+        if not isinstance(result, dict) or result.get("ok"):
+            continue
+        command = str(result.get("command") or "")
+        if not _command_mentions_scratch_path(command):
+            continue
+        _collect_missing_dependencies(result, dependencies)
+
+    caveats: list[str] = []
+    for dependency in dependencies:
+        caveat = (
+            "Diagnostic script could not run because "
+            f"{dependency} is not installed in the project environment."
+        )
+        if caveat not in caveats:
+            caveats.append(caveat)
+    return caveats
+
+
+def _collect_missing_dependencies(record: dict[str, Any], dependencies: list[str]) -> None:
+    explicit = record.get("missing_dependency")
+    if isinstance(explicit, str) and explicit:
+        _append_unique(dependencies, explicit)
+
+    for key in ("introduced_environment_issues", "craft_issues"):
+        issues = record.get(key)
+        if not isinstance(issues, list):
+            continue
+        for issue in issues:
+            if not isinstance(issue, dict):
+                continue
+            dependency = _dependency_from_text(str(issue.get("message") or ""))
+            if dependency:
+                _append_unique(dependencies, dependency)
+
+    for key in ("error", "result_preview", "output", "output_preview", "repair_instructions"):
+        dependency = _dependency_from_text(str(record.get(key) or ""))
+        if dependency:
+            _append_unique(dependencies, dependency)
+
+
+def _dependency_from_text(text: str) -> str | None:
+    patterns = (
+        r"Import source '([^']+)' could not be resolved",
+        r'Import source "([^"]+)" could not be resolved',
+        r"No module named '([^']+)'",
+        r'No module named "([^"]+)"',
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            return match.group(1).split(".", 1)[0]
+    return None
+
+
+def _append_unique(items: list[str], value: str) -> None:
+    if value and value not in items:
+        items.append(value)
+
+
+def _command_mentions_scratch_path(command: str) -> bool:
+    normalized = _normalize_worker_path(command)
+    for token in re.split(r"\s+", normalized):
+        token = token.strip("'\"")
+        if _is_validation_scratch_path(token):
+            return True
+    return False
 
 
 def _validation_scratch_files(root: Path | None) -> set[Path]:
@@ -1498,7 +1640,7 @@ def _validation_scratch_files(root: Path | None) -> set[Path]:
     files = set(_root_check_files(root))
     tmp_dir = root / ".aura" / "tmp"
     if tmp_dir.is_dir():
-        for pattern in ("dump*.py", "_check*.py", "check*.py", "tmp*.py"):
+        for pattern in ("dump*.py", "_check*.py", "check*.py", "tmp*.py", "_tmp*.py", "_inspect*.py", "inspect*.py", "diagnostic*.py", "_diagnostic*.py"):
             files.update(path for path in tmp_dir.glob(pattern) if path.is_file())
     return files
 
@@ -1520,7 +1662,10 @@ def _cleanup_new_validation_scratch_files(root: Path, before: set[Path]) -> list
     return sorted(cleaned)
 
 
-def _filter_scratch_write_records(relay: Any) -> None:
+def _filter_scratch_write_records(relay: Any, *, preserve_scratch: bool = False) -> None:
+    if preserve_scratch:
+        return
+
     def keep(path: object) -> bool:
         return not _is_validation_scratch_path(str(path or ""))
 
@@ -1532,21 +1677,46 @@ def _filter_scratch_write_records(relay: Any) -> None:
     relay.wrote_new_files = [path for path in relay.wrote_new_files if keep(path)]
     relay.edited_existing_files = [path for path in relay.edited_existing_files if keep(path)]
 
+    if hasattr(relay, "not_applied_writes"):
+        relay.not_applied_writes = [
+            item for item in relay.not_applied_writes
+            if keep(item.get("path") if isinstance(item, dict) else "")
+        ]
+        relay.not_applied_writes = _dedupe_summary_writes(relay.not_applied_writes)
+    if hasattr(relay, "failed_tool_results"):
+        relay.failed_tool_results = [
+            item for item in relay.failed_tool_results
+            if keep(item.get("path") if isinstance(item, dict) else "")
+        ]
+    if hasattr(relay, "quality_bounces"):
+        relay.quality_bounces = [
+            item for item in relay.quality_bounces
+            if keep(item.get("path") if isinstance(item, dict) else "")
+        ]
+
 
 def _root_check_files(root: Path | None) -> set[Path]:
     if root is None:
         return set()
     try:
-        return {path.resolve() for path in root.glob("_check*.py") if path.is_file()}
+        files: set[Path] = set()
+        for pattern in ("_check*.py", "_tmp*.py", "tmp_*.py", "_inspect*.py", "inspect*.py", "diagnostic*.py", "_diagnostic*.py"):
+            files.update(path.resolve() for path in root.glob(pattern) if path.is_file())
+        return files
     except OSError:
         return set()
 
 
 def _request_allows_root_check_files(req: WorkerDispatchRequest) -> bool:
     text = " ".join([req.goal, req.spec, req.acceptance, req.summary]).lower()
-    if "_check" in text:
+    if "_check" in text or "_tmp" in text or "tmp_" in text:
         return True
-    return any(Path(path).name.startswith("_check") for path in req.files)
+    if "_inspect" in text or "_diagnostic" in text:
+        return True
+    return any(
+        Path(path).name.startswith(("_check", "_tmp", "tmp_", "_inspect", "inspect", "diagnostic", "_diagnostic"))
+        for path in req.files
+    )
 
 
 def _cleanup_new_root_check_files(root: Path, before: set[Path]) -> list[str]:

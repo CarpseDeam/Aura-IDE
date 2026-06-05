@@ -497,7 +497,7 @@ def _is_new_root_validation_scratch(root: Path, target: Path) -> bool:
     return (
         target.parent == root
         and not target.exists()
-        and target.name.startswith("_check")
+        and _is_scratch_python_name(target.name)
         and target.suffix == ".py"
     )
 
@@ -514,10 +514,28 @@ def _normalize_worker_path(path: str) -> str:
 
 def _is_validation_scratch_path(path: str) -> bool:
     normalized = _normalize_worker_path(path)
-    if not (normalized.startswith(".aura/tmp/") and normalized.endswith(".py")):
-        return False
     name = normalized.rsplit("/", 1)[-1]
-    return name.startswith(("dump", "_check", "check", "tmp"))
+    if not name.endswith(".py"):
+        return False
+    if normalized.startswith(".aura/tmp/") or "/" not in normalized:
+        return _is_scratch_python_name(name)
+    return False
+
+
+def _is_scratch_python_name(name: str) -> bool:
+    return name.startswith(
+        (
+            "dump",
+            "_check",
+            "check",
+            "tmp",
+            "_tmp",
+            "_inspect",
+            "inspect",
+            "diagnostic",
+            "_diagnostic",
+        )
+    )
 
 
 def _atomic_write_bytes(target: Path, data: bytes) -> None:

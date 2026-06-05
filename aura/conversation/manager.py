@@ -138,10 +138,24 @@ def _normalize_worker_path(path: str) -> str:
 
 def _is_validation_scratch_path(path: str) -> bool:
     normalized = _normalize_worker_path(path)
-    if not (normalized.startswith(".aura/tmp/") and normalized.endswith(".py")):
-        return False
     name = normalized.rsplit("/", 1)[-1]
-    return name.startswith(("dump", "_check", "check", "tmp"))
+    if not name.endswith(".py"):
+        return False
+    if normalized.startswith(".aura/tmp/") or "/" not in normalized:
+        return name.startswith(
+            (
+                "dump",
+                "_check",
+                "check",
+                "tmp",
+                "_tmp",
+                "_inspect",
+                "inspect",
+                "diagnostic",
+                "_diagnostic",
+            )
+        )
+    return False
 
 
 class ConversationManager:

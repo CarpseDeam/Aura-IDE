@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from aura.conversation.dispatch import (
     WorkerDispatchRequest,
     WorkerDispatchResult,
@@ -13,9 +15,13 @@ from aura.bridge.dispatch import (
     _applied_modified_files,
     _build_worker_summary,
     _compute_outcome_status,
+    _diagnostic_environment_caveats,
     _final_report_claims_failure,
     _final_report_claims_validation,
+    _filter_scratch_validation_results,
+    _filter_scratch_write_records,
     _format_spec_as_user_message,
+    _is_validation_scratch_path,
     _unrecovered_validation_failures,
     _validation_results_for_task,
 )
@@ -797,6 +803,85 @@ def test_worker_summary_dedupes_duplicate_modified_file_rows_and_count():
     assert "Files changed   : 2 (1 edited, 1 new)" in summary
     assert summary.count("a.py   (edit)") == 1
     assert summary.count("b.py   (new)") == 1
+
+
+def test_scratch_diagnostic_missing_import_is_caveat_not_project_patch():
+    relay = SimpleNamespace(
+        write_results=[
+            {"tool": "write_file", "path": "_tmp_inspect_wear.py", "applied": True, "is_new_file": True},
+        ],
+        touched_files={"_tmp_inspect_wear.py"},
+        wrote_new_files=["_tmp_inspect_wear.py"],
+        edited_existing_files=[],
+        not_applied_writes=[
+            {
+                "path": "_tmp_inspect_wear.py",
+                "failure_class": "introduced_environment_issue",
+                "introduced_environment_issues": [
+                    {"message": "Import source 'numpy' could not be resolved in workspace or stdlib."}
+                ],
+            },
+            {
+                "path": "_tmp_inspect_wear.py",
+                "failure_class": "introduced_environment_issue",
+                "introduced_environment_issues": [
+                    {"message": "Import source 'numpy' could not be resolved in workspace or stdlib."}
+                ],
+            },
+        ],
+        failed_tool_results=[
+            {
+                "name": "write_file",
+                "path": "_tmp_inspect_wear.py",
+                "failure_class": "introduced_environment_issue",
+                "introduced_environment_issues": [
+                    {"message": "Import source 'numpy' could not be resolved in workspace or stdlib."}
+                ],
+            }
+        ],
+        quality_bounces=[
+            {
+                "path": "_tmp_inspect_wear.py",
+                "craft_issues": [
+                    {"message": "Import source 'numpy' could not be resolved in workspace or stdlib."}
+                ],
+            }
+        ],
+        terminal_results=[
+            {
+                "command": "python _tmp_inspect_wear.py",
+                "ok": False,
+                "exit_code": 1,
+                "output": "ModuleNotFoundError: No module named 'numpy'",
+                "output_preview": "ModuleNotFoundError: No module named 'numpy'",
+            }
+        ],
+    )
+
+    assert _diagnostic_environment_caveats(relay) == [
+        "Diagnostic script could not run because numpy is not installed in the project environment."
+    ]
+
+    _filter_scratch_write_records(relay)
+
+    assert relay.write_results == []
+    assert relay.not_applied_writes == []
+    assert relay.failed_tool_results == []
+    assert relay.quality_bounces == []
+    assert relay.touched_files == set()
+
+
+def test_scratch_py_compile_validation_rows_are_not_project_validation():
+    validation_results = [
+        {"command": "python -m py_compile _tmp_inspect_baked.py", "ok": True, "exit_code": 0},
+        {"command": "python -m py_compile aura/config.py", "ok": True, "exit_code": 0},
+    ]
+
+    filtered = _filter_scratch_validation_results(validation_results)
+
+    assert filtered == [validation_results[1]]
+    assert _is_validation_scratch_path("_tmp_inspect_baked.py")
+    assert _is_validation_scratch_path(".aura/tmp/_tmp_inspect_baked.py")
 
 
 def test_worker_result_needs_followup_not_terminal():

@@ -861,6 +861,8 @@ def test_auto_py_compile_scratch_paths_filtered():
     # Scratch paths should be marked as scratch
     assert _is_validation_scratch_path(".aura/tmp/dump_doubleclick.py"), "dump_* should be scratch"
     assert _is_validation_scratch_path(".aura/tmp/_check_something.py"), "_check_* should be scratch"
+    assert _is_validation_scratch_path(".aura/tmp/_tmp_inspect_wear.py"), "_tmp_inspect* should be scratch"
+    assert _is_validation_scratch_path("_tmp_inspect_wear.py"), "root _tmp_inspect* should be scratch"
     assert _is_validation_scratch_path(".aura/tmp/tmp_tempfile.py"), "tmp_* in .aura/tmp/ should be scratch"
     assert _is_validation_scratch_path(".aura/tmp/check_test.py"), "check* in .aura/tmp/ should be scratch"
 
