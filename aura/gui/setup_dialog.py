@@ -1,4 +1,4 @@
-"""First-run setup dialog for when no API keys are configured."""
+"""First-run setup dialog for when no providers are configured."""
 
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ class SetupDialog(QDialog):
 
         button_box = QDialogButtonBox(self)
 
-        open_settings_btn = QPushButton("Open API Settings")
+        open_settings_btn = QPushButton("Open Provider Settings")
         button_box.addButton(open_settings_btn, QDialogButtonBox.ButtonRole.AcceptRole)
         open_settings_btn.clicked.connect(self.accept)
 

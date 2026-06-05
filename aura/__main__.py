@@ -73,7 +73,7 @@ def _run_app(log_path: Path, args: argparse.Namespace, qt_argv: list[str]) -> in
     app = QApplication(qt_argv)
     logger.info("QApplication creation end")
 
-    from aura.config import APP_NAME, PROVIDERS, get_api_key, icon_path, load_settings
+    from aura.config import APP_NAME, PROVIDERS, has_api_key, has_usable_provider_credentials, get_provider_kind, icon_path, load_settings
     from aura.gui.theme import apply_theme
 
     app.setWindowIcon(QIcon(str(icon_path())))
@@ -87,41 +87,44 @@ def _run_app(log_path: Path, args: argparse.Namespace, qt_argv: list[str]) -> in
     logger.info("settings load end")
 
     selected_provider = settings.provider
-    has_any_key = any(get_api_key(pid) is not None for pid in PROVIDERS)
-    has_selected_key = get_api_key(selected_provider) is not None
 
     _should_open_api_settings = False
 
     if args.startup_smoke:
-        logger.info("startup smoke mode: skipping API key warnings")
-    elif not has_any_key:
-        # No provider at all has a key — show the setup dialog.
-        logger.info("no API keys found — showing setup dialog")
+        logger.info("startup smoke mode: skipping provider warnings")
+    elif not has_usable_provider_credentials():
+        # No provider at all is configured/available — show setup dialog.
+        logger.info("no providers configured — showing setup dialog")
         from aura.gui.setup_dialog import SetupDialog
         dlg = SetupDialog()
         result = dlg.exec()
         if dlg._continue_readonly:
             logger.info("user chose Continue Read-only")
         elif result == QDialog.DialogCode.Accepted:
-            logger.info("user chose Open API Settings")
+            logger.info("user chose Open Provider Settings")
             _should_open_api_settings = True
         else:
             logger.info("user chose Exit")
             return 0
-    elif not has_selected_key:
-        # Selected provider doesn't have a key, but another one does.
+    elif not has_api_key(selected_provider):
+        # Selected provider doesn't have a key or CLI available, but another one does.
         cfg = PROVIDERS[selected_provider]
-        logger.info("API key warning start")
-        QMessageBox.warning(
-            None,
-            APP_NAME,
-            f"No API key found for {cfg.label}.\n\n"
-            f"Set the {cfg.env_key} environment variable or open "
-            f"Settings → API Key to paste one.\n\n"
-            f"The app will open, but chat with this provider will fail "
-            f"until a key is configured.",
-        )
-        logger.info("API key warning end")
+        kind = get_provider_kind(selected_provider)
+        if kind == "external_cli":
+            logger.info("selected provider is external CLI — no key needed, skipping warning")
+            # External CLI providers don't need a key — the user is all set.
+        else:
+            logger.info("provider key warning start")
+            QMessageBox.warning(
+                None,
+                APP_NAME,
+                f"No API key found for {cfg.label}.\n\n"
+                f"Set the {cfg.env_key} environment variable or open "
+                f"Settings → API Key to paste one.\n\n"
+                f"The app will open, but chat with this provider will fail "
+                f"until a key is configured.",
+            )
+            logger.info("provider key warning end")
 
     from aura.gui.main_window import MainWindow
 
