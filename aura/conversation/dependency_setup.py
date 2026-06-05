@@ -40,6 +40,21 @@ _IMPORT_TO_PACKAGE = {
     "yaml": "pyyaml",
 }
 
+_SAFE_EXPLICIT_PIP_INSTALL_FLAGS = {
+    "--upgrade",
+    "-u",
+}
+
+_FORBIDDEN_PIP_INSTALL_FLAGS = {
+    "--break-system-packages",
+    "--prefix",
+    "--root",
+    "--target",
+    "--user",
+    "--system",
+    "-t",
+}
+
 
 @dataclass(frozen=True)
 class DependencySetupPlan:
@@ -249,18 +264,63 @@ def _is_workspace_venv_pip_install(tokens: list[str], *, workspace_root: Path | 
     lowered = [_clean_token(token).lower() for token in tokens]
     if lowered[1:4] != ["-m", "pip", "install"]:
         return False
-    args = lowered[4:]
-    if args == ["-e", "."]:
+    args = [_clean_token(token) for token in tokens[4:]]
+    lowered_args = [arg.lower().replace("\\", "/") for arg in args]
+    if lowered_args == ["-e", "."]:
         return True
-    if args == ["-e", ".[test]"] or args == ["-e", ".[dev]"]:
+    if lowered_args == ["-e", ".[test]"] or lowered_args == ["-e", ".[dev]"]:
         return True
-    if args == ["-r", "requirements.txt"] or args == ["-r", "requirements-dev.txt"]:
+    if lowered_args == ["-r", "requirements.txt"] or lowered_args == ["-r", "requirements-dev.txt"]:
         return True
-    return False
+    return _declared_workspace_venv_package_install_allowed(args, workspace_root=workspace_root)
+
+
+def _declared_workspace_venv_package_install_allowed(
+    args: list[str],
+    *,
+    workspace_root: Path | None,
+) -> bool:
+    if workspace_root is None:
+        return False
+    if not args:
+        return False
+
+    packages: list[str] = []
+    for raw_arg in args:
+        arg = _clean_token(raw_arg).strip()
+        if not arg:
+            return False
+        lowered = arg.lower()
+        flag_name = lowered.split("=", 1)[0]
+        if flag_name in _FORBIDDEN_PIP_INSTALL_FLAGS:
+            return False
+        if lowered in _SAFE_EXPLICIT_PIP_INSTALL_FLAGS:
+            continue
+        if lowered.startswith("-"):
+            return False
+        if _looks_like_non_package_install_target(arg):
+            return False
+        package = _normalize_package_name(arg)
+        if not package:
+            return False
+        packages.append(package)
+
+    if not packages:
+        return False
+    declared = declared_dependencies(Path(workspace_root))
+    return all(package in declared for package in packages)
+
+
+def _looks_like_non_package_install_target(value: str) -> bool:
+    lowered = value.strip().lower().replace("\\", "/")
+    return (
+        lowered.startswith((".", "/", "~", "git+", "http://", "https://"))
+        or "/" in lowered
+    )
 
 
 def _is_workspace_venv_python(value: str, *, workspace_root: Path | None) -> bool:
-    text = value.strip("'\"").replace("\\", "/")
+    text = _normalize_path_token(value)
     lowered = text.lower()
     if lowered in {".venv/scripts/python.exe", ".venv/bin/python"}:
         return True
@@ -274,6 +334,13 @@ def _is_workspace_venv_python(value: str, *, workspace_root: Path | None) -> boo
         except OSError:
             return False
     return False
+
+
+def _normalize_path_token(value: str) -> str:
+    text = value.strip("'\"").replace("\\", "/")
+    while text.startswith("./"):
+        text = text[2:]
+    return text
 
 
 def _canonical_setup_tokens(command: str, *, workspace_root: Path | None) -> list[str] | None:
@@ -317,7 +384,7 @@ def _split_command_segments(command: str) -> list[str]:
 
 def _split_tokens(command: str) -> list[str]:
     try:
-        return shlex.split(command, posix=(os.name != "nt"))
+        return shlex.split(command, posix=False)
     except ValueError:
         return command.split()
 
