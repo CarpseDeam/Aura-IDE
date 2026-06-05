@@ -708,6 +708,8 @@ class _DispatchProxy(QObject):
             "worker_internal_error": bool(internal_error),
             "internal_error": internal_error or "",
             "validation_not_run": validation_not_run,
+            "recoverable": recoverable,
+            "needs_followup": needs_followup,
             "phase_boundary": relay.phase_boundary_info or {},
             "limit": (
                 relay.phase_boundary_info
@@ -732,8 +734,28 @@ class _DispatchProxy(QObject):
             from aura.conversation.persistence import save_dispatch_record_to_memory
             save_dispatch_record_to_memory(record, self._workspace_root)
 
-        # Auto-commit if worker made changes — fire in background so dispatch isn't blocked.
-        if self._auto_commit_enabled and self._workspace_root is not None and relay.write_results:
+        auto_commit_allowed = _worker_result_allows_auto_commit(
+            ok=ok,
+            needs_followup=needs_followup,
+            recoverable=recoverable,
+            status=status,
+            internal_error=internal_error,
+            failed_validation=failed_validation,
+            not_applied_writes=not_applied_writes,
+            unrecovered_not_applied_writes=unrecovered_not_applied_writes,
+            environment_setup_blockers=environment_setup_blockers,
+            validation_not_run=validation_not_run,
+            result_errors=result_errors,
+        )
+        extras["auto_commit_allowed"] = auto_commit_allowed
+
+        # Auto-commit only after a clean final Worker result.
+        if (
+            self._auto_commit_enabled
+            and self._workspace_root is not None
+            and relay.write_results
+            and auto_commit_allowed
+        ):
             try:
                 from aura.git_ops import auto_commit
 
@@ -920,6 +942,9 @@ def _format_spec_as_user_message(task: WorkerTaskSpec | WorkerDispatchRequest) -
         "- Do not satisfy acceptance with placeholder behavior.",
         "- If a requested responsibility does not belong in a listed file, inspect and choose the smallest correct neighboring module, or report the mismatch.",
         "- Use update_todo_list for broad or risky work; small localized tasks may proceed directly after reading.",
+        "- Use patch_file for existing-file edits after reading the file.",
+        "- Use write_file only for new files or intentional full-file replacement.",
+        "- If patch_file fails, re-read the file and retry patch_file once; do not switch between edit tools.",
         "- Build the smallest complete implementation.",
         "- Own exact edits, validation, and code-quality decisions.",
         "- Use grep_search for searching.",
@@ -1052,13 +1077,42 @@ def _format_recoverable_write_failure(result: dict[str, Any]) -> str:
     name = str(result.get("name") or "write_tool")
     path = str(result.get("path") or "")
     error = str(result.get("error") or result.get("result_preview") or "recoverable edit mechanics failure")
-    suggested = str(result.get("suggested_next_tool") or result.get("suggested_tool") or "apply_edit_transaction")
+    suggested = str(result.get("suggested_next_tool") or result.get("suggested_tool") or "patch_file")
     target = f" on {path}" if path else ""
     op = result.get("failed_operation")
     op_text = ""
     if isinstance(op, dict) and op:
         op_text = f" Failed operation: {json.dumps(op, ensure_ascii=False, sort_keys=True)}."
     return f"Recoverable edit mechanics failure from {name}{target}: {error}. Next tactic: {suggested}.{op_text}"
+
+
+def _worker_result_allows_auto_commit(
+    *,
+    ok: bool,
+    needs_followup: bool,
+    recoverable: bool,
+    status: str | None,
+    internal_error: str | None,
+    failed_validation: list[dict[str, Any]],
+    not_applied_writes: list[dict[str, Any]],
+    unrecovered_not_applied_writes: list[dict[str, Any]],
+    environment_setup_blockers: list[dict[str, Any]],
+    validation_not_run: bool,
+    result_errors: list[str],
+) -> bool:
+    if not ok or needs_followup or recoverable:
+        return False
+    if status not in {WorkerOutcomeStatus.completed.value, WorkerOutcomeStatus.completed_with_caveats.value}:
+        return False
+    if internal_error or result_errors:
+        return False
+    if failed_validation or validation_not_run:
+        return False
+    if environment_setup_blockers:
+        return False
+    if not_applied_writes or unrecovered_not_applied_writes:
+        return False
+    return True
 
 
 def _unrecovered_validation_failures(results: list[dict[str, Any]]) -> list[dict[str, Any]]:

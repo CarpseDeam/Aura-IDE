@@ -127,6 +127,42 @@ class TestWorkerLifecycle:
         handler._on_worker_finished("tc1", True, "done")
         playground.worker_finished.assert_called_once_with(True, "done", status=None)
 
+    def test_recoverable_worker_followup_does_not_add_main_summary(
+        self, handler: WorkerEventHandler, bridge: Mock, chat: Mock, playground: Mock,
+    ) -> None:
+        bridge.worker_result_metadata.return_value = {"extras": {"recoverable": True}}
+
+        handler._on_worker_finished(
+            "tc1",
+            False,
+            "Worker needs one more pass.",
+            needs_followup=True,
+            status="needs_followup",
+        )
+
+        playground.worker_finished.assert_called_once_with(
+            False,
+            "Worker needs one more pass.",
+            needs_followup=True,
+            status="needs_followup",
+        )
+        chat.add_worker_summary.assert_not_called()
+
+    def test_unrecoverable_worker_followup_still_adds_main_summary(
+        self, handler: WorkerEventHandler, bridge: Mock, chat: Mock,
+    ) -> None:
+        bridge.worker_result_metadata.return_value = {"extras": {"recoverable": False}}
+
+        handler._on_worker_finished(
+            "tc1",
+            False,
+            "Worker blocked.",
+            needs_followup=True,
+            status="needs_followup",
+        )
+
+        chat.add_worker_summary.assert_called_once()
+
     def test_worker_cancelled_delegates_to_playground(
         self, handler: WorkerEventHandler, playground: Mock,
     ) -> None:

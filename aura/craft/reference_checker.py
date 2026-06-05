@@ -41,6 +41,54 @@ def _is_skip_dir(name: str) -> bool:
     return name in _SKIP_DIRS
 
 
+def _parent_map(tree: ast.AST) -> dict[ast.AST, ast.AST]:
+    parents: dict[ast.AST, ast.AST] = {}
+    for parent in ast.walk(tree):
+        for child in ast.iter_child_nodes(parent):
+            parents[child] = parent
+    return parents
+
+
+def _is_soft_import_context(node: ast.AST, parents: dict[ast.AST, ast.AST]) -> bool:
+    current = node
+    while current in parents:
+        parent = parents[current]
+        if isinstance(parent, ast.If) and _is_type_checking_test(parent.test):
+            return True
+        if isinstance(parent, ast.Try) and _node_is_in_try_body(current, parent):
+            if any(_handler_catches_import_error(handler) for handler in parent.handlers):
+                return True
+        current = parent
+    return False
+
+
+def _is_type_checking_test(node: ast.AST) -> bool:
+    if isinstance(node, ast.Name):
+        return node.id == "TYPE_CHECKING"
+    if isinstance(node, ast.Attribute):
+        return node.attr == "TYPE_CHECKING"
+    return False
+
+
+def _node_is_in_try_body(node: ast.AST, try_node: ast.Try) -> bool:
+    return any(child is node for child in try_node.body)
+
+
+def _handler_catches_import_error(handler: ast.ExceptHandler) -> bool:
+    if handler.type is None:
+        return False
+    caught = handler.type.elts if isinstance(handler.type, ast.Tuple) else [handler.type]
+    return any(_exception_name(exc) in {"ImportError", "ModuleNotFoundError"} for exc in caught)
+
+
+def _exception_name(node: ast.AST) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return ""
+
+
 @dataclass
 class _FuncSig:
     """Lightweight function/method signature for workspace index."""
@@ -251,12 +299,15 @@ class ReferenceChecker:
         imported_names: dict[str, str] = {}
         import_sources: list[tuple[str, ast.AST, str | None]] = []
 
+        parent_map = _parent_map(tree)
+
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
                     name = alias.asname or alias.name.split('.')[0]
                     imported_names[name] = alias.name
-                    import_sources.append((alias.name, node, None))
+                    if not _is_soft_import_context(node, parent_map):
+                        import_sources.append((alias.name, node, None))
             elif isinstance(node, ast.ImportFrom):
                 level = node.level or 0
                 base_module = node.module or ""
@@ -277,7 +328,8 @@ class ReferenceChecker:
                     for alias in node.names:
                         name = alias.asname or alias.name
                         imported_names[name] = f"{resolved_module}.{alias.name}"
-                        import_sources.append((resolved_module, node, alias.name))
+                        if not _is_soft_import_context(node, parent_map):
+                            import_sources.append((resolved_module, node, alias.name))
 
         issues: list[CraftIssue] = []
         builtin_names = set(dir(builtins))

@@ -611,6 +611,7 @@ def test_dispatch_spec_rejection_is_plan_incomplete_not_worker_started(
         e for e in captured_events
         if isinstance(e, ToolResult) and e.name == "dispatch_to_worker"
     )
+    assert dispatch_result.ok is True
     parsed = json.loads(dispatch_result.result)
     assert parsed["ok"] is False
     assert parsed["summary"].startswith("Plan incomplete")

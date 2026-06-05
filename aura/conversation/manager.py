@@ -1264,6 +1264,19 @@ class ConversationManager:
             self._record_recovery_block(payload, f"line-range-reread:{path}", recovery_block_counts)
             return self._blocked_tool_result(tool_call_id, name, payload)
 
+        if name == "patch_file" and path in edit_fallback_required:
+            prior = edit_fallback_required[path]
+            payload = self._recovery_payload(
+                path=path,
+                failure_class=str(prior.get("failure_class") or "patch_hunk_not_found"),
+                error="Previous patch_file failed. Re-read the file before retrying the patch.",
+                suggested_next_tool="read_file",
+                suggested_next_action="Re-read the file, then retry patch_file once with current exact text.",
+            )
+            payload["previous_error"] = prior.get("error", "")
+            self._record_recovery_block(payload, f"patch-reread:{path}", recovery_block_counts)
+            return self._blocked_tool_result(tool_call_id, name, payload)
+
         if name in ("edit_file", "edit_symbol") and path in edit_fallback_required:
             prior = edit_fallback_required[path]
             block_key = self._edit_shape_signature(name, args)
@@ -1538,7 +1551,13 @@ class ConversationManager:
         write_attempts_by_path: dict[str, int],
     ) -> str:
         parsed = self._parse_tool_payload(content)
-        self._record_reads_for_recovery(name, args, parsed, line_range_reread_required)
+        self._record_reads_for_recovery(
+            name,
+            args,
+            parsed,
+            line_range_reread_required,
+            edit_fallback_required,
+        )
         path = self._tool_path(name, args, parsed)
         if name in WRITE_TOOLS and path and (
             not ok
@@ -1769,16 +1788,19 @@ class ConversationManager:
         args: dict[str, Any],
         parsed: Any,
         line_range_reread_required: dict[str, dict[str, Any]],
+        edit_fallback_required: dict[str, dict[str, Any]],
     ) -> None:
         if name == "read_file":
             path = str(args.get("path") or (parsed.get("path") if isinstance(parsed, dict) else ""))
             if path:
                 line_range_reread_required.pop(path, None)
+                edit_fallback_required.pop(path, None)
         elif name == "read_files":
             paths = args.get("paths")
             if isinstance(paths, list):
                 for item in paths:
                     line_range_reread_required.pop(str(item), None)
+                    edit_fallback_required.pop(str(item), None)
 
     @staticmethod
     def _syntax_repair_tool_allowed(

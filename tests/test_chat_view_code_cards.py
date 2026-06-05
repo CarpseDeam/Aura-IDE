@@ -146,13 +146,37 @@ def test_pre_worker_dispatch_rejection_does_not_add_worker_summary(qapp) -> None
     }
 
     import json
-    chat.set_tool_result("dispatch-1", False, json.dumps(result))
+    chat.set_tool_result("dispatch-1", True, json.dumps(result))
 
     assert chat.findChildren(WorkerSummaryCard) == []
     plan_cards = chat.findChildren(PlanWriterCard)
     assert len(plan_cards) == 1
     assert plan_cards[0]._state == PlanWriterCard.STATE_INCOMPLETE
     assert "missing acceptance" in plan_cards[0]._incomplete_text
+
+
+def test_recoverable_worker_followup_dispatch_does_not_add_worker_summary(qapp) -> None:
+    chat = ChatView()
+    chat.begin_assistant()
+
+    chat.add_tool_call("dispatch-1", "dispatch_to_worker")
+    chat.append_tool_args(
+        "dispatch-1",
+        '{"goal": "Fix it", "files": ["a.py"], "spec": "Change a.py", "acceptance": "py_compile"}',
+    )
+    result = {
+        "ok": False,
+        "summary": "Worker needs one more pass.",
+        "needs_followup": True,
+        "recoverable": True,
+        "status": "needs_followup",
+        "extras": {"recoverable": True},
+    }
+
+    import json
+    chat.set_tool_result("dispatch-1", True, json.dumps(result))
+
+    assert chat.findChildren(WorkerSummaryCard) == []
 
 
 def test_worker_summary_replaces_existing_card_for_same_dispatch(qapp) -> None:

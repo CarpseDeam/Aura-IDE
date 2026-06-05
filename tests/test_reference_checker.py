@@ -129,6 +129,40 @@ def test_relative_imports_missing_module(tmp_workspace: Path):
     assert any(i.code == "broken-import" and "missing_module" in i.message for i in issues)
 
 
+def test_type_checking_imports_are_not_runtime_broken_imports(tmp_workspace: Path):
+    rc = ReferenceChecker()
+    code = (
+        "from typing import TYPE_CHECKING\n"
+        "if TYPE_CHECKING:\n"
+        "    from .missing_module import Thing\n"
+        "\n"
+        "def build() -> str:\n"
+        "    return 'ok'\n"
+    )
+    cap = MockCapsule(proposed_code=code, path=tmp_workspace / "pkg" / "module.py")
+
+    issues = rc.check(cap, workspace_root=tmp_workspace)
+
+    assert not any(i.code == "broken-import" and "missing_module" in i.message for i in issues)
+
+
+def test_import_error_guarded_imports_are_not_runtime_broken_imports(tmp_workspace: Path):
+    rc = ReferenceChecker()
+    code = (
+        "try:\n"
+        "    import optional_missing\n"
+        "except ModuleNotFoundError:\n"
+        "    optional_missing = None\n"
+        "\n"
+        "def build() -> bool:\n"
+        "    return optional_missing is None\n"
+    )
+
+    issues = rc.check(MockCapsule(proposed_code=code), workspace_root=tmp_workspace)
+
+    assert not any(i.code == "broken-import" and "optional_missing" in i.message for i in issues)
+
+
 def test_invalidate_workspace_index_clears_cache(tmp_workspace: Path):
     rc = ReferenceChecker()
     rc._build_workspace_index(tmp_workspace)

@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from aura.client.events import TerminalOutput, ToolCallStart, ToolResult
+from aura.conversation.dispatch import WorkerDispatchResult
 from aura.conversation.history import History
 from aura.conversation.loop_detection import LoopDetector
 from aura.conversation.tool_runner import ToolRunner
@@ -138,3 +139,63 @@ def test_terminal_output_events_stream_chunks(tmp_path: Path):
     assert len(tool_results) == 1
     payload = json.loads(tool_results[0].result)
     assert payload["ok"] is True
+
+
+def test_recoverable_dispatch_result_emits_nonfailed_tool_event(tmp_path: Path):
+    runner = _make_runner(tmp_path)
+    events = []
+
+    result = runner.handle_dispatch(
+        tool_call_id="dispatch-1",
+        args={
+            "goal": "Fix bug",
+            "files": ["a.py"],
+            "spec": "Change the implementation in a.py.",
+            "acceptance": "Run python -m py_compile a.py.",
+        },
+        on_event=events.append,
+        dispatch_cb=lambda _tool_call_id, _req: WorkerDispatchResult(
+            ok=False,
+            summary="Worker needs one more pass.",
+            needs_followup=True,
+            recoverable=True,
+        ),
+    )
+
+    assert result is not None
+    assert result.ok is False
+    tool_results = [ev for ev in events if isinstance(ev, ToolResult)]
+    assert len(tool_results) == 1
+    assert tool_results[0].ok is True
+    payload = json.loads(tool_results[0].result)
+    assert payload["ok"] is False
+    assert payload["recoverable"] is True
+
+
+def test_recoverable_dispatch_spec_rejection_emits_nonfailed_tool_event(tmp_path: Path):
+    runner = _make_runner(tmp_path)
+    events = []
+
+    result = runner.handle_dispatch(
+        tool_call_id="dispatch-1",
+        args={
+            "goal": "Fix bug",
+            "files": ["a.py"],
+            "spec": "Change the implementation in a.py.",
+            "acceptance": "",
+        },
+        on_event=events.append,
+        dispatch_cb=lambda _tool_call_id, _req: WorkerDispatchResult(ok=True, summary="unused"),
+    )
+
+    assert result is not None
+    assert result.ok is False
+    assert result.recoverable is True
+    tool_results = [ev for ev in events if isinstance(ev, ToolResult)]
+    assert len(tool_results) == 1
+    assert tool_results[0].ok is True
+    assert tool_results[0].extras["dispatch_spec_rejected"] is True
+    assert tool_results[0].extras["recoverable"] is True
+    payload = json.loads(tool_results[0].result)
+    assert payload["ok"] is False
+    assert payload["extras"]["dispatch_spec_rejected"] is True

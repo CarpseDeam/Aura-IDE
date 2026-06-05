@@ -531,9 +531,14 @@ class ChatView(QScrollArea):
                 dispatch_not_started = False
                 approval_timeout = False
                 cancelled = False
+                recoverable = False
                 try:
                     data = json.loads(result_text)
                     extras = data.get("extras", {})
+                    recoverable = bool(
+                        data.get("recoverable")
+                        or extras.get("recoverable")
+                    )
                     dispatch_not_started = bool(
                         data.get("dispatch_not_started")
                         or data.get("dispatch_spec_rejected")
@@ -572,7 +577,7 @@ class ChatView(QScrollArea):
                 # Failed state, remove it so it doesn't appear as the final item.
                 self._cleanup_failed_code_cards(tool_call_id)
 
-                if summary and not dispatch_not_started:
+                if summary and not dispatch_not_started and not (needs_followup and recoverable):
                     goal = (
                         controller.goal
                         or self._tool_goal_from_args(controller.buffer)

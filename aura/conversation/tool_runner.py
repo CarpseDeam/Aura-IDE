@@ -94,11 +94,12 @@ class ToolRunner:
                 ToolResult(
                     tool_call_id=tool_call_id,
                     name="dispatch_to_worker",
-                    ok=False,
+                    ok=True,
                     result=payload,
                     extras={
                         "dispatch_not_started": True,
                         "dispatch_spec_rejected": True,
+                        "recoverable": True,
                         "summary": error_message,
                         "quality_errors": list(quality.errors),
                     },
@@ -160,11 +161,15 @@ class ToolRunner:
             "followup_reason": result.followup_reason,
         }
         event_extras.update(result.extras)
+        # Recoverable Worker failures are Planner control-flow, not a visible
+        # failed planner tool. Keep the payload truthful for the model while
+        # avoiding a transient red tool card when the Planner can redispatch.
+        event_ok = result.ok or bool(result.recoverable and not result.cancelled)
         on_event(
             ToolResult(
                 tool_call_id=tool_call_id,
                 name="dispatch_to_worker",
-                ok=result.ok,
+                ok=event_ok,
                 result=payload,
                 extras=event_extras,
             )

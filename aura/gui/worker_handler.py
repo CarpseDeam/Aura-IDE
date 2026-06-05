@@ -248,6 +248,12 @@ class WorkerEventHandler(QObject):
         status: str | None = None,
     ) -> None:
         """Forward worker finished to playground and update spec card."""
+        metadata = self._worker_result_metadata(tool_call_id)
+        suppress_main_summary = self._is_recoverable_internal_worker_result(
+            ok=ok,
+            needs_followup=bool(needs_followup),
+            metadata=metadata,
+        )
         self._playground.stop_aura()
         if needs_followup is None:
             self._playground.worker_finished(ok, summary, status=status)
@@ -260,16 +266,16 @@ class WorkerEventHandler(QObject):
         if card:
             card.worker_finished(ok, summary, status=status)
         goal = self._worker_summary_goal(tool_call_id, card)
-        self._chat.add_worker_summary(
-            tool_call_id,
-            goal,
-            ok,
-            summary,
-            needs_followup=bool(needs_followup),
-            status=status,
-        )
+        if not suppress_main_summary:
+            self._chat.add_worker_summary(
+                tool_call_id,
+                goal,
+                ok,
+                summary,
+                needs_followup=bool(needs_followup),
+                status=status,
+            )
         if self._active_workflow is not None and self._active_workflow.tool_call_id == tool_call_id:
-            metadata = self._worker_result_metadata(tool_call_id)
             self._set_active_workflow(
                 self._active_workflow.finish(
                     ok=ok,
@@ -282,6 +288,22 @@ class WorkerEventHandler(QObject):
                 )
             )
         self._clear_active_spec_card(tool_call_id)
+
+    @staticmethod
+    def _is_recoverable_internal_worker_result(
+        *,
+        ok: bool,
+        needs_followup: bool,
+        metadata: dict,
+    ) -> bool:
+        extras = metadata.get("extras") if isinstance(metadata.get("extras"), dict) else {}
+        return bool(
+            not ok
+            and needs_followup
+            and extras.get("recoverable")
+            and not extras.get("worker_internal_error")
+            and not extras.get("internal_error")
+        )
 
     def _worker_result_metadata(self, tool_call_id: str) -> dict:
         getter = getattr(self._bridge, "worker_result_metadata", None)

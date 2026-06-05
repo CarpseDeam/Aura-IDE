@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import threading
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, PropertyMock, patch
@@ -275,6 +276,221 @@ def test_dependency_setup_merges_multiple_missing_packages_for_same_pending_path
     assert state["modules"] == ["fastapi", "httpx"]
     assert state["packages"] == ["fastapi", "httpx"]
     assert state["setup_failed"] is False
+
+
+def test_declared_fastapi_dependency_setup_runs_then_original_write_retries(tmp_path):
+    history = History()
+    tools = MagicMock(spec=ToolRegistry)
+    tools.tool_defs.return_value = []
+    type(tools).mode = PropertyMock(return_value="worker")
+    type(tools).workspace_root = PropertyMock(return_value=tmp_path)
+    python = tmp_path / ".venv" / "Scripts" / "python.exe"
+    python.parent.mkdir(parents=True)
+    python.write_text("", encoding="utf-8")
+    setup_command = r".venv\Scripts\python.exe -m pip install -e ."
+    tools.execute.side_effect = [
+        ToolExecResult(
+            ok=True,
+            payload={
+                "ok": True,
+                "path": "app.py",
+                "dependency_setup_needed": True,
+                "missing_module": "fastapi",
+                "missing_dependency": "fastapi",
+                "dependency_declared": True,
+                "dependency_file": "pyproject.toml",
+                "setup_command": setup_command,
+            },
+        ),
+        ToolExecResult(
+            ok=True,
+            payload={"ok": True, "path": "app.py", "applied": True, "is_new_file": True},
+        ),
+    ]
+    manager = ConversationManager(history, tools)
+    events = []
+    hook = MagicMock(
+        side_effect=[
+            iter([
+                _done(
+                    tool_calls=[
+                        _tool_call(
+                            "w1",
+                            "write_file",
+                            {"path": "app.py", "content": "from fastapi import FastAPI\napp = FastAPI()\n"},
+                        )
+                    ]
+                )
+            ]),
+            iter([_done(tool_calls=[_tool_call("setup1", "run_terminal_command", {"command": setup_command})])]),
+            iter([
+                _done(
+                    tool_calls=[
+                        _tool_call(
+                            "w2",
+                            "write_file",
+                            {"path": "app.py", "content": "from fastapi import FastAPI\napp = FastAPI()\n"},
+                        )
+                    ]
+                )
+            ]),
+            iter([_done("Done. py_compile passed.")]),
+        ]
+    )
+    sandbox = MagicMock()
+    sandbox.run_terminal_command.return_value = SandboxResult(
+        ok=True,
+        stdout="installed\n",
+        stderr="",
+        exit_code=0,
+    )
+
+    try:
+        _register_worker_hook(hook)
+        with (
+            patch("aura.conversation.tool_runner.load_settings") as load_settings,
+            patch("aura.conversation.tool_runner.SandboxExecutor", return_value=sandbox),
+            patch.object(ConversationManager, "_run_focused_py_compile", return_value=(True, "app.py: ok")),
+        ):
+            load_settings.return_value = MagicMock(sandbox_mode="host")
+            manager.send(
+                on_event=events.append,
+                approval_cb=MagicMock(return_value=ApprovalDecision("approve")),
+                cancel_event=threading.Event(),
+                model="test-model",
+                thinking="off",
+                hook_name="generate_worker_code",
+            )
+    finally:
+        hooks.unregister("generate_worker_code")
+
+    executed_names = [call.kwargs["name"] for call in tools.execute.call_args_list]
+    assert executed_names == ["write_file", "write_file"]
+    sandbox.run_terminal_command.assert_called_once()
+    assert "-m pip install -e ." in sandbox.run_terminal_command.call_args.kwargs["command"]
+    assert not any(
+        isinstance(ev, ToolResult)
+        and ev.name == "write_file"
+        and json.loads(ev.result).get("failure_class") == "project_environment_setup_needed"
+        for ev in events
+    )
+
+
+def test_undeclared_fastapi_dependency_file_update_setup_then_original_write_retries(tmp_path):
+    history = History()
+    tools = MagicMock(spec=ToolRegistry)
+    tools.tool_defs.return_value = []
+    type(tools).mode = PropertyMock(return_value="worker")
+    type(tools).workspace_root = PropertyMock(return_value=tmp_path)
+    python = tmp_path / ".venv" / "Scripts" / "python.exe"
+    python.parent.mkdir(parents=True)
+    python.write_text("", encoding="utf-8")
+    setup_command = r".venv\Scripts\python.exe -m pip install -e ."
+    tools.execute.side_effect = [
+        ToolExecResult(
+            ok=True,
+            payload={
+                "ok": True,
+                "path": "app.py",
+                "dependency_setup_needed": True,
+                "missing_module": "fastapi",
+                "missing_dependency": "fastapi",
+                "dependency_declared": False,
+                "dependency_file": "pyproject.toml",
+                "setup_command": setup_command,
+            },
+        ),
+        ToolExecResult(
+            ok=True,
+            payload={"ok": True, "path": "pyproject.toml", "applied": True, "is_new_file": False},
+        ),
+        ToolExecResult(
+            ok=True,
+            payload={"ok": True, "path": "app.py", "applied": True, "is_new_file": True},
+        ),
+    ]
+    manager = ConversationManager(history, tools)
+    events = []
+    hook = MagicMock(
+        side_effect=[
+            iter([
+                _done(
+                    tool_calls=[
+                        _tool_call(
+                            "w1",
+                            "write_file",
+                            {"path": "app.py", "content": "from fastapi import FastAPI\napp = FastAPI()\n"},
+                        )
+                    ]
+                )
+            ]),
+            iter([
+                _done(
+                    tool_calls=[
+                        _tool_call(
+                            "dep1",
+                            "write_file",
+                            {
+                                "path": "pyproject.toml",
+                                "content": "[project]\nname = 'demo'\ndependencies = ['fastapi']\n",
+                            },
+                        )
+                    ]
+                )
+            ]),
+            iter([_done(tool_calls=[_tool_call("setup1", "run_terminal_command", {"command": setup_command})])]),
+            iter([
+                _done(
+                    tool_calls=[
+                        _tool_call(
+                            "w2",
+                            "write_file",
+                            {"path": "app.py", "content": "from fastapi import FastAPI\napp = FastAPI()\n"},
+                        )
+                    ]
+                )
+            ]),
+            iter([_done("Done. py_compile passed.")]),
+        ]
+    )
+    sandbox = MagicMock()
+    sandbox.run_terminal_command.return_value = SandboxResult(
+        ok=True,
+        stdout="installed\n",
+        stderr="",
+        exit_code=0,
+    )
+
+    try:
+        _register_worker_hook(hook)
+        with (
+            patch("aura.conversation.tool_runner.load_settings") as load_settings,
+            patch("aura.conversation.tool_runner.SandboxExecutor", return_value=sandbox),
+            patch.object(ConversationManager, "_run_focused_py_compile", return_value=(True, "app.py: ok")),
+        ):
+            load_settings.return_value = MagicMock(sandbox_mode="host")
+            manager.send(
+                on_event=events.append,
+                approval_cb=MagicMock(return_value=ApprovalDecision("approve")),
+                cancel_event=threading.Event(),
+                model="test-model",
+                thinking="off",
+                hook_name="generate_worker_code",
+            )
+    finally:
+        hooks.unregister("generate_worker_code")
+
+    executed = [
+        (call.kwargs["name"], call.kwargs["args"]["path"])
+        for call in tools.execute.call_args_list
+    ]
+    assert executed == [
+        ("write_file", "app.py"),
+        ("write_file", "pyproject.toml"),
+        ("write_file", "app.py"),
+    ]
+    sandbox.run_terminal_command.assert_called_once()
+    assert "-m pip install -e ." in sandbox.run_terminal_command.call_args.kwargs["command"]
 
 
 def test_repeated_identical_edit_attempt_is_blocked_and_redirected(tmp_path):
@@ -725,6 +941,73 @@ def test_auto_py_compile_validation_is_counted_by_dispatch(tmp_workspace):
     assert validation["output"] == "a.py: ok"
     assert validation["output_preview"] == "a.py: ok"
     assert validation["auto_validation"] is True
+
+
+def test_dogfood_worker_read_patch_validate_completes_successfully(
+    tmp_workspace,
+    monkeypatch,
+    block_real_subprocess,
+):
+    monkeypatch.setattr(subprocess, "run", block_real_subprocess)
+    target = tmp_workspace / "a.py"
+    target.write_text("value = 1\n", encoding="utf-8")
+    req = WorkerDispatchRequest(
+        goal="Update value",
+        files=["a.py"],
+        spec="Change value from 1 to 2 in a.py.",
+        acceptance="Run python -m py_compile a.py.",
+        summary="Patch a.py",
+    )
+    proxy = _DispatchProxy(
+        parent_widget=Mock(),
+        registry_factory=lambda mode: ToolRegistry(tmp_workspace, mode=mode),
+        approval_proxy=Mock(
+            request_approval=MagicMock(return_value=ApprovalDecision("approve")),
+            consume_last_event=MagicMock(return_value=None),
+        ),
+        workspace_root=tmp_workspace,
+    )
+    proxy.set_auto_commit_enabled(False)
+    hook = MagicMock(
+        side_effect=[
+            iter([_done(tool_calls=[_tool_call("r1", "read_file", {"path": "a.py"})])]),
+            iter([
+                _done(
+                    tool_calls=[
+                        _tool_call(
+                            "p1",
+                            "patch_file",
+                            {
+                                "path": "a.py",
+                                "edits": [{"old": "value = 1\n", "new": "value = 2\n"}],
+                            },
+                        )
+                    ]
+                )
+            ]),
+            iter([_done("Done. py_compile passed.")]),
+        ]
+    )
+
+    try:
+        _register_worker_hook(hook)
+        result = proxy._run_worker("dispatch-1", req, SimpleNamespace(cancel_event=None))
+    finally:
+        hooks.unregister("generate_worker_code")
+
+    assert result.ok is True
+    assert result.needs_followup is False
+    assert result.status == "completed"
+    assert target.read_text(encoding="utf-8") == "value = 2\n"
+    write_tools = [
+        row.get("tool")
+        for row in result.extras["writes"]
+        if row.get("path") == "a.py"
+    ]
+    assert write_tools == ["patch_file"]
+    validation = result.extras["validation_results"][0]
+    assert validation["ok"] is True
+    assert validation["command"].endswith(" -m py_compile a.py")
 
 
 def test_root_check_scratch_files_are_cleaned(tmp_workspace):
