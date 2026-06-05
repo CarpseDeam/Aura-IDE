@@ -111,8 +111,18 @@ def _run_app(log_path: Path, args: argparse.Namespace, qt_argv: list[str]) -> in
         cfg = PROVIDERS[selected_provider]
         kind = get_provider_kind(selected_provider)
         if kind == "external_cli":
-            logger.info("selected provider external CLI unavailable — skipping warning")
-            # External CLI providers don't need a key — the user is all set.
+            logger.info("selected provider external CLI unavailable warning start")
+            QMessageBox.warning(
+                None,
+                APP_NAME,
+                f"{cfg.label} is selected, but its CLI executable is not available.\n\n"
+                "Install and sign in to the CLI, or choose another provider in "
+                "Settings -> Provider Setup.\n\n"
+                "The app will open, but chat with this provider will fail until "
+                "the CLI is available.",
+            )
+            logger.info("selected provider external CLI unavailable warning end")
+            _should_open_api_settings = True
         else:
             logger.info("provider key warning start")
             QMessageBox.warning(

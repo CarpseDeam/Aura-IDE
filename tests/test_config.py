@@ -439,3 +439,65 @@ def test_google_cloud_api_key_fallbacks(monkeypatch):
     # 4. Stored key fallback
     monkeypatch.setattr("aura.config._stored_get_key", lambda p: "stored-secret" if p == "google_cloud" else None)
     assert get_api_key("google_cloud") == "stored-secret"
+
+
+def test_external_cli_providers_do_not_report_api_keys(monkeypatch):
+    """External CLI providers should never count as API-key configured."""
+    from aura.config import has_api_key
+
+    monkeypatch.setattr("aura.config.get_api_key", lambda p: "not-used")
+
+    assert has_api_key("claude_code") is False
+    assert has_api_key("codex") is False
+
+
+def test_api_key_providers_are_usable_only_with_api_key(monkeypatch):
+    """API-key providers are usable exactly when get_api_key returns a value."""
+    from aura.config import has_usable_provider_configuration
+
+    monkeypatch.setattr("aura.config.get_provider_kind", lambda p: "api_key")
+    monkeypatch.setattr("aura.config.get_api_key", lambda p: None)
+    assert has_usable_provider_configuration("openai") is False
+
+    monkeypatch.setattr("aura.config.get_api_key", lambda p: "sk-test")
+    assert has_usable_provider_configuration("openai") is True
+
+
+def test_external_cli_providers_are_usable_only_when_executable_is_available(monkeypatch):
+    """External CLI providers depend on executable availability, not API keys."""
+    from aura.config import has_usable_provider_configuration
+
+    monkeypatch.setattr("aura.config.get_provider_kind", lambda p: "external_cli")
+    monkeypatch.setattr("aura.config.is_external_cli_available", lambda p: False)
+    assert has_usable_provider_configuration("claude_code") is False
+
+    monkeypatch.setattr("aura.config.is_external_cli_available", lambda p: True)
+    assert has_usable_provider_configuration("claude_code") is True
+
+
+def test_local_providers_are_not_usable_yet(monkeypatch):
+    """Local providers are recognized as unavailable until local execution exists."""
+    from aura.config import has_usable_provider_configuration
+
+    monkeypatch.setattr("aura.config.get_provider_kind", lambda p: "local")
+
+    assert has_usable_provider_configuration("future_local") is False
+
+
+def test_has_usable_provider_credentials_wraps_provider_configuration(monkeypatch):
+    """The legacy credentials helper should remain a compatibility wrapper."""
+    from aura.config import has_usable_provider_credentials
+
+    calls = []
+
+    def fake_has_usable_provider_configuration(provider_id=None):
+        calls.append(provider_id)
+        return True
+
+    monkeypatch.setattr(
+        "aura.config.has_usable_provider_configuration",
+        fake_has_usable_provider_configuration,
+    )
+
+    assert has_usable_provider_credentials() is True
+    assert calls == [None]
