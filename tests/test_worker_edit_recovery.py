@@ -713,6 +713,223 @@ def test_auto_py_compile_validation_is_counted_by_dispatch(tmp_workspace):
     assert validation["auto_validation"] is True
 
 
+def test_worker_auto_commit_success_is_recorded_in_extras_and_summary(tmp_workspace):
+    req = WorkerDispatchRequest(
+        goal="Create a Python module",
+        files=["a.py"],
+        spec="Create a.py with a simple value.",
+        acceptance="",
+        summary="Create a.py",
+    )
+    proxy = _DispatchProxy(
+        parent_widget=Mock(),
+        registry_factory=lambda mode: ToolRegistry(tmp_workspace, mode=mode),
+        approval_proxy=Mock(
+            request_approval=MagicMock(return_value=ApprovalDecision("approve")),
+            consume_last_event=MagicMock(return_value=None),
+        ),
+        workspace_root=tmp_workspace,
+    )
+    tc = _tool_call("w1", "write_file", {"path": "a.py", "content": "value = 1\n"})
+    hook = MagicMock(side_effect=[iter([_done(tool_calls=[tc])]), iter([_done("Done.")])])
+
+    try:
+        _register_worker_hook(hook)
+        with (
+            patch.object(
+                ConversationManager,
+                "_run_focused_py_compile",
+                return_value=(True, "a.py: ok"),
+            ),
+            patch("aura.git_ops.auto_commit", return_value=(True, "Committed: Create a Python module")) as commit_mock,
+        ):
+            result = proxy._run_worker("dispatch-1", req, SimpleNamespace(cancel_event=None))
+    finally:
+        hooks.unregister("generate_worker_code")
+
+    commit_mock.assert_called_once()
+    assert commit_mock.call_args.args[0] == tmp_workspace
+    assert commit_mock.call_args.args[1] == req.goal
+    assert commit_mock.call_args.args[2] == ["a.py"]
+    assert result.ok is True
+    assert result.status == "completed"
+    assert result.extras["auto_commit_attempted"] is True
+    assert result.extras["auto_commit_success"] is True
+    assert result.extras["auto_commit_message"] == "Committed: Create a Python module"
+    assert "Auto-commit: Committed: Create a Python module" in result.summary
+    metadata = proxy.result_metadata("dispatch-1")
+    assert metadata["extras"]["auto_commit_attempted"] is True
+    assert metadata["extras"]["auto_commit_success"] is True
+    assert metadata["extras"]["auto_commit_message"] == "Committed: Create a Python module"
+
+
+def test_worker_auto_commit_failure_is_recorded_in_extras_and_summary(tmp_workspace):
+    req = WorkerDispatchRequest(
+        goal="Create a Python module",
+        files=["a.py"],
+        spec="Create a.py with a simple value.",
+        acceptance="",
+        summary="Create a.py",
+    )
+    proxy = _DispatchProxy(
+        parent_widget=Mock(),
+        registry_factory=lambda mode: ToolRegistry(tmp_workspace, mode=mode),
+        approval_proxy=Mock(
+            request_approval=MagicMock(return_value=ApprovalDecision("approve")),
+            consume_last_event=MagicMock(return_value=None),
+        ),
+        workspace_root=tmp_workspace,
+    )
+    tc = _tool_call("w1", "write_file", {"path": "a.py", "content": "value = 1\n"})
+    hook = MagicMock(side_effect=[iter([_done(tool_calls=[tc])]), iter([_done("Done.")])])
+
+    try:
+        _register_worker_hook(hook)
+        with (
+            patch.object(
+                ConversationManager,
+                "_run_focused_py_compile",
+                return_value=(True, "a.py: ok"),
+            ),
+            patch("aura.git_ops.auto_commit", return_value=(False, "git commit failed.")) as commit_mock,
+        ):
+            result = proxy._run_worker("dispatch-1", req, SimpleNamespace(cancel_event=None))
+    finally:
+        hooks.unregister("generate_worker_code")
+
+    commit_mock.assert_called_once()
+    assert result.ok is True
+    assert result.status == "completed"
+    assert result.extras["auto_commit_attempted"] is True
+    assert result.extras["auto_commit_success"] is False
+    assert result.extras["auto_commit_message"] == "git commit failed."
+    assert "Auto-commit skipped/failed: git commit failed." in result.summary
+
+
+def test_worker_auto_commit_not_called_when_result_not_allowed(tmp_workspace):
+    req = WorkerDispatchRequest(
+        goal="Create a Python module",
+        files=["a.py"],
+        spec="Create a.py with a simple value.",
+        acceptance="",
+        summary="Create a.py",
+    )
+    proxy = _DispatchProxy(
+        parent_widget=Mock(),
+        registry_factory=lambda mode: ToolRegistry(tmp_workspace, mode=mode),
+        approval_proxy=Mock(
+            request_approval=MagicMock(return_value=ApprovalDecision("approve")),
+            consume_last_event=MagicMock(return_value=None),
+        ),
+        workspace_root=tmp_workspace,
+    )
+    tc = _tool_call("w1", "write_file", {"path": "a.py", "content": "value = 1\n"})
+    hook = MagicMock(side_effect=[iter([_done(tool_calls=[tc])]), iter([_done("Done.")])])
+
+    try:
+        _register_worker_hook(hook)
+        with (
+            patch.object(
+                ConversationManager,
+                "_run_focused_py_compile",
+                return_value=(False, "a.py: failed"),
+            ),
+            patch("aura.git_ops.auto_commit") as commit_mock,
+        ):
+            result = proxy._run_worker("dispatch-1", req, SimpleNamespace(cancel_event=None))
+    finally:
+        hooks.unregister("generate_worker_code")
+
+    commit_mock.assert_not_called()
+    assert result.ok is False
+    assert result.extras["auto_commit_allowed"] is False
+    assert result.extras["auto_commit_attempted"] is False
+    assert result.extras["auto_commit_success"] is None
+    assert result.extras["auto_commit_message"] == ""
+    assert "Auto-commit:" not in result.summary
+    assert "Auto-commit skipped/failed:" not in result.summary
+
+
+def test_worker_auto_commit_not_called_when_written_files_empty(tmp_workspace):
+    req = WorkerDispatchRequest(
+        goal="Inspect the project",
+        files=[],
+        spec="No file changes are required.",
+        acceptance="",
+        summary="Inspect only",
+    )
+    proxy = _DispatchProxy(
+        parent_widget=Mock(),
+        registry_factory=lambda mode: ToolRegistry(tmp_workspace, mode=mode),
+        approval_proxy=Mock(
+            request_approval=MagicMock(return_value=ApprovalDecision("approve")),
+            consume_last_event=MagicMock(return_value=None),
+        ),
+        workspace_root=tmp_workspace,
+    )
+    hook = MagicMock(return_value=iter([_done("No changes.")]))
+
+    try:
+        _register_worker_hook(hook)
+        with patch("aura.git_ops.auto_commit") as commit_mock:
+            result = proxy._run_worker("dispatch-1", req, SimpleNamespace(cancel_event=None))
+    finally:
+        hooks.unregister("generate_worker_code")
+
+    commit_mock.assert_not_called()
+    assert result.extras["auto_commit_attempted"] is False
+    assert result.extras["auto_commit_success"] is None
+    assert result.extras["auto_commit_message"] == ""
+    assert "Auto-commit:" not in result.summary
+    assert "Auto-commit skipped/failed:" not in result.summary
+
+
+def test_worker_auto_commit_exception_is_recorded_in_extras_and_summary(tmp_workspace):
+    req = WorkerDispatchRequest(
+        goal="Create a Python module",
+        files=["a.py"],
+        spec="Create a.py with a simple value.",
+        acceptance="",
+        summary="Create a.py",
+    )
+    proxy = _DispatchProxy(
+        parent_widget=Mock(),
+        registry_factory=lambda mode: ToolRegistry(tmp_workspace, mode=mode),
+        approval_proxy=Mock(
+            request_approval=MagicMock(return_value=ApprovalDecision("approve")),
+            consume_last_event=MagicMock(return_value=None),
+        ),
+        workspace_root=tmp_workspace,
+    )
+    tc = _tool_call("w1", "write_file", {"path": "a.py", "content": "value = 1\n"})
+    hook = MagicMock(side_effect=[iter([_done(tool_calls=[tc])]), iter([_done("Done.")])])
+
+    try:
+        _register_worker_hook(hook)
+        with (
+            patch.object(
+                ConversationManager,
+                "_run_focused_py_compile",
+                return_value=(True, "a.py: ok"),
+            ),
+            patch("aura.git_ops.auto_commit", side_effect=RuntimeError("identity missing")) as commit_mock,
+        ):
+            result = proxy._run_worker("dispatch-1", req, SimpleNamespace(cancel_event=None))
+    finally:
+        hooks.unregister("generate_worker_code")
+
+    commit_mock.assert_called_once()
+    assert result.ok is True
+    assert result.status == "completed"
+    assert result.extras["auto_commit_attempted"] is True
+    assert result.extras["auto_commit_success"] is False
+    assert result.extras["auto_commit_message"] == "Auto-commit failed: RuntimeError: identity missing"
+    assert (
+        "Auto-commit skipped/failed: Auto-commit failed: RuntimeError: identity missing"
+        in result.summary
+    )
+
+
 def test_dogfood_worker_read_patch_validate_completes_successfully(
     tmp_workspace,
     monkeypatch,

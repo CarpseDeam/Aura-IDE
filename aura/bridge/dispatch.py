@@ -718,6 +718,59 @@ class _DispatchProxy(QObject):
             ),
         }
 
+        auto_commit_allowed = _worker_result_allows_auto_commit(
+            ok=ok,
+            needs_followup=needs_followup,
+            recoverable=recoverable,
+            status=status,
+            internal_error=internal_error,
+            failed_validation=failed_validation,
+            not_applied_writes=not_applied_writes,
+            unrecovered_not_applied_writes=unrecovered_not_applied_writes,
+            environment_setup_blockers=environment_setup_blockers,
+            validation_not_run=validation_not_run,
+            result_errors=result_errors,
+        )
+        extras["auto_commit_allowed"] = auto_commit_allowed
+        extras["auto_commit_attempted"] = False
+        extras["auto_commit_success"] = None
+        extras["auto_commit_message"] = ""
+
+        # Auto-commit only after a clean final Worker result.
+        if (
+            self._auto_commit_enabled
+            and self._workspace_root is not None
+            and auto_commit_allowed
+        ):
+            written_files = _applied_modified_files(relay.write_results)
+            if written_files:
+                extras["auto_commit_attempted"] = True
+                try:
+                    from aura.git_ops import auto_commit
+
+                    success, message = auto_commit(
+                        self._workspace_root,
+                        req.goal,
+                        written_files,
+                        summary,
+                    )
+                    extras["auto_commit_success"] = success
+                    extras["auto_commit_message"] = message
+                except Exception as exc:
+                    extras["auto_commit_success"] = False
+                    extras["auto_commit_message"] = (
+                        f"Auto-commit failed: {type(exc).__name__}: {exc}"
+                    )
+
+                auto_commit_message = extras["auto_commit_message"]
+                if extras["auto_commit_success"]:
+                    summary = f"{summary.rstrip()}\nAuto-commit: {auto_commit_message}"
+                else:
+                    summary = (
+                        f"{summary.rstrip()}\n"
+                        f"Auto-commit skipped/failed: {auto_commit_message}"
+                    )
+
         spec_dict = req.to_dict()
         spec_dict["task_spec"] = task_spec.to_dict()
         record = WorkerDispatchRecord(
@@ -733,43 +786,6 @@ class _DispatchProxy(QObject):
         if self._workspace_root is not None:
             from aura.conversation.persistence import save_dispatch_record_to_memory
             save_dispatch_record_to_memory(record, self._workspace_root)
-
-        auto_commit_allowed = _worker_result_allows_auto_commit(
-            ok=ok,
-            needs_followup=needs_followup,
-            recoverable=recoverable,
-            status=status,
-            internal_error=internal_error,
-            failed_validation=failed_validation,
-            not_applied_writes=not_applied_writes,
-            unrecovered_not_applied_writes=unrecovered_not_applied_writes,
-            environment_setup_blockers=environment_setup_blockers,
-            validation_not_run=validation_not_run,
-            result_errors=result_errors,
-        )
-        extras["auto_commit_allowed"] = auto_commit_allowed
-
-        # Auto-commit only after a clean final Worker result.
-        if (
-            self._auto_commit_enabled
-            and self._workspace_root is not None
-            and relay.write_results
-            and auto_commit_allowed
-        ):
-            try:
-                from aura.git_ops import auto_commit
-
-                written_files = _applied_modified_files(relay.write_results)
-                if written_files:
-                    def _do_commit(root, goal, files, summary):
-                        auto_commit(root, goal, files, summary)
-                    threading.Thread(
-                        target=_do_commit,
-                        args=(self._workspace_root, req.goal, written_files, summary),
-                        daemon=True,
-                    ).start()
-            except Exception:
-                pass  # Never block the chat on git failures
 
         self._result_metadata[tool_call_id] = {
             "modified_files": modified_files,
