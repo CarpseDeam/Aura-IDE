@@ -137,6 +137,91 @@ def test_syntax_repair_recovery_steers_to_patch_not_line_range(tmp_workspace):
     assert "patch_file" in payload["suggested_next_action"]
 
 
+def test_syntax_repair_allows_targeted_py_compile(tmp_workspace):
+    manager = ConversationManager(History(), ToolRegistry(tmp_workspace, mode="worker"))
+
+    assert manager._syntax_repair_tool_allowed(
+        "run_terminal_command",
+        {"command": "python -m py_compile database.py"},
+        {"database.py"},
+    )
+
+
+def test_syntax_repair_blocks_unrelated_terminal_commands(tmp_workspace):
+    manager = ConversationManager(History(), ToolRegistry(tmp_workspace, mode="worker"))
+
+    assert not manager._syntax_repair_tool_allowed(
+        "run_terminal_command",
+        {"command": "python -m pytest tests"},
+        {"database.py"},
+    )
+    assert not manager._syntax_repair_tool_allowed(
+        "run_terminal_command",
+        {"command": "echo py_compile database.py"},
+        {"database.py"},
+    )
+
+
+def test_syntax_repair_py_compile_path_normalization(tmp_workspace):
+    manager = ConversationManager(History(), ToolRegistry(tmp_workspace, mode="worker"))
+
+    assert manager._syntax_repair_tool_allowed(
+        "run_terminal_command",
+        {"command": "python -m py_compile ./database.py"},
+        {"database.py"},
+    )
+    assert manager._syntax_repair_tool_allowed(
+        "run_terminal_command",
+        {"command": r"python -m py_compile .\pkg\database.py"},
+        {"pkg/database.py"},
+    )
+
+
+def test_successful_py_compile_clears_normalized_syntax_state(tmp_workspace):
+    manager = ConversationManager(History(), ToolRegistry(tmp_workspace, mode="worker"))
+    syntax_repair_required = {"./database.py": {"error": "SyntaxError"}}
+    syntax_validation_required = {r".\database.py"}
+
+    manager._update_syntax_state_from_terminal(
+        args={"command": "python -m py_compile database.py"},
+        loop_info={
+            "_terminal_payload": {
+                "ok": True,
+                "command": "python -m py_compile database.py",
+                "output": "",
+            }
+        },
+        syntax_repair_required=syntax_repair_required,
+        syntax_validation_required=syntax_validation_required,
+    )
+
+    assert syntax_repair_required == {}
+    assert syntax_validation_required == set()
+
+
+def test_failed_py_compile_records_normalized_syntax_path(tmp_workspace):
+    manager = ConversationManager(History(), ToolRegistry(tmp_workspace, mode="worker"))
+    syntax_repair_required = {}
+    syntax_validation_required = set()
+
+    manager._update_syntax_state_from_terminal(
+        args={"command": "python -m py_compile ./database.py"},
+        loop_info={
+            "_terminal_payload": {
+                "ok": False,
+                "command": "python -m py_compile ./database.py",
+                "output": "SyntaxError: invalid syntax",
+            }
+        },
+        syntax_repair_required=syntax_repair_required,
+        syntax_validation_required=syntax_validation_required,
+    )
+
+    assert set(syntax_repair_required) == {"database.py"}
+    assert syntax_repair_required["database.py"]["error"] == "SyntaxError: invalid syntax"
+    assert syntax_validation_required == set()
+
+
 def test_patch_file_failure_requires_reread_before_retry(tmp_workspace):
     manager = ConversationManager(History(), ToolRegistry(tmp_workspace, mode="worker"))
     fallback_required = {
