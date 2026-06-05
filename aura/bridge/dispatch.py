@@ -38,6 +38,7 @@ from aura.conversation import (
     WorkerTaskSpec,
     normalize_worker_task,
 )
+from aura.conversation.project_profile import detect_project_profile
 from aura.conversation.tool_limits import WRITE_TOOLS
 from aura.conversation.persistence import WorkerDispatchRecord
 from aura.prompts import (
@@ -304,6 +305,12 @@ class _DispatchProxy(QObject):
         full_prompt = inject_private_worker_style(full_prompt)
         worker_history.set_system(full_prompt)
         task_spec = normalize_worker_task(req)
+        if self._workspace_root is not None:
+            try:
+                profile = detect_project_profile(self._workspace_root)
+                task_spec = replace(task_spec, project_profile=profile)
+            except Exception:
+                logging.exception("Failed to detect project profile for worker context")
         worker_history.append_user_text(_format_spec_as_user_message(task_spec))
 
         worker_registry = self._registry_factory("worker")
@@ -856,7 +863,18 @@ def _format_spec_as_user_message(task: WorkerTaskSpec | WorkerDispatchRequest) -
             return default
         return "\n".join(f"- {item}" for item in items)
 
-    parts = [
+    parts: list[str] = []
+
+    # ---- Project Profile (injected by dispatch) -----------------------------
+    if task.project_profile is not None:
+        summary = task.project_profile.summarize()
+        parts.append("\u2500\u2500 Project Profile " + "\u2500" * 42)
+        for line in summary.split("\n"):
+            parts.append(line)
+        parts.append("\u2500" * 60)
+        parts.append("")
+
+    parts.extend([
         "Goal",
         task.goal,
         "",
@@ -880,7 +898,7 @@ def _format_spec_as_user_message(task: WorkerTaskSpec | WorkerDispatchRequest) -
         "",
         "Acceptance / Validation",
         task.acceptance,
-    ]
+    ])
 
     if task.validation_commands:
         parts.extend([
