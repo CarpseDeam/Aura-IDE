@@ -105,6 +105,73 @@ def test_worker_terminal_policy_allows_project_local_dependency_setup(tmp_path) 
         assert decision.failure_class == ""
 
 
+def test_worker_terminal_policy_allows_declared_explicit_packages_in_workspace_venv(tmp_path) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname = 'demo'\ndependencies = ['fastapi>=0.100']\n"
+        "[project.optional-dependencies]\ntest = ['pytest>=8', 'httpx']\n",
+        encoding="utf-8",
+    )
+    commands = [
+        r".\.venv\Scripts\python.exe -m pip install pytest httpx",
+        r".venv\Scripts\python.exe -m pip install --upgrade pytest httpx",
+        ".venv/bin/python -m pip install pytest httpx",
+        "./.venv/bin/python -m pip install pytest httpx",
+        ".venv/bin/python -m pip install fastapi pytest",
+    ]
+
+    for command in commands:
+        assert classify_worker_terminal_command(command) == "project_environment_setup"
+        decision = worker_terminal_command_allowed(command, workspace_root=tmp_path)
+        assert decision.allowed is True
+        assert decision.failure_class == ""
+
+
+def test_worker_terminal_policy_blocks_undeclared_workspace_venv_package_install(tmp_path) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname = 'demo'\ndependencies = ['pytest']\n",
+        encoding="utf-8",
+    )
+
+    decision = worker_terminal_command_allowed(
+        r".\.venv\Scripts\python.exe -m pip install pytest mystery-package",
+        workspace_root=tmp_path,
+    )
+    payload = decision.to_blocked_payload(r".\.venv\Scripts\python.exe -m pip install pytest mystery-package")
+
+    assert decision.allowed is False
+    assert payload["failure_class"] == "project_environment_setup_blocked"
+
+
+def test_worker_terminal_policy_blocks_workspace_venv_install_scope_escape(tmp_path) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname = 'demo'\ndependencies = ['pytest']\n",
+        encoding="utf-8",
+    )
+    commands = [
+        r".\.venv\Scripts\python.exe -m pip install --user pytest",
+        r".\.venv\Scripts\python.exe -m pip install --target vendor pytest",
+        r".\.venv\Scripts\python.exe -m pip install ../local-package",
+    ]
+
+    for command in commands:
+        decision = worker_terminal_command_allowed(command, workspace_root=tmp_path)
+        assert decision.allowed is False
+        assert decision.failure_class == "project_environment_setup_blocked"
+
+
+def test_worker_terminal_policy_blocks_chained_project_dependency_setup(tmp_path) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname = 'demo'\ndependencies = ['pytest']\n",
+        encoding="utf-8",
+    )
+
+    command = r".\.venv\Scripts\python.exe -m pip install pytest && python -m pytest"
+    decision = worker_terminal_command_allowed(command, workspace_root=tmp_path)
+
+    assert decision.allowed is False
+    assert decision.failure_class == "project_environment_setup_blocked"
+
+
 def test_worker_terminal_policy_allows_project_manager_setup_with_project_evidence(tmp_path) -> None:
     commands_and_files = [
         ("uv sync", "pyproject.toml"),
