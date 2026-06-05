@@ -16,21 +16,21 @@ DEEPSEEK_MODELS: dict[str, ModelInfo] = {
     "deepseek-v4-flash": ModelInfo(
         id="deepseek-v4-flash",
         label="DeepSeek V4 Flash",
-        input_per_m_usd=0.15,
-        output_per_m_usd=0.60,
-        cache_hit_per_m_usd=0.075,
+        input_per_m_usd=0.14,
+        output_per_m_usd=0.28,
+        cache_hit_per_m_usd=0.0028,
     ),
     "deepseek-v4-pro": ModelInfo(
         id="deepseek-v4-pro",
         label="DeepSeek V4 Pro",
-        input_per_m_usd=2.50,
-        output_per_m_usd=10.00,
-        cache_hit_per_m_usd=0.375,
+        input_per_m_usd=0.435,
+        output_per_m_usd=0.87,
+        cache_hit_per_m_usd=0.003625,
     ),
 }
 DEEPSEEK_PRICING: dict[str, dict[str, float]] = {
-    "deepseek-v4-flash": {"in_miss": 0.15, "in_hit": 0.075, "out": 0.60},
-    "deepseek-v4-pro": {"in_miss": 2.50, "in_hit": 0.375, "out": 10.00},
+    "deepseek-v4-flash": {"in_miss": 0.14, "in_hit": 0.0028, "out": 0.28},
+    "deepseek-v4-pro": {"in_miss": 0.435, "in_hit": 0.003625, "out": 0.87},
 }
 
 OPENAI_MODELS: dict[str, ModelInfo] = {
