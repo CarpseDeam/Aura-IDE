@@ -114,7 +114,6 @@ def gather_workspace_snapshot(workspace_root: Path) -> dict[str, Any]:
             "python_venv_path": profile.python_venv_path,
             "python_executable": profile.python_executable,
             "declared_dependencies": list(profile.declared_dependencies),
-            "setup_command": profile.setup_command,
             "validation_commands": list(profile.validation_commands),
             "node_scripts": [list(s) for s in profile.node_scripts],
             "summary": profile.summarize(),

@@ -6,13 +6,8 @@ import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
-from aura.conversation.dependency_setup import (
-    safe_project_environment_setup_command,
-    unsafe_global_environment_setup_command,
-)
-
 SOURCE_INSPECTION_ERROR = (
-    "Worker terminal supports validation/build commands and safe project-local dependency setup. "
+    "Worker terminal supports validation/build/test commands and dependency installs. "
     "Use structured read tools for source inspection."
 )
 SOURCE_INSPECTION_NEXT_ACTION = (
@@ -49,10 +44,10 @@ def classify_worker_terminal_command(command: str) -> str:
         return "unknown"
     if _looks_like_source_inspection(normalized):
         return "source_inspection"
-    if _looks_like_project_environment_setup(command):
-        return "project_environment_setup"
     if _looks_like_validation(normalized):
         return "validation"
+    if _looks_like_dependency_install(normalized):
+        return "dependency_install"
     return "unknown"
 
 
@@ -63,33 +58,8 @@ def worker_terminal_command_allowed(
     workspace_root: Path | str | None = None,
 ) -> TerminalPolicyDecision:
     """Return whether a normal Worker may run *command* in terminal."""
-    root = Path(workspace_root) if workspace_root is not None else None
-    if unsafe_global_environment_setup_command(command) and not safe_project_environment_setup_command(
-        command,
-        workspace_root=root,
-    ):
-        return TerminalPolicyDecision(
-            False,
-            "Global/system dependency installation is blocked for Worker terminal commands.",
-            "global_environment_setup_blocked",
-            "typed_blocker",
-            "Install dependencies only through the workspace-local .venv or project manager.",
-        )
-
-    if _looks_like_project_environment_setup(command):
-        if safe_project_environment_setup_command(command, workspace_root=root):
-            return TerminalPolicyDecision(True, "project environment setup command", "", "", "")
-        return TerminalPolicyDecision(
-            False,
-            "Worker dependency setup must target the workspace-local environment.",
-            "project_environment_setup_blocked",
-            "typed_blocker",
-            (
-                "Use python -m venv .venv when no project .venv exists, then install "
-                "through .venv Python or a project manager such as uv, poetry, or pdm."
-            ),
-        )
     if _looks_like_source_inspection(_normalize_command(command)):
+
         return TerminalPolicyDecision(
             False,
             SOURCE_INSPECTION_ERROR,
@@ -101,6 +71,8 @@ def worker_terminal_command_allowed(
         return TerminalPolicyDecision(True, "explicit validation command", "", "", "")
 
     classification = classify_worker_terminal_command(command)
+    if classification == "dependency_install":
+        return TerminalPolicyDecision(True, "dependency install command", "", "", "")
     if classification == "validation":
         return TerminalPolicyDecision(True, "validation command", "", "", "")
     if classification == "source_inspection":
@@ -115,12 +87,12 @@ def worker_terminal_command_allowed(
     return TerminalPolicyDecision(
         False,
         (
-            "Worker terminal supports validation/build commands and safe project-local dependency setup. "
+            "Worker terminal supports validation/build/test commands and dependency installs. "
             "This command is not recognized as one of those allowed command types."
         ),
         "worker_terminal_not_validation",
         "typed_blocker",
-        "Run only validation/build/test commands, or report a typed blocker if validation cannot be performed with available tools.",
+        "Run only validation/build/test/install commands, or report a typed blocker if validation cannot be performed with available tools.",
     )
 
 
@@ -163,14 +135,33 @@ def _segment_looks_like_validation(segment: str) -> bool:
     return any(re.search(pattern, segment) for pattern in validation_patterns)
 
 
-def _looks_like_project_environment_setup(command: str) -> bool:
-    normalized = _normalize_command(command).replace("\\", "/")
-    return bool(
-        safe_project_environment_setup_command(command)
-        or unsafe_global_environment_setup_command(command)
-        or re.match(r"^(?:python(?:\d+(?:\.\d+)?)?|py)\s+-m\s+venv\s+\.venv$", normalized)
-        or re.match(r"^(?:uv\s+sync(?:\s+--(?:all-extras|dev))?|poetry\s+install|pdm\s+install)$", normalized)
+def _looks_like_dependency_install(normalized: str) -> bool:
+    segments = _split_command_segments(normalized.replace("\\", "/"))
+    if not segments:
+        return False
+    has_install = any(_segment_looks_like_dependency_install(segment) for segment in segments)
+    return has_install and all(
+        _segment_looks_like_dependency_install(segment)
+        or _segment_looks_like_validation(segment)
+        for segment in segments
     )
+
+
+def _segment_looks_like_dependency_install(segment: str) -> bool:
+    install_patterns = (
+        r"^(?:[a-z]:/[^\s]+/)?(?:\.?/?\.venv/(?:scripts|bin)/)?python(?:\.exe)?\s+-m\s+pip\s+install\b",
+        r"^(?:python(?:\d+(?:\.\d+)?)?|py)\s+-m\s+pip\s+install\b",
+        r"^pip(?:\d+)?\s+install\b",
+        r"^uv\s+(?:sync|pip\s+install)\b",
+        r"^poetry\s+install\b",
+        r"^pdm\s+install\b",
+        r"^npm\s+(?:install|ci)\b",
+        r"^pnpm\s+(?:install|i)\b",
+        r"^yarn\s+(?:install)?\b",
+        r"^cargo\s+(?:fetch|build|test)\b",
+        r"^go\s+(?:mod\s+download|get\b|test\b|build\b)",
+    )
+    return any(re.search(pattern, segment) for pattern in install_patterns)
 
 
 def _looks_like_source_inspection(normalized: str) -> bool:

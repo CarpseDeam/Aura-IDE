@@ -29,7 +29,6 @@ def test_failed_transaction_returns_typed_blocker_without_recovery_roulette(tmp_
         syntax_repair_required={},
         syntax_validation_required=set(),
         compiler_repair_required={},
-        dependency_setup_required={},
         write_attempts_by_path={},
     )
 
@@ -67,7 +66,6 @@ def test_ambiguous_replace_text_once_is_nonrecoverable_with_specific_guidance(tm
         syntax_repair_required={},
         syntax_validation_required=set(),
         compiler_repair_required={},
-        dependency_setup_required={},
         write_attempts_by_path={},
     )
 
@@ -100,7 +98,6 @@ def test_repeated_ambiguous_replace_text_once_shape_is_blocked(tmp_workspace):
         syntax_repair_required={},
         syntax_validation_required=set(),
         compiler_repair_required={},
-        dependency_setup_required={},
         write_attempts_by_path={},
     )
 
@@ -128,7 +125,6 @@ def test_syntax_repair_recovery_steers_to_patch_not_line_range(tmp_workspace):
         syntax_repair_required={"broken.py": {"error": "SyntaxError"}},
         syntax_validation_required=set(),
         compiler_repair_required={},
-        dependency_setup_required={},
         write_attempts_by_path={},
     )
 
@@ -161,7 +157,6 @@ def test_patch_file_failure_requires_reread_before_retry(tmp_workspace):
         syntax_repair_required={},
         syntax_validation_required=set(),
         compiler_repair_required={},
-        dependency_setup_required={},
         write_attempts_by_path={},
     )
 
@@ -190,7 +185,6 @@ def test_patch_file_failure_requires_reread_before_retry(tmp_workspace):
         syntax_repair_required={},
         syntax_validation_required=set(),
         compiler_repair_required={},
-        dependency_setup_required={},
         write_attempts_by_path={},
     )
     assert unblocked is None

@@ -41,7 +41,7 @@ dependencies = ["fastapi", "pydantic>=2.0", "httpx"]
         assert profile.has_venv is True
         assert profile.python_executable == exec_path
         assert profile.package_manager == "pip"
-        assert profile.setup_command is not None
+        assert profile.validation_commands
         assert "pyproject.toml" in profile.manifests
 
 class TestPythonPyprojectTomlWithUvLock:
@@ -58,7 +58,7 @@ dependencies = ["fastapi"]
         profile = detect_project_profile(tmp_path)
 
         assert profile.package_manager == "uv"
-        assert profile.setup_command == "uv sync"
+        assert profile.validation_commands
         assert "uv.lock" in profile.lockfiles
 
 class TestPythonRequirementsTxtWithoutVenv:
@@ -148,7 +148,7 @@ version = "0.1.0"
 
         assert profile.project_types == ("rust",)
         assert profile.package_manager == "cargo"
-        assert profile.setup_command == "cargo fetch"
+        assert "cargo build" in profile.validation_commands
 
 class TestGoGoMod:
     """go.mod → Go project."""
@@ -164,7 +164,7 @@ go 1.21
 
         assert profile.project_types == ("go",)
         assert profile.package_manager == "go"
-        assert profile.setup_command == "go mod download"
+        assert "go test ./..." in profile.validation_commands
 
 class TestMixedPythonAndNode:
     """pyproject.toml + package.json → both types detected."""
@@ -230,6 +230,5 @@ dependencies = ["fastapi", "httpx"]
         assert "pyproject.toml" in summary
         assert "Package manager:" in summary
         assert "Virtual env:" in summary
-        assert "Setup:" in summary
         assert "fastapi" in summary
         assert "httpx" in summary

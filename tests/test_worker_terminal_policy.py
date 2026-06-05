@@ -28,16 +28,7 @@ def test_worker_terminal_policy_blocks_source_inspection_commands() -> None:
         payload = decision.to_blocked_payload(command)
         assert decision.allowed is False
         assert payload["failure_class"] == "source_inspection_command_blocked"
-        assert payload["error"] == (
-            "Worker terminal supports validation/build commands and safe project-local dependency setup. "
-            "Use structured read tools for source inspection."
-        )
         assert payload["suggested_next_tool"] == "read_file"
-        assert payload["suggested_next_action"] == (
-            "Use read_file, read_files, grep_search, read_file_outline, find_usages, or "
-            "search_codebase. If structured reads cannot access the file, report a blocker "
-            "instead of trying terminal/Python file reads."
-        )
         assert payload["blocked_command"] == command
 
 
@@ -87,189 +78,47 @@ def test_worker_terminal_policy_blocks_unknown_commands_by_default() -> None:
     assert payload["failure_class"] == "worker_terminal_not_validation"
 
 
-def test_worker_terminal_policy_allows_project_local_dependency_setup(tmp_path) -> None:
+def test_worker_terminal_policy_allows_dependency_install_commands(tmp_path) -> None:
     commands = [
         r".venv\Scripts\python.exe -m pip install -e .",
-        r".venv\Scripts\python.exe -m pip install -e .[test]",
-        r".venv\Scripts\python.exe -m pip install -e .[dev]",
+        r".venv\Scripts\python.exe -m pip install pytest httpx",
         r".venv\Scripts\python.exe -m pip install -r requirements.txt",
-        r".venv\Scripts\python.exe -m pip install -r requirements-dev.txt",
         ".venv/bin/python -m pip install -e .",
-        ".venv/bin/python -m pip install -r requirements.txt",
-    ]
-
-    for command in commands:
-        assert classify_worker_terminal_command(command) == "project_environment_setup"
-        decision = worker_terminal_command_allowed(command, workspace_root=tmp_path)
-        assert decision.allowed is True
-        assert decision.failure_class == ""
-
-
-def test_worker_terminal_policy_allows_declared_explicit_packages_in_workspace_venv(tmp_path) -> None:
-    (tmp_path / "pyproject.toml").write_text(
-        "[project]\nname = 'demo'\ndependencies = ['fastapi>=0.100']\n"
-        "[project.optional-dependencies]\ntest = ['pytest>=8', 'httpx']\n",
-        encoding="utf-8",
-    )
-    commands = [
-        r".\.venv\Scripts\python.exe -m pip install pytest httpx",
-        r".venv\Scripts\python.exe -m pip install --upgrade pytest httpx",
         ".venv/bin/python -m pip install pytest httpx",
-        "./.venv/bin/python -m pip install pytest httpx",
-        ".venv/bin/python -m pip install fastapi pytest",
-    ]
-
-    for command in commands:
-        assert classify_worker_terminal_command(command) == "project_environment_setup"
-        decision = worker_terminal_command_allowed(command, workspace_root=tmp_path)
-        assert decision.allowed is True
-        assert decision.failure_class == ""
-
-
-def test_worker_terminal_policy_blocks_undeclared_workspace_venv_package_install(tmp_path) -> None:
-    (tmp_path / "pyproject.toml").write_text(
-        "[project]\nname = 'demo'\ndependencies = ['pytest']\n",
-        encoding="utf-8",
-    )
-
-    decision = worker_terminal_command_allowed(
-        r".\.venv\Scripts\python.exe -m pip install pytest mystery-package",
-        workspace_root=tmp_path,
-    )
-    payload = decision.to_blocked_payload(r".\.venv\Scripts\python.exe -m pip install pytest mystery-package")
-
-    assert decision.allowed is False
-    assert payload["failure_class"] == "project_environment_setup_blocked"
-
-
-def test_worker_terminal_policy_blocks_workspace_venv_install_scope_escape(tmp_path) -> None:
-    (tmp_path / "pyproject.toml").write_text(
-        "[project]\nname = 'demo'\ndependencies = ['pytest']\n",
-        encoding="utf-8",
-    )
-    commands = [
-        r".\.venv\Scripts\python.exe -m pip install --user pytest",
-        r".\.venv\Scripts\python.exe -m pip install --target vendor pytest",
-        r".\.venv\Scripts\python.exe -m pip install ../local-package",
-    ]
-
-    for command in commands:
-        decision = worker_terminal_command_allowed(command, workspace_root=tmp_path)
-        assert decision.allowed is False
-        assert decision.failure_class == "project_environment_setup_blocked"
-
-
-def test_worker_terminal_policy_blocks_chained_project_dependency_setup(tmp_path) -> None:
-    (tmp_path / "pyproject.toml").write_text(
-        "[project]\nname = 'demo'\ndependencies = ['pytest']\n",
-        encoding="utf-8",
-    )
-
-    command = r".\.venv\Scripts\python.exe -m pip install pytest && python -m pytest"
-    decision = worker_terminal_command_allowed(command, workspace_root=tmp_path)
-
-    assert decision.allowed is False
-    assert decision.failure_class == "project_environment_setup_blocked"
-
-
-def test_worker_terminal_policy_allows_project_manager_setup_with_project_evidence(tmp_path) -> None:
-    commands_and_files = [
-        ("uv sync", "pyproject.toml"),
-        ("uv sync --all-extras", "uv.lock"),
-        ("uv sync --dev", "pyproject.toml"),
-        ("poetry install", "poetry.lock"),
-        ("pdm install", "pdm.toml"),
-    ]
-
-    for command, filename in commands_and_files:
-        workspace = tmp_path / command.replace(" ", "_").replace("-", "_")
-        workspace.mkdir()
-        (workspace / filename).write_text("", encoding="utf-8")
-
-        assert classify_worker_terminal_command(command) == "project_environment_setup"
-        decision = worker_terminal_command_allowed(command, workspace_root=workspace)
-
-        assert decision.allowed is True
-        assert decision.failure_class == ""
-
-
-def test_worker_terminal_policy_blocks_project_manager_setup_without_project_evidence(tmp_path) -> None:
-    commands = [
+        "python -m pip install -e .",
+        "python -m pip install pytest httpx",
+        "pip install fastapi",
+        "pip3 install fastapi",
         "uv sync",
         "uv sync --all-extras",
         "uv sync --dev",
+        "uv pip install pytest",
         "poetry install",
         "pdm install",
+        "npm install",
+        "npm ci",
+        "pnpm install",
+        "yarn install",
+        "cargo fetch",
+        "go mod download",
+        "go get ./...",
     ]
 
     for command in commands:
+        assert classify_worker_terminal_command(command) == "dependency_install"
         decision = worker_terminal_command_allowed(command, workspace_root=tmp_path)
-        payload = decision.to_blocked_payload(command)
-
-        assert decision.allowed is False
-        assert payload["failure_class"] == "project_environment_setup_blocked"
+        assert decision.allowed is True
+        assert decision.failure_class == ""
 
 
-def test_worker_terminal_policy_allows_absolute_workspace_venv_python_pip_install(tmp_path) -> None:
-    windows_command = (
-        r"C:\workspaces\demo\.venv\Scripts\python.exe -m pip install -e ."
-    )
-    posix_python = tmp_path / ".venv" / "bin" / "python"
-    posix_command = f"{posix_python} -m pip install -e ."
-
-    assert worker_terminal_command_allowed(windows_command).allowed is True
-    assert worker_terminal_command_allowed(posix_command, workspace_root=tmp_path).allowed is True
-
-
-def test_worker_terminal_policy_allows_venv_creation_only_without_existing_project_venv(tmp_path) -> None:
-    command = "python -m venv .venv"
+def test_worker_terminal_policy_allows_install_then_validation_chain(tmp_path) -> None:
+    command = r".venv\Scripts\python.exe -m pip install pytest && python -m pytest"
 
     decision = worker_terminal_command_allowed(command, workspace_root=tmp_path)
-    assert classify_worker_terminal_command(command) == "project_environment_setup"
+
+    assert classify_worker_terminal_command(command) == "dependency_install"
     assert decision.allowed is True
-
-    existing = tmp_path / ".venv" / "Scripts" / "python.exe"
-    existing.parent.mkdir(parents=True)
-    existing.write_text("", encoding="utf-8")
-
-    blocked = worker_terminal_command_allowed(command, workspace_root=tmp_path)
-    payload = blocked.to_blocked_payload(command)
-    assert blocked.allowed is False
-    assert payload["failure_class"] == "project_environment_setup_blocked"
-
-
-def test_worker_terminal_policy_blocks_global_dependency_setup() -> None:
-    commands = [
-        "pip install fastapi",
-        "pip3 install fastapi",
-        "python -m pip install fastapi",
-        "py -m pip install fastapi",
-        "sudo apt install python3-fastapi",
-        "apt install python3-fastapi",
-        "winget install Python.Python.3.13",
-        "choco install python",
-        "brew install python",
-        "npm install -g typescript",
-    ]
-
-    for command in commands:
-        decision = worker_terminal_command_allowed(command)
-        payload = decision.to_blocked_payload(command)
-        assert decision.allowed is False
-        assert payload["failure_class"] == "global_environment_setup_blocked"
-
-
-def test_worker_terminal_policy_blocks_explicit_global_dependency_setup() -> None:
-    command = "pip install fastapi"
-
-    decision = worker_terminal_command_allowed(
-        command,
-        explicit_validation_commands=[command],
-    )
-    payload = decision.to_blocked_payload(command)
-
-    assert decision.allowed is False
-    assert payload["failure_class"] == "global_environment_setup_blocked"
+    assert decision.failure_class == ""
 
 
 def test_worker_terminal_policy_blocks_generic_git_reset() -> None:

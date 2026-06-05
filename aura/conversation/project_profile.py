@@ -73,7 +73,6 @@ class ProjectProfile:
     python_venv_path: str | None
     python_executable: str | None
     declared_dependencies: tuple[str, ...]
-    setup_command: str | None
     validation_commands: tuple[str, ...]
     node_scripts: tuple[tuple[str, str], ...]
 
@@ -92,8 +91,6 @@ class ProjectProfile:
         if self.declared_dependencies:
             dep_list = ", ".join(self.declared_dependencies)
             lines.append(f"Dependencies ({len(self.declared_dependencies)}): {dep_list}")
-        if self.setup_command:
-            lines.append("Setup: " + self.setup_command)
         if self.validation_commands:
             lines.append("Validation: " + "  |  ".join(self.validation_commands))
         if self.node_scripts:
@@ -372,44 +369,6 @@ def detect_project_profile(workspace_root: str | Path) -> ProjectProfile:
     if "package.json" in found_manifests:
         node_scripts = _node_scripts_from_package_json(root / "package.json")
 
-    # --- setup command ---
-    setup_command: str | None = None
-
-    if "python" in project_types:
-        if package_manager == "uv":
-            setup_command = "uv sync"
-        elif package_manager == "poetry":
-            setup_command = "poetry install"
-        elif package_manager == "pdm":
-            setup_command = "pdm install"
-        elif has_venv:
-            if python_executable:
-                if "requirements.txt" in found_manifests or "requirements-dev.txt" in found_manifests:
-                    setup_command = f"{python_executable} -m pip install -r requirements.txt"
-                else:
-                    setup_command = f"{python_executable} -m pip install -e ."
-            else:
-                setup_command = "pip install -r requirements.txt" if "requirements.txt" in found_manifests else None
-        else:
-            if "pyproject.toml" in found_manifests or "setup.py" in found_manifests or "setup.cfg" in found_manifests:
-                setup_command = "python -m venv .venv"
-            else:
-                setup_command = "python -m venv .venv" if "requirements.txt" in found_manifests else None
-
-    if setup_command is None and "node" in project_types:
-        if package_manager == "pnpm":
-            setup_command = "pnpm install"
-        elif package_manager == "yarn":
-            setup_command = "yarn install"
-        else:
-            setup_command = "npm install"
-
-    if setup_command is None and "rust" in project_types:
-        setup_command = "cargo fetch"
-
-    if setup_command is None and "go" in project_types:
-        setup_command = "go mod download"
-
     # --- validation commands ---
     validation_cmds: list[str] = []
     if "python" in project_types:
@@ -431,7 +390,6 @@ def detect_project_profile(workspace_root: str | Path) -> ProjectProfile:
         python_venv_path=python_venv_path,
         python_executable=python_executable,
         declared_dependencies=tuple(sorted(declared_deps)),
-        setup_command=setup_command,
         validation_commands=tuple(validation_cmds),
         node_scripts=node_scripts,
     )

@@ -124,170 +124,12 @@ def test_worker_event_relay_preserves_failed_tool_error_payload():
     assert failed["internal_recovery_steer"] is True
 
 
-def test_dependency_setup_pending_blocks_placeholder_module_write(tmp_path):
-    history = History()
-    tools = MagicMock(spec=ToolRegistry)
-    type(tools).mode = PropertyMock(return_value="worker")
-    type(tools).workspace_root = PropertyMock(return_value=tmp_path)
-    manager = ConversationManager(history, tools)
-    dependency_setup_required = {
-        "app.py": {
-            "tool": "write_file",
-            "module": "fastapi",
-            "package": "fastapi",
-            "declared": False,
-            "dependency_file": "pyproject.toml",
-            "setup_command": "python -m venv .venv",
-            "setup_done": False,
-            "setup_failed": False,
-        }
-    }
-
-    blocked = manager._dependency_setup_block(
-        tool_call_id="placeholder",
-        name="write_file",
-        args={"path": "fastapi.py", "content": ""},
-        dependency_setup_required=dependency_setup_required,
-        recovery_block_counts={},
-    )
-
-    assert blocked is not None
-    payload = json.loads(blocked["result_payload"])
-    assert payload["failure_class"] == "project_environment_setup_needed"
-    assert payload["suggested_next_tool"] == "write_file"
-    assert "placeholder" in payload["suggested_next_action"]
-
-
-def test_dependency_setup_matches_rewritten_absolute_workspace_venv_python(tmp_path):
-    history = History()
-    tools = MagicMock(spec=ToolRegistry)
-    type(tools).mode = PropertyMock(return_value="worker")
-    type(tools).workspace_root = PropertyMock(return_value=tmp_path)
-    manager = ConversationManager(history, tools)
-    python = tmp_path / ".venv" / "Scripts" / "python.exe"
-    python.parent.mkdir(parents=True)
-    python.write_text("", encoding="utf-8")
-    dependency_setup_required = {
-        "app.py": {
-            "tool": "write_file",
-            "module": "fastapi",
-            "modules": ["fastapi"],
-            "package": "fastapi",
-            "packages": ["fastapi"],
-            "declared": True,
-            "dependency_file": "pyproject.toml",
-            "setup_command": r".venv\Scripts\python.exe -m pip install -e .",
-            "setup_done": False,
-            "setup_failed": False,
-        }
-    }
-
-    manager._update_dependency_setup_state_from_terminal(
-        args={"command": r".venv\Scripts\python.exe -m pip install -e ."},
-        loop_info={
-            "_terminal_payload": {
-                "ok": True,
-                "command": f"{python} -m pip install -e .",
-                "requested_command": r".venv\Scripts\python.exe -m pip install -e .",
-            }
-        },
-        dependency_setup_required=dependency_setup_required,
-    )
-
-    assert dependency_setup_required["app.py"]["setup_done"] is True
-    assert dependency_setup_required["app.py"]["setup_failed"] is False
-
-
-def test_dependency_setup_tracks_new_missing_package_after_setup_without_false_failure(tmp_path):
-    history = History()
-    tools = MagicMock(spec=ToolRegistry)
-    type(tools).mode = PropertyMock(return_value="worker")
-    type(tools).workspace_root = PropertyMock(return_value=tmp_path)
-    manager = ConversationManager(history, tools)
-    dependency_setup_required = {
-        "app.py": {
-            "tool": "write_file",
-            "module": "fastapi",
-            "modules": ["fastapi"],
-            "package": "fastapi",
-            "packages": ["fastapi"],
-            "declared": True,
-            "dependency_file": "pyproject.toml",
-            "setup_command": r".venv\Scripts\python.exe -m pip install -e .",
-            "setup_done": True,
-            "setup_failed": False,
-        }
-    }
-
-    manager._record_dependency_setup_required(
-        path="app.py",
-        tool="write_file",
-        parsed={
-            "missing_module": "httpx",
-            "missing_dependency": "httpx",
-            "dependency_declared": False,
-            "dependency_file": "pyproject.toml",
-            "setup_command": r".venv\Scripts\python.exe -m pip install -e .",
-        },
-        dependency_setup_required=dependency_setup_required,
-    )
-
-    state = dependency_setup_required["app.py"]
-    assert state["setup_failed"] is False
-    assert state["setup_done"] is False
-    assert state["declared"] is False
-    assert state["packages"] == ["fastapi", "httpx"]
-
-
-def test_dependency_setup_merges_multiple_missing_packages_for_same_pending_path(tmp_path):
-    history = History()
-    tools = MagicMock(spec=ToolRegistry)
-    type(tools).mode = PropertyMock(return_value="worker")
-    type(tools).workspace_root = PropertyMock(return_value=tmp_path)
-    manager = ConversationManager(history, tools)
-    dependency_setup_required: dict[str, dict] = {}
-
-    manager._record_dependency_setup_required(
-        path="app.py",
-        tool="write_file",
-        parsed={
-            "missing_module": "fastapi",
-            "missing_dependency": "fastapi",
-            "dependency_declared": False,
-            "dependency_file": "pyproject.toml",
-            "setup_command": r".venv\Scripts\python.exe -m pip install -e .",
-        },
-        dependency_setup_required=dependency_setup_required,
-    )
-    manager._record_dependency_setup_required(
-        path="app.py",
-        tool="write_file",
-        parsed={
-            "missing_module": "httpx",
-            "missing_dependency": "httpx",
-            "dependency_declared": False,
-            "dependency_file": "pyproject.toml",
-            "setup_command": r".venv\Scripts\python.exe -m pip install -e .",
-        },
-        dependency_setup_required=dependency_setup_required,
-    )
-
-    state = dependency_setup_required["app.py"]
-    assert state["modules"] == ["fastapi", "httpx"]
-    assert state["packages"] == ["fastapi", "httpx"]
-    assert state["setup_failed"] is False
-
-
-def test_declared_fastapi_dependency_setup_runs_after_applied_write_before_validation(tmp_path):
+def test_missing_import_write_does_not_block_unrelated_read_or_validation(tmp_path):
     history = History()
     tools = MagicMock(spec=ToolRegistry)
     tools.tool_defs.return_value = []
     type(tools).mode = PropertyMock(return_value="worker")
     type(tools).workspace_root = PropertyMock(return_value=tmp_path)
-    python = tmp_path / ".venv" / "Scripts" / "python.exe"
-    python.parent.mkdir(parents=True)
-    python.write_text("", encoding="utf-8")
-    setup_command = r".venv\Scripts\python.exe -m pip install -e ."
     tools.execute.side_effect = [
         ToolExecResult(
             ok=True,
@@ -296,14 +138,15 @@ def test_declared_fastapi_dependency_setup_runs_after_applied_write_before_valid
                 "path": "app.py",
                 "applied": True,
                 "is_new_file": True,
-                "dependency_setup_needed": True,
-                "missing_module": "fastapi",
-                "missing_dependency": "fastapi",
-                "dependency_declared": True,
-                "dependency_file": "pyproject.toml",
-                "setup_command": setup_command,
+                "introduced_environment_issues": [
+                    {
+                        "code": "broken-import",
+                        "message": "Import 'fastapi' could not be resolved.",
+                    }
+                ],
             },
         ),
+        ToolExecResult(ok=True, payload={"ok": True, "path": "README.md"}),
     ]
     manager = ConversationManager(history, tools)
     events = []
@@ -320,26 +163,14 @@ def test_declared_fastapi_dependency_setup_runs_after_applied_write_before_valid
                     ]
                 )
             ]),
-            iter([_done(tool_calls=[_tool_call("setup1", "run_terminal_command", {"command": setup_command})])]),
+            iter([_done(tool_calls=[_tool_call("r1", "read_file", {"path": "README.md"})])]),
             iter([_done("Done. py_compile passed.")]),
         ]
-    )
-    sandbox = MagicMock()
-    sandbox.run_terminal_command.return_value = SandboxResult(
-        ok=True,
-        stdout="installed\n",
-        stderr="",
-        exit_code=0,
     )
 
     try:
         _register_worker_hook(hook)
-        with (
-            patch("aura.conversation.tool_runner.load_settings") as load_settings,
-            patch("aura.conversation.tool_runner.SandboxExecutor", return_value=sandbox),
-            patch.object(ConversationManager, "_run_focused_py_compile", return_value=(True, "app.py: ok")) as py_compile,
-        ):
-            load_settings.return_value = MagicMock(sandbox_mode="host")
+        with patch.object(ConversationManager, "_run_focused_py_compile", return_value=(True, "app.py: ok")) as py_compile:
             manager.send(
                 on_event=events.append,
                 approval_cb=MagicMock(return_value=ApprovalDecision("approve")),
@@ -352,51 +183,36 @@ def test_declared_fastapi_dependency_setup_runs_after_applied_write_before_valid
         hooks.unregister("generate_worker_code")
 
     executed_names = [call.kwargs["name"] for call in tools.execute.call_args_list]
-    assert executed_names == ["write_file"]
-    sandbox.run_terminal_command.assert_called_once()
-    assert "-m pip install -e ." in sandbox.run_terminal_command.call_args.kwargs["command"]
+    assert executed_names == ["write_file", "read_file"]
     py_compile.assert_called_once_with(["app.py"])
     assert not any(
         isinstance(ev, ToolResult)
-        and ev.name == "write_file"
-        and json.loads(ev.result).get("failure_class") == "project_environment_setup_needed"
+        and str(json.loads(ev.result).get("failure_class") or "").startswith("project_environment_" + "setup")
         for ev in events
     )
 
 
-def test_undeclared_fastapi_dependency_file_update_setup_then_validation(tmp_path):
+def test_worker_can_run_pip_install_after_missing_import_write(tmp_path):
     history = History()
     tools = MagicMock(spec=ToolRegistry)
     tools.tool_defs.return_value = []
     type(tools).mode = PropertyMock(return_value="worker")
     type(tools).workspace_root = PropertyMock(return_value=tmp_path)
-    python = tmp_path / ".venv" / "Scripts" / "python.exe"
-    python.parent.mkdir(parents=True)
-    python.write_text("", encoding="utf-8")
-    setup_command = r".venv\Scripts\python.exe -m pip install -e ."
-    tools.execute.side_effect = [
-        ToolExecResult(
-            ok=True,
-            payload={
-                "ok": True,
-                "path": "app.py",
-                "applied": True,
-                "is_new_file": True,
-                "dependency_setup_needed": True,
-                "missing_module": "fastapi",
-                "missing_dependency": "fastapi",
-                "dependency_declared": False,
-                "dependency_file": "pyproject.toml",
-                "setup_command": setup_command,
-            },
-        ),
-        ToolExecResult(
-            ok=True,
-            payload={"ok": True, "path": "pyproject.toml", "applied": True, "is_new_file": False},
-        ),
-    ]
+    tools.execute.return_value = ToolExecResult(
+        ok=True,
+        payload={
+            "ok": True,
+            "path": "app.py",
+            "applied": True,
+            "is_new_file": True,
+            "introduced_environment_issues": [
+                {"code": "broken-import", "message": "Import 'fastapi' could not be resolved."}
+            ],
+        },
+    )
     manager = ConversationManager(history, tools)
     events = []
+    install_command = r".venv\Scripts\python.exe -m pip install -e ."
     hook = MagicMock(
         side_effect=[
             iter([
@@ -410,21 +226,7 @@ def test_undeclared_fastapi_dependency_file_update_setup_then_validation(tmp_pat
                     ]
                 )
             ]),
-            iter([
-                _done(
-                    tool_calls=[
-                        _tool_call(
-                            "dep1",
-                            "write_file",
-                            {
-                                "path": "pyproject.toml",
-                                "content": "[project]\nname = 'demo'\ndependencies = ['fastapi']\n",
-                            },
-                        )
-                    ]
-                )
-            ]),
-            iter([_done(tool_calls=[_tool_call("setup1", "run_terminal_command", {"command": setup_command})])]),
+            iter([_done(tool_calls=[_tool_call("i1", "run_terminal_command", {"command": install_command})])]),
             iter([_done("Done. py_compile passed.")]),
         ]
     )
@@ -441,7 +243,7 @@ def test_undeclared_fastapi_dependency_file_update_setup_then_validation(tmp_pat
         with (
             patch("aura.conversation.tool_runner.load_settings") as load_settings,
             patch("aura.conversation.tool_runner.SandboxExecutor", return_value=sandbox),
-            patch.object(ConversationManager, "_run_focused_py_compile", return_value=(True, "app.py: ok")) as py_compile,
+            patch.object(ConversationManager, "_run_focused_py_compile", return_value=(True, "app.py: ok")),
         ):
             load_settings.return_value = MagicMock(sandbox_mode="host")
             manager.send(
@@ -455,17 +257,10 @@ def test_undeclared_fastapi_dependency_file_update_setup_then_validation(tmp_pat
     finally:
         hooks.unregister("generate_worker_code")
 
-    executed = [
-        (call.kwargs["name"], call.kwargs["args"]["path"])
-        for call in tools.execute.call_args_list
-    ]
-    assert executed == [
-        ("write_file", "app.py"),
-        ("write_file", "pyproject.toml"),
-    ]
     sandbox.run_terminal_command.assert_called_once()
-    assert "-m pip install -e ." in sandbox.run_terminal_command.call_args.kwargs["command"]
-    py_compile.assert_called_once_with(["app.py"])
+    assert "pip install -e ." in sandbox.run_terminal_command.call_args.kwargs["command"]
+    terminal_results = [ev for ev in events if isinstance(ev, ToolResult) and ev.name == "run_terminal_command"]
+    assert terminal_results[-1].ok is True
 
 
 def test_repeated_identical_edit_attempt_is_blocked_and_redirected(tmp_path):

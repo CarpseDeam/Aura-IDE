@@ -19,10 +19,6 @@ import stat
 import tempfile
 from pathlib import Path
 
-from aura.conversation.dependency_setup import (
-    missing_import_modules_from_issues,
-    plan_dependency_setup,
-)
 from aura.conversation.tools._types import ApprovalRequest, ToolExecResult
 from aura.paths import safe_relative_to
 
@@ -347,115 +343,6 @@ def _compute_craft_line_ranges(proposal: dict) -> list[tuple[int, int]]:
     return [(1, len(proposed_lines) + 1)]
 
 
-def _dependency_setup_payload(
-    *,
-    rel_path: str,
-    hard_issues: list,
-    workspace_root,
-    is_new_file: bool,
-) -> dict | None:
-    if workspace_root is None:
-        return None
-    issue_payloads = [_craft_issue_payload(issue) for issue in hard_issues]
-    setup_metadata = _dependency_setup_metadata(
-        rel_path=rel_path,
-        issue_payloads=issue_payloads,
-        workspace_root=workspace_root,
-        is_new_file=is_new_file,
-    )
-    if setup_metadata is None:
-        return None
-    all_declared = bool(setup_metadata.get("dependency_declared"))
-
-    action = str(setup_metadata.get("suggested_next_action") or "")
-    return {
-        "ok": True,
-        "applied": False,
-        "write_outcome": "not_applied_dependency_setup_needed",
-        "failure_class": "project_environment_setup_needed",
-        **setup_metadata,
-        "craft_issues": issue_payloads,
-        "suggested_next_tool": "run_terminal_command" if all_declared else "write_file",
-        "suggested_next_action": (
-            action
-            + " After setup succeeds, retry the original write once."
-        ),
-        "recoverable": True,
-    }
-
-
-def _dependency_setup_metadata(
-    *,
-    rel_path: str,
-    issue_payloads: list[dict],
-    workspace_root,
-    is_new_file: bool,
-) -> dict | None:
-    if workspace_root is None:
-        return None
-    modules = missing_import_modules_from_issues(issue_payloads)
-    if not modules:
-        return None
-    plans = []
-    seen_packages: set[str] = set()
-    for module in modules:
-        plan = plan_dependency_setup(Path(workspace_root), module)
-        if plan is None or plan.package in seen_packages:
-            continue
-        plans.append(plan)
-        seen_packages.add(plan.package)
-    if not plans:
-        return None
-    plan = plans[0]
-    missing_modules = [item.module for item in plans]
-    missing_dependencies = [item.package for item in plans]
-    undeclared_dependencies = [item.package for item in plans if not item.declared]
-    all_declared = not undeclared_dependencies
-
-    action = (
-        f"Run project-local dependency setup: {plan.setup_command}"
-        if all_declared
-        else (
-            f"Add {', '.join(repr(package) for package in undeclared_dependencies)} "
-            f"to {plan.dependency_file}, then run "
-            f"project-local dependency setup: {plan.setup_command}"
-        )
-    )
-    return {
-        "dependency_setup_needed": True,
-        "path": rel_path,
-        "is_new_file": is_new_file,
-        "missing_module": plan.module,
-        "missing_modules": missing_modules,
-        "missing_dependency": plan.package,
-        "missing_dependencies": missing_dependencies,
-        "undeclared_dependencies": undeclared_dependencies,
-        "dependency_declared": all_declared,
-        "dependency_file": plan.dependency_file,
-        "setup_command": plan.setup_command,
-        "suggested_next_tool": "run_terminal_command" if all_declared else "write_file",
-        "suggested_next_action": (
-            action
-            + ". Do not create placeholder modules."
-        ),
-        "recoverable": True,
-    }
-
-
-def _pending_dependency_setup_metadata(proposal: dict, workspace_root) -> dict | None:
-    metadata = proposal.get("craft_metadata")
-    if not isinstance(metadata, dict):
-        return None
-    introduced_issues = metadata.get("introduced_environment_issues")
-    if not isinstance(introduced_issues, list):
-        return None
-    return _dependency_setup_metadata(
-        rel_path=str(proposal.get("rel_path") or ""),
-        issue_payloads=[issue for issue in introduced_issues if isinstance(issue, dict)],
-        workspace_root=workspace_root,
-        is_new_file=bool(proposal.get("is_new_file", False)),
-    )
-
 
 def _run_compiler_pipeline(proposal: dict, tool_name: str, contract: ExplicitSpecContract | None = None, workspace_root=None) -> ToolExecResult | None:
     if compiler_service is None:
@@ -512,14 +399,6 @@ def _run_compiler_pipeline(proposal: dict, tool_name: str, contract: ExplicitSpe
                 issue for issue in result.issues
                 if str(getattr(getattr(issue, "severity", ""), "value", getattr(issue, "severity", ""))) == "hard"
             ]
-            dependency_payload = _dependency_setup_payload(
-                rel_path=rel_path,
-                hard_issues=hard_issues,
-                workspace_root=workspace_root,
-                is_new_file=is_new_file,
-            )
-            if dependency_payload is not None:
-                return ToolExecResult(ok=True, payload=dependency_payload)
             return ToolExecResult(
                 ok=True,
                 payload={
@@ -1165,11 +1044,6 @@ class WriteHandlersMixin:
             payload["craft_warnings"] = proposal.get("craft_warnings")
         if proposal.get("craft_metadata"):
             payload["craft_metadata"] = proposal.get("craft_metadata")
-        dependency_setup_metadata = _pending_dependency_setup_metadata(proposal, self._root)
-        if dependency_setup_metadata is not None:
-            payload.update(dependency_setup_metadata)
-            payload["applied"] = True
-            payload["write_outcome"] = "applied_dependency_setup_pending"
         if name == "edit_line_range":
             payload["start_line"] = proposal.get("start_line")
             payload["end_line"] = proposal.get("end_line")

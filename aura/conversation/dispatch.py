@@ -292,7 +292,6 @@ class WorkerTaskSpec:
                 "python_venv_path": self.project_profile.python_venv_path,
                 "python_executable": self.project_profile.python_executable,
                 "declared_dependencies": list(self.project_profile.declared_dependencies),
-                "setup_command": self.project_profile.setup_command,
                 "validation_commands": list(self.project_profile.validation_commands),
                 "node_scripts": [list(s) for s in self.project_profile.node_scripts],
             }
@@ -319,7 +318,6 @@ class WorkerTaskSpec:
                 python_venv_path=_none_or_str(raw_profile.get("python_venv_path")),
                 python_executable=_none_or_str(raw_profile.get("python_executable")),
                 declared_dependencies=tuple(_str_list_items(raw_profile, "declared_dependencies")),
-                setup_command=_none_or_str(raw_profile.get("setup_command")),
                 validation_commands=tuple(_str_list_items(raw_profile, "validation_commands")),
                 node_scripts=tuple(
                     (str(s[0]), str(s[1]))

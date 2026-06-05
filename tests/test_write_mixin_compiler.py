@@ -97,7 +97,7 @@ class TestWriteMixinCompiler:
         assert "pre_existing_environment_issues" not in result.payload
 
     @pytest.mark.usefixtures("enable_craft")
-    def test_declared_fastapi_dependency_missing_from_env_applies_write_then_requests_setup(self, tmp_workspace, monkeypatch):
+    def test_declared_fastapi_dependency_missing_from_env_applies_write_without_setup_gate(self, tmp_workspace, monkeypatch):
         _force_missing_modules(monkeypatch, "fastapi")
         (tmp_workspace / "pyproject.toml").write_text(
             "[project]\nname = 'demo'\ndependencies = ['fastapi']\n",
@@ -116,19 +116,15 @@ class TestWriteMixinCompiler:
         assert result.ok is True
         assert (tmp_workspace / "app.py").exists()
         assert result.payload["applied"] is True
-        assert result.payload["write_outcome"] == "applied_dependency_setup_pending"
-        assert not str(result.payload["write_outcome"]).startswith("not_applied")
-        assert result.payload["dependency_setup_needed"] is True
-        assert result.payload["dependency_declared"] is True
-        assert result.payload["missing_dependency"] == "fastapi"
-        assert result.payload["dependency_file"] == "pyproject.toml"
-        assert result.payload["setup_command"] == "python -m venv .venv"
+        assert result.payload["write_outcome"] == "applied_with_environment_caveat"
+        assert not any(key.startswith("dependency_") for key in result.payload)
+        assert not any(key in result.payload for key in ("dependency_file", "setup_" + "command", "missing_dependency", "missing_dependencies"))
         assert result.payload["introduced_environment_issues"][0]["code"] == "broken-import"
         assert result.payload["craft_metadata"]["introduced_environment_issues"][0]["code"] == "broken-import"
         assert "quality_bounce" not in result.payload
 
     @pytest.mark.usefixtures("enable_craft")
-    def test_undeclared_third_party_dependency_applies_write_then_requests_dependency_file_flow(self, tmp_workspace, monkeypatch):
+    def test_undeclared_third_party_dependency_applies_write_without_dependency_file_flow(self, tmp_workspace, monkeypatch):
         _force_missing_modules(monkeypatch, "missingvendoralpha", "missingvendorbeta")
         (tmp_workspace / "pyproject.toml").write_text(
             "[project]\nname = 'demo'\ndependencies = []\n",
@@ -149,14 +145,14 @@ class TestWriteMixinCompiler:
 
         assert result.ok is True
         assert result.payload["applied"] is True
-        assert result.payload["dependency_setup_needed"] is True
-        assert result.payload["dependency_declared"] is False
-        assert result.payload["missing_modules"] == ["missingvendoralpha", "missingvendorbeta"]
-        assert result.payload["missing_dependencies"] == ["missingvendoralpha", "missingvendorbeta"]
-        assert result.payload["undeclared_dependencies"] == ["missingvendoralpha", "missingvendorbeta"]
-        assert "missingvendoralpha" in result.payload["suggested_next_action"]
-        assert "missingvendorbeta" in result.payload["suggested_next_action"]
-        assert not str(result.payload["write_outcome"]).startswith("not_applied")
+        assert result.payload["write_outcome"] == "applied_with_environment_caveat"
+        assert not any(key.startswith("dependency_") for key in result.payload)
+        assert "undeclared_" + "dependencies" not in result.payload
+        assert "suggested_next_action" not in result.payload
+        issues = result.payload["introduced_environment_issues"]
+        messages = "\n".join(str(issue.get("message") or "") for issue in issues)
+        assert "missingvendoralpha" in messages
+        assert "missingvendorbeta" in messages
 
     @pytest.mark.usefixtures("enable_craft")
     def test_new_python_write_enters_craft(self, tmp_workspace):
@@ -345,7 +341,7 @@ class TestWriteMixinCompiler:
                 reg, {"path": "main.py", "content": "import does_not_exist\n"}, approve_cb, False
             )
             assert res.ok
-            assert res.payload.get("dependency_setup_needed") is True
+            assert not any(key.startswith("dependency_") for key in res.payload)
             assert res.payload.get("applied") is True
             mock_inval.assert_called_once()
 

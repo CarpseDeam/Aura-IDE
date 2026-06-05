@@ -223,7 +223,7 @@ def test_worker_pytest_executes_through_project_venv_when_available(
     assert "-m pytest tests/test_x.py" in rewritten
 
 
-def test_worker_project_local_dependency_setup_executes(
+def test_worker_project_local_dependency_install_executes(
     worker_manager: tuple[ConversationManager, MagicMock],
     worker_backend: MagicMock,
 ) -> None:
