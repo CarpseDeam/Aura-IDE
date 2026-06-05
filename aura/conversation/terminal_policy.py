@@ -2,8 +2,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 import re
 import shlex
+
+from aura.conversation.dependency_setup import (
+    safe_project_environment_setup_command,
+    unsafe_global_environment_setup_command,
+)
 
 SOURCE_INSPECTION_ERROR = (
     "Worker terminal is validation-only. Use structured read tools for source inspection."
@@ -36,12 +42,14 @@ class TerminalPolicyDecision:
 
 
 def classify_worker_terminal_command(command: str) -> str:
-    """Classify a Worker terminal command as validation, source inspection, or unknown."""
+    """Classify a Worker terminal command."""
     normalized = _normalize_command(command)
     if not normalized:
         return "unknown"
     if _looks_like_source_inspection(normalized):
         return "source_inspection"
+    if _looks_like_project_environment_setup(command):
+        return "project_environment_setup"
     if _looks_like_validation(normalized):
         return "validation"
     return "unknown"
@@ -51,23 +59,38 @@ def worker_terminal_command_allowed(
     command: str,
     *,
     explicit_validation_commands: list[str] | None = None,
+    workspace_root: Path | str | None = None,
 ) -> TerminalPolicyDecision:
     """Return whether a normal Worker may run *command* in terminal."""
     if _matches_explicit_validation(command, explicit_validation_commands):
         return TerminalPolicyDecision(True, "explicit validation command", "", "", "")
 
-    if _looks_like_project_environment_setup(command):
+    root = Path(workspace_root) if workspace_root is not None else None
+    if unsafe_global_environment_setup_command(command) and not safe_project_environment_setup_command(
+        command,
+        workspace_root=root,
+    ):
         return TerminalPolicyDecision(
             False,
-            "Project environment setup requires an explicit user-approved command.",
-            "project_environment_setup_needs_approval",
+            "Global/system dependency installation is blocked for Worker terminal commands.",
+            "global_environment_setup_blocked",
             "typed_blocker",
-            (
-                "Ask for explicit approval before creating .venv or installing dependencies. "
-                "Never install dependencies into global/system Python by default."
-            ),
+            "Install dependencies only through the workspace-local .venv or project manager.",
         )
 
+    if _looks_like_project_environment_setup(command):
+        if safe_project_environment_setup_command(command, workspace_root=root):
+            return TerminalPolicyDecision(True, "project environment setup command", "", "", "")
+        return TerminalPolicyDecision(
+            False,
+            "Worker dependency setup must target the workspace-local environment.",
+            "project_environment_setup_blocked",
+            "typed_blocker",
+            (
+                "Use python -m venv .venv when no project .venv exists, then install "
+                "through .venv Python or a project manager such as uv, poetry, or pdm."
+            ),
+        )
     classification = classify_worker_terminal_command(command)
     if classification == "validation":
         return TerminalPolicyDecision(True, "validation command", "", "", "")
@@ -131,15 +154,10 @@ def _segment_looks_like_validation(segment: str) -> bool:
 def _looks_like_project_environment_setup(command: str) -> bool:
     normalized = _normalize_command(command).replace("\\", "/")
     return bool(
-        re.match(r"^(?:python(?:\d+(?:\.\d+)?)?|py)\s+-m\s+venv\s+\.venv$", normalized)
-        or re.match(
-            r"^(?:\.venv|venv)/(?:scripts/python\.exe|bin/python)\s+-m\s+pip\s+install\s+-r\s+requirements\.txt$",
-            normalized,
-        )
-        or re.match(
-            r"^(?:\.venv|venv)/(?:scripts/python\.exe|bin/python)\s+-m\s+pip\s+install\s+-e\s+\.\[?[a-z0-9_,.-]*\]?$",
-            normalized,
-        )
+        safe_project_environment_setup_command(command)
+        or unsafe_global_environment_setup_command(command)
+        or re.match(r"^(?:python(?:\d+(?:\.\d+)?)?|py)\s+-m\s+venv\s+\.venv$", normalized)
+        or re.match(r"^(?:uv\s+sync(?:\s+--(?:all-extras|dev))?|poetry\s+install|pdm\s+install)$", normalized)
     )
 
 

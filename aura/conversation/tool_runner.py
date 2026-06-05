@@ -307,6 +307,7 @@ class ToolRunner:
             decision = worker_terminal_command_allowed(
                 str(command),
                 explicit_validation_commands=explicit_validation_commands,
+                workspace_root=self._workspace_root,
             )
             if not decision.allowed:
                 blocked_payload = decision.to_blocked_payload(str(command))

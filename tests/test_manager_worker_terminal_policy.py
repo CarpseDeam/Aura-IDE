@@ -223,6 +223,56 @@ def test_worker_pytest_executes_through_project_venv_when_available(
     assert "-m pytest tests/test_x.py" in rewritten
 
 
+def test_worker_project_local_dependency_setup_executes(
+    worker_manager: tuple[ConversationManager, MagicMock],
+    worker_backend: MagicMock,
+) -> None:
+    manager, tools = worker_manager
+    workspace_root = tools.workspace_root
+    python = workspace_root / ".venv" / "Scripts" / "python.exe"
+    python.parent.mkdir(parents=True)
+    python.write_text("", encoding="utf-8")
+    events: list[Event] = []
+    command = r".venv\Scripts\python.exe -m pip install -e ."
+    worker_backend.side_effect = [
+        iter([_done_with_tool("term1", "run_terminal_command", {"command": command})]),
+        iter([Done(finish_reason="stop", full_message={"role": "assistant", "content": "Done.", "reasoning_content": None})]),
+    ]
+
+    with (
+        patch("aura.conversation.tool_runner.load_settings") as load_settings,
+        patch("aura.conversation.tool_runner.SandboxExecutor") as sandbox_cls,
+    ):
+        load_settings.return_value = MagicMock(sandbox_mode="host")
+        sandbox = MagicMock()
+        sandbox.run_terminal_command.return_value = SandboxResult(
+            ok=True,
+            stdout="installed\n",
+            stderr="",
+            exit_code=0,
+        )
+        sandbox_cls.return_value = sandbox
+
+        manager.send(
+            on_event=events.append,
+            approval_cb=_approval_cb,
+            cancel_event=threading.Event(),
+            model="deepseek-chat",
+            thinking="off",
+            hook_name="generate_worker_code",
+        )
+
+    sandbox.run_terminal_command.assert_called_once()
+    rewritten = sandbox.run_terminal_command.call_args.kwargs["command"]
+    assert str(python) in rewritten
+    assert "-m pip install -e ." in rewritten
+    terminal_results = [
+        event for event in events
+        if isinstance(event, ToolResult) and event.name == "run_terminal_command"
+    ]
+    assert terminal_results[-1].ok is True
+
+
 def test_worker_explicit_validation_command_executes(
     worker_manager: tuple[ConversationManager, MagicMock],
     worker_backend: MagicMock,

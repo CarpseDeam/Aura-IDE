@@ -48,6 +48,11 @@ from aura.conversation.dispatch import (
     infer_outcome_status,
 )
 from aura.conversation.history import History
+from aura.conversation.dependency_setup import (
+    missing_import_modules_from_issues,
+    plan_dependency_setup,
+    project_install_command,
+)
 from aura.conversation.loop_detection import LoopDetector
 from aura.conversation.tool_runner import ToolRunner
 from aura.conversation.tool_limits import (
@@ -223,6 +228,7 @@ class ConversationManager:
         syntax_repair_required: dict[str, dict[str, Any]] = {}
         syntax_validation_required: set[str] = set()
         compiler_repair_required: dict[str, dict[str, Any]] = {}
+        dependency_setup_required: dict[str, dict[str, Any]] = {}
         write_attempts_by_path: dict[str, int] = {}
         worker_recovery_nudge_sent = False
         patch_quality_unresolved: dict[str, Any] | None = None
@@ -379,9 +385,30 @@ class ConversationManager:
                     compiler_repair_pending = bool(
                         self._compiler_repair_paths(compiler_repair_required)
                     )
-                    if edit_recovery_pending or syntax_repair_pending or compiler_repair_pending:
+                    dependency_setup_pending = bool(
+                        self._dependency_setup_paths(dependency_setup_required)
+                    )
+                    dependency_setup_failed = self._has_dependency_setup_failure(
+                        dependency_setup_required
+                    )
+                    if dependency_setup_failed:
+                        self._finish_worker_unrecoverable(
+                            on_event,
+                            failure_class="project_environment_setup_failed",
+                            error="Dependency setup failed. Details are in Worker Log.",
+                        )
+                        return
+                    if (
+                        edit_recovery_pending
+                        or syntax_repair_pending
+                        or compiler_repair_pending
+                        or dependency_setup_pending
+                    ):
                         if not worker_recovery_nudge_sent:
                             instruction = (
+                                self._dependency_setup_instruction(dependency_setup_required)
+                                if dependency_setup_pending
+                                else
                                 WORKER_COMPILER_REPAIR_INSTRUCTION
                                 if compiler_repair_pending
                                 else WORKER_EDIT_RECOVERY_INSTRUCTION
@@ -396,6 +423,13 @@ class ConversationManager:
                             self._history.append_user_text(instruction)
                             worker_recovery_nudge_sent = True
                             continue
+                        if dependency_setup_pending:
+                            self._finish_worker_unrecoverable(
+                                on_event,
+                                failure_class="project_environment_setup_failed",
+                                error="Dependency setup was not completed. Details are in Worker Log.",
+                            )
+                            return
                         if compiler_repair_pending:
                             self._finish_worker_unrecoverable(
                                 on_event,
@@ -511,6 +545,7 @@ class ConversationManager:
                         syntax_repair_required=syntax_repair_required,
                         syntax_validation_required=syntax_validation_required,
                         compiler_repair_required=compiler_repair_required,
+                        dependency_setup_required=dependency_setup_required,
                         write_attempts_by_path=write_attempts_by_path,
                     )
                     if blocked is not None:
@@ -581,6 +616,11 @@ class ConversationManager:
                             syntax_repair_required=syntax_repair_required,
                             syntax_validation_required=syntax_validation_required,
                         )
+                        self._update_dependency_setup_state_from_terminal(
+                            args=args,
+                            loop_info=loop_info,
+                            dependency_setup_required=dependency_setup_required,
+                        )
                     if self._is_recoverable_phase_boundary(loop_info):
                         _worker_phase_boundary_info = loop_info
                     return {
@@ -635,6 +675,7 @@ class ConversationManager:
                         syntax_repair_required=syntax_repair_required,
                         syntax_validation_required=syntax_validation_required,
                         compiler_repair_required=compiler_repair_required,
+                        dependency_setup_required=dependency_setup_required,
                         write_attempts_by_path=write_attempts_by_path,
                     )
                     parsed_after_recovery = self._parse_tool_payload(tool_msg_content)
@@ -756,6 +797,14 @@ class ConversationManager:
                 )
                 return
 
+            if self._has_dependency_setup_failure(dependency_setup_required):
+                self._finish_worker_unrecoverable(
+                    on_event,
+                    failure_class="project_environment_setup_failed",
+                    error="Dependency setup failed. Details are in Worker Log.",
+                )
+                return
+
             if _worker_phase_boundary_info is not None:
                 worker_phase_boundary_info = _worker_phase_boundary_info
                 worker_needs_final_report = True
@@ -861,6 +910,47 @@ class ConversationManager:
             state.get("repair_failed") and not state.get("quality_bounce")
             for state in compiler_repair_required.values()
         )
+
+    @staticmethod
+    def _dependency_setup_paths(
+        dependency_setup_required: dict[str, dict[str, Any]],
+    ) -> set[str]:
+        return {
+            path
+            for path, state in dependency_setup_required.items()
+            if not state.get("setup_done")
+        }
+
+    @staticmethod
+    def _has_dependency_setup_failure(
+        dependency_setup_required: dict[str, dict[str, Any]],
+    ) -> bool:
+        return any(state.get("setup_failed") for state in dependency_setup_required.values())
+
+    @staticmethod
+    def _dependency_setup_instruction(
+        dependency_setup_required: dict[str, dict[str, Any]],
+    ) -> str:
+        if not dependency_setup_required:
+            return "Dependency setup is required before retrying the rejected write."
+        path = sorted(dependency_setup_required)[0]
+        state = dependency_setup_required[path]
+        package = str(state.get("package") or state.get("module") or "dependency")
+        dep_file = str(state.get("dependency_file") or "dependency file")
+        setup_command = str(state.get("setup_command") or "")
+        declared = bool(state.get("declared"))
+        lines = [
+            f"Dependency setup is required before retrying {path}.",
+            "Do not create placeholder modules to bypass unresolved imports.",
+        ]
+        if declared:
+            lines.append(f"The dependency '{package}' is already declared. Run the project-local setup command.")
+        else:
+            lines.append(f"Add '{package}' to {dep_file}, then run the project-local setup command.")
+        if setup_command:
+            lines.append(f"Setup command: {setup_command}")
+        lines.append("After setup succeeds, retry the original write once.")
+        return "\n".join(lines)
 
     @staticmethod
     def _has_terminal_syntax_failure(
@@ -1024,9 +1114,20 @@ class ConversationManager:
         syntax_repair_required: dict[str, dict[str, Any]],
         syntax_validation_required: set[str],
         compiler_repair_required: dict[str, dict[str, Any]],
+        dependency_setup_required: dict[str, dict[str, Any]],
         write_attempts_by_path: dict[str, int],
     ) -> dict[str, Any] | None:
         path = self._tool_path(name, args)
+        dependency_block = self._dependency_setup_block(
+            tool_call_id=tool_call_id,
+            name=name,
+            args=args,
+            dependency_setup_required=dependency_setup_required,
+            recovery_block_counts=recovery_block_counts,
+        )
+        if dependency_block is not None:
+            return dependency_block
+
         if self._has_compiler_repair_failure(compiler_repair_required):
             target = sorted(
                 path for path, state in compiler_repair_required.items()
@@ -1194,6 +1295,156 @@ class ConversationManager:
 
         return None
 
+    def _dependency_setup_block(
+        self,
+        *,
+        tool_call_id: str,
+        name: str,
+        args: dict[str, Any],
+        dependency_setup_required: dict[str, dict[str, Any]],
+        recovery_block_counts: dict[str, int],
+    ) -> dict[str, Any] | None:
+        pending_paths = self._dependency_setup_paths(dependency_setup_required)
+        if not pending_paths:
+            return None
+
+        target = sorted(pending_paths)[0]
+        state = dependency_setup_required.get(target, {})
+        if state.get("setup_failed"):
+            payload = self._recovery_payload(
+                path=target,
+                failure_class="project_environment_setup_failed",
+                error="Dependency setup failed. Details are in Worker Log.",
+                suggested_next_tool="",
+                suggested_next_action="Stop tool use and report the dependency setup blocker.",
+                recoverable=False,
+            )
+            self._record_recovery_block(payload, f"dependency-setup-failed:{target}:{name}", recovery_block_counts)
+            return self._blocked_tool_result(tool_call_id, name, payload)
+
+        dependency_file = str(state.get("dependency_file") or "")
+        setup_command = str(state.get("setup_command") or "")
+        setup_done = bool(state.get("setup_done"))
+        declared = bool(state.get("declared"))
+
+        if name in {"read_file", "read_file_outline"}:
+            requested = str(args.get("path") or "")
+            if requested in {target, dependency_file}:
+                return None
+        if name == "read_files":
+            requested = args.get("paths")
+            if isinstance(requested, list) and any(str(item) in {target, dependency_file} for item in requested):
+                return None
+
+        if name == "run_terminal_command":
+            command = " ".join(str(args.get("command") or "").strip().split())
+            expected = " ".join(setup_command.strip().split())
+            if command == expected and declared:
+                return None
+
+        if name in WRITE_TOOLS:
+            requested_path = self._tool_path(name, args)
+            if requested_path == dependency_file and not declared:
+                return None
+            if requested_path == target and setup_done:
+                return None
+
+        if not declared:
+            action = f"Add the dependency to {dependency_file}; do not create placeholder modules."
+            next_tool = "write_file"
+        elif not setup_done:
+            action = f"Run project-local dependency setup: {setup_command}"
+            next_tool = "run_terminal_command"
+        else:
+            action = "Retry the original write once."
+            next_tool = str(state.get("tool") or "write_file")
+
+        payload = self._recovery_payload(
+            path=target,
+            failure_class="project_environment_setup_needed",
+            error="Dependency setup is required before retrying the rejected write.",
+            suggested_next_tool=next_tool,
+            suggested_next_action=action,
+            recoverable=True,
+        )
+        payload["missing_dependency"] = state.get("package") or state.get("module") or ""
+        payload["dependency_file"] = dependency_file
+        payload["setup_command"] = setup_command
+        self._record_recovery_block(payload, f"dependency-setup:{target}:{name}", recovery_block_counts)
+        return self._blocked_tool_result(tool_call_id, name, payload)
+
+    def _record_dependency_setup_required(
+        self,
+        *,
+        path: str,
+        tool: str,
+        parsed: dict[str, Any],
+        dependency_setup_required: dict[str, dict[str, Any]],
+    ) -> None:
+        prior = dependency_setup_required.get(path)
+        if prior and prior.get("setup_done"):
+            prior["setup_failed"] = True
+            parsed["recoverable"] = False
+            parsed["failure_class"] = "project_environment_setup_failed"
+            parsed["error"] = "Dependency setup failed. Details are in Worker Log."
+            return
+
+        state = {
+            "tool": tool,
+            "module": parsed.get("missing_module") or parsed.get("module") or "",
+            "package": parsed.get("missing_dependency") or parsed.get("package") or "",
+            "declared": bool(parsed.get("dependency_declared")),
+            "dependency_file": parsed.get("dependency_file") or "",
+            "setup_command": parsed.get("setup_command") or "",
+            "setup_done": False,
+            "setup_failed": False,
+        }
+        if state["setup_command"] == "python -m venv .venv" and state["declared"]:
+            state["venv_pending"] = True
+        dependency_setup_required[path] = state
+
+    @staticmethod
+    def _mark_dependency_file_write_applied(
+        *,
+        path: str,
+        dependency_setup_required: dict[str, dict[str, Any]],
+    ) -> None:
+        for state in dependency_setup_required.values():
+            if path == str(state.get("dependency_file") or ""):
+                state["declared"] = True
+                if state.get("setup_command") == "python -m venv .venv":
+                    state["venv_pending"] = True
+
+    def _update_dependency_setup_state_from_terminal(
+        self,
+        *,
+        args: dict[str, Any],
+        loop_info: dict[str, Any] | None,
+        dependency_setup_required: dict[str, dict[str, Any]],
+    ) -> None:
+        payload = loop_info.get("_terminal_payload") if isinstance(loop_info, dict) else None
+        if not isinstance(payload, dict):
+            return
+        command = " ".join(str(payload.get("command") or args.get("command") or "").strip().split())
+        if not command:
+            return
+        for state in dependency_setup_required.values():
+            expected = " ".join(str(state.get("setup_command") or "").strip().split())
+            if command != expected:
+                continue
+            if not payload.get("ok"):
+                state["setup_failed"] = True
+                return
+            if state.get("venv_pending"):
+                state["venv_pending"] = False
+                state["setup_command"] = project_install_command(
+                    Path(self._tools.workspace_root),
+                    str(state.get("dependency_file") or ""),
+                )
+                return
+            state["setup_done"] = True
+            return
+
     def _update_worker_recovery_state(
         self,
         *,
@@ -1207,6 +1458,7 @@ class ConversationManager:
         syntax_repair_required: dict[str, dict[str, Any]],
         syntax_validation_required: set[str],
         compiler_repair_required: dict[str, dict[str, Any]],
+        dependency_setup_required: dict[str, dict[str, Any]],
         write_attempts_by_path: dict[str, int],
     ) -> str:
         parsed = self._parse_tool_payload(content)
@@ -1221,6 +1473,23 @@ class ConversationManager:
             )
         ):
             write_attempts_by_path[path] = write_attempts_by_path.get(path, 0) + 1
+
+        if (
+            ok
+            and isinstance(parsed, dict)
+            and parsed.get("dependency_setup_needed")
+            and path
+            and name in WRITE_TOOLS
+        ):
+            self._record_dependency_setup_required(
+                path=path,
+                tool=name,
+                parsed=parsed,
+                dependency_setup_required=dependency_setup_required,
+            )
+            parsed["internal_recovery_steer"] = True
+            content = json.dumps(parsed, ensure_ascii=False)
+            return content
 
         if (
             ok
@@ -1255,9 +1524,14 @@ class ConversationManager:
 
         if ok:
             if name in WRITE_TOOLS and path:
+                self._mark_dependency_file_write_applied(
+                    path=path,
+                    dependency_setup_required=dependency_setup_required,
+                )
                 edit_fallback_required.pop(path, None)
                 line_range_reread_required.pop(path, None)
                 compiler_repair_required.pop(path, None)
+                dependency_setup_required.pop(path, None)
                 if self._is_python_path(path) and not _is_validation_scratch_path(path):
                     syntax_validation_required.add(path)
                 if path in syntax_repair_required:

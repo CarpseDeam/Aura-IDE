@@ -21,6 +21,10 @@ from pathlib import Path
 
 from aura.paths import safe_relative_to
 
+from aura.conversation.dependency_setup import (
+    missing_import_modules_from_issues,
+    plan_dependency_setup,
+)
 from aura.conversation.tools._types import ApprovalRequest, ToolExecResult
 
 # Import the registry module so we can look up functions at call time.
@@ -334,6 +338,54 @@ def _compute_craft_line_ranges(proposal: dict) -> list[tuple[int, int]]:
     return [(1, len(proposed_lines) + 1)]
 
 
+def _dependency_setup_payload(
+    *,
+    rel_path: str,
+    hard_issues: list,
+    workspace_root,
+    is_new_file: bool,
+) -> dict | None:
+    if workspace_root is None:
+        return None
+    issue_payloads = [_craft_issue_payload(issue) for issue in hard_issues]
+    modules = missing_import_modules_from_issues(issue_payloads)
+    if not modules:
+        return None
+    plan = plan_dependency_setup(Path(workspace_root), modules[0])
+    if plan is None:
+        return None
+
+    action = (
+        f"Run project-local dependency setup: {plan.setup_command}"
+        if plan.declared
+        else (
+            f"Add '{plan.package}' to {plan.dependency_file}, then run "
+            f"project-local dependency setup: {plan.setup_command}"
+        )
+    )
+    return {
+        "ok": True,
+        "applied": False,
+        "write_outcome": "not_applied_dependency_setup_needed",
+        "failure_class": "project_environment_setup_needed",
+        "dependency_setup_needed": True,
+        "path": rel_path,
+        "is_new_file": is_new_file,
+        "missing_module": plan.module,
+        "missing_dependency": plan.package,
+        "dependency_declared": plan.declared,
+        "dependency_file": plan.dependency_file,
+        "setup_command": plan.setup_command,
+        "craft_issues": issue_payloads,
+        "suggested_next_tool": "run_terminal_command" if plan.declared else "write_file",
+        "suggested_next_action": (
+            action
+            + ". Do not create placeholder modules. After setup succeeds, retry the original write once."
+        ),
+        "recoverable": True,
+    }
+
+
 def _run_compiler_pipeline(proposal: dict, tool_name: str, contract: ExplicitSpecContract | None = None, workspace_root=None) -> ToolExecResult | None:
     if compiler_service is None:
         return None
@@ -389,6 +441,14 @@ def _run_compiler_pipeline(proposal: dict, tool_name: str, contract: ExplicitSpe
                 issue for issue in result.issues
                 if str(getattr(getattr(issue, "severity", ""), "value", getattr(issue, "severity", ""))) == "hard"
             ]
+            dependency_payload = _dependency_setup_payload(
+                rel_path=rel_path,
+                hard_issues=hard_issues,
+                workspace_root=workspace_root,
+                is_new_file=is_new_file,
+            )
+            if dependency_payload is not None:
+                return ToolExecResult(ok=True, payload=dependency_payload)
             return ToolExecResult(
                 ok=True,
                 payload={

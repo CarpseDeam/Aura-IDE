@@ -82,6 +82,50 @@ class TestWriteMixinCompiler:
         assert "pre_existing_environment_issues" not in result.payload
 
     @pytest.mark.usefixtures("enable_craft")
+    def test_broken_import_for_declared_dependency_requests_setup_not_quality_bounce(self, tmp_workspace):
+        (tmp_workspace / "pyproject.toml").write_text(
+            "[project]\nname = 'demo'\ndependencies = ['fastapi']\n",
+            encoding="utf-8",
+        )
+        proposal = {
+            "ok": True,
+            "rel_path": "app.py",
+            "old_content": "",
+            "new_content": "from fastapi import FastAPI\napp = FastAPI()\n",
+            "is_new_file": True,
+        }
+        issue = CraftIssue(
+            line=1,
+            column=0,
+            code="broken-import",
+            message="Import source 'fastapi' could not be resolved in workspace or stdlib.",
+            suggestion="Install the missing package or correct the import path.",
+            severity=CraftIssueSeverity.HARD,
+        )
+
+        with patch("aura.conversation.tools._write_mixin.compiler_service.process_proposal") as process:
+            process.side_effect = lambda capsule, workspace_root=None: CompilerBounce(
+                capsule=capsule,
+                issues=[issue],
+                repair_instructions="Install the missing package.",
+                attempt_number=1,
+                max_attempts=2,
+            )
+
+            result = _run_compiler_pipeline(proposal, "write_file", workspace_root=tmp_workspace)
+
+        assert result is not None
+        assert result.ok is True
+        assert result.payload["applied"] is False
+        assert result.payload["failure_class"] == "project_environment_setup_needed"
+        assert result.payload["dependency_setup_needed"] is True
+        assert result.payload["dependency_declared"] is True
+        assert result.payload["missing_dependency"] == "fastapi"
+        assert result.payload["dependency_file"] == "pyproject.toml"
+        assert result.payload["setup_command"] == "python -m venv .venv"
+        assert "quality_bounce" not in result.payload
+
+    @pytest.mark.usefixtures("enable_craft")
     def test_new_python_write_enters_craft(self, tmp_workspace):
         reg = DummyWriteRegistry(tmp_workspace)
         approve_cb = MagicMock()
@@ -267,7 +311,7 @@ class TestWriteMixinCompiler:
                 reg, {"path": "main.py", "content": "import does_not_exist\n"}, approve_cb, False
             )
             assert res.ok
-            assert res.payload.get("quality_bounce") is True
+            assert res.payload.get("dependency_setup_needed") is True
             assert res.payload.get("applied") is False
             mock_inval.assert_not_called()
 

@@ -123,6 +123,40 @@ def test_worker_event_relay_preserves_failed_tool_error_payload():
     assert failed["internal_recovery_steer"] is True
 
 
+def test_dependency_setup_pending_blocks_placeholder_module_write(tmp_path):
+    history = History()
+    tools = MagicMock(spec=ToolRegistry)
+    type(tools).mode = PropertyMock(return_value="worker")
+    type(tools).workspace_root = PropertyMock(return_value=tmp_path)
+    manager = ConversationManager(history, tools)
+    dependency_setup_required = {
+        "app.py": {
+            "tool": "write_file",
+            "module": "fastapi",
+            "package": "fastapi",
+            "declared": False,
+            "dependency_file": "pyproject.toml",
+            "setup_command": "python -m venv .venv",
+            "setup_done": False,
+            "setup_failed": False,
+        }
+    }
+
+    blocked = manager._dependency_setup_block(
+        tool_call_id="placeholder",
+        name="write_file",
+        args={"path": "fastapi.py", "content": ""},
+        dependency_setup_required=dependency_setup_required,
+        recovery_block_counts={},
+    )
+
+    assert blocked is not None
+    payload = json.loads(blocked["result_payload"])
+    assert payload["failure_class"] == "project_environment_setup_needed"
+    assert payload["suggested_next_tool"] == "write_file"
+    assert "placeholder" in payload["suggested_next_action"]
+
+
 def test_repeated_identical_edit_attempt_is_blocked_and_redirected(tmp_path):
     history = History()
     tools = MagicMock(spec=ToolRegistry)
@@ -470,7 +504,7 @@ def test_worker_cannot_finish_after_python_write_until_py_compile(tmp_path):
     assert len(validation_events) == 1
     payload = json.loads(validation_events[0].result)
     assert payload["ok"] is True
-    assert payload["command"] == "python -m py_compile a.py"
+    assert payload["command"].endswith(" -m py_compile a.py")
     assert payload["auto_validation"] is True
     content = history.messages[-1]["content"]
     assert "failure_class" not in content
@@ -563,16 +597,14 @@ def test_auto_py_compile_validation_is_counted_by_dispatch(tmp_workspace):
     assert result.needs_followup is False
     assert result.recoverable is False
     assert "Worker modified files but ran no validation command." not in result.extras["caveats"]
-    assert result.extras["validation_results"] == [
-        {
-            "command": "python -m py_compile a.py",
-            "ok": True,
-            "exit_code": 0,
-            "output": "a.py: ok",
-            "output_preview": "a.py: ok",
-            "auto_validation": True,
-        }
-    ]
+    assert len(result.extras["validation_results"]) == 1
+    validation = result.extras["validation_results"][0]
+    assert validation["command"].endswith(" -m py_compile a.py")
+    assert validation["ok"] is True
+    assert validation["exit_code"] == 0
+    assert validation["output"] == "a.py: ok"
+    assert validation["output_preview"] == "a.py: ok"
+    assert validation["auto_validation"] is True
 
 
 def test_root_check_scratch_files_are_cleaned(tmp_workspace):
@@ -789,7 +821,7 @@ def test_auto_py_compile_success_when_worker_stops(tmp_path):
     assert len(validation_events) == 1
     payload = json.loads(validation_events[0].result)
     assert payload["ok"] is True
-    assert payload["command"] == "python -m py_compile graph_main_window.py"
+    assert payload["command"].endswith(" -m py_compile graph_main_window.py")
     assert payload["auto_validation"] is True
     content = history.messages[-1]["content"]
     assert "failure_class" not in content

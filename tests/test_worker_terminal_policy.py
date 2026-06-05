@@ -84,20 +84,76 @@ def test_worker_terminal_policy_blocks_unknown_commands_by_default() -> None:
     assert payload["failure_class"] == "worker_terminal_not_validation"
 
 
-def test_worker_terminal_policy_requires_explicit_project_env_setup() -> None:
+def test_worker_terminal_policy_allows_project_local_dependency_setup(tmp_path) -> None:
+    commands = [
+        r".venv\Scripts\python.exe -m pip install -e .",
+        r".venv\Scripts\python.exe -m pip install -e .[test]",
+        r".venv\Scripts\python.exe -m pip install -e .[dev]",
+        r".venv\Scripts\python.exe -m pip install -r requirements.txt",
+        r".venv\Scripts\python.exe -m pip install -r requirements-dev.txt",
+        ".venv/bin/python -m pip install -e .",
+        ".venv/bin/python -m pip install -r requirements.txt",
+        "uv sync",
+        "uv sync --all-extras",
+        "uv sync --dev",
+        "poetry install",
+        "pdm install",
+    ]
+
+    for command in commands:
+        assert classify_worker_terminal_command(command) == "project_environment_setup"
+        decision = worker_terminal_command_allowed(command, workspace_root=tmp_path)
+        assert decision.allowed is True
+        assert decision.failure_class == ""
+
+
+def test_worker_terminal_policy_allows_absolute_workspace_venv_python_pip_install(tmp_path) -> None:
+    windows_command = (
+        r"C:\workspaces\demo\.venv\Scripts\python.exe -m pip install -e ."
+    )
+    posix_python = tmp_path / ".venv" / "bin" / "python"
+    posix_command = f"{posix_python} -m pip install -e ."
+
+    assert worker_terminal_command_allowed(windows_command).allowed is True
+    assert worker_terminal_command_allowed(posix_command, workspace_root=tmp_path).allowed is True
+
+
+def test_worker_terminal_policy_allows_venv_creation_only_without_existing_project_venv(tmp_path) -> None:
     command = "python -m venv .venv"
 
-    decision = worker_terminal_command_allowed(command)
-    payload = decision.to_blocked_payload(command)
+    decision = worker_terminal_command_allowed(command, workspace_root=tmp_path)
+    assert classify_worker_terminal_command(command) == "project_environment_setup"
+    assert decision.allowed is True
 
-    assert decision.allowed is False
-    assert payload["failure_class"] == "project_environment_setup_needs_approval"
+    existing = tmp_path / ".venv" / "Scripts" / "python.exe"
+    existing.parent.mkdir(parents=True)
+    existing.write_text("", encoding="utf-8")
 
-    explicit = worker_terminal_command_allowed(
-        command,
-        explicit_validation_commands=[command],
-    )
-    assert explicit.allowed is True
+    blocked = worker_terminal_command_allowed(command, workspace_root=tmp_path)
+    payload = blocked.to_blocked_payload(command)
+    assert blocked.allowed is False
+    assert payload["failure_class"] == "project_environment_setup_blocked"
+
+
+def test_worker_terminal_policy_blocks_global_dependency_setup() -> None:
+    commands = [
+        "pip install fastapi",
+        "pip3 install fastapi",
+        "python -m pip install fastapi",
+        "py -m pip install fastapi",
+        "sudo apt install python3-fastapi",
+        "apt install python3-fastapi",
+        "winget install Python.Python.3.13",
+        "choco install python",
+        "brew install python",
+        "npm install -g typescript",
+    ]
+
+    for command in commands:
+        decision = worker_terminal_command_allowed(command)
+        payload = decision.to_blocked_payload(command)
+        assert decision.allowed is False
+        assert payload["failure_class"] == "global_environment_setup_blocked"
 
 
 def test_worker_terminal_policy_blocks_generic_git_reset() -> None:
