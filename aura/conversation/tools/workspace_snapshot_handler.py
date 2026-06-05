@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from aura.conversation.project_profile import detect_project_profile
 from aura.projects.store import ProjectStore
 
 logger = logging.getLogger(__name__)
@@ -99,4 +100,26 @@ def gather_workspace_snapshot(workspace_root: Path) -> dict[str, Any]:
     for filename, label in hints_map.items():
         if (root / filename).is_file():
             result["project_hints"].append(label)
+
+    # Project profile
+    try:
+        profile = detect_project_profile(root)
+        result["project_profile"] = {
+            "workspace_root": profile.workspace_root,
+            "project_types": list(profile.project_types),
+            "manifests": list(profile.manifests),
+            "lockfiles": list(profile.lockfiles),
+            "package_manager": profile.package_manager,
+            "has_venv": profile.has_venv,
+            "python_venv_path": profile.python_venv_path,
+            "python_executable": profile.python_executable,
+            "declared_dependencies": list(profile.declared_dependencies),
+            "setup_command": profile.setup_command,
+            "validation_commands": list(profile.validation_commands),
+            "node_scripts": [list(s) for s in profile.node_scripts],
+            "summary": profile.summarize(),
+        }
+    except Exception:
+        logger.warning("Failed to detect project profile", exc_info=True)
+
     return result

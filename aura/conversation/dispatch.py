@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from aura.craft.types import ExplicitSpecContract
+from aura.conversation.project_profile import ProjectProfile
 
 
 class WorkerOutcomeStatus(str, enum.Enum):
@@ -264,9 +265,10 @@ class WorkerTaskSpec:
     risk_notes: list[str] = field(default_factory=list)
     non_goals: list[str] = field(default_factory=list)
     contract: ExplicitSpecContract | None = None
+    project_profile: ProjectProfile | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result: dict[str, Any] = {
             "goal": self.goal,
             "files": list(self.files),
             "summary": self.summary,
@@ -279,6 +281,22 @@ class WorkerTaskSpec:
             "risk_notes": list(self.risk_notes),
             "non_goals": list(self.non_goals),
         }
+        if self.project_profile is not None:
+            result["project_profile"] = {
+                "workspace_root": self.project_profile.workspace_root,
+                "project_types": list(self.project_profile.project_types),
+                "manifests": list(self.project_profile.manifests),
+                "lockfiles": list(self.project_profile.lockfiles),
+                "package_manager": self.project_profile.package_manager,
+                "has_venv": self.project_profile.has_venv,
+                "python_venv_path": self.project_profile.python_venv_path,
+                "python_executable": self.project_profile.python_executable,
+                "declared_dependencies": list(self.project_profile.declared_dependencies),
+                "setup_command": self.project_profile.setup_command,
+                "validation_commands": list(self.project_profile.validation_commands),
+                "node_scripts": [list(s) for s in self.project_profile.node_scripts],
+            }
+        return result
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "WorkerTaskSpec":
@@ -287,6 +305,28 @@ class WorkerTaskSpec:
             if not isinstance(raw, list):
                 return []
             return [str(v) for v in raw]
+
+        project_profile: ProjectProfile | None = None
+        raw_profile = data.get("project_profile")
+        if isinstance(raw_profile, dict):
+            project_profile = ProjectProfile(
+                workspace_root=str(raw_profile.get("workspace_root", "")),
+                project_types=tuple(_str_list_items(raw_profile, "project_types")),
+                manifests=tuple(_str_list_items(raw_profile, "manifests")),
+                lockfiles=tuple(_str_list_items(raw_profile, "lockfiles")),
+                package_manager=_none_or_str(raw_profile.get("package_manager")),
+                has_venv=bool(raw_profile.get("has_venv", False)),
+                python_venv_path=_none_or_str(raw_profile.get("python_venv_path")),
+                python_executable=_none_or_str(raw_profile.get("python_executable")),
+                declared_dependencies=tuple(_str_list_items(raw_profile, "declared_dependencies")),
+                setup_command=_none_or_str(raw_profile.get("setup_command")),
+                validation_commands=tuple(_str_list_items(raw_profile, "validation_commands")),
+                node_scripts=tuple(
+                    (str(s[0]), str(s[1]))
+                    for s in raw_profile.get("node_scripts", [])
+                    if isinstance(s, list) and len(s) == 2
+                ),
+            )
 
         return cls(
             goal=str(data.get("goal", "")),
@@ -301,6 +341,7 @@ class WorkerTaskSpec:
             risk_notes=_str_list("risk_notes"),
             non_goals=_str_list("non_goals"),
             contract=ExplicitSpecContract.from_dict(data["contract"]) if data.get("contract") else None,
+            project_profile=project_profile,
         )
 
 
@@ -424,7 +465,20 @@ def normalize_worker_task(req: WorkerDispatchRequest) -> WorkerTaskSpec:
         required_outputs=list(req.required_outputs),
         risk_notes=list(req.risk_notes),
         contract=contract,
+        project_profile=None,
     )
+
+
+
+def _str_list_items(data: dict[str, Any], key: str) -> list[str]:
+    raw = data.get(key)
+    if not isinstance(raw, list):
+        return []
+    return [str(item) for item in raw]
+
+
+def _none_or_str(value: Any) -> str | None:
+    return str(value) if value is not None else None
 
 
 DispatchCallback = Callable[[str, WorkerDispatchRequest], WorkerDispatchResult]
