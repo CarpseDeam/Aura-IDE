@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QSplitter, QToolButton, QVBox
 from aura.gui.theme import BORDER
 from aura.gui.controllers import ToolStreamController
 from aura.gui.widgets.aura_glow import AuraWidget
+from aura.gui.workspace_tree import WorkspaceTree
 
 
 class AuraPlayground(QWidget):
@@ -81,7 +82,35 @@ class AuraPlayground(QWidget):
         self._splitter.setStretchFactor(1, 1)
         self._splitter.setSizes([560, 300])
 
-        layout.addWidget(self._splitter, 1)
+        # Outer horizontal splitter: file tree (left) | code/log (right)
+        self._outer_splitter = QSplitter(Qt.Orientation.Horizontal, self)
+        self._outer_splitter.setHandleWidth(3)
+        self._outer_splitter.setStyleSheet(
+            f"QSplitter::handle {{ background: {BORDER}; }}"
+        )
+
+        # File tree panel (left side)
+        self._file_tree_panel = QWidget()
+        file_tree_layout = QVBoxLayout(self._file_tree_panel)
+        file_tree_layout.setContentsMargins(0, 0, 0, 0)
+        file_tree_layout.setSpacing(0)
+
+        files_label = QLabel("FILES")
+        files_label.setObjectName("paneTitleFiles")
+        file_tree_layout.addWidget(files_label)
+
+        self._tree = WorkspaceTree(None)
+        file_tree_layout.addWidget(self._tree, 1)
+
+        # Right side: existing vertical splitter (code editor / info hub)
+        self._outer_splitter.addWidget(self._file_tree_panel)
+        self._outer_splitter.addWidget(self._splitter)
+
+        self._outer_splitter.setStretchFactor(0, 0)
+        self._outer_splitter.setStretchFactor(1, 1)
+        self._outer_splitter.setSizes([240, 800])
+
+        layout.addWidget(self._outer_splitter, 1)
 
         # Floating terminal window. It is intentionally not added to this
         # layout, so terminal output never consumes worker/workspace space.
@@ -114,6 +143,10 @@ class AuraPlayground(QWidget):
     def set_workspace_root(self, root: Path | None) -> None:
         self._workspace_root = root
         self._code_editor.set_workspace_root(root)
+        self._tree.set_root(root)
+
+    def file_tree(self) -> WorkspaceTree:
+        return self._tree
 
     def set_read_only_mode(self, enabled: bool) -> None:
         self._code_editor.set_read_only_mode(enabled)

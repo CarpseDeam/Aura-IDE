@@ -49,7 +49,6 @@ from aura.gui.worker_handler import WorkerEventHandler
 from aura.prompts import SINGLE_SYSTEM_PROMPT
 from aura.updater import UpdateStatus
 
-
 class MainWindow(WindowChromeMixin, QMainWindow):
 
     def __init__(self) -> None:
@@ -122,7 +121,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._left_pane.planner_thinking_changed.connect(lambda: self._refresh_status_bar())
         self._left_pane.worker_model_changed.connect(self._on_sidebar_worker_model_changed)
         self._left_pane.worker_thinking_changed.connect(self._on_sidebar_worker_thinking_changed)
-        self._tree = self._left_pane.tree()
         splitter.addWidget(self._left_pane)
 
         # Middle pane: chat + input
@@ -258,6 +256,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._input.sent.connect(lambda p: self._send_handler.handle_send(p, self.current_model(), self.current_thinking()))
         self._input.stop_requested.connect(self._send_handler.handle_stop)
         self._input.retry_requested.connect(self._on_retry)
+        self._tree = self._playground.file_tree()
         self._tree.file_activated.connect(self._playground.open_file)
         self._playground.focused_action_requested.connect(self._on_focused_action_requested)
         terminal_window = self._playground.terminal_window()

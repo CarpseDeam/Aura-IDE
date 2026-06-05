@@ -25,15 +25,12 @@ from aura.config import (
 )
 from aura.providers.registry import provider_registry
 from aura.gui.theme import BG, BG_ALT, BG_RAISED, BORDER, FG, FG_DIM, FG_MUTED, ACCENT, LABEL_PROJECTS, LABEL_THREAD
-from aura.gui.workspace_tree import WorkspaceTree
 from aura.projects.store import ProjectStore
-
 
 class _ToggleToolButton(QToolButton):
     def mousePressEvent(self, event) -> None:
         event.accept()
         super().mousePressEvent(event)
-
 
 class _ProjectRow(QFrame):
     clicked = Signal(Path)
@@ -92,7 +89,6 @@ class _ProjectRow(QFrame):
         else:
             super().mousePressEvent(event)
 
-
 class _ThreadRow(QFrame):
     clicked = Signal(Path)
 
@@ -130,7 +126,6 @@ class _ThreadRow(QFrame):
         else:
             super().mousePressEvent(event)
 
-
 class _ShowMoreRow(QFrame):
     clicked = Signal()
 
@@ -162,7 +157,6 @@ class _ShowMoreRow(QFrame):
             event.accept()
         else:
             super().mousePressEvent(event)
-
 
 class LeftPane(QFrame):
     change_root_requested = Signal()
@@ -233,19 +227,6 @@ class LeftPane(QFrame):
 
         self._projects_scroll.setWidget(self._projects_container)
         layout.addWidget(self._projects_scroll, 1)
-
-        # --- Files section ---
-        files_sep = QFrame()
-        files_sep.setFrameShape(QFrame.Shape.HLine)
-        files_sep.setStyleSheet(f"QFrame {{ color: {BORDER}; }}")
-        layout.addWidget(files_sep)
-
-        files_title = QLabel("Files")
-        files_title.setObjectName("paneTitleFiles")
-        layout.addWidget(files_title)
-
-        self._tree = WorkspaceTree(workspace_root)
-        layout.addWidget(self._tree, 2)
 
         # --- Model Config section ---
         self._model_config_footer = QFrame()
@@ -326,9 +307,6 @@ class LeftPane(QFrame):
         layout.addWidget(self._model_config_footer)
 
         self.update_workspace_label(workspace_root)
-
-    def tree(self) -> WorkspaceTree:
-        return self._tree
 
     def update_workspace_label(self, root: Path | None) -> None:
         if root is None:
@@ -473,7 +451,6 @@ class LeftPane(QFrame):
     def _on_project_collapse_toggled(self, project_id: str) -> None:
         self._project_collapsed[project_id] = not self._project_collapsed.get(project_id, False)
         self.refresh_projects(self._last_workspace_root)
-
 
 def _models_with_default(provider: ProviderId) -> dict[str, ModelInfo]:
     spec = provider_registry.get(provider)
