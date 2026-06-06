@@ -5,15 +5,11 @@ from .types import (
     CraftIssueSeverity,
     OwnershipContext,
     ProposalCapsule,
-    CompiledPatch,
-    CompilerBounce,
-    CompilerReject,
     ExplicitSpecContract,
     line_in_ranges,
     node_in_ranges,
 )
 from .engine import CraftEngine
-from .compiler import CompilerService
 from .contract_gate import ContractGate
 from .reference_checker import ReferenceChecker
 from .mutator import SafeMutator
@@ -26,11 +22,7 @@ __all__ = [
     "CraftIssueSeverity",
     "OwnershipContext",
     "ProposalCapsule",
-    "CompiledPatch",
-    "CompilerBounce",
-    "CompilerReject",
     "CraftEngine",
-    "CompilerService",
     "ContractGate",
     "ReferenceChecker",
     "SafeMutator",

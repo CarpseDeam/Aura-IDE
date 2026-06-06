@@ -120,13 +120,6 @@ WORKER_AUTO_PY_COMPILE_INSTRUCTION = (
     "Diagnostic output:\n{diagnostics}"
 )
 
-WORKER_COMPILER_REPAIR_INSTRUCTION = (
-    "Craft reviewed the proposed patch and returned repair notes. Re-read the "
-    "affected file, repair the proposal using the notes below, then retry the "
-    "patch once. Normal inspection and validation tools remain available."
-)
-
-
 def _normalize_worker_path(path: str) -> str:
     normalized = str(path).replace("\\", "/")
     if normalized.startswith("./"):
@@ -222,10 +215,8 @@ class ConversationManager:
         line_range_reread_required: dict[str, dict[str, Any]] = {}
         syntax_repair_required: dict[str, dict[str, Any]] = {}
         syntax_validation_required: set[str] = set()
-        compiler_repair_required: dict[str, dict[str, Any]] = {}
         write_attempts_by_path: dict[str, int] = {}
         worker_recovery_nudge_sent = False
-        patch_quality_unresolved: dict[str, Any] | None = None
         task_completion_context = False
         final_messages_after_completion = 0
         last_completion_final_text = ""
@@ -360,35 +351,19 @@ class ConversationManager:
                             error="Python syntax still fails after one repair attempt.",
                         )
                         return
-                    if patch_quality_unresolved is not None:
-                        self._finish_worker_unrecoverable(
-                            on_event,
-                            failure_class="patch_quality_unresolved",
-                            error=str(
-                                patch_quality_unresolved.get("error")
-                                or "Patch quality needs repair."
-                            ),
-                        )
-                        return
                     edit_recovery_pending = bool(
                         edit_fallback_required or line_range_reread_required
                     )
                     syntax_repair_pending = bool(
                         self._syntax_repair_paths(syntax_repair_required)
                     )
-                    compiler_repair_pending = bool(
-                        self._compiler_repair_paths(compiler_repair_required)
-                    )
                     if (
                         edit_recovery_pending
                         or syntax_repair_pending
-                        or compiler_repair_pending
                     ):
                         if not worker_recovery_nudge_sent:
                             instruction = (
-                                WORKER_COMPILER_REPAIR_INSTRUCTION
-                                if compiler_repair_pending
-                                else WORKER_EDIT_RECOVERY_INSTRUCTION
+                                WORKER_EDIT_RECOVERY_INSTRUCTION
                                 if edit_recovery_pending
                                 else (
                                     "Previous py_compile failed. Re-read the touched "
@@ -400,16 +375,6 @@ class ConversationManager:
                             self._history.append_user_text(instruction)
                             worker_recovery_nudge_sent = True
                             continue
-                        if compiler_repair_pending:
-                            self._finish_worker_unrecoverable(
-                                on_event,
-                                failure_class="worker_compiler_repair_exhausted",
-                                error=(
-                                    "Worker stopped before repairing a recoverable "
-                                    "Craft/compiler rejection."
-                                ),
-                            )
-                            return
                         self._finish_worker_unrecoverable(
                             on_event,
                             failure_class="worker_recovery_exhausted",
@@ -498,7 +463,7 @@ class ConversationManager:
                 return
 
             def process_task(task: dict[str, Any]) -> dict[str, Any]:
-                nonlocal _terminal_dispatch, _worker_phase_boundary_info, reject_all_for_turn, worker_redispatches, patch_quality_unresolved
+                nonlocal _terminal_dispatch, _worker_phase_boundary_info, reject_all_for_turn, worker_redispatches
                 tool_call_id = task["id"]
                 name = task["name"]
                 args = task["args"]
@@ -514,7 +479,6 @@ class ConversationManager:
                         line_range_reread_required=line_range_reread_required,
                         syntax_repair_required=syntax_repair_required,
                         syntax_validation_required=syntax_validation_required,
-                        compiler_repair_required=compiler_repair_required,
                         write_attempts_by_path=write_attempts_by_path,
                     )
                     if blocked is not None:
@@ -638,12 +602,8 @@ class ConversationManager:
                         line_range_reread_required=line_range_reread_required,
                         syntax_repair_required=syntax_repair_required,
                         syntax_validation_required=syntax_validation_required,
-                        compiler_repair_required=compiler_repair_required,
                         write_attempts_by_path=write_attempts_by_path,
                     )
-                    parsed_after_recovery = self._parse_tool_payload(tool_msg_content)
-                    if isinstance(parsed_after_recovery, dict) and parsed_after_recovery.get("patch_quality_unresolved"):
-                        patch_quality_unresolved = parsed_after_recovery
 
                 loop_result = self._apply_loop_detection(
                     mode=mode,
@@ -667,14 +627,6 @@ class ConversationManager:
                         ok=exec_result.ok,
                         result=tool_msg_content,
                         extras=exec_result.extras,
-                    ),
-                    "quality_instruction": (
-                        self._quality_bounce_instruction(parsed_after_recovery)
-                        if mode == "worker"
-                        and isinstance(parsed_after_recovery, dict)
-                        and parsed_after_recovery.get("quality_bounce")
-                        and not parsed_after_recovery.get("patch_quality_unresolved")
-                        else ""
                     ),
                     "completed_tool_result_for_final": (
                         mode in {"planner", "single"}
@@ -715,7 +667,6 @@ class ConversationManager:
             # History is not thread-safe. Reorder results by original tool_call_id order and append.
             results_by_id = {r.get("id"): r for r in results_to_append if r is not None}
 
-            quality_instructions: list[str] = []
             completed_dispatch_for_final = False
             completed_tool_result_for_final = False
             for task in tasks:
@@ -742,23 +693,6 @@ class ConversationManager:
                 if "result_payload" in res:
                     self._history.append_tool_result(task["id"], res["result_payload"])
                     on_event(res["event"])
-                    instruction = res.get("quality_instruction")
-                    if isinstance(instruction, str) and instruction:
-                        quality_instructions.append(instruction)
-
-            for instruction in quality_instructions:
-                self._history.append_user_text(instruction)
-
-            if patch_quality_unresolved is not None:
-                self._finish_worker_unrecoverable(
-                    on_event,
-                    failure_class="patch_quality_unresolved",
-                    error=str(
-                        patch_quality_unresolved.get("error")
-                        or "Patch quality needs repair."
-                    ),
-                )
-                return
 
             if _worker_phase_boundary_info is not None:
                 worker_phase_boundary_info = _worker_phase_boundary_info
@@ -895,25 +829,6 @@ class ConversationManager:
         for existing_path in set(syntax_validation_required):
             if _normalize_worker_path(existing_path) == normalized:
                 syntax_validation_required.discard(existing_path)
-
-    @staticmethod
-    def _compiler_repair_paths(
-        compiler_repair_required: dict[str, dict[str, Any]],
-    ) -> set[str]:
-        return {
-            path
-            for path, state in compiler_repair_required.items()
-            if not state.get("repair_failed") and not state.get("quality_bounce")
-        }
-
-    @staticmethod
-    def _has_compiler_repair_failure(
-        compiler_repair_required: dict[str, dict[str, Any]],
-    ) -> bool:
-        return any(
-            state.get("repair_failed") and not state.get("quality_bounce")
-            for state in compiler_repair_required.values()
-        )
 
     @staticmethod
     def _has_terminal_syntax_failure(
@@ -1076,60 +991,10 @@ class ConversationManager:
         line_range_reread_required: dict[str, dict[str, Any]],
         syntax_repair_required: dict[str, dict[str, Any]],
         syntax_validation_required: set[str],
-        compiler_repair_required: dict[str, dict[str, Any]],
         write_attempts_by_path: dict[str, int],
     ) -> dict[str, Any] | None:
         raw_path = self._tool_path(name, args)
         path = _normalize_worker_path(raw_path) if raw_path else ""
-        if self._has_compiler_repair_failure(compiler_repair_required):
-            target = sorted(
-                path for path, state in compiler_repair_required.items()
-                if state.get("repair_failed")
-            )[0]
-            payload = self._recovery_payload(
-                path=target,
-                failure_class="compiler_rejected",
-                error="Patch quality needs repair after one retry.",
-                suggested_next_tool="",
-                suggested_next_action="Stop tool use and report the compiler rejection.",
-                recoverable=False,
-            )
-            self._record_recovery_block(payload, f"compiler-failed:{target}:{name}", recovery_block_counts)
-            return self._blocked_tool_result(tool_call_id, name, payload)
-
-        compiler_paths = self._compiler_repair_paths(compiler_repair_required)
-        if compiler_paths and not self._compiler_repair_tool_allowed(
-            name, args, compiler_repair_required
-        ):
-            target = sorted(compiler_paths)[0]
-            state = compiler_repair_required.get(target, {})
-            repair_failed = bool(state.get("repair_failed"))
-            payload = self._recovery_payload(
-                path=target,
-                failure_class="compiler_rejected",
-                error=(
-                    "Patch quality needs repair after one retry."
-                    if repair_failed
-                    else (
-                        "Craft/compiler rejected the proposed code. Re-read the file, "
-                        "repair the checker issue once, and retry with patch_file "
-                        "for existing files or write_file for new files."
-                    )
-                ),
-                suggested_next_tool=str(
-                    state.get("suggested_next_tool")
-                    or self._repair_write_tactic(str(state.get("tool") or name), state)
-                ),
-                suggested_next_action=(
-                    "Repair the proposed code once using the precise checker error; "
-                    "do not narrate. Retry with patch_file for existing files or write_file for new files."
-                ),
-                recoverable=not repair_failed,
-            )
-            payload["previous_error"] = state.get("error", "")
-            self._record_recovery_block(payload, f"compiler:{target}:{name}", recovery_block_counts)
-            return self._blocked_tool_result(tool_call_id, name, payload)
-
         syntax_paths = self._syntax_repair_paths(syntax_repair_required)
         if syntax_paths and not self._syntax_repair_tool_allowed(name, args, syntax_paths):
             target = sorted(syntax_paths)[0]
@@ -1271,7 +1136,6 @@ class ConversationManager:
         line_range_reread_required: dict[str, dict[str, Any]],
         syntax_repair_required: dict[str, dict[str, Any]],
         syntax_validation_required: set[str],
-        compiler_repair_required: dict[str, dict[str, Any]],
         write_attempts_by_path: dict[str, int],
     ) -> str:
         parsed = self._parse_tool_payload(content)
@@ -1294,43 +1158,10 @@ class ConversationManager:
         ):
             write_attempts_by_path[path] = write_attempts_by_path.get(path, 0) + 1
 
-        if (
-            ok
-            and isinstance(parsed, dict)
-            and parsed.get("quality_bounce")
-            and path
-            and name in WRITE_TOOLS
-        ):
-            signature = self._quality_bounce_signature(path, name, args, parsed)
-            prior = compiler_repair_required.get(path)
-            if prior is not None and prior.get("signature") == signature:
-                prior["repair_failed"] = True
-                parsed["patch_quality_unresolved"] = True
-                parsed["error"] = (
-                    "Patch quality needs repair: "
-                    + str(
-                        parsed.get("repair_instructions")
-                        or parsed.get("suggested_next_action")
-                        or "Craft returned the same repair notes after one retry."
-                    )
-                )
-            else:
-                compiler_repair_required[path] = {
-                    "tool": name,
-                    "quality_bounce": True,
-                    "signature": signature,
-                    "repair_instructions": parsed.get("repair_instructions", ""),
-                    "craft_issues": parsed.get("craft_issues", []),
-                    "suggested_next_action": parsed.get("suggested_next_action", ""),
-                    "is_new_file": bool(parsed.get("is_new_file")),
-                }
-            return json.dumps(parsed, ensure_ascii=False)
-
         if ok:
             if name in WRITE_TOOLS and path:
                 self._pop_normalized_recovery_key(edit_fallback_required, path)
                 self._pop_normalized_recovery_key(line_range_reread_required, path)
-                compiler_repair_required.pop(path, None)
                 if self._is_python_path(path) and not _is_validation_scratch_path(path):
                     syntax_validation_required.add(path)
                 state = self._syntax_repair_state_for_path(syntax_repair_required, path)
@@ -1419,38 +1250,6 @@ class ConversationManager:
             if int(state.get("failed_repairs", 0)) > 1:
                 parsed["recoverable"] = False
                 parsed["error"] = "Syntax repair failed after one repair attempt. " + str(parsed.get("error", ""))
-            content = json.dumps(parsed, ensure_ascii=False)
-        elif (
-            path
-            and failure_class == "compiler_rejected"
-            and parsed.get("bounce")
-            and name in {"write_file", "patch_file", "edit_file", "edit_line_range"}
-            and self._has_precise_checker_error(parsed)
-        ):
-            prior = compiler_repair_required.get(path)
-            if prior is not None:
-                prior["repair_failed"] = True
-                prior["failed_tool"] = name
-                parsed["recoverable"] = False
-                parsed["error"] = (
-                    "Patch quality needs repair after one retry. "
-                    + str(parsed.get("error", ""))
-                )
-            else:
-                compiler_repair_required[path] = {
-                    "tool": name,
-                    "error": parsed.get("error", ""),
-                    "suggested_next_tool": self._repair_write_tactic(name, parsed),
-                    "craft_issues": parsed.get("craft_issues", []),
-                    "is_new_file": bool(parsed.get("is_new_file")),
-                }
-                parsed["recoverable"] = True
-                parsed["suggested_next_tool"] = self._repair_write_tactic(name, parsed)
-                parsed["suggested_next_action"] = (
-                    "Repair the proposed code once using the precise checker error, "
-                    "then retry with patch_file for existing files or write_file for new files. Do not narrate."
-                )
-            parsed["internal_recovery_steer"] = True
             content = json.dumps(parsed, ensure_ascii=False)
 
         return content
@@ -1549,108 +1348,6 @@ class ConversationManager:
             targets = ConversationManager._py_compile_targets(command)
             return bool(targets) and any(target in syntax_paths for target in targets)
         return False
-
-    @staticmethod
-    def _compiler_repair_tool_allowed(
-        name: str,
-        args: dict[str, Any],
-        compiler_repair_required: dict[str, dict[str, Any]],
-    ) -> bool:
-        path = str(args.get("path", ""))
-        paths = ConversationManager._compiler_repair_paths(compiler_repair_required)
-        if name in {"read_file", "read_file_outline"}:
-            return path in paths
-        if name == "read_files":
-            requested = args.get("paths")
-            return isinstance(requested, list) and any(str(item) in paths for item in requested)
-        if name in WRITE_TOOLS and path in paths:
-            prior_tool = str(compiler_repair_required[path].get("tool", ""))
-            if prior_tool == "patch_file" and name == "patch_file":
-                return True
-            return name != prior_tool
-        return False
-
-    @staticmethod
-    def _quality_bounce_signature(
-        path: str,
-        name: str,
-        args: dict[str, Any],
-        parsed: dict[str, Any],
-    ) -> str:
-        issues = parsed.get("craft_issues")
-        issue_bits: list[str] = []
-        if isinstance(issues, list):
-            for issue in issues[:8]:
-                if isinstance(issue, dict):
-                    issue_bits.append(
-                        "|".join(
-                            str(issue.get(key, ""))
-                            for key in ("line", "code", "message")
-                        )
-                    )
-        raw = json.dumps(
-            {
-                "path": path,
-                "repair": parsed.get("repair_instructions", ""),
-                "issues": issue_bits,
-            },
-            sort_keys=True,
-            ensure_ascii=False,
-            default=str,
-        )
-        return hashlib.sha256(raw.encode("utf-8", errors="replace")).hexdigest()
-
-    @staticmethod
-    def _quality_bounce_instruction(parsed: dict[str, Any]) -> str:
-        path = str(parsed.get("path") or "")
-        repair = str(parsed.get("repair_instructions") or "").strip()
-        suggested = str(parsed.get("suggested_next_action") or "").strip()
-        issues = parsed.get("craft_issues")
-        lines = [
-            WORKER_COMPILER_REPAIR_INSTRUCTION,
-            "",
-            f"Path: {path}" if path else "Path: (unknown)",
-        ]
-        if repair:
-            lines.extend(["", "Repair instructions:", repair])
-        if isinstance(issues, list) and issues:
-            lines.append("")
-            lines.append("Craft issues:")
-            for issue in issues[:8]:
-                if not isinstance(issue, dict):
-                    continue
-                line = issue.get("line")
-                code = issue.get("code", "")
-                message = issue.get("message", "")
-                suggestion = issue.get("suggestion", "")
-                prefix = f"- line {line}: " if line else "- "
-                text = f"{prefix}{code}: {message}".strip()
-                if suggestion:
-                    text += f" Suggestion: {suggestion}"
-                lines.append(text)
-        if suggested:
-            lines.extend(["", f"Suggested next action: {suggested}"])
-        return "\n".join(lines)
-
-    @staticmethod
-    def _repair_write_tactic(name: str, state: dict[str, Any] | None = None) -> str:
-        if state and bool(state.get("is_new_file")):
-            return "write_file"
-        if name == "write_file" and state and bool(state.get("full_replacement")):
-            return "write_file"
-        return "patch_file"
-
-    @staticmethod
-    def _alternate_write_tactic(name: str) -> str:
-        return ConversationManager._repair_write_tactic(name)
-
-    @staticmethod
-    def _has_precise_checker_error(parsed: dict[str, Any]) -> bool:
-        issues = parsed.get("craft_issues")
-        if isinstance(issues, list) and issues:
-            return True
-        error = str(parsed.get("error") or "")
-        return bool(re.search(r"\bLine\s+\d+:", error))
 
     @staticmethod
     def _py_compile_targets(command: str) -> list[str]:

@@ -172,7 +172,7 @@ class WorkerEventRelay(QObject):
                         "path": parsed.get("path") or parsed.get("rel_path"),
                         "applied": False,
                         "write_outcome": parsed.get("write_outcome") or "not_applied_craft_rejected",
-                        "failure_class": parsed.get("failure_class") or "compiler_rejected",
+                        "failure_class": parsed.get("failure_class") or "craft_blocked",
                         "error": parsed.get("repair_instructions", ""),
                         "quality_bounce": True,
                         "craft_issues": parsed.get("craft_issues", []),

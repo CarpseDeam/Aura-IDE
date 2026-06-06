@@ -460,7 +460,7 @@ def test_final_report_partial_suite_with_py_compile_is_not_harness_failure():
     )
 
     assert not summary.startswith("Harness error")
-    assert summary.startswith("Worker completed with caveats")
+    assert "Worker completed with caveats" in summary
 
 
 def test_no_blocker_remains_does_not_trip_failure_sniffing():
@@ -485,7 +485,7 @@ def test_structured_worker_failure_summary_is_not_harness_error():
         [],
     )
 
-    assert summary.startswith("Worker needs follow-up")
+    assert "Worker needs follow-up" in summary
     assert not summary.startswith("Harness error")
 
 
@@ -949,18 +949,19 @@ def test_worker_result_needs_followup_not_terminal():
     assert restored.recoverable
 
 
-def test_patch_quality_unresolved_summary_is_not_worker_failed():
+def test_craft_rejected_summary_is_not_worker_failed():
     req = WorkerDispatchRequest(goal="Fix code", files=["a.py"], spec="spec", acceptance="")
     summary = _build_worker_summary(
         req,
         History(),
         [],
-        ["Patch quality needs repair: Define missing (patch_quality_unresolved)."],
-        {"status": "patch_quality_unresolved", "reason": "Patch quality needs repair: Define missing"},
+        ["Craft blocked generated Python."],
+        {},
         [],
+        status=WorkerOutcomeStatus.craft_rejected.value,
     )
 
-    assert summary.startswith("Patch quality needs repair:")
+    assert "Craft rejected" in summary
     assert "Worker failed" not in summary
 
 
@@ -994,15 +995,14 @@ def test_compute_outcome_status_distinguishes_rejection_and_bounce_classes():
         structured_failure={"failure_class": "approval_rejected"}
     ) == WorkerOutcomeStatus.approval_rejected.value
     assert _status_for(
-        write_failures=[{"failure_class": "compiler_rejected"}]
+        write_failures=[{"failure_class": "craft_blocked"}]
+    ) == WorkerOutcomeStatus.craft_rejected.value
+    assert _status_for(
+        write_failures=[{"failure_class": "craft_rejected"}]
     ) == WorkerOutcomeStatus.craft_rejected.value
     assert _status_for(
         write_failures=[{"reject": True}]
     ) == WorkerOutcomeStatus.craft_rejected.value
-    assert _status_for(
-        structured_failure={"failure_class": "patch_quality_unresolved"},
-        continuation={"status": "patch_quality_unresolved"},
-    ) == WorkerOutcomeStatus.craft_bounced.value
 
 
 def test_compute_outcome_status_distinguishes_validation_mechanics_and_harness():

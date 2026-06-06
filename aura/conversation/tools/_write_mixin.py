@@ -28,21 +28,16 @@ from aura.paths import safe_relative_to
 
 try:
     from aura.craft import (
-        CompiledPatch,
-        CompilerBounce,
-        CompilerReject,
-        CompilerService,
         CraftEngine,
         ExplicitSpecContract,
         OwnershipContext,
         ProposalCapsule,
     )
-    from aura.craft.compiler import compiler_service
 except ImportError:
     CraftEngine = None
-    CompilerService = None
-    compiler_service = None
     ExplicitSpecContract = None
+    OwnershipContext = None
+    ProposalCapsule = None
 
 from aura.conversation.tools import registry as _reg
 
@@ -219,7 +214,7 @@ def _humanizer_gate_error(rel_path: str, result, blocking_issues: list) -> ToolE
         payload=_mark_not_applied({
             "ok": False,
             "error": "Aura humanizer rejected generated Python before approval.",
-            "failure_class": "compiler_rejected",
+            "failure_class": "craft_rejected",
             "humanizer_gate": True,
             "path": rel_path,
             "slop_score": getattr(report, "score", 0.0) if report else 0.0,
@@ -344,8 +339,8 @@ def _compute_craft_line_ranges(proposal: dict) -> list[tuple[int, int]]:
 
 
 
-def _run_compiler_pipeline(proposal: dict, tool_name: str, contract: ExplicitSpecContract | None = None, workspace_root=None) -> ToolExecResult | None:
-    if compiler_service is None:
+def _run_craft_gate(proposal: dict, tool_name: str, contract: ExplicitSpecContract | None = None, workspace_root=None) -> ToolExecResult | None:
+    if CraftEngine is None or ProposalCapsule is None:
         return None
         
     env = os.environ.get("AURA_CRAFT", "1")
@@ -374,73 +369,75 @@ def _run_compiler_pipeline(proposal: dict, tool_name: str, contract: ExplicitSpe
             contract=contract,
         )
         
-        result = compiler_service.process_proposal(capsule, workspace_root=workspace_root)
+        if contract is not None:
+            capsule.expected_public_symbols = list(getattr(contract, "expected_public_symbols", []))
+            capsule.expected_dataclass_fields = dict(getattr(contract, "expected_dataclass_fields", {}))
+            capsule.forbidden_public_methods = list(getattr(contract, "forbidden_public_methods", []))
+            capsule.forbidden_calls = list(getattr(contract, "forbidden_calls", []))
+
+        decision = CraftEngine().process_proposal(capsule)
         
         if is_observe:
-            if not isinstance(result, CompiledPatch):
+            if not decision.approved:
                 _log.info("[craft:observe] %s blocked", rel_path)
             return None
             
-        if isinstance(result, CompiledPatch):
-            proposal["new_content"] = result.cleaned_code
-            proposal["craft_metadata"] = dict(result.metadata)
-            proposal["write_outcome"] = str(result.metadata.get("write_outcome") or "applied")
-            if result.checks_warned:
-                proposal["checks_warned"] = list(result.checks_warned)
-            if result.metadata.get("craft_warnings"):
-                proposal["craft_warnings"] = result.metadata.get("craft_warnings")
-            if result.metadata.get("pre_existing_environment_issues"):
-                proposal["pre_existing_environment_issues"] = result.metadata.get("pre_existing_environment_issues")
+        metadata = dict(getattr(decision, "metadata", {}) or {})
+        if decision.approved:
+            proposal["new_content"] = decision.cleaned_code
+            if metadata:
+                proposal["craft_metadata"] = metadata
+            proposal["write_outcome"] = str(metadata.get("write_outcome") or "applied")
+            if metadata.get("checks_warned"):
+                proposal["checks_warned"] = list(metadata.get("checks_warned") or [])
+            elif decision.soft_issues:
+                proposal["checks_warned"] = ["craft_engine"]
+            warnings = metadata.get("craft_warnings")
+            if warnings:
+                proposal["craft_warnings"] = warnings
+            elif decision.soft_issues:
+                proposal["craft_warnings"] = [_craft_issue_payload(issue) for issue in decision.soft_issues]
+            if metadata.get("pre_existing_environment_issues"):
+                proposal["pre_existing_environment_issues"] = metadata.get("pre_existing_environment_issues")
             return None
-            
-        if isinstance(result, CompilerBounce):
-            _log.info("[craft:bounce] %s bounced (attempt %d/%d)", rel_path, result.attempt_number, result.max_attempts)
-            hard_issues = [
-                issue for issue in result.issues
-                if str(getattr(getattr(issue, "severity", ""), "value", getattr(issue, "severity", ""))) == "hard"
-            ]
-            return ToolExecResult(
-                ok=True,
-                payload={
-                    "ok": True,
-                    "applied": False,
-                    "write_outcome": str(result.metadata.get("write_outcome") or "not_applied_craft_rejected"),
-                    "failure_class": str(result.metadata.get("failure_class") or "compiler_rejected"),
-                    "syntax_valid": bool(result.metadata.get("syntax_valid", True)),
-                    "quality_bounce": True,
+
+        _log.info("[craft:block] %s blocked", rel_path)
+        issues = list(decision.hard_issues or decision.issues)
+        failure_class = str(metadata.get("failure_class") or "craft_blocked")
+        if failure_class not in {"craft_blocked", "craft_rejected", "syntax_invalid"}:
+            failure_class = "craft_rejected"
+        ok = False
+        return ToolExecResult(
+            ok=ok,
+            payload=_mark_not_applied(
+                {
+                    "ok": ok,
+                    "error": _craft_block_error(issues),
                     "path": rel_path,
-                    "repair_instructions": result.repair_instructions,
+                    "rel_path": rel_path,
+                    "failure_class": failure_class,
+                    "syntax_valid": not any(getattr(issue, "code", "") == "syntax-error" for issue in issues),
                     "is_new_file": is_new_file,
-                    "craft_issues": [_craft_issue_payload(issue) for issue in hard_issues],
-                    "suggested_next_action": "Repair the proposed patch and retry this file.",
+                    "craft_issues": [_craft_issue_payload(issue) for issue in issues],
+                    "craft_metadata": metadata,
                 },
+                failure_class,
             )
-            
-        if isinstance(result, CompilerReject):
-            _log.info("[craft:reject] %s rejected after %d attempts", rel_path, result.total_attempts)
-            return ToolExecResult(
-                ok=False,
-                payload={
-                    "ok": False,
-                    "error": result.reason,
-                    "path": rel_path,
-                    "failure_class": "compiler_rejected",
-                    "write_outcome": str(result.metadata.get("write_outcome") or "not_applied_craft_rejected"),
-                    "applied": False,
-                    "syntax_valid": bool(result.metadata.get("syntax_valid", True)),
-                    "pre_existing_environment_issues": result.metadata.get("pre_existing_environment_issues", []),
-                    "introduced_environment_issues": result.metadata.get("introduced_environment_issues", []),
-                    "reject": True,
-                    "is_new_file": is_new_file,
-                    "craft_issues": [_craft_issue_payload(issue) for issue in result.issues],
-                    "craft_metadata": dict(result.metadata),
-                },
-            )
-            
-        return None
+        )
     except Exception:
-        _log.exception("CompilerService failed for %s", rel_path)
+        _log.exception("CraftEngine failed for %s", rel_path)
         return None
+
+
+def _craft_block_error(issues: list) -> str:
+    if not issues:
+        return "Craft blocked the proposed code before approval."
+    first = issues[0]
+    line = getattr(first, "line", None)
+    code = getattr(first, "code", "craft")
+    message = getattr(first, "message", "Craft blocked the proposed code before approval.")
+    prefix = f"Line {line}: " if line else ""
+    return f"{prefix}{code}: {message}"
 
 
 def _craft_issue_payload(issue) -> dict:
@@ -458,7 +455,7 @@ def _craft_issue_payload(issue) -> dict:
 def _write_outcome_for_failure(failure_class: str) -> str:
     if failure_class == "approval_rejected":
         return "not_applied_user_rejected"
-    if failure_class in {"compiler_rejected", "introduced_environment_issue", "syntax_invalid"}:
+    if failure_class in {"craft_blocked", "craft_rejected", "introduced_environment_issue", "syntax_invalid"}:
         return "not_applied_craft_rejected"
     if failure_class == "pre_existing_environment_issue":
         return "not_applied_pre_existing_environment_blocked"
@@ -885,8 +882,6 @@ class WriteHandlersMixin:
         backup_path = _reg.backup_existing(self._root, target)
         target.unlink()
 
-        if compiler_service is not None:
-            compiler_service.invalidate_workspace_index(self._root)
         rel_backup = (
             safe_relative_to(backup_path, self._root).as_posix() if backup_path is not None else None
         )
@@ -1005,7 +1000,7 @@ class WriteHandlersMixin:
             if syntax_error is not None:
                 return ToolExecResult(ok=False, payload=syntax_error)
 
-            craft_error = _run_compiler_pipeline(proposal, "write_file", contract=self.get_contract(), workspace_root=self._root)
+            craft_error = _run_craft_gate(proposal, "write_file", contract=self.get_contract(), workspace_root=self._root)
             if craft_error is not None:
                 return craft_error
 
@@ -1048,7 +1043,7 @@ class WriteHandlersMixin:
             gate_error = _maybe_humanize_proposal(proposal)
             if gate_error is not None:
                 return gate_error
-            craft_error = _run_compiler_pipeline(proposal, "apply_edit_transaction", contract=self.get_contract(), workspace_root=self._root)
+            craft_error = _run_craft_gate(proposal, "apply_edit_transaction", contract=self.get_contract(), workspace_root=self._root)
             if craft_error is not None:
                 return craft_error
 
@@ -1077,7 +1072,7 @@ class WriteHandlersMixin:
             # Humanizer: observe-only for existing file edits
             _maybe_observe_humanizer(proposal)
             
-            craft_error = _run_compiler_pipeline(proposal, "edit_file", contract=self.get_contract(), workspace_root=self._root)
+            craft_error = _run_craft_gate(proposal, "edit_file", contract=self.get_contract(), workspace_root=self._root)
             if craft_error is not None:
                 return craft_error
 
@@ -1122,7 +1117,7 @@ class WriteHandlersMixin:
                 return ToolExecResult(ok=False, payload=_mark_not_applied(proposal))
 
             _maybe_observe_humanizer(proposal)
-            craft_error = _run_compiler_pipeline(proposal, "edit_line_range", contract=self.get_contract(), workspace_root=self._root)
+            craft_error = _run_craft_gate(proposal, "edit_line_range", contract=self.get_contract(), workspace_root=self._root)
             if craft_error is not None:
                 return craft_error
 
@@ -1163,7 +1158,7 @@ class WriteHandlersMixin:
                 return ToolExecResult(ok=False, payload=_mark_not_applied(proposal))
 
             _maybe_observe_humanizer(proposal)
-            craft_error = _run_compiler_pipeline(proposal, "patch_file", contract=self.get_contract(), workspace_root=self._root)
+            craft_error = _run_craft_gate(proposal, "patch_file", contract=self.get_contract(), workspace_root=self._root)
             if craft_error is not None:
                 return craft_error
 
@@ -1194,7 +1189,7 @@ class WriteHandlersMixin:
             gate_error = _maybe_humanize_proposal(proposal)
             if gate_error is not None:
                 return gate_error
-            craft_error = _run_compiler_pipeline(proposal, "edit_symbol", contract=self.get_contract(), workspace_root=self._root)
+            craft_error = _run_craft_gate(proposal, "edit_symbol", contract=self.get_contract(), workspace_root=self._root)
             if craft_error is not None:
                 return craft_error
 
@@ -1244,8 +1239,6 @@ class WriteHandlersMixin:
         backup_path = _reg.backup_existing(self._root, target)
         _atomic_write_bytes(target, req.new_content.encode("utf-8"))
 
-        if compiler_service is not None:
-            compiler_service.invalidate_workspace_index(self._root)
         rel_backup = (
             safe_relative_to(backup_path, self._root).as_posix() if backup_path is not None else None
         )

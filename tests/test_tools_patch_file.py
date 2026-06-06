@@ -92,7 +92,7 @@ def test_patch_file_runs_craft_once_for_multiple_hunks(tmp_workspace):
     target.write_text("alpha = 1\nbeta = 2\n", encoding="utf-8")
     registry = ToolRegistry(tmp_workspace, mode="worker")
 
-    with patch("aura.conversation.tools._write_mixin._run_compiler_pipeline") as craft:
+    with patch("aura.conversation.tools._write_mixin._run_craft_gate") as craft:
         craft.return_value = None
         result = registry.execute(
             "patch_file",
@@ -112,24 +112,24 @@ def test_patch_file_runs_craft_once_for_multiple_hunks(tmp_workspace):
     assert craft.call_args.args[1] == "patch_file"
 
 
-def test_patch_file_compiler_bounce_is_quality_bounce_without_write(tmp_workspace):
+def test_patch_file_craft_block_is_not_applied_without_write(tmp_workspace):
     target = tmp_workspace / "a.py"
     original = "value = 1\n"
     target.write_text(original, encoding="utf-8")
     registry = ToolRegistry(tmp_workspace, mode="worker")
-    bounce = ToolExecResult(
-        ok=True,
+    blocked = ToolExecResult(
+        ok=False,
         payload={
-            "ok": True,
+            "ok": False,
             "applied": False,
-            "quality_bounce": True,
             "path": "a.py",
-            "tool_name": "patch_file",
-            "repair_instructions": "Define missing.",
+            "failure_class": "craft_blocked",
+            "write_outcome": "not_applied_craft_rejected",
+            "craft_issues": [{"code": "stub-body-pass"}],
         },
     )
 
-    with patch("aura.conversation.tools._write_mixin._run_compiler_pipeline", return_value=bounce):
+    with patch("aura.conversation.tools._write_mixin._run_craft_gate", return_value=blocked):
         result = registry.execute(
             "patch_file",
             {
@@ -140,8 +140,8 @@ def test_patch_file_compiler_bounce_is_quality_bounce_without_write(tmp_workspac
             False,
         )
 
-    assert result.ok is True
-    assert result.payload["quality_bounce"] is True
+    assert result.ok is False
+    assert result.payload["failure_class"] == "craft_blocked"
     assert result.payload["applied"] is False
     assert target.read_text(encoding="utf-8") == original
 

@@ -28,62 +28,57 @@ def test_worker_event_relay_tool_call_lifecycle_tracks_index_to_id() -> None:
     assert ends == [("dispatch-1", "worker-tool-1")]
 
 
-def test_quality_bounce_is_tracked_separately_from_failures_and_writes() -> None:
+def test_craft_block_is_tracked_as_not_applied_write() -> None:
     relay = WorkerEventRelay(approval_proxy=Mock(), worker_model="test-model")
     payload = (
-        '{"ok": true, "applied": false, "quality_bounce": true, '
-        '"path": "a.py", "tool_name": "edit_file", '
-        '"repair_instructions": "Define missing", '
-        '"craft_issues": [{"code": "undefined-name"}], '
-        '"suggested_next_action": "Repair the proposed patch and retry this file."}'
+        '{"ok": false, "applied": false, '
+        '"path": "a.py", "failure_class": "craft_blocked", '
+        '"write_outcome": "not_applied_craft_rejected", '
+        '"error": "Define missing", '
+        '"craft_issues": [{"code": "undefined-name"}]}'
     )
 
     relay.relay(
         "dispatch-1",
-        ToolResult(tool_call_id="worker-tool-1", name="edit_file", ok=True, result=payload),
+        ToolResult(tool_call_id="worker-tool-1", name="edit_file", ok=False, result=payload),
     )
 
-    assert relay.quality_bounces == [
+    assert relay.quality_bounces == []
+    assert relay.not_applied_writes == [
         {
+            "tool": "edit_file",
             "path": "a.py",
-            "tool_name": "edit_file",
-            "repair_instructions": "Define missing",
+            "applied": False,
+            "write_outcome": "not_applied_craft_rejected",
+            "failure_class": "craft_blocked",
+            "error": "Define missing",
+            "quality_bounce": False,
             "craft_issues": [{"code": "undefined-name"}],
-            "suggested_next_action": "Repair the proposed patch and retry this file.",
-            "payload": {
-                "ok": True,
-                "applied": False,
-                "quality_bounce": True,
-                "path": "a.py",
-                "tool_name": "edit_file",
-                "repair_instructions": "Define missing",
-                "craft_issues": [{"code": "undefined-name"}],
-                "suggested_next_action": "Repair the proposed patch and retry this file.",
-            },
+            "pre_existing_environment_issues": [],
+            "introduced_environment_issues": [],
         }
     ]
-    assert relay.failed_tool_results == []
     assert relay.write_results == []
     assert relay.touched_files == set()
 
 
-def test_patch_file_quality_bounce_is_not_failed_or_touched() -> None:
+def test_patch_file_craft_block_is_not_touched() -> None:
     relay = WorkerEventRelay(approval_proxy=Mock(), worker_model="test-model")
     payload = (
-        '{"ok": true, "applied": false, "quality_bounce": true, '
-        '"path": "a.py", "tool_name": "patch_file", '
-        '"repair_instructions": "Repair patch", '
-        '"craft_issues": [], '
-        '"suggested_next_action": "Repair the proposed patch and retry this file."}'
+        '{"ok": false, "applied": false, '
+        '"path": "a.py", "failure_class": "craft_blocked", '
+        '"write_outcome": "not_applied_craft_rejected", '
+        '"error": "Repair patch", "craft_issues": []}'
     )
 
     relay.relay(
         "dispatch-1",
-        ToolResult(tool_call_id="worker-tool-1", name="patch_file", ok=True, result=payload),
+        ToolResult(tool_call_id="worker-tool-1", name="patch_file", ok=False, result=payload),
     )
 
-    assert relay.quality_bounces[0]["tool_name"] == "patch_file"
-    assert relay.failed_tool_results == []
+    assert relay.quality_bounces == []
+    assert relay.not_applied_writes[0]["tool"] == "patch_file"
+    assert relay.not_applied_writes[0]["failure_class"] == "craft_blocked"
     assert relay.write_results == []
     assert relay.touched_files == set()
 

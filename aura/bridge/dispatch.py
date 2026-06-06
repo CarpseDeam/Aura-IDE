@@ -863,7 +863,7 @@ def _compute_outcome_status(
 
     if "approval_rejected" in failure_classes:
         return S.approval_rejected.value
-    if "compiler_rejected" in failure_classes or reject_flags:
+    if any(fc in {"craft_blocked", "craft_rejected"} for fc in failure_classes) or reject_flags:
         return S.craft_rejected.value
     if (
         "patch_quality_unresolved" in failure_classes

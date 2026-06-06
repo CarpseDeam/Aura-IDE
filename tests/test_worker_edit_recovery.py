@@ -423,22 +423,21 @@ def test_py_compile_failure_blocks_unrelated_tool_until_syntax_repair(tmp_path):
     assert "pass py_compile before any unrelated tool call" in payload["error"]
 
 
-def test_quality_bounce_adds_repair_guidance_without_blocking_tools(tmp_path):
+def test_craft_block_is_not_repaired_by_manager(tmp_path):
     history = History()
     tools = MagicMock(spec=ToolRegistry)
     tools.tool_defs.return_value = []
     type(tools).mode = PropertyMock(return_value="worker")
     type(tools).workspace_root = PropertyMock(return_value=tmp_path)
-    tools.execute.side_effect = [
-        ToolExecResult(
-        ok=True,
+    tools.execute.return_value = ToolExecResult(
+        ok=False,
         payload={
-            "ok": True,
+            "ok": False,
             "applied": False,
-            "quality_bounce": True,
             "path": "a.py",
-            "tool_name": "edit_file",
-            "repair_instructions": "Line 2: [undefined-name] Name 'missing' is used but never defined.",
+            "failure_class": "craft_blocked",
+            "write_outcome": "not_applied_craft_rejected",
+            "error": "Line 2: undefined-name: Name 'missing' is used but never defined.",
             "craft_issues": [
                 {
                     "line": 2,
@@ -448,20 +447,14 @@ def test_quality_bounce_adds_repair_guidance_without_blocking_tools(tmp_path):
                     "suggestion": "Define or import the name before using it.",
                 }
             ],
-            "suggested_next_action": "Repair the proposed patch and retry this file.",
         },
-    ),
-        ToolExecResult(ok=True, payload={"ok": True, "path": "a.py", "content": "value = 1\n"}),
-        ToolExecResult(ok=True, payload={"ok": True, "path": "a.py", "applied": "write_file", "is_new_file": False}),
-    ]
+    )
     manager = ConversationManager(history, tools)
     events = []
     args = {"path": "a.py", "old_str": "value = 1", "new_str": "value = missing"}
     hook = MagicMock(
         side_effect=[
             iter([_done(tool_calls=[_tool_call("e1", "edit_file", args)])]),
-            iter([_done(tool_calls=[_tool_call("r1", "read_file", {"path": "a.py"})])]),
-            iter([_done(tool_calls=[_tool_call("w1", "write_file", {"path": "a.py", "content": "value = 2\n"})])]),
             iter([_done("Done.")]),
         ]
     )
@@ -481,45 +474,37 @@ def test_quality_bounce_adds_repair_guidance_without_blocking_tools(tmp_path):
         hooks.unregister("generate_worker_code")
 
     edit_results = [ev for ev in events if isinstance(ev, ToolResult) and ev.name == "edit_file"]
-    read_results = [ev for ev in events if isinstance(ev, ToolResult) and ev.name == "read_file"]
-    assert tools.execute.call_count == 3
+    assert tools.execute.call_count == 1
     assert len(edit_results) == 1
-    bounced = json.loads(edit_results[-1].result)
-    assert bounced["quality_bounce"] is True
-    assert bounced["applied"] is False
-    assert read_results
+    blocked = json.loads(edit_results[-1].result)
+    assert blocked["failure_class"] == "craft_blocked"
+    assert blocked["applied"] is False
     assert any(
-        msg.get("role") == "user"
-        and "Craft reviewed the proposed patch and returned repair notes" in str(msg.get("content"))
-        for msg in history.messages
-    )
-    assert not any(
-        isinstance(ev, ToolResult)
-        and json.loads(ev.result).get("failure_class") == "compiler_rejected"
+        isinstance(ev, ToolResult) and json.loads(ev.result).get("failure_class") == "craft_blocked"
         for ev in events
         if isinstance(ev, ToolResult) and ev.result.startswith("{")
     )
+    assert not any("Craft reviewed the proposed patch" in str(msg.get("content")) for msg in history.messages)
 
 
-def test_compiler_bounce_failed_repair_finishes_with_single_reason(tmp_path):
+def test_repeated_craft_block_does_not_emit_repair_state(tmp_path):
     history = History()
     tools = MagicMock(spec=ToolRegistry)
     tools.tool_defs.return_value = []
     type(tools).mode = PropertyMock(return_value="worker")
     type(tools).workspace_root = PropertyMock(return_value=tmp_path)
-    bounce_payload = {
-        "ok": True,
+    blocked_payload = {
+        "ok": False,
         "applied": False,
-        "quality_bounce": True,
         "path": "a.py",
-        "tool_name": "edit_file",
-        "repair_instructions": "Line 2: [undefined-name] Name 'missing' is used but never defined.",
+        "failure_class": "craft_blocked",
+        "write_outcome": "not_applied_craft_rejected",
+        "error": "Line 2: undefined-name: Name 'missing' is used but never defined.",
         "craft_issues": [{"line": 2, "code": "undefined-name", "message": "Name 'missing' is used but never defined."}],
-        "suggested_next_action": "Repair the proposed patch and retry this file.",
     }
     tools.execute.side_effect = [
-        ToolExecResult(ok=True, payload=dict(bounce_payload)),
-        ToolExecResult(ok=True, payload=dict(bounce_payload)),
+        ToolExecResult(ok=False, payload=dict(blocked_payload)),
+        ToolExecResult(ok=False, payload=dict(blocked_payload)),
     ]
     manager = ConversationManager(history, tools)
     events = []
@@ -553,12 +538,11 @@ def test_compiler_bounce_failed_repair_finishes_with_single_reason(tmp_path):
         hooks.unregister("generate_worker_code")
 
     assert tools.execute.call_count == 2
-    final_payload = json.loads(history.messages[-1]["content"])
-    assert final_payload == {
-        "ok": False,
-        "failure_class": "patch_quality_unresolved",
-        "error": "Patch quality needs repair: Line 2: [undefined-name] Name 'missing' is used but never defined.",
-    }
+    forbidden = ("patch_quality_unresolved", "compiler_rejected", "quality_bounce")
+    assert not any(
+        any(term in str(message.get("content")) for term in forbidden)
+        for message in history.messages
+    )
 
 
 def test_worker_cannot_finish_after_python_write_until_py_compile(tmp_path):
@@ -1133,13 +1117,13 @@ def test_failed_write_summary_uses_exact_reason_not_generic():
     result = {
         "name": "write_file",
         "path": "a.py",
-        "error": "compiler rejected generated Python",
-        "failure_class": "compiler_rejected",
+        "error": "Craft blocked generated Python",
+        "failure_class": "craft_blocked",
     }
 
     summary = _format_worker_write_failure(result)
 
-    assert "compiler rejected generated Python" in summary
+    assert "Craft blocked generated Python" in summary
     assert "reported failure" not in summary
     assert not _is_recoverable_worker_write_failure(result)
     assert _is_recoverable_worker_write_failure(
