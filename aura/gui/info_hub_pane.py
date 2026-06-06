@@ -141,7 +141,7 @@ class InfoHubPane(QWidget):
                 WorkerOutcomeStatus.needs_followup.value: "⚠️ Worker needs follow-up.",
                 WorkerOutcomeStatus.validation_failed.value: "❌ Worker validation failed.",
                 WorkerOutcomeStatus.edit_mechanics_blocked.value: "⚠️ Worker edit mechanics blocked.",
-                WorkerOutcomeStatus.craft_bounced.value: "⚠️ Worker patch quality needs repair.",
+                WorkerOutcomeStatus.craft_blocked.value: "❌ Worker craft blocked.",
                 WorkerOutcomeStatus.craft_rejected.value: "❌ Worker craft rejected.",
                 WorkerOutcomeStatus.scope_mismatch.value: "⚠️ Worker scope mismatch.",
                 WorkerOutcomeStatus.approval_rejected.value: "❌ Worker approval rejected.",

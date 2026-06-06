@@ -95,7 +95,7 @@ class WorkerSummaryCard(QFrame):
                 WorkerOutcomeStatus.needs_followup.value: ("Needs follow-up", WARN),
                 WorkerOutcomeStatus.validation_failed.value: ("Validation failed", DANGER),
                 WorkerOutcomeStatus.edit_mechanics_blocked.value: ("Edit mechanics blocked", WARN),
-                WorkerOutcomeStatus.craft_bounced.value: ("Patch quality needs repair", WARN),
+                WorkerOutcomeStatus.craft_blocked.value: ("Craft blocked", DANGER),
                 WorkerOutcomeStatus.craft_rejected.value: ("Craft rejected", DANGER),
                 WorkerOutcomeStatus.scope_mismatch.value: ("Scope mismatch", WARN),
                 WorkerOutcomeStatus.approval_rejected.value: ("Approval rejected", DANGER),
@@ -104,8 +104,8 @@ class WorkerSummaryCard(QFrame):
             }
             return mapping.get(status, ("Unknown", "#6b7280"))
         # Fallback to legacy inference
-        if "Patch quality needs repair" in summary:
-            return "Patch quality needs repair", WARN
+        if "Craft blocked" in summary:
+            return "Craft blocked", DANGER
         if "Waiting for approval" in summary:
             return "Waiting for approval", WARN
         if "Repairing patch" in summary:
@@ -163,11 +163,6 @@ class WorkerSummaryCard(QFrame):
                 continue
             if "Exceeded max tool rounds" in line:
                 continue
-            if "quality bounce" in line.lower():
-                continue
-            if "compiler rejected" in line.lower():
-                continue
-
             out.append(line)
 
         result = "\n".join(out).strip()

@@ -64,7 +64,6 @@ class WorkerEventRelay(QObject):
         self.phase_boundary_info: dict[str, Any] | None = None
         self.tool_results: list[dict] = []
         self.failed_tool_results: list[dict] = []
-        self.quality_bounces: list[dict[str, Any]] = []
         self.terminal_results: list[dict] = []
         self.validation_results: list[dict] = []
         # Execution ledger
@@ -155,35 +154,6 @@ class WorkerEventRelay(QObject):
                 ev.name in WRITE_TOOLS
                 and isinstance(parsed, dict)
                 and parsed.get("ok")
-                and parsed.get("quality_bounce") is True
-            ):
-                bounce_record = {
-                    "path": parsed.get("path"),
-                    "tool_name": parsed.get("tool_name") or ev.name,
-                    "repair_instructions": parsed.get("repair_instructions", ""),
-                    "craft_issues": parsed.get("craft_issues", []),
-                    "suggested_next_action": parsed.get("suggested_next_action", ""),
-                    "payload": parsed,
-                }
-                self.quality_bounces.append(bounce_record)
-                self.not_applied_writes.append(
-                    {
-                        "tool": ev.name,
-                        "path": parsed.get("path") or parsed.get("rel_path"),
-                        "applied": False,
-                        "write_outcome": parsed.get("write_outcome") or "not_applied_craft_rejected",
-                        "failure_class": parsed.get("failure_class") or "craft_blocked",
-                        "error": parsed.get("repair_instructions", ""),
-                        "quality_bounce": True,
-                        "craft_issues": parsed.get("craft_issues", []),
-                        "pre_existing_environment_issues": parsed.get("pre_existing_environment_issues", []),
-                        "introduced_environment_issues": parsed.get("introduced_environment_issues", []),
-                    }
-                )
-            elif (
-                ev.name in WRITE_TOOLS
-                and isinstance(parsed, dict)
-                and parsed.get("ok")
                 and parsed.get("applied") is True
             ):
                 write_record = {
@@ -223,7 +193,6 @@ class WorkerEventRelay(QObject):
                         "write_outcome": parsed.get("write_outcome") or "not_applied_edit_mechanics_blocked",
                         "failure_class": parsed.get("failure_class", ""),
                         "error": parsed.get("error", ""),
-                        "quality_bounce": bool(parsed.get("quality_bounce")),
                         "craft_issues": parsed.get("craft_issues", []),
                         "pre_existing_environment_issues": parsed.get("pre_existing_environment_issues", []),
                         "introduced_environment_issues": parsed.get("introduced_environment_issues", []),
@@ -306,7 +275,6 @@ class WorkerEventRelay(QObject):
         self.phase_boundary_info = None
         self.tool_results.clear()
         self.failed_tool_results.clear()
-        self.quality_bounces.clear()
         self.terminal_results.clear()
         self.validation_results.clear()
         self.read_files.clear()
@@ -343,13 +311,9 @@ class WorkerEventRelay(QObject):
             "class_name",
             "failure_class",
             "internal_recovery_steer",
-            "bounce",
             "reject",
             "craft_issues",
-            "quality_bounce",
-            "repair_instructions",
             "tool_name",
-            "patch_quality_unresolved",
             "applied",
             "deleted",
             "is_new_file",

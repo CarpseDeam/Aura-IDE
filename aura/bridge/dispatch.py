@@ -428,7 +428,6 @@ class _DispatchProxy(QObject):
         ]
         failed_validation = _unrecovered_validation_failures(validation_results)
         validation_ran = bool(validation_results)
-        quality_bounces = list(getattr(relay, "quality_bounces", []))
         not_applied_writes = list(getattr(relay, "not_applied_writes", []))
         unrecovered_not_applied_writes = _unrecovered_not_applied_writes(relay.tool_results)
 
@@ -445,19 +444,6 @@ class _DispatchProxy(QObject):
             result_errors.insert(0, "Harness error due to an internal Worker exception.")
 
         structured_failure = _parse_structured_worker_failure(final_report)
-        if (
-            diagnostic_environment_caveats
-            and structured_failure.get("failure_class") == "patch_quality_unresolved"
-            and not relay.write_results
-            and not getattr(relay, "quality_bounces", [])
-            and not getattr(relay, "not_applied_writes", [])
-        ):
-            structured_failure = {}
-        patch_quality_unresolved = (
-            structured_failure
-            if structured_failure.get("failure_class") == "patch_quality_unresolved"
-            else {}
-        )
         if structured_failure:
             result_errors.append(_format_structured_worker_failure(structured_failure))
 
@@ -563,7 +549,7 @@ class _DispatchProxy(QObject):
             or "inspect" in req.goal.lower()[:100]
             or "diagnostic" in req.goal.lower()[:100]
         )
-        if is_implementation and not relay.touched_files and not relay.failed_tool_results and not quality_bounces and not internal_error and not relay.api_errors:
+        if is_implementation and not relay.touched_files and not relay.failed_tool_results and not internal_error and not relay.api_errors:
             result_caveats.append("Worker made no changes, reported no blocker, and ran no meaningful validation.")
 
         # Severity-based classification
@@ -582,12 +568,11 @@ class _DispatchProxy(QObject):
                 and not relay.write_results
             )
         )
-        has_quality_bounce_blocker = bool(quality_bounces) and not relay.write_results
         has_source_inspection_blocker = bool(source_inspection_blockers)
         has_terminal_policy_blocker = bool(terminal_policy_blockers)
         has_environment_setup_blocker = bool(environment_setup_blockers)
         has_diagnostic_environment_blocker = bool(diagnostic_environment_caveats) and not relay.write_results
-        has_no_work = not relay.touched_files and not relay.failed_tool_results and not quality_bounces and not internal_error and not relay.api_errors
+        has_no_work = not relay.touched_files and not relay.failed_tool_results and not internal_error and not relay.api_errors
         has_unverified_acceptance = acceptance_unverified or validation_not_run
 
         # Is this a broad/risky/multi-file task that should have used TODO?
@@ -604,10 +589,6 @@ class _DispatchProxy(QObject):
                 or has_terminal_policy_blocker
                 or has_environment_setup_blocker
             ) and not has_internal_failure
-        elif has_quality_bounce_blocker:
-            ok = False
-            needs_followup = True
-            recoverable = True
         elif has_recoverable_edit_blocker:
             ok = False
             needs_followup = True
@@ -649,19 +630,6 @@ class _DispatchProxy(QObject):
         if has_diagnostic_environment_blocker and not summary_continuation.get("status"):
             summary_continuation["status"] = "needs_followup"
             summary_continuation["reason"] = diagnostic_environment_caveats[0]
-        if patch_quality_unresolved:
-            summary_continuation["status"] = "patch_quality_unresolved"
-            summary_continuation["reason"] = str(
-                patch_quality_unresolved.get("error") or "Patch quality needs repair."
-            )
-        elif has_quality_bounce_blocker:
-            bounce = quality_bounces[0]
-            summary_continuation["status"] = "patch_quality_unresolved"
-            summary_continuation["reason"] = str(
-                bounce.get("repair_instructions")
-                or bounce.get("suggested_next_action")
-                or "Patch quality needs repair."
-            )
 
         status = _compute_outcome_status(
             ok=ok,
@@ -670,7 +638,6 @@ class _DispatchProxy(QObject):
             has_internal_failure=has_internal_failure,
             has_validation_failure=has_validation_failure,
             has_recoverable_edit_blocker=has_recoverable_edit_blocker,
-            has_quality_bounce_blocker=has_quality_bounce_blocker,
             has_source_inspection_blocker=has_source_inspection_blocker,
             has_environment_setup_blocker=has_environment_setup_blocker or has_diagnostic_environment_blocker,
             has_no_work=has_no_work,
@@ -709,8 +676,6 @@ class _DispatchProxy(QObject):
             "source_inspection_blockers": source_inspection_blockers,
             "terminal_policy_blockers": terminal_policy_blockers,
             "environment_setup_blockers": environment_setup_blockers,
-            "quality_bounces": quality_bounces,
-            "patch_quality_unresolved": patch_quality_unresolved,
             "terminal_results": getattr(relay, "terminal_results", []),
             "validation_results": validation_results,
             "errors": result_errors,
@@ -830,7 +795,6 @@ def _compute_outcome_status(
     has_internal_failure: bool,
     has_validation_failure: bool,
     has_recoverable_edit_blocker: bool,
-    has_quality_bounce_blocker: bool,
     has_source_inspection_blocker: bool,
     has_no_work: bool,
     is_implementation: bool,
@@ -859,18 +823,13 @@ def _compute_outcome_status(
         for item in [structured_failure, *write_failures]
         if isinstance(item, dict)
     )
-    structured_status = str(continuation.get("status") or "")
-
     if "approval_rejected" in failure_classes:
         return S.approval_rejected.value
-    if any(fc in {"craft_blocked", "craft_rejected"} for fc in failure_classes) or reject_flags:
+    if "craft_blocked" in failure_classes:
+        return S.craft_blocked.value
+    if "craft_rejected" in failure_classes or reject_flags:
         return S.craft_rejected.value
-    if (
-        "patch_quality_unresolved" in failure_classes
-        or structured_status == "patch_quality_unresolved"
-        or has_quality_bounce_blocker
-    ):
-        return S.craft_bounced.value
+    structured_status = str(continuation.get("status") or "")
     if has_recoverable_edit_blocker or (
         not has_applied_writes
         and any(
@@ -1307,9 +1266,7 @@ def _build_worker_summary(
 
     # Derive status if not provided (backward compat for callers without status)
     if not status:
-        if continuation.get("status") == "patch_quality_unresolved":
-            status = "craft_bounced"
-        elif errors:
+        if errors:
             if _is_internal_error_summary(errors[0]):
                 status = "harness_error"
             elif errors[0].startswith("Validation command failed"):
@@ -1329,7 +1286,7 @@ def _build_worker_summary(
         "needs_followup": "⚠️  Worker needs follow-up",
         "validation_failed": "❌  Validation failed",
         "edit_mechanics_blocked": "⚠️  Edit mechanics blocked",
-        "craft_bounced": "⚠️  Patch quality needs repair",
+        "craft_blocked": "❌  Craft blocked",
         "craft_rejected": "❌  Craft rejected",
         "scope_mismatch": "⚠️  Scope mismatch",
         "approval_rejected": "❌  Approval rejected",
@@ -1342,7 +1299,7 @@ def _build_worker_summary(
         "needs_followup": "Re-dispatch with follow-up",
         "validation_failed": "Fix validation failure — see below",
         "edit_mechanics_blocked": "Re-dispatch — edit tool failure",
-        "craft_bounced": "Re-dispatch — patch repair needed",
+        "craft_blocked": "Review and re-specify",
         "craft_rejected": "Review and re-specify",
         "scope_mismatch": "Review and re-specify",
         "approval_rejected": "N/A — was not approved",
@@ -1684,7 +1641,7 @@ def _filter_scratch_validation_results(results: list[dict[str, Any]]) -> list[di
 def _diagnostic_environment_caveats(relay: Any) -> list[str]:
     dependencies: list[str] = []
     records: list[dict[str, Any]] = []
-    for attr in ("quality_bounces", "not_applied_writes", "failed_tool_results"):
+    for attr in ("not_applied_writes", "failed_tool_results"):
         value = getattr(relay, attr, [])
         if isinstance(value, list):
             records.extend(item for item in value if isinstance(item, dict))
@@ -1730,7 +1687,7 @@ def _collect_missing_dependencies(record: dict[str, Any], dependencies: list[str
             if dependency:
                 _append_unique(dependencies, dependency)
 
-    for key in ("error", "result_preview", "output", "output_preview", "repair_instructions"):
+    for key in ("error", "result_preview", "output", "output_preview"):
         dependency = _dependency_from_text(str(record.get(key) or ""))
         if dependency:
             _append_unique(dependencies, dependency)
@@ -1819,12 +1776,6 @@ def _filter_scratch_write_records(relay: Any, *, preserve_scratch: bool = False)
             item for item in relay.failed_tool_results
             if keep(item.get("path") if isinstance(item, dict) else "")
         ]
-    if hasattr(relay, "quality_bounces"):
-        relay.quality_bounces = [
-            item for item in relay.quality_bounces
-            if keep(item.get("path") if isinstance(item, dict) else "")
-        ]
-
 
 def _root_check_files(root: Path | None) -> set[Path]:
     if root is None:

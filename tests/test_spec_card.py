@@ -185,10 +185,10 @@ class TestDispatchExpired:
 
         spec_card.worker_finished(
             False,
-            "Patch quality needs repair.",
-            status=WorkerOutcomeStatus.craft_bounced.value,
+            "Craft blocked.",
+            status=WorkerOutcomeStatus.craft_blocked.value,
         )
-        assert spec_card._status_label.text() == "Patch quality needs repair"
+        assert spec_card._status_label.text() == "Craft blocked"
 
         spec_card.worker_finished(
             False,

@@ -35,8 +35,8 @@ class WorkerOutcomeStatus(str, enum.Enum):
     edit_mechanics_blocked = "edit_mechanics_blocked"
     """Worker could not apply edits due to mechanical tool failures."""
 
-    craft_bounced = "craft_bounced"
-    """Craft rejected the patch during compilation."""
+    craft_blocked = "craft_blocked"
+    """Craft blocked the proposal before approval."""
 
     craft_rejected = "craft_rejected"
     """Craft rejected the patch and it was not retried."""

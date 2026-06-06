@@ -97,8 +97,8 @@ def sample_py_file(tmp_workspace: Path) -> Path:
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(autouse=True)
-def disable_craft_compiler(monkeypatch):
-    """Disable AURA_CRAFT by default so dummy edits don't trigger compiler bounces."""
+def disable_craft_gate(monkeypatch):
+    """Disable AURA_CRAFT by default so dummy edits do not trigger Craft blocks."""
     monkeypatch.setenv("AURA_CRAFT", "0")
 
 @pytest.fixture

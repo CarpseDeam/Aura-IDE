@@ -43,7 +43,6 @@ def test_craft_block_is_tracked_as_not_applied_write() -> None:
         ToolResult(tool_call_id="worker-tool-1", name="edit_file", ok=False, result=payload),
     )
 
-    assert relay.quality_bounces == []
     assert relay.not_applied_writes == [
         {
             "tool": "edit_file",
@@ -52,7 +51,6 @@ def test_craft_block_is_tracked_as_not_applied_write() -> None:
             "write_outcome": "not_applied_craft_rejected",
             "failure_class": "craft_blocked",
             "error": "Define missing",
-            "quality_bounce": False,
             "craft_issues": [{"code": "undefined-name"}],
             "pre_existing_environment_issues": [],
             "introduced_environment_issues": [],
@@ -76,7 +74,6 @@ def test_patch_file_craft_block_is_not_touched() -> None:
         ToolResult(tool_call_id="worker-tool-1", name="patch_file", ok=False, result=payload),
     )
 
-    assert relay.quality_bounces == []
     assert relay.not_applied_writes[0]["tool"] == "patch_file"
     assert relay.not_applied_writes[0]["failure_class"] == "craft_blocked"
     assert relay.write_results == []

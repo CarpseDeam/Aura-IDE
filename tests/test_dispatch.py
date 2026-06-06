@@ -887,14 +887,6 @@ def test_scratch_diagnostic_missing_import_is_caveat_not_project_patch():
                 ],
             }
         ],
-        quality_bounces=[
-            {
-                "path": "_tmp_inspect_wear.py",
-                "craft_issues": [
-                    {"message": "Import source 'numpy' could not be resolved in workspace or stdlib."}
-                ],
-            }
-        ],
         terminal_results=[
             {
                 "command": "python _tmp_inspect_wear.py",
@@ -915,7 +907,6 @@ def test_scratch_diagnostic_missing_import_is_caveat_not_project_patch():
     assert relay.write_results == []
     assert relay.not_applied_writes == []
     assert relay.failed_tool_results == []
-    assert relay.quality_bounces == []
     assert relay.touched_files == set()
 
 
@@ -973,7 +964,6 @@ def _status_for(**overrides):
         "has_internal_failure": False,
         "has_validation_failure": False,
         "has_recoverable_edit_blocker": False,
-        "has_quality_bounce_blocker": False,
         "has_source_inspection_blocker": False,
         "has_no_work": False,
         "is_implementation": True,
@@ -990,19 +980,35 @@ def _status_for(**overrides):
     return _compute_outcome_status(**args)
 
 
-def test_compute_outcome_status_distinguishes_rejection_and_bounce_classes():
+def test_compute_outcome_status_distinguishes_craft_blocked_and_rejected():
     assert _status_for(
         structured_failure={"failure_class": "approval_rejected"}
     ) == WorkerOutcomeStatus.approval_rejected.value
     assert _status_for(
         write_failures=[{"failure_class": "craft_blocked"}]
-    ) == WorkerOutcomeStatus.craft_rejected.value
+    ) == WorkerOutcomeStatus.craft_blocked.value
     assert _status_for(
         write_failures=[{"failure_class": "craft_rejected"}]
     ) == WorkerOutcomeStatus.craft_rejected.value
     assert _status_for(
         write_failures=[{"reject": True}]
     ) == WorkerOutcomeStatus.craft_rejected.value
+
+
+def test_compute_outcome_status_maps_craft_not_applied_to_craft_status():
+    status = _status_for(
+        has_recoverable_edit_blocker=True,
+        write_failures=[
+            {
+                "path": "a.py",
+                "applied": False,
+                "write_outcome": "not_applied_craft_rejected",
+                "failure_class": "craft_blocked",
+            }
+        ],
+    )
+
+    assert status == WorkerOutcomeStatus.craft_blocked.value
 
 
 def test_compute_outcome_status_distinguishes_validation_mechanics_and_harness():

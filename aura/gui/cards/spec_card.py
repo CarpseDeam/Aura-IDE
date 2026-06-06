@@ -491,7 +491,7 @@ class SpecCard(QFrame):
                 WorkerOutcomeStatus.needs_followup.value: ("Needs follow-up", WARN),
                 WorkerOutcomeStatus.validation_failed.value: ("Validation failed", DANGER),
                 WorkerOutcomeStatus.edit_mechanics_blocked.value: ("Edit mechanics blocked", WARN),
-                WorkerOutcomeStatus.craft_bounced.value: ("Patch quality needs repair", WARN),
+                WorkerOutcomeStatus.craft_blocked.value: ("Craft blocked", DANGER),
                 WorkerOutcomeStatus.craft_rejected.value: ("Craft rejected", DANGER),
                 WorkerOutcomeStatus.scope_mismatch.value: ("Scope mismatch", WARN),
                 WorkerOutcomeStatus.approval_rejected.value: ("Approval rejected", DANGER),

@@ -78,14 +78,14 @@ def test_relative_imports_resolved(tmp_workspace: Path):
     (aura_dir / "utils.py").write_text("def my_util(): pass")
     (aura_dir / "__init__.py").write_text("from .utils import my_util")
     (craft_dir / "types.py").write_text("class ProposalCapsule: pass")
-    (craft_dir / "compiler.py").write_text("class CompilerService: pass")
+    (craft_dir / "engine.py").write_text("class CraftEngine: pass")
     (aura_dir / "paths.py").write_text("def safe_relative_to(): pass")
     (conversation_dir / "_write_mixin.py").write_text("class WriteMixin: pass")
 
     rc._build_workspace_index(tmp_workspace)
 
-    # 1. from .types import ProposalCapsule in aura/craft/compiler.py
-    cap1 = MockCapsule(proposed_code="from .types import ProposalCapsule\n", path=craft_dir / "compiler.py")
+    # 1. from .types import ProposalCapsule in aura/craft/engine.py
+    cap1 = MockCapsule(proposed_code="from .types import ProposalCapsule\n", path=craft_dir / "engine.py")
     issues1 = rc.check(cap1, workspace_root=tmp_workspace)
     assert not any(i.code == "broken-import" for i in issues1)
 
@@ -112,7 +112,7 @@ def test_relative_imports_missing_symbol(tmp_workspace: Path):
     (craft_dir / "types.py").write_text("class ProposalCapsule: pass")
     rc._build_workspace_index(tmp_workspace)
 
-    cap = MockCapsule(proposed_code="from .types import MissingSymbol\n", path=craft_dir / "compiler.py")
+    cap = MockCapsule(proposed_code="from .types import MissingSymbol\n", path=craft_dir / "engine.py")
     issues = rc.check(cap, workspace_root=tmp_workspace)
     assert any(i.code == "broken-import" and "MissingSymbol" in i.message for i in issues)
 
@@ -124,7 +124,7 @@ def test_relative_imports_missing_module(tmp_workspace: Path):
     craft_dir.mkdir(parents=True)
     rc._build_workspace_index(tmp_workspace)
 
-    cap = MockCapsule(proposed_code="from .missing_module import Something\n", path=craft_dir / "compiler.py")
+    cap = MockCapsule(proposed_code="from .missing_module import Something\n", path=craft_dir / "engine.py")
     issues = rc.check(cap, workspace_root=tmp_workspace)
     assert any(i.code == "broken-import" and "missing_module" in i.message for i in issues)
 

@@ -907,7 +907,7 @@ class ConversationManager:
         if not paths:
             return True, ""
         workspace_root = self._tools.workspace_root
-        compiler = str(preferred_python_for_compile(Path(workspace_root)))
+        python_exe = str(preferred_python_for_compile(Path(workspace_root)))
         outputs: list[str] = []
         all_ok = True
         for path in sorted(paths):
@@ -921,7 +921,7 @@ class ConversationManager:
                 continue
             try:
                 result = subprocess.run(
-                    [compiler, "-m", "py_compile", str(full_path)],
+                    [python_exe, "-m", "py_compile", str(full_path)],
                     capture_output=True,
                     text=True,
                     timeout=30,
@@ -960,8 +960,8 @@ class ConversationManager:
         ]
         if not product_paths:
             return
-        compiler = quote_command_arg(preferred_python_for_compile(Path(self._tools.workspace_root)))
-        command = compiler + " -m py_compile " + " ".join(product_paths)
+        python_exe = quote_command_arg(preferred_python_for_compile(Path(self._tools.workspace_root)))
+        command = python_exe + " -m py_compile " + " ".join(product_paths)
         payload = {
             "ok": ok,
             "command": command,
