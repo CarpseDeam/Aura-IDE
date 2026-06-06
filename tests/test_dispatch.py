@@ -289,9 +289,27 @@ def test_task_shape_infers_new_tool_or_app():
     )
 
     assert shape.task_kind == "new_tool_or_app"
+    assert "configure/create the thing" in shape.product_flow
+    assert "job/task" in shape.state_concepts
+    assert "partial run failure" in shape.failure_modes
+    assert shape.extension_seams
     assert "build the smallest shippable slice, not a demo" in shape.quality_pressure
-    assert "fake integrations" in shape.forbidden_moves
+    assert "no fake integrations" in shape.forbidden_moves
     assert "release_tracker" in shape.likely_entities
+
+
+def test_task_shape_old_payload_without_new_fields_loads_safely():
+    shape = TaskShape.from_dict(
+        {
+            "task_kind": "new_tool_or_app",
+            "core_flow": ["run the main action"],
+            "quality_pressure": ["build the smallest shippable slice, not a demo"],
+        }
+    )
+
+    assert shape.task_kind == "new_tool_or_app"
+    assert shape.product_flow == ["run the main action"]
+    assert shape.state_concepts == []
 
 
 def test_task_shape_infers_bugfix():
@@ -504,7 +522,7 @@ def test_worker_prompt_guides_search_validation_semantics():
     assert "pytest" not in prompt
 
 
-def test_worker_task_formatting_includes_task_shape_standard():
+def test_worker_task_formatting_bugfix_uses_compact_task_shape_contract():
     req = WorkerDispatchRequest(
         goal="Fix failing import behavior",
         files=["x.py"],
@@ -515,12 +533,16 @@ def test_worker_task_formatting_includes_task_shape_standard():
 
     prompt = _format_spec_as_user_message(req)
 
-    assert "Task shape\nbugfix" in prompt
-    assert "Implementation standard" in prompt
-    assert "Make the fix surgical and preserve compatibility." in prompt
+    assert "Task Shape Contract" in prompt
+    assert "Task shape: bugfix" in prompt
+    assert "- surgical fix" in prompt
+    assert "- preserve compatibility" in prompt
+    assert "- prove changed behavior" in prompt
+    assert "Implementation standard" not in prompt
+    assert "Core flow:" not in prompt
 
 
-def test_worker_task_formatting_new_tool_or_app_uses_shippable_standard():
+def test_worker_task_formatting_new_tool_or_app_uses_task_shape_contract():
     req = WorkerDispatchRequest(
         goal="Build a scout dashboard app",
         files=["scout_dashboard.py"],
@@ -530,9 +552,17 @@ def test_worker_task_formatting_new_tool_or_app_uses_shippable_standard():
 
     prompt = _format_spec_as_user_message(req)
 
-    assert "Task shape\nnew_tool_or_app" in prompt
-    assert "smallest shippable slice" in prompt
-    assert "Avoid fake integrations, placeholder bodies, demo/mock production scaffolding" in prompt
+    assert "Task Shape Contract" in prompt
+    assert "Task shape: new_tool_or_app" in prompt
+    assert "Core flow:" in prompt
+    assert "- configure/create the thing" in prompt
+    assert "State concepts:" in prompt
+    assert "- result/candidate" in prompt
+    assert "Quality traps:" in prompt
+    assert "- no fake integrations" in prompt
+    assert "Proof intent:" in prompt
+    assert "- prove the core flow runs or is directly exercised" in prompt
+    assert "Implementation standard" not in prompt
 
 
 def test_lone_rg_terminal_result_does_not_count_as_task_validation():

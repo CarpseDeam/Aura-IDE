@@ -168,6 +168,8 @@ class WorkerEventRelay(QObject):
                 }
                 if parsed.get("pre_existing_environment_issues"):
                     write_record["pre_existing_environment_issues"] = parsed.get("pre_existing_environment_issues")
+                if parsed.get("craft_metadata"):
+                    write_record["craft_metadata"] = parsed.get("craft_metadata")
                 if "start_line" in parsed:
                     write_record["start_line"] = parsed.get("start_line")
                 if "end_line" in parsed:
@@ -197,6 +199,8 @@ class WorkerEventRelay(QObject):
                         "pre_existing_environment_issues": parsed.get("pre_existing_environment_issues", []),
                         "introduced_environment_issues": parsed.get("introduced_environment_issues", []),
                     }
+                    if parsed.get("craft_metadata"):
+                        write_record["craft_metadata"] = parsed.get("craft_metadata")
                     for key in (
                         "operation_index",
                         "failed_operation",

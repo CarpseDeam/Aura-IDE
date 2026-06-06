@@ -339,7 +339,13 @@ def _compute_craft_line_ranges(proposal: dict) -> list[tuple[int, int]]:
 
 
 
-def _run_craft_gate(proposal: dict, tool_name: str, contract: ExplicitSpecContract | None = None, workspace_root=None) -> ToolExecResult | None:
+def _run_craft_gate(
+    proposal: dict,
+    tool_name: str,
+    contract: ExplicitSpecContract | None = None,
+    workspace_root=None,
+    task_shape=None,
+) -> ToolExecResult | None:
     if CraftEngine is None or ProposalCapsule is None:
         return None
         
@@ -356,6 +362,7 @@ def _run_craft_gate(proposal: dict, tool_name: str, contract: ExplicitSpecContra
         
     try:
         is_new_file = proposal.get("is_new_file", False)
+        task_shape_summary = _task_shape_summary(task_shape)
         ownership_context = OwnershipContext.AURA if (rel_path.startswith("aura/") and is_new_file) else OwnershipContext.FOREIGN
         capsule = ProposalCapsule(
             path=Path(rel_path),
@@ -367,6 +374,7 @@ def _run_craft_gate(proposal: dict, tool_name: str, contract: ExplicitSpecContra
             is_new_file=is_new_file,
             ownership_context=ownership_context,
             contract=contract,
+            task_shape=task_shape,
         )
         
         if contract is not None:
@@ -383,6 +391,8 @@ def _run_craft_gate(proposal: dict, tool_name: str, contract: ExplicitSpecContra
             return None
             
         metadata = dict(getattr(decision, "metadata", {}) or {})
+        if task_shape_summary:
+            metadata.setdefault("task_shape", task_shape_summary)
         if decision.approved:
             proposal["new_content"] = decision.cleaned_code
             if metadata:
@@ -427,6 +437,26 @@ def _run_craft_gate(proposal: dict, tool_name: str, contract: ExplicitSpecContra
     except Exception:
         _log.exception("CraftEngine failed for %s", rel_path)
         return None
+
+
+def _task_shape_summary(task_shape) -> dict:
+    if task_shape is None:
+        return {}
+    if hasattr(task_shape, "to_summary_dict"):
+        try:
+            summary = task_shape.to_summary_dict()
+            return summary if isinstance(summary, dict) else {}
+        except Exception:
+            return {}
+    task_kind = str(getattr(task_shape, "task_kind", "") or "")
+    if not task_kind:
+        return {}
+    return {
+        "task_kind": task_kind,
+        "product_flow": list(getattr(task_shape, "product_flow", []) or getattr(task_shape, "core_flow", []) or []),
+        "state_concepts": list(getattr(task_shape, "state_concepts", []) or []),
+        "craft_pressure": list(getattr(task_shape, "craft_pressure", []) or []),
+    }
 
 
 def _craft_block_error(issues: list) -> str:
@@ -1000,7 +1030,13 @@ class WriteHandlersMixin:
             if syntax_error is not None:
                 return ToolExecResult(ok=False, payload=syntax_error)
 
-            craft_error = _run_craft_gate(proposal, "write_file", contract=self.get_contract(), workspace_root=self._root)
+            craft_error = _run_craft_gate(
+                proposal,
+                "write_file",
+                contract=self.get_contract(),
+                workspace_root=self._root,
+                task_shape=self.get_task_shape(),
+            )
             if craft_error is not None:
                 return craft_error
 
@@ -1043,7 +1079,13 @@ class WriteHandlersMixin:
             gate_error = _maybe_humanize_proposal(proposal)
             if gate_error is not None:
                 return gate_error
-            craft_error = _run_craft_gate(proposal, "apply_edit_transaction", contract=self.get_contract(), workspace_root=self._root)
+            craft_error = _run_craft_gate(
+                proposal,
+                "apply_edit_transaction",
+                contract=self.get_contract(),
+                workspace_root=self._root,
+                task_shape=self.get_task_shape(),
+            )
             if craft_error is not None:
                 return craft_error
 
@@ -1072,7 +1114,13 @@ class WriteHandlersMixin:
             # Humanizer: observe-only for existing file edits
             _maybe_observe_humanizer(proposal)
             
-            craft_error = _run_craft_gate(proposal, "edit_file", contract=self.get_contract(), workspace_root=self._root)
+            craft_error = _run_craft_gate(
+                proposal,
+                "edit_file",
+                contract=self.get_contract(),
+                workspace_root=self._root,
+                task_shape=self.get_task_shape(),
+            )
             if craft_error is not None:
                 return craft_error
 
@@ -1117,7 +1165,13 @@ class WriteHandlersMixin:
                 return ToolExecResult(ok=False, payload=_mark_not_applied(proposal))
 
             _maybe_observe_humanizer(proposal)
-            craft_error = _run_craft_gate(proposal, "edit_line_range", contract=self.get_contract(), workspace_root=self._root)
+            craft_error = _run_craft_gate(
+                proposal,
+                "edit_line_range",
+                contract=self.get_contract(),
+                workspace_root=self._root,
+                task_shape=self.get_task_shape(),
+            )
             if craft_error is not None:
                 return craft_error
 
@@ -1158,7 +1212,13 @@ class WriteHandlersMixin:
                 return ToolExecResult(ok=False, payload=_mark_not_applied(proposal))
 
             _maybe_observe_humanizer(proposal)
-            craft_error = _run_craft_gate(proposal, "patch_file", contract=self.get_contract(), workspace_root=self._root)
+            craft_error = _run_craft_gate(
+                proposal,
+                "patch_file",
+                contract=self.get_contract(),
+                workspace_root=self._root,
+                task_shape=self.get_task_shape(),
+            )
             if craft_error is not None:
                 return craft_error
 
@@ -1189,7 +1249,13 @@ class WriteHandlersMixin:
             gate_error = _maybe_humanize_proposal(proposal)
             if gate_error is not None:
                 return gate_error
-            craft_error = _run_craft_gate(proposal, "edit_symbol", contract=self.get_contract(), workspace_root=self._root)
+            craft_error = _run_craft_gate(
+                proposal,
+                "edit_symbol",
+                contract=self.get_contract(),
+                workspace_root=self._root,
+                task_shape=self.get_task_shape(),
+            )
             if craft_error is not None:
                 return craft_error
 

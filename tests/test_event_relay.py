@@ -80,6 +80,39 @@ def test_patch_file_craft_block_is_not_touched() -> None:
     assert relay.touched_files == set()
 
 
+def test_craft_metadata_is_preserved_on_not_applied_write() -> None:
+    relay = WorkerEventRelay(approval_proxy=Mock(), worker_model="test-model")
+    payload = {
+        "ok": False,
+        "applied": False,
+        "path": "a.py",
+        "failure_class": "craft_blocked",
+        "write_outcome": "not_applied_craft_rejected",
+        "error": "Placeholder",
+        "craft_issues": [{"code": "task-shape-placeholder-body"}],
+        "craft_metadata": {
+            "task_shape": {
+                "task_kind": "new_tool_or_app",
+                "product_flow": ["run the main action"],
+                "state_concepts": ["job/task"],
+                "craft_pressure": ["block placeholder/demo/fake production code"],
+            }
+        },
+    }
+
+    relay.relay(
+        "dispatch-1",
+        ToolResult(
+            tool_call_id="worker-tool-1",
+            name="write_file",
+            ok=False,
+            result=json.dumps(payload),
+        ),
+    )
+
+    assert relay.not_applied_writes[0]["craft_metadata"]["task_shape"]["task_kind"] == "new_tool_or_app"
+
+
 def test_delete_file_success_is_tracked_as_applied_write() -> None:
     relay = WorkerEventRelay(approval_proxy=Mock(), worker_model="test-model")
     payload = {

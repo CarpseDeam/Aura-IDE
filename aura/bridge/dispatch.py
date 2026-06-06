@@ -39,7 +39,7 @@ from aura.conversation import (
     normalize_worker_task,
 )
 from aura.conversation.project_profile import detect_project_profile
-from aura.conversation.task_shape import implementation_standard_lines
+from aura.conversation.task_shape import task_shape_contract_lines
 from aura.conversation.tool_limits import WRITE_TOOLS
 from aura.conversation.persistence import WorkerDispatchRecord
 from aura.prompts import (
@@ -318,6 +318,8 @@ class _DispatchProxy(QObject):
         # Set the Planner contract on the worker's registry for contract gate checks
         if task_spec.contract is not None:
             worker_registry.set_contract(task_spec.contract)
+        if task_spec.task_shape is not None and hasattr(worker_registry, "set_task_shape"):
+            worker_registry.set_task_shape(task_spec.task_shape)
         worker_manager = ConversationManager(worker_history, worker_registry)
 
         self.workerStarted.emit(tool_call_id)
@@ -666,6 +668,11 @@ class _DispatchProxy(QObject):
             internal_error=internal_error,
         )
         modified_files = _applied_modified_files(relay.write_results)
+        task_shape_summary = (
+            task_spec.task_shape.to_summary_dict()
+            if task_spec.task_shape is not None
+            else {}
+        )
         extras = {
             "writes": relay.write_results,
             "not_applied_writes": not_applied_writes,
@@ -687,6 +694,7 @@ class _DispatchProxy(QObject):
             "recoverable": recoverable,
             "needs_followup": needs_followup,
             "phase_boundary": relay.phase_boundary_info or {},
+            "task_shape": task_shape_summary,
             "limit": (
                 relay.phase_boundary_info
                 if relay.phase_boundary_info and relay.phase_boundary_info.get("limit_reached")
@@ -883,14 +891,7 @@ def _format_spec_as_user_message(task: WorkerTaskSpec | WorkerDispatchRequest) -
         parts.append("")
 
     if task.task_shape is not None:
-        parts.extend([
-            "Task shape",
-            task.task_shape.task_kind,
-            "",
-            "Implementation standard",
-            *[f"- {line}" for line in implementation_standard_lines(task.task_shape)],
-            "",
-        ])
+        parts.extend([*task_shape_contract_lines(task.task_shape), ""])
 
     parts.extend([
         "Goal",

@@ -55,6 +55,11 @@ try:
 except ImportError:
     ExplicitSpecContract = None
 
+try:
+    from aura.conversation.task_shape import TaskShape
+except ImportError:
+    TaskShape = None
+
 # Tool handler dispatch table.
 # Maps tool name -> unbound method that accepts (self, args, approval_cb, reject_all).
 TOOL_HANDLERS: dict[str, Any] = {}
@@ -93,6 +98,7 @@ class ToolRegistry(
         self._dynamic_tools = DynamicToolRegistry(self._root)
         self._mcp_tools = MCPToolRegistry()
         self._contract: ExplicitSpecContract | None = None
+        self._task_shape: TaskShape | None = None
         self._executor = ToolExecutor(
             owner=self,
             dynamic_tools=self._dynamic_tools,
@@ -162,6 +168,14 @@ class ToolRegistry(
     def get_contract(self) -> ExplicitSpecContract | None:
         """Get the current Planner contract, if any."""
         return self._contract
+
+    def set_task_shape(self, task_shape: TaskShape | None) -> None:
+        """Set hidden task-shaping context for the current worker session."""
+        self._task_shape = task_shape
+
+    def get_task_shape(self) -> TaskShape | None:
+        """Get hidden task-shaping context for write/Craft gates."""
+        return getattr(self, "_task_shape", None)
 
     def _resolve_in_root(self, raw: str) -> Path:
         """Resolve a workspace-relative path; raise if it escapes the jail.

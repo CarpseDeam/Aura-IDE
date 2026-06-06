@@ -96,6 +96,120 @@ def _collect_name(node: ast.AST, generic_set: set[str], seen: set) -> None:
         _collect_name(node.value, generic_set, seen)
 
 
+def _task_kind(capsule: ProposalCapsule) -> str:
+    return str(getattr(getattr(capsule, "task_shape", None), "task_kind", "") or "")
+
+
+def _is_new_tool_task(capsule: ProposalCapsule) -> bool:
+    return _task_kind(capsule) == "new_tool_or_app"
+
+
+def _name_tokens(name: str) -> set[str]:
+    snake = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", str(name))
+    return {part.lower() for part in re.split(r"[^A-Za-z0-9]+|_", snake) if part}
+
+
+def _has_logging_or_raise(body: list[ast.stmt]) -> bool:
+    logging_attrs = {"debug", "info", "warning", "error", "exception", "critical"}
+    for stmt in body:
+        for sub in ast.walk(stmt):
+            if isinstance(sub, ast.Raise):
+                return True
+            if (
+                isinstance(sub, ast.Call)
+                and isinstance(sub.func, ast.Attribute)
+                and sub.func.attr in logging_attrs
+            ):
+                return True
+    return False
+
+
+def _returns_success_dict(value: ast.expr | None) -> bool:
+    if not isinstance(value, ast.Dict):
+        return False
+    for key, val in zip(value.keys, value.values):
+        if not isinstance(key, ast.Constant) or not isinstance(key.value, str):
+            continue
+        key_text = key.value.lower()
+        if key_text in {"ok", "success", "succeeded"} and isinstance(val, ast.Constant) and val.value is True:
+            return True
+        if key_text == "status" and isinstance(val, ast.Constant) and str(val.value).lower() in {"ok", "success", "passed"}:
+            return True
+    return False
+
+
+def _is_success_looking_return(value: ast.expr | None) -> bool:
+    if isinstance(value, ast.Constant) and value.value is True:
+        return True
+    return _returns_success_dict(value)
+
+
+def _is_empty_or_default_return(value: ast.expr | None) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, ast.Constant):
+        return value.value in (None, True, False, "", 0)
+    if isinstance(value, (ast.List, ast.Dict, ast.Set)) and not value.elts:
+        return True
+    if isinstance(value, ast.Tuple) and not value.elts:
+        return True
+    return _is_success_looking_return(value)
+
+
+def _function_body_after_docstring(node: ast.FunctionDef | ast.AsyncFunctionDef) -> list[ast.stmt]:
+    return _strip_docstring(list(node.body))
+
+
+def _class_body_after_docstring(node: ast.ClassDef) -> list[ast.stmt]:
+    return _strip_docstring(list(node.body))
+
+
+def _is_not_implemented_raise(stmt: ast.stmt) -> bool:
+    if not isinstance(stmt, ast.Raise):
+        return False
+    if isinstance(stmt.exc, ast.Name) and stmt.exc.id == "NotImplementedError":
+        return True
+    return (
+        isinstance(stmt.exc, ast.Call)
+        and isinstance(stmt.exc.func, ast.Name)
+        and stmt.exc.func.id == "NotImplementedError"
+    )
+
+
+def _is_stub_statement(stmt: ast.stmt) -> bool:
+    return (
+        isinstance(stmt, ast.Pass)
+        or (
+            isinstance(stmt, ast.Expr)
+            and isinstance(stmt.value, ast.Constant)
+            and stmt.value.value is Ellipsis
+        )
+        or _is_not_implemented_raise(stmt)
+    )
+
+
+def _is_stub_function(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    body = _function_body_after_docstring(node)
+    return len(body) == 1 and _is_stub_statement(body[0])
+
+
+def _is_trivial_default_function(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    body = _function_body_after_docstring(node)
+    return len(body) == 1 and isinstance(body[0], ast.Return) and _is_empty_or_default_return(body[0].value)
+
+
+def _dedupe_issues(issues: list[CraftIssue]) -> list[CraftIssue]:
+    seen: set[tuple[int, str, str]] = set()
+    deduped: list[CraftIssue] = []
+    for issue in issues:
+        key = (issue.line, issue.code, issue.message)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(issue)
+    return deduped
+
+
 class CraftEngine:
     def process_proposal(self, capsule: ProposalCapsule) -> CraftDecision:
         if capsule.language != "python" or not str(capsule.path).endswith(".py"):
@@ -153,7 +267,14 @@ class CraftEngine:
             ))
             return CraftDecision(approved=False, cleaned_code=cleaned_code, issues=issues)
             
+        source_lines = cleaned_code.splitlines()
         is_test_file = "/test" in str(capsule.path).replace("\\", "/") or "test" in capsule.path.stem.lower()
+        soft_issues: list[CraftIssue] = []
+
+        if _is_new_tool_task(capsule):
+            hard, soft = self._run_new_tool_task_checks(tree, capsule, source_lines, is_test_file)
+            issues.extend(hard)
+            soft_issues.extend(soft)
 
         for node in ast.walk(tree):
             if not capsule.is_new_file and capsule.changed_line_ranges:
@@ -251,8 +372,190 @@ class CraftEngine:
             authorship_issues = self._run_authorship_checks(capsule, capsule.ownership_context)
             if authorship_issues:
                 return CraftDecision(approved=False, cleaned_code=cleaned_code, issues=authorship_issues)
+
+        if soft_issues:
+            return CraftDecision(
+                approved=True,
+                cleaned_code=cleaned_code,
+                issues=soft_issues,
+                metadata={"checks_warned": ["task_shape"]},
+            )
             
         return CraftDecision(approved=True, cleaned_code=cleaned_code)
+
+    def _run_new_tool_task_checks(
+        self,
+        tree: ast.AST,
+        capsule: ProposalCapsule,
+        source_lines: list[str],
+        is_test_file: bool,
+    ) -> tuple[list[CraftIssue], list[CraftIssue]]:
+        hard: list[CraftIssue] = []
+        soft: list[CraftIssue] = []
+        hard.extend(self._check_new_tool_placeholder_comments(capsule, source_lines, is_test_file))
+
+        for node in ast.walk(tree):
+            if not capsule.is_new_file and capsule.changed_line_ranges:
+                if not node_in_ranges(node, capsule.changed_line_ranges):
+                    continue
+
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if _is_stub_function(node):
+                    hard.append(CraftIssue(
+                        line=node.lineno,
+                        column=node.col_offset,
+                        code="task-shape-placeholder-body",
+                        message=f"Function '{node.name}' is a placeholder implementation.",
+                        suggestion="Implement the production behavior or remove the placeholder.",
+                    ))
+                if not is_test_file and self._has_placeholder_name(node.name):
+                    hard.append(CraftIssue(
+                        line=node.lineno,
+                        column=node.col_offset,
+                        code="task-shape-placeholder-name",
+                        message=f"Function '{node.name}' uses fake/demo/mock placeholder naming in production code.",
+                        suggestion="Replace it with domain-shaped production code.",
+                    ))
+                if not is_test_file and self._is_fake_integration_stub(node):
+                    hard.append(CraftIssue(
+                        line=node.lineno,
+                        column=node.col_offset,
+                        code="task-shape-fake-integration-stub",
+                        message=f"Function '{node.name}' looks like an integration stub that returns default success or empty data.",
+                        suggestion="Implement the integration path honestly, or surface unavailable/empty states explicitly.",
+                    ))
+
+            elif isinstance(node, ast.ClassDef):
+                if not is_test_file and self._has_placeholder_name(node.name):
+                    hard.append(CraftIssue(
+                        line=node.lineno,
+                        column=node.col_offset,
+                        code="task-shape-placeholder-name",
+                        message=f"Class '{node.name}' uses fake/demo/mock placeholder naming in production code.",
+                        suggestion="Replace it with domain-shaped production code.",
+                    ))
+                if not is_test_file and self._is_empty_class(node):
+                    hard.append(CraftIssue(
+                        line=node.lineno,
+                        column=node.col_offset,
+                        code="task-shape-empty-class",
+                        message=f"Class '{node.name}' has no production responsibility.",
+                        suggestion="Remove the class or give it explicit state and behavior.",
+                    ))
+                if not is_test_file and self._is_fake_integration_class(node):
+                    hard.append(CraftIssue(
+                        line=node.lineno,
+                        column=node.col_offset,
+                        code="task-shape-fake-integration-stub",
+                        message=f"Class '{node.name}' looks like an integration stub that only returns defaults.",
+                        suggestion="Implement the integration path honestly, or surface unavailable/empty states explicitly.",
+                    ))
+                if not is_test_file and self._has_generic_scaffold_name(node.name):
+                    issue = CraftIssue(
+                        line=node.lineno,
+                        column=node.col_offset,
+                        code="task-shape-generic-scaffold-name",
+                        message=f"Class '{node.name}' uses generic scaffold naming.",
+                        suggestion="Use a domain-shaped name that describes the real responsibility.",
+                        severity=CraftIssueSeverity.SOFT,
+                    )
+                    if self._class_has_real_responsibility(node):
+                        soft.append(issue)
+                    else:
+                        issue.severity = CraftIssueSeverity.HARD
+                        issue.code = "task-shape-ceremonial-generic-class"
+                        issue.message = f"Class '{node.name}' is generic scaffold ceremony without real responsibility."
+                        hard.append(issue)
+
+            elif isinstance(node, ast.ExceptHandler):
+                if self._is_silent_success_or_default_handler(node):
+                    hard.append(CraftIssue(
+                        line=node.lineno,
+                        column=node.col_offset,
+                        code="task-shape-silent-default-success",
+                        message="Exception handler silently returns default data or success-looking output.",
+                        suggestion="Log, re-raise, or return an explicit failure/partial-failure state.",
+                    ))
+
+        return _dedupe_issues(hard), _dedupe_issues(soft)
+
+    def _check_new_tool_placeholder_comments(
+        self,
+        capsule: ProposalCapsule,
+        source_lines: list[str],
+        is_test_file: bool,
+    ) -> list[CraftIssue]:
+        if is_test_file:
+            return []
+        issues: list[CraftIssue] = []
+        for index, line_text in enumerate(source_lines, start=1):
+            if not capsule.is_new_file and capsule.changed_line_ranges:
+                if not line_in_ranges(index, capsule.changed_line_ranges):
+                    continue
+            stripped = line_text.strip()
+            if not stripped.startswith("#"):
+                continue
+            text = stripped[1:].strip().lower()
+            if not re.search(r"\b(?:todo|fixme)\b", text):
+                continue
+            issues.append(CraftIssue(
+                line=index,
+                column=0,
+                code="task-shape-placeholder-comment",
+                message="TODO/FIXME placeholder comment in production code.",
+                suggestion="Replace the placeholder with real behavior before approval.",
+            ))
+        return issues
+
+    def _has_placeholder_name(self, name: str) -> bool:
+        return bool(_name_tokens(name) & {"demo", "placeholder", "mock", "fake", "dummy"})
+
+    def _has_generic_scaffold_name(self, name: str) -> bool:
+        return bool(_name_tokens(name) & {"manager", "processor", "handler"})
+
+    def _is_fake_integration_stub(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+        if not (_name_tokens(node.name) & {"adapter", "integration", "client", "provider", "connector"}):
+            return False
+        return _is_trivial_default_function(node)
+
+    def _is_fake_integration_class(self, node: ast.ClassDef) -> bool:
+        if not (_name_tokens(node.name) & {"adapter", "integration", "client", "provider", "connector"}):
+            return False
+        methods = [item for item in node.body if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))]
+        public_methods = [method for method in methods if not method.name.startswith("_")]
+        if not public_methods:
+            return False
+        return all(_is_trivial_default_function(method) or _is_stub_function(method) for method in public_methods)
+
+    def _is_empty_class(self, node: ast.ClassDef) -> bool:
+        body = _class_body_after_docstring(node)
+        return not body or all(_is_stub_statement(stmt) for stmt in body)
+
+    def _class_has_real_responsibility(self, node: ast.ClassDef) -> bool:
+        body = _class_body_after_docstring(node)
+        if not body:
+            return False
+        for stmt in body:
+            if isinstance(stmt, (ast.AnnAssign, ast.Assign)):
+                return True
+            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if not _is_stub_function(stmt) and not _is_trivial_default_function(stmt):
+                    return True
+        return False
+
+    def _is_silent_success_or_default_handler(self, node: ast.ExceptHandler) -> bool:
+        if _has_logging_or_raise(node.body):
+            return False
+        for stmt in node.body:
+            if isinstance(stmt, ast.Return) and _is_empty_or_default_return(stmt.value):
+                return True
+            if (
+                isinstance(stmt, ast.Assign)
+                and isinstance(stmt.value, ast.Constant)
+                and stmt.value.value is True
+            ):
+                return True
+        return False
 
     def _run_authorship_checks(self, capsule: ProposalCapsule, ownership_context: OwnershipContext = OwnershipContext.AURA) -> list[CraftIssue]:
         """Run authorship checks. Some soft checks are gated behind OwnershipContext.AURA."""

@@ -94,6 +94,7 @@ class ProposalCapsule:
     ownership_context: OwnershipContext = OwnershipContext.AURA
     ast_tree: ast.Module | None = None
     contract: ExplicitSpecContract | None = None
+    task_shape: Any | None = None
 
 @dataclass
 class CraftIssue:
