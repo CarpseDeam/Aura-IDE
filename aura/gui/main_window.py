@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QThread, QTimer
+from PySide6.QtCore import QByteArray, Qt, QThread, QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QDialog,
@@ -109,8 +109,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self.setStatusBar(self._status_bar)
 
         # ----- splitter ----
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.setHandleWidth(3)
+        self._main_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._main_splitter.setHandleWidth(3)
 
         # Left pane: workspace label + change root + tree + model config.
         self._left_pane = LeftPane(self._workspace_root, parent=self)
@@ -122,7 +122,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._left_pane.planner_thinking_changed.connect(lambda: self._refresh_status_bar())
         self._left_pane.worker_model_changed.connect(self._on_sidebar_worker_model_changed)
         self._left_pane.worker_thinking_changed.connect(self._on_sidebar_worker_thinking_changed)
-        splitter.addWidget(self._left_pane)
+        self._main_splitter.addWidget(self._left_pane)
 
         # Middle pane: chat + input
         center = QWidget(self)
@@ -197,8 +197,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._set_sidebar_planner_worker_mode(self._settings.planner_worker_mode)
         center_layout.addWidget(self._input)
 
-        splitter.addWidget(center)
-        splitter.addWidget(self._playground_aura)
+        self._main_splitter.addWidget(center)
+        self._main_splitter.addWidget(self._playground_aura)
 
         # Sensible initial distribution: left is narrow, chat is comfortable,
         # and the workspace opens as the primary work surface.
@@ -206,17 +206,21 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         left_w = 220
         center_w = 520
         right_w = max(560, w - left_w - center_w)
-        splitter.setSizes([left_w, center_w, right_w])
+        self._main_splitter.setSizes([left_w, center_w, right_w])
+
+        # Override with saved splitter sizes if available.
+        if self._settings.main_splitter_sizes:
+            self._main_splitter.setSizes(self._settings.main_splitter_sizes)
 
         # Keep the sidebar stable and let the workspace receive most extra room.
-        splitter.setStretchFactor(0, 0)  # workspace tree: fixed
-        splitter.setStretchFactor(1, 1)  # chat: stable reading/planning column
-        splitter.setStretchFactor(2, 2)  # workspace: primary work surface
+        self._main_splitter.setStretchFactor(0, 0)  # workspace tree: fixed
+        self._main_splitter.setStretchFactor(1, 1)  # chat: stable reading/planning column
+        self._main_splitter.setStretchFactor(2, 2)  # workspace: primary work surface
 
-        self.setCentralWidget(splitter)
+        self.setCentralWidget(self._main_splitter)
 
         # Make the central widget and splitter transparent so the gradient shows through
-        splitter.setStyleSheet("background: transparent;")
+        self._main_splitter.setStyleSheet("background: transparent;")
         self.centralWidget().setStyleSheet("background: transparent;")
         self.centralWidget().setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
 
@@ -289,6 +293,29 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
         # Check for updates in the background.
         QTimer.singleShot(2000, self._check_for_updates)
+
+        # Restore saved window geometry/state after construction.
+        if self._settings.main_window_geometry:
+            QTimer.singleShot(0, self._restore_layout)
+
+    def _restore_layout(self) -> None:
+        if self._settings.main_window_geometry:
+            geo = QByteArray.fromBase64(self._settings.main_window_geometry.encode("ascii"))
+            self.restoreGeometry(geo)
+        if self._settings.main_window_state:
+            state = QByteArray.fromBase64(self._settings.main_window_state.encode("ascii"))
+            self.restoreState(state)
+
+    def closeEvent(self, event) -> None:
+        # Save window geometry/state.
+        geo = self.saveGeometry()
+        self._settings.main_window_geometry = bytes(geo.toBase64()).decode("ascii")
+        state = self.saveState()
+        self._settings.main_window_state = bytes(state.toBase64()).decode("ascii")
+        # Save splitter sizes.
+        self._settings.main_splitter_sizes = list(self._main_splitter.sizes())
+        save_settings(self._settings)
+        super().closeEvent(event)
 
     def _check_for_updates(self) -> None:
         """Run a background update check."""

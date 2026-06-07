@@ -6,18 +6,18 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
-from aura.paths import config_dir
-from aura.providers.registry import provider_registry
 from aura.models import (
+    DEFAULT_MODEL,
+    DEFAULT_PLANNER_MODEL,
+    DEFAULT_PLANNER_THINKING,
+    DEFAULT_THINKING,
+    DEFAULT_WORKER_MODEL,
+    DEFAULT_WORKER_THINKING,
     ProviderId,
     ThinkingMode,
-    DEFAULT_MODEL,
-    DEFAULT_THINKING,
-    DEFAULT_PLANNER_MODEL,
-    DEFAULT_WORKER_MODEL,
-    DEFAULT_PLANNER_THINKING,
-    DEFAULT_WORKER_THINKING,
 )
+from aura.paths import config_dir
+from aura.providers.registry import provider_registry
 
 DEFAULT_PROVIDER: ProviderId = "deepseek"
 DEFAULT_SANDBOX_MODE: str = "host"
@@ -83,6 +83,9 @@ class AppSettings:
     max_tool_rounds: int = 50
     tavily_api_key: str = ""
     terminal_window_geometry: str = ""
+    main_window_geometry: str = ""
+    main_window_state: str = ""
+    main_splitter_sizes: list[int] = field(default_factory=list)
     first_launch_done: bool = False
     onboarding_checklist: dict = field(default_factory=dict)
     onboarding_version: int = 1
@@ -122,6 +125,12 @@ class AppSettings:
             s.tavily_api_key = data["tavily_api_key"]
         if isinstance(data.get("terminal_window_geometry"), str):
             s.terminal_window_geometry = data["terminal_window_geometry"]
+        if isinstance(data.get("main_window_geometry"), str):
+            s.main_window_geometry = data["main_window_geometry"]
+        if isinstance(data.get("main_window_state"), str):
+            s.main_window_state = data["main_window_state"]
+        if isinstance(data.get("main_splitter_sizes"), list):
+            s.main_splitter_sizes = data["main_splitter_sizes"]
         # Provider
         s.provider = _provider_from_data(data, "provider", s.provider)
         s.planner_provider = _provider_from_data(
