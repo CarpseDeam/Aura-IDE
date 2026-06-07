@@ -3,23 +3,27 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt, QVariantAnimation
+from PySide6.QtCore import Qt, QSize, QTimer, QVariantAnimation
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
+    QApplication,
     QFrame,
     QHBoxLayout,
     QLabel,
     QScrollArea,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
+from aura.config import media_path
 from aura.gui.cards._collapsible import _CollapsibleSection
 from aura.gui.cards._helpers import _CODE_FENCE_RE, _fade_in_widget, _MarkdownTextBlock
 from aura.gui.cards._stream_label import _StreamLabel
 from aura.gui.cards.code_block_card import CodeBlockCard
 from aura.gui.cards.tool_call_card import ToolCallCard
 from aura.gui.markdown_renderer import _render_markdown_with_code
-from aura.gui.theme import FG, FG_ITALIC, SUCCESS_DIM, WARN
+from aura.gui.theme import BG_RAISED, FG, FG_DIM, FG_ITALIC, SUCCESS_DIM, WARN
 
 if TYPE_CHECKING:
     from aura.gui.chat_view import ChatView
@@ -33,6 +37,7 @@ class AssistantCard(QFrame):
         self._compact_tool_active: int = 0
         self._compact_tool_names: list[str] = []
         self._chat_view: ChatView | None = None
+        self._assistant_text: str = ""
 
         self._outer = QVBoxLayout(self)
         self._outer.setContentsMargins(16, 14, 16, 14)
@@ -48,6 +53,18 @@ class AssistantCard(QFrame):
         header = QLabel("Aura", parent=header_row)
         header.setObjectName("assistantHeader")
         header_layout.addWidget(header)
+
+        # Copy button for full assistant message text
+        self._copy_btn = QToolButton(header_row)
+        self._copy_btn.setIcon(QIcon(str(media_path("copy-classic.svg"))))
+        self._copy_btn.setIconSize(QSize(16, 16))
+        self._copy_btn.setToolTip("Copy message")
+        self._copy_btn.setStyleSheet(
+            f"QToolButton {{ border: none; border-radius: 3px; padding: 2px; }} "
+            f"QToolButton:hover {{ background: {BG_RAISED}; }}"
+        )
+        self._copy_btn.clicked.connect(self._on_copy)
+        header_layout.addWidget(self._copy_btn)
 
         header_layout.addStretch(1)
 
@@ -143,6 +160,7 @@ class AssistantCard(QFrame):
         if not self._content_label.isVisible():
             self._content_label.setVisible(True)
             # Keep reasoning visible so user can see the thinking
+        self._assistant_text += text
         self._content_label.append(text)
 
     def finalize_reasoning(self) -> None:
@@ -192,6 +210,20 @@ class AssistantCard(QFrame):
         self._compact_tool_names.clear()
         self._tool_status.setVisible(False)
         self._stop_thinking_animation()
+
+    # ---- copy button -----------------------------------------------------
+
+    def _on_copy(self) -> None:
+        QApplication.clipboard().setText(self._assistant_text)
+        self._copy_btn.setIcon(QIcon())
+        self._copy_btn.setText("✓")
+        self._copy_btn.setToolTip("Copied!")
+        QTimer.singleShot(2000, self._reset_copy_btn)
+
+    def _reset_copy_btn(self) -> None:
+        self._copy_btn.setIcon(QIcon(str(media_path("copy-classic.svg"))))
+        self._copy_btn.setText("")
+        self._copy_btn.setToolTip("Copy message")
 
     # ---- thinking animation ---------------------------------------------
 

@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import base64
 
-from PySide6.QtCore import Qt, QBuffer, QByteArray
-from PySide6.QtGui import QPixmap, QMovie
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout
+from PySide6.QtCore import Qt, QBuffer, QByteArray, QSize, QTimer
+from PySide6.QtGui import QIcon, QPixmap, QMovie
+from PySide6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QToolButton, QVBoxLayout
 
+from aura.config import media_path
 from aura.gui.markdown_renderer import _render_markdown_with_code
-from aura.gui.theme import BORDER, DANGER, FG_BODY_USER
+from aura.gui.theme import BG_RAISED, BORDER, DANGER, FG_BODY_USER, FG_DIM
 
 
 class UserCard(QFrame):
@@ -19,9 +20,33 @@ class UserCard(QFrame):
         layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(6)
 
-        header = QLabel("You", parent=self)
+        self._text = text
+
+        # Header row with "You" label and copy button
+        header_row = QWidget(self)
+        header_row.setStyleSheet("background: transparent;")
+        header_layout = QHBoxLayout(header_row)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(0)
+
+        header = QLabel("You", parent=header_row)
         header.setObjectName("userHeader")
-        layout.addWidget(header)
+        header_layout.addWidget(header)
+
+        header_layout.addStretch(1)
+
+        self._copy_btn = QToolButton(header_row)
+        self._copy_btn.setIcon(QIcon(str(media_path("copy-classic.svg"))))
+        self._copy_btn.setIconSize(QSize(16, 16))
+        self._copy_btn.setToolTip("Copy message")
+        self._copy_btn.setStyleSheet(
+            f"QToolButton {{ border: none; border-radius: 3px; padding: 2px; }} "
+            f"QToolButton:hover {{ background: {BG_RAISED}; }}"
+        )
+        self._copy_btn.clicked.connect(self._on_copy)
+        header_layout.addWidget(self._copy_btn)
+
+        layout.addWidget(header_row)
 
         self._movies: list[QMovie] = []
 
@@ -83,3 +108,17 @@ class UserCard(QFrame):
             label = QLabel(f"[image: {exc}]", parent=self)
             label.setStyleSheet(f"color: {DANGER};")
             return label
+
+    # ---- copy button -----------------------------------------------------
+
+    def _on_copy(self) -> None:
+        QApplication.clipboard().setText(self._text)
+        self._copy_btn.setIcon(QIcon())
+        self._copy_btn.setText("✓")
+        self._copy_btn.setToolTip("Copied!")
+        QTimer.singleShot(2000, self._reset_copy_btn)
+
+    def _reset_copy_btn(self) -> None:
+        self._copy_btn.setIcon(QIcon(str(media_path("copy-classic.svg"))))
+        self._copy_btn.setText("")
+        self._copy_btn.setToolTip("Copy message")
