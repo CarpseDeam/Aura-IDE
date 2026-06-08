@@ -54,6 +54,17 @@ class EdgeTabRail(QFrame):
         self._rail_layout.setContentsMargins(0, 0, 0, 0)
         self._rail_layout.setSpacing(6)
 
+        self._drone_run_stack = QWidget(self)
+        self._drone_run_stack.setObjectName("droneRunStack")
+        self._drone_run_stack_layout = QVBoxLayout(self._drone_run_stack)
+        self._drone_run_stack_layout.setContentsMargins(0, 0, 0, 0)
+        self._drone_run_stack_layout.setSpacing(4)
+        self._drone_run_stack_layout.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom)
+
+        self._rail_layout.addStretch(1)
+        self._rail_layout.addWidget(self._drone_run_stack, alignment=Qt.AlignmentFlag.AlignCenter)
+        self._rail_layout.addSpacing(2)
+
         self._terminal_tab = QToolButton(self)
         self._terminal_tab.setObjectName("edgeTerminalTab")
         self._terminal_tab.setText("$")
@@ -88,11 +99,6 @@ class EdgeTabRail(QFrame):
         self._drone_tab.setStyleSheet(self._drone_tab_style())
         self._rail_layout.addWidget(self._drone_tab)
 
-        # Run pip (hidden until active)
-        self._drone_run_pip = DroneRailPip(self)
-        self._rail_layout.addSpacing(2)
-        self._rail_layout.addWidget(self._drone_run_pip, alignment=Qt.AlignmentFlag.AlignCenter)
-
         self.adjustSize()
         self.set_state("dim")
         self.raise_()
@@ -123,10 +129,6 @@ class EdgeTabRail(QFrame):
         return self._drone_tab
 
     @property
-    def drone_run_pip(self) -> DroneRailPip:
-        return self._drone_run_pip
-
-    @property
     def terminal_container(self) -> QWidget | None:
         return self._terminal_container
 
@@ -148,8 +150,7 @@ class EdgeTabRail(QFrame):
         pip.set_summoning()
         pip.begin_launch_animation()
         self._drone_run_pips[run_id] = pip
-        self._rail_layout.addWidget(pip, alignment=Qt.AlignmentFlag.AlignCenter)
-        self._drone_run_pip.set_idle()
+        self._drone_run_stack_layout.addWidget(pip, alignment=Qt.AlignmentFlag.AlignCenter)
         self.adjustSize()
         self.setFixedHeight(self.sizeHint().height())
         QTimer.singleShot(0, lambda rid=run_id: self._play_summon_animation(rid))
@@ -183,7 +184,7 @@ class EdgeTabRail(QFrame):
         pip = self._drone_run_pips.pop(run_id, None)
         if pip is None:
             return
-        self._rail_layout.removeWidget(pip)
+        self._drone_run_stack_layout.removeWidget(pip)
         pip.deleteLater()
         self.adjustSize()
         self.setFixedHeight(self.sizeHint().height())
@@ -212,7 +213,11 @@ class EdgeTabRail(QFrame):
         )
 
         start = self._centered_child_pos(self._drone_tab, ghost.size())
-        end = self._centered_child_pos(pip, ghost.size())
+        pip_origin = pip.mapTo(self, QPoint(0, 0))
+        end = QPoint(
+            pip_origin.x() + (pip.width() - ghost.width()) // 2,
+            pip_origin.y() + (pip.height() - ghost.height()) // 2,
+        )
         ghost.move(start)
         ghost.show()
         ghost.raise_()
