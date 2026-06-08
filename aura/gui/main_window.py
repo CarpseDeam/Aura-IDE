@@ -1122,6 +1122,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         runner = runner or self._drone_runner
         if runner is None:
             return
+        approval_id = request.approval_id or None
 
         # Build the diff text.
         if request.is_new_file:
@@ -1157,20 +1158,21 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         reject_all_btn = button_box.addButton("Reject All", QDialogButtonBox.ButtonRole.RejectRole)
 
         button_box.clicked.connect(lambda btn: self._on_drone_approval_button_clicked(
-            dialog, runner, btn, approve_btn, reject_btn, approve_all_btn, reject_all_btn
+            dialog, runner, btn, approval_id, approve_btn, reject_btn, approve_all_btn, reject_all_btn
         ))
 
         layout.addWidget(button_box)
 
         # Ensure worker thread unblocks even if dialog is closed via X.
         dialog.rejected.connect(lambda: runner.set_approval_result(
-            ApprovalDecision(action="reject")
+            ApprovalDecision(action="reject"),
+            approval_id=approval_id,
         ))
 
         dialog.exec()
 
     def _on_drone_approval_button_clicked(
-        self, dialog: QDialog, runner, btn,
+        self, dialog: QDialog, runner, btn, approval_id,
         approve_btn, reject_btn, approve_all_btn, reject_all_btn
     ) -> None:
         if btn == approve_btn:
@@ -1184,7 +1186,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         else:
             decision = ApprovalDecision(action="reject")
 
-        runner.set_approval_result(decision)
+        runner.set_approval_result(decision, approval_id=approval_id)
         dialog.accept()
 
     def _on_auto_dispatch_toggled(self, checked: bool) -> None:

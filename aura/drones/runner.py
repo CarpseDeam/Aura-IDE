@@ -33,6 +33,8 @@ from aura.sandbox import SandboxExecutor
 
 logger = logging.getLogger(__name__)
 
+DRONE_APPROVAL_TIMEOUT_SECONDS = 300.0
+
 
 class DroneRunner(QObject):
     """Executes a single read-only Drone on a background thread.
@@ -77,6 +79,8 @@ class DroneRunner(QObject):
         self._auto_approve = auto_approve
         self._approval_event: threading.Event | None = None
         self._approval_result: ApprovalDecision | None = None
+        self._approval_id: str | None = None
+        self._approval_lock = threading.Lock()
         self._reject_all: bool = False
 
     def cancel(self) -> None:
@@ -152,7 +156,7 @@ class DroneRunner(QObject):
         elif self._drone.write_policy == "normal_diff_approval" and self._auto_approve:
             approval_cb = self._always_approve
         else:
-            approval_cb = self._build_approval_callback()
+            approval_cb = self._build_approval_callback(errors)
 
         try:
             for _round_num in range(max_rounds):
@@ -346,26 +350,88 @@ class DroneRunner(QObject):
             self.receiptReady.emit(receipt)
             self.finished.emit()
 
-    def set_approval_result(self, decision: ApprovalDecision) -> None:
+    def set_approval_result(self, decision: ApprovalDecision, approval_id: str | None = None) -> None:
         """Called from the GUI thread to unblock the worker with a decision."""
-        self._approval_result = decision
-        if decision.action in ("reject_all", "approve_all"):
-            self._reject_all = (decision.action == "reject_all")
-        if self._approval_event is not None:
+        with self._approval_lock:
+            if self._approval_event is None:
+                return
+            if approval_id is not None and approval_id != self._approval_id:
+                return
+            self._approval_result = decision
+            if decision.action in ("reject_all", "approve_all"):
+                self._reject_all = (decision.action == "reject_all")
             self._approval_event.set()
 
     def _always_approve(self, _request: ApprovalRequest) -> ApprovalDecision:
         return ApprovalDecision(action="approve")
 
-    def _build_approval_callback(self):
+    def _build_approval_callback(self, errors: list[str] | None = None):
         """Build a blocking callback that signals the GUI thread for approval."""
         def callback(request: ApprovalRequest) -> ApprovalDecision:
-            self._approval_event = threading.Event()
-            self._approval_result = None
+            approval_event = threading.Event()
+            approval_id = f"{self._run.run_id}:{time.monotonic_ns()}"
+            timeout_seconds = self._approval_timeout_seconds()
+            request.approval_id = approval_id
+            request.approval_timeout_seconds = timeout_seconds
+            with self._approval_lock:
+                self._approval_event = approval_event
+                self._approval_result = None
+                self._approval_id = approval_id
             self.approval_requested.emit(request)
-            self._approval_event.wait()
-            return self._approval_result or ApprovalDecision(action="reject")
+            wait_result = self._wait_for_approval(approval_event, timeout_seconds)
+            with self._approval_lock:
+                decision = self._approval_result
+                if self._approval_event is approval_event:
+                    self._approval_event = None
+                    self._approval_result = None
+                    self._approval_id = None
+            if wait_result == "approved":
+                return decision or ApprovalDecision(action="reject")
+
+            if wait_result == "cancelled":
+                message = f"Drone diff approval cancelled for {request.tool_name} on {request.rel_path}."
+                metadata = {
+                    "approval_cancelled": True,
+                    "failure_class": "approval_cancelled",
+                    "tool_name": request.tool_name,
+                    "rel_path": request.rel_path,
+                }
+            else:
+                message = (
+                    f"Drone diff approval timed out after {timeout_seconds:.0f}s "
+                    f"for {request.tool_name} on {request.rel_path}."
+                )
+                metadata = {
+                    "approval_timeout": True,
+                    "failure_class": "approval_timeout",
+                    "timeout_seconds": timeout_seconds,
+                    "tool_name": request.tool_name,
+                    "rel_path": request.rel_path,
+                }
+            if errors is not None:
+                errors.append(message)
+            logger.warning(message)
+            return ApprovalDecision(
+                action="reject",
+                note=message,
+                metadata=metadata,
+            )
         return callback
+
+    def _approval_timeout_seconds(self) -> float:
+        """Return the bounded wait time for one Drone diff approval."""
+        return max(0.001, min(DRONE_APPROVAL_TIMEOUT_SECONDS, float(self._drone.budget.timeout_seconds)))
+
+    def _wait_for_approval(self, event: threading.Event, timeout_seconds: float) -> str:
+        """Wait for approval, but wake promptly when the Drone is cancelled."""
+        deadline = time.monotonic() + timeout_seconds
+        while not self._run.cancel_event.is_set():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return "timed_out"
+            if event.wait(timeout=min(0.2, remaining)):
+                return "approved"
+        return "cancelled"
 
     def _execute_terminal_command(self, args: dict[str, Any]) -> tuple[bool, str]:
         """Execute a bounded terminal command for a Drone run."""

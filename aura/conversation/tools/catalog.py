@@ -115,6 +115,8 @@ class ToolCatalog:
                 + [dict(TERMINAL_TOOL_DEF)]
                 + list(GIT_TOOL_DEFS)
                 + list(RESEARCH_TOOL_DEFS)
+                + [dict(DIAGNOSTIC_TOOL_DEF)]
+                + [dict(WORKSPACE_SNAPSHOT_TOOL_DEF)]
             )
 
         # Append dynamic tools (only when not read-only)

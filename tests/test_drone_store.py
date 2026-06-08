@@ -255,12 +255,14 @@ def test_default_tools_for_policy_read_only() -> None:
     assert "git_stash_list" in tools
     assert "git_stash_show" in tools
     assert "run_terminal_command" in tools
-    assert len(tools) == 17
+    assert "run_diagnostic_command" in tools
+    assert "get_workspace_snapshot" in tools
+    assert len(tools) == 19
 
 
 def test_default_tools_for_policy_unknown() -> None:
     tools = default_tools_for_policy("nonexistent_policy")
-    assert len(tools) == 17
+    assert len(tools) == 19
 
 
 def test_slugify() -> None:

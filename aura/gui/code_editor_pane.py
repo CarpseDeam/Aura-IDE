@@ -626,6 +626,10 @@ class CodeEditorPane(QWidget):
         except ValueError:
             return str(path)
 
+    @staticmethod
+    def _compute_animation_region(old: str, new: str) -> tuple[int, int, int, int]:
+        return EditAnimation.compute_animation_region(old, new)
+
     # ------------------------------------------------------------------
     # Styling
     # ------------------------------------------------------------------

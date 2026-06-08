@@ -19,6 +19,8 @@ class ApprovalRequest:
     old_content: str
     new_content: str
     is_new_file: bool
+    approval_id: str = ""
+    approval_timeout_seconds: float = 0.0
 
 
 @dataclass

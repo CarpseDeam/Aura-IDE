@@ -1616,6 +1616,8 @@ class TestModeToolSurfaces:
         assert "patch_file" in tool_names
         assert "run_terminal_command" in tool_names
         assert "run_research" in tool_names  # Added!
+        assert "run_diagnostic_command" in tool_names
+        assert "get_workspace_snapshot" in tool_names
         assert "dispatch_to_worker" not in tool_names
 
 class TestProposeLineRangeEdit:

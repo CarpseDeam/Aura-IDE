@@ -53,6 +53,8 @@ READ_ONLY_TOOLS = (
     "git_stash_list",
     "git_stash_show",
     "run_terminal_command",
+    "run_diagnostic_command",
+    "get_workspace_snapshot",
 )
 
 
