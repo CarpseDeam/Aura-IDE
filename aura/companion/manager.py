@@ -49,6 +49,7 @@ class CompanionManager(QObject):
         self._workspace_root: str = ""
         self._current_project_id: str = ""
         self._pending_chat_id: str = ""
+        self._pending_chat_phone_id: str = ""
         self._current_pairing_code: str = ""
 
     # ── Lifecycle ────────────────────────────────────────────
@@ -187,6 +188,9 @@ class CompanionManager(QObject):
         # Ensure ws:// prefix
         if not url.startswith("ws"):
             url = f"ws://{url}"
+        # Ensure /ws path
+        if not url.endswith("/ws"):
+            url = url.rstrip("/") + "/ws"
         # Use device_id as token for now (Phase 4 upgrades to JWT)
         device_id = get_device_id()
         self._ws_client = CompanionWsClient(url, device_id, self)
@@ -257,6 +261,7 @@ class CompanionManager(QObject):
             }, in_response_to=msg.get("id", "")))
             return
         self._pending_chat_id = msg.get("id", "")
+        self._pending_chat_phone_id = msg.get("sender_device_id", "")
         self._bridge.history.append_user_text(text)
         model = resolve_role_default_model(self._settings.planner_provider, "planner")
         thinking = self._settings.default_planner_thinking
@@ -447,14 +452,14 @@ class CompanionManager(QObject):
             "role": "assistant",
             "type": "content",
             "text": text,
-        }, in_response_to=self._pending_chat_id))
+        }, desktop_id=self._pending_chat_phone_id, in_response_to=self._pending_chat_id))
 
     def _on_bridge_reasoning_delta(self, text: str) -> None:
         self.send_event(make_envelope("chat.message.delta", {
             "role": "assistant",
             "type": "reasoning",
             "text": text,
-        }, in_response_to=self._pending_chat_id))
+        }, desktop_id=self._pending_chat_phone_id, in_response_to=self._pending_chat_id))
 
     def _on_bridge_stream_done(self, finish_reason: str, full_message: dict) -> None:
         content = full_message.get("content", "") if isinstance(full_message, dict) else ""
@@ -465,14 +470,16 @@ class CompanionManager(QObject):
             "role": "assistant",
             "text": content or "…",
             "finish_reason": finish_reason,
-        }, in_response_to=self._pending_chat_id))
+        }, desktop_id=self._pending_chat_phone_id, in_response_to=self._pending_chat_id))
         self._pending_chat_id = ""
+        self._pending_chat_phone_id = ""
 
     def _on_bridge_api_error(self, status_code: int, message: str) -> None:
         self.send_event(make_envelope("chat.error", {
             "message": f"API error ({status_code}): {message}",
-        }, in_response_to=self._pending_chat_id))
+        }, desktop_id=self._pending_chat_phone_id, in_response_to=self._pending_chat_id))
         self._pending_chat_id = ""
+        self._pending_chat_phone_id = ""
 
     def _on_bridge_finished(self) -> None:
         if self._pending_chat_id:
@@ -480,5 +487,6 @@ class CompanionManager(QObject):
                 "role": "assistant",
                 "text": "",
                 "finish_reason": "cancelled",
-            }, in_response_to=self._pending_chat_id))
+            }, desktop_id=self._pending_chat_phone_id, in_response_to=self._pending_chat_id))
             self._pending_chat_id = ""
+            self._pending_chat_phone_id = ""

@@ -34,6 +34,7 @@ function ChatScreen() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
+  const [error, setError] = useState('');
   const [connected, setConnected] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -95,10 +96,18 @@ function ChatScreen() {
       setStreaming(false);
     });
 
+    // Listen for chat errors
+    const unsubError = socket.on('chat.error', (msg: any) => {
+      const payload = msg.payload || {};
+      setError(payload.message || 'An error occurred');
+      setStreaming(false);
+    });
+
     return () => {
       unsubWelcome();
       unsubDelta();
       unsubComplete();
+      unsubError();
     };
   }, [desktopId, navigate]);
 
@@ -109,6 +118,7 @@ function ChatScreen() {
     setMessages((prev) => [...prev, userMsg]);
     setInput('');
     setStreaming(true);
+    setError('');
     socket.send('chat.send', { text }, desktopId);
   }, [input, streaming, desktopId]);
 
@@ -209,6 +219,18 @@ function ChatScreen() {
 
       {/* Input */}
       <div style={{ padding: '0.75rem', borderTop: '1px solid #222' }}>
+        {error && (
+          <div style={{
+            padding: '0.5rem 0.75rem',
+            background: '#e1705533',
+            color: '#e17055',
+            borderRadius: '8px',
+            marginBottom: '0.5rem',
+            fontSize: '0.85rem',
+          }}>
+            {error}
+          </div>
+        )}
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
           <input
             value={input}
@@ -246,6 +268,28 @@ function ChatScreen() {
           >
             ↑
           </button>
+          {streaming && (
+            <button
+              onClick={() => {
+                socket.send('chat.cancel', {}, desktopId);
+                setStreaming(false);
+                setError('');
+              }}
+              style={{
+                padding: '0.5rem 1rem',
+                background: '#e17055',
+                border: 'none',
+                borderRadius: '16px',
+                color: '#fff',
+                fontSize: '0.85rem',
+                fontWeight: 600,
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              Cancel
+            </button>
+          )}
         </div>
       </div>
     </div>

@@ -175,7 +175,8 @@ async def handle_websocket(ws: WebSocket, sessions: SessionManager) -> None:
             # Route to target desktop
             target = msg.get("desktop_id", "")
             if target and sessions.is_online(target):
-                ok = await sessions.send_to(target, raw)
+                msg["sender_device_id"] = device_id
+                ok = await sessions.send_to(target, json.dumps(msg))
                 if not ok:
                     await ws.send_text(json.dumps({
                         "type": "error",
