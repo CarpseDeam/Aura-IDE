@@ -58,6 +58,26 @@ class CompanionPage(QWidget):
         layout.addLayout(form)
         layout.addStretch()
 
+    def set_manager(self, manager: object) -> None:
+        # Lazy import to avoid circular imports at module level.
+        from aura.companion import CompanionManager as _CM
+        if isinstance(manager, _CM):
+            manager.connection_status_changed.connect(self._on_connection_status)
+
+    def _on_connection_status(self, status: str) -> None:
+        if status == "disabled":
+            self._status_label.setText("\u25cf Disabled")
+            self._status_label.setStyleSheet("color: #888;")
+        elif status == "connecting":
+            self._status_label.setText("\u25cb Connecting\u2026")
+            self._status_label.setStyleSheet("color: #f0c000;")
+        elif status == "connected":
+            self._status_label.setText("\u25cf Connected")
+            self._status_label.setStyleSheet("color: #00cc66;")
+        elif status == "error":
+            self._status_label.setText("\u25cf Error")
+            self._status_label.setStyleSheet("color: #e17055;")
+
     def collect_settings(self, settings: AppSettings) -> None:
         settings.companion_enabled = self._enabled_switch.isChecked()
         settings.companion_display_name = self._display_name_edit.text()

@@ -51,7 +51,7 @@ class CompanionSocket {
     this.relayUrl = relayUrl;
     this.deviceToken = token;
     this._deviceId = id;
-    this.maxRetries = -1;
+    this.maxRetries = Infinity;  // infinite retry intended — _scheduleReconnect never blocks on limit
     this.reconnectDelay = 1000;
     this.retryCount = 0;
     this._open();
@@ -186,8 +186,7 @@ class CompanionSocket {
         reject(new Error(data.payload?.message || 'Pairing failed'));
       });
 
-      this.connect(relayUrl);
-
+      // User must be connected before calling pair().
       this.send('pair.connect', {
         code: pairingCode,
         device_name: deviceName || 'Aura Companion',

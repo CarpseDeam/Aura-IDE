@@ -1301,6 +1301,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             on_change_root=self._on_change_root,
             parent=self,
         )
+        dlg.set_companion_manager(self._companion)
         if dlg.exec() == SettingsDialog.DialogCode.Accepted:
             self._settings = dlg.result_settings()
             self._send_handler.update_settings(self._settings)
@@ -1355,6 +1356,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             parent=self,
             open_api_keys_tab=True,
         )
+        dlg.set_companion_manager(self._companion)
         if dlg.exec() == SettingsDialog.DialogCode.Accepted:
             self._settings = dlg.result_settings()
             self._send_handler.update_settings(self._settings)

@@ -101,7 +101,6 @@ class AppSettings:
     companion_enabled: bool = False
     companion_relay_url: str = "ws://localhost:8765"
     companion_display_name: str = ""
-    companion_device_token: str = ""
 
     @classmethod
     def from_dict(cls, data: dict) -> "AppSettings":
@@ -213,8 +212,6 @@ class AppSettings:
             s.companion_relay_url = data["companion_relay_url"]
         if isinstance(data.get("companion_display_name"), str):
             s.companion_display_name = data["companion_display_name"]
-        if isinstance(data.get("companion_device_token"), str):
-            s.companion_device_token = data["companion_device_token"]
         # Onboarding fields (backward-compatible)
         if isinstance(data.get("onboarding_checklist"), dict):
             s.onboarding_checklist = data["onboarding_checklist"]

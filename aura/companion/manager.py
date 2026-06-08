@@ -5,6 +5,8 @@ import json
 import logging
 from typing import Any
 
+from aura.version import __version__
+
 from PySide6.QtCore import QObject, Signal
 
 from aura.companion.auth import generate_pairing_code, get_device_display_name, get_device_id, invalidate_pairing_code, validate_pairing_code
@@ -205,7 +207,7 @@ class CompanionManager(QObject):
         # Send desktop.online event
         self.send_event(make_envelope("desktop.online", {
             "display_name": get_device_display_name(),
-            "aura_version": "1.6.0",
+            "aura_version": __version__,
             "capabilities": ["chat.send", "project.list_recent", "conversation.*"],
         }, desktop_id=get_device_id()))
 

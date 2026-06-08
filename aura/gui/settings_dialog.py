@@ -95,6 +95,9 @@ class SettingsDialog(QDialog):
         if open_api_keys_tab:
             self._tabs.setCurrentIndex(1)
 
+    def set_companion_manager(self, manager: object) -> None:
+        self._companion_page.set_manager(manager)
+
     # --- Thread cleanup ---
 
     def _cleanup_threads(self) -> None:
