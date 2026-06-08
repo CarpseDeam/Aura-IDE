@@ -15,6 +15,7 @@ class CompanionSocket {
   private static STORAGE_KEY_TOKEN = 'aura_companion_token';
   private static STORAGE_KEY_DEVICE_ID = 'aura_companion_device_id';
   private static STORAGE_KEY_RELAY = 'companion_relay_url';
+  private static STORAGE_KEY_SAFE_CONTEXT = 'companion_safe_context';
 
   static getStoredToken(): string {
     return localStorage.getItem(CompanionSocket.STORAGE_KEY_TOKEN) || '';
@@ -35,6 +36,24 @@ class CompanionSocket {
       localStorage.setItem(CompanionSocket.STORAGE_KEY_DEVICE_ID, id);
     }
     return id;
+  }
+
+  static getStoredSafeContext(): any {
+    try {
+      return JSON.parse(localStorage.getItem(CompanionSocket.STORAGE_KEY_SAFE_CONTEXT) || '{}');
+    } catch { return {}; }
+  }
+
+  static setStoredSafeContext(ctx: any): void {
+    localStorage.setItem(CompanionSocket.STORAGE_KEY_SAFE_CONTEXT, JSON.stringify(ctx));
+  }
+
+  static getProjectId(): string {
+    return CompanionSocket.getStoredSafeContext().project_id || '';
+  }
+
+  static getConversationId(): string {
+    return CompanionSocket.getStoredSafeContext().conversation_id || '';
   }
 
   static isPaired(): boolean {
@@ -137,13 +156,13 @@ class CompanionSocket {
     }
   }
 
-  send(type: string, payload: any = {}, desktopId: string = ''): void {
+  send(type: string, payload: any = {}, desktopId: string = '', projectId: string = '', conversationId: string = ''): void {
     this.sendRaw({
       id: `cmd_${Math.random().toString(36).slice(2, 14)}`,
       type,
       desktop_id: desktopId,
-      project_id: '',
-      conversation_id: '',
+      project_id: projectId,
+      conversation_id: conversationId,
       in_response_to: '',
       payload,
     });
@@ -174,6 +193,17 @@ class CompanionSocket {
         if (token) {
           CompanionSocket.setStoredToken(token);
           this.deviceToken = token;
+
+          const safeCtx: any = {};
+          if (data.payload?.desktop_name) safeCtx.desktop_name = data.payload.desktop_name;
+          if (data.payload?.project_id) safeCtx.project_id = data.payload.project_id;
+          if (data.payload?.project_name) safeCtx.project_name = data.payload.project_name;
+          if (data.payload?.conversation_id) safeCtx.conversation_id = data.payload.conversation_id;
+          if (data.payload?.phone_id) safeCtx.phone_id = data.payload.phone_id;
+          if (Object.keys(safeCtx).length > 0) {
+            CompanionSocket.setStoredSafeContext(safeCtx);
+          }
+
           unsubConfirmed();
           unsubError();
           resolve(token);

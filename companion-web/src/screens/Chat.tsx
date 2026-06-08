@@ -22,8 +22,11 @@ function ChatScreen() {
   const bottomRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
 
+  const safeCtx = CompanionSocket.getStoredSafeContext();
+  const projectId = safeCtx.project_id || '';
+  const conversationId = safeCtx.conversation_id || '';
   const desktopId = sessionStorage.getItem('companion_desktop_id') || '';
-  const desktopName = sessionStorage.getItem('companion_desktop_name') || 'Aura Desktop';
+  const desktopName = safeCtx.desktop_name || sessionStorage.getItem('companion_desktop_name') || 'Aura Desktop';
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -105,14 +108,14 @@ function ChatScreen() {
     setInput('');
     setStreaming(true);
     setError('');
-    socket.send('chat.send', { text }, desktopId);
+    socket.send('chat.send', { text }, desktopId, projectId, conversationId);
     if (taRef.current) taRef.current.style.height = 'auto';
-  }, [input, streaming, desktopId]);
+  }, [input, streaming, desktopId, projectId, conversationId]);
 
   const cancel = useCallback(() => {
-    socket.send('chat.cancel', {}, desktopId);
+    socket.send('chat.cancel', {}, desktopId, projectId, conversationId);
     setStreaming(false);
-  }, [desktopId]);
+  }, [desktopId, projectId, conversationId]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100dvh', padding: '0 0.75rem' }}>
@@ -146,6 +149,11 @@ function ChatScreen() {
           <div style={{ fontSize: '0.7rem', color: tokens.fgMuted, marginTop: 2 }}>
             Aura Desktop
           </div>
+          {safeCtx.project_name && (
+            <div style={{ fontSize: '0.7rem', color: tokens.fgMuted, marginTop: 2 }}>
+              Project: {safeCtx.project_name}
+            </div>
+          )}
         </div>
         <span style={statusPillStyle(connected ? 'connected' : 'disconnected')}>
           ● {connected ? 'Online' : 'Offline'}

@@ -64,14 +64,16 @@ function AppLayout() {
   const location = useLocation();
   const navigate = useNavigate();
 
-  // QR auto-fill flow: if URL has pair params, always land on Login.
-  const hasPairParams = window.location.search.includes('code=') && window.location.search.includes('desktop=');
-  const showNav = location.pathname !== '/login';
+  // QR / ticket auto-fill flow: if URL has pair params, always land on Login.
+  const search = window.location.search;
+  const isPairRoute = location.pathname.startsWith('/pair');
+  const hasPairParams = search.includes('code=') || search.includes('ticket=') || isPairRoute;
+  const showNav = location.pathname !== '/login' && location.pathname !== '/pair';
   const isPaired = CompanionSocket.isPaired();
 
   // Connection guard
   useEffect(() => {
-    if (location.pathname === '/login') return;
+    if (location.pathname === '/login' || location.pathname === '/pair') return;
     if (!isPaired) {
       navigate('/login', { replace: true });
       return;
@@ -89,13 +91,14 @@ function AppLayout() {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100dvh' }}>
       <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         <Routes>
+          <Route path="/pair" element={<LoginScreen />} />
           <Route path="/login" element={<LoginScreen />} />
           <Route path="/desktops" element={<DesktopsScreen />} />
           <Route path="/projects" element={<ProjectsScreen />} />
           <Route path="/chat/:threadId?" element={<ChatScreen />} />
           <Route path="/runs" element={<RunsScreen />} />
           <Route path="/receipts" element={<ReceiptsScreen />} />
-          <Route path="*" element={<Navigate to={hasPairParams || !isPaired ? '/login' : '/chat'} replace />} />
+          <Route path="*" element={<Navigate to={(hasPairParams || !isPaired) ? (isPairRoute ? '/pair' : '/login') : '/chat'} replace />} />
         </Routes>
       </div>
       {showNav && <BottomNav />}

@@ -14,6 +14,7 @@ function LoginScreen() {
   const qrDesktop = searchParams.get('desktop') || '';
   const qrDesktopName = searchParams.get('name') || '';
   const qrCode = searchParams.get('code') || '';
+  const qrTicket = searchParams.get('ticket') || '';
 
   const [relayUrl, setRelayUrl] = useState(qrRelay || 'ws://localhost:8765');
   const [pairingCode, setPairingCode] = useState(qrCode);
@@ -29,7 +30,7 @@ function LoginScreen() {
 
   // Forget the URL params after we read them so a refresh doesn't re-trigger.
   useEffect(() => {
-    if (qrCode || qrDesktop || qrRelay) {
+    if (qrCode || qrDesktop || qrRelay || qrTicket) {
       // Strip the params from the URL bar without re-running effects.
       setSearchParams({}, { replace: true });
     }
@@ -84,12 +85,90 @@ function LoginScreen() {
       sessionStorage.setItem('companion_desktop_id', desktopId);
       if (desktopName) sessionStorage.setItem('companion_desktop_name', desktopName);
       setPhase('paired');
-      navigate('/chat', { replace: true });
+      const safeCtx = CompanionSocket.getStoredSafeContext();
+      if (safeCtx.project_id) {
+        navigate('/chat', { replace: true });
+      } else {
+        navigate('/projects', { replace: true });
+      }
     } catch (e: any) {
       setPhase('connected');
       setError(e?.message || 'Pairing failed — generate a new code on desktop.');
     }
   }, [pairingCode, desktopId, desktopName, phoneName, relayUrl, navigate]);
+
+  const autoPairWithTicket = useCallback(async (ticket: string, relay: string) => {
+    if (autoStartedRef.current) return;
+    autoStartedRef.current = true;
+
+    try {
+      setPhase('connecting');
+      socket.connect(relay);
+
+      await new Promise<void>((resolve, reject) => {
+        const unsub = socket.on('welcome', () => {
+          unsub();
+          resolve();
+        });
+        setTimeout(() => { unsub(); reject(new Error('timeout')); }, 10000);
+      });
+
+      setPhase('connected');
+      await new Promise(r => setTimeout(r, 200));
+
+      setPhase('pairing');
+      const token = await new Promise<string>((resolve, reject) => {
+        const unsubConfirmed = socket.on('pair.confirmed', (data: any) => {
+          const t = data.payload?.token;
+          if (t) {
+            CompanionSocket.setStoredToken(t);
+            (socket as any).deviceToken = t;
+
+            const safeCtx: any = {};
+            if (data.payload?.desktop_name) safeCtx.desktop_name = data.payload.desktop_name;
+            if (data.payload?.project_id) safeCtx.project_id = data.payload.project_id;
+            if (data.payload?.project_name) safeCtx.project_name = data.payload.project_name;
+            if (data.payload?.conversation_id) safeCtx.conversation_id = data.payload.conversation_id;
+            if (data.payload?.phone_id) safeCtx.phone_id = data.payload.phone_id;
+            if (Object.keys(safeCtx).length > 0) {
+              CompanionSocket.setStoredSafeContext(safeCtx);
+            }
+
+            unsubConfirmed();
+            unsubError();
+            resolve(t);
+          } else {
+            reject(new Error('No token in pair.confirmed'));
+          }
+        });
+        const unsubError = socket.on('pair.error', (data: any) => {
+          unsubConfirmed();
+          unsubError();
+          reject(new Error(data.payload?.message || 'Pairing failed'));
+        });
+
+        socket.send('pair.connect', { ticket, device_name: phoneName || 'Aura Companion' });
+
+        setTimeout(() => {
+          unsubConfirmed();
+          unsubError();
+          reject(new Error('Pairing timed out'));
+        }, 30000);
+      });
+
+      setPhase('paired');
+
+      const safeCtx = CompanionSocket.getStoredSafeContext();
+      if (safeCtx.project_id) {
+        navigate('/chat', { replace: true });
+      } else {
+        navigate('/projects', { replace: true });
+      }
+    } catch (e: any) {
+      setPhase('connected');
+      setError(e?.message || 'Auto-pairing failed. Try manual pairing below.');
+    }
+  }, [navigate, phoneName]);
 
   // Auto-pair: if we landed here with all URL params, run the whole flow once.
   useEffect(() => {
@@ -108,6 +187,18 @@ function LoginScreen() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Ticket-based auto-pair
+  useEffect(() => {
+    if (!qrTicket) return;
+    if (autoStartedRef.current) return;
+    if (alreadyPaired) return;
+    const host = window.location.hostname;
+    const derivedRelay = `ws://${host}:8765`;
+    setRelayUrl(derivedRelay);
+    autoPairWithTicket(qrTicket, derivedRelay);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [qrTicket]);
 
   const handleReconnect = () => {
     setPhase('connecting');
@@ -145,7 +236,7 @@ function LoginScreen() {
   };
 
   // Already paired
-  if (alreadyPaired && !qrCode) {
+  if (alreadyPaired && !qrCode && !qrTicket) {
     return (
       <div style={pageWrap} className="fade-in">
         <Wordmark />
@@ -160,7 +251,7 @@ function LoginScreen() {
     );
   }
 
-  const isAutoPairing = qrCode && (phase === 'connecting' || phase === 'pairing');
+  const isAutoPairing = (qrCode || qrTicket) && (phase === 'connecting' || phase === 'pairing');
 
   return (
     <div style={pageWrap} className="fade-in">
@@ -206,7 +297,9 @@ function LoginScreen() {
               margin: '0 auto 1rem',
             }} />
             <div style={{ fontSize: '0.9rem' }}>
-              {phase === 'connecting' ? 'Connecting to relay…' : 'Pairing with desktop…'}
+              {qrTicket
+                ? (phase === 'connecting' ? 'Resolving pairing ticket…' : 'Pairing with desktop…')
+                : (phase === 'connecting' ? 'Connecting to relay…' : 'Pairing with desktop…')}
             </div>
             <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
           </div>
