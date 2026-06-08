@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import difflib
+import logging
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 from PySide6.QtCore import QByteArray, Qt, QThread, QTimer
 from PySide6.QtGui import QIcon
@@ -21,6 +24,7 @@ from PySide6.QtWidgets import (
 
 from aura.bridge import ConversationBridge
 from aura.bridge.qt_bridge import PLANNER_SYSTEM_PROMPT
+from aura.companion import CompanionManager
 from aura.config import (
     APP_NAME,
     PROVIDERS,
@@ -166,6 +170,14 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             workspace_root=self._workspace_root,
             parent=self,
         )
+
+        # Companion (mobile control plane)
+        self._companion = CompanionManager(self._settings)
+        self._companion.connection_status_changed.connect(self._on_companion_status)
+        self._companion.message_received.connect(self._on_companion_message)
+        self._companion.set_bridge(self._bridge)
+        self._companion.set_workspace_root(str(self._workspace_root))
+        self._companion.start()
 
         # Right pane: worker activity (embedded, not a separate window)
         self._playground = AuraPlayground(
@@ -370,6 +382,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         # Save splitter sizes.
         self._settings.main_splitter_sizes = list(self._main_splitter.sizes())
         save_settings(self._settings)
+        self._companion.stop()
         super().closeEvent(event)
 
     def _check_for_updates(self) -> None:
@@ -496,6 +509,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._input.set_workspace_root(path)
         self._send_handler.set_workspace_root(path)
         self._playground.set_workspace_root(path)
+        self._companion.set_workspace_root(str(self._workspace_root))
         self._tree.set_root(path)
         save_workspace_root(path)
         self._update_workspace_label()
@@ -615,6 +629,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._input.set_workspace_root(root_path)
         self._send_handler.set_workspace_root(root_path)
         self._playground.set_workspace_root(root_path)
+        self._companion.set_workspace_root(str(self._workspace_root))
         self._tree.set_root(root_path)
         save_workspace_root(root_path)
         # new_conversation() above already sets _current_conversation_path = None
@@ -883,6 +898,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         if run_drone.write_policy != "read_only":
             self._write_drone_run_id = run_id
         self._drone_runner = runner
+        self._companion.set_drone_runner(self._drone_runner)
         self._drone_runner_thread = thread
         self._active_run_card = run_card
         self._drone_reports_window.add_run_card(run_id, run_card)
@@ -1075,6 +1091,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._drone_runs.pop(run_id, None)
         if self._drone_runner is runner:
             self._drone_runner = None
+            self._companion.set_drone_runner(None)
             self._drone_runner_thread = None
         # Refresh run history in drone bay so completed run appears immediately.
         self._drone_bay.refresh_run_history()
@@ -1287,6 +1304,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         if dlg.exec() == SettingsDialog.DialogCode.Accepted:
             self._settings = dlg.result_settings()
             self._send_handler.update_settings(self._settings)
+            self._companion.update_settings(self._settings)
             self._persistence.update_settings(self._settings)
             self._worker_handler.update_settings(self._settings)
             self._toolbar.update_settings(self._settings)
@@ -1340,6 +1358,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         if dlg.exec() == SettingsDialog.DialogCode.Accepted:
             self._settings = dlg.result_settings()
             self._send_handler.update_settings(self._settings)
+            self._companion.update_settings(self._settings)
             self._persistence.update_settings(self._settings)
             self._worker_handler.update_settings(self._settings)
             self._toolbar.update_settings(self._settings)
@@ -1380,6 +1399,15 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             self._toolbar.set_auto_approve(self._settings.auto_approve)
             self._toolbar.set_auto_summon_drones(self._settings.auto_summon_drones)
             self._refresh_status_bar()
+
+    def _on_companion_status(self, status: str) -> None:
+        """Handle companion connection status changes."""
+        logger.info("[MainWindow] Companion status: %s", status)
+        # Phase 2: update status bar indicator
+
+    def _on_companion_message(self, msg: dict) -> None:
+        """Handle an incoming companion message."""
+        logger.debug("[MainWindow] Companion msg: %s", msg.get("type"))
 
     def _on_open_update(self) -> None:
         dlg = UpdateDialog(self)
