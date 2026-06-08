@@ -3,7 +3,12 @@ from __future__ import annotations
 
 import json
 import logging
+import random
 import socket
+import string
+import threading
+import time
+import uuid
 
 from aura.paths import data_dir
 
@@ -26,8 +31,6 @@ def get_device_id() -> str:
         except Exception as exc:
             logger.warning("Failed to read companion device ID, regenerating: %s", exc)
     # Generate new persistent ID
-    import uuid
-
     device_id = f"desktop_{uuid.uuid4().hex[:12]}"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"device_id": device_id, "hostname": socket.gethostname()}))
@@ -38,11 +41,6 @@ def get_device_display_name() -> str:
     """Return a human-readable display name for this desktop."""
     return socket.gethostname()
 
-
-import random
-import string
-import threading
-import time
 
 # In-memory pairing code store (thread-safe)
 _pairing_codes: dict[str, dict] = {}
