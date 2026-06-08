@@ -10,7 +10,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QScrollArea,
     QSizePolicy,
-    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -78,22 +77,7 @@ class DroneReportsWindow(QDialog):
         header_layout.addLayout(title_col)
         header_layout.addStretch(1)
 
-        close_btn = QToolButton(header)
-        close_btn.setText("x")
-        close_btn.setToolTip("Hide Drone Reports")
-        close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        close_btn.setStyleSheet(
-            f"QToolButton {{"
-            f"  background: transparent;"
-            f"  color: {FG_DIM};"
-            f"  border: none;"
-            f"  font-size: 14px;"
-            f"  padding: 2px 8px;"
-            f"}}"
-            f"QToolButton:hover {{ color: {FG}; }}"
-        )
-        close_btn.clicked.connect(self.hide)
-        header_layout.addWidget(close_btn)
+
         outer.addWidget(header)
 
         self._scroll = QScrollArea(self)
@@ -131,8 +115,6 @@ class DroneReportsWindow(QDialog):
         self._scroll.setWidget(self._card_host)
         outer.addWidget(self._scroll, 1)
 
-        # Close/hide guard — prevents re-entrancy and ensures active runs survive close.
-        self._close_guard: bool = False
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
 
         self.setStyleSheet(f"QDialog {{ background: {BG_ALT}; color: {FG}; }}")
@@ -193,13 +175,7 @@ class DroneReportsWindow(QDialog):
         return self.isVisible()
 
     def hideEvent(self, event) -> None:
-        """Hide — save geometry via timer, emit visibility change.
-
-        Must not clear cards or touch run state.
-        """
         super().hideEvent(event)
-        if self._close_guard:
-            return
         self._schedule_geometry_save()
         self.visibility_changed.emit(False)
 
@@ -216,17 +192,12 @@ class DroneReportsWindow(QDialog):
         self._schedule_geometry_save()
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        """Close → always hide, never close/destroy.
+        """Prevent destruction — Drone Reports is a stable live monitor.
 
-        Closing while active Drone runs exist must only hide the window.
-        It must not reject, delete cards, clear runs, or touch run state.
+        Closing must never delete cards, clear runs, or touch runner state.
+        The window stays open for the full lifecycle of active runs.
         """
         event.ignore()
-        if self._close_guard:
-            return
-        self._close_guard = True
-        self.hide()
-        self._close_guard = False
 
     def _refresh_empty_state(self) -> None:
         self._empty_label.setVisible(not self._cards)
