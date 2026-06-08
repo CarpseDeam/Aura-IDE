@@ -79,3 +79,88 @@ class PlannerHandlersMixin:
                 ok=False,
                 payload={"error": str(exc), "workspace_root": str(self._root)},
             )
+
+    def _handle_run_read_only_drone(
+        self,
+        args: dict[str, Any],
+        approval_cb: Any,
+        reject_all: bool,
+    ) -> ToolExecResult:
+        drone_id = str(args.get("drone_id") or "").strip()
+        goal = str(args.get("goal") or "").strip()
+        wait_seconds = int(args.get("wait_seconds", 120) or 0) or 120
+        include_receipt = bool(args.get("include_receipt", False))
+
+        if not drone_id:
+            return ToolExecResult(
+                ok=False,
+                payload={"ok": False, "error": "missing required arg: drone_id", "failure_class": "invalid_args"},
+            )
+        if not goal:
+            return ToolExecResult(
+                ok=False,
+                payload={"ok": False, "error": "missing required arg: goal", "failure_class": "invalid_args"},
+            )
+
+        from aura.drones.store import DroneStore
+
+        drone = DroneStore.load_drone(self._root, drone_id)
+        if drone is None:
+            return ToolExecResult(
+                ok=False,
+                payload={"ok": False, "error": f"Unknown Drone: {drone_id}", "failure_class": "drone_not_found"},
+            )
+
+        if drone.write_policy != "read_only":
+            return ToolExecResult(
+                ok=False,
+                payload={
+                    "ok": False,
+                    "error": f"Drone '{drone_id}' has write_policy='{drone.write_policy}'. Only read_only Drones can be run with this tool.",
+                    "failure_class": "drone_not_read_only",
+                },
+            )
+
+        count = getattr(self, "_run_read_only_drone_count", 0)
+        if count >= 2:
+            return ToolExecResult(
+                ok=False,
+                payload={
+                    "ok": False,
+                    "error": "Per-turn limit reached: at most 2 run_read_only_drone calls per conversation turn.",
+                    "failure_class": "per_turn_limit_exceeded",
+                },
+            )
+        self._run_read_only_drone_count = count + 1
+
+        budget = drone.budget
+        timeout = min(wait_seconds, budget.timeout_seconds if budget else 120)
+        max_rounds = budget.max_tool_rounds if budget else 8
+
+        from aura.drones.sync_runner import run_read_only_drone_sync
+
+        result = run_read_only_drone_sync(
+            workspace_root=self._root,
+            drone_id=drone_id,
+            drone=drone,
+            goal=goal,
+            timeout_seconds=timeout,
+            max_tool_rounds=max_rounds,
+        )
+
+        payload: dict[str, Any] = {
+            "ok": result["ok"],
+            "drone_id": result["drone_id"],
+            "drone_name": result["drone_name"],
+            "run_id": result["run_id"],
+            "status": result["status"],
+            "summary": result["summary"],
+            "tool_calls_made": result["tool_calls_made"],
+            "tool_errors": result["tool_errors"],
+            "elapsed_seconds": result["elapsed_seconds"],
+        }
+
+        if include_receipt:
+            payload["receipt"] = result.get("receipt")
+
+        return ToolExecResult(ok=result["ok"], payload=payload)

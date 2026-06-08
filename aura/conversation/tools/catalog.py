@@ -7,17 +7,18 @@ from typing import Any
 
 from aura.conversation.tools._types import RegistryMode
 from aura.conversation.tools._schemas import (
+    DIAGNOSTIC_TOOL_DEF,
     DISPATCH_TOOL_DEF,
     GIT_TOOL_DEFS,
     READ_TOOL_DEFS,
     RESEARCH_TOOL_DEFS,
+    RUN_READ_ONLY_DRONE_TOOL_DEF,
+    SUMMON_DRONE_TOOL_DEF,
     TERMINAL_TOOL_DEF,
     WEB_TOOL_DEFS,
     WORKER_TODO_TOOL_DEF,
-    WRITE_TOOL_DEFS,
-    DIAGNOSTIC_TOOL_DEF,
     WORKSPACE_SNAPSHOT_TOOL_DEF,
-    SUMMON_DRONE_TOOL_DEF,
+    WRITE_TOOL_DEFS,
 )
 
 PLANNER_TOOL_NAMES = {
@@ -88,6 +89,7 @@ class ToolCatalog:
                 + planner_git_tools
                 + [dict(DISPATCH_TOOL_DEF)]
                 + [dict(SUMMON_DRONE_TOOL_DEF)]
+                + [dict(RUN_READ_ONLY_DRONE_TOOL_DEF)]
                 + list(RESEARCH_TOOL_DEFS)
                 + [dict(DIAGNOSTIC_TOOL_DEF)]
                 + [dict(WORKSPACE_SNAPSHOT_TOOL_DEF)]
@@ -107,6 +109,7 @@ class ToolCatalog:
                 + [dict(TERMINAL_TOOL_DEF)]
                 + list(GIT_TOOL_DEFS)
                 + list(RESEARCH_TOOL_DEFS)
+                + [dict(RUN_READ_ONLY_DRONE_TOOL_DEF)]
             )
         else:  # "single" or any unknown mode
             tools = (
@@ -117,6 +120,7 @@ class ToolCatalog:
                 + list(RESEARCH_TOOL_DEFS)
                 + [dict(DIAGNOSTIC_TOOL_DEF)]
                 + [dict(WORKSPACE_SNAPSHOT_TOOL_DEF)]
+                + [dict(RUN_READ_ONLY_DRONE_TOOL_DEF)]
             )
 
         # Append dynamic tools (only when not read-only)

@@ -483,7 +483,25 @@ def _build_drone_context(workspace_root: Path, store_cls) -> str:
         "Call `summon_drone` to launch one when the user's request matches its purpose.",
     ]
     for d in drones:
-        instr = (d.instructions or "")[:80].replace("\n", " ").strip()
-        lines.append(f'- "{d.name}" (id: {d.id}): {instr}')
+        instr = (d.instructions or "").strip()
+        output_contract = (d.output_contract or "").strip()
+        desc = (d.description or "").strip()
+
+        instr_short = instr[:150].replace("\n", " ").strip()
+        if len(instr) > 150:
+            instr_short += "..."
+        contract_short = output_contract[:100].replace("\n", " ").strip()
+        if len(output_contract) > 100:
+            contract_short += "..."
+        desc_short = desc[:120].replace("\n", " ").strip()
+        if len(desc) > 120:
+            desc_short += "..."
+
+        write_tag = "\U0001f512 readonly" if d.write_policy == "read_only" else "\u270f\ufe0f can write"
+
+        lines.append(f'- "{d.name}" (id: {d.id}, {write_tag})')
+        lines.append(f'  Description: {desc_short}')
+        lines.append(f'  Instructions: {instr_short}')
+        lines.append(f'  Output: {contract_short}')
     lines.append("")
     return "\n".join(lines)

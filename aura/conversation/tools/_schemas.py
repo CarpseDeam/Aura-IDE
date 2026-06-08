@@ -1258,3 +1258,39 @@ WORKSPACE_SNAPSHOT_TOOL_DEF: dict[str, Any] = {
         "parameters": {"type": "object", "properties": {}, "required": []},
     },
 }
+
+RUN_READ_ONLY_DRONE_TOOL_DEF: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "run_read_only_drone",
+        "description": "Run a saved read-only Drone for a focused investigation or sub-task. The Drone will use its instructions and your goal to investigate, returning findings. Only Drones with read_only write policy are allowed. Use this for side investigations that would burn too many tool calls in the main conversation. Do NOT use for simple reads or tiny checks.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "drone_id": {
+                    "type": "string",
+                    "description": "The id of the saved read-only Drone to run (from Available Drones list)."
+                },
+                "goal": {
+                    "type": "string",
+                    "description": "What the Drone should investigate or accomplish. Be specific so the Drone's instructions can guide it precisely."
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "Optional: why you are running this Drone. Used only for logging."
+                },
+                "wait_seconds": {
+                    "type": "integer",
+                    "description": "Maximum seconds to wait for results. Default: 120.",
+                    "default": 120
+                },
+                "include_receipt": {
+                    "type": "boolean",
+                    "description": "If true, include the full receipt/run details in the result. Default: false (just summary).",
+                    "default": False
+                }
+            },
+            "required": ["drone_id", "goal"]
+        }
+    }
+}

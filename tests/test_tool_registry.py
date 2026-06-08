@@ -1492,6 +1492,7 @@ class TestHandlerRegistration:
         "search_project_memory",
         "save_to_project_memory",
         "run_diagnostic_command",
+        "run_read_only_drone",
         "get_workspace_snapshot",
         "summon_drone",
     }
@@ -1546,6 +1547,7 @@ class TestModeToolSurfaces:
             "git_show",
             "git_log_file",
             "dispatch_to_worker",
+            "run_read_only_drone",
             "run_research",
             "run_diagnostic_command",
             "get_workspace_snapshot",
