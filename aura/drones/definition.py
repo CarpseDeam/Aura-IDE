@@ -53,9 +53,20 @@ READ_ONLY_TOOLS = (
 )
 
 
+WRITE_TOOLS = (
+    "write_file",
+    "delete_file",
+    "edit_file",
+    "edit_symbol",
+    "edit_line_range",
+    "patch_file",
+    "apply_edit_transaction",
+)
+
+
 def default_tools_for_policy(write_policy: str) -> tuple[str, ...]:
     if write_policy == "read_only":
         return READ_ONLY_TOOLS
-    # Write-capable policies get the same base tools for now; write tools
-    # will be added in later phases.
+    if write_policy in ("ask_before_writes", "normal_diff_approval"):
+        return READ_ONLY_TOOLS + WRITE_TOOLS
     return READ_ONLY_TOOLS

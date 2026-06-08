@@ -140,6 +140,9 @@ class AuraPlayground(QWidget):
         self._pending_worker_code_content: dict[str, str] = {}
         self._workspace_root: Path | None = None
 
+        # Active drone run card (shown below the stack widget)
+        self._run_card: QWidget | None = None
+
         # Aura wrapper reference for atmospheric synchronization
         self._aura_wrapper: AuraWidget | None = None
 
@@ -186,6 +189,19 @@ class AuraPlayground(QWidget):
     def set_glow_state(self, state: str) -> None:
         if self._aura_wrapper:
             self._aura_wrapper.set_glow_state(state)
+
+    def set_active_run_card(self, card: QWidget) -> None:
+        """Insert a run card into the playground layout (below the stack)."""
+        self._run_card = card
+        self.layout().addWidget(card)
+        card.show()
+
+    def clear_active_run_card(self) -> None:
+        """Remove the run card from the layout and destroy it."""
+        if self._run_card is not None:
+            self.layout().removeWidget(self._run_card)
+            self._run_card.deleteLater()
+            self._run_card = None
 
     def stop_aura(self) -> None:
         if self._aura_wrapper:

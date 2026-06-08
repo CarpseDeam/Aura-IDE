@@ -4,6 +4,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -22,7 +23,7 @@ from aura.client.events import (
     Usage,
 )
 from aura.config import get_provider, resolve_role_default_model
-from aura.conversation.tools._types import ApprovalDecision
+from aura.conversation.tools._types import ApprovalDecision, ApprovalRequest
 from aura.conversation.tools.registry import ToolRegistry
 from aura.drones.definition import DroneDefinition
 from aura.drones.receipt import DroneReceipt
@@ -53,6 +54,7 @@ class DroneRunner(QObject):
     usageEmitted = Signal(int, int, int, int)  # prompt, completion, cache_hit, cache_miss
     apiError = Signal(int, str)            # status_code, message
     receiptReady = Signal(object)          # DroneReceipt
+    approval_requested = Signal(object)    # ApprovalRequest
     finished = Signal()
 
     def __init__(
@@ -69,6 +71,9 @@ class DroneRunner(QObject):
         self._run = DroneRun(drone=drone)
         self._provider = provider_id
         self._model = model
+        self._approval_event: threading.Event | None = None
+        self._approval_result: ApprovalDecision | None = None
+        self._reject_all: bool = False
 
     def cancel(self) -> None:
         """Request cancellation (thread-safe)."""
@@ -88,11 +93,13 @@ class DroneRunner(QObject):
         logger.info("Drone run started: %s (%s)", self._drone.name, self._run.run_id)
         self._run.mark("running")
         self.statusChanged.emit("running")
+        self._reject_all = False
 
-        # 1. Create read-only tool registry
+        # 1. Create tool registry (read-only or write-capable based on policy)
+        read_only = (self._drone.write_policy == "read_only")
         registry = ToolRegistry(
             workspace_root=self._workspace_root,
-            read_only=True,
+            read_only=read_only,
             mode="single",
         )
 
@@ -124,10 +131,11 @@ class DroneRunner(QObject):
         timeout = self._drone.budget.timeout_seconds
         start_time = time.time()
 
-        # Approval callback — always approve since we're in read-only mode
-        # and write tools aren't available to the model.
-        def _always_approve(_request) -> ApprovalDecision:
-            return ApprovalDecision(action="approve")
+        # Select approval callback based on write policy
+        if self._drone.write_policy == "read_only":
+            approval_cb = self._always_approve
+        else:
+            approval_cb = self._build_approval_callback()
 
         try:
             for _round_num in range(max_rounds):
@@ -210,7 +218,7 @@ class DroneRunner(QObject):
 
                         # Execute via registry
                         try:
-                            result = registry.execute(name, args, approval_cb=_always_approve)
+                            result = registry.execute(name, args, approval_cb=approval_cb, reject_all=self._reject_all)
                             ok = result.ok
                             result_str = result.to_tool_message_content()
                             if not ok:
@@ -276,15 +284,46 @@ class DroneRunner(QObject):
             self.receiptReady.emit(receipt)
             self.finished.emit()
 
+    def set_approval_result(self, decision: ApprovalDecision) -> None:
+        """Called from the GUI thread to unblock the worker with a decision."""
+        self._approval_result = decision
+        if decision.action in ("reject_all", "approve_all"):
+            self._reject_all = (decision.action == "reject_all")
+        if self._approval_event is not None:
+            self._approval_event.set()
+
+    def _always_approve(self, _request: ApprovalRequest) -> ApprovalDecision:
+        return ApprovalDecision(action="approve")
+
+    def _build_approval_callback(self):
+        """Build a blocking callback that signals the GUI thread for approval."""
+        def callback(request: ApprovalRequest) -> ApprovalDecision:
+            self._approval_event = threading.Event()
+            self._approval_result = None
+            self.approval_requested.emit(request)
+            self._approval_event.wait()
+            return self._approval_result or ApprovalDecision(action="reject")
+        return callback
+
     def _build_system_prompt(self) -> str:
         """Build the system prompt for this drone."""
         budget_min = max(1, self._drone.budget.timeout_seconds // 60)
+        is_read_only = self._drone.write_policy == "read_only"
+        if is_read_only:
+            write_note = "- Read-only mode: you cannot write or modify any files."
+        else:
+            write_note = (
+                "- Write-capable: you can read and write files. "
+                "Write operations require your approval and will show a diff dialog. "
+                "You can approve, reject, approve all, or reject all."
+            )
+
         return (
-            f"You are a focused, read-only worker drone: \"{self._drone.name}\".\n\n"
+            f"You are a focused worker drone: \"{self._drone.name}\".\n\n"
             f"{self._drone.description}\n\n"
             f"## Instructions\n{self._drone.instructions}\n\n"
             f"## Rules\n"
-            f"- Read-only mode: you cannot write or modify any files.\n"
+            f"{write_note}\n"
             f"- Execute the task using the available tools.\n"
             f"- Provide a clear summary of what you found or accomplished.\n"
             f"- Keep responses concise and relevant.\n"

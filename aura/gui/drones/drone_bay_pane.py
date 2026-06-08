@@ -226,11 +226,12 @@ class DroneBayPane(QWidget):
 
         launch_btn = QPushButton("Launch")
         if drone.write_policy == "read_only":
-            launch_btn.setEnabled(True)
             launch_btn.setToolTip(f"Launch {drone.name}")
-        else:
-            launch_btn.setEnabled(False)
-            launch_btn.setToolTip("Write-capable Drone runs land in a later phase.")
+        elif drone.write_policy == "ask_before_writes":
+            launch_btn.setToolTip(f"Launch {drone.name} (asks before writes)")
+        elif drone.write_policy == "normal_diff_approval":
+            launch_btn.setToolTip(f"Launch {drone.name} (diff approval)")
+        launch_btn.setEnabled(True)
         launch_btn.setStyleSheet(
             f"QPushButton {{ background: {ACCENT}; color: {BG}; "
             f"border: 1px solid {ACCENT}; border-radius: 4px; "
@@ -238,10 +239,9 @@ class DroneBayPane(QWidget):
             f"QPushButton:disabled {{ background: #2a2a30; color: #555566; "
             f"border: 1px solid #333340; }}"
         )
-        if drone.write_policy == "read_only":
-            launch_btn.clicked.connect(
-                lambda checked=False, did=drone.id: self.launchDroneRequested.emit(did)
-            )
+        launch_btn.clicked.connect(
+            lambda checked=False, did=drone.id: self.launchDroneRequested.emit(did)
+        )
         action_row.addWidget(launch_btn)
 
         edit_btn = QPushButton("Edit")
