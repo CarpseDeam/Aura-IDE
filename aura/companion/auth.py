@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import random
+import secrets
 import socket
 import string
 import threading
@@ -125,3 +126,50 @@ def clear_expired_codes() -> None:
         for code, entry in list(_pairing_codes.items()):
             if now > entry["expires_at"]:
                 _pairing_codes.pop(code, None)
+
+
+# In-memory ticket store (thread-safe)
+TICKET_BYTES = 24  # 192 bits of entropy
+TICKET_TTL = 300   # 5 minutes
+
+_tickets: dict[str, dict] = {}
+_tickets_lock = threading.Lock()
+
+
+def generate_ticket(desktop_id: str, pairing_code: str, *,
+                    desktop_name: str = "",
+                    project_id: str = "",
+                    conversation_id: str = "") -> str:
+    """Generate an opaque short-lived ticket bound to the given context."""
+    ticket = secrets.token_urlsafe(TICKET_BYTES)
+    with _tickets_lock:
+        _tickets[ticket] = {
+            "desktop_id": desktop_id,
+            "code": pairing_code,
+            "desktop_name": desktop_name,
+            "project_id": project_id,
+            "conversation_id": conversation_id,
+            "created_at": time.time(),
+            "expires_at": time.time() + TICKET_TTL,
+        }
+    return ticket
+
+
+def pop_ticket(ticket: str) -> dict | None:
+    """Return and remove ticket data if valid, or None if expired/invalid."""
+    with _tickets_lock:
+        data = _tickets.pop(ticket, None)
+        if data is None:
+            return None
+    if time.time() > data.get("expires_at", 0):
+        return None
+    return data
+
+
+def cleanup_expired_tickets() -> None:
+    """Remove expired tickets."""
+    now = time.time()
+    with _tickets_lock:
+        expired = [k for k, v in _tickets.items() if now > v.get("expires_at", 0)]
+        for k in expired:
+            _tickets.pop(k, None)

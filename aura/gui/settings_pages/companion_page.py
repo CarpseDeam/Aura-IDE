@@ -2,12 +2,19 @@
 
 Layout:
     [ Connection status pill ]                       [ Enable switch ]
-    Relay URL .......................   Display name .................
-    Companion Web URL ..............    Desktop ID (read-only) .......
-    [ Pair Phone button ]            [ Paired devices status text ]
 
-When pairing is active, a glass card slides in showing the QR code, the
-fallback short code, expiry countdown, and a Cancel button.
+    Connection:
+        Desktop Name ..................
+
+    Phone Pairing (visible when connected):
+        [ Pair Phone button ]
+        (Pairing card: QR, code, expiry, Cancel — when pairing)
+        (Paired status — after pairing complete)
+
+    Advanced / Self-hosting (collapsible, collapsed by default):
+        Relay URL .......................
+        Companion Web URL ................
+        Desktop ID (read-only) ...........
 """
 from __future__ import annotations
 
@@ -29,6 +36,7 @@ from PySide6.QtWidgets import (
 )
 
 from aura.companion.auth import get_device_display_name, get_device_id
+from aura.gui.cards._collapsible import _CollapsibleSection
 from aura.gui.theme import (
     ACCENT,
     BG_ALT,
@@ -83,93 +91,70 @@ class CompanionPage(QWidget):
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(14)
+        outer.setSpacing(12)
 
-        # ── Header card: status + enable ─────────────────────────
-        header = _Card(self)
-        h_layout = QHBoxLayout(header)
-        h_layout.setContentsMargins(16, 14, 16, 14)
-        h_layout.setSpacing(12)
-
-        eyebrow = QLabel("AURA COMPANION")
-        eyebrow.setStyleSheet(
-            f"color: {ACCENT}; font-weight: 700; font-size: 10px;"
-            " letter-spacing: 0.14em;"
-        )
-        title = QLabel("Pocket cockpit for your desktop")
-        title.setStyleSheet(f"color: {FG}; font-size: 14px; font-weight: 600;")
-        sub = QLabel("Pair your phone to chat, cancel runs, and watch responses on the go.")
-        sub.setStyleSheet(f"color: {FG_DIM}; font-size: 11px;")
-        sub.setWordWrap(True)
-
-        title_col = QVBoxLayout()
-        title_col.setContentsMargins(0, 0, 0, 0)
-        title_col.setSpacing(2)
-        title_col.addWidget(eyebrow)
-        title_col.addWidget(title)
-        title_col.addWidget(sub)
-        h_layout.addLayout(title_col, 1)
-
-        right = QVBoxLayout()
-        right.setSpacing(8)
-        right.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
+        # ── Header row: status pill + enable switch ─────────────
+        header_row = QHBoxLayout()
+        header_row.setContentsMargins(0, 0, 0, 0)
         self._status_pill = QLabel("● Disabled")
         self._status_pill.setStyleSheet(self._pill_style(FG_MUTED))
-        right.addWidget(self._status_pill, alignment=Qt.AlignmentFlag.AlignRight)
+        header_row.addWidget(self._status_pill)
+        header_row.addStretch()
         self._enabled_switch = GlassSwitch("Enable Companion", self._settings.companion_enabled)
-        right.addWidget(self._enabled_switch, alignment=Qt.AlignmentFlag.AlignRight)
-        h_layout.addLayout(right, 0)
+        header_row.addWidget(self._enabled_switch)
+        outer.addLayout(header_row)
 
-        outer.addWidget(header)
+        # ── Connection section ──────────────────────────────────
+        conn_card = _Card(self)
+        conn_layout = QVBoxLayout(conn_card)
+        conn_layout.setContentsMargins(16, 14, 16, 14)
+        conn_layout.setSpacing(8)
 
-        # ── Config card: identity + connection ───────────────────
-        config = _Card(self)
-        cfg_layout = QVBoxLayout(config)
-        cfg_layout.setContentsMargins(16, 14, 16, 14)
-        cfg_layout.setSpacing(10)
+        conn_title = QLabel("Connection")
+        conn_title.setStyleSheet(f"color: {FG}; font-size: 13px; font-weight: 600;")
+        conn_layout.addWidget(conn_title)
 
-        form = QFormLayout()
-        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-        form.setHorizontalSpacing(12)
-        form.setVerticalSpacing(8)
-
+        name_row = QHBoxLayout()
+        name_row.setSpacing(10)
+        name_label = QLabel("Desktop Name")
+        name_label.setStyleSheet(f"color: {FG_DIM}; font-size: 11px;")
+        name_label.setFixedWidth(100)
+        name_row.addWidget(name_label)
         self._display_name_edit = QLineEdit(self._settings.companion_display_name or get_device_display_name())
         self._display_name_edit.setPlaceholderText("Auto from hostname")
-        form.addRow(self._dim_label("Desktop Name"), self._display_name_edit)
+        name_row.addWidget(self._display_name_edit, 1)
+        conn_layout.addLayout(name_row)
 
-        self._relay_url_edit = QLineEdit(self._settings.companion_relay_url)
-        form.addRow(self._dim_label("Relay URL"), self._relay_url_edit)
+        outer.addWidget(conn_card)
 
-        self._web_url_edit = QLineEdit(self._settings.companion_web_url)
-        self._web_url_edit.setPlaceholderText("http://<your-lan-ip>:5173")
-        form.addRow(self._dim_label("Companion Web URL"), self._web_url_edit)
+        # ── Pairing section (visible when connected) ────────────
+        self._pairing_section = QWidget(self)
+        self._pairing_section.setVisible(False)
+        pairing_outer = QVBoxLayout(self._pairing_section)
+        pairing_outer.setContentsMargins(0, 0, 0, 0)
+        pairing_outer.setSpacing(8)
 
-        device_id = get_device_id()
-        device_id_label = QLabel(device_id)
-        device_id_label.setStyleSheet(
-            f"color: {FG_DIM}; background: {BG_RAISED}; border: 1px solid {BORDER};"
-            f" border-radius: 6px; padding: 4px 8px; font-family: 'JetBrains Mono', 'Consolas', monospace;"
-            " font-size: 11px;"
-        )
-        device_id_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        form.addRow(self._dim_label("Desktop ID"), device_id_label)
+        pair_card = _Card(self._pairing_section)
+        pair_card_layout = QVBoxLayout(pair_card)
+        pair_card_layout.setContentsMargins(16, 14, 16, 14)
+        pair_card_layout.setSpacing(8)
 
-        cfg_layout.addLayout(form)
-
-        action_row = QHBoxLayout()
-        action_row.setSpacing(10)
-        action_row.addStretch()
+        pair_header = QHBoxLayout()
+        pair_title = QLabel("Phone Pairing")
+        pair_title.setStyleSheet(f"color: {FG}; font-size: 13px; font-weight: 600;")
+        pair_header.addWidget(pair_title)
+        pair_header.addStretch()
         self._pair_button = QPushButton("Pair Phone")
         self._pair_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self._pair_button.setStyleSheet(self._primary_button_style())
         self._pair_button.clicked.connect(self._on_pair_clicked)
-        action_row.addWidget(self._pair_button)
-        cfg_layout.addLayout(action_row)
+        pair_header.addWidget(self._pair_button)
+        pair_card_layout.addLayout(pair_header)
 
-        outer.addWidget(config)
+        pairing_outer.addWidget(pair_card)
 
-        # ── Pairing card: QR + code + expiry ─────────────────────
-        self._pair_card = _Card(self)
+        # Pairing card (QR + code + expiry)
+        self._pair_card = _Card(self._pairing_section)
         self._pair_card.setVisible(False)
         pair_layout = QHBoxLayout(self._pair_card)
         pair_layout.setContentsMargins(16, 16, 16, 16)
@@ -181,18 +166,18 @@ class CompanionPage(QWidget):
         info_col = QVBoxLayout()
         info_col.setSpacing(8)
 
-        pair_title = QLabel("Scan with your phone")
-        pair_title.setStyleSheet(f"color: {FG}; font-size: 14px; font-weight: 600;")
-        info_col.addWidget(pair_title)
+        pair_subtitle = QLabel("Scan with your phone")
+        pair_subtitle.setStyleSheet(f"color: {FG}; font-size: 14px; font-weight: 600;")
+        info_col.addWidget(pair_subtitle)
 
         pair_sub = QLabel("Open the Aura Companion web app, then point your camera at the QR.\nOr type the code below if you're testing locally.")
         pair_sub.setStyleSheet(f"color: {FG_DIM}; font-size: 11px;")
         pair_sub.setWordWrap(True)
         info_col.addWidget(pair_sub)
 
-        code_label_caption = QLabel("Pairing code")
-        code_label_caption.setStyleSheet(f"color: {FG_MUTED}; font-size: 10px; text-transform: uppercase; letter-spacing: 0.12em;")
-        info_col.addWidget(code_label_caption)
+        code_caption = QLabel("Pairing code")
+        code_caption.setStyleSheet(f"color: {FG_MUTED}; font-size: 10px; text-transform: uppercase; letter-spacing: 0.12em;")
+        info_col.addWidget(code_caption)
 
         self._code_text = QLabel("------")
         code_font = QFont("JetBrains Mono")
@@ -246,12 +231,65 @@ class CompanionPage(QWidget):
         info_col.addStretch()
 
         pair_layout.addLayout(info_col, 1)
-        outer.addWidget(self._pair_card)
+        pairing_outer.addWidget(self._pair_card)
 
-        # ── Paired devices status ────────────────────────────────
+        # Paired status
         self._paired_status_label = QLabel("No phone paired yet.")
         self._paired_status_label.setStyleSheet(f"color: {FG_DIM}; font-size: 11px; padding: 2px 4px;")
-        outer.addWidget(self._paired_status_label)
+        pairing_outer.addWidget(self._paired_status_label)
+
+        outer.addWidget(self._pairing_section)
+
+        # ── Advanced / Self-hosting (collapsible) ───────────────
+        advanced_body = QWidget(self)
+        advanced_body_layout = QVBoxLayout(advanced_body)
+        advanced_body_layout.setContentsMargins(0, 4, 0, 0)
+        advanced_body_layout.setSpacing(8)
+
+        adv_form = QFormLayout()
+        adv_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        adv_form.setHorizontalSpacing(12)
+        adv_form.setVerticalSpacing(8)
+
+        self._relay_url_edit = QLineEdit(self._settings.companion_relay_url)
+        adv_form.addRow(self._dim_label("Relay URL"), self._relay_url_edit)
+
+        self._web_url_edit = QLineEdit(self._settings.companion_web_url)
+        self._web_url_edit.setPlaceholderText("http://<your-lan-ip>:5173")
+        adv_form.addRow(self._dim_label("Companion Web URL"), self._web_url_edit)
+
+        device_id = get_device_id()
+        device_id_label = QLabel(device_id)
+        device_id_label.setStyleSheet(
+            f"color: {FG_DIM}; background: {BG_RAISED}; border: 1px solid {BORDER};"
+            f" border-radius: 6px; padding: 4px 8px; font-family: 'JetBrains Mono', 'Consolas', monospace;"
+            " font-size: 11px;"
+        )
+        device_id_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        adv_form.addRow(self._dim_label("Desktop ID"), device_id_label)
+
+        advanced_body_layout.addLayout(adv_form)
+
+        note = QLabel("Configure these for custom relay deployments")
+        note.setStyleSheet(f"color: {FG_MUTED}; font-size: 10px; padding: 2px 0;")
+        note.setWordWrap(True)
+        advanced_body_layout.addWidget(note)
+
+        advanced_card = _Card(self)
+        advanced_card_layout = QVBoxLayout(advanced_card)
+        advanced_card_layout.setContentsMargins(0, 0, 0, 0)
+        advanced_card_layout.setSpacing(0)
+
+        self._advanced_section = _CollapsibleSection(
+            "Advanced / Self-hosting",
+            advanced_body,
+            start_open=False,
+            parent=advanced_card,
+        )
+        advanced_card_layout.addWidget(self._advanced_section)
+        advanced_card_layout.addStretch()
+
+        outer.addWidget(advanced_card)
 
         outer.addStretch()
 
@@ -272,6 +310,7 @@ class CompanionPage(QWidget):
         label, color = _STATUS_STYLES.get(status, ("Unknown", FG_DIM))
         self._status_pill.setText(f"● {label}")
         self._status_pill.setStyleSheet(self._pill_style(color))
+        self._pairing_section.setVisible(status == "connected")
 
     def _on_pair_clicked(self) -> None:
         if self._manager is None:

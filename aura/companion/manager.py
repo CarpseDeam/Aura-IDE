@@ -12,6 +12,7 @@ from PySide6.QtCore import QObject, Signal
 from aura.companion.auth import (
     create_device_token,
     generate_pairing_code,
+    generate_ticket,
     get_device_display_name,
     get_device_id,
     invalidate_pairing_code,
@@ -20,7 +21,6 @@ from aura.companion.auth import (
 )
 from aura.companion.client import CompanionWsClient
 from pathlib import Path
-from urllib.parse import urlencode
 
 from aura.companion.protocol import (
     ActiveRunSummary,
@@ -58,9 +58,12 @@ class CompanionManager(QObject):
         self._project_store: Any = None
         self._workspace_root: str = ""
         self._current_project_id: str = ""
+        self._current_conversation_id: str = ""
         self._pending_chat_id: str = ""
         self._pending_chat_phone_id: str = ""
         self._current_pairing_code: str = ""
+        self._paired_context: dict = {}
+        self._paired_project_name: str = ""
 
     # ── Lifecycle ────────────────────────────────────────────
 
@@ -98,8 +101,8 @@ class CompanionManager(QObject):
                 old.streamDone.disconnect(self._on_bridge_stream_done)
                 old.apiError.disconnect(self._on_bridge_api_error)
                 old.finished.disconnect(self._on_bridge_finished)
-            except (TypeError, RuntimeError):
-                pass
+            except (TypeError, RuntimeError) as exc:
+                logger.debug("[Companion] bridge disconnect skipped: %s", exc)
         self._bridge = bridge
         if bridge is not None:
             bridge.contentDelta.connect(self._on_bridge_content_delta)
@@ -116,6 +119,13 @@ class CompanionManager(QObject):
 
     def set_workspace_root(self, path: str) -> None:
         self._workspace_root = path
+
+    def set_current_project(self, project_id: str, project_name: str = "") -> None:
+        self._current_project_id = project_id
+        self._paired_project_name = project_name
+
+    def set_current_conversation(self, conversation_id: str) -> None:
+        self._current_conversation_id = conversation_id
 
     # ── Send ────────────────────────────────────────────────
 
@@ -140,30 +150,40 @@ class CompanionManager(QObject):
     def start_pairing(self) -> dict:
         """Create a fresh pairing code and return a structured payload.
 
-        Returns a dict with: code, expires_at (unix), relay_url, desktop_id,
-        desktop_name, pair_url (the URL the phone opens to auto-fill the pair
-        screen). The pair URL points at the configured companion web URL —
-        see AppSettings.companion_web_url.
+        Returns a dict with: code, expires_at (unix), ticket, desktop_name,
+        pair_url (the URL the phone opens to auto-fill the pair screen).
+        The pair URL points at the configured companion web URL with a
+        time-limited ticket — see AppSettings.companion_web_url.
         """
         code = self.generate_new_pairing_code()
         expires_at = pairing_code_expiry(code) or 0.0
-        relay_url = self._settings.companion_relay_url or "ws://localhost:8765"
         desktop_id = get_device_id()
         desktop_name = self._settings.companion_display_name or get_device_display_name()
         web_url = (self._settings.companion_web_url or "http://localhost:5173").rstrip("/")
-        query = urlencode({
-            "relay": relay_url,
-            "desktop": desktop_id,
-            "name": desktop_name,
+
+        ticket = generate_ticket(
+            desktop_id=desktop_id,
+            pairing_code=code,
+            desktop_name=desktop_name,
+            project_id=self._current_project_id,
+            conversation_id=self._current_conversation_id,
+        )
+
+        # Register the ticket with the relay so it can resolve context
+        self.send_event(make_envelope("ticket.register", {
+            "ticket": ticket,
+            "desktop_id": desktop_id,
+            "desktop_name": desktop_name,
             "code": code,
-            "exp": int(expires_at),
-        })
-        pair_url = f"{web_url}/login?{query}"
+            "project_id": self._current_project_id,
+            "conversation_id": self._current_conversation_id,
+        }))
+
+        pair_url = f"{web_url}/pair?ticket={ticket}"
         return {
             "code": code,
             "expires_at": expires_at,
-            "relay_url": relay_url,
-            "desktop_id": desktop_id,
+            "ticket": ticket,
             "desktop_name": desktop_name,
             "pair_url": pair_url,
         }
@@ -204,13 +224,31 @@ class CompanionManager(QObject):
             role="phone"
         )
 
-        # Send confirmation back through relay
+        # Resolve safe context to deliver to the phone after pairing
+        project_name = ""
+        if self._current_project_id and self._project_store:
+            try:
+                project = self._project_store.load_project(self._current_project_id)
+                if project:
+                    project_name = project.name
+            except Exception as exc:
+                logger.debug("[Companion] could not resolve project name for pairing context: %s", exc)
+
+        safe_context = {
+            "project_id": self._current_project_id,
+            "project_name": project_name,
+            "conversation_id": self._current_conversation_id,
+        }
+        self._paired_context = safe_context
+
+        # Send confirmation back through relay with safe context
         self.send_event(make_envelope("pair.confirmed", {
             "token": token,
             "desktop_id": get_device_id(),
             "desktop_name": get_device_display_name(),
             "phone_id": phone_id,
             "device_name": phone_name,
+            **safe_context,
         }, in_response_to=original_msg_id))
 
         # Emit signal for UI
@@ -300,9 +338,22 @@ class CompanionManager(QObject):
                 "message": "Companion is not connected to a conversation session.",
             }, in_response_to=msg.get("id", "")))
             return
-        text = msg.get("payload", {}).get("text", "")
+        payload = msg.get("payload", {})
+        text = payload.get("text", "")
         if not text:
             return
+
+        project_id = msg.get("project_id") or payload.get("project_id", "")
+        conversation_id = msg.get("conversation_id") or payload.get("conversation_id", "")
+        if not project_id or not conversation_id:
+            self.send_event(make_envelope("chat.error", {
+                "message": "Missing project or conversation context.",
+            }, in_response_to=msg.get("id", "")))
+            return
+
+        self._current_project_id = project_id
+        self._current_conversation_id = conversation_id
+
         if self._bridge.is_running():
             self.send_event(make_envelope("chat.error", {
                 "message": "A conversation is already in progress on the desktop.",
@@ -316,6 +367,13 @@ class CompanionManager(QObject):
         self._bridge.send(model=model, thinking=thinking, max_tool_rounds=self._settings.max_tool_rounds)
 
     def _handle_chat_cancel(self, msg: dict) -> None:
+        payload = msg.get("payload", {})
+        project_id = msg.get("project_id") or payload.get("project_id", "")
+        conversation_id = msg.get("conversation_id") or payload.get("conversation_id", "")
+        if project_id:
+            self._current_project_id = project_id
+        if conversation_id:
+            self._current_conversation_id = conversation_id
         if self._bridge and self._bridge.is_running():
             self._bridge.request_cancel()
 
