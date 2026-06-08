@@ -73,8 +73,10 @@ class EdgeTabRail(QFrame):
 
         self._drone_tab = QToolButton(self)
         self._drone_tab.setObjectName("edgeDroneTab")
-        self._drone_tab.setText("◉")
         self._drone_tab.setToolTip("Drone Bay")
+        self._drone_tab.setIcon(QIcon(str(media_path("drone_bot.svg"))))
+        self._drone_tab.setIconSize(QSize(22, 22))
+        self._drone_tab.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
         self._drone_tab.setCursor(Qt.CursorShape.PointingHandCursor)
         self._drone_tab.setCheckable(True)
         self._drone_tab.setFixedSize(40, 44)
@@ -173,8 +175,6 @@ class EdgeTabRail(QFrame):
             "  border-bottom-left-radius: 8px;"
             "  border-top-right-radius: 0px;"
             "  border-bottom-right-radius: 0px;"
-            "  font-size: 18px;"
-            "  font-weight: 800;"
             "  padding: 0px;"
             "}"
             "QToolButton#edgeDroneTab:hover {"

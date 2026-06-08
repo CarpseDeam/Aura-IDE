@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="#7dcfff">
+  <!-- Antenna rod -->
+  <path d="M11.5 3.5v3h1v-3z"/>
+  <!-- Antenna tip dot -->
+  <path d="M12 2.5a1 1 0 1 1 0 2 1 1 0 0 1 0-2z"/>
+  <!-- Head body (rounded rectangle) -->
+  <path d="M6 7.5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2z"/>
+  <!-- Left eye -->
+  <path d="M8.5 10.5h3v3h-3z"/>
+  <!-- Right eye -->
+  <path d="M13.5 10.5h3v3h-3z"/>
+</svg>
