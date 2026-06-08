@@ -52,12 +52,14 @@ class SettingsDialog(QDialog):
         from aura.gui.settings_pages.automation_page import AutomationPage
         from aura.gui.settings_pages.models_page import ModelsPage
         from aura.gui.settings_pages.prompts_page import PromptsPage
+        from aura.gui.settings_pages.companion_page import CompanionPage
         from aura.gui.settings_pages.sandbox_page import SandboxPage
         from aura.gui.settings_pages.vision_page import VisionPage
 
         self._models_page = ModelsPage(self._settings)
         self._api_keys_page = ApiKeysPage(self._settings)
         self._automation_page = AutomationPage(self._settings)
+        self._companion_page = CompanionPage(self._settings)
         self._vision_page = VisionPage(self._settings)
         self._sandbox_page = SandboxPage(self._settings, workspace_root, on_change_root)
         self._prompts_page = PromptsPage(self._settings)
@@ -66,6 +68,7 @@ class SettingsDialog(QDialog):
             (self._models_page, "Models"),
             (self._api_keys_page, "API Keys"),
             (self._automation_page, "Automation"),
+            (self._companion_page, "Companion"),
             (self._vision_page, "Vision"),
             (self._sandbox_page, "Sandbox / Workspace"),
             (self._prompts_page, "Prompts"),
@@ -131,6 +134,7 @@ class SettingsDialog(QDialog):
         self._models_page.collect_settings(result)
         self._api_keys_page.collect_settings(result)
         self._automation_page.collect_settings(result)
+        self._companion_page.collect_settings(result)
         self._vision_page.collect_settings(result)
         self._sandbox_page.collect_settings(result)
         self._prompts_page.collect_settings(result)

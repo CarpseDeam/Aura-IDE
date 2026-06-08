@@ -97,6 +97,12 @@ class AppSettings:
     humanizer_feature_log: bool = False
     humanizer_observe: bool = False
 
+    # Companion (mobile control plane)
+    companion_enabled: bool = False
+    companion_relay_url: str = "ws://localhost:8765"
+    companion_display_name: str = ""
+    companion_device_token: str = ""
+
     @classmethod
     def from_dict(cls, data: dict) -> "AppSettings":
         s = cls()
@@ -200,6 +206,15 @@ class AppSettings:
             s.auto_summon_drones = data["auto_summon_drones"]
         if isinstance(data.get("sandbox_mode"), str) and data["sandbox_mode"] in ("host", "docker", "wasm"):
             s.sandbox_mode = data["sandbox_mode"]
+        # Companion
+        if isinstance(data.get("companion_enabled"), bool):
+            s.companion_enabled = data["companion_enabled"]
+        if isinstance(data.get("companion_relay_url"), str):
+            s.companion_relay_url = data["companion_relay_url"]
+        if isinstance(data.get("companion_display_name"), str):
+            s.companion_display_name = data["companion_display_name"]
+        if isinstance(data.get("companion_device_token"), str):
+            s.companion_device_token = data["companion_device_token"]
         # Onboarding fields (backward-compatible)
         if isinstance(data.get("onboarding_checklist"), dict):
             s.onboarding_checklist = data["onboarding_checklist"]
