@@ -32,6 +32,12 @@ class DroneStore:
 
     @staticmethod
     def drones_dir(workspace_root: Path) -> Path:
+        """Return the .aura/drones path without creating it."""
+        return workspace_root / ".aura" / "drones"
+
+    @staticmethod
+    def _ensure_drones_dir(workspace_root: Path) -> Path:
+        """Create and return the .aura/drones directory."""
         d = workspace_root / ".aura" / "drones"
         d.mkdir(parents=True, exist_ok=True)
         return d
@@ -39,9 +45,9 @@ class DroneStore:
     @staticmethod
     def list_drones(workspace_root: Path) -> list[DroneDefinition]:
         d = DroneStore.drones_dir(workspace_root)
-        results: list[DroneDefinition] = []
         if not d.exists():
-            return results
+            return []
+        results: list[DroneDefinition] = []
         for p in sorted(d.iterdir()):
             if p.suffix != ".json":
                 continue
@@ -67,8 +73,7 @@ class DroneStore:
 
     @staticmethod
     def save_drone(workspace_root: Path, drone: DroneDefinition) -> None:
-        """Save drone definition atomically (temp file + rename)."""
-        d = DroneStore.drones_dir(workspace_root)
+        d = DroneStore._ensure_drones_dir(workspace_root)
         p = d / f"{drone.id}.json"
         data = asdict(drone)
         fd, tmp_path = tempfile.mkstemp(dir=str(d), suffix=".json")

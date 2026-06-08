@@ -20,7 +20,12 @@ from aura.gui.theme import ACCENT, BG, BG_RAISED, BORDER, DANGER, FG, FG_DIM, FG
 
 
 class DroneBayPane(QWidget):
-    """Panel that displays saved Drones with action buttons."""
+    """Panel that displays saved Drones with action buttons.
+    
+    Future phases will add live Drone run cards (active run pips),
+    parallel execution indicators, and receipt display. Keep this
+    widget capable of hosting both static definitions and live runs.
+    """
 
     newDroneRequested = Signal()
     editDroneRequested = Signal(str)
@@ -128,6 +133,13 @@ class DroneBayPane(QWidget):
     # -- Internal helpers --
 
     def _show_empty_state(self) -> None:
+        # Remove any existing items first
+        while self._card_layout.count() > 0:
+            item = self._card_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        self._card_layout.addStretch(2)
         empty = QLabel(
             "No drones yet.\n\n"
             "Create one from scratch, or save a useful Aura workflow later."
@@ -136,20 +148,20 @@ class DroneBayPane(QWidget):
         empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
         empty.setWordWrap(True)
         empty.setStyleSheet(
-            f"color: {FG_MUTED}; font-size: 13px; padding: 48px 16px; "
+            f"color: {FG_MUTED}; font-size: 13px; padding: 16px; "
             f"background: transparent;"
         )
         self._card_layout.addWidget(empty)
-        self._card_layout.addStretch(1)
+        self._card_layout.addStretch(3)
 
     def _build_drone_card(self, drone: DroneDefinition) -> QFrame:
         card = QFrame()
         card.setObjectName("droneCard")
         card.setStyleSheet(
-            f"QFrame#droneCard {{ background: rgba(28, 28, 34, 0.50); "
+            f"QFrame#droneCard {{ background: {BG_RAISED}; "
             f"border: 1px solid {BORDER}; border-radius: 8px; "
-            f"padding: 10px; }}"
-            f"QFrame#droneCard:hover {{ background: rgba(35, 35, 42, 0.65); "
+            f"padding: 0px; }}"
+            f"QFrame#droneCard:hover {{ background: #2b2b34; "
             f"border-color: {ACCENT}; }}"
         )
 
@@ -203,9 +215,9 @@ class DroneBayPane(QWidget):
         launch_btn.setStyleSheet(
             f"QPushButton {{ background: {ACCENT}; color: {BG}; "
             f"border: 1px solid {ACCENT}; border-radius: 4px; "
-            f"padding: 3px 12px; font-size: 12px; font-weight: 600; }}"
-            f"QPushButton:disabled {{ background: {BG_RAISED}; color: {FG_MUTED}; "
-            f"border-color: {BORDER}; }}"
+            f"padding: 3px 14px; font-size: 12px; font-weight: 600; }}"
+            f"QPushButton:disabled {{ background: #2a2a30; color: #555566; "
+            f"border: 1px solid #333340; }}"
         )
         action_row.addWidget(launch_btn)
 

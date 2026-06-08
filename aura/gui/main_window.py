@@ -246,6 +246,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         if checkpoint_tab is not None:
             checkpoint_tab.clicked.connect(lambda: self._on_open_checkpoints())
         self._edge_rail.droneBayRequested.connect(self._on_drone_bay_requested)
+        self._sync_drone_tab_checked()
 
         # Frameless window — no native title bar
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.FramelessWindowHint)
@@ -451,6 +452,9 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         save_workspace_root(path)
         self._update_workspace_label()
         self._left_pane.refresh_projects(path)
+        if hasattr(self, '_drone_bay'):
+            self._drone_bay.set_workspace_root(path)
+            self._drone_bay.refresh()
         self._refresh_status_bar()
         return str(path)
 
@@ -602,7 +606,12 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
     def _on_drone_bay_requested(self) -> None:
         self._playground.toggle_drone_bay()
+        self._sync_drone_tab_checked()
         self._position_edge_tabs()
+
+    def _sync_drone_tab_checked(self) -> None:
+        if self._edge_rail.drone_tab is not None:
+            self._edge_rail.drone_tab.setChecked(self._playground.is_drone_bay_open())
 
     def _on_new_drone(self) -> None:
         dlg = DroneEditorDialog(
@@ -628,15 +637,23 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         drone = DroneStore.load_drone(self._workspace_root, drone_id)
         if drone is None:
             return
+
+        # Determine a distinct name: "Release Check" → "Release Check Copy"
+        existing_names = {d.name for d in DroneStore.list_drones(self._workspace_root)}
+        copy_name = f"{drone.name} Copy"
+        if copy_name in existing_names:
+            counter = 2
+            while f"{drone.name} Copy {counter}" in existing_names:
+                counter += 1
+            copy_name = f"{drone.name} Copy {counter}"
+
+        new_id = DroneStore.next_id(self._workspace_root, copy_name)
         import datetime
-        from copy import deepcopy
-        dup = deepcopy(drone)
-        new_id = DroneStore.next_id(self._workspace_root, drone.name)
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
         from aura.drones.definition import DroneDefinition
         dup = DroneDefinition(
             id=new_id,
-            name=drone.name,
+            name=copy_name,
             description=drone.description,
             instructions=drone.instructions,
             write_policy=drone.write_policy,
@@ -865,6 +882,9 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
     def _on_started(self) -> None:
         self._input.set_streaming(True)
+        # If Drone Bay is open, switch back to workspace view so user sees the run
+        self._playground.switch_to_workspace()
+        self._sync_drone_tab_checked()
 
     def _on_finished(self) -> None:
         self._input.set_streaming(False)

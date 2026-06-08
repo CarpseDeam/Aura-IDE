@@ -14,6 +14,7 @@ from aura.drones.store import DroneStore
 
 def test_list_drones_empty(tmp_path: Path) -> None:
     assert DroneStore.list_drones(tmp_path) == []
+    assert not (tmp_path / ".aura" / "drones").exists()
 
 
 def test_save_and_load_drone(tmp_path: Path) -> None:
@@ -56,6 +57,22 @@ def test_list_drones(tmp_path: Path) -> None:
     drones = DroneStore.list_drones(tmp_path)
     assert len(drones) == 3
     assert {d.id for d in drones} == {"drone-0", "drone-1", "drone-2"}
+
+
+def test_save_creates_directory(tmp_path: Path) -> None:
+    drone = DroneDefinition(
+        id="first",
+        name="First",
+        description="",
+        instructions="",
+        write_policy="read_only",
+        allowed_tools=(),
+        output_contract="",
+    )
+    drone_dir = tmp_path / ".aura" / "drones"
+    assert not drone_dir.exists()
+    DroneStore.save_drone(tmp_path, drone)
+    assert drone_dir.exists()
 
 
 def test_delete_drone(tmp_path: Path) -> None:

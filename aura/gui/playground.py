@@ -48,18 +48,18 @@ class AuraPlayground(QWidget):
         header_layout.setContentsMargins(12, 8, 12, 4)
         header_layout.setSpacing(8)
 
-        header_label = QLabel("WORKSPACE", self)
-        header_label.setObjectName("paneTitleWorkspace")
-        header_layout.addWidget(header_label)
+        self._header_label = QLabel("WORKSPACE", self)
+        self._header_label.setObjectName("paneTitleWorkspace")
+        header_layout.addWidget(self._header_label)
 
         header_layout.addStretch(1)
 
-        close_all_btn = QToolButton(self)
-        close_all_btn.setText("Close All")
-        close_all_btn.setObjectName("closeAllBtn")
-        close_all_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        close_all_btn.clicked.connect(self.clear)
-        header_layout.addWidget(close_all_btn)
+        self._close_all_btn = QToolButton(self)
+        self._close_all_btn.setText("Close All")
+        self._close_all_btn.setObjectName("closeAllBtn")
+        self._close_all_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._close_all_btn.clicked.connect(self.clear)
+        header_layout.addWidget(self._close_all_btn)
 
         layout.addWidget(header_container)
 
@@ -147,17 +147,34 @@ class AuraPlayground(QWidget):
         self._drone_bay = drone_bay
         self._stack.addWidget(drone_bay)  # index 1
 
+    def set_workspace_header(self, text: str, show_close_all: bool = True) -> None:
+        """Update the header label and visibility of Close All button."""
+        self._header_label.setText(text)
+        self._close_all_btn.setVisible(show_close_all)
+
+    def switch_to_workspace(self) -> None:
+        """Switch the stacked widget to the normal workspace view (index 0)."""
+        if self._stack.currentIndex() != 0:
+            self._stack.setCurrentIndex(0)
+            self.set_workspace_header("WORKSPACE", show_close_all=True)
+
+    def switch_to_drone_bay(self) -> None:
+        """Switch the stacked widget to the Drone Bay view (index 1)."""
+        if self._drone_bay is not None and self._stack.currentIndex() != 1:
+            self._stack.setCurrentIndex(1)
+            self.set_workspace_header("DRONE BAY", show_close_all=False)
+
+    def is_drone_bay_open(self) -> bool:
+        """Return True if the Drone Bay is currently visible."""
+        return self._drone_bay is not None and self._stack.currentIndex() == 1
+
     def toggle_drone_bay(self) -> None:
         if self._drone_bay is None:
             return
         if self._stack.currentIndex() == 0:
-            self._stack.setCurrentIndex(1)
+            self.switch_to_drone_bay()
         else:
-            self._stack.setCurrentIndex(0)
-
-    def show_drone_bay(self) -> None:
-        if self._drone_bay is not None:
-            self._stack.setCurrentIndex(1)
+            self.switch_to_workspace()
 
     def refresh_drone_bay(self) -> None:
         if self._drone_bay is not None and hasattr(self._drone_bay, 'refresh'):
