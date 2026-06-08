@@ -72,6 +72,7 @@ class ChatView(QScrollArea):
         self._programmatic_scroll_depth = 0
         self._plan_writer_cards: dict[str, PlanWriterCard] = {}
         self._worker_summary_cards: dict[str, WorkerSummaryCard] = {}
+        self._worker_summary_disabled: bool = True
         self._compact_tools: bool = False
         self._compact_tool_names: dict[str, str] = {}
         self._is_bulk_updating: bool = False
@@ -731,11 +732,22 @@ class ChatView(QScrollArea):
         card.deleteLater()
         self._scroll_after_bottom_layout_change()
 
+    @property
+    def worker_summary_disabled(self) -> bool:
+        return self._worker_summary_disabled
+
+    @worker_summary_disabled.setter
+    def worker_summary_disabled(self, value: bool) -> None:
+        self._worker_summary_disabled = value
+
     def add_worker_summary(
         self, tool_call_id: str, goal: str, ok: bool, summary: str,
         needs_followup: bool = False, status: str | None = None,
     ) -> None:
         """Add a summary card to the chat after a worker completes."""
+        if self._worker_summary_disabled:
+            self._remove_plan_writer_card(tool_call_id)
+            return
         self._remove_plan_writer_card(tool_call_id)
         existing = self._worker_summary_cards.get(tool_call_id)
         if existing is not None:

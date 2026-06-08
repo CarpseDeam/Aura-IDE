@@ -31,6 +31,7 @@ class DroneJob:
     error: str | None = None
     started_at: float | None = None
     ended_at: float | None = None
+    _drone_def: DroneDefinition | None = field(default=None, repr=False)
     _completion_event: threading.Event = field(default_factory=threading.Event, repr=False)
 
 
@@ -61,12 +62,11 @@ class ReadOnlyDroneBackgroundRunner:
             drone_id=drone.id,
             drone_name=drone.name,
             goal=goal,
+            _drone_def=drone,
         )
         with self._lock:
             self._jobs[job.run_id] = job
-            running = sum(1 for j in self._jobs.values() if j.status == "running")
-            if running < self._max_parallel:
-                self._start_job(job, drone)
+        self._drain_queue()
         return job
 
     def get(self, run_id: str, wait_seconds: float = 0) -> DroneJob | None:
@@ -84,6 +84,23 @@ class ReadOnlyDroneBackgroundRunner:
         event.wait(timeout=capped)
         with self._lock:
             return self._jobs.get(run_id)
+
+    def _drain_queue(self) -> None:
+        """Start queued jobs if slots are available."""
+        with self._lock:
+            running = sum(1 for j in self._jobs.values() if j.status == "running")
+            queued_ids = sorted(
+                jid for jid, j in self._jobs.items()
+                if j.status == "queued" and j._drone_def is not None
+            )
+            for run_id in queued_ids:
+                if running >= self._max_parallel:
+                    break
+                job = self._jobs[run_id]
+                drone_def = job._drone_def
+                if drone_def is not None:
+                    self._start_job(job, drone_def)
+                    running += 1
 
     def shutdown(self, wait: bool = True) -> None:
         self._executor.shutdown(wait=wait)
@@ -119,6 +136,7 @@ class ReadOnlyDroneBackgroundRunner:
 
             job.ended_at = time.time()
             job._completion_event.set()
+            self._drain_queue()
             logger.info(
                 "Drone job %s (%s) finished: %s",
                 job.run_id,
@@ -126,15 +144,13 @@ class ReadOnlyDroneBackgroundRunner:
                 job.status,
             )
 
-
-_default_runner: ReadOnlyDroneBackgroundRunner | None = None
+_runners: dict[Path, ReadOnlyDroneBackgroundRunner] = {}
 _runner_lock = threading.Lock()
 
 
 def get_background_runner(workspace_root: Path) -> ReadOnlyDroneBackgroundRunner:
-    global _default_runner
-    if _default_runner is None:
-        with _runner_lock:
-            if _default_runner is None:
-                _default_runner = ReadOnlyDroneBackgroundRunner(workspace_root)
-    return _default_runner
+    root = workspace_root.resolve()
+    with _runner_lock:
+        if root not in _runners:
+            _runners[root] = ReadOnlyDroneBackgroundRunner(root)
+        return _runners[root]

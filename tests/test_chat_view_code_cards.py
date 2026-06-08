@@ -181,6 +181,7 @@ def test_recoverable_worker_followup_dispatch_does_not_add_worker_summary(qapp) 
 
 def test_worker_summary_replaces_existing_card_for_same_dispatch(qapp) -> None:
     chat = ChatView()
+    chat.worker_summary_disabled = False
     chat.begin_assistant()
 
     chat.add_worker_summary(
@@ -230,3 +231,24 @@ def test_compact_mode_streams_heavy_tools(qapp) -> None:
 
     controller = chat._controllers["dispatch-1"]
     assert controller.goal == "Fix it"
+
+
+def test_worker_summary_disabled_by_default(qapp) -> None:
+    chat = ChatView()
+    assert chat.worker_summary_disabled is True
+
+
+def test_worker_summary_adds_nothing_when_disabled(qapp) -> None:
+    chat = ChatView()
+    chat.begin_assistant()
+    chat.add_worker_summary("dispatch-1", "goal", True, "done")
+    assert chat.findChildren(WorkerSummaryCard) == []
+
+
+def test_worker_summary_flag_setter_toggles(qapp) -> None:
+    chat = ChatView()
+    chat.worker_summary_disabled = False
+    assert chat.worker_summary_disabled is False
+    chat.add_worker_summary("dispatch-1", "goal", True, "done")
+    cards = chat.findChildren(WorkerSummaryCard)
+    assert len(cards) == 1
