@@ -9,9 +9,18 @@ from aura.version import __version__
 
 from PySide6.QtCore import QObject, Signal
 
-from aura.companion.auth import generate_pairing_code, get_device_display_name, get_device_id, invalidate_pairing_code, validate_pairing_code
+from aura.companion.auth import (
+    create_device_token,
+    generate_pairing_code,
+    get_device_display_name,
+    get_device_id,
+    invalidate_pairing_code,
+    pairing_code_expiry,
+    validate_pairing_code,
+)
 from aura.companion.client import CompanionWsClient
 from pathlib import Path
+from urllib.parse import urlencode
 
 from aura.companion.protocol import (
     ActiveRunSummary,
@@ -23,7 +32,6 @@ from aura.companion.protocol import (
 from aura.drones.store import RunHistoryStore
 from aura.projects.store import ProjectStore
 from aura.settings import AppSettings, resolve_role_default_model
-from relay.auth import create_device_token
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +136,44 @@ class CompanionManager(QObject):
         self.pairing_code_available.emit(code)
         logger.info("[Companion] Pairing code generated: %s", code)
         return code
+
+    def start_pairing(self) -> dict:
+        """Create a fresh pairing code and return a structured payload.
+
+        Returns a dict with: code, expires_at (unix), relay_url, desktop_id,
+        desktop_name, pair_url (the URL the phone opens to auto-fill the pair
+        screen). The pair URL points at the configured companion web URL —
+        see AppSettings.companion_web_url.
+        """
+        code = self.generate_new_pairing_code()
+        expires_at = pairing_code_expiry(code) or 0.0
+        relay_url = self._settings.companion_relay_url or "ws://localhost:8765"
+        desktop_id = get_device_id()
+        desktop_name = self._settings.companion_display_name or get_device_display_name()
+        web_url = (self._settings.companion_web_url or "http://localhost:5173").rstrip("/")
+        query = urlencode({
+            "relay": relay_url,
+            "desktop": desktop_id,
+            "name": desktop_name,
+            "code": code,
+            "exp": int(expires_at),
+        })
+        pair_url = f"{web_url}/?{query}"
+        return {
+            "code": code,
+            "expires_at": expires_at,
+            "relay_url": relay_url,
+            "desktop_id": desktop_id,
+            "desktop_name": desktop_name,
+            "pair_url": pair_url,
+        }
+
+    def cancel_pairing(self) -> None:
+        """Invalidate the active pairing code (user closed the pair dialog)."""
+        if self._current_pairing_code:
+            invalidate_pairing_code(self._current_pairing_code)
+            self._current_pairing_code = ""
+            self.pairing_code_invalidated.emit()
 
     def _handle_pair_verify(self, msg: dict) -> None:
         """Desktop receives a pair.verify from relay — validate code and respond."""

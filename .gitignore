@@ -27,6 +27,11 @@ env/
 *.swo
 *~
 
+# Node / companion-web
+node_modules/
+.vite/
+*.tsbuildinfo
+
 # OS
 .DS_Store
 Thumbs.db

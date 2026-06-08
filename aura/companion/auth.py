@@ -1,20 +1,48 @@
-"""Authentication and device identity for Companion."""
+"""Authentication and device identity for Companion.
+
+This module is self-contained — it does not depend on the relay package, so
+the desktop build remains shippable without the relay code bundled.
+"""
 from __future__ import annotations
 
 import json
 import logging
+import os
 import random
 import socket
 import string
 import threading
 import time
 import uuid
+from datetime import datetime, timedelta, timezone
+
+import jwt
 
 from aura.paths import data_dir
 
 logger = logging.getLogger(__name__)
 
 _DEVICE_ID_FILE = "companion_device.json"
+
+# Shared secret with the relay. Must match relay.auth.SECRET.
+SECRET = os.environ.get("AURA_RELAY_SECRET", "dev-secret-change-in-prod")
+TOKEN_TTL_DAYS = 30
+
+
+def create_device_token(desktop_id: str, device_name: str, role: str = "phone") -> str:
+    """Create a signed JWT for a paired phone device.
+
+    Mirrors relay.auth.create_device_token so the desktop does not depend on
+    the relay package at runtime.
+    """
+    payload = {
+        "desktop_id": desktop_id,
+        "device_name": device_name,
+        "role": role,
+        "exp": datetime.now(timezone.utc) + timedelta(days=TOKEN_TTL_DAYS),
+        "iat": datetime.now(timezone.utc),
+    }
+    return jwt.encode(payload, SECRET, algorithm="HS256")
 
 
 def get_device_id() -> str:
@@ -49,14 +77,26 @@ CODE_TTL = 300  # 5 minutes
 
 
 def generate_pairing_code() -> str:
-    """Generate a 6-character alphanumeric pairing code (valid 5 min)."""
-    code = "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
+    """Generate a 6-character alphanumeric pairing code (valid 5 min).
+
+    Avoids visually ambiguous characters (0/O, 1/I) so users can type the
+    fallback code from the QR card without squinting.
+    """
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    code = "".join(random.choices(alphabet, k=6))
     with _pairing_lock:
         _pairing_codes[code] = {
             "expires_at": time.time() + CODE_TTL,
             "created_at": time.time(),
         }
     return code
+
+
+def pairing_code_expiry(code: str) -> float | None:
+    """Return the expiry timestamp for a pairing code, or None if unknown."""
+    with _pairing_lock:
+        entry = _pairing_codes.get(code)
+        return float(entry["expires_at"]) if entry else None
 
 
 def validate_pairing_code(code: str) -> bool:

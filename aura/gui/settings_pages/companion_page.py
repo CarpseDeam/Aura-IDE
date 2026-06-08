@@ -1,84 +1,393 @@
+"""Companion settings page — pairing, status, and connection config.
+
+Layout:
+    [ Connection status pill ]                       [ Enable switch ]
+    Relay URL .......................   Display name .................
+    Companion Web URL ..............    Desktop ID (read-only) .......
+    [ Pair Phone button ]            [ Paired devices status text ]
+
+When pairing is active, a glass card slides in showing the QR code, the
+fallback short code, expiry countdown, and a Cancel button.
+"""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+import time
+from typing import Optional
+
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QFont, QGuiApplication
 from PySide6.QtWidgets import (
     QFormLayout,
+    QFrame,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
+    QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 
-from aura.gui.theme import FG_DIM
+from aura.companion.auth import get_device_display_name, get_device_id
+from aura.gui.theme import (
+    ACCENT,
+    BG_ALT,
+    BG_RAISED,
+    BORDER,
+    BORDER_STRONG,
+    DANGER,
+    FG,
+    FG_DIM,
+    FG_MUTED,
+    SUCCESS,
+    WARN,
+)
 from aura.gui.widgets.glass_switch import GlassSwitch
+from aura.gui.widgets.qr_widget import QrCodeLabel
 from aura.settings import AppSettings
+
+
+_STATUS_STYLES = {
+    "disabled":   ("Disabled",   FG_MUTED),
+    "connecting": ("Connecting", WARN),
+    "connected":  ("Connected",  SUCCESS),
+    "error":      ("Offline",    DANGER),
+}
+
+
+class _Card(QFrame):
+    """Glass-like card frame for sections."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("CompanionCard")
+        self.setStyleSheet(
+            f"#CompanionCard {{"
+            f"  background: {BG_ALT};"
+            f"  border: 1px solid {BORDER};"
+            f"  border-radius: 12px;"
+            f"}}"
+        )
 
 
 class CompanionPage(QWidget):
     def __init__(self, settings: AppSettings, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._settings = settings
+        self._manager: Optional[object] = None
+        self._countdown_timer = QTimer(self)
+        self._countdown_timer.setInterval(1000)
+        self._countdown_timer.timeout.connect(self._tick_countdown)
+        self._pairing_expires_at: float = 0.0
+        self._pair_url: str = ""
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(14)
+
+        # ── Header card: status + enable ─────────────────────────
+        header = _Card(self)
+        h_layout = QHBoxLayout(header)
+        h_layout.setContentsMargins(16, 14, 16, 14)
+        h_layout.setSpacing(12)
+
+        eyebrow = QLabel("AURA COMPANION")
+        eyebrow.setStyleSheet(
+            f"color: {ACCENT}; font-weight: 700; font-size: 10px;"
+            " letter-spacing: 0.14em;"
+        )
+        title = QLabel("Pocket cockpit for your desktop")
+        title.setStyleSheet(f"color: {FG}; font-size: 14px; font-weight: 600;")
+        sub = QLabel("Pair your phone to chat, cancel runs, and watch responses on the go.")
+        sub.setStyleSheet(f"color: {FG_DIM}; font-size: 11px;")
+        sub.setWordWrap(True)
+
+        title_col = QVBoxLayout()
+        title_col.setContentsMargins(0, 0, 0, 0)
+        title_col.setSpacing(2)
+        title_col.addWidget(eyebrow)
+        title_col.addWidget(title)
+        title_col.addWidget(sub)
+        h_layout.addLayout(title_col, 1)
+
+        right = QVBoxLayout()
+        right.setSpacing(8)
+        right.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
+        self._status_pill = QLabel("● Disabled")
+        self._status_pill.setStyleSheet(self._pill_style(FG_MUTED))
+        right.addWidget(self._status_pill, alignment=Qt.AlignmentFlag.AlignRight)
+        self._enabled_switch = GlassSwitch("Enable Companion", self._settings.companion_enabled)
+        right.addWidget(self._enabled_switch, alignment=Qt.AlignmentFlag.AlignRight)
+        h_layout.addLayout(right, 0)
+
+        outer.addWidget(header)
+
+        # ── Config card: identity + connection ───────────────────
+        config = _Card(self)
+        cfg_layout = QVBoxLayout(config)
+        cfg_layout.setContentsMargins(16, 14, 16, 14)
+        cfg_layout.setSpacing(10)
 
         form = QFormLayout()
         form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-        form.setHorizontalSpacing(14)
-        form.setVerticalSpacing(10)
+        form.setHorizontalSpacing(12)
+        form.setVerticalSpacing(8)
 
-        title = QLabel("Companion (Mobile Control Plane)")
-        title.setStyleSheet(
-            f"color: {FG_DIM}; font-weight: 600; font-size: 11px;"
-            " text-transform: uppercase; letter-spacing: 0.04em;"
-        )
-        form.addRow("", title)
-
-        self._enabled_switch = GlassSwitch(
-            "Enable Companion — connect to mobile web control plane",
-            self._settings.companion_enabled,
-        )
-        form.addRow("", self._enabled_switch)
-
-        self._display_name_edit = QLineEdit()
+        self._display_name_edit = QLineEdit(self._settings.companion_display_name or get_device_display_name())
         self._display_name_edit.setPlaceholderText("Auto from hostname")
-        self._display_name_edit.setText(self._settings.companion_display_name)
-        form.addRow("Desktop Display Name:", self._display_name_edit)
+        form.addRow(self._dim_label("Desktop Name"), self._display_name_edit)
 
-        self._relay_url_edit = QLineEdit()
-        self._relay_url_edit.setText(self._settings.companion_relay_url)
-        form.addRow("Relay URL:", self._relay_url_edit)
+        self._relay_url_edit = QLineEdit(self._settings.companion_relay_url)
+        form.addRow(self._dim_label("Relay URL"), self._relay_url_edit)
 
-        # Connection status indicator (wired to live status in Phase 1)
-        self._status_label = QLabel("\u25cf Disabled")
-        self._status_label.setStyleSheet(f"color: {FG_DIM};")
-        form.addRow("Status:", self._status_label)
+        self._web_url_edit = QLineEdit(self._settings.companion_web_url)
+        self._web_url_edit.setPlaceholderText("http://<your-lan-ip>:5173")
+        form.addRow(self._dim_label("Companion Web URL"), self._web_url_edit)
 
-        layout.addLayout(form)
-        layout.addStretch()
+        device_id = get_device_id()
+        device_id_label = QLabel(device_id)
+        device_id_label.setStyleSheet(
+            f"color: {FG_DIM}; background: {BG_RAISED}; border: 1px solid {BORDER};"
+            f" border-radius: 6px; padding: 4px 8px; font-family: 'JetBrains Mono', 'Consolas', monospace;"
+            " font-size: 11px;"
+        )
+        device_id_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        form.addRow(self._dim_label("Desktop ID"), device_id_label)
+
+        cfg_layout.addLayout(form)
+
+        action_row = QHBoxLayout()
+        action_row.setSpacing(10)
+        action_row.addStretch()
+        self._pair_button = QPushButton("Pair Phone")
+        self._pair_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._pair_button.setStyleSheet(self._primary_button_style())
+        self._pair_button.clicked.connect(self._on_pair_clicked)
+        action_row.addWidget(self._pair_button)
+        cfg_layout.addLayout(action_row)
+
+        outer.addWidget(config)
+
+        # ── Pairing card: QR + code + expiry ─────────────────────
+        self._pair_card = _Card(self)
+        self._pair_card.setVisible(False)
+        pair_layout = QHBoxLayout(self._pair_card)
+        pair_layout.setContentsMargins(16, 16, 16, 16)
+        pair_layout.setSpacing(18)
+
+        self._qr_label = QrCodeLabel(220, self._pair_card)
+        pair_layout.addWidget(self._qr_label, 0, Qt.AlignmentFlag.AlignTop)
+
+        info_col = QVBoxLayout()
+        info_col.setSpacing(8)
+
+        pair_title = QLabel("Scan with your phone")
+        pair_title.setStyleSheet(f"color: {FG}; font-size: 14px; font-weight: 600;")
+        info_col.addWidget(pair_title)
+
+        pair_sub = QLabel("Open the Aura Companion web app, then point your camera at the QR.\nOr type the code below if you're testing locally.")
+        pair_sub.setStyleSheet(f"color: {FG_DIM}; font-size: 11px;")
+        pair_sub.setWordWrap(True)
+        info_col.addWidget(pair_sub)
+
+        code_label_caption = QLabel("Pairing code")
+        code_label_caption.setStyleSheet(f"color: {FG_MUTED}; font-size: 10px; text-transform: uppercase; letter-spacing: 0.12em;")
+        info_col.addWidget(code_label_caption)
+
+        self._code_text = QLabel("------")
+        code_font = QFont("JetBrains Mono")
+        code_font.setStyleHint(QFont.StyleHint.Monospace)
+        code_font.setPointSize(22)
+        code_font.setBold(True)
+        self._code_text.setFont(code_font)
+        self._code_text.setStyleSheet(
+            f"color: {ACCENT}; letter-spacing: 0.32em; background: {BG_RAISED};"
+            f" border: 1px solid {BORDER_STRONG}; border-radius: 8px;"
+            " padding: 10px 14px;"
+        )
+        self._code_text.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self._code_text.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        info_col.addWidget(self._code_text)
+
+        self._expiry_label = QLabel("")
+        self._expiry_label.setStyleSheet(f"color: {FG_DIM}; font-size: 11px;")
+        info_col.addWidget(self._expiry_label)
+
+        url_caption = QLabel("Pair URL (open on phone)")
+        url_caption.setStyleSheet(f"color: {FG_MUTED}; font-size: 10px; text-transform: uppercase; letter-spacing: 0.12em;")
+        info_col.addWidget(url_caption)
+
+        self._url_label = QLabel("")
+        self._url_label.setStyleSheet(
+            f"color: {FG}; background: {BG_RAISED}; border: 1px solid {BORDER};"
+            f" border-radius: 6px; padding: 6px 10px; font-size: 10px;"
+            " font-family: 'JetBrains Mono', 'Consolas', monospace;"
+        )
+        self._url_label.setWordWrap(True)
+        self._url_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self._url_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+        info_col.addWidget(self._url_label)
+
+        button_row = QHBoxLayout()
+        button_row.setSpacing(8)
+        self._copy_url_btn = QPushButton("Copy URL")
+        self._copy_url_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._copy_url_btn.setStyleSheet(self._ghost_button_style())
+        self._copy_url_btn.clicked.connect(self._on_copy_url)
+        button_row.addWidget(self._copy_url_btn)
+
+        self._cancel_pair_btn = QPushButton("Cancel")
+        self._cancel_pair_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._cancel_pair_btn.setStyleSheet(self._danger_button_style())
+        self._cancel_pair_btn.clicked.connect(self._on_cancel_pair)
+        button_row.addWidget(self._cancel_pair_btn)
+        button_row.addStretch()
+        info_col.addLayout(button_row)
+        info_col.addStretch()
+
+        pair_layout.addLayout(info_col, 1)
+        outer.addWidget(self._pair_card)
+
+        # ── Paired devices status ────────────────────────────────
+        self._paired_status_label = QLabel("No phone paired yet.")
+        self._paired_status_label.setStyleSheet(f"color: {FG_DIM}; font-size: 11px; padding: 2px 4px;")
+        outer.addWidget(self._paired_status_label)
+
+        outer.addStretch()
+
+    # ── Manager wiring ───────────────────────────────────────
 
     def set_manager(self, manager: object) -> None:
-        # Lazy import to avoid circular imports at module level.
         from aura.companion import CompanionManager as _CM
-        if isinstance(manager, _CM):
-            manager.connection_status_changed.connect(self._on_connection_status)
+        if not isinstance(manager, _CM):
+            return
+        self._manager = manager
+        manager.connection_status_changed.connect(self._on_connection_status)
+        manager.pairing_code_invalidated.connect(self._on_pairing_invalidated)
+        manager.pairing_complete.connect(self._on_pairing_complete)
+
+    # ── Status / Pairing slots ───────────────────────────────
 
     def _on_connection_status(self, status: str) -> None:
-        if status == "disabled":
-            self._status_label.setText("\u25cf Disabled")
-            self._status_label.setStyleSheet("color: #888;")
-        elif status == "connecting":
-            self._status_label.setText("\u25cb Connecting\u2026")
-            self._status_label.setStyleSheet("color: #f0c000;")
-        elif status == "connected":
-            self._status_label.setText("\u25cf Connected")
-            self._status_label.setStyleSheet("color: #00cc66;")
-        elif status == "error":
-            self._status_label.setText("\u25cf Error")
-            self._status_label.setStyleSheet("color: #e17055;")
+        label, color = _STATUS_STYLES.get(status, ("Unknown", FG_DIM))
+        self._status_pill.setText(f"● {label}")
+        self._status_pill.setStyleSheet(self._pill_style(color))
+
+    def _on_pair_clicked(self) -> None:
+        if self._manager is None:
+            return
+        try:
+            info = self._manager.start_pairing()  # type: ignore[attr-defined]
+        except Exception:
+            return
+        code = info.get("code", "")
+        expires_at = float(info.get("expires_at", 0.0))
+        pair_url = info.get("pair_url", "")
+        self._pair_url = pair_url
+        self._pairing_expires_at = expires_at
+        self._code_text.setText(code)
+        self._url_label.setText(pair_url)
+        self._qr_label.set_data(pair_url)
+        self._pair_card.setVisible(True)
+        self._countdown_timer.start()
+        self._tick_countdown()
+
+    def _on_copy_url(self) -> None:
+        if self._pair_url:
+            QGuiApplication.clipboard().setText(self._pair_url)
+            self._copy_url_btn.setText("Copied!")
+            QTimer.singleShot(1200, lambda: self._copy_url_btn.setText("Copy URL"))
+
+    def _on_cancel_pair(self) -> None:
+        if self._manager is not None:
+            try:
+                self._manager.cancel_pairing()  # type: ignore[attr-defined]
+            except Exception:
+                pass
+        self._pair_card.setVisible(False)
+        self._countdown_timer.stop()
+        self._pair_url = ""
+
+    def _on_pairing_invalidated(self) -> None:
+        self._pair_card.setVisible(False)
+        self._countdown_timer.stop()
+
+    def _on_pairing_complete(self, device_name: str) -> None:
+        self._pair_card.setVisible(False)
+        self._countdown_timer.stop()
+        self._paired_status_label.setText(f"✔  Paired with {device_name}")
+        self._paired_status_label.setStyleSheet(f"color: {SUCCESS}; font-size: 11px; padding: 2px 4px;")
+
+    def _tick_countdown(self) -> None:
+        if not self._pairing_expires_at:
+            self._expiry_label.setText("")
+            return
+        secs = int(max(0, self._pairing_expires_at - time.time()))
+        if secs <= 0:
+            self._expiry_label.setText("Code expired — generate a new one")
+            self._expiry_label.setStyleSheet(f"color: {DANGER}; font-size: 11px;")
+            self._countdown_timer.stop()
+            return
+        mm = secs // 60
+        ss = secs % 60
+        self._expiry_label.setText(f"Expires in {mm}:{ss:02d}")
+        color = WARN if secs < 60 else FG_DIM
+        self._expiry_label.setStyleSheet(f"color: {color}; font-size: 11px;")
+
+    # ── Settings collection ──────────────────────────────────
 
     def collect_settings(self, settings: AppSettings) -> None:
         settings.companion_enabled = self._enabled_switch.isChecked()
-        settings.companion_display_name = self._display_name_edit.text()
-        settings.companion_relay_url = self._relay_url_edit.text()
+        settings.companion_display_name = self._display_name_edit.text().strip()
+        settings.companion_relay_url = self._relay_url_edit.text().strip() or "ws://localhost:8765"
+        settings.companion_web_url = self._web_url_edit.text().strip() or "http://localhost:5173"
+
+    # ── Style helpers ────────────────────────────────────────
+
+    @staticmethod
+    def _dim_label(text: str) -> QLabel:
+        lbl = QLabel(text)
+        lbl.setStyleSheet(f"color: {FG_DIM}; font-size: 11px;")
+        return lbl
+
+    @staticmethod
+    def _pill_style(color: str) -> str:
+        return (
+            f"color: {color}; background: rgba(255,255,255,0.04);"
+            f" border: 1px solid {BORDER}; border-radius: 999px;"
+            " padding: 3px 10px; font-size: 11px; font-weight: 600;"
+        )
+
+    @staticmethod
+    def _primary_button_style() -> str:
+        return (
+            f"QPushButton {{"
+            f"  background: {ACCENT}; color: #0a0f1f;"
+            f"  border: none; border-radius: 8px;"
+            f"  padding: 8px 18px; font-weight: 600;"
+            f"}}"
+            f"QPushButton:hover {{ background: #94b6ff; }}"
+            f"QPushButton:disabled {{ background: {BORDER}; color: {FG_MUTED}; }}"
+        )
+
+    @staticmethod
+    def _ghost_button_style() -> str:
+        return (
+            f"QPushButton {{"
+            f"  background: transparent; color: {FG};"
+            f"  border: 1px solid {BORDER_STRONG}; border-radius: 8px;"
+            f"  padding: 6px 14px; font-weight: 500;"
+            f"}}"
+            f"QPushButton:hover {{ border-color: {ACCENT}; color: {ACCENT}; }}"
+        )
+
+    @staticmethod
+    def _danger_button_style() -> str:
+        return (
+            f"QPushButton {{"
+            f"  background: transparent; color: {DANGER};"
+            f"  border: 1px solid {DANGER}; border-radius: 8px;"
+            f"  padding: 6px 14px; font-weight: 500;"
+            f"}}"
+            f"QPushButton:hover {{ background: rgba(247,118,142,0.12); }}"
+        )

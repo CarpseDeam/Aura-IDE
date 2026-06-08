@@ -46,6 +46,13 @@ async def handle_websocket(ws: WebSocket, sessions: SessionManager) -> None:
 
     sessions.register(device_id, ws, device_type, display_name)
 
+    # Desktops are trusted on the LAN: they own the pairing-code authority,
+    # so we mark them authenticated as soon as they connect. Phones must
+    # complete the pair handshake before non-skip messages route.
+    if device_type == "desktop":
+        sessions.set_authenticated(device_id, {"role": "desktop", "desktop_id": device_id})
+        logger.info("[Relay] desktop %s auto-authenticated", device_id)
+
     # Send welcome
     await ws.send_text(json.dumps({
         "type": "welcome",
@@ -55,9 +62,9 @@ async def handle_websocket(ws: WebSocket, sessions: SessionManager) -> None:
     # Forward online list to everyone
     await _broadcast_online(sessions)
 
-    # If hello had a token, verify and mark as authenticated
+    # If hello had a token, verify and mark as authenticated (phones)
     token = hello.get("token", "")
-    if token:
+    if token and device_type != "desktop":
         token_payload = verify_token(token)
         if token_payload:
             sessions.set_authenticated(device_id, token_payload)
@@ -80,7 +87,11 @@ async def handle_websocket(ws: WebSocket, sessions: SessionManager) -> None:
             msg_type = msg.get("type")
 
             # Auth gate: non-pair messages require authentication
-            AUTH_SKIP_TYPES = {"hello", "welcome", "error", "system.online_list", "pair.connect", "pair.cancel"}
+            AUTH_SKIP_TYPES = {
+                "hello", "welcome", "error", "system.online_list",
+                "pair.connect", "pair.cancel", "pair.verify",
+                "pair.confirmed", "pair.error",
+            }
             if msg_type not in AUTH_SKIP_TYPES:
                 if not sessions.is_authenticated(device_id):
                     await ws.send_text(json.dumps({

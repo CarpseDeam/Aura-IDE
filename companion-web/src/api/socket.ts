@@ -11,10 +11,10 @@ class CompanionSocket {
   private _deviceId: string = '';
   private maxRetries = 5;
   private retryCount = 0;
-  private reconnectDelay = 1000;
 
   private static STORAGE_KEY_TOKEN = 'aura_companion_token';
   private static STORAGE_KEY_DEVICE_ID = 'aura_companion_device_id';
+  private static STORAGE_KEY_RELAY = 'companion_relay_url';
 
   static getStoredToken(): string {
     return localStorage.getItem(CompanionSocket.STORAGE_KEY_TOKEN) || '';
@@ -51,8 +51,8 @@ class CompanionSocket {
     this.relayUrl = relayUrl;
     this.deviceToken = token;
     this._deviceId = id;
+    try { localStorage.setItem(CompanionSocket.STORAGE_KEY_RELAY, relayUrl); } catch {}
     this.maxRetries = Infinity;  // infinite retry intended — _scheduleReconnect never blocks on limit
-    this.reconnectDelay = 1000;
     this.retryCount = 0;
     this._open();
   }
@@ -67,8 +67,10 @@ class CompanionSocket {
 
   private _open(): void {
     this._cleanup();
-    const url = this.relayUrl.startsWith('ws') ? this.relayUrl : `ws://${this.relayUrl}`;
-    this.ws = new WebSocket(`${url}/ws`);
+    let base = this.relayUrl.startsWith('ws') ? this.relayUrl : `ws://${this.relayUrl}`;
+    base = base.replace(/\/+$/, '');  // strip trailing slashes
+    const url = base.endsWith('/ws') ? base : `${base}/ws`;
+    this.ws = new WebSocket(url);
     
     this.ws.onopen = () => {
       this.retryCount = 0;
@@ -165,7 +167,7 @@ class CompanionSocket {
     };
   }
 
-  pair(pairingCode: string, relayUrl: string, desktopId: string, deviceName?: string): Promise<string> {
+  pair(pairingCode: string, _relayUrl: string, desktopId: string, deviceName?: string): Promise<string> {
     return new Promise((resolve, reject) => {
       const unsubConfirmed = this.on('pair.confirmed', (data: any) => {
         const token = data.payload?.token;
