@@ -1458,6 +1458,217 @@ class TestExecuteUnknown:
 # Handler registration verification
 
 
+class TestLaunchReadOnlyDrone:
+    """launch_read_only_drone: validates and starts background drone run."""
+
+    def test_missing_drone_id(self, registry: ToolRegistry, approve_cb: MagicMock):
+        """Missing drone_id returns error."""
+        result = _handler("launch_read_only_drone")(registry, {"goal": "test"}, approve_cb, False)
+        assert not result.ok
+        assert "drone_id is required" in result.payload["error"]
+
+    def test_missing_goal(self, registry: ToolRegistry, approve_cb: MagicMock):
+        """Missing goal returns error."""
+        result = _handler("launch_read_only_drone")(registry, {"drone_id": "bug-scout"}, approve_cb, False)
+        assert not result.ok
+        assert "goal is required" in result.payload["error"]
+
+    def test_valid_launch(self, registry: ToolRegistry, approve_cb: MagicMock):
+        """Valid launch returns run_id and queued status."""
+        mock_drone = MagicMock()
+        mock_drone.id = "bug-scout"
+        mock_drone.name = "Bug Scout"
+        mock_drone.write_policy = "read_only"
+
+        mock_job = MagicMock()
+        mock_job.run_id = "test-run-123"
+        mock_job.drone_id = "bug-scout"
+        mock_job.drone_name = "Bug Scout"
+        mock_job.status = "queued"
+
+        with patch("aura.drones.store.DroneStore") as mock_store_cls:
+            mock_store_cls.load_drone.return_value = mock_drone
+            with patch("aura.drones.background_runner.get_background_runner") as mock_runner:
+                mock_runner.return_value.launch.return_value = mock_job
+                result = _handler("launch_read_only_drone")(
+                    registry,
+                    {"drone_id": "bug-scout", "goal": "investigate crash"},
+                    approve_cb,
+                    False,
+                )
+
+        assert result.ok
+        output = result.payload
+        assert output["run_id"] == "test-run-123"
+        assert output["status"] == "queued"
+        assert output["drone_id"] == "bug-scout"
+
+    def test_unknown_drone_id(self, registry: ToolRegistry, approve_cb: MagicMock):
+        """Unknown drone_id returns clean error."""
+        with patch("aura.drones.store.DroneStore") as mock_store_cls:
+            mock_store_cls.load_drone.return_value = None
+            mock_store_cls.list_drones.return_value = []
+            result = _handler("launch_read_only_drone")(
+                registry,
+                {"drone_id": "nonexistent", "goal": "test"},
+                approve_cb,
+                False,
+            )
+        assert not result.ok
+        assert "Unknown drone_id" in result.payload["error"]
+
+    def test_rejects_write_capable_drone(self, registry: ToolRegistry, approve_cb: MagicMock):
+        """Write-capable drone is rejected."""
+        mock_drone = MagicMock()
+        mock_drone.id = "writer"
+        mock_drone.name = "Writer"
+        mock_drone.write_policy = "on_approval"
+
+        with patch("aura.drones.store.DroneStore") as mock_store_cls:
+            mock_store_cls.load_drone.return_value = mock_drone
+            result = _handler("launch_read_only_drone")(
+                registry,
+                {"drone_id": "writer", "goal": "test"},
+                approve_cb,
+                False,
+            )
+        assert not result.ok
+        assert "write_policy" in result.payload["error"]
+
+    def test_does_not_call_sync_runner_inline(self, registry: ToolRegistry, approve_cb: MagicMock):
+        """Handler does NOT call run_read_only_drone_sync directly."""
+        mock_drone = MagicMock()
+        mock_drone.id = "bug-scout"
+        mock_drone.name = "Bug Scout"
+        mock_drone.write_policy = "read_only"
+
+        mock_job = MagicMock()
+        mock_job.run_id = "test-run-123"
+        mock_job.drone_id = "bug-scout"
+        mock_job.drone_name = "Bug Scout"
+        mock_job.status = "queued"
+
+        with patch("aura.drones.store.DroneStore") as mock_store_cls:
+            mock_store_cls.load_drone.return_value = mock_drone
+            with patch("aura.drones.background_runner.get_background_runner") as mock_runner:
+                mock_runner.return_value.launch.return_value = mock_job
+                with patch("aura.drones.sync_runner.run_read_only_drone_sync") as sync_spy:
+                    result = _handler("launch_read_only_drone")(
+                        registry,
+                        {"drone_id": "bug-scout", "goal": "investigate"},
+                        approve_cb,
+                        False,
+                    )
+                    sync_spy.assert_not_called()
+        assert result.ok
+
+
+class TestCheckDroneRun:
+    """check_drone_run: queries background drone job state."""
+
+    def test_missing_run_id(self, registry: ToolRegistry, approve_cb: MagicMock):
+        """Missing run_id returns error."""
+        result = _handler("check_drone_run")(registry, {}, approve_cb, False)
+        assert not result.ok
+        assert "run_id is required" in result.payload["error"]
+
+    def test_unknown_run_id(self, registry: ToolRegistry, approve_cb: MagicMock):
+        """Unknown run_id returns clean error."""
+        with patch("aura.drones.background_runner.get_background_runner") as mock_runner:
+            mock_runner.return_value.get.return_value = None
+            result = _handler("check_drone_run")(
+                registry,
+                {"run_id": "nonexistent"},
+                approve_cb,
+                False,
+            )
+        assert not result.ok
+        assert "Unknown run_id" in result.payload["error"]
+
+    def test_returns_completed_state(self, registry: ToolRegistry, approve_cb: MagicMock):
+        """Completed job returns summary and stats."""
+        mock_job = MagicMock()
+        mock_job.run_id = "test-run-456"
+        mock_job.drone_id = "bug-scout"
+        mock_job.drone_name = "Bug Scout"
+        mock_job.status = "completed"
+        mock_job.goal = "investigate crash"
+        mock_job.summary = "Found the bug"
+        mock_job.tool_calls_made = 5
+        mock_job.tool_errors = 0
+        mock_job.elapsed_seconds = 3.2
+        mock_job.error = None
+        mock_job.receipt = None
+
+        with patch("aura.drones.background_runner.get_background_runner") as mock_runner:
+            mock_runner.return_value.get.return_value = mock_job
+            result = _handler("check_drone_run")(
+                registry,
+                {"run_id": "test-run-456"},
+                approve_cb,
+                False,
+            )
+        assert result.ok
+        output = result.payload
+        assert output["status"] == "completed"
+        assert output["summary"] == "Found the bug"
+        assert output["tool_calls_made"] == 5
+
+    def test_returns_failed_state(self, registry: ToolRegistry, approve_cb: MagicMock):
+        """Failed job returns error info."""
+        mock_job = MagicMock()
+        mock_job.run_id = "test-run-789"
+        mock_job.drone_id = "bug-scout"
+        mock_job.drone_name = "Bug Scout"
+        mock_job.status = "failed"
+        mock_job.goal = "test"
+        mock_job.summary = ""
+        mock_job.tool_calls_made = 0
+        mock_job.tool_errors = 0
+        mock_job.elapsed_seconds = 0.0
+        mock_job.error = "Something went wrong"
+        mock_job.receipt = None
+
+        with patch("aura.drones.background_runner.get_background_runner") as mock_runner:
+            mock_runner.return_value.get.return_value = mock_job
+            result = _handler("check_drone_run")(
+                registry,
+                {"run_id": "test-run-789"},
+                approve_cb,
+                False,
+            )
+        assert result.ok
+        output = result.payload
+        assert output["status"] == "failed"
+        assert output["error"] == "Something went wrong"
+
+    def test_forwards_wait_seconds(self, registry: ToolRegistry, approve_cb: MagicMock):
+        """wait_seconds is forwarded to background runner."""
+        mock_job = MagicMock()
+        mock_job.run_id = "test-run-cap"
+        mock_job.drone_id = "bug-scout"
+        mock_job.drone_name = "Bug Scout"
+        mock_job.status = "running"
+        mock_job.goal = "test"
+        mock_job.summary = ""
+        mock_job.tool_calls_made = 0
+        mock_job.tool_errors = 0
+        mock_job.elapsed_seconds = 0.0
+        mock_job.error = None
+        mock_job.receipt = None
+
+        with patch("aura.drones.background_runner.get_background_runner") as mock_runner:
+            mock_runner.return_value.get.return_value = mock_job
+            _handler("check_drone_run")(
+                registry,
+                {"run_id": "test-run-cap", "wait_seconds": 30},
+                approve_cb,
+                False,
+            )
+            kwargs = mock_runner.return_value.get.call_args.kwargs
+            assert kwargs.get("wait_seconds") == 30.0
+
+
 class TestHandlerRegistration:
     """Verify that all expected tools are registered and callable."""
 
@@ -1492,7 +1703,8 @@ class TestHandlerRegistration:
         "search_project_memory",
         "save_to_project_memory",
         "run_diagnostic_command",
-        "run_read_only_drone",
+        "launch_read_only_drone",
+        "check_drone_run",
         "get_workspace_snapshot",
         "summon_drone",
     }
@@ -1547,7 +1759,8 @@ class TestModeToolSurfaces:
             "git_show",
             "git_log_file",
             "dispatch_to_worker",
-            "run_read_only_drone",
+            "launch_read_only_drone",
+            "check_drone_run",
             "run_research",
             "run_diagnostic_command",
             "get_workspace_snapshot",
@@ -1598,6 +1811,8 @@ class TestModeToolSurfaces:
         assert "update_todo_list" in tool_names
         assert "run_terminal_command" in tool_names
         assert "run_research" in tool_names  # Added!
+        assert "launch_read_only_drone" in tool_names
+        assert "check_drone_run" in tool_names
         assert "dispatch_to_worker" not in tool_names
 
     def test_single_tool_surface(self, tmp_path: Path):

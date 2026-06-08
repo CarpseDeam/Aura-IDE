@@ -19,7 +19,8 @@ from aura.client.events import (
     ToolCallStart,
     Usage,
 )
-from aura.config import get_provider, load_settings, resolve_role_default_model
+from aura.config import get_provider
+from aura.settings import load_settings, resolve_role_default_model
 from aura.conversation.tools._types import ApprovalDecision, ApprovalRequest
 from aura.conversation.tools.registry import ToolRegistry
 from aura.drones.definition import DroneDefinition, WRITE_TOOLS, default_tools_for_policy
@@ -99,11 +100,23 @@ def run_read_only_drone_sync(
         {"role": "user", "content": goal},
     ]
 
-    provider_id = "deepseek"
-    provider_cfg = get_provider(provider_id)
-    model = resolve_role_default_model(provider_id, "worker") or provider_cfg.models.get("worker", "")
+    provider_id_str = "deepseek"
+    try:
+        settings = load_settings()
+        provider_id_str = settings.worker_provider or "deepseek"
+    except Exception:
+        provider_id_str = "deepseek"
 
-    backend = APIAgentBackend(provider=provider_id)
+    provider_cfg = get_provider(provider_id_str)
+
+    try:
+        model = resolve_role_default_model(provider_id_str, "worker")
+    except Exception:
+        model = "deepseek-chat"
+    if not model:
+        model = provider_cfg.models.get("worker", "deepseek-chat")
+
+    backend = APIAgentBackend(provider=provider_id_str)
     cancel_event = threading.Event()
 
     tool_calls_made = 0

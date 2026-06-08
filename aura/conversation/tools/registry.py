@@ -248,4 +248,5 @@ TOOL_HANDLERS["save_to_project_memory"] = ToolRegistry._handle_save_to_project_m
 TOOL_HANDLERS["run_diagnostic_command"] = ToolRegistry._handle_run_diagnostic_command
 TOOL_HANDLERS["get_workspace_snapshot"] = ToolRegistry._handle_get_workspace_snapshot
 TOOL_HANDLERS["summon_drone"] = ToolRegistry._handle_summon_drone
-TOOL_HANDLERS["run_read_only_drone"] = ToolRegistry._handle_run_read_only_drone
+TOOL_HANDLERS["launch_read_only_drone"] = ToolRegistry._handle_launch_read_only_drone
+TOOL_HANDLERS["check_drone_run"] = ToolRegistry._handle_check_drone_run

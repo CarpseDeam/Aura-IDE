@@ -480,7 +480,11 @@ def _build_drone_context(workspace_root: Path, store_cls) -> str:
         "",
         "## Available Drones",
         "You have saved Drones that can handle focused sub-tasks independently.",
-        "Call `summon_drone` to launch one when the user's request matches its purpose.",
+        "Call `launch_read_only_drone` to run a read-only Drone in the background and return results later.",
+        "Call `summon_drone` to suggest launching one via the GUI confirmation card.",
+        "Use a Drone when the task is a focused side investigation (bug tracing, impact scouting, "
+        "test discovery) that would otherwise burn tool calls or clutter the main conversation. "
+        "Do not use a Drone for tiny tasks where direct inspection is faster.",
     ]
     for d in drones:
         instr = (d.instructions or "").strip()

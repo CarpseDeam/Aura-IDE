@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any
+import json
+
 from aura.conversation.tools._types import ToolExecResult
 
 
@@ -80,35 +81,38 @@ class PlannerHandlersMixin:
                 payload={"error": str(exc), "workspace_root": str(self._root)},
             )
 
-    def _handle_run_read_only_drone(
+    def _handle_launch_read_only_drone(
         self,
         args: dict[str, Any],
         approval_cb: Any,
         reject_all: bool,
     ) -> ToolExecResult:
+        """Launch a read-only Drone in background, return immediately."""
         drone_id = str(args.get("drone_id") or "").strip()
         goal = str(args.get("goal") or "").strip()
-        wait_seconds = int(args.get("wait_seconds", 120) or 0) or 120
-        include_receipt = bool(args.get("include_receipt", False))
 
         if not drone_id:
             return ToolExecResult(
                 ok=False,
-                payload={"ok": False, "error": "missing required arg: drone_id", "failure_class": "invalid_args"},
+                payload={"ok": False, "error": "drone_id is required"},
             )
         if not goal:
             return ToolExecResult(
                 ok=False,
-                payload={"ok": False, "error": "missing required arg: goal", "failure_class": "invalid_args"},
+                payload={"ok": False, "error": "goal is required"},
             )
 
         from aura.drones.store import DroneStore
 
         drone = DroneStore.load_drone(self._root, drone_id)
         if drone is None:
+            drones = DroneStore.list_drones(self._root)
             return ToolExecResult(
                 ok=False,
-                payload={"ok": False, "error": f"Unknown Drone: {drone_id}", "failure_class": "drone_not_found"},
+                payload={
+                    "ok": False,
+                    "error": f"Unknown drone_id: '{drone_id}'. Available: {[d.id for d in drones]}",
+                },
             )
 
         if drone.write_policy != "read_only":
@@ -116,51 +120,77 @@ class PlannerHandlersMixin:
                 ok=False,
                 payload={
                     "ok": False,
-                    "error": f"Drone '{drone_id}' has write_policy='{drone.write_policy}'. Only read_only Drones can be run with this tool.",
-                    "failure_class": "drone_not_read_only",
+                    "error": (
+                        f"Drone '{drone_id}' has write_policy='{drone.write_policy}'. "
+                        "Only read_only Drones are allowed for this tool."
+                    ),
                 },
             )
 
-        count = getattr(self, "_run_read_only_drone_count", 0)
-        if count >= 2:
-            return ToolExecResult(
-                ok=False,
-                payload={
-                    "ok": False,
-                    "error": "Per-turn limit reached: at most 2 run_read_only_drone calls per conversation turn.",
-                    "failure_class": "per_turn_limit_exceeded",
-                },
-            )
-        self._run_read_only_drone_count = count + 1
+        from aura.drones.background_runner import get_background_runner
 
-        budget = drone.budget
-        timeout = min(wait_seconds, budget.timeout_seconds if budget else 120)
-        max_rounds = budget.max_tool_rounds if budget else 8
+        runner = get_background_runner(self._root)
+        job = runner.launch(drone, goal)
 
-        from aura.drones.sync_runner import run_read_only_drone_sync
-
-        result = run_read_only_drone_sync(
-            workspace_root=self._root,
-            drone_id=drone_id,
-            drone=drone,
-            goal=goal,
-            timeout_seconds=timeout,
-            max_tool_rounds=max_rounds,
+        return ToolExecResult(
+            ok=True,
+            payload={
+                "ok": True,
+                "run_id": job.run_id,
+                "drone_id": drone.id,
+                "drone_name": drone.name,
+                "status": job.status,
+            },
         )
 
-        payload: dict[str, Any] = {
-            "ok": result["ok"],
-            "drone_id": result["drone_id"],
-            "drone_name": result["drone_name"],
-            "run_id": result["run_id"],
-            "status": result["status"],
-            "summary": result["summary"],
-            "tool_calls_made": result["tool_calls_made"],
-            "tool_errors": result["tool_errors"],
-            "elapsed_seconds": result["elapsed_seconds"],
+    def _handle_check_drone_run(
+        self,
+        args: dict[str, Any],
+        approval_cb: Any,
+        reject_all: bool,
+    ) -> ToolExecResult:
+        """Check status of a background Drone run."""
+        run_id = str(args.get("run_id") or "").strip()
+        if not run_id:
+            return ToolExecResult(
+                ok=False,
+                payload={"ok": False, "error": "run_id is required"},
+            )
+
+        try:
+            wait_seconds = float(args.get("wait_seconds", 0) or 0)
+        except (TypeError, ValueError):
+            wait_seconds = 0.0
+        include_receipt = bool(args.get("include_receipt", False))
+
+        from aura.drones.background_runner import get_background_runner
+
+        runner = get_background_runner(self._root)
+        job = runner.get(run_id, wait_seconds=wait_seconds)
+
+        if job is None:
+            return ToolExecResult(
+                ok=False,
+                payload={"ok": False, "error": f"Unknown run_id: '{run_id}'"},
+            )
+
+        result: dict[str, Any] = {
+            "ok": True,
+            "run_id": job.run_id,
+            "drone_id": job.drone_id,
+            "drone_name": job.drone_name,
+            "status": job.status,
+            "goal": job.goal,
         }
 
-        if include_receipt:
-            payload["receipt"] = result.get("receipt")
+        if job.status == "completed":
+            result["summary"] = job.summary
+            result["tool_calls_made"] = job.tool_calls_made
+            result["tool_errors"] = job.tool_errors
+            result["elapsed_seconds"] = job.elapsed_seconds
+            if include_receipt and job.receipt:
+                result["receipt"] = job.receipt
+        elif job.status == "failed":
+            result["error"] = job.error or "Unknown error"
 
-        return ToolExecResult(ok=result["ok"], payload=payload)
+        return ToolExecResult(ok=True, payload=result)

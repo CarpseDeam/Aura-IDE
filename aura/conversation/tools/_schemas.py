@@ -1259,38 +1259,68 @@ WORKSPACE_SNAPSHOT_TOOL_DEF: dict[str, Any] = {
     },
 }
 
-RUN_READ_ONLY_DRONE_TOOL_DEF: dict[str, Any] = {
+LAUNCH_READ_ONLY_DRONE_TOOL_DEF: dict[str, Any] = {
     "type": "function",
     "function": {
-        "name": "run_read_only_drone",
-        "description": "Run a saved read-only Drone for a focused investigation or sub-task. The Drone will use its instructions and your goal to investigate, returning findings. Only Drones with read_only write policy are allowed. Use this for side investigations that would burn too many tool calls in the main conversation. Do NOT use for simple reads or tiny checks.",
+        "name": "launch_read_only_drone",
+        "description": (
+            "Launch a saved read-only Drone in the background for a focused "
+            "investigation sub-task. Returns immediately with a run_id. "
+            "Use check_drone_run later to retrieve results. "
+            "Use this when the task is a focused side investigation (bug tracing, "
+            "impact scouting, test discovery) that would otherwise burn tool calls "
+            "or clutter the main conversation. Do NOT use for tiny tasks where "
+            "direct inspection is faster."
+        ),
         "parameters": {
             "type": "object",
             "properties": {
                 "drone_id": {
                     "type": "string",
-                    "description": "The id of the saved read-only Drone to run (from Available Drones list)."
+                    "description": "The id of the saved read-only Drone to run (from Available Drones list).",
                 },
                 "goal": {
                     "type": "string",
-                    "description": "What the Drone should investigate or accomplish. Be specific so the Drone's instructions can guide it precisely."
+                    "description": "What the Drone should investigate or accomplish. Be specific so the Drone's instructions can guide it precisely.",
                 },
                 "reason": {
                     "type": "string",
-                    "description": "Optional: why you are running this Drone. Used only for logging."
+                    "description": "Optional: why you are launching this Drone. Used only for logging.",
+                },
+            },
+            "required": ["drone_id", "goal"],
+        },
+    },
+}
+
+
+CHECK_DRONE_RUN_TOOL_DEF: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "check_drone_run",
+        "description": (
+            "Check the status of a previously launched read-only Drone run. "
+            "Returns queued/running/completed/failed/timed_out state. "
+            "If completed, includes summary, tool call counts, and elapsed time. "
+            "Optionally wait a few seconds for completion (capped at 10s)."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "run_id": {
+                    "type": "string",
+                    "description": "The run_id returned from launch_read_only_drone.",
                 },
                 "wait_seconds": {
-                    "type": "integer",
-                    "description": "Maximum seconds to wait for results. Default: 120.",
-                    "default": 120
+                    "type": "number",
+                    "description": "Optional: seconds to wait for completion (capped at 10). Default 0 (return immediately).",
                 },
                 "include_receipt": {
                     "type": "boolean",
-                    "description": "If true, include the full receipt/run details in the result. Default: false (just summary).",
-                    "default": False
-                }
+                    "description": "If true, include the full receipt in the result. Default false.",
+                },
             },
-            "required": ["drone_id", "goal"]
-        }
-    }
+            "required": ["run_id"],
+        },
+    },
 }
