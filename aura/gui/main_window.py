@@ -1,15 +1,19 @@
 """Main application window: three-pane splitter, toolbar, chat + input."""
 from __future__ import annotations
 
+import difflib
 from pathlib import Path
 
 from PySide6.QtCore import QByteArray, Qt, QThread, QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QDialog,
+    QDialogButtonBox,
     QFileDialog,
+    QLabel,
     QMainWindow,
     QMessageBox,
+    QPlainTextEdit,
     QSplitter,
     QVBoxLayout,
     QWidget,
@@ -28,6 +32,7 @@ from aura.config import (
     save_settings,
     save_workspace_root,
 )
+from aura.conversation.tools._types import ApprovalDecision, ApprovalRequest
 from aura.drones.runner import DroneRunner
 from aura.drones.store import DroneStore
 from aura.git_ops import git_init, is_git_repo
@@ -692,7 +697,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
     # ----- Drone Run lifecycle (Phase 2) --------------------------------
 
     def _on_launch_drone(self, drone_id: str) -> None:
-        """Launch a read-only Drone."""
+        """Launch a Drone (read-only or write-capable)."""
         if self._workspace_root is None:
             return
 
@@ -700,9 +705,10 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         if drone is None:
             return
 
-        if drone.write_policy != "read_only":
-            # Shouldn't happen (Launch disabled in UI), but guard anyway.
-            return
+        # Clear any previous run card before launching a new one.
+        if self._active_run_card is not None:
+            self._playground.clear_active_run_card()
+            self._active_run_card = None
 
         # Switch to workspace view to show the run.
         self._playground.switch_to_workspace()
@@ -710,8 +716,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
         run_card = DroneRunCard(drone, parent=self._playground)
         self._active_run_card = run_card
-        # TODO: In Phase 2, insert the run card into the right pane.
-        # For now, hold the reference; future phases will add it to the layout.
+        self._playground.set_active_run_card(run_card)
 
         self._drone_runner_thread = QThread(self)
         self._drone_runner = DroneRunner(
@@ -731,6 +736,12 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._drone_runner.receiptReady.connect(run_card.on_receipt_ready)
         self._drone_runner.receiptReady.connect(self._on_drone_receipt)
         self._drone_runner.finished.connect(self._on_drone_finished)
+
+        # Wire approval for write-capable drones.
+        if drone.write_policy != "read_only":
+            self._drone_runner.approval_requested.connect(
+                self._on_drone_approval_requested
+            )
 
         # Wire cancel/close buttons.
         run_card.cancelRequested.connect(self._on_cancel_drone)
@@ -779,9 +790,79 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
     def _on_close_drone_card(self) -> None:
         """Close/dismiss the completed run card."""
+        self._playground.clear_active_run_card()
         self._active_run_card = None
         self._drone_bay.set_active_run(None, None)
-        # TODO: Remove card from UI layout in a future phase.
+
+    def _on_drone_approval_requested(self, request: ApprovalRequest) -> None:
+        """Show approval dialog for a write operation requested by a Drone."""
+        runner = self._drone_runner
+        if runner is None:
+            return
+
+        # Build the diff text.
+        if request.is_new_file:
+            diff_text = f"[New file] {request.rel_path}\n\n{request.new_content}"
+        else:
+            diff_lines = list(difflib.unified_diff(
+                request.old_content.splitlines(keepends=True),
+                request.new_content.splitlines(keepends=True),
+                fromfile=request.rel_path,
+                tofile=request.rel_path,
+            ))
+            diff_text = "".join(diff_lines) if diff_lines else "(no changes)"
+
+        dialog = QDialog(self._playground)
+        dialog.setWindowTitle(f"Drone: {request.tool_name}")
+        dialog.resize(600, 400)
+
+        layout = QVBoxLayout(dialog)
+
+        info = QLabel(f"<b>Tool:</b> {request.tool_name} | <b>File:</b> {request.rel_path}")
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        diff_view = QPlainTextEdit()
+        diff_view.setPlainText(diff_text)
+        diff_view.setReadOnly(True)
+        layout.addWidget(diff_view, stretch=1)
+
+        button_box = QDialogButtonBox(dialog)
+        approve_btn = button_box.addButton("Approve", QDialogButtonBox.ButtonRole.AcceptRole)
+        reject_btn = button_box.addButton("Reject", QDialogButtonBox.ButtonRole.RejectRole)
+        approve_all_btn = button_box.addButton("Approve All", QDialogButtonBox.ButtonRole.AcceptRole)
+        reject_all_btn = button_box.addButton("Reject All", QDialogButtonBox.ButtonRole.RejectRole)
+
+        button_box.clicked.connect(lambda btn: self._on_drone_approval_button_clicked(
+            dialog, runner, btn, approve_btn, reject_btn, approve_all_btn, reject_all_btn
+        ))
+
+        layout.addWidget(button_box)
+
+        # Ensure worker thread unblocks even if dialog is closed via X.
+        dialog.rejected.connect(lambda: runner.set_approval_result(
+            ApprovalDecision(action="reject")
+        ))
+
+        dialog.exec()
+
+    def _on_drone_approval_button_clicked(
+        self, dialog: QDialog, runner, btn,
+        approve_btn, reject_btn, approve_all_btn, reject_all_btn
+    ) -> None:
+        if btn == approve_btn:
+            decision = ApprovalDecision(action="approve")
+        elif btn == reject_btn:
+            decision = ApprovalDecision(action="reject")
+        elif btn == approve_all_btn:
+            decision = ApprovalDecision(action="approve_all")
+        elif btn == reject_all_btn:
+            decision = ApprovalDecision(action="reject_all")
+        else:
+            decision = ApprovalDecision(action="reject")
+
+        runner.set_approval_result(decision)
+        dialog.accept()
 
     def _on_auto_dispatch_toggled(self, checked: bool) -> None:
         self._settings.auto_dispatch = checked
