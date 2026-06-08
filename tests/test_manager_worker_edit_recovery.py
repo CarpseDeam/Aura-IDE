@@ -110,7 +110,9 @@ def test_repeated_ambiguous_replace_text_once_shape_is_blocked(tmp_workspace):
 
 def test_syntax_repair_recovery_steers_to_patch_not_line_range(tmp_workspace):
     manager = ConversationManager(History(), ToolRegistry(tmp_workspace, mode="worker"))
+    syntax_repair = {"broken.py": {"error": "SyntaxError"}}
 
+    # read_file is always allowed during syntax repair
     blocked = manager._worker_recovery_block(
         tool_call_id="tc1",
         name="read_file",
@@ -119,11 +121,25 @@ def test_syntax_repair_recovery_steers_to_patch_not_line_range(tmp_workspace):
         edit_fallback_required={},
         recovery_block_counts={},
         line_range_reread_required={},
-        syntax_repair_required={"broken.py": {"error": "SyntaxError"}},
+        syntax_repair_required=syntax_repair,
         syntax_validation_required=set(),
         write_attempts_by_path={},
     )
+    assert blocked is None
 
+    # write_file with unrelated path is blocked during syntax repair
+    blocked = manager._worker_recovery_block(
+        tool_call_id="tc2",
+        name="write_file",
+        args={"path": "other.py"},
+        edit_failed_shapes=set(),
+        edit_fallback_required={},
+        recovery_block_counts={},
+        line_range_reread_required={},
+        syntax_repair_required=syntax_repair,
+        syntax_validation_required=set(),
+        write_attempts_by_path={},
+    )
     assert blocked is not None
     payload = json.loads(blocked["result_payload"])
     assert payload["failure_class"] == "syntax_invalid"
@@ -131,6 +147,23 @@ def test_syntax_repair_recovery_steers_to_patch_not_line_range(tmp_workspace):
     assert payload["suggested_next_tool"] != "edit_line_range"
     assert "edit_line_range" not in payload["suggested_next_action"]
     assert "patch_file" in payload["suggested_next_action"]
+
+    # non-py_compile run_terminal_command is blocked during syntax repair
+    blocked = manager._worker_recovery_block(
+        tool_call_id="tc3",
+        name="run_terminal_command",
+        args={"command": "echo hello"},
+        edit_failed_shapes=set(),
+        edit_fallback_required={},
+        recovery_block_counts={},
+        line_range_reread_required={},
+        syntax_repair_required=syntax_repair,
+        syntax_validation_required=set(),
+        write_attempts_by_path={},
+    )
+    assert blocked is not None
+    payload = json.loads(blocked["result_payload"])
+    assert payload["failure_class"] == "syntax_invalid"
 
 
 def test_syntax_repair_allows_targeted_py_compile(tmp_workspace):
@@ -184,6 +217,7 @@ def test_syntax_repair_py_compile_path_normalization(tmp_workspace):
 
 
 def test_successful_py_compile_clears_normalized_syntax_state(tmp_workspace):
+    (tmp_workspace / "database.py").write_text("")
     manager = ConversationManager(History(), ToolRegistry(tmp_workspace, mode="worker"))
     syntax_repair_required = {"./database.py": {"error": "SyntaxError"}}
     syntax_validation_required = {r".\database.py"}
@@ -206,6 +240,7 @@ def test_successful_py_compile_clears_normalized_syntax_state(tmp_workspace):
 
 
 def test_failed_py_compile_records_normalized_syntax_path(tmp_workspace):
+    (tmp_workspace / "database.py").write_text("")
     manager = ConversationManager(History(), ToolRegistry(tmp_workspace, mode="worker"))
     syntax_repair_required = {}
     syntax_validation_required = set()

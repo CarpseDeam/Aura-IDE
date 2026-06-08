@@ -104,6 +104,24 @@ TASK_COMPLETION_TOOL_NAMES = {
     "git_log_file",
 }
 
+SYNTAX_REPAIR_ALWAYS_ALLOWED = {
+    "read_file",
+    "read_files",
+    "read_file_outline",
+    "grep_search",
+    "search_codebase",
+    "find_usages",
+    "list_directory",
+    "glob",
+    "git_status",
+    "git_diff",
+    "git_log",
+    "git_show",
+    "git_log_file",
+    "run_diagnostic_command",
+    "get_workspace_snapshot",
+}
+
 ACTION_COMPLETION_TOOL_NAMES = TASK_COMPLETION_TOOL_NAMES | WRITE_TOOLS
 
 WORKER_EDIT_RECOVERY_INSTRUCTION = (
@@ -1266,9 +1284,15 @@ class ConversationManager:
         if not isinstance(payload, dict):
             return
         command = str(payload.get("command") or args.get("command") or "")
+        workspace_root = Path(self._tools.workspace_root)
         targets = [
-            _normalize_worker_path(path) for path in self._py_compile_targets(command)
+            _normalize_worker_path(path)
+            for path in self._py_compile_targets(command)
             if not _is_validation_scratch_path(path)
+            and not (
+                "/" not in path
+                and not (workspace_root / path).exists()
+            )
         ]
         if not targets:
             return
@@ -1326,13 +1350,8 @@ class ConversationManager:
         args: dict[str, Any],
         syntax_paths: set[str],
     ) -> bool:
-        if name in {"read_file", "read_file_outline"}:
-            return _normalize_worker_path(str(args.get("path", ""))) in syntax_paths
-        if name == "read_files":
-            paths = args.get("paths")
-            return isinstance(paths, list) and any(
-                _normalize_worker_path(str(path)) in syntax_paths for path in paths
-            )
+        if name in SYNTAX_REPAIR_ALWAYS_ALLOWED:
+            return True
         if name in WRITE_TOOLS:
             return _normalize_worker_path(str(args.get("path", ""))) in syntax_paths
         if name == "run_terminal_command":
