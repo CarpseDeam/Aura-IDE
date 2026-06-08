@@ -33,8 +33,10 @@ from aura.config import (
     save_workspace_root,
 )
 from aura.conversation.tools._types import ApprovalDecision, ApprovalRequest
+from aura.drones.definition import DroneDefinition
+from aura.drones.receipt import DroneReceipt
 from aura.drones.runner import DroneRunner
-from aura.drones.store import DroneStore
+from aura.drones.store import DroneStore, RunHistoryStore
 from aura.git_ops import git_init, is_git_repo
 from aura.gui.chat_view import ChatView
 from aura.gui.checkpoint_dialog import CheckpointDialog
@@ -179,6 +181,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._drone_bay.duplicateDroneRequested.connect(self._on_duplicate_drone)
         self._drone_bay.deleteDroneRequested.connect(self._on_delete_drone)
         self._drone_bay.launchDroneRequested.connect(self._on_launch_drone)
+        self._drone_bay.viewRunReceiptRequested.connect(self._on_view_drone_receipt)
 
         # Worker event handler — owns session usage, forwards bridge signals
         # to chat / playground UI components.
@@ -282,6 +285,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._drone_runner: DroneRunner | None = None
         self._drone_runner_thread: QThread | None = None
         self._active_run_card: DroneRunCard | None = None
+        self._drone_receipt: DroneReceipt | None = None
 
         self._pending_handoff: bool = False
         self._tree = self._playground.file_tree()
@@ -663,7 +667,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         new_id = DroneStore.next_id(self._workspace_root, copy_name)
         import datetime
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        from aura.drones.definition import DroneDefinition
         dup = DroneDefinition(
             id=new_id,
             name=copy_name,
@@ -775,11 +778,56 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         if self._drone_runner is not None:
             self._drone_runner.deleteLater()
             self._drone_runner = None
+        # Refresh run history in drone bay so completed run appears immediately.
+        self._drone_bay.refresh_run_history()
 
     def _on_drone_receipt(self, receipt: object) -> None:
-        """Handle completed drone receipt."""
-        # Phase 2: receipt is stored in the run card, no persistence.
-        pass
+        """Handle completed drone receipt — save to disk."""
+        if not isinstance(receipt, DroneReceipt):
+            return
+        self._drone_receipt = receipt
+        workspace_root = load_workspace_root()
+        if workspace_root is not None:
+            RunHistoryStore.save_run(workspace_root, receipt)
+
+    def _on_view_drone_receipt(self, run_id: str) -> None:
+        """Open a read-only run card for a saved receipt."""
+        workspace_root = load_workspace_root()
+        if not workspace_root:
+            return
+
+        receipt = RunHistoryStore.load_run(workspace_root, run_id)
+        if not receipt:
+            return
+
+        # Clear any existing run card
+        if self._active_run_card is not None:
+            self._playground.clear_active_run_card()
+            self._active_run_card = None
+
+        # Build a minimal DroneDefinition from the receipt
+        minimal_drone = DroneDefinition(
+            id="history:" + run_id,
+            name=receipt.drone_name,
+            description="",
+            instructions="",
+            write_policy="read_only",
+            allowed_tools=(),
+            output_contract="",
+        )
+
+        run_card = DroneRunCard(minimal_drone, parent=self._playground, readonly=True)
+        run_card.populate_from_receipt(receipt)
+
+        self._active_run_card = run_card
+        self._playground.set_active_run_card(run_card)
+
+        # Wire close
+        run_card.closeRequested.connect(self._on_close_drone_card)
+
+        # Switch to workspace view
+        self._playground.switch_to_workspace()
+        self._sync_drone_tab_checked()
 
     def _on_focus_drone_run(self) -> None:
         """Focus the active run card."""

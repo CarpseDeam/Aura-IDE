@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
 
 from aura.drones.definition import DroneDefinition
 from aura.drones.run import DroneRun
-from aura.drones.store import DroneStore
+from aura.drones.store import DroneStore, RunHistoryStore
 from aura.gui.drones.drone_run_card import DroneRunCard
 from aura.gui.theme import ACCENT, BG, BG_RAISED, BORDER, DANGER, FG, FG_DIM, FG_MUTED, SUCCESS, WARN
 
@@ -35,12 +35,16 @@ class DroneBayPane(QWidget):
     deleteDroneRequested = Signal(str)
     launchDroneRequested = Signal(str)  # drone_id
     activeRunFocusRequested = Signal()
+    viewRunReceiptRequested = Signal(str)  # run_id
 
     def __init__(self, workspace_root: Path | None = None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._workspace_root = workspace_root
         self._active_run: DroneRun | None = None
         self._active_run_card: DroneRunCard | None = None
+        self._history_section: QWidget | None = None
+        self._run_history_widgets: list[QWidget] = []
+        self._scroll_content = self._card_layout
 
         self.setObjectName("droneBayPane")
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -111,8 +115,10 @@ class DroneBayPane(QWidget):
     # -- Public API --
 
     def refresh(self) -> None:
-        """Reload drones from DroneStore and rebuild cards."""
-        # Clear existing cards (remove all widgets except the stretch)
+        """Reload drones from DroneStore and rebuild cards + run history."""
+        # Clear existing history section first
+        self._clear_history_section()
+        # Clear existing drone cards
         while self._card_layout.count() > 0:
             item = self._card_layout.takeAt(0)
             if item.widget():
@@ -130,7 +136,9 @@ class DroneBayPane(QWidget):
         for drone in drones:
             card = self._build_drone_card(drone)
             self._card_layout.addWidget(card)
-        self._card_layout.addStretch(1)
+
+        # Add run history section after drone cards
+        self.refresh_run_history()
 
     def set_workspace_root(self, root: Path | None) -> None:
         self._workspace_root = root
@@ -297,3 +305,142 @@ class DroneBayPane(QWidget):
             f"background: transparent; padding: 1px 0;"
         )
         return badge
+
+    # -- Run History section --
+
+    def refresh_run_history(self) -> None:
+        """Reload run history from disk and rebuild the UI section."""
+        self._clear_history_section()
+        self._run_history_widgets.clear()
+
+        if self._workspace_root is None:
+            return
+
+        runs = RunHistoryStore.list_runs(self._workspace_root)
+        if not runs:
+            return
+
+        # Separator line
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        sep.setStyleSheet("background: rgba(255,255,255,0.1); max-height: 1px;")
+        self._card_layout.addWidget(sep)
+
+        self._history_section = QWidget()
+        section_layout = QVBoxLayout(self._history_section)
+        section_layout.setContentsMargins(0, 0, 0, 0)
+        section_layout.setSpacing(4)
+
+        # Header row: "RUN HISTORY" label + clear button
+        header_row = QHBoxLayout()
+        history_label = QLabel("RUN HISTORY")
+        history_label.setStyleSheet(
+            "font-size: 11px; font-weight: 600; color: rgba(255,255,255,0.5); letter-spacing: 1px; padding: 8px 0 4px 12px;"
+        )
+        header_row.addWidget(history_label)
+        header_row.addStretch()
+
+        clear_btn = QPushButton("Clear")
+        clear_btn.setFixedSize(60, 24)
+        clear_btn.setStyleSheet(
+            "QPushButton {"
+            "  background: transparent; color: rgba(255,255,255,0.4);"
+            "  border: 1px solid rgba(255,255,255,0.15); border-radius: 4px;"
+            "  font-size: 11px; padding: 2px 8px;"
+            "}"
+            "QPushButton:hover { background: rgba(255,255,255,0.1); color: #fff; }"
+        )
+        clear_btn.clicked.connect(self._clear_run_history)
+        header_row.addWidget(clear_btn)
+        section_layout.addLayout(header_row)
+
+        # Run history cards
+        for run_data in runs:
+            card = self._build_history_card(run_data)
+            section_layout.addWidget(card)
+            self._run_history_widgets.append(card)
+
+        self._card_layout.addWidget(self._history_section)
+
+    def _build_history_card(self, run_data: dict) -> QFrame:
+        """Build a compact clickable card for a single run entry."""
+        card = QFrame()
+        card.setCursor(Qt.CursorShape.PointingHandCursor)
+        card.setStyleSheet(
+            "QFrame {"
+            "  background: rgba(255,255,255,0.04); border-radius: 6px;"
+            "  padding: 8px 12px; margin: 2px 10px;"
+            "}"
+            "QFrame:hover { background: rgba(255,255,255,0.08); }"
+        )
+        layout = QHBoxLayout(card)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(12)
+
+        # Status icon
+        status = run_data.get("status", "unknown")
+        if status == "completed":
+            icon_text = "\u2713"
+            icon_color = "#4CAF50"
+        elif status == "failed":
+            icon_text = "\u2717"
+            icon_color = "#F44336"
+        else:
+            icon_text = "\u25D0"
+            icon_color = "#FF9800"
+
+        icon = QLabel(icon_text)
+        icon.setStyleSheet(f"color: {icon_color}; font-size: 16px; font-weight: bold;")
+        icon.setFixedWidth(24)
+        layout.addWidget(icon)
+
+        # Info column
+        info_col = QVBoxLayout()
+        info_col.setSpacing(2)
+
+        name_label = QLabel(run_data.get("drone_name", "Unknown"))
+        name_label.setStyleSheet("color: #fff; font-size: 13px; font-weight: 500;")
+        info_col.addWidget(name_label)
+
+        # Detail row: timestamp | duration | tool calls
+        started_at = run_data.get("started_at", "")
+        elapsed = run_data.get("elapsed_seconds", 0)
+        tool_count = len(run_data.get("tool_calls", []))
+
+        # Format timestamp
+        try:
+            import datetime
+            ts = datetime.datetime.fromisoformat(started_at)
+            time_str = ts.strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            time_str = started_at[:16] if started_at else "?"
+
+        duration_str = f"{elapsed:.0f}s" if elapsed < 60 else f"{elapsed/60:.1f}m"
+        detail = QLabel(f"{time_str}  |  {duration_str}  |  {tool_count} call{'s' if tool_count != 1 else ''}")
+        detail.setStyleSheet("color: rgba(255,255,255,0.45); font-size: 11px;")
+        info_col.addWidget(detail)
+
+        layout.addLayout(info_col, stretch=1)
+        layout.addStretch()
+
+        # Make clickable
+        run_id = run_data.get("run_id", "")
+        card.mousePressEvent = lambda event, rid=run_id: self._on_history_card_clicked(event, rid)
+
+        return card
+
+    def _on_history_card_clicked(self, event, run_id: str) -> None:
+        self.viewRunReceiptRequested.emit(run_id)
+
+    def _clear_run_history(self) -> None:
+        if self._workspace_root is not None:
+            RunHistoryStore.clear_history(self._workspace_root)
+            self.refresh_run_history()
+
+    def _clear_history_section(self) -> None:
+        """Remove the history section and separator from the layout."""
+        if self._history_section is not None:
+            self._card_layout.removeWidget(self._history_section)
+            self._history_section.deleteLater()
+            self._history_section = None
+        self._run_history_widgets.clear()

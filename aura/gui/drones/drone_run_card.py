@@ -36,10 +36,11 @@ class DroneRunCard(QFrame):
     cancelRequested = Signal()
     closeRequested = Signal()
 
-    def __init__(self, drone: DroneDefinition, parent: QWidget | None = None) -> None:
+    def __init__(self, drone: DroneDefinition, parent: QWidget | None = None, readonly: bool = False) -> None:
         super().__init__(parent)
         self._drone = drone
         self._receipt: DroneReceipt | None = None
+        self._is_readonly_view = readonly
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -115,9 +116,13 @@ class DroneRunCard(QFrame):
 
         layout.addLayout(btn_layout)
 
-        # Start with cancel visible, close hidden
-        self._cancel_btn.show()
-        self._close_btn.hide()
+        # Start with cancel visible, close hidden (unless readonly)
+        if self._is_readonly_view:
+            self._cancel_btn.hide()
+            self._close_btn.show()
+        else:
+            self._cancel_btn.show()
+            self._close_btn.hide()
 
     # --- Event handlers called from MainWindow ---
 
@@ -184,6 +189,59 @@ class DroneRunCard(QFrame):
         label.setWordWrap(True)
         # Insert before the stretch
         self._log_layout.insertWidget(self._log_layout.count() - 1, label)
+
+    def populate_from_receipt(self, receipt: DroneReceipt) -> None:
+        """Fill the run card from a saved receipt (read-only view)."""
+        self._receipt = receipt
+        self._is_readonly_view = True
+
+        # Set status badge
+        status = receipt.status
+        status_color = {
+            "completed": SUCCESS,
+            "failed": DANGER,
+            "cancelled": WARN,
+        }.get(status, FG_MUTED)
+        self._status_badge.setText(status.upper())
+        self._status_badge.setStyleSheet(
+            f"color: {status_color}; font-size: 11px; font-weight: 600; "
+            f"padding: 2px 8px; border-radius: 4px; "
+            f"background: {status_color}22; border: 1px solid {status_color};"
+        )
+
+        # Show Close, hide Cancel
+        self._cancel_btn.hide()
+        self._close_btn.show()
+
+        # Populate tool calls
+        for tc in receipt.tool_calls:
+            name = tc.get("name", "?")
+            args = tc.get("args", {})
+            result = tc.get("result", "")
+
+            self._add_log_entry(f"── {name} ──", ACCENT, bold=True)
+            if args:
+                import json
+                self._add_log_entry(f"  Args: {json.dumps(args, indent=2)}", FG_DIM)
+            if result:
+                self._add_log_entry(f"  Result: {result[:500]}", FG)
+            self._add_log_entry("", FG_MUTED)
+
+        # Show errors
+        for err in receipt.errors:
+            self._add_log_entry(f"\u26A0 Error: {err}", DANGER)
+
+        # Summary line
+        elapsed = receipt.elapsed_seconds
+        dur_str = f"{elapsed:.0f}s" if elapsed < 60 else f"{elapsed/60:.1f}m"
+        summary = (
+            f"\n── Run complete ──\n"
+            f"  Status: {receipt.status}\n"
+            f"  Duration: {dur_str}\n"
+            f"  Tool calls: {receipt.tool_calls_made}\n"
+            f"  Errors: {receipt.tool_errors}\n"
+        )
+        self._add_log_entry(summary, FG_MUTED)
 
     @property
     def receipt(self) -> DroneReceipt | None:
