@@ -37,11 +37,6 @@ from aura.settings import AppSettings, resolve_role_default_model
 logger = logging.getLogger(__name__)
 
 
-def _is_local_url(url: str) -> bool:
-    """Return True if url targets localhost or 127.0.0.1 (local dev relay)."""
-    return "localhost" in url or "127.0.0.1" in url
-
-
 class CompanionManager(QObject):
     """Manages the Companion (mobile web control plane) connection lifecycle.
 
@@ -286,15 +281,6 @@ class CompanionManager(QObject):
 
         device_id = get_device_id()
         desktop_secret = os.environ.get("AURA_COMPANION_DESKTOP_SECRET", "")
-
-        if not _is_local_url(url) and not desktop_secret:
-            logger.error(
-                "[Companion] AURA_COMPANION_DESKTOP_SECRET is not set — "
-                "cannot connect to hosted relay %s",
-                url,
-            )
-            self.connection_status_changed.emit("error")
-            return
 
         self._ws_client = CompanionWsClient(url, device_id, desktop_secret, self)
         self._ws_client.connected.connect(self._on_connected)

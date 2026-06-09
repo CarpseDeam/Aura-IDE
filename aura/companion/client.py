@@ -59,12 +59,14 @@ class _WsWorker(QObject):
                 async with websockets.connect(self._url) as ws:
                     self._ws = ws
                     self._reconnect_delay = 1.0
-                    await ws.send(json.dumps({
+                    hello = {
                         "type": "hello",
                         "device_id": self._device_id or "unknown",
                         "device_type": "desktop",
-                        "secret": self._desktop_secret,
-                    }))
+                    }
+                    if self._desktop_secret:
+                        hello["secret"] = self._desktop_secret
+                    await ws.send(json.dumps(hello))
                     welcome_raw = await ws.recv()
                     try:
                         welcome = json.loads(welcome_raw)
