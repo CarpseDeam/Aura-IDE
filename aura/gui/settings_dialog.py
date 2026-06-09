@@ -34,6 +34,7 @@ class SettingsDialog(QDialog):
         on_change_root: Callable[[], None],
         parent: QWidget | None = None,
         open_api_keys_tab: bool = False,
+        on_live_settings_applied: Callable[[AppSettings], None] | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(f"{APP_NAME} — Settings")
@@ -41,6 +42,7 @@ class SettingsDialog(QDialog):
         self.resize(640, 540)
 
         self._settings = copy.deepcopy(settings)
+        self._on_live_settings_applied = on_live_settings_applied
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(20, 18, 20, 14)
@@ -92,8 +94,17 @@ class SettingsDialog(QDialog):
         buttons.rejected.connect(self.reject)
         outer.addWidget(buttons)
 
+        self._companion_page.apply_requested.connect(self._apply_companion_settings_live)
+
         if open_api_keys_tab:
             self._tabs.setCurrentIndex(1)
+
+    def _apply_companion_settings_live(self) -> None:
+        new_settings = self.result_settings()
+        save_settings(new_settings)
+        self._settings = new_settings
+        if self._on_live_settings_applied is not None:
+            self._on_live_settings_applied(new_settings)
 
     def set_companion_manager(self, manager: object) -> None:
         self._companion_page.set_manager(manager)

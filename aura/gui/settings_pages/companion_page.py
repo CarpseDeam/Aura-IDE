@@ -21,7 +21,7 @@ from __future__ import annotations
 import time
 from typing import Optional
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QFont, QGuiApplication
 from PySide6.QtWidgets import (
     QFormLayout,
@@ -79,6 +79,8 @@ class _Card(QFrame):
 
 
 class CompanionPage(QWidget):
+    apply_requested = Signal()
+
     def __init__(self, settings: AppSettings, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._settings = settings
@@ -101,6 +103,7 @@ class CompanionPage(QWidget):
         header_row.addWidget(self._status_pill)
         header_row.addStretch()
         self._enabled_switch = GlassSwitch("Enable Companion", self._settings.companion_enabled)
+        self._enabled_switch.toggled.connect(self._on_enable_toggled)
         header_row.addWidget(self._enabled_switch)
         outer.addLayout(header_row)
 
@@ -122,6 +125,7 @@ class CompanionPage(QWidget):
         name_row.addWidget(name_label)
         self._display_name_edit = QLineEdit(self._settings.companion_display_name or get_device_display_name())
         self._display_name_edit.setPlaceholderText("Auto from hostname")
+        self._display_name_edit.editingFinished.connect(self._on_url_or_name_edited)
         name_row.addWidget(self._display_name_edit, 1)
         conn_layout.addLayout(name_row)
 
@@ -252,10 +256,12 @@ class CompanionPage(QWidget):
         adv_form.setVerticalSpacing(8)
 
         self._relay_url_edit = QLineEdit(self._settings.companion_relay_url)
+        self._relay_url_edit.editingFinished.connect(self._on_url_or_name_edited)
         adv_form.addRow(self._dim_label("Relay URL"), self._relay_url_edit)
 
         self._web_url_edit = QLineEdit(self._settings.companion_web_url)
         self._web_url_edit.setPlaceholderText("http://<your-lan-ip>:5173")
+        self._web_url_edit.editingFinished.connect(self._on_url_or_name_edited)
         adv_form.addRow(self._dim_label("Companion Web URL"), self._web_url_edit)
 
         device_id = get_device_id()
@@ -311,6 +317,21 @@ class CompanionPage(QWidget):
         self._status_pill.setText(f"● {label}")
         self._status_pill.setStyleSheet(self._pill_style(color))
         self._pairing_section.setVisible(status == "connected")
+
+    def _on_enable_toggled(self, checked: bool) -> None:
+        if checked:
+            self._pair_card.setVisible(False)
+            self._on_connection_status("connecting")
+        else:
+            self._countdown_timer.stop()
+            self._pair_url = ""
+            self._pair_card.setVisible(False)
+            self._on_connection_status("disabled")
+        self.apply_requested.emit()
+
+    def _on_url_or_name_edited(self) -> None:
+        if self._enabled_switch.isChecked():
+            self.apply_requested.emit()
 
     def _on_pair_clicked(self) -> None:
         if self._manager is None:
