@@ -6,12 +6,7 @@ import json
 
 import pytest
 
-from aura.drones.build_spec import (
-    KIND_PROJECT_WORKER,
-    KIND_REPORT_DRAFTER,
-    STATUS_BUILDABLE_NOW,
-    STATUS_NEEDS_CAPABILITY,
-)
+from aura.drones.build_spec import DroneBuildBrief
 from aura.drones.workshop_runner import (
     DRONE_WORKSHOP_SYSTEM_PROMPT,
     DroneWorkshopResponse,
@@ -34,8 +29,7 @@ class TestDroneWorkshopResponse:
         )
         assert resp.kind == "question"
         assert resp.message == "What should it do?"
-        assert resp.spec is None
-        assert resp.validation_errors == ()
+        assert resp.brief is None
         assert resp.raw_text is not None
 
     def test_frozen(self) -> None:
@@ -96,39 +90,49 @@ class TestParseWorkshopResponse:
         resp = parse_workshop_response(text)
         assert resp.kind == "question"
         assert resp.message == "What should it do?"
-        assert resp.spec is None
+        assert resp.brief is None
 
-    def test_parse_spec_response(self) -> None:
-        spec_dict = {
-            "name": "Release Drafter",
-            "kind": KIND_REPORT_DRAFTER,
-            "job": "Draft release notes",
-            "trigger": "tag pushed",
-            "required_access": ["read"],
-            "write_policy": "normal_diff_approval",
-            "action_policy": "",
-            "capabilities_needed": [],
-            "instructions": "Read commits and produce release notes.",
-            "output_contract": "Returns markdown release notes.",
-            "success_criteria": ["Covers all commits"],
-            "boundaries": ["Last tag range only"],
-            "assumptions": ["Conventional commits"],
-            "build_status": STATUS_BUILDABLE_NOW,
-            "missing_capabilities": [],
-            "first_run_test": "",
-        }
+    def test_parse_brief_response(self) -> None:
         payload = json.dumps({
-            "type": "spec",
-            "message": "Release Dragger proposal",
-            "spec": spec_dict,
+            "type": "brief",
+            "message": "Here is the plan.",
+            "ready_to_build": True,
+            "build_brief": "Build a watcher that monitors the workspace.",
         })
         resp = parse_workshop_response(payload)
-        assert resp.kind == "spec"
-        assert resp.message == "Release Dragger proposal"
-        assert resp.spec is not None
-        assert resp.spec.name == "Release Drafter"
-        assert resp.spec.kind == KIND_REPORT_DRAFTER
-        assert resp.validation_errors == ()
+        assert resp.kind == "brief"
+        assert resp.message == "Here is the plan."
+        assert resp.brief is not None
+        assert isinstance(resp.brief, DroneBuildBrief)
+        assert resp.brief.response_type == "brief"
+        assert resp.brief.ready_to_build is True
+        assert resp.brief.build_brief == "Build a watcher that monitors the workspace."
+
+    def test_parse_brief_without_ready(self) -> None:
+        """Brief with ready_to_build=False is still valid."""
+        payload = json.dumps({
+            "type": "brief",
+            "message": "Still need info.",
+            "ready_to_build": False,
+            "build_brief": "",
+        })
+        resp = parse_workshop_response(payload)
+        assert resp.kind == "brief"
+        assert resp.brief is not None
+        assert resp.brief.ready_to_build is False
+
+    def test_parse_brief_invalid_empty_build_brief(self) -> None:
+        """Invalid brief (empty build_brief with ready_to_build=true) returns error."""
+        payload = json.dumps({
+            "type": "brief",
+            "message": "Ready.",
+            "ready_to_build": True,
+            "build_brief": "",
+        })
+        resp = parse_workshop_response(payload)
+        assert resp.kind == "error"
+        assert "build_brief" in resp.message
+        assert "not be empty" in resp.message
 
     def test_parse_json_in_fenced_block(self) -> None:
         text = (
@@ -161,66 +165,9 @@ class TestParseWorkshopResponse:
         assert resp.kind == "error"
         assert "Unknown response type" in resp.message
 
-    def test_parse_spec_with_validation_errors(self) -> None:
-        """Spec missing name and kind should produce validation errors."""
-        spec_dict = {
-            "name": "",
-            "kind": "",
-            "job": "Draft reports",
-            "write_policy": "normal_diff_approval",
-            "instructions": "",
-            "output_contract": "",
-            "build_status": STATUS_BUILDABLE_NOW,
-        }
-        payload = json.dumps({
-            "type": "spec",
-            "message": "Incomplete spec",
-            "spec": spec_dict,
-        })
-        resp = parse_workshop_response(payload)
-        assert resp.kind == "spec"
-        assert resp.spec is not None
-        # Should have validation errors for missing name, kind, instructions,
-        # output_contract, and buildable_now constraints
-        assert len(resp.validation_errors) > 0
-        error_texts = " ".join(resp.validation_errors).lower()
-        assert "name" in error_texts
-        assert "kind" in error_texts
-
-    def test_parse_spec_with_needs_capability(self) -> None:
-        """A spec that needs capabilities should parse without errors
-        and include the spec's validation_errors (missing_capabilities empty)."""
-        spec_dict = {
-            "name": "Browser Watcher",
-            "kind": KIND_PROJECT_WORKER,
-            "job": "Watch something",
-            "write_policy": "read_only",
-            "instructions": "Check for changes",
-            "output_contract": "Summary of changes",
-            "build_status": STATUS_NEEDS_CAPABILITY,
-            "missing_capabilities": [],
-        }
-        payload = json.dumps({
-            "type": "spec",
-            "message": "Needs extra capabilities",
-            "spec": spec_dict,
-        })
-        resp = parse_workshop_response(payload)
-        assert resp.kind == "spec"
-        assert resp.spec is not None
-        # validate() should flag missing_capabilities empty for needs_capability
-        assert len(resp.validation_errors) > 0
-
     def test_parse_empty_text(self) -> None:
         resp = parse_workshop_response("")
         assert resp.kind == "error"
-
-    def test_parse_spec_field_not_dict(self) -> None:
-        """When spec field is not a dict, return error."""
-        payload = json.dumps({"type": "spec", "message": "bad", "spec": "not-a-dict"})
-        resp = parse_workshop_response(payload)
-        assert resp.kind == "error"
-        assert "not a valid object" in resp.message
 
     def test_raw_text_preserved(self) -> None:
         """Error responses preserve the original raw_text."""
@@ -245,11 +192,17 @@ class TestSystemPrompt:
         assert isinstance(DRONE_WORKSHOP_SYSTEM_PROMPT, str)
         assert len(DRONE_WORKSHOP_SYSTEM_PROMPT) > 100
 
-    def test_contains_json_shapes(self) -> None:
-        """The prompt should mention the two JSON response shapes."""
-        assert '"type": "question"' in DRONE_WORKSHOP_SYSTEM_PROMPT
-        assert '"type": "spec"' in DRONE_WORKSHOP_SYSTEM_PROMPT
+    def test_contains_build_brief_keywords(self) -> None:
+        assert "build brief" in DRONE_WORKSHOP_SYSTEM_PROMPT.lower()
 
-    def test_mentions_valid_write_policies(self) -> None:
-        assert "read_only" in DRONE_WORKSHOP_SYSTEM_PROMPT
-        assert "normal_diff_approval" in DRONE_WORKSHOP_SYSTEM_PROMPT
+    def test_mentions_json_shapes(self) -> None:
+        assert '"type": "question"' in DRONE_WORKSHOP_SYSTEM_PROMPT
+        assert '"type": "brief"' in DRONE_WORKSHOP_SYSTEM_PROMPT
+
+    def test_does_not_contain_unsupported_language(self) -> None:
+        """The prompt should NOT say 'unsupported', 'cannot build', or 'missing capabilities'."""
+        prompt_lower = DRONE_WORKSHOP_SYSTEM_PROMPT.lower()
+        assert "unsupported" not in prompt_lower
+        assert "cannot build" not in prompt_lower
+        assert "missing capabilities" not in prompt_lower
+        assert "cannot build" not in prompt_lower

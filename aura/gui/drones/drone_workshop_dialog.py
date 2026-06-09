@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from aura.config import ThinkingMode
-from aura.drones.build_spec import DroneBuildSpec
+from aura.drones.build_spec import DroneBuildBrief
 from aura.drones.workshop_runner import DroneWorkshopResponse, DroneWorkshopRunner
 from aura.gui.theme import ACCENT, BG, BG_ALT, BG_RAISED, BORDER, FG, FG_DIM, FG_MUTED
 
@@ -24,7 +24,7 @@ from aura.gui.theme import ACCENT, BG, BG_ALT, BG_RAISED, BORDER, FG, FG_DIM, FG
 class DroneWorkshopDialog(QDialog):
     """Modal dialog for building a Drone via conversation with Aura."""
 
-    buildSpecApproved = Signal(object)  # emits DroneBuildSpec
+    buildSpecApproved = Signal(object)  # emits DroneBuildBrief
 
     def __init__(
         self,
@@ -43,7 +43,7 @@ class DroneWorkshopDialog(QDialog):
         self._temperature = temperature
 
         self._conversation: list[dict[str, str]] = []
-        self._current_spec: DroneBuildSpec | None = None
+        self._current_brief: DroneBuildBrief | None = None
         self._runner_thread: QThread | None = None
         self._runner: DroneWorkshopRunner | None = None
         self._assistant_buffer: str = ""
@@ -109,8 +109,8 @@ class DroneWorkshopDialog(QDialog):
 
         layout.addLayout(input_row)
 
-        # -- Preview: Drone Build Spec card --
-        preview_title = QLabel("DRONE BUILD SPEC")
+        # -- Preview: Drone Build Brief card --
+        preview_title = QLabel("DRONE BUILD BRIEF")
         preview_title.setStyleSheet(
             f"font-size: 11px; font-weight: 700; color: {FG_DIM}; "
             f"letter-spacing: 0.08em; padding: 8px 0 4px 0; background: transparent;"
@@ -128,7 +128,7 @@ class DroneWorkshopDialog(QDialog):
         self._preview_text = QPlainTextEdit()
         self._preview_text.setReadOnly(True)
         self._preview_text.setPlaceholderText(
-            "The Workshop will show the proposed Drone spec here "
+            "The Workshop will show the build brief here "
             "once it has enough details."
         )
         self._preview_text.setStyleSheet(
@@ -236,22 +236,17 @@ class DroneWorkshopDialog(QDialog):
             self._conversation.append({"role": "assistant", "content": display})
             # Preview unchanged; build button stays disabled
 
-        elif response.kind == "spec":
-            self._current_spec = response.spec
-            display = response.message or "Here's the proposed Drone spec."
+        elif response.kind == "brief":
+            self._current_brief = response.brief
+            display = response.message or "Here's the build brief."
             self._conversation.append({"role": "assistant", "content": display})
-            # Update preview
-            if response.spec is not None:
-                md = response.spec.preview_markdown()
-                if response.validation_errors:
-                    errs = "\n".join(f"• {e}" for e in response.validation_errors)
-                    md += f"\n\n⚠️ **Validation Issues:**\n{errs}"
-                self._preview_text.setPlainText(md)
-                # Enable build button only if no validation errors
-                self._build_btn.setEnabled(len(response.validation_errors) == 0)
+            # Update preview with build_brief text
+            if response.brief is not None:
+                self._preview_text.setPlainText(response.brief.build_brief)
+                self._build_btn.setEnabled(response.brief.ready_to_build)
             else:
                 self._preview_text.setPlainText(
-                    "(The model returned a spec response but the spec was missing.)"
+                    "(The model returned a brief response but the brief was missing.)"
                 )
                 self._build_btn.setEnabled(False)
 
@@ -281,12 +276,13 @@ class DroneWorkshopDialog(QDialog):
             self._runner = None
 
     def _on_approve_build(self) -> None:
-        """User clicked Build this Drone — emit spec and accept."""
-        if self._current_spec is not None:
-            self.buildSpecApproved.emit(self._current_spec)
+        """User clicked Build this Drone — emit brief and accept."""
+        if self._current_brief is not None:
+            self.buildSpecApproved.emit(self._current_brief)
         self.accept()
 
     def reject(self) -> None:
         if self._runner is not None:
             self._runner.cancel()
+        self._current_brief = None
         super().reject()

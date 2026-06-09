@@ -703,62 +703,49 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             temperature=self._settings.temperature,
             parent=self,
         )
-        dlg.buildSpecApproved.connect(self._on_drone_build_spec_approved)
+        dlg.buildSpecApproved.connect(self._on_drone_build_brief_approved)
         dlg.exec()
 
-    def _on_drone_build_spec_approved(self, spec: object) -> None:
-        """Handle an approved Drone Build Spec from the Workshop."""
-        from aura.drones.build_spec import DroneBuildSpec
+    def _on_drone_build_brief_approved(self, brief: object) -> None:
+        """Handle an approved Drone Build Brief from the Workshop."""
+        from aura.drones.build_spec import DroneBuildBrief
 
-        if not isinstance(spec, DroneBuildSpec):
+        if not isinstance(brief, DroneBuildBrief):
             return
 
         from PySide6.QtWidgets import QMessageBox
 
         # Guard: workspace required
         if self._workspace_root is None:
-            QMessageBox.warning(self, "Drone Build Spec", "No workspace root is set.")
+            QMessageBox.warning(self, "Drone Build Brief", "No workspace root is set.")
             return
 
         # Guard: bridge running
         if self._bridge.is_running():
             QMessageBox.information(
                 self,
-                "Drone Build Spec",
+                "Drone Build Brief",
                 "Aura is currently processing a request. Please wait for it to finish, then try again.",
             )
             return
 
-        if spec.build_status != "buildable_now":
-            # Show honest info about why this can't be built yet.
-            if spec.missing_capabilities:
-                caps = ", ".join(spec.missing_capabilities)
-                msg = (
-                    f"This Drone spec is valid, but Aura cannot build or run it yet.\n\n"
-                    f"Missing capabilities: {caps}\n\n"
-                    "The spec will be saved when Aura supports these capabilities."
-                )
-            elif spec.build_status == "needs_more_info":
-                msg = (
-                    "This Drone spec needs more information before Aura can build it.\n\n"
-                    "Return to the Workshop and answer the remaining questions."
-                )
-            else:
-                msg = (
-                    f"This Drone spec has status '{spec.build_status}' and "
-                    "cannot be built yet."
-                )
-            QMessageBox.information(self, "Drone Build Spec", msg)
+        if not brief.is_ready_to_build():
+            QMessageBox.information(
+                self,
+                "Drone Build Brief",
+                "This brief is not ready to build yet. "
+                "Return to the Workshop and provide more information.",
+            )
             return
 
-        # Buildable spec — create prompt and send through normal pathway.
-        prompt = build_drone_creation_prompt(spec)
+        # Ready to build — create prompt and send through normal pathway.
+        prompt = build_drone_creation_prompt(brief)
 
         # Show a brief visible message so the user sees the handoff.
         QMessageBox.information(
             self,
-            "Drone Build Spec",
-            f"Building Drone from approved Workshop spec: {spec.name}",
+            "Drone Build Brief",
+            "Building Drone from approved Workshop brief.",
         )
 
         payload = SendPayload(text=prompt, attachments=[])

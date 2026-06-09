@@ -3,80 +3,98 @@
 from __future__ import annotations
 
 from aura.drones.build_prompt import build_drone_creation_prompt
-from aura.drones.build_spec import DroneBuildSpec
+from aura.drones.build_spec import DroneBuildBrief
 
 
-def test_buildable_spec_prompt_includes_key_sections() -> None:
-    spec = DroneBuildSpec(
-        name="Bug Scout",
-        kind="project_worker",
-        job="Investigate bugs",
-        trigger="manual",
-        write_policy="read_only",
-        instructions="Find and analyze bugs.",
-        output_contract="Bug report.",
-        build_status="buildable_now",
-        success_criteria=("Bug found",),
+def test_buildable_brief_prompt_includes_build_brief_text() -> None:
+    brief = DroneBuildBrief(
+        response_type="brief",
+        message="Plan ready.",
+        ready_to_build=True,
+        build_brief="Build a bug scout that investigates bugs.",
     )
-    prompt = build_drone_creation_prompt(spec)
+    prompt = build_drone_creation_prompt(brief)
 
-    assert spec.name in prompt
-    assert spec.kind in prompt
-    assert spec.job in prompt
-    assert ".aura/drones" in prompt
+    assert brief.build_brief in prompt
+    assert "Build a bug scout" in prompt
+
+
+def test_prompt_includes_approved_language() -> None:
+    brief = DroneBuildBrief(
+        response_type="brief",
+        message="Ready.",
+        ready_to_build=True,
+        build_brief="Build a nightly reporter.",
+    )
+    prompt = build_drone_creation_prompt(brief)
+
+    assert "approved" in prompt.lower()
+
+
+def test_prompt_mentions_design_and_create() -> None:
+    brief = DroneBuildBrief(
+        response_type="brief",
+        message="Ready.",
+        ready_to_build=True,
+        build_brief="Build a drone.",
+    )
+    prompt = build_drone_creation_prompt(brief)
+
+    assert "design and create" in prompt.lower() or "build the drone" in prompt.lower()
+
+
+def test_prompt_includes_access_setup_safety_notes() -> None:
+    brief = DroneBuildBrief(
+        response_type="brief",
+        message="Ready.",
+        ready_to_build=True,
+        build_brief="Monitor logs. Needs filesystem read access. Run every hour.",
+    )
+    prompt = build_drone_creation_prompt(brief)
+
+    # The build_brief content should appear verbatim
+    assert "Monitor logs" in prompt
+    assert "Needs filesystem read access" in prompt
+    assert "Run every hour" in prompt
+
+
+def test_prompt_includes_store_no_secrets_instruction() -> None:
+    brief = DroneBuildBrief(
+        response_type="brief",
+        message="Ready.",
+        ready_to_build=True,
+        build_brief="Build a drone.",
+    )
+    prompt = build_drone_creation_prompt(brief)
+
+    assert "store no secrets" in prompt.lower()
+
+
+def test_prompt_references_definition_and_store() -> None:
+    brief = DroneBuildBrief(
+        response_type="brief",
+        message="Ready.",
+        ready_to_build=True,
+        build_brief="Build a drone.",
+    )
+    prompt = build_drone_creation_prompt(brief)
+
     assert "DroneDefinition" in prompt
     assert "DroneStore" in prompt
-    assert "next_id" in prompt
-    assert "default_tools_for_policy" in prompt
+    assert ".aura/drones" in prompt
 
 
-def test_prompt_includes_all_spec_fields() -> None:
-    spec = DroneBuildSpec(
-        name="Nightly Reporter",
-        kind="report_drafter",
-        job="Generate nightly report",
-        trigger="scheduled",
-        write_policy="ask_before_writes",
-        instructions="Summarise logs into a nightly report.",
-        output_contract="Markdown report.",
-        build_status="buildable_now",
-        success_criteria=("Report generated", "Email sent"),
+def test_prompt_does_not_contain_spec_fields() -> None:
+    """No references to old spec fields like kind, job, capabilities_needed, etc."""
+    brief = DroneBuildBrief(
+        response_type="brief",
+        message="Ready.",
+        ready_to_build=True,
+        build_brief="Build a drone.",
     )
-    prompt = build_drone_creation_prompt(spec)
+    prompt = build_drone_creation_prompt(brief)
 
-    assert "Nightly Reporter" in prompt
-    assert "report_drafter" in prompt
-    assert "Generate nightly report" in prompt
-    assert "scheduled" in prompt  # trigger
-    assert "ask_before_writes" in prompt
-    assert "Summarise logs into a nightly report." in prompt
-    assert "Markdown report." in prompt
-    assert "buildable_now" in prompt
-    assert "Report generated" in prompt
-
-
-def test_needs_capability_spec_still_includes_fields() -> None:
-    spec = DroneBuildSpec(
-        name="Email Watcher",
-        kind="email_watcher",
-        job="Watch for incoming email",
-        trigger="continuous",
-        write_policy="read_only",
-        instructions="Monitor Gmail inbox.",
-        output_contract="Alert on new mail.",
-        build_status="needs_capability",
-        missing_capabilities=("gmail_api",),
-        success_criteria=("Email detected",),
-    )
-    prompt = build_drone_creation_prompt(spec)
-
-    # The prompt builder doesn't gate on build_status, so all fields
-    # should still appear.
-    assert "Email Watcher" in prompt
-    assert "email_watcher" in prompt
-    assert "Watch for incoming email" in prompt
-    assert "read_only" in prompt
-    assert "Monitor Gmail inbox." in prompt
-    assert "Alert on new mail." in prompt
-    assert "needs_capability" in prompt
-    assert "gmail_api" in prompt
+    assert "capabilities_needed" not in prompt
+    assert "missing_capabilities" not in prompt
+    assert "build_status" not in prompt
+    assert "output_contract" not in prompt

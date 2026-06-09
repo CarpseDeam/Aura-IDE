@@ -1,11 +1,11 @@
-"""Build a user-message prompt from an approved DroneBuildSpec."""
+"""Build a user-message prompt from an approved DroneBuildBrief."""
 
 from __future__ import annotations
 
-from aura.drones.build_spec import DroneBuildSpec
+from aura.drones.build_spec import DroneBuildBrief
 
 
-def build_drone_creation_prompt(spec: DroneBuildSpec) -> str:
+def build_drone_creation_prompt(brief: DroneBuildBrief) -> str:
     """Return a single user-message string for the Planner/Worker pipeline.
 
     The prompt tells the Planner to dispatch a Worker that creates a saved
@@ -13,26 +13,13 @@ def build_drone_creation_prompt(spec: DroneBuildSpec) -> str:
     """
     lines: list[str] = []
     lines.append(
-        "The user has approved this Drone Build Spec. Please build it."
+        "The user has approved this Drone Build Brief. "
+        "Please build the Drone described below."
     )
     lines.append("")
-    lines.append("## Approved Drone Build Spec")
+    lines.append("## Approved Drone Build Brief")
     lines.append("")
-    lines.append(f"- **Name**: {spec.name}")
-    lines.append(f"- **Kind**: {spec.kind}")
-    lines.append(f"- **Job**: {spec.job}")
-    lines.append(f"- **Trigger**: {spec.trigger}")
-    lines.append(f"- **Required Access**: {', '.join(spec.required_access) if spec.required_access else '(none)'}")
-    lines.append(f"- **Write Policy**: {spec.write_policy}")
-    lines.append(f"- **Action Policy**: {spec.action_policy}")
-    lines.append(f"- **Capabilities Needed**: {', '.join(spec.capabilities_needed) if spec.capabilities_needed else '(none)'}")
-    lines.append(f"- **Missing Capabilities**: {', '.join(spec.missing_capabilities) if spec.missing_capabilities else '(none)'}")
-    lines.append(f"- **Instructions**: {spec.instructions}")
-    lines.append(f"- **Output Contract**: {spec.output_contract}")
-    lines.append(f"- **Success Criteria**: {', '.join(spec.success_criteria) if spec.success_criteria else '(none)'}")
-    lines.append(f"- **Build Status**: {spec.build_status}")
-    lines.append(f"- **Boundaries**: {', '.join(spec.boundaries) if spec.boundaries else '(none)'}")
-    lines.append(f"- **Assumptions**: {', '.join(spec.assumptions) if spec.assumptions else '(none)'}")
+    lines.append(brief.build_brief)
     lines.append("")
     lines.append("## Instructions")
     lines.append("")
@@ -46,25 +33,30 @@ def build_drone_creation_prompt(spec: DroneBuildSpec) -> str:
     )
     lines.append(
         "3. Use ``DroneStore.next_id(workspace_root, name)`` to generate "
-        "a safe id from the spec name."
+        "a safe id from the Drone name."
     )
     lines.append(
         "4. Use ``default_tools_for_policy(write_policy)`` from "
         "``aura.drones.definition`` for ``allowed_tools``."
     )
     lines.append(
-        "5. Include all required ``DroneDefinition`` fields: ``id``, ``name``, "
-        "``description``, ``instructions``, ``write_policy``, ``allowed_tools``, "
-        "``output_contract``, ``budget`` (use default), ``scope`` (use default), "
-        "``enabled=True``, ``created_by=\"drone_workshop\"``, "
-        "``created_at`` (now ISO), ``updated_at`` (now ISO)."
+        "5. Include all required ``DroneDefinition`` fields. "
+        "Read the schema from ``aura/drones/definition.py``."
     )
     lines.append(
         "6. Do NOT create a second Drone system. Do NOT open or depend on "
         "``DroneEditorDialog``."
     )
     lines.append(
-        "7. Keep the saved Drone focused on the approved spec. "
+        "7. Include any access/setup/safety notes from the brief in "
+        "the Drone's instructions."
+    )
+    lines.append(
+        "8. Ask the user only for details or access that are truly needed "
+        "later (e.g. API keys at runtime). Store no secrets in the Drone definition."
+    )
+    lines.append(
+        "9. Keep the saved Drone focused on the approved brief. "
         "Do not add external browser, Gmail, or scheduler capabilities."
     )
     lines.append("")

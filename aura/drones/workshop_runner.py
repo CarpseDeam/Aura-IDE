@@ -11,7 +11,7 @@ from PySide6.QtCore import QObject, Signal
 from aura.backends.api import APIAgentBackend
 from aura.client.events import ApiError, ContentDelta, Done
 from aura.config import ThinkingMode
-from aura.drones.build_spec import DroneBuildSpec
+from aura.drones.build_spec import DroneBuildBrief
 
 # ---------------------------------------------------------------------------
 # Response model
@@ -20,10 +20,9 @@ from aura.drones.build_spec import DroneBuildSpec
 
 @dataclass(frozen=True)
 class DroneWorkshopResponse:
-    kind: str  # "question", "spec", "error"
+    kind: str  # "question", "brief", "error"
     message: str = ""
-    spec: DroneBuildSpec | None = None
-    validation_errors: tuple[str, ...] = ()
+    brief: DroneBuildBrief | None = None
     raw_text: str = ""
 
 
@@ -119,21 +118,24 @@ def parse_workshop_response(text: str) -> DroneWorkshopResponse:
                 raw_text=text,
             )
 
-        if resp_type == "spec":
-            spec_dict = obj.get("spec", {})
-            if not isinstance(spec_dict, dict):
+        if resp_type == "brief":
+            brief = DroneBuildBrief(
+                response_type="brief",
+                message=str(obj.get("message", "")),
+                ready_to_build=bool(obj.get("ready_to_build", False)),
+                build_brief=str(obj.get("build_brief", "")),
+            )
+            validation_errors = brief.validate()
+            if validation_errors:
                 return DroneWorkshopResponse(
                     kind="error",
-                    message="Response 'spec' field is not a valid object.",
+                    message="; ".join(validation_errors),
                     raw_text=text,
                 )
-            parsed_spec = DroneBuildSpec.from_dict(spec_dict)
-            validation_errors = parsed_spec.validate()
             return DroneWorkshopResponse(
-                kind="spec",
+                kind="brief",
                 message=str(obj.get("message", "")),
-                spec=parsed_spec,
-                validation_errors=tuple(validation_errors),
+                brief=brief,
                 raw_text=text,
             )
 
@@ -158,22 +160,30 @@ DRONE_WORKSHOP_SYSTEM_PROMPT = """You are Aura's Drone Workshop assistant. You h
 
 You accept normal-user chore language, not just coding requests. A user might say "remind me when a new PR is opened" or "tell me if a build fails" — interpret that naturally.
 
-Rules:
-- Ask only useful missing questions. Do not ask the user to fill in every field — infer sensible defaults.
-- When you have enough information, produce a complete Drone Build Spec as a JSON `spec` response.
-- Early safe Drone categories: watch, summarize, draft, report, notify. The spec must use one of the supported kinds: `project_worker`, `browser_watcher`, `email_watcher`, `dashboard_summarizer`, `market_watcher`, `repo_watcher`, `report_drafter`, `custom_chore`.
-- Do NOT pretend Aura can run unsupported external capabilities (browser, Gmail, scheduling, notifications, market data) right now. If the user's request needs them, still produce a valid spec but set `build_status` to `"needs_capability"` and list what's missing in `missing_capabilities`.
-- For buildable project/workspace Drones (code work, file ops, git, shell commands within the workspace), set `build_status` to `"buildable_now"`.
-- Valid write policies: `read_only`, `ask_before_writes`, `normal_diff_approval`. Default to `normal_diff_approval` unless the user wants read-only.
-- If you do not have enough information, ask a single focused follow-up question as a `question` response. Ask about the most important missing piece: what should the Drone DO, when should it run, or what output should it produce.
+You are an interviewer, not a form-filler. Have a natural conversation to understand what the user wants. Ask focused follow-up questions only when you need more information to write a useful build brief.
+
+When you have enough information, produce a build brief (type: "brief") with ready_to_build set to true.
+
+The brief should capture:
+- What the user wants the Drone to do
+- When and how it should run (trigger, schedule, or on-demand)
+- What access, credentials, or setup it needs
+- Safety boundary — what it should NOT do
+- What a good first-run test would prove
+
+Do NOT try to engineer the implementation. Just gather the job, constraints, access needs, safety boundary, and success test.
+
+External access or unavailable capabilities should be noted in the build_brief as context, not as a blocker. The Workshop should not decide what is buildable — it should just describe what's needed honestly.
+
+Never tell the user that something cannot be built or is unavailable — just describe what's needed honestly in the build_brief.
 
 Return ONLY valid JSON in one of these exact shapes (no extra prose):
 
 Question when more info is needed:
 {"type": "question", "message": "One focused question for the user."}
 
-Spec when enough info is available:
-{"type": "spec", "message": "Short summary of the proposed Drone.", "spec": {"name": "...", "kind": "...", "job": "...", "trigger": "...", "required_access": [], "write_policy": "...", "action_policy": "...", "capabilities_needed": [], "instructions": "...", "output_contract": "...", "success_criteria": [], "boundaries": [], "assumptions": [], "build_status": "...", "missing_capabilities": [], "first_run_test": "..."}}"""
+Brief when enough info is available:
+{"type": "brief", "message": "Short summary for the user.", "ready_to_build": true, "build_brief": "Plain-language build brief describing the Drone, its trigger, access needs, safety boundary, and first-run test."}"""
 
 
 # ---------------------------------------------------------------------------
