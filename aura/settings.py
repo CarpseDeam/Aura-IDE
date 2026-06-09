@@ -206,9 +206,10 @@ class AppSettings:
             s.auto_summon_drones = data["auto_summon_drones"]
         if isinstance(data.get("sandbox_mode"), str) and data["sandbox_mode"] in ("host", "docker", "wasm"):
             s.sandbox_mode = data["sandbox_mode"]
-        # Companion
-        if isinstance(data.get("companion_enabled"), bool):
-            s.companion_enabled = data["companion_enabled"]
+        # Companion — relay URL, web URL, and display name are persistent config.
+        # companion_enabled is session-only: Aura must never auto-start remote
+        # control on launch, so it is always forced False regardless of what was saved.
+        s.companion_enabled = False
         if isinstance(data.get("companion_relay_url"), str):
             s.companion_relay_url = data["companion_relay_url"]
         if isinstance(data.get("companion_display_name"), str):
@@ -304,4 +305,6 @@ def load_settings() -> AppSettings:
 
 def save_settings(settings: AppSettings) -> None:
     p = settings_path()
-    p.write_text(json.dumps(asdict(settings), indent=2), encoding="utf-8")
+    data = asdict(settings)
+    data["companion_enabled"] = False  # session-only; never persist as enabled
+    p.write_text(json.dumps(data, indent=2), encoding="utf-8")
