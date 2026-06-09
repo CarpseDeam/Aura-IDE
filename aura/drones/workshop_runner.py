@@ -13,7 +13,6 @@ from aura.client.events import ApiError, ContentDelta, Done
 from aura.config import ThinkingMode
 from aura.drones.build_spec import DroneBuildSpec
 
-
 # ---------------------------------------------------------------------------
 # Response model
 # ---------------------------------------------------------------------------

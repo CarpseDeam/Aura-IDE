@@ -37,6 +37,7 @@ from aura.config import (
     save_workspace_root,
 )
 from aura.conversation.tools._types import ApprovalDecision, ApprovalRequest
+from aura.drones.build_prompt import build_drone_creation_prompt
 from aura.drones.definition import DroneDefinition
 from aura.drones.receipt import DroneReceipt
 from aura.drones.runner import DroneRunner
@@ -47,11 +48,11 @@ from aura.gui.chat_view import ChatView
 from aura.gui.checkpoint_dialog import CheckpointDialog
 from aura.gui.conv_persistence import ConversationPersistence
 from aura.gui.drones.drone_bay_pane import DroneBayPane
-from aura.gui.drones.drone_workshop_dialog import DroneWorkshopDialog
 from aura.gui.drones.drone_editor_dialog import DroneEditorDialog
 from aura.gui.drones.drone_reports_window import DroneReportsWindow
 from aura.gui.drones.drone_run_card import DroneRunCard
 from aura.gui.drones.drone_summon_card import DroneSummonCard
+from aura.gui.drones.drone_workshop_dialog import DroneWorkshopDialog
 from aura.gui.edge_rails import EdgeTabRail
 from aura.gui.input_panel import InputPanel, SendPayload
 from aura.gui.left_pane import LeftPane
@@ -706,13 +707,62 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         dlg.exec()
 
     def _on_drone_build_spec_approved(self, spec: object) -> None:
-        """Placeholder — the spec will be passed to Planner/Worker in the next chunk."""
+        """Handle an approved Drone Build Spec from the Workshop."""
+        from aura.drones.build_spec import DroneBuildSpec
+
+        if not isinstance(spec, DroneBuildSpec):
+            return
+
         from PySide6.QtWidgets import QMessageBox
+
+        # Guard: workspace required
+        if self._workspace_root is None:
+            QMessageBox.warning(self, "Drone Build Spec", "No workspace root is set.")
+            return
+
+        # Guard: bridge running
+        if self._bridge.is_running():
+            QMessageBox.information(
+                self,
+                "Drone Build Spec",
+                "Aura is currently processing a request. Please wait for it to finish, then try again.",
+            )
+            return
+
+        if spec.build_status != "buildable_now":
+            # Show honest info about why this can't be built yet.
+            if spec.missing_capabilities:
+                caps = ", ".join(spec.missing_capabilities)
+                msg = (
+                    f"This Drone spec is valid, but Aura cannot build or run it yet.\n\n"
+                    f"Missing capabilities: {caps}\n\n"
+                    "The spec will be saved when Aura supports these capabilities."
+                )
+            elif spec.build_status == "needs_more_info":
+                msg = (
+                    "This Drone spec needs more information before Aura can build it.\n\n"
+                    "Return to the Workshop and answer the remaining questions."
+                )
+            else:
+                msg = (
+                    f"This Drone spec has status '{spec.build_status}' and "
+                    "cannot be built yet."
+                )
+            QMessageBox.information(self, "Drone Build Spec", msg)
+            return
+
+        # Buildable spec — create prompt and send through normal pathway.
+        prompt = build_drone_creation_prompt(spec)
+
+        # Show a brief visible message so the user sees the handoff.
         QMessageBox.information(
             self,
             "Drone Build Spec",
-            "Drone Build Spec approved. The next pass will submit it to Aura Planner/Worker.",
+            f"Building Drone from approved Workshop spec: {spec.name}",
         )
+
+        payload = SendPayload(text=prompt, attachments=[])
+        self._send_handler.handle_send(payload, self.current_model(), self.current_thinking())
 
     def _on_save_as_drone(self, summary: str) -> None:
         """Open the Drone editor pre-filled from the last Worker run."""
@@ -1571,6 +1621,10 @@ class MainWindow(WindowChromeMixin, QMainWindow):
                 planner_provider=self._settings.planner_provider,
                 worker_provider=self._settings.worker_provider,
             )
+            # Refresh Drone Bay so newly created Drones appear.
+            if hasattr(self, '_drone_bay') and self._drone_bay is not None:
+                self._drone_bay.refresh()
+            self._refresh_drone_context()
 
     def _on_diff_decided(
         self,

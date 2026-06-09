@@ -19,7 +19,6 @@ from aura.drones.workshop_runner import (
     parse_workshop_response,
 )
 
-
 # ===================================================================
 # DroneWorkshopResponse
 # ===================================================================
