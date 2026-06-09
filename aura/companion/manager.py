@@ -45,6 +45,7 @@ class CompanionManager(QObject):
     """
 
     connection_status_changed = Signal(str)  # "disabled", "connecting", "connected", "error"
+    connection_error = Signal(str)           # exact error string from the ws worker
     message_received = Signal(dict)
     pairing_code_available = Signal(str)       # Emitted when a pairing code is generated
     pairing_code_invalidated = Signal()        # Emitted when a pairing code is cancelled
@@ -286,8 +287,14 @@ class CompanionManager(QObject):
         self._ws_client = client
         client.connected.connect(lambda c=client: self._on_connected(c))
         client.disconnected.connect(lambda c=client: self._on_disconnected(c))
+        client.error.connect(lambda err, c=client: self._on_client_error(c, err))
         client.message_received.connect(self._on_raw_message)
         client.connect_to_relay()
+
+    def _on_client_error(self, client: CompanionWsClient, error_str: str) -> None:
+        if client is not self._ws_client:
+            return
+        self.connection_error.emit(error_str)
 
     def _on_connected(self, client: CompanionWsClient | None = None) -> None:
         if client is not None and client is not self._ws_client:

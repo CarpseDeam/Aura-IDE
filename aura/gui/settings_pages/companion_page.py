@@ -90,6 +90,7 @@ class CompanionPage(QWidget):
         self._countdown_timer.timeout.connect(self._tick_countdown)
         self._pairing_expires_at: float = 0.0
         self._pair_url: str = ""
+        self._auto_pair_on_connect: bool = False
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -106,6 +107,12 @@ class CompanionPage(QWidget):
         self._enabled_switch.toggled.connect(self._on_enable_toggled)
         header_row.addWidget(self._enabled_switch)
         outer.addLayout(header_row)
+
+        self._error_label = QLabel("")
+        self._error_label.setStyleSheet(f"color: {DANGER}; font-size: 11px; padding: 2px 4px;")
+        self._error_label.setWordWrap(True)
+        self._error_label.setVisible(False)
+        outer.addWidget(self._error_label)
 
         # ── Connection section ──────────────────────────────────
         conn_card = _Card(self)
@@ -307,6 +314,7 @@ class CompanionPage(QWidget):
             return
         self._manager = manager
         manager.connection_status_changed.connect(self._on_connection_status)
+        manager.connection_error.connect(self._on_connection_error)
         manager.pairing_code_invalidated.connect(self._on_pairing_invalidated)
         manager.pairing_complete.connect(self._on_pairing_complete)
 
@@ -317,23 +325,43 @@ class CompanionPage(QWidget):
         self._status_pill.setText(f"● {label}")
         self._status_pill.setStyleSheet(self._pill_style(color))
         self._pairing_section.setVisible(status == "connected")
+        if status == "connected":
+            self._error_label.setVisible(False)
+            if self._auto_pair_on_connect:
+                self._auto_pair_on_connect = False
+                self._start_pairing()
+        elif status == "error":
+            self._pair_card.setVisible(False)
+            if not self._error_label.isVisible():
+                self._error_label.setText("Could not connect to relay.")
+                self._error_label.setVisible(True)
+        else:
+            self._error_label.setVisible(False)
 
     def _on_enable_toggled(self, checked: bool) -> None:
         if checked:
+            self._error_label.setVisible(False)
             self._pair_card.setVisible(False)
+            self._auto_pair_on_connect = True
             self._on_connection_status("connecting")
         else:
+            self._auto_pair_on_connect = False
             self._countdown_timer.stop()
             self._pair_url = ""
             self._pair_card.setVisible(False)
+            self._error_label.setVisible(False)
             self._on_connection_status("disabled")
         self.apply_requested.emit()
+
+    def _on_connection_error(self, error_str: str) -> None:
+        self._error_label.setText(f"Connection error: {error_str}")
+        self._error_label.setVisible(True)
 
     def _on_url_or_name_edited(self) -> None:
         if self._enabled_switch.isChecked():
             self.apply_requested.emit()
 
-    def _on_pair_clicked(self) -> None:
+    def _start_pairing(self) -> None:
         if self._manager is None:
             return
         try:
@@ -351,6 +379,9 @@ class CompanionPage(QWidget):
         self._pair_card.setVisible(True)
         self._countdown_timer.start()
         self._tick_countdown()
+
+    def _on_pair_clicked(self) -> None:
+        self._start_pairing()
 
     def _on_copy_url(self) -> None:
         if self._pair_url:

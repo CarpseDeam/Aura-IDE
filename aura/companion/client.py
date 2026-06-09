@@ -28,6 +28,7 @@ class _WsWorker(QObject):
     connected = Signal()
     disconnected = Signal()
     message_received = Signal(str)
+    error = Signal(str)
 
     def __init__(self, url: str, device_id: str, desktop_secret: str) -> None:
         super().__init__()  # No parent — required for moveToThread
@@ -83,6 +84,7 @@ class _WsWorker(QObject):
                 logger.warning("[CompanionWsClient] connection closed")
             except Exception as exc:
                 logger.error("[CompanionWsClient] connection error: %s", exc)
+                self.error.emit(str(exc))
             finally:
                 self._ws = None
                 self.disconnected.emit()
@@ -136,6 +138,7 @@ class CompanionWsClient(QObject):
     connected = Signal()
     disconnected = Signal()
     message_received = Signal(str)  # raw JSON string
+    error = Signal(str)
 
     def __init__(self, url: str = "", device_id: str = "", desktop_secret: str = "", parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -165,6 +168,7 @@ class CompanionWsClient(QObject):
         self._worker.connected.connect(self._on_worker_connected)
         self._worker.disconnected.connect(self._on_worker_disconnected)
         self._worker.message_received.connect(self.message_received)
+        self._worker.error.connect(self.error)
 
         self._thread.started.connect(self._worker.run)
         self._thread.start()
