@@ -47,6 +47,7 @@ from aura.gui.chat_view import ChatView
 from aura.gui.checkpoint_dialog import CheckpointDialog
 from aura.gui.conv_persistence import ConversationPersistence
 from aura.gui.drones.drone_bay_pane import DroneBayPane
+from aura.gui.drones.drone_design_wizard_dialog import DroneDesignWizardDialog
 from aura.gui.drones.drone_editor_dialog import DroneEditorDialog
 from aura.gui.drones.drone_reports_window import DroneReportsWindow
 from aura.gui.drones.drone_run_card import DroneRunCard
@@ -195,6 +196,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._drone_bay = DroneBayPane(workspace_root=self._workspace_root, parent=self)
         self._playground.set_drone_bay(self._drone_bay)
         self._drone_bay.newDroneRequested.connect(self._on_new_drone)
+        self._drone_bay.designDroneRequested.connect(self._on_design_drone)
         self._drone_bay.editDroneRequested.connect(self._on_edit_drone)
         self._drone_bay.duplicateDroneRequested.connect(self._on_duplicate_drone)
         self._drone_bay.deleteDroneRequested.connect(self._on_delete_drone)
@@ -687,6 +689,30 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             parent=self,
         )
         if dlg.exec() == QDialog.DialogCode.Accepted:
+            self._drone_bay.refresh()
+            self._refresh_drone_context()
+
+    def _on_design_drone(self) -> None:
+        """Open the Drone Design Wizard, then pre-fill the editor with the draft."""
+        wizard = DroneDesignWizardDialog(
+            workspace_root=self._workspace_root,
+            parent=self,
+        )
+        if wizard.exec() != QDialog.DialogCode.Accepted:
+            return
+        draft = wizard.draft
+        if draft is None:
+            return
+
+        editor = DroneEditorDialog(
+            workspace_root=self._workspace_root,
+            parent=self,
+            initial_name=draft.name,
+            initial_instructions=draft.instructions,
+            initial_output_contract=draft.output_contract,
+            initial_write_policy=draft.write_policy,
+        )
+        if editor.exec() == QDialog.DialogCode.Accepted:
             self._drone_bay.refresh()
             self._refresh_drone_context()
 

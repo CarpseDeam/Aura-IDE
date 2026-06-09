@@ -30,6 +30,7 @@ class DroneBayPane(QWidget):
     """
 
     newDroneRequested = Signal()
+    designDroneRequested = Signal()
     editDroneRequested = Signal(str)
     duplicateDroneRequested = Signal(str)
     deleteDroneRequested = Signal(str)
@@ -88,6 +89,18 @@ class DroneBayPane(QWidget):
         )
         new_btn.clicked.connect(self.newDroneRequested.emit)
         header_layout.addWidget(new_btn)
+
+        design_btn = QPushButton("Design a Drone")
+        design_btn.setObjectName("secondary")
+        design_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        design_btn.setStyleSheet(
+            f"QPushButton#secondary {{ background: transparent; color: {ACCENT}; "
+            f"border: 1px solid {ACCENT}; border-radius: 6px; "
+            f"padding: 6px 16px; font-weight: 600; font-size: 13px; }}"
+            f"QPushButton#secondary:hover {{ background: rgba(122, 162, 247, 0.10); }}"
+        )
+        design_btn.clicked.connect(self.designDroneRequested.emit)
+        header_layout.addWidget(design_btn)
 
         layout.addWidget(header)
 
@@ -166,7 +179,7 @@ class DroneBayPane(QWidget):
         self._card_layout.addStretch(2)
         empty = QLabel(
             "No drones yet.\n\n"
-            "Create one from scratch, or save a useful Aura workflow later."
+            "Create one from scratch, or design one with Aura and refine it later."
         )
         empty.setObjectName("droneBayEmpty")
         empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
