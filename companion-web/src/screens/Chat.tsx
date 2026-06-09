@@ -93,11 +93,16 @@ function ChatScreen() {
       setError(msg.payload?.message || 'An error occurred');
       setStreaming(false);
     });
+    const unsubAuthError = socket.on('auth.error', () => {
+      CompanionSocket.setStoredToken('');
+      navigate('/login', { replace: true });
+    });
     return () => {
       unsubWelcome();
       unsubDelta();
       unsubComplete();
       unsubError();
+      unsubAuthError();
     };
   }, []);
 
