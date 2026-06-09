@@ -27,7 +27,7 @@ Aura is a native desktop IDE that runs your prompt through a real engineering lo
 
 ---
 
-Here's what Aura actually does. You type a request — fix a bug, add a feature, refactor a module. The **Planner** reads your code, understands the project structure, and writes a technical spec. You see the spec. You can edit it. When you're satisfied, you dispatch it. The **Worker** executes the spec with read and write filesystem access, proposes every change as a diff for your approval, runs validation, and recovers if something breaks. Every write is backed up. Every batch of changes gets an AI-generated commit message. The whole cycle produces a receipt you can review.
+Here's what Aura actually does. You type a request... fix a bug, add a feature, refactor a module. The **Planner** reads your code, understands the project structure, and writes a technical spec. You see the spec. You can edit it. When you're satisfied, you dispatch it. The **Worker** executes the spec with read and write filesystem access, proposes every change as a diff for your approval, runs validation, and recovers if something breaks. Every write is backed up. Every batch of changes gets an AI-generated commit message. The whole cycle produces a receipt you can review.
 
 What makes it different is the architecture. The Planner and Worker are two separate models that can run on different providers with different thinking depths. The Planner's output is a structured spec — not raw code — so the Worker starts from a clean target instead of inheriting the Planner's reasoning noise. This **spec-as-token-firewall** is why Aura's prompt caching hits 90%+: the deterministic architecture keeps context stable, not luck.
 
