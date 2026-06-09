@@ -1,0 +1,16 @@
+name = "aura-companion-relay"
+main = "src/index.ts"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+
+[[durable_objects.bindings]]
+name = "RELAY"
+class_name = "RelayDO"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["RelayDO"]
+
+[vars]
+# Override in wrangler secret or dashboard:
+# DESKTOP_SECRET = "change-me"

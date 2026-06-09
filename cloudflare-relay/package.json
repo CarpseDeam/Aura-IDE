@@ -1,0 +1,15 @@
+{
+  "name": "aura-companion-relay",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "build": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240718.0",
+    "typescript": "^5.5.0",
+    "wrangler": "^3.60.0"
+  }
+}
