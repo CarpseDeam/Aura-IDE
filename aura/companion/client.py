@@ -29,10 +29,11 @@ class _WsWorker(QObject):
     disconnected = Signal()
     message_received = Signal(str)
 
-    def __init__(self, url: str, token: str) -> None:
+    def __init__(self, url: str, device_id: str, desktop_secret: str) -> None:
         super().__init__()  # No parent — required for moveToThread
         self._url = url
-        self._token = token
+        self._device_id = device_id
+        self._desktop_secret = desktop_secret
         self._loop: asyncio.AbstractEventLoop | None = None
         self._ws: websockets.WebSocketClientProtocol | None = None
         self._should_run = True
@@ -60,9 +61,9 @@ class _WsWorker(QObject):
                     self._reconnect_delay = 1.0
                     await ws.send(json.dumps({
                         "type": "hello",
-                        "device_id": self._token or "unknown",
+                        "device_id": self._device_id or "unknown",
                         "device_type": "desktop",
-                        "token": self._token or "",
+                        "secret": self._desktop_secret,
                     }))
                     welcome_raw = await ws.recv()
                     try:
@@ -121,10 +122,11 @@ class CompanionWsClient(QObject):
     disconnected = Signal()
     message_received = Signal(str)  # raw JSON string
 
-    def __init__(self, url: str = "", device_token: str = "", parent: QObject | None = None) -> None:
+    def __init__(self, url: str = "", device_id: str = "", desktop_secret: str = "", parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._url = url
-        self._token = device_token
+        self._device_id = device_id
+        self._desktop_secret = desktop_secret
         self._thread: QThread | None = None
         self._worker: _WsWorker | None = None
         self._is_connected: bool = False
@@ -133,16 +135,14 @@ class CompanionWsClient(QObject):
     def is_connected(self) -> bool:
         return self._is_connected
 
-    def connect_to_relay(self, url: str | None = None, token: str | None = None) -> None:
+    def connect_to_relay(self, url: str | None = None) -> None:
         if url:
             self._url = url
-        if token:
-            self._token = token
         if self._thread is not None and self._thread.isRunning():
             logger.warning("[CompanionWsClient] already connecting")
             return
 
-        self._worker = _WsWorker(self._url, self._token)
+        self._worker = _WsWorker(self._url, self._device_id, self._desktop_secret)
         self._thread = QThread()
         self._worker.moveToThread(self._thread)
 
