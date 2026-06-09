@@ -21,6 +21,7 @@ function ChatScreen() {
   const [connected, setConnected] = useState(socket.connected);
   const bottomRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
+  const watchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const safeCtx = CompanionSocket.getStoredSafeContext();
   const projectId = safeCtx.project_id || '';
@@ -52,6 +53,8 @@ function ChatScreen() {
 
     const unsubWelcome = socket.on('welcome', () => setConnected(true));
     const unsubDelta = socket.on('chat.message.delta', (msg: any) => {
+      clearWatchdog();
+      setError('');
       const text = msg.payload?.text || '';
       const kind = msg.payload?.type || 'content';
       if (kind === 'reasoning') return;  // skip reasoning in MVP
@@ -66,6 +69,7 @@ function ChatScreen() {
       });
     });
     const unsubComplete = socket.on('chat.message.complete', (msg: any) => {
+      clearWatchdog();
       const text = msg.payload?.text || '';
       const finishReason = msg.payload?.finish_reason || '';
       setMessages(prev => {
@@ -90,6 +94,7 @@ function ChatScreen() {
       setStreaming(false);
     });
     const unsubError = socket.on('chat.error', (msg: any) => {
+      clearWatchdog();
       setError(msg.payload?.message || 'An error occurred');
       setStreaming(false);
     });
@@ -98,6 +103,7 @@ function ChatScreen() {
       navigate('/login', { replace: true });
     });
     return () => {
+      clearWatchdog();
       unsubWelcome();
       unsubDelta();
       unsubComplete();
@@ -114,13 +120,27 @@ function ChatScreen() {
     setStreaming(true);
     setError('');
     socket.send('chat.send', { text }, desktopId, projectId, conversationId);
+    // Start watchdog — if desktop doesn't respond in 60s, show error
+    clearWatchdog();
+    watchdogRef.current = setTimeout(() => {
+      setStreaming(false);
+      setError('No response from desktop. Check Aura Desktop.');
+    }, 60_000);
     if (taRef.current) taRef.current.style.height = 'auto';
   }, [input, streaming, desktopId, projectId, conversationId]);
 
   const cancel = useCallback(() => {
+    clearWatchdog();
     socket.send('chat.cancel', {}, desktopId, projectId, conversationId);
     setStreaming(false);
   }, [desktopId, projectId, conversationId]);
+
+  const clearWatchdog = () => {
+    if (watchdogRef.current !== null) {
+      clearTimeout(watchdogRef.current);
+      watchdogRef.current = null;
+    }
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100dvh', padding: '0 0.75rem' }}>

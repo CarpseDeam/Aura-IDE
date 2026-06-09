@@ -346,6 +346,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         # Wire project thread selection from left pane
         self._left_pane.thread_selected.connect(self._on_thread_selected)
         self._persistence.project_thread_updated.connect(self._on_project_thread_updated)
+        self._persistence.current_context_changed.connect(self._on_current_context_changed)
 
         self._left_pane.refresh_projects(self._workspace_root)
 
@@ -512,6 +513,9 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._companion.set_workspace_root(str(self._workspace_root))
         self._tree.set_root(path)
         save_workspace_root(path)
+        from aura.projects.store import ProjectStore
+        _project = ProjectStore().create_or_update_project(path)
+        self._companion.set_current_project(_project.id, _project.name)
         self._update_workspace_label()
         self._left_pane.refresh_projects(path)
         if hasattr(self, '_drone_bay'):
@@ -614,7 +618,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
     def _on_project_selected(self, root_path: Path) -> None:
         from aura.projects.store import ProjectStore
-        ProjectStore().create_or_update_project(root_path)
+        project = ProjectStore().create_or_update_project(root_path)
+        self._companion.set_current_project(project.id, project.name)
 
         if self._workspace_root is not None and self._workspace_root.resolve() != root_path.resolve():
             # Fully reset conversation state before switching
@@ -1281,6 +1286,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._input.set_attachments([])
         self._input.set_queued_messages(0)
         self._reset_session_usage()
+        self._companion.set_current_conversation("")
 
     def _on_open_conversation(self) -> None:
         if self._bridge.is_running():
@@ -1616,6 +1622,12 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             self._reset_session_usage()
         except Exception as _err:
             QMessageBox.warning(self, APP_NAME, f"Could not open conversation:\n{_err}")
+
+    def _on_current_context_changed(self, project_id: str, thread_id: str) -> None:
+        """Sync companion with the active project and conversation context."""
+        if project_id:
+            self._companion.set_current_project(project_id)
+        self._companion.set_current_conversation(thread_id or "")
 
     def _on_project_thread_updated(self) -> None:
         self._left_pane.refresh_projects(self._workspace_root)

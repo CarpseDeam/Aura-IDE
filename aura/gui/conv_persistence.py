@@ -43,6 +43,8 @@ class ConversationPersistence(QObject):
     needs_status_refresh = Signal()
     # Emitted after project thread metadata is updated by auto-save.
     project_thread_updated = Signal()
+    # Emitted when the active project or conversation context changes.
+    current_context_changed = Signal(str, str)  # (project_id, thread_id)
 
     def __init__(
         self,
@@ -126,6 +128,7 @@ class ConversationPersistence(QObject):
             project.last_thread_id = thread.id
             store.save_project(project)
             self.project_thread_updated.emit()
+            self.current_context_changed.emit(project.id, thread.id)
         except Exception:
             logging.exception("Failed to update project thread metadata")
 
@@ -203,6 +206,7 @@ class ConversationPersistence(QObject):
         self._chat.reset()
         self._playground.clear()
         self._current_conversation_path = None
+        self.current_context_changed.emit("", "")
 
     def open_conversation(
         self, workspace_root, parent_widget
@@ -345,6 +349,24 @@ class ConversationPersistence(QObject):
         self._bridge.clear_pre_worker_snapshot()
         self.replay_history()
         self.needs_status_refresh.emit()
+
+        # Sync companion context after applying a loaded conversation
+        try:
+            ws = self._bridge.registry.workspace_root
+            if ws and loaded.path:
+                store = ProjectStore()
+                project = store.create_or_update_project(ws)
+                found = False
+                for t in store.list_threads(project, include_archived=True):
+                    if t.conversation_path == loaded.path:
+                        self.current_context_changed.emit(project.id, t.id)
+                        found = True
+                        break
+                if not found:
+                    # Thread not found — still emit project (with empty thread)
+                    self.current_context_changed.emit(project.id, "")
+        except Exception:
+            logging.exception("Failed to sync companion context after loading conversation")
 
     # ---- replay history into view ------------------------------------------
 
