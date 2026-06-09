@@ -47,7 +47,7 @@ from aura.gui.chat_view import ChatView
 from aura.gui.checkpoint_dialog import CheckpointDialog
 from aura.gui.conv_persistence import ConversationPersistence
 from aura.gui.drones.drone_bay_pane import DroneBayPane
-from aura.gui.drones.drone_design_wizard_dialog import DroneDesignWizardDialog
+from aura.gui.drones.drone_workshop_dialog import DroneWorkshopDialog
 from aura.gui.drones.drone_editor_dialog import DroneEditorDialog
 from aura.gui.drones.drone_reports_window import DroneReportsWindow
 from aura.gui.drones.drone_run_card import DroneRunCard
@@ -196,7 +196,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._drone_bay = DroneBayPane(workspace_root=self._workspace_root, parent=self)
         self._playground.set_drone_bay(self._drone_bay)
         self._drone_bay.newDroneRequested.connect(self._on_new_drone)
-        self._drone_bay.designDroneRequested.connect(self._on_design_drone)
+        self._drone_bay.buildDroneRequested.connect(self._on_build_drone)
         self._drone_bay.editDroneRequested.connect(self._on_edit_drone)
         self._drone_bay.duplicateDroneRequested.connect(self._on_duplicate_drone)
         self._drone_bay.deleteDroneRequested.connect(self._on_delete_drone)
@@ -692,29 +692,27 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             self._drone_bay.refresh()
             self._refresh_drone_context()
 
-    def _on_design_drone(self) -> None:
-        """Open the Drone Design Wizard, then pre-fill the editor with the draft."""
-        wizard = DroneDesignWizardDialog(
+    def _on_build_drone(self) -> None:
+        """Open the Drone Workshop dialog."""
+        dlg = DroneWorkshopDialog(
             workspace_root=self._workspace_root,
+            provider_id=self._settings.planner_provider,
+            model=self.current_model(),
+            thinking=self.current_thinking(),
+            temperature=self._settings.temperature,
             parent=self,
         )
-        if wizard.exec() != QDialog.DialogCode.Accepted:
-            return
-        draft = wizard.draft
-        if draft is None:
-            return
+        dlg.buildSpecApproved.connect(self._on_drone_build_spec_approved)
+        dlg.exec()
 
-        editor = DroneEditorDialog(
-            workspace_root=self._workspace_root,
-            parent=self,
-            initial_name=draft.name,
-            initial_instructions=draft.instructions,
-            initial_output_contract=draft.output_contract,
-            initial_write_policy=draft.write_policy,
+    def _on_drone_build_spec_approved(self, spec: object) -> None:
+        """Placeholder — the spec will be passed to Planner/Worker in the next chunk."""
+        from PySide6.QtWidgets import QMessageBox
+        QMessageBox.information(
+            self,
+            "Drone Build Spec",
+            "Drone Build Spec approved. The next pass will submit it to Aura Planner/Worker.",
         )
-        if editor.exec() == QDialog.DialogCode.Accepted:
-            self._drone_bay.refresh()
-            self._refresh_drone_context()
 
     def _on_save_as_drone(self, summary: str) -> None:
         """Open the Drone editor pre-filled from the last Worker run."""
