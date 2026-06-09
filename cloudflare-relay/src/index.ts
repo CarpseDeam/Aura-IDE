@@ -96,6 +96,13 @@ function b64urlDecode(s: string): Uint8Array {
   return Uint8Array.from(bin, (c) => c.charCodeAt(0));
 }
 
+function b64urlEncode(data: Uint8Array): string {
+  return btoa(String.fromCharCode(...data))
+    .replace(/=/g, "")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_");
+}
+
 async function hmacKey(secret: string): Promise<CryptoKey> {
   return crypto.subtle.importKey(
     "raw",
@@ -122,6 +129,16 @@ async function verifyJwt(token: string, secret: string): Promise<JwtPayload | nu
   } catch {
     return null;
   }
+}
+
+async function signJwt(payload: JwtPayload, secret: string): Promise<string> {
+  const header = b64urlEncode(new TextEncoder().encode(JSON.stringify({ alg: "HS256", typ: "JWT" })));
+  const body = b64urlEncode(new TextEncoder().encode(JSON.stringify(payload)));
+  const data = `${header}.${body}`;
+  const key = await hmacKey(secret);
+  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(data));
+  const sigB64 = b64urlEncode(new Uint8Array(sig));
+  return `${data}.${sigB64}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -506,7 +523,6 @@ export class RelayDO implements DurableObject {
   ): Promise<void> {
     const payload = (msg["payload"] ?? {}) as Record<string, unknown>;
     const phoneId = String(payload["phone_id"] ?? "");
-    const token = String(payload["token"] ?? "");
     const phoneName = String(payload["device_name"] ?? "Phone");
 
     // Look up the pairing attempt
@@ -548,29 +564,36 @@ export class RelayDO implements DurableObject {
       return;
     }
 
-    // Verify the JWT the desktop issued and mark phone as authenticated
-    if (token) {
-      const jwtPayload = await verifyJwt(token, this.env.RELAY_SECRET ?? "");
-      if (jwtPayload) {
-        const phoneSession = this.sessions.get(phoneId);
-        if (phoneSession) {
-          phoneSession.authenticated = true;
-          phoneSession.role = jwtPayload.role;
-          phoneSession.displayName = phoneName;
-        }
-      }
+    // Create a relay-issued connect token for the phone
+    const relayToken = await signJwt(
+      {
+        role: "phone",
+        desktop_id: deviceId,
+        device_name: phoneName,
+        exp: Math.floor(Date.now() / 1000) + 86400 * 30, // 30 days
+      },
+      this.env.RELAY_SECRET ?? "",
+    );
+
+    // Mark phone session as authenticated
+    const phoneSession = this.sessions.get(phoneId);
+    if (phoneSession) {
+      phoneSession.authenticated = true;
+      phoneSession.role = "phone";
+      phoneSession.displayName = phoneName;
     }
 
     // Record pairing
     this.pairedPhones.set(phoneId, deviceId);
-    const phoneSession = this.sessions.get(phoneId);
     if (phoneSession) {
       phoneSession.pairedDesktop = deviceId;
     }
 
-    // Forward to phone with scoped_to added
+    // Forward to phone with relay-issued token + scoped_to
     const confirmed = JSON.parse(raw) as Record<string, unknown>;
-    (confirmed["payload"] as Record<string, unknown>)["scoped_to"] = deviceId;
+    const confirmedPayload = confirmed["payload"] as Record<string, unknown>;
+    confirmedPayload["token"] = relayToken;
+    confirmedPayload["scoped_to"] = deviceId;
     const phoneConn = this.sessions.get(phoneId);
     if (phoneConn) {
       phoneConn.ws.send(JSON.stringify(confirmed));
