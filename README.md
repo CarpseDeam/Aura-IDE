@@ -29,9 +29,15 @@ Aura is a native desktop IDE that runs your prompt through a real engineering lo
 
 Here's what Aura actually does. You type a request... fix a bug, add a feature, refactor a module. The **Planner** reads your code, understands the project structure, and writes a technical spec. You see the spec. You can edit it. When you're satisfied, you dispatch it. The **Worker** executes the spec with read and write filesystem access, proposes every change as a diff for your approval, runs validation, and recovers if something breaks. Every write is backed up. Every batch of changes gets an AI-generated commit message. The whole cycle produces a receipt you can review.
 
-What makes it different is the architecture. The Planner and Worker are two separate models that can run on different providers with different thinking depths. The Planner's output is a structured spec — not raw code — so the Worker starts from a clean target instead of inheriting the Planner's reasoning noise. This **spec-as-token-firewall** is why Aura's prompt caching hits 90%+: the deterministic architecture keeps context stable, not luck.
+What makes it different is the architecture. The Planner and Worker are two separate models that can run on different providers with different thinking depths. The Planner's output is a structured spec — not raw code — so the Worker starts from a clean target instead of inheriting the Planner's reasoning noise. Combined with a deterministic AST repo map and stable memory layers, this produces 90%+ prompt cache hit rates — not luck, architecture. That's why a full month of heavy development cost just $35.18 — most of those tokens never needed recomputing.
 
-Aura wrote most of itself. During May 2026 it processed **1.1 billion DeepSeek tokens** across nearly **30,000 API requests** while building its own codebase — for **$35.18** in visible API spend that month. The harness produces the quality, not the model. Swap models, swap providers, change thinking depth — the workflow stays the same and the output stays consistent.
+Aura wrote most of itself. During May 2026 it processed **1.1 billion DeepSeek tokens** across nearly **30,000 API requests** while building its own codebase.
+
+<p align="center">
+  <img src="media/aura-may.png" alt="Token usage for May 2026" width="600">
+</p>
+
+The harness produces the quality, not the model. Swap models, swap providers, change thinking depth — the workflow stays the same and the output stays consistent.
 
 ---
 
@@ -77,7 +83,7 @@ That's it. Five lines. You're running.
 
 ---
 
-Full documentation — *docs/* *(coming soon)*
+[Full documentation](docs/README.md) — getting-started guide, tool reference, provider config, and more.
 
 [Aura blog](https://aura-ide.hashnode.dev/) — project updates, design deep-dives, usage guides
 
