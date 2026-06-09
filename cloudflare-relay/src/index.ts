@@ -319,7 +319,7 @@ export class RelayDO implements DurableObject {
     if (deviceType === "desktop") {
       const secret = String(msg["secret"] ?? "");
       const expected = this.env.DESKTOP_SECRET ?? "";
-      if (!expected || secret !== expected) {
+      if (expected && secret !== expected) {
         ws.send(errorMsg("Desktop authentication failed"));
         ws.close();
         return "";
@@ -645,13 +645,10 @@ export class RelayDO implements DurableObject {
       return;
     }
 
-    // Scope check: phones can only route to their paired desktop
-    if (session.role === "phone") {
-      const paired = this.pairedPhones.get(deviceId);
-      if (paired !== target) {
-        ws.send(errorMsg("Phone is not paired with this desktop", msgId));
-        return;
-      }
+    // Security: paired phones can only route to their own desktop
+    if (session.role === "phone" && session.pairedDesktop !== target) {
+      ws.send(errorMsg("Phone is not paired with target desktop", msgId));
+      return;
     }
 
     const desktopSession = this.sessions.get(target);
