@@ -59,8 +59,6 @@ The harness produces the quality, not the model. Swap models, swap providers, ch
 
 **Web research sub-agent** — A background agent that searches the web (Tavily), scrapes pages (BeautifulSoup), and returns a synthesized report. For documentation lookups, debugging unfamiliar errors, or researching libraries without leaving the IDE.
 
-**CLI agent backends** — Drop-in support for Claude Code, Codex CLI, and Antigravity as alternative execution backends. Use their OAuth flow, skip API key management.
-
 **MCP tool integration** — Connect any Model Context Protocol stdio server. Its tools become available to the AI alongside Aura's built-in tools. Multiple servers supported simultaneously.
 
 **Windows installer with self-updater** — Per-user install, no admin rights needed. In-app updates check GitHub Releases and download the latest installer. One click to update.
