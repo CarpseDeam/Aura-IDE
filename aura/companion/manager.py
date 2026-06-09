@@ -135,6 +135,28 @@ class CompanionManager(QObject):
         if self._ws_client and self._ws_client.is_connected:
             self._ws_client.send(json.dumps(event))
 
+    def _reply_to_sender(
+        self,
+        msg: dict,
+        msg_type: str,
+        payload: dict,
+        *,
+        project_id: str = "",
+        conversation_id: str = "",
+    ) -> None:
+        sender_phone_id = msg.get("sender_device_id", "")
+        if not sender_phone_id:
+            logger.warning("[Companion] cannot reply to %s: missing sender_device_id", msg_type)
+            return
+        self.send_event(make_envelope(
+            msg_type,
+            payload,
+            desktop_id=sender_phone_id,
+            project_id=project_id,
+            conversation_id=conversation_id,
+            in_response_to=msg.get("id", ""),
+        ))
+
     # ── Pairing ─────────────────────────────────────────────
 
     def generate_new_pairing_code(self) -> str:
@@ -348,47 +370,51 @@ class CompanionManager(QObject):
     # ── Bridge chat handlers ────────────────────────────────
 
     def _handle_chat_send(self, msg: dict) -> None:
-        if self._bridge is None:
-            self.send_event(make_envelope("chat.error", {
-                "message": "Companion is not connected to a conversation session.",
-            }, in_response_to=msg.get("id", "")))
-            return
         payload = msg.get("payload", {})
-        text = payload.get("text", "")
-        if not text:
+        sender_phone_id = msg.get("sender_device_id", "")
+        chat_id = msg.get("id", "")
+        text = (payload.get("text", "") or "").strip()
+
+        def reply_error(message: str) -> None:
+            self._reply_to_sender(msg, "chat.error", {"message": message})
+
+        if self._bridge is None:
+            reply_error("Companion is not connected to a conversation session.")
             return
 
-        project_id = msg.get("project_id") or payload.get("project_id", "")
-        conversation_id = msg.get("conversation_id") or payload.get("conversation_id", "")
+        if not text:
+            reply_error("Message text is empty.")
+            return
+
+        project_id = (
+            msg.get("project_id")
+            or payload.get("project_id", "")
+            or self._current_project_id
+        )
+        conversation_id = (
+            msg.get("conversation_id")
+            or payload.get("conversation_id", "")
+            or self._current_conversation_id
+        )
         if not project_id or not conversation_id:
-            self.send_event(make_envelope("chat.error", {
-                "message": "Missing project or conversation context.",
-            }, in_response_to=msg.get("id", "")))
+            reply_error("Open or create a conversation in Aura Desktop, then try again.")
             return
 
         self._current_project_id = project_id
         self._current_conversation_id = conversation_id
 
         if self._bridge.is_running():
-            self.send_event(make_envelope("chat.error", {
-                "message": "A conversation is already in progress on the desktop.",
-            }, in_response_to=msg.get("id", "")))
+            reply_error("A conversation is already in progress on the desktop.")
             return
-        self._pending_chat_id = msg.get("id", "")
-        self._pending_chat_phone_id = msg.get("sender_device_id", "")
+
+        self._pending_chat_id = chat_id
+        self._pending_chat_phone_id = sender_phone_id
         self._bridge.history.append_user_text(text)
         model = resolve_role_default_model(self._settings.planner_provider, "planner")
         thinking = self._settings.default_planner_thinking
         self._bridge.send(model=model, thinking=thinking, max_tool_rounds=self._settings.max_tool_rounds)
 
     def _handle_chat_cancel(self, msg: dict) -> None:
-        payload = msg.get("payload", {})
-        project_id = msg.get("project_id") or payload.get("project_id", "")
-        conversation_id = msg.get("conversation_id") or payload.get("conversation_id", "")
-        if project_id:
-            self._current_project_id = project_id
-        if conversation_id:
-            self._current_conversation_id = conversation_id
         if self._bridge and self._bridge.is_running():
             self._bridge.request_cancel()
 
