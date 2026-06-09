@@ -215,19 +215,9 @@ class DroneWorkshopDialog(QDialog):
 
     def _on_content_delta(self, text: str) -> None:
         self._assistant_buffer += text
-        if not self._assistant_message_started:
-            self._transcript.appendPlainText("\nAura: ")
-            self._assistant_message_started = True
-        # Stream inline: move cursor to end, insert text
-        cursor = self._transcript.textCursor()
-        cursor.movePosition(cursor.End)
-        cursor.insertText(text)
-        self._transcript.setTextCursor(cursor)
-        self._transcript.ensureCursorVisible()
 
     def _on_response_ready(self, response: DroneWorkshopResponse) -> None:
-        # If we had no streamed content, show the message now
-        if not self._assistant_buffer.strip() and response.message:
+        if response.message:
             self._transcript.appendPlainText(f"\nAura: {response.message}")
 
         if response.kind == "question":

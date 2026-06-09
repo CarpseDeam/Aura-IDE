@@ -70,6 +70,19 @@ def test_prompt_includes_store_no_secrets_instruction() -> None:
     assert "store no secrets" in prompt.lower()
 
 
+def test_prompt_includes_access_setup_harness_guidance() -> None:
+    brief = DroneBuildBrief(
+        response_type="brief",
+        message="Ready.",
+        ready_to_build=True,
+        build_brief="Build a drone.",
+    )
+    prompt = build_drone_creation_prompt(brief)
+
+    assert "access, setup, safety, and harness" in prompt.lower()
+    assert "runtime access" in prompt.lower() or "connector" in prompt.lower()
+
+
 def test_prompt_references_definition_and_store() -> None:
     brief = DroneBuildBrief(
         response_type="brief",
@@ -98,3 +111,6 @@ def test_prompt_does_not_contain_spec_fields() -> None:
     assert "missing_capabilities" not in prompt
     assert "build_status" not in prompt
     assert "output_contract" not in prompt
+    assert "Do not add external browser" not in prompt
+    assert "Gmail" not in prompt
+    assert "scheduler capabilities" not in prompt

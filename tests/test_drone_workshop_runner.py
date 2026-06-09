@@ -205,4 +205,9 @@ class TestSystemPrompt:
         assert "unsupported" not in prompt_lower
         assert "cannot build" not in prompt_lower
         assert "missing capabilities" not in prompt_lower
+        assert "unavailable capabilities" not in prompt_lower
         assert "cannot build" not in prompt_lower
+
+    def test_contains_access_setup_language(self) -> None:
+        assert "access or setup needs" in DRONE_WORKSHOP_SYSTEM_PROMPT.lower()
+

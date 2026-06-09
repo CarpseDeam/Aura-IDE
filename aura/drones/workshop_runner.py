@@ -173,7 +173,7 @@ The brief should capture:
 
 Do NOT try to engineer the implementation. Just gather the job, constraints, access needs, safety boundary, and success test.
 
-External access or unavailable capabilities should be noted in the build_brief as context, not as a blocker. The Workshop should not decide what is buildable — it should just describe what's needed honestly.
+External access or setup needs should be noted in the build_brief as context, not as a blocker. The Workshop should not decide what is buildable — it should just describe what's needed honestly.
 
 Never tell the user that something cannot be built or is unavailable — just describe what's needed honestly in the build_brief.
 

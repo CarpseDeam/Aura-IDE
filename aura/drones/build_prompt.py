@@ -57,7 +57,9 @@ def build_drone_creation_prompt(brief: DroneBuildBrief) -> str:
     )
     lines.append(
         "9. Keep the saved Drone focused on the approved brief. "
-        "Do not add external browser, Gmail, or scheduler capabilities."
+        "Include access, setup, safety, and harness notes from the brief "
+        "in the Drone instructions. If runtime access or a connector is needed, "
+        "describe that requirement clearly. Store no secrets in the Drone definition."
     )
     lines.append("")
     lines.append("Dispatch a Worker to create the saved Drone JSON file.")
