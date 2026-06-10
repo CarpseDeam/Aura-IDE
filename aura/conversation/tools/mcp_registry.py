@@ -1,16 +1,44 @@
 """MCP tool registry — owns MCP clients, schemas, and execution dispatch."""
 from __future__ import annotations
 
+import json
+import os as _os
 import shlex
 from typing import Any
 
-from aura.conversation.tools._types import ToolExecResult
+from aura.conversation.tools._types import ApprovalRequest, ToolExecResult
+from aura.conversation.tools.consequential import is_consequential
 from aura.mcp_client import MCPClient, _convert_tool_to_openai_schema
 
 
 def _make_mcp_handler(mcp_client: MCPClient, tool_name: str):
     """Create a handler closure for an MCP tool."""
     def handler(self, args, approval_cb, reject_all):
+        if is_consequential(tool_name):
+            if reject_all:
+                return ToolExecResult(
+                    ok=False,
+                    payload={"ok": False, "rejected": True, "error": f"rejected: {tool_name}"},
+                )
+            if approval_cb is not None:
+                request = ApprovalRequest(
+                    tool_name=tool_name,
+                    rel_path=f"mcp:{tool_name}",
+                    old_content="",
+                    new_content=json.dumps(args),
+                    is_new_file=True,
+                )
+                decision = approval_cb(request)
+                if decision.action in ("reject", "reject_all"):
+                    return ToolExecResult(
+                        ok=False,
+                        payload={
+                            "ok": False,
+                            "rejected": True,
+                            "error": f"rejected: {tool_name}",
+                            "decision": decision.action,
+                        },
+                    )
         result = mcp_client.call_tool(tool_name, args)
         return ToolExecResult(ok=result.get("ok", False), payload=result)
     return handler
@@ -29,9 +57,6 @@ class MCPToolRegistry:
         Returns the number of tools registered.
         Raises RuntimeError if the server fails to launch.
         """
-        import os as _os
-        from aura.conversation.tools.registry import TOOL_HANDLERS
-
         parsed = shlex.split(server_command, posix=(_os.name != "nt"))
         client = MCPClient(parsed)
         client.connect()
@@ -44,6 +69,8 @@ class MCPToolRegistry:
             self._schemas.append(schema)
             self._clients[tool_name] = client
             # Backward compatibility: also register in global TOOL_HANDLERS
+            from aura.conversation.tools.registry import TOOL_HANDLERS
+
             TOOL_HANDLERS[tool_name] = _make_mcp_handler(client, tool_name)
             count += 1
 
