@@ -14,6 +14,7 @@ from aura.conversation.tools._schemas import (
     READ_TOOL_DEFS,
     RESEARCH_TOOL_DEFS,
     RESOLVE_CAPABILITY_TOOL_DEF,
+    RUN_READ_ONLY_DRONE_TOOL_DEF,
     SUMMON_DRONE_TOOL_DEF,
     TERMINAL_TOOL_DEF,
     WEB_TOOL_DEFS,
@@ -92,6 +93,7 @@ class ToolCatalog:
                 + [dict(DISPATCH_TOOL_DEF)]
                 + [dict(SUMMON_DRONE_TOOL_DEF)]
                 + [dict(LAUNCH_READ_ONLY_DRONE_TOOL_DEF)]
+                + [dict(RUN_READ_ONLY_DRONE_TOOL_DEF)]
                 + [dict(CHECK_DRONE_RUN_TOOL_DEF)]
                 + list(RESEARCH_TOOL_DEFS)
                 + [dict(DIAGNOSTIC_TOOL_DEF)]
@@ -114,6 +116,7 @@ class ToolCatalog:
                 + list(GIT_TOOL_DEFS)
                 + list(RESEARCH_TOOL_DEFS)
                 + [dict(LAUNCH_READ_ONLY_DRONE_TOOL_DEF)]
+                + [dict(RUN_READ_ONLY_DRONE_TOOL_DEF)]
                 + [dict(CHECK_DRONE_RUN_TOOL_DEF)]
             )
         else:  # "single" or any unknown mode
@@ -125,6 +128,7 @@ class ToolCatalog:
                 + list(RESEARCH_TOOL_DEFS)
                 + [dict(DIAGNOSTIC_TOOL_DEF)]
                 + [dict(WORKSPACE_SNAPSHOT_TOOL_DEF)]
+                + [dict(RUN_READ_ONLY_DRONE_TOOL_DEF)]
             )
 
         # Append dynamic tools (only when not read-only)

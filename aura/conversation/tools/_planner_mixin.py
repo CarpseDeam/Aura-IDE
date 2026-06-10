@@ -154,6 +154,73 @@ class PlannerHandlersMixin:
             },
         )
 
+    def _handle_run_read_only_drone(
+        self,
+        args: dict[str, Any],
+        approval_cb: Any,
+        reject_all: bool,
+    ) -> ToolExecResult:
+        """Run a saved read-only Drone directly in the background."""
+        drone_id = str(args.get("drone_id") or "").strip()
+        goal = str(args.get("goal") or "").strip()
+
+        if not drone_id:
+            return ToolExecResult(
+                ok=False,
+                payload={"ok": False, "error": "Missing required parameter: drone_id"},
+            )
+        if not goal:
+            return ToolExecResult(
+                ok=False,
+                payload={"ok": False, "error": "Missing required parameter: goal"},
+            )
+
+        from aura.drones.store import DroneStore
+
+        drone = DroneStore.load_drone(self._root, drone_id)
+        if drone is None:
+            return ToolExecResult(
+                ok=False,
+                payload={"ok": False, "error": f"No drone found with id: {drone_id}"},
+            )
+
+        if drone.write_policy != "read_only":
+            return ToolExecResult(
+                ok=False,
+                payload={
+                    "ok": False,
+                    "error": (
+                        f"Drone '{drone_id}' is not read-only; "
+                        "only read-only Drones can be run directly."
+                    ),
+                },
+            )
+
+        # Per-turn limit check
+        count = getattr(self, "_drone_runs", 0) + 1
+        self._drone_runs = count
+        if count >= 3:
+            return ToolExecResult(
+                ok=False,
+                payload={"ok": False, "error": "Per-turn limit of 3 drone runs reached"},
+            )
+
+        from aura.drones.sync_runner import run_read_only_drone_sync
+
+        try:
+            result = run_read_only_drone_sync(
+                drone_id=drone_id,
+                goal=goal,
+                workspace_root=self._root,
+                drone=drone,
+            )
+            return ToolExecResult(ok=True, payload=result)
+        except Exception as exc:
+            return ToolExecResult(
+                ok=False,
+                payload={"ok": False, "error": f"Drone execution failed: {exc}"},
+            )
+
     def _handle_check_drone_run(
         self,
         args: dict[str, Any],

@@ -1294,6 +1294,32 @@ LAUNCH_READ_ONLY_DRONE_TOOL_DEF: dict[str, Any] = {
 }
 
 
+RUN_READ_ONLY_DRONE_TOOL_DEF: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "run_read_only_drone",
+        "description": (
+            "Run a saved read-only Drone directly in the background to handle a "
+            "focused sub-task. Returns results synchronously."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "drone_id": {
+                    "type": "string",
+                    "description": "The id of the saved read-only Drone to run (from Available Drones list).",
+                },
+                "goal": {
+                    "type": "string",
+                    "description": "What the Drone should investigate or accomplish. Must be non-empty.",
+                },
+            },
+            "required": ["drone_id", "goal"],
+        },
+    },
+}
+
+
 CHECK_DRONE_RUN_TOOL_DEF: dict[str, Any] = {
     "type": "function",
     "function": {
