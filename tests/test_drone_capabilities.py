@@ -6,12 +6,14 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
+from aura.drones.badges import compute_capability_badges
 from aura.drones.capabilities import (
     CapabilityBinding,
     CapabilityCandidate,
     CapabilityRequirement,
     CapabilityResolution,
 )
+from aura.drones.definition import DroneDefinition
 
 # ---------------------------------------------------------------------------
 # CapabilityRequirement
@@ -552,3 +554,126 @@ class TestCapabilityResolutionRoundtrip:
         restored = CapabilityResolution.from_dict(data)
         assert restored.requirements == ()
         assert restored.allowed_tools == ()
+
+
+# ---------------------------------------------------------------------------
+# compute_capability_badges
+# ---------------------------------------------------------------------------
+
+
+class TestComputeCapabilityBadges:
+    """Tests for aura.drones.badges.compute_capability_badges."""
+
+    def test_empty_bindings_and_no_test_returns_empty(self) -> None:
+        drone = DroneDefinition(
+            id="test",
+            name="Test",
+            description="",
+            instructions="",
+            write_policy="read_only",
+            allowed_tools=(),
+            output_contract="",
+            capability_bindings=(),
+            first_run_test="",
+        )
+        assert compute_capability_badges(drone) == []
+
+    def test_pending_setup_returns_needs_setup(self) -> None:
+        bindings = (
+            CapabilityBinding(
+                capability="web_search",
+                route_kind="api",
+                source="tavily",
+                setup_status="pending",
+            ),
+        )
+        drone = DroneDefinition(
+            id="test",
+            name="Test",
+            description="",
+            instructions="",
+            write_policy="read_only",
+            allowed_tools=(),
+            output_contract="",
+            capability_bindings=bindings,
+        )
+        assert "Needs setup" in compute_capability_badges(drone)
+
+    def test_generated_code_returns_generated_tool(self) -> None:
+        bindings = (
+            CapabilityBinding(
+                capability="code_gen",
+                route_kind="generated_code",
+                source="aura",
+                setup_status="ready",
+            ),
+        )
+        drone = DroneDefinition(
+            id="test",
+            name="Test",
+            description="",
+            instructions="",
+            write_policy="read_only",
+            allowed_tools=(),
+            output_contract="",
+            capability_bindings=bindings,
+        )
+        badges = compute_capability_badges(drone)
+        assert "Generated tool" in badges
+        assert "Needs setup" not in badges
+
+    def test_mcp_route_returns_uses_mcp(self) -> None:
+        bindings = (
+            CapabilityBinding(
+                capability="mcp_tool",
+                route_kind="installed_mcp",
+                source="mcp",
+                setup_status="ready",
+            ),
+        )
+        drone = DroneDefinition(
+            id="test",
+            name="Test",
+            description="",
+            instructions="",
+            write_policy="read_only",
+            allowed_tools=(),
+            output_contract="",
+            capability_bindings=bindings,
+        )
+        assert "Uses MCP" in compute_capability_badges(drone)
+
+    def test_multiple_bindings_and_test_produces_all_badges(self) -> None:
+        bindings = (
+            CapabilityBinding(
+                capability="web_search",
+                route_kind="mcp",
+                source="mcp",
+                setup_status="ready",
+            ),
+            CapabilityBinding(
+                capability="code_gen",
+                route_kind="generated_code",
+                source="aura",
+                setup_status="pending",
+            ),
+            CapabilityBinding(
+                capability="browser",
+                route_kind="browser_existing_session",
+                source="browser",
+                setup_status="ready",
+            ),
+        )
+        drone = DroneDefinition(
+            id="test",
+            name="Test",
+            description="",
+            instructions="",
+            write_policy="read_only",
+            allowed_tools=(),
+            output_contract="",
+            capability_bindings=bindings,
+            first_run_test="echo hello",
+        )
+        badges = compute_capability_badges(drone)
+        assert badges == ["Needs setup", "Uses MCP", "Generated tool", "First-run test available"]

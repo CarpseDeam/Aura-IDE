@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -218,6 +219,157 @@ class InstalledMCPProvider:
                         setup_required=False,
                     )
                 )
+        return tuple(candidates)
+
+
+# ---------------------------------------------------------------------------
+# MCPDiscoveryProvider
+# ---------------------------------------------------------------------------
+
+
+class MCPDiscoveryProvider:
+    """Discovers MCP tool servers from a workspace-local catalog file.
+
+    Reads ``.aura/capabilities/mcp_catalog.json`` if present.
+    Matches capabilities by case-insensitive comparison.
+    """
+
+    CATALOG_RELATIVE = Path(".aura") / "capabilities" / "mcp_catalog.json"
+
+    def find_candidates(
+        self,
+        requirements: tuple[CapabilityRequirement, ...],
+        context: CapabilityContext,
+    ) -> tuple[CapabilityCandidate, ...]:
+        catalog = self._load_catalog(context.workspace_root)
+        if not catalog:
+            return ()
+
+        matches: list[CapabilityCandidate] = []
+        for req in requirements:
+            req_cap = req.capability.strip().lower()
+
+            for item in catalog:
+                if not isinstance(item, dict):
+                    continue
+                item_cap = str(item.get("capability", "")).strip().lower()
+                if not item_cap or item_cap != req_cap:
+                    continue
+
+                # Parse tool_names — must be a list of non-empty strings
+                tool_names_raw = item.get("tool_names", [])
+                tool_names: tuple[str, ...] = ()
+                if isinstance(tool_names_raw, list):
+                    tool_names = tuple(
+                        str(t) for t in tool_names_raw
+                        if isinstance(t, str) and t.strip()
+                    )
+
+                candidate = CapabilityCandidate(
+                    capability=req.capability,
+                    route_kind="mcp",
+                    source=str(item.get("source", "mcp catalog")),
+                    confidence=0.5,
+                    setup_required=bool(item.get("setup_required", True)),
+                    setup_notes=str(item.get("setup_notes", "")),
+                    tool_names=tool_names,
+                    install_command=str(item.get("install_command", "")),
+                    docs_url=str(item.get("docs_url", "")),
+                )
+                matches.append(candidate)
+
+        return tuple(matches)
+
+    def _load_catalog(self, workspace_root: Path) -> list:
+        """Load catalog entries. Returns empty list if file does not exist."""
+        catalog_path = workspace_root / self.CATALOG_RELATIVE
+        if not catalog_path.is_file():
+            return []
+        with open(catalog_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            return data
+        return []
+
+
+# ---------------------------------------------------------------------------
+# AppRouteProvider
+# ---------------------------------------------------------------------------
+
+
+class AppRouteProvider:
+    """Suggests browser/app-driving routes for relevant capability requirements.
+
+    Returns candidates with route_kind like ``browser_existing_session``,
+    ``chrome_devtools``, ``windows_ui_automation``, or ``browser_extension_bridge``.
+    No browser or app automation is actually performed.
+    """
+
+    _BROWSER_KEYWORDS: tuple[str, ...] = (
+        "browser", "website", "web app", "web page", "web", "chrome",
+        "firefox", "edge", "safari", "read a page", "monitor a page",
+        "scrape", "crawl", "extension", "bridge",
+    )
+    _APP_KEYWORDS: tuple[str, ...] = (
+        "local app", "desktop app", "desktop", "open an app", "open app",
+        "app", "window",
+    )
+
+    def find_candidates(
+        self,
+        requirements: tuple[CapabilityRequirement, ...],
+        context: CapabilityContext,
+    ) -> tuple[CapabilityCandidate, ...]:
+        candidates: list[CapabilityCandidate] = []
+        for requirement in requirements:
+            cap_lower = requirement.capability.lower().strip()
+
+            is_browser = any(k in cap_lower for k in self._BROWSER_KEYWORDS)
+            is_app = any(k in cap_lower for k in self._APP_KEYWORDS)
+
+            if not is_browser and not is_app:
+                continue
+
+            if is_app:
+                route_kind = "windows_ui_automation"
+                setup_notes = (
+                    "Requires Windows UI Automation or platform-specific app-driving "
+                    "tool (e.g., pywinauto, AppleScript, xdotool). Set up the appropriate "
+                    "accessibility bridge for the target OS."
+                )
+            elif "extension" in cap_lower or "bridge" in cap_lower:
+                route_kind = "browser_extension_bridge"
+                setup_notes = (
+                    "Requires a browser extension bridge to be installed and connected. "
+                    "Configure the extension to allow automation access."
+                )
+            elif "monitor" in cap_lower or "watch" in cap_lower or "devtools" in cap_lower:
+                route_kind = "chrome_devtools"
+                setup_notes = (
+                    "Requires Chrome DevTools Protocol (CDP) connection to a running "
+                    "browser instance. Start Chrome with --remote-debugging-port and "
+                    "configure the connection."
+                )
+            else:
+                route_kind = "browser_existing_session"
+                setup_notes = (
+                    "Requires a browser automation session. Connect to an existing "
+                    "browser session via Playwright, Puppeteer, or Selenium WebDriver."
+                )
+
+            candidate = CapabilityCandidate(
+                capability=requirement.capability,
+                route_kind=route_kind,
+                source="app route heuristic",
+                confidence=0.4,
+                setup_required=True,
+                setup_notes=setup_notes,
+                tool_names=(),
+                install_command="",
+                docs_url="",
+            )
+            candidates.append(candidate)
+
         return tuple(candidates)
 
 

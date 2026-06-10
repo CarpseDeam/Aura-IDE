@@ -5,11 +5,13 @@ from typing import Any
 from aura.conversation.tools._types import ToolExecResult
 from aura.drones.capabilities import CapabilityRequirement
 from aura.drones.capability_resolver import (
+    AppRouteProvider,
     CapabilityContext,
     CapabilityResolver,
     DynamicToolProvider,
     GeneratedCodeFallbackProvider,
     InstalledMCPProvider,
+    MCPDiscoveryProvider,
     StaticToolProvider,
 )
 
@@ -276,6 +278,8 @@ class PlannerHandlersMixin:
                 StaticToolProvider(),
                 DynamicToolProvider(),
                 InstalledMCPProvider(),
+                MCPDiscoveryProvider(),
+                AppRouteProvider(),
                 GeneratedCodeFallbackProvider(),
             ]
         )

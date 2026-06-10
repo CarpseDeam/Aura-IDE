@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from aura.drones.capabilities import CapabilityCandidate, CapabilityRequirement, CapabilityResolution
 from aura.drones.capability_resolver import (
+    AppRouteProvider,
     CapabilityContext,
     CapabilityResolver,
     DynamicToolProvider,
     GeneratedCodeFallbackProvider,
     InstalledMCPProvider,
+    MCPDiscoveryProvider,
     StaticToolProvider,
 )
 
@@ -214,6 +217,219 @@ class TestResolverAllowedTools:
         resolver = CapabilityResolver([])
         resolution = resolver.resolve((), _ctx())
         assert resolution.allowed_tools == ()
+
+
+# ---------------------------------------------------------------------------
+# Test: MCPDiscoveryProvider
+# ---------------------------------------------------------------------------
+
+
+class TestMCPDiscoveryProvider:
+    """Tests for the workspace-local MCP catalog provider."""
+
+    @staticmethod
+    def _write_catalog(tmp_path: Path, items: list[dict]) -> Path:
+        catalog_dir = tmp_path / ".aura" / "capabilities"
+        catalog_dir.mkdir(parents=True, exist_ok=True)
+        catalog_path = catalog_dir / "mcp_catalog.json"
+        catalog_path.write_text(json.dumps(items), encoding="utf-8")
+        return tmp_path
+
+    def test_missing_catalog_returns_empty(self) -> None:
+        provider = MCPDiscoveryProvider()
+        ctx = CapabilityContext(workspace_root=Path("/nonexistent"))
+        result = provider.find_candidates(
+            (CapabilityRequirement(capability="read inbox"),), ctx
+        )
+        assert result == ()
+
+    def test_valid_catalog_returns_mcp_candidates(self, tmp_path: Path) -> None:
+        ws = self._write_catalog(tmp_path, [
+            {
+                "capability": "read inbox",
+                "tool_names": ["gmail_search", "gmail_read"],
+                "source": "gmail-mcp",
+                "setup_required": True,
+                "setup_notes": "Connect Gmail MCP.",
+                "install_command": "pip install gmail-mcp",
+                "docs_url": "https://example.com",
+            }
+        ])
+        provider = MCPDiscoveryProvider()
+        ctx = CapabilityContext(workspace_root=ws)
+        result = provider.find_candidates(
+            (CapabilityRequirement(capability="read inbox"),), ctx
+        )
+        assert len(result) == 1
+        c = result[0]
+        assert c.capability == "read inbox"
+        assert c.route_kind == "mcp"
+        assert c.source == "gmail-mcp"
+        assert c.confidence == 0.5
+        assert c.setup_required is True
+        assert c.setup_notes == "Connect Gmail MCP."
+        assert c.tool_names == ("gmail_search", "gmail_read")
+        assert c.install_command == "pip install gmail-mcp"
+        assert c.docs_url == "https://example.com"
+
+    def test_non_matching_capability_returns_empty(self, tmp_path: Path) -> None:
+        ws = self._write_catalog(tmp_path, [
+            {
+                "capability": "read inbox",
+                "tool_names": ["gmail_search"],
+                "source": "gmail-mcp",
+            }
+        ])
+        provider = MCPDiscoveryProvider()
+        ctx = CapabilityContext(workspace_root=ws)
+        result = provider.find_candidates(
+            (CapabilityRequirement(capability="write file"),), ctx
+        )
+        assert result == ()
+
+    def test_malformed_catalog_entries_skipped(self, tmp_path: Path) -> None:
+        ws = self._write_catalog(tmp_path, [
+            "bare string",
+            {"no_capability_key": True},
+            {
+                "capability": "read inbox",
+                "tool_names": ["gmail_search"],
+                "source": "gmail-mcp",
+            },
+            {"wrong_key": "value"},
+        ])
+        provider = MCPDiscoveryProvider()
+        ctx = CapabilityContext(workspace_root=ws)
+        result = provider.find_candidates(
+            (CapabilityRequirement(capability="read inbox"),), ctx
+        )
+        assert len(result) == 1
+        assert result[0].tool_names == ("gmail_search",)
+
+    def test_setup_notes_and_install_command_roundtrip(self, tmp_path: Path) -> None:
+        ws = self._write_catalog(tmp_path, [
+            {
+                "capability": "deploy",
+                "tool_names": ["deploy_tool"],
+                "setup_notes": "Do this first.",
+                "install_command": "npx @gmail/mcp",
+                "source": "custom",
+            }
+        ])
+        provider = MCPDiscoveryProvider()
+        ctx = CapabilityContext(workspace_root=ws)
+        result = provider.find_candidates(
+            (CapabilityRequirement(capability="deploy"),), ctx
+        )
+        assert len(result) == 1
+        assert result[0].setup_notes == "Do this first."
+        assert result[0].install_command == "npx @gmail/mcp"
+
+    def test_catalog_surfaces_through_resolver(self, tmp_path: Path) -> None:
+        ws = self._write_catalog(tmp_path, [
+            {
+                "capability": "read inbox",
+                "tool_names": ["gmail_search", "gmail_read"],
+                "source": "gmail-mcp",
+                "setup_required": True,
+            }
+        ])
+        resolver = CapabilityResolver([MCPDiscoveryProvider()])
+        ctx = CapabilityContext(workspace_root=ws)
+        resolution = resolver.resolve(
+            (CapabilityRequirement(capability="read inbox"),), ctx
+        )
+        assert len(resolution.selected_bindings) == 1
+        binding = resolution.selected_bindings[0]
+        assert binding.route_kind == "mcp"
+        assert binding.tool_names == ("gmail_search", "gmail_read")
+        assert binding.setup_status == "pending"
+        assert "gmail_search" in resolution.allowed_tools
+        assert "gmail_read" in resolution.allowed_tools
+
+
+# ---------------------------------------------------------------------------
+# Test: AppRouteProvider
+# ---------------------------------------------------------------------------
+
+
+class TestAppRouteProvider:
+    """Tests for the app-route heuristic provider."""
+
+    def test_browser_capability_returns_candidates(self) -> None:
+        provider = AppRouteProvider()
+        result = provider.find_candidates(
+            (CapabilityRequirement(capability="read inbox using browser"),),
+            CapabilityContext(workspace_root=_WORKSPACE),
+        )
+        assert len(result) == 1
+        candidate = result[0]
+        assert candidate.route_kind in {
+            "browser_existing_session",
+            "chrome_devtools",
+            "browser_extension_bridge",
+        }
+        assert candidate.confidence == 0.4
+        assert candidate.setup_required is True
+        assert candidate.setup_notes != ""
+        assert candidate.tool_names == ()
+        assert candidate.source == "app route heuristic"
+
+    def test_local_app_capability_returns_app_route(self) -> None:
+        provider = AppRouteProvider()
+        result = provider.find_candidates(
+            (CapabilityRequirement(capability="open desktop app"),),
+            CapabilityContext(workspace_root=_WORKSPACE),
+        )
+        assert len(result) == 1
+        assert result[0].route_kind == "windows_ui_automation"
+
+    def test_non_app_capability_returns_empty(self) -> None:
+        provider = AppRouteProvider()
+        result = provider.find_candidates(
+            (CapabilityRequirement(capability="git history"),),
+            CapabilityContext(workspace_root=_WORKSPACE),
+        )
+        assert result == ()
+
+    def test_route_kind_is_plain_string_not_enum(self) -> None:
+        provider = AppRouteProvider()
+        result = provider.find_candidates(
+            (CapabilityRequirement(capability="browser"),),
+            CapabilityContext(workspace_root=_WORKSPACE),
+        )
+        assert len(result) == 1
+        candidate = result[0]
+        assert isinstance(candidate.route_kind, str)
+        assert candidate.route_kind in {
+            "browser_existing_session",
+            "chrome_devtools",
+            "windows_ui_automation",
+            "browser_extension_bridge",
+        }
+
+    def test_candidates_have_setup_required_true(self) -> None:
+        provider = AppRouteProvider()
+        result = provider.find_candidates(
+            (CapabilityRequirement(capability="scrape web page"),),
+            CapabilityContext(workspace_root=_WORKSPACE),
+        )
+        assert len(result) == 1
+        assert result[0].setup_required is True
+
+    def test_app_route_surfaces_through_resolver(self) -> None:
+        resolver = CapabilityResolver([AppRouteProvider()])
+        resolution = resolver.resolve(
+            (CapabilityRequirement(capability="open desktop app"),),
+            CapabilityContext(workspace_root=_WORKSPACE),
+        )
+        assert len(resolution.selected_bindings) == 1
+        binding = resolution.selected_bindings[0]
+        assert binding.route_kind == "windows_ui_automation"
+        assert binding.setup_status == "pending"
+        assert binding.tool_names == ()
+        # allowed_tools should not crash — may be empty since no tool_names
+        assert isinstance(resolution.allowed_tools, tuple)
 
 
 # ---------------------------------------------------------------------------
