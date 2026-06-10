@@ -17,38 +17,42 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from aura.codebase_index.indexer import CodebaseIndex  # noqa: F401
+from aura.codebase_index.tool import search_codebase as _search_codebase  # noqa: F401
+from aura.conversation.tools._diagnostic_mixin import DiagnosticHandlersMixin
+from aura.conversation.tools._git_mixin import GitHandlersMixin
+from aura.conversation.tools._memory_mixin import MemoryHandlersMixin
+from aura.conversation.tools._planner_mixin import PlannerHandlersMixin
+from aura.conversation.tools._read_mixin import ReadHandlersMixin
+from aura.conversation.tools._search_mixin import SearchHandlersMixin
 from aura.conversation.tools._types import (
     ApprovalCallback,
     RegistryMode,
     ToolExecResult,
 )
-from aura.conversation.tools._read_mixin import ReadHandlersMixin
-from aura.conversation.tools._search_mixin import SearchHandlersMixin
-from aura.conversation.tools._git_mixin import GitHandlersMixin
 from aura.conversation.tools._web_mixin import WebHandlersMixin
 from aura.conversation.tools._write_mixin import WriteHandlersMixin
-from aura.conversation.tools._memory_mixin import MemoryHandlersMixin
-from aura.conversation.tools._diagnostic_mixin import DiagnosticHandlersMixin
-from aura.conversation.tools._planner_mixin import PlannerHandlersMixin
 
 # Imports kept for test-patch compatibility (patching
 # aura.conversation.tools.registry.<name> in test_tool_registry.py).
 from aura.conversation.tools.backup import backup_existing  # noqa: F401
-from aura.conversation.tools.find_usages import find_usages  # noqa: F401
-from aura.conversation.tools.fs_handler import FsReadHandler
-from aura.conversation.tools.git_handler import GitHandler
-from aura.conversation.tools.grep import grep_files  # noqa: F401
-from aura.conversation.tools.fs_edit_structured import propose_edit_symbol  # noqa: F401
-from aura.conversation.tools.fs_edit_transaction import propose_edit_transaction  # noqa: F401
-from aura.conversation.tools.fs_write import propose_edit, propose_line_range_edit, propose_patch_file, propose_write  # noqa: F401
-from aura.codebase_index.tool import search_codebase as _search_codebase  # noqa: F401
-from aura.codebase_index.indexer import CodebaseIndex  # noqa: F401
-from aura.conversation.tools.web_handler import WebHandler
-
 from aura.conversation.tools.catalog import ToolCatalog
 from aura.conversation.tools.dynamic_registry import DynamicToolRegistry
-from aura.conversation.tools.mcp_registry import MCPToolRegistry
 from aura.conversation.tools.executor import ToolExecutor
+from aura.conversation.tools.find_usages import find_usages  # noqa: F401
+from aura.conversation.tools.fs_edit_structured import propose_edit_symbol  # noqa: F401
+from aura.conversation.tools.fs_edit_transaction import propose_edit_transaction  # noqa: F401
+from aura.conversation.tools.fs_handler import FsReadHandler
+from aura.conversation.tools.fs_write import (  # noqa: F401
+    propose_edit,
+    propose_line_range_edit,
+    propose_patch_file,
+    propose_write,
+)
+from aura.conversation.tools.git_handler import GitHandler
+from aura.conversation.tools.grep import grep_files  # noqa: F401
+from aura.conversation.tools.mcp_registry import MCPToolRegistry
+from aura.conversation.tools.web_handler import WebHandler
 
 try:
     from aura.craft import ExplicitSpecContract
@@ -250,3 +254,4 @@ TOOL_HANDLERS["get_workspace_snapshot"] = ToolRegistry._handle_get_workspace_sna
 TOOL_HANDLERS["summon_drone"] = ToolRegistry._handle_summon_drone
 TOOL_HANDLERS["launch_read_only_drone"] = ToolRegistry._handle_launch_read_only_drone
 TOOL_HANDLERS["check_drone_run"] = ToolRegistry._handle_check_drone_run
+TOOL_HANDLERS["resolve_capability"] = ToolRegistry._handle_resolve_capability

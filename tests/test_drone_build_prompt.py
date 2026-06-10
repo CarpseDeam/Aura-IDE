@@ -114,3 +114,93 @@ def test_prompt_does_not_contain_spec_fields() -> None:
     assert "Do not add external browser" not in prompt
     assert "Gmail" not in prompt
     assert "scheduler capabilities" not in prompt
+
+
+def test_prompt_mentions_resolve_capability() -> None:
+    brief = DroneBuildBrief(
+        response_type="brief",
+        message="Ready.",
+        ready_to_build=True,
+        build_brief="Build a drone.",
+    )
+    prompt = build_drone_creation_prompt(brief)
+    assert "resolve_capability" in prompt
+
+
+def test_prompt_mentions_capability_requirements() -> None:
+    brief = DroneBuildBrief(
+        response_type="brief",
+        message="Ready.",
+        ready_to_build=True,
+        build_brief="Build a drone.",
+    )
+    prompt = build_drone_creation_prompt(brief)
+    assert "capability_requirements" in prompt
+
+
+def test_prompt_mentions_capability_bindings() -> None:
+    brief = DroneBuildBrief(
+        response_type="brief",
+        message="Ready.",
+        ready_to_build=True,
+        build_brief="Build a drone.",
+    )
+    prompt = build_drone_creation_prompt(brief)
+    assert "capability_bindings" in prompt
+
+
+def test_prompt_mentions_setup_steps() -> None:
+    brief = DroneBuildBrief(
+        response_type="brief",
+        message="Ready.",
+        ready_to_build=True,
+        build_brief="Build a drone.",
+    )
+    prompt = build_drone_creation_prompt(brief)
+    assert "setup_steps" in prompt
+
+
+def test_prompt_mentions_first_run_test() -> None:
+    brief = DroneBuildBrief(
+        response_type="brief",
+        message="Ready.",
+        ready_to_build=True,
+        build_brief="Build a drone.",
+    )
+    prompt = build_drone_creation_prompt(brief)
+    assert "first_run_test" in prompt
+
+
+def test_prompt_does_not_frame_routes_as_closed_list() -> None:
+    """Route options must be open-ended, not a closed list of MCP/browser/code."""
+    brief = DroneBuildBrief(
+        response_type="brief",
+        message="Ready.",
+        ready_to_build=True,
+        build_brief="Build a drone.",
+    )
+    prompt = build_drone_creation_prompt(brief)
+    # Must not present a fixed menu of 2-3 route types
+    assert "MCP, browser" not in prompt
+    assert "three routes" not in prompt.lower()
+    assert "choose between" not in prompt.lower()
+    # Must use open-ended language
+    assert "candidate" in prompt.lower()
+
+
+def test_prompt_old_bad_fields_stay_absent() -> None:
+    """No old spec fields leak into the prompt."""
+    brief = DroneBuildBrief(
+        response_type="brief",
+        message="Ready.",
+        ready_to_build=True,
+        build_brief="Build a drone.",
+    )
+    prompt = build_drone_creation_prompt(brief)
+    assert "capabilities_needed" not in prompt
+    assert "missing_capabilities" not in prompt
+    assert "build_status" not in prompt
+    assert "output_contract" not in prompt
+    assert "Do not add external browser" not in prompt
+    assert "Gmail" not in prompt
+    assert "scheduler capabilities" not in prompt

@@ -93,3 +93,22 @@ def test_drone_approval_callback_ignores_stale_approval_id(monkeypatch, tmp_path
 
     assert decision.action == "reject"
     assert decision.metadata["approval_timeout"] is True
+
+
+def test_runner_blocks_tool_not_in_allowed_set(tmp_path) -> None:
+    """Prove a DroneRunner's surface would block a tool outside allowed_tools."""
+    drone = DroneDefinition(
+        id="test",
+        name="Test",
+        description="",
+        instructions="",
+        write_policy="read_only",
+        allowed_tools=("read_file",),
+        output_contract="",
+        budget=DroneBudget(max_tool_rounds=1, timeout_seconds=30),
+    )
+    from aura.drones.tool_surface import build_drone_tool_surface
+
+    surface = build_drone_tool_surface(tmp_path, drone)
+    assert "write_file" not in surface.allowed_tools
+    assert "read_file" in surface.allowed_tools

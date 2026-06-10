@@ -6,23 +6,23 @@ calls are made during test execution.
 """
 
 from __future__ import annotations
-from __future__ import annotations
-import tempfile
+
 from pathlib import Path
 from unittest.mock import ANY, MagicMock, patch
+
 import pytest
 
+from aura.conversation.tool_limits import WRITE_TOOLS
+from aura.conversation.tools._schemas import DIAGNOSTIC_TOOL_DEF, READ_TOOL_DEFS, WRITE_TOOL_DEFS
 from aura.conversation.tools._types import (
     ApprovalDecision,
 )
-from aura.conversation.tool_limits import WRITE_TOOLS
-from aura.conversation.tools._schemas import DIAGNOSTIC_TOOL_DEF, READ_TOOL_DEFS, WRITE_TOOL_DEFS
+from aura.conversation.tools.fs_write import propose_line_range_edit
 from aura.conversation.tools.registry import (
     TOOL_HANDLERS,
     ToolRegistry,
 )
 
-from aura.conversation.tools.fs_write import propose_line_range_edit
 # Fixtures
 
 
@@ -1707,6 +1707,7 @@ class TestHandlerRegistration:
         "check_drone_run",
         "get_workspace_snapshot",
         "summon_drone",
+        "resolve_capability",
     }
 
     def test_all_expected_tools_present(self):
@@ -1765,6 +1766,7 @@ class TestModeToolSurfaces:
             "run_diagnostic_command",
             "get_workspace_snapshot",
             "summon_drone",
+            "resolve_capability",
         }
         assert "write_file" not in tool_names
         assert "edit_file" not in tool_names
@@ -1986,3 +1988,136 @@ class TestPlannerModeToolDefs:
         registry = ToolRegistry(workspace_root=ws, read_only=False, mode="planner")
         tool_names = {t["function"]["name"] for t in registry.tool_defs()}
         assert "patch_file" not in tool_names
+
+
+class TestResolveCapability:
+    """resolve_capability: resolves capability requirements via CapabilityResolver."""
+
+    TOOL_NAME = "resolve_capability"
+
+    def test_handler_in_registry(self):
+        """Handler is registered in TOOL_HANDLERS."""
+        from aura.conversation.tools.registry import TOOL_HANDLERS
+        assert self.TOOL_NAME in TOOL_HANDLERS
+
+    def test_present_in_planner_mode(self, tmp_path):
+        """Tool is available in planner mode."""
+        from aura.conversation.tools.registry import ToolRegistry
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+        registry = ToolRegistry(ws, mode="planner")
+        tool_defs = registry.tool_defs()
+        tool_names = {t["function"]["name"] for t in tool_defs}
+        assert self.TOOL_NAME in tool_names
+
+    def test_absent_in_worker_mode(self, tmp_path):
+        """Tool is NOT available in worker mode."""
+        from aura.conversation.tools.registry import ToolRegistry
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+        registry = ToolRegistry(ws, mode="worker")
+        tool_defs = registry.tool_defs()
+        tool_names = {t["function"]["name"] for t in tool_defs}
+        assert self.TOOL_NAME not in tool_names
+
+    def test_absent_in_read_only_mode(self, tmp_path):
+        """Tool is NOT available in read_only mode."""
+        from aura.conversation.tools.registry import ToolRegistry
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+        registry = ToolRegistry(ws, read_only=True, mode="planner")
+        tool_defs = registry.tool_defs()
+        tool_names = {t["function"]["name"] for t in tool_defs}
+        assert self.TOOL_NAME not in tool_names
+
+    def test_valid_requirements_returns_ok(self, tmp_path):
+        """Handler returns ok=True for valid requirements with CapabilityResolution shape."""
+        from aura.conversation.tools.registry import ToolRegistry
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+        registry = ToolRegistry(ws, mode="planner")
+        args = {
+            "requirements": [
+                {"capability": "read_file", "purpose": "read source", "notes": ""},
+            ],
+        }
+        result = registry.execute(self.TOOL_NAME, args, lambda _: True)
+        assert result.ok
+        payload = result.payload
+        assert payload.get("ok") is True
+        assert "requirements" in payload
+        assert "candidates" in payload
+        assert "selected_bindings" in payload
+        assert "allowed_tools" in payload
+        assert "setup_notes" in payload
+
+    def test_missing_requirements_returns_error(self, tmp_path):
+        """Missing requirements field returns ok=False."""
+        from aura.conversation.tools.registry import ToolRegistry
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+        registry = ToolRegistry(ws, mode="planner")
+        args = {}
+        result = registry.execute(self.TOOL_NAME, args, lambda _: True)
+        assert not result.ok
+        assert result.payload.get("ok") is False
+        assert "error" in result.payload
+
+    def test_empty_requirements_returns_error(self, tmp_path):
+        """Empty requirements list returns ok=False."""
+        from aura.conversation.tools.registry import ToolRegistry
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+        registry = ToolRegistry(ws, mode="planner")
+        args = {"requirements": []}
+        result = registry.execute(self.TOOL_NAME, args, lambda _: True)
+        assert not result.ok
+        assert result.payload.get("ok") is False
+        assert "error" in result.payload
+
+    def test_unknown_keys_ignored(self, tmp_path):
+        """Extra unknown input keys are ignored, handler still succeeds."""
+        from aura.conversation.tools.registry import ToolRegistry
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+        registry = ToolRegistry(ws, mode="planner")
+        args = {
+            "requirements": [{"capability": "read_file"}],
+            "unknown_field": "should_be_ignored",
+        }
+        result = registry.execute(self.TOOL_NAME, args, lambda _: True)
+        assert result.ok
+        assert result.payload.get("ok") is True
+
+    def test_static_tool_matched(self, tmp_path):
+        """A requirement for 'read_file' gets a static_tool binding in planner mode."""
+        from aura.conversation.tools.registry import ToolRegistry
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+        registry = ToolRegistry(ws, mode="planner")
+        args = {
+            "requirements": [{"capability": "read_file"}],
+        }
+        result = registry.execute(self.TOOL_NAME, args, lambda _: True)
+        assert result.ok
+        bindings = result.payload.get("selected_bindings", [])
+        read_file_bindings = [b for b in bindings if b["capability"] == "read_file"]
+        assert len(read_file_bindings) >= 1
+        assert read_file_bindings[0]["route_kind"] == "static_tool"
+        assert "read_file" in result.payload.get("allowed_tools", [])
+
+    def test_unknown_capability_gets_fallback(self, tmp_path):
+        """An unknown capability gets a generated_code fallback."""
+        from aura.conversation.tools.registry import ToolRegistry
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+        registry = ToolRegistry(ws, mode="planner")
+        args = {
+            "requirements": [{"capability": "fly_to_the_moon"}],
+        }
+        result = registry.execute(self.TOOL_NAME, args, lambda _: True)
+        assert result.ok
+        bindings = result.payload.get("selected_bindings", [])
+        fly_bindings = [b for b in bindings if b["capability"] == "fly_to_the_moon"]
+        assert len(fly_bindings) == 1
+        assert fly_bindings[0]["route_kind"] == "generated_code"

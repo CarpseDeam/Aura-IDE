@@ -1,8 +1,17 @@
 from __future__ import annotations
 
-import json
+from typing import Any
 
 from aura.conversation.tools._types import ToolExecResult
+from aura.drones.capabilities import CapabilityRequirement
+from aura.drones.capability_resolver import (
+    CapabilityContext,
+    CapabilityResolver,
+    DynamicToolProvider,
+    GeneratedCodeFallbackProvider,
+    InstalledMCPProvider,
+    StaticToolProvider,
+)
 
 
 class PlannerHandlersMixin:
@@ -194,3 +203,94 @@ class PlannerHandlersMixin:
             result["error"] = job.error or "Unknown error"
 
         return ToolExecResult(ok=True, payload=result)
+
+    def _handle_resolve_capability(
+        self,
+        args: dict[str, Any],
+        approval_cb: Any,
+        reject_all: bool,
+    ) -> ToolExecResult:
+        """Resolve capability requirements and return candidate routes."""
+        requirements_raw = args.get("requirements", [])
+        if not isinstance(requirements_raw, list) or len(requirements_raw) == 0:
+            return ToolExecResult(
+                ok=False,
+                payload={"ok": False, "error": "requirements must be a non-empty list"},
+            )
+
+        # 1. Parse requirements into CapabilityRequirement objects
+        requirements: list[CapabilityRequirement] = []
+        for item in requirements_raw:
+            if not isinstance(item, dict):
+                return ToolExecResult(
+                    ok=False,
+                    payload={"ok": False, "error": "each requirement must be a dict"},
+                )
+            cap = str(item.get("capability", "")).strip()
+            if not cap:
+                return ToolExecResult(
+                    ok=False,
+                    payload={"ok": False, "error": "each requirement must have a non-empty capability string"},
+                )
+            requirements.append(
+                CapabilityRequirement(
+                    capability=cap,
+                    purpose=str(item.get("purpose", "")),
+                    notes=str(item.get("notes", "")),
+                )
+            )
+
+        # 2. Build context from current tool registry state
+        def _tool_names_from_schemas(schemas: list[dict[str, Any]]) -> tuple[str, ...]:
+            names: list[str] = []
+            for s in schemas:
+                fn = s.get("function")
+                if isinstance(fn, dict):
+                    name = fn.get("name")
+                    if isinstance(name, str) and name:
+                        names.append(name)
+            return tuple(sorted(names))
+
+        all_schemas = self._catalog.build_tool_defs(
+            mode=self._mode,
+            read_only=self._read_only,
+        )
+        available_tool_names = _tool_names_from_schemas(all_schemas)
+
+        dynamic_schemas = self._dynamic_tools.schemas()
+        dynamic_tool_names = _tool_names_from_schemas(dynamic_schemas)
+
+        mcp_schemas = self._mcp_tools.schemas
+        mcp_tool_names = _tool_names_from_schemas(mcp_schemas)
+
+        context = CapabilityContext(
+            workspace_root=self._root,
+            available_tool_names=available_tool_names,
+            dynamic_tool_names=dynamic_tool_names,
+            mcp_tool_names=mcp_tool_names,
+        )
+
+        # 3. Build resolver and resolve
+        resolver = CapabilityResolver(
+            providers=[
+                StaticToolProvider(),
+                DynamicToolProvider(),
+                InstalledMCPProvider(),
+                GeneratedCodeFallbackProvider(),
+            ]
+        )
+        resolution = resolver.resolve(
+            requirements=tuple(requirements),
+            context=context,
+        )
+
+        # 4. Serialize to JSON-compatible dict
+        payload = {
+            "ok": True,
+            "requirements": [r.to_dict() for r in resolution.requirements],
+            "candidates": [c.to_dict() for c in resolution.candidates],
+            "selected_bindings": [b.to_dict() for b in resolution.selected_bindings],
+            "allowed_tools": list(resolution.allowed_tools),
+            "setup_notes": list(resolution.setup_notes),
+        }
+        return ToolExecResult(ok=True, payload=payload)

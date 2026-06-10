@@ -1324,3 +1324,35 @@ CHECK_DRONE_RUN_TOOL_DEF: dict[str, Any] = {
         },
     },
 }
+
+
+RESOLVE_CAPABILITY_TOOL_DEF: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "resolve_capability",
+        "description": (
+            "Ask Aura to resolve which tool route can satisfy a capability requirement. "
+            "This is a planning / discovery tool only — it does not install, connect, or execute anything. "
+            "Returns candidate routes, selected bindings, final allowed tool names, and setup notes."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "requirements": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "capability": {"type": "string", "description": "The capability name, e.g. 'read inbox' or 'run sql query'."},
+                            "purpose": {"type": "string", "description": "Why this capability is needed.", "default": ""},
+                            "notes": {"type": "string", "description": "Additional notes.", "default": ""},
+                        },
+                        "required": ["capability"],
+                    },
+                    "description": "List of capability requirements to resolve.",
+                },
+            },
+            "required": ["requirements"],
+        },
+    },
+}

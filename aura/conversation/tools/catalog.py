@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from aura.conversation.tools._types import RegistryMode
 from aura.conversation.tools._schemas import (
     CHECK_DRONE_RUN_TOOL_DEF,
     DIAGNOSTIC_TOOL_DEF,
@@ -14,6 +13,7 @@ from aura.conversation.tools._schemas import (
     LAUNCH_READ_ONLY_DRONE_TOOL_DEF,
     READ_TOOL_DEFS,
     RESEARCH_TOOL_DEFS,
+    RESOLVE_CAPABILITY_TOOL_DEF,
     SUMMON_DRONE_TOOL_DEF,
     TERMINAL_TOOL_DEF,
     WEB_TOOL_DEFS,
@@ -21,6 +21,7 @@ from aura.conversation.tools._schemas import (
     WORKSPACE_SNAPSHOT_TOOL_DEF,
     WRITE_TOOL_DEFS,
 )
+from aura.conversation.tools._types import RegistryMode
 
 PLANNER_TOOL_NAMES = {
     "read_file",
@@ -95,6 +96,7 @@ class ToolCatalog:
                 + list(RESEARCH_TOOL_DEFS)
                 + [dict(DIAGNOSTIC_TOOL_DEF)]
                 + [dict(WORKSPACE_SNAPSHOT_TOOL_DEF)]
+                + [dict(RESOLVE_CAPABILITY_TOOL_DEF)]
             )
         elif mode == "worker":
             if os.environ.get("AURA_WORKER_LOW_LEVEL_EDIT_TOOLS") == "1":

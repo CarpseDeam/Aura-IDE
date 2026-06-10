@@ -24,10 +24,10 @@ from aura.client.events import (
 )
 from aura.config import get_provider, load_settings, resolve_role_default_model
 from aura.conversation.tools._types import ApprovalDecision, ApprovalRequest
-from aura.conversation.tools.registry import ToolRegistry
-from aura.drones.definition import DroneDefinition, WRITE_TOOLS, default_tools_for_policy
+from aura.drones.definition import DroneDefinition
 from aura.drones.receipt import DroneReceipt
 from aura.drones.run import DroneRun
+from aura.drones.tool_surface import build_drone_tool_surface
 from aura.project_env import build_project_command_rewrite
 from aura.sandbox import SandboxExecutor
 
@@ -107,22 +107,10 @@ class DroneRunner(QObject):
         # Terminal commands are handled by ConversationManager in normal runs,
         # not ToolRegistry, so Drones need their own terminal execution path.
         read_only = self._drone.write_policy == "read_only"
-        registry = ToolRegistry(
-            workspace_root=self._workspace_root,
-            read_only=False,
-            mode="single",
-        )
-
-        # 2. Filter to allowed tools. Treat missing allowed_tools as policy defaults
-        # for backward compatibility with older saved Drone JSON.
-        allowed_set = set(self._drone.allowed_tools or default_tools_for_policy(self._drone.write_policy))
-        if read_only:
-            allowed_set.difference_update(WRITE_TOOLS)
-        tool_defs = registry.tool_defs()
-        tool_defs = [
-            t for t in tool_defs
-            if t.get("function", {}).get("name") in allowed_set
-        ]
+        surface = build_drone_tool_surface(self._workspace_root, self._drone)
+        registry = surface.registry
+        allowed_set = set(surface.allowed_tools)
+        tool_defs = list(surface.tool_defs)
 
         # 3. Build messages
         system_prompt = self._build_system_prompt()

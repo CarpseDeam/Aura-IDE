@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+from aura.drones.capabilities import CapabilityBinding, CapabilityRequirement
+
 
 @dataclass(frozen=True)
 class DroneBudget:
@@ -25,6 +27,10 @@ class DroneDefinition:
     created_by: str = "user"
     created_at: str = ""
     updated_at: str = ""
+    capability_requirements: tuple[CapabilityRequirement, ...] = ()
+    capability_bindings: tuple[CapabilityBinding, ...] = ()
+    setup_steps: tuple[str, ...] = ()
+    first_run_test: str = ""
 
 
 def slugify(name: str) -> str:

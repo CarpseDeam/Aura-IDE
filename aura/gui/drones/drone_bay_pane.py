@@ -221,6 +221,15 @@ class DroneBayPane(QWidget):
         )
         card_layout.addWidget(desc_label)
 
+        # First run test hint
+        if drone.first_run_test:
+            frt_label = QLabel(drone.first_run_test)
+            frt_label.setWordWrap(True)
+            frt_label.setStyleSheet(
+                f"font-size: 11px; color: {FG_MUTED}; background: transparent; font-style: italic;"
+            )
+            card_layout.addWidget(frt_label)
+
         # Badge row
         badge_row = QHBoxLayout()
         badge_row.setContentsMargins(0, 2, 0, 2)

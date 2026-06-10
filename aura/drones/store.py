@@ -7,6 +7,7 @@ import tempfile
 from dataclasses import asdict
 from pathlib import Path
 
+from aura.drones.capabilities import CapabilityBinding, CapabilityRequirement
 from aura.drones.definition import DroneBudget, DroneDefinition, slugify
 from aura.drones.receipt import DroneReceipt
 
@@ -30,6 +31,22 @@ def _drone_from_dict(data: dict) -> DroneDefinition:
         data = {**data, "allowed_tools": tuple(data["allowed_tools"])}
     if "budget" in data and isinstance(data["budget"], dict):
         data = {**data, "budget": DroneBudget(**data["budget"])}
+    if "capability_requirements" in data and isinstance(data["capability_requirements"], list):
+        data = {
+            **data,
+            "capability_requirements": tuple(
+                CapabilityRequirement.from_dict(d) for d in data["capability_requirements"]
+            ),
+        }
+    if "capability_bindings" in data and isinstance(data["capability_bindings"], list):
+        data = {
+            **data,
+            "capability_bindings": tuple(
+                CapabilityBinding.from_dict(d) for d in data["capability_bindings"]
+            ),
+        }
+    if "setup_steps" in data and isinstance(data["setup_steps"], list):
+        data = {**data, "setup_steps": tuple(str(x) for x in data["setup_steps"])}
     drone = DroneDefinition(**data)
     DroneStore.validate_drone(drone)
     return drone

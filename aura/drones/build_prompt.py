@@ -28,38 +28,56 @@ def build_drone_creation_prompt(brief: DroneBuildBrief) -> str:
         "to understand the ``DroneDefinition`` schema and ``DroneStore`` API."
     )
     lines.append(
-        "2. Create a JSON file under ``.aura/drones/`` that is compatible "
-        "with ``DroneDefinition``."
+        "2. Extract the capabilities the Drone needs from the approved brief. "
+        "Each capability should be a short label like \"read inbox\" or "
+        "\"query database\"."
     )
     lines.append(
-        "3. Use ``DroneStore.next_id(workspace_root, name)`` to generate "
-        "a safe id from the Drone name."
+        "3. Call ``resolve_capability`` for each needed capability to discover "
+        "which routes are available. Aura resolves capabilities through "
+        "candidate providers — pick the simplest viable route for each capability."
     )
     lines.append(
-        "4. Use ``default_tools_for_policy(write_policy)`` from "
-        "``aura.drones.definition`` for ``allowed_tools``."
+        "4. Create a JSON file under ``.aura/drones/`` that is compatible "
+        "with ``DroneDefinition``. Use ``DroneStore.next_id(workspace_root, name)`` "
+        "to generate a safe id from the Drone name."
     )
     lines.append(
-        "5. Include all required ``DroneDefinition`` fields. "
+        "5. Populate the capability fields from the resolution:"
+    )
+    lines.append(
+        "   - ``capability_requirements`` — the requirements extracted from the brief."
+    )
+    lines.append(
+        "   - ``capability_bindings`` — the selected bindings from ``resolve_capability``."
+    )
+    lines.append(
+        "   - ``setup_steps`` — any setup steps needed before the Drone can run."
+    )
+    lines.append(
+        "   - ``first_run_test`` — a quick smoke test to verify the Drone works."
+    )
+    lines.append(
+        "6. Set ``allowed_tools`` to the resolved flat tool names from the "
+        "``resolve_capability`` result. Do not hardcode a fixed tool list — "
+        "use the tools Aura resolved."
+    )
+    lines.append(
+        "7. Include all other required ``DroneDefinition`` fields. "
         "Read the schema from ``aura/drones/definition.py``."
     )
     lines.append(
-        "6. Do NOT create a second Drone system. Do NOT open or depend on "
+        "8. Do NOT create a second Drone system. Do NOT open or depend on "
         "``DroneEditorDialog``."
     )
     lines.append(
-        "7. Include any access/setup/safety notes from the brief in "
-        "the Drone's instructions."
+        "9. Include any access, setup, safety, and harness notes from the brief in "
+        "the Drone's instructions. If runtime access or a connector is needed, "
+        "describe that requirement clearly."
     )
     lines.append(
-        "8. Ask the user only for details or access that are truly needed "
-        "later (e.g. API keys at runtime). Store no secrets in the Drone definition."
-    )
-    lines.append(
-        "9. Keep the saved Drone focused on the approved brief. "
-        "Include access, setup, safety, and harness notes from the brief "
-        "in the Drone instructions. If runtime access or a connector is needed, "
-        "describe that requirement clearly. Store no secrets in the Drone definition."
+        "10. Store no secrets in the Drone definition. Ask the user only for "
+        "details or access that are truly needed later (e.g. API keys at runtime)."
     )
     lines.append("")
     lines.append("Dispatch a Worker to create the saved Drone JSON file.")
