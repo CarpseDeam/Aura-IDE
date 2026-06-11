@@ -24,7 +24,7 @@ from aura.gui.theme import ACCENT, BG, BG_RAISED, BORDER, DANGER, FG, FG_DIM, FG
 
 class DroneBayPane(QWidget):
     """Panel that displays saved Drones with action buttons.
-    
+
     Future phases will add live Drone run cards (active run pips),
     parallel execution indicators, and receipt display. Keep this
     widget capable of hosting both static definitions and live runs.
@@ -119,7 +119,7 @@ class DroneBayPane(QWidget):
         self._card_container.setStyleSheet("background: transparent;")
         self._card_layout = QVBoxLayout(self._card_container)
         self._card_layout.setContentsMargins(0, 0, 0, 0)
-        self._card_layout.setSpacing(8)
+        self._card_layout.setSpacing(6)
         self._card_layout.addStretch(1)
 
         scroll.setWidget(self._card_container)
@@ -130,10 +130,10 @@ class DroneBayPane(QWidget):
     # -- Public API --
 
     def refresh(self) -> None:
-        """Reload drones from DroneStore and rebuild cards + run history."""
+        """Reload drones from DroneStore and rebuild rows + run history."""
         # Clear existing history section first
         self._clear_history_section()
-        # Clear existing drone cards
+        # Clear existing drone rows
         while self._card_layout.count() > 0:
             item = self._card_layout.takeAt(0)
             if item.widget():
@@ -148,11 +148,20 @@ class DroneBayPane(QWidget):
             self._show_empty_state()
             return
 
-        for drone in drones:
-            card = self._build_drone_card(drone)
-            self._card_layout.addWidget(card)
+        # Build last-run lookup: map drone_id -> most recent run data
+        all_runs = RunHistoryStore.list_runs(self._workspace_root)
+        last_run_by_drone: dict[str, dict] = {}
+        for run_data in all_runs:
+            did = run_data.get("drone_id", "")
+            if did and did not in last_run_by_drone:
+                last_run_by_drone[did] = run_data
 
-        # Add run history section after drone cards
+        for drone in drones:
+            last_run_info = last_run_by_drone.get(drone.id)
+            row_widget = self._build_drone_row(drone, last_run_info)
+            self._card_layout.addWidget(row_widget)
+
+        # Add run history section after drone rows
         self.refresh_run_history()
 
     def set_workspace_root(self, root: Path | None) -> None:
@@ -192,46 +201,223 @@ class DroneBayPane(QWidget):
         self._card_layout.addWidget(empty)
         self._card_layout.addStretch(3)
 
-    def _build_drone_card(self, drone: DroneDefinition) -> QFrame:
-        card = QFrame()
-        card.setObjectName("droneCard")
-        card.setStyleSheet(
-            f"QFrame#droneCard {{ background: {BG_RAISED}; "
-            f"border: 1px solid {BORDER}; border-radius: 8px; "
-            f"padding: 0px; }}"
-            f"QFrame#droneCard:hover {{ background: #2b2b34; "
-            f"border-color: {ACCENT}; }}"
+    def _make_policy_badge(self, write_policy: str, compact: bool = False) -> QLabel:
+        if write_policy == "read_only":
+            text = "Read-only"
+            color = WARN
+        elif write_policy == "ask_before_writes":
+            text = "Ask writes"
+            color = ACCENT
+        elif write_policy == "normal_diff_approval":
+            text = "Diff approval"
+            color = SUCCESS
+        else:
+            text = write_policy
+            color = FG_DIM
+
+        badge = QLabel(text)
+        badge.setStyleSheet(
+            f"font-size: 10px; font-weight: 600; color: {color}; "
+            f"background: transparent; padding: 2px 8px; "
+            f"border-radius: 4px;"
+        )
+        return badge
+
+    def _make_trigger_pill(self) -> QLabel:
+        pill = QLabel("Manual")
+        pill.setStyleSheet(
+            f"font-size: 10px; font-weight: 600; color: {FG_MUTED}; "
+            f"background: transparent; padding: 2px 8px; "
+            f"border: 1px solid rgba(255,255,255,0.12); border-radius: 4px;"
+        )
+        return pill
+
+    def _build_drone_row(self, drone: DroneDefinition, last_run_info: dict | None) -> QWidget:
+        """Build a compact drone row with an expandable detail panel.
+
+        Returns an outer QWidget containing the always-visible row QFrame
+        and the optionally-visible detail QFrame.
+        """
+        wrapper = QWidget()
+        wrapper.setObjectName("droneRowWrapper")
+        wrapper.setStyleSheet("background: transparent;")
+
+        wrapper_layout = QVBoxLayout(wrapper)
+        wrapper_layout.setContentsMargins(0, 0, 0, 0)
+        wrapper_layout.setSpacing(0)
+
+        # ---- Always-visible row ----
+        row = QFrame()
+        row.setObjectName("droneRow")
+        row.setCursor(Qt.CursorShape.PointingHandCursor)
+        row.setFixedHeight(58)
+        row.setStyleSheet(
+            f"QFrame#droneRow {{ background: {BG_RAISED}; border: 1px solid {BORDER}; "
+            f"border-radius: 8px; padding: 0px; }}"
+            f"QFrame#droneRow:hover {{ border-color: {ACCENT}; }}"
         )
 
-        card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(10, 8, 10, 8)
-        card_layout.setSpacing(4)
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(10, 0, 8, 0)
+        row_layout.setSpacing(8)
+        row_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
-        # Name
+        # a) Name
         name_label = QLabel(drone.name)
         name_label.setStyleSheet(
-            f"font-size: 14px; font-weight: 700; color: {FG}; background: transparent;"
+            f"font-size: 13px; font-weight: 700; color: {FG}; background: transparent;"
         )
-        card_layout.addWidget(name_label)
+        name_label.setFixedWidth(140)
+        name_label.setMinimumWidth(140)
+        name_label.setContentsMargins(0, 0, 0, 0)
+        row_layout.addWidget(name_label)
 
-        # Description
-        desc_label = QLabel(drone.description)
-        desc_label.setWordWrap(True)
+        # b) Short description (first ~60 chars)
+        short_desc = (drone.description[:57] + "...") if len(drone.description) > 60 else drone.description
+        desc_label = QLabel(short_desc)
         desc_label.setStyleSheet(
             f"font-size: 12px; color: {FG_DIM}; background: transparent;"
         )
-        card_layout.addWidget(desc_label)
+        desc_label.setMaximumWidth(200)
+        desc_label.setContentsMargins(0, 0, 0, 0)
+        row_layout.addWidget(desc_label)
 
-        # First run test hint
+        # c) Write policy pill
+        policy_pill = self._make_policy_badge(drone.write_policy, compact=True)
+        row_layout.addWidget(policy_pill)
+
+        # d) Trigger pill (Manual placeholder)
+        trigger_pill = self._make_trigger_pill()
+        row_layout.addWidget(trigger_pill)
+
+        # e) Last run summary
+        last_run_label = QLabel()
+        last_run_label.setStyleSheet(
+            f"font-size: 11px; color: {FG_MUTED}; background: transparent;"
+        )
+        if last_run_info:
+            elapsed = last_run_info.get("elapsed_seconds", 0)
+            tool_calls = len(last_run_info.get("tool_calls", []))
+            if elapsed < 60:
+                dur_str = f"{elapsed:.0f}s"
+            else:
+                dur_str = f"{elapsed/60:.1f}m"
+            last_run_label.setText(f"Last: {dur_str} / {tool_calls} calls")
+            status = last_run_info.get("status", "")
+            if status == "failed":
+                last_run_label.setStyleSheet(
+                    f"font-size: 11px; color: {DANGER}; background: transparent;"
+                )
+        else:
+            last_run_label.setText("Never run")
+            last_run_label.setStyleSheet(
+                f"font-size: 11px; color: {FG_MUTED}; background: transparent;"
+            )
+        last_run_label.setContentsMargins(0, 0, 0, 0)
+        row_layout.addWidget(last_run_label)
+
+        row_layout.addStretch(1)
+
+        # f) Run button
+        run_btn = QPushButton("Run")
+        run_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        run_btn.setStyleSheet(
+            f"QPushButton {{ background: {ACCENT}; color: {BG}; "
+            f"border: 1px solid {ACCENT}; border-radius: 4px; "
+            f"padding: 3px 14px; font-size: 12px; font-weight: 600; }}"
+            f"QPushButton:hover {{ background: #94b6ff; }}"
+        )
+        run_btn.clicked.connect(
+            lambda checked=False, did=drone.id: self.launchDroneRequested.emit(did)
+        )
+        row_layout.addWidget(run_btn)
+
+        # g) Overflow/details button
+        detail_btn = QPushButton("\u22EF")
+        detail_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        detail_btn.setFixedWidth(32)
+        detail_btn.setStyleSheet(
+            f"QPushButton {{ background: transparent; color: {FG}; "
+            f"border: 1px solid {BORDER}; border-radius: 4px; "
+            f"padding: 2px 8px; font-size: 14px; }}"
+            f"QPushButton:hover {{ border-color: {ACCENT}; }}"
+        )
+        row_layout.addWidget(detail_btn)
+
+        wrapper_layout.addWidget(row)
+
+        # ---- Expandable detail panel ----
+        detail_widget = QFrame()
+        detail_widget.setObjectName("droneDetail")
+        detail_widget.setVisible(False)
+        detail_widget.setStyleSheet(
+            f"QFrame#droneDetail {{ background: {BG_RAISED}; border: 1px solid {BORDER}; "
+            f"border-top: none; border-radius: 0 0 8px 8px; padding: 12px; }}"
+        )
+
+        detail_layout = QVBoxLayout(detail_widget)
+        detail_layout.setContentsMargins(12, 8, 12, 12)
+        detail_layout.setSpacing(8)
+
+        # a) Full description
+        desc_full = QLabel(drone.description)
+        desc_full.setWordWrap(True)
+        desc_full.setStyleSheet(
+            f"font-size: 12px; color: {FG_DIM}; background: transparent;"
+        )
+        detail_layout.addWidget(desc_full)
+
+        # b) Instructions preview
+        instr_label = QLabel("Instructions:")
+        instr_label.setStyleSheet(
+            f"font-size: 11px; font-weight: 600; color: {FG}; background: transparent;"
+        )
+        detail_layout.addWidget(instr_label)
+        instr_preview = drone.instructions[:300] + "..." if len(drone.instructions) > 300 else drone.instructions
+        instr_text = QLabel(instr_preview)
+        instr_text.setWordWrap(True)
+        instr_text.setStyleSheet(
+            f"font-size: 11px; color: {FG_MUTED}; background: transparent; font-style: italic;"
+        )
+        detail_layout.addWidget(instr_text)
+
+        # c) Output contract
+        if drone.output_contract:
+            oc_label = QLabel("Output contract:")
+            oc_label.setStyleSheet(
+                f"font-size: 11px; font-weight: 600; color: {FG}; background: transparent;"
+            )
+            detail_layout.addWidget(oc_label)
+            oc_text = QLabel(drone.output_contract)
+            oc_text.setWordWrap(True)
+            oc_text.setStyleSheet(
+                f"font-size: 11px; color: {FG_MUTED}; background: transparent;"
+            )
+            detail_layout.addWidget(oc_text)
+
+        # d) First-run test
         if drone.first_run_test:
-            frt_label = QLabel(drone.first_run_test)
-            frt_label.setWordWrap(True)
-            frt_label.setStyleSheet(
+            frt_card = QFrame()
+            frt_card.setStyleSheet(
+                f"background: rgba(255,255,255,0.03); border-radius: 4px; padding: 6px;"
+            )
+            frt_card_layout = QVBoxLayout(frt_card)
+            frt_card_layout.setContentsMargins(8, 6, 8, 6)
+            frt_card_layout.setSpacing(2)
+            frt_label_title = QLabel("First-run test:")
+            frt_label_title.setStyleSheet(
+                f"font-size: 11px; font-weight: 600; color: {FG}; background: transparent;"
+            )
+            frt_card_layout.addWidget(frt_label_title)
+            frt_text = QLabel(drone.first_run_test)
+            frt_text.setWordWrap(True)
+            frt_text.setStyleSheet(
                 f"font-size: 11px; color: {FG_MUTED}; background: transparent; font-style: italic;"
             )
-            card_layout.addWidget(frt_label)
+            frt_card_layout.addWidget(frt_text)
+            detail_layout.addWidget(frt_card)
 
-        # Capability state badges
+        # e) Capability badges
         cap_badges = compute_capability_badges(drone)
         if cap_badges:
             cap_row = QHBoxLayout()
@@ -244,57 +430,26 @@ class DroneBayPane(QWidget):
                     f"padding: 1px 6px; border: 1px solid rgba(255,255,255,0.08); "
                     f"border-radius: 4px;"
                 )
-                # Tooltip for first-run test badge: show the actual test text
                 if badge_text == "First-run test available" and drone.first_run_test:
                     cap_label.setToolTip(drone.first_run_test)
                 cap_row.addWidget(cap_label)
             cap_row.addStretch(1)
-            card_layout.addLayout(cap_row)
+            detail_layout.addLayout(cap_row)
 
-        # Badge row
-        badge_row = QHBoxLayout()
-        badge_row.setContentsMargins(0, 2, 0, 2)
-        badge_row.setSpacing(6)
-
-        write_badge = self._make_policy_badge(drone.write_policy)
-        badge_row.addWidget(write_badge)
-
+        # f) Budget
         budget_label = QLabel(
-            f"{drone.budget.max_tool_rounds} rounds · "
-            f"{drone.budget.timeout_seconds // 60} min"
+            f"{drone.budget.max_tool_rounds} max tool rounds \u00b7 "
+            f"{drone.budget.timeout_seconds // 60} min timeout"
         )
         budget_label.setStyleSheet(
             f"font-size: 11px; color: {FG_MUTED}; background: transparent;"
         )
-        badge_row.addWidget(budget_label)
-        badge_row.addStretch(1)
+        detail_layout.addWidget(budget_label)
 
-        card_layout.addLayout(badge_row)
-
-        # Action buttons
+        # g) Action buttons row
         action_row = QHBoxLayout()
         action_row.setContentsMargins(0, 4, 0, 0)
         action_row.setSpacing(6)
-
-        launch_btn = QPushButton("Launch")
-        if drone.write_policy == "read_only":
-            launch_btn.setToolTip(f"Launch {drone.name}")
-        elif drone.write_policy == "ask_before_writes":
-            launch_btn.setToolTip(f"Launch {drone.name} (asks before writes)")
-        elif drone.write_policy == "normal_diff_approval":
-            launch_btn.setToolTip(f"Launch {drone.name} (diff approval)")
-        launch_btn.setEnabled(True)
-        launch_btn.setStyleSheet(
-            f"QPushButton {{ background: {ACCENT}; color: {BG}; "
-            f"border: 1px solid {ACCENT}; border-radius: 4px; "
-            f"padding: 3px 14px; font-size: 12px; font-weight: 600; }}"
-            f"QPushButton:disabled {{ background: #2a2a30; color: #555566; "
-            f"border: 1px solid #333340; }}"
-        )
-        launch_btn.clicked.connect(
-            lambda checked=False, did=drone.id: self.launchDroneRequested.emit(did)
-        )
-        action_row.addWidget(launch_btn)
 
         edit_btn = QPushButton("Edit")
         edit_btn.setStyleSheet(
@@ -337,29 +492,57 @@ class DroneBayPane(QWidget):
         del_btn.clicked.connect(lambda checked=False, did=drone.id: self.deleteDroneRequested.emit(did))
         action_row.addWidget(del_btn)
 
-        card_layout.addLayout(action_row)
-        return card
+        action_row.addStretch(1)
+        detail_layout.addLayout(action_row)
 
-    def _make_policy_badge(self, write_policy: str) -> QLabel:
-        if write_policy == "read_only":
-            text = "Read-only"
-            color = WARN
-        elif write_policy == "ask_before_writes":
-            text = "Ask before writes"
-            color = ACCENT
-        elif write_policy == "normal_diff_approval":
-            text = "Normal diff approval"
-            color = SUCCESS
-        else:
-            text = write_policy
-            color = FG_DIM
-
-        badge = QLabel(text)
-        badge.setStyleSheet(
-            f"font-size: 11px; font-weight: 600; color: {color}; "
-            f"background: transparent; padding: 1px 0;"
+        # h) Recent runs for this drone
+        recent_label = QLabel("Recent runs")
+        recent_label.setStyleSheet(
+            f"font-size: 11px; font-weight: 600; color: {FG_DIM}; background: transparent;"
         )
-        return badge
+        detail_layout.addWidget(recent_label)
+
+        # Query runs filtered to this drone
+        if self._workspace_root is not None:
+            drone_runs = RunHistoryStore.list_runs(self._workspace_root)
+            filtered = [r for r in drone_runs if r.get("drone_id") == drone.id][:5]
+        else:
+            filtered = []
+
+        if filtered:
+            for run_data in filtered:
+                run_row = self._build_history_card(run_data)
+                detail_layout.addWidget(run_row)
+        else:
+            no_runs = QLabel("No runs yet")
+            no_runs.setStyleSheet(
+                f"font-size: 11px; color: {FG_MUTED}; background: transparent; font-style: italic;"
+            )
+            detail_layout.addWidget(no_runs)
+
+        wrapper_layout.addWidget(detail_widget)
+
+        # ---- Toggle logic ----
+        def _toggle_detail() -> None:
+            is_open = detail_widget.isVisible()
+            detail_widget.setVisible(not is_open)
+            # Update border radii so row and detail panel connect seamlessly
+            if not is_open:
+                row.setStyleSheet(
+                    f"QFrame#droneRow {{ background: {BG_RAISED}; border: 1px solid {ACCENT}; "
+                    f"border-radius: 8px 8px 0 0; border-bottom: none; padding: 0px; }}"
+                )
+            else:
+                row.setStyleSheet(
+                    f"QFrame#droneRow {{ background: {BG_RAISED}; border: 1px solid {BORDER}; "
+                    f"border-radius: 8px; padding: 0px; }}"
+                    f"QFrame#droneRow:hover {{ border-color: {ACCENT}; }}"
+                )
+
+        detail_btn.clicked.connect(_toggle_detail)
+        row.mousePressEvent = lambda event: _toggle_detail()
+
+        return wrapper
 
     # -- Run History section --
 
@@ -419,68 +602,109 @@ class DroneBayPane(QWidget):
         self._card_layout.addWidget(self._history_section)
 
     def _build_history_card(self, run_data: dict) -> QFrame:
-        """Build a compact clickable card for a single run entry."""
+        """Build a compact single-row run history entry."""
         card = QFrame()
         card.setCursor(Qt.CursorShape.PointingHandCursor)
+        card.setFixedHeight(36)
         card.setStyleSheet(
             "QFrame {"
-            "  background: rgba(255,255,255,0.04); border-radius: 6px;"
-            "  padding: 8px 12px; margin: 2px 10px;"
+            "  background: rgba(255,255,255,0.04); border-radius: 4px;"
+            "  padding: 4px 10px; margin: 1px 10px;"
             "}"
             "QFrame:hover { background: rgba(255,255,255,0.08); }"
         )
         layout = QHBoxLayout(card)
-        layout.setContentsMargins(10, 8, 10, 8)
-        layout.setSpacing(12)
+        layout.setContentsMargins(8, 0, 8, 0)
+        layout.setSpacing(8)
+        layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
         # Status icon
         status = run_data.get("status", "unknown")
         if status == "completed":
             icon_text = "\u2713"
-            icon_color = "#4CAF50"
+            icon_color = SUCCESS
         elif status == "failed":
             icon_text = "\u2717"
-            icon_color = "#F44336"
+            icon_color = DANGER
         else:
             icon_text = "\u25D0"
-            icon_color = "#FF9800"
+            icon_color = WARN
 
         icon = QLabel(icon_text)
-        icon.setStyleSheet(f"color: {icon_color}; font-size: 16px; font-weight: bold;")
-        icon.setFixedWidth(24)
+        icon.setStyleSheet(f"color: {icon_color}; font-size: 14px; font-weight: bold; background: transparent;")
+        icon.setFixedWidth(20)
         layout.addWidget(icon)
 
-        # Info column
-        info_col = QVBoxLayout()
-        info_col.setSpacing(2)
-
+        # Drone name
         name_label = QLabel(run_data.get("drone_name", "Unknown"))
-        name_label.setStyleSheet("color: #fff; font-size: 13px; font-weight: 500;")
-        info_col.addWidget(name_label)
+        name_label.setStyleSheet(f"color: {FG}; font-size: 12px; font-weight: 600; background: transparent;")
+        name_label.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(name_label)
 
-        # Detail row: timestamp | duration | tool calls
-        started_at = run_data.get("started_at", "")
+        # Status badge
+        if status == "completed":
+            badge_color = SUCCESS
+            badge_text = "completed"
+        elif status == "failed":
+            badge_color = DANGER
+            badge_text = "failed"
+        else:
+            badge_color = WARN
+            badge_text = status if status else "running"
+
+        status_badge = QLabel(badge_text)
+        status_badge.setStyleSheet(
+            f"font-size: 10px; color: {badge_color}; background: transparent; "
+            f"padding: 1px 6px; border: 1px solid {badge_color}; border-radius: 3px;"
+        )
+        layout.addWidget(status_badge)
+
+        # Duration
         elapsed = run_data.get("elapsed_seconds", 0)
-        tool_count = len(run_data.get("tool_calls", []))
+        if elapsed < 60:
+            dur_str = f"{elapsed:.0f}s"
+        else:
+            dur_str = f"{elapsed/60:.1f}m"
+        dur_label = QLabel(dur_str)
+        dur_label.setStyleSheet(f"font-size: 11px; color: {FG_MUTED}; background: transparent;")
+        layout.addWidget(dur_label)
 
-        # Format timestamp
+        # Tool count
+        tool_count = len(run_data.get("tool_calls", []))
+        calls_label = QLabel(f"{tool_count} calls")
+        calls_label.setStyleSheet(f"font-size: 11px; color: {FG_MUTED}; background: transparent;")
+        layout.addWidget(calls_label)
+
+        layout.addStretch()
+
+        # Timestamp
+        started_at = run_data.get("started_at", "")
         try:
             import datetime
             ts = datetime.datetime.fromisoformat(started_at)
             time_str = ts.strftime("%Y-%m-%d %H:%M")
         except Exception:
             time_str = started_at[:16] if started_at else "?"
+        ts_label = QLabel(time_str)
+        ts_label.setStyleSheet(f"font-size: 11px; color: {FG_MUTED}; background: transparent;")
+        layout.addWidget(ts_label)
 
-        duration_str = f"{elapsed:.0f}s" if elapsed < 60 else f"{elapsed/60:.1f}m"
-        detail = QLabel(f"{time_str}  |  {duration_str}  |  {tool_count} call{'s' if tool_count != 1 else ''}")
-        detail.setStyleSheet("color: rgba(255,255,255,0.45); font-size: 11px;")
-        info_col.addWidget(detail)
-
-        layout.addLayout(info_col, stretch=1)
-        layout.addStretch()
+        # View button
+        view_btn = QPushButton("View")
+        view_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        view_btn.setStyleSheet(
+            f"QPushButton {{ background: transparent; color: {ACCENT}; "
+            f"border: 1px solid {BORDER}; border-radius: 3px; "
+            f"padding: 1px 8px; font-size: 10px; }}"
+            f"QPushButton:hover {{ border-color: {ACCENT}; }}"
+        )
+        run_id = run_data.get("run_id", "")
+        view_btn.clicked.connect(
+            lambda checked=False, rid=run_id: self.viewRunReceiptRequested.emit(rid)
+        )
+        layout.addWidget(view_btn)
 
         # Make clickable
-        run_id = run_data.get("run_id", "")
         card.mousePressEvent = lambda event, rid=run_id: self._on_history_card_clicked(event, rid)
 
         return card
