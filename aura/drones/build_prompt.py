@@ -38,10 +38,11 @@ def build_drone_creation_prompt(brief: DroneBuildBrief) -> str:
         "candidate providers — pick the simplest viable route for each capability."
     )
     lines.append(
-        "4. Use ``DroneStore.save_drone(workspace_root, drone)`` to persist the Drone. "
-        "Use ``DroneStore.next_id(workspace_root, name)`` to generate a safe id from "
-        "the Drone name. Do NOT manually write ``.aura/drones/*.json`` files. "
-        "The Drone will be saved globally and available across all workspaces."
+        "4. Call ``save_drone_definition`` (available as a Worker tool) to persist the Drone. "
+        "Pass all required DroneDefinition fields. "
+        "If you omit ``id``, the tool will auto-generate a safe slug from the name. "
+        "Do NOT call ``DroneStore.save_drone()`` directly — use the tool. "
+        "Do NOT manually write ``.aura/drones/*.json`` files."
     )
     lines.append(
         "5. Populate the capability fields from the resolution:"
@@ -72,14 +73,22 @@ def build_drone_creation_prompt(brief: DroneBuildBrief) -> str:
         "``DroneEditorDialog``."
     )
     lines.append(
-        "9. Include any access, setup, safety, and harness notes from the brief in "
+        "9. DO NOT create Python scripts (e.g., ``scripts/create_*.py``, ``scripts/verify_*.py``), "
+        "helper files, verifier scripts, scratch files, or any repo artifacts for the Drone build. "
+        "The only acceptable output is calling ``save_drone_definition``."
+    )
+    lines.append(
+        "10. Include any access, setup, safety, and harness notes from the brief in "
         "the Drone's instructions. If runtime access or a connector is needed, "
         "describe that requirement clearly."
     )
     lines.append(
-        "10. Store no secrets in the Drone definition. Ask the user only for "
+        "11. Store no secrets in the Drone definition. Ask the user only for "
         "details or access that are truly needed later (e.g. API keys at runtime)."
     )
+    lines.append("")
+    lines.append("The final expected result is a saved Drone visible in Drone Bay.")
+    lines.append("Do not create scripts — just call ``save_drone_definition``.")
     lines.append("")
     lines.append("Dispatch a Worker to create the saved Drone.")
     return "\n".join(lines)

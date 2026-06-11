@@ -3,7 +3,9 @@ from __future__ import annotations
 from typing import Any
 
 from aura.conversation.tools._types import ToolExecResult
-from aura.drones.capabilities import CapabilityRequirement
+from aura.drones.capabilities import CapabilityBinding, CapabilityRequirement
+from aura.drones.definition import DroneBudget, DroneDefinition
+from aura.drones.store import DroneStore
 from aura.drones.capability_resolver import (
     AppRouteProvider,
     CapabilityContext,
@@ -272,6 +274,188 @@ class PlannerHandlersMixin:
             result["error"] = job.error or "Unknown error"
 
         return ToolExecResult(ok=True, payload=result)
+
+    def _handle_save_drone_definition(
+        self,
+        args: dict[str, Any],
+        approval_cb: Any,
+        reject_all: bool,
+    ) -> ToolExecResult:
+        """Create and persist a DroneDefinition via DroneStore."""
+        try:
+            # Required fields
+            name = str(args.get("name") or "").strip()
+            description = str(args.get("description") or "").strip()
+            instructions = str(args.get("instructions") or "").strip()
+            write_policy = str(args.get("write_policy") or "").strip()
+            allowed_tools_raw = args.get("allowed_tools", [])
+            output_contract = str(args.get("output_contract") or "").strip()
+
+            if not name:
+                return ToolExecResult(
+                    ok=False,
+                    payload={"ok": False, "error": "name is required"},
+                )
+            if not description:
+                return ToolExecResult(
+                    ok=False,
+                    payload={"ok": False, "error": "description is required"},
+                )
+            if not instructions:
+                return ToolExecResult(
+                    ok=False,
+                    payload={"ok": False, "error": "instructions is required"},
+                )
+            if not write_policy:
+                return ToolExecResult(
+                    ok=False,
+                    payload={"ok": False, "error": "write_policy is required"},
+                )
+            if not allowed_tools_raw or not isinstance(allowed_tools_raw, list):
+                return ToolExecResult(
+                    ok=False,
+                    payload={"ok": False, "error": "allowed_tools must be a non-empty array of strings"},
+                )
+            if not output_contract:
+                return ToolExecResult(
+                    ok=False,
+                    payload={"ok": False, "error": "output_contract is required"},
+                )
+
+            # ID: use provided or generate from name
+            drone_id = str(args.get("id") or "").strip()
+            if not drone_id:
+                drone_id = DroneStore.next_id(self._root, name)
+
+            # Optional fields with defaults
+            scope = str(args.get("scope") or "global").strip()
+            enabled = bool(args.get("enabled", True))
+            created_by = str(args.get("created_by") or "user").strip()
+
+            # Budget
+            budget_raw = args.get("budget", {})
+            if not isinstance(budget_raw, dict):
+                budget_raw = {}
+            max_tool_rounds = int(budget_raw.get("max_tool_rounds", 8))
+            timeout_seconds = int(budget_raw.get("timeout_seconds", 300))
+            budget = DroneBudget(
+                max_tool_rounds=max_tool_rounds,
+                timeout_seconds=timeout_seconds,
+            )
+
+            # Allowed tools
+            allowed_tools = tuple(str(t) for t in allowed_tools_raw if isinstance(t, str))
+
+            # Capability requirements
+            cap_reqs_raw = args.get("capability_requirements", [])
+            if not isinstance(cap_reqs_raw, list):
+                cap_reqs_raw = []
+            capability_requirements: tuple[CapabilityRequirement, ...] = ()
+            if cap_reqs_raw:
+                reqs = []
+                for item in cap_reqs_raw:
+                    if not isinstance(item, dict):
+                        continue
+                    reqs.append(
+                        CapabilityRequirement(
+                            capability=str(item.get("capability", "")),
+                            purpose=str(item.get("purpose", "")),
+                            notes=str(item.get("notes", "")),
+                        )
+                    )
+                capability_requirements = tuple(reqs)
+
+            # Capability bindings
+            cap_binds_raw = args.get("capability_bindings", [])
+            if not isinstance(cap_binds_raw, list):
+                cap_binds_raw = []
+            capability_bindings: tuple[CapabilityBinding, ...] = ()
+            if cap_binds_raw:
+                binds = []
+                for item in cap_binds_raw:
+                    if not isinstance(item, dict):
+                        continue
+                    tool_name_val = item.get("tool_name", "")
+                    sn = item.get("setup_notes", [])
+                    if isinstance(sn, list):
+                        setup_notes_val = "; ".join(str(s) for s in sn)
+                    else:
+                        setup_notes_val = str(sn)
+                    binds.append(
+                        CapabilityBinding(
+                            capability=str(item.get("capability", "")),
+                            route_kind=str(item.get("route", "")),
+                            source="user",
+                            tool_names=tuple([str(tool_name_val)]) if tool_name_val else (),
+                            setup_notes=setup_notes_val,
+                        )
+                    )
+                capability_bindings = tuple(binds)
+
+            # Setup steps
+            setup_steps_raw = args.get("setup_steps", [])
+            if isinstance(setup_steps_raw, list):
+                setup_steps = tuple(str(s) for s in setup_steps_raw)
+            else:
+                setup_steps = ()
+
+            first_run_test = str(args.get("first_run_test", "")).strip()
+
+            # Build DroneDefinition
+            drone = DroneDefinition(
+                id=drone_id,
+                name=name,
+                description=description,
+                instructions=instructions,
+                write_policy=write_policy,
+                allowed_tools=allowed_tools,
+                output_contract=output_contract,
+                budget=budget,
+                scope=scope,
+                enabled=enabled,
+                created_by=created_by,
+                created_at="",
+                updated_at="",
+                capability_requirements=capability_requirements,
+                capability_bindings=capability_bindings,
+                setup_steps=setup_steps,
+                first_run_test=first_run_test,
+            )
+
+            # Validate
+            try:
+                DroneStore.validate_drone(drone)
+            except ValueError as ve:
+                return ToolExecResult(
+                    ok=False,
+                    payload={"ok": False, "error": str(ve)},
+                )
+
+            # Save
+            DroneStore.save_drone(self._root, drone)
+
+            return ToolExecResult(
+                ok=True,
+                payload={
+                    "ok": True,
+                    "drone_saved": True,
+                    "drone_id": drone.id,
+                    "id": drone.id,
+                    "name": drone.name,
+                    "scope": drone.scope,
+                    "write_policy": drone.write_policy,
+                    "allowed_tools": list(drone.allowed_tools),
+                },
+                extras={
+                    "drone_saved": True,
+                    "drone_id": drone.id,
+                },
+            )
+        except Exception as e:
+            return ToolExecResult(
+                ok=False,
+                payload={"ok": False, "error": str(e)},
+            )
 
     def _handle_resolve_capability(
         self,

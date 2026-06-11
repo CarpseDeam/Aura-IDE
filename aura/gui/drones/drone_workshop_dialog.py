@@ -351,15 +351,15 @@ class DroneWorkshopDialog(QDialog):
             self._runner.apiError.connect(self._on_api_error)
             self._runner.finished.connect(self._on_runner_finished)
 
-            self._runner_thread.started.connect(
-                lambda: self._runner.run(
-                    conversation=self._conversation,
-                    provider_id=self._provider_id,
-                    model=self._model,
-                    thinking=self._thinking,
-                    temperature=self._temperature,
-                )
+            self._runner.configure(
+                conversation=self._conversation,
+                provider_id=self._provider_id,
+                model=self._model,
+                thinking=self._thinking,
+                temperature=self._temperature,
             )
+            self._runner.contentDelta.connect(self._on_content_delta)
+            self._runner_thread.started.connect(self._runner.do_run)
             self._runner_thread.start()
         except Exception as exc:
             if self._aura_wrapper is not None:
@@ -378,10 +378,19 @@ class DroneWorkshopDialog(QDialog):
                 f"padding: 6px 14px; font-weight: 600; font-size: 16px; }}"
             )
 
+    def _on_content_delta(self, text: str) -> None:
+        """Handle streaming text delta from the runner."""
+        if self._aura_wrapper is not None and self._thinking_card is not None:
+            self._thinking_card._stop_thinking_animation()
+            self._thinking_card.set_content("Drafting response\u2026")
+
     def _on_response_ready(self, response: DroneWorkshopResponse) -> None:
         if self._aura_wrapper is not None:
             self._aura_wrapper.stop_aura()
             self._aura_wrapper = None
+        # Belt-and-suspenders: ensure thinking dots stop
+        if self._thinking_card is not None:
+            self._thinking_card._stop_thinking_animation()
         self._response_received = True
         if response.kind == "error":
             if self._thinking_card:
@@ -449,15 +458,16 @@ class DroneWorkshopDialog(QDialog):
         if self._last_valid_brief is not None and self._last_valid_brief.is_ready_to_build():
             self._build_btn.setEnabled(True)
             self._build_btn.setText("✓ Build This Drone")
-        # Clean up thread
+        # Clean up thread and runner — non-blocking
         if self._runner_thread is not None:
-            self._runner_thread.quit()
-            self._runner_thread.wait(2000)
-            self._runner_thread.deleteLater()
+            thread = self._runner_thread
+            runner = self._runner
             self._runner_thread = None
-        if self._runner is not None:
-            self._runner.deleteLater()
             self._runner = None
+            thread.quit()
+            thread.finished.connect(thread.deleteLater)
+            if runner is not None:
+                thread.finished.connect(runner.deleteLater)
 
     def _on_approve_build(self) -> None:
         """User clicked Build this Drone — emit signal and accept."""

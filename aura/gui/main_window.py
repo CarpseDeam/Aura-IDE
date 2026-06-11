@@ -1584,6 +1584,11 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         if ok and name == "summon_drone" and extras.get("summon_drone"):
             self._handle_summon_drone_result(tool_id, extras)
 
+        if ok and name == "save_drone_definition" and extras.get("drone_saved"):
+            if hasattr(self, '_drone_bay') and self._drone_bay is not None:
+                self._drone_bay.refresh()
+            self._refresh_drone_context()
+
         if ok and name in ("read_file", "read_files"):
             try:
                 import json

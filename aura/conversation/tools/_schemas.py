@@ -1382,3 +1382,119 @@ RESOLVE_CAPABILITY_TOOL_DEF: dict[str, Any] = {
         },
     },
 }
+
+
+SAVE_DRONE_DEFINITION_TOOL_DEF: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "save_drone_definition",
+        "description": (
+            "Create and persist a DroneDefinition from the provided fields. "
+            "Use this to save an approved Drone after collecting all required fields "
+            "from the user or from a Workshop build flow. "
+            "If you omit 'id', a safe slug will be auto-generated from the name. "
+            "Do NOT manually write .aura/drones/*.json files — use this tool."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Drone name.",
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Description of what the Drone does.",
+                },
+                "instructions": {
+                    "type": "string",
+                    "description": "System instructions for the Drone.",
+                },
+                "write_policy": {
+                    "type": "string",
+                    "enum": ["read_only", "ask_before_writes", "normal_diff_approval"],
+                    "description": "Write access policy for the Drone.",
+                },
+                "allowed_tools": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of allowed tool names.",
+                },
+                "output_contract": {
+                    "type": "string",
+                    "description": "Expected output format or contract.",
+                },
+                "budget": {
+                    "type": "object",
+                    "properties": {
+                        "max_tool_rounds": {
+                            "type": "integer",
+                            "description": "Maximum tool call rounds. Default: 8.",
+                            "default": 8,
+                        },
+                        "timeout_seconds": {
+                            "type": "integer",
+                            "description": "Maximum runtime in seconds. Default: 300.",
+                            "default": 300,
+                        },
+                    },
+                    "description": "Budget limits for the Drone.",
+                },
+                "id": {
+                    "type": "string",
+                    "description": "Optional unique ID. Auto-generated from name if omitted.",
+                },
+                "scope": {
+                    "type": "string",
+                    "enum": ["global", "project"],
+                    "description": "Scope of the Drone. Default: 'global'.",
+                },
+                "enabled": {
+                    "type": "boolean",
+                    "description": "Whether the Drone is enabled. Default: true.",
+                },
+                "created_by": {
+                    "type": "string",
+                    "description": "Who created the Drone. Default: 'user'.",
+                },
+                "capability_requirements": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "capability": {"type": "string", "description": "Capability name."},
+                            "purpose": {"type": "string", "description": "Why this capability is needed."},
+                            "notes": {"type": "string", "description": "Additional notes."},
+                        },
+                        "required": ["capability"],
+                    },
+                    "description": "Optional capability requirements.",
+                },
+                "capability_bindings": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "capability": {"type": "string", "description": "Capability name."},
+                            "route": {"type": "string", "description": "Route identifier."},
+                            "tool_name": {"type": "string", "description": "Tool name."},
+                            "setup_notes": {"type": "array", "items": {"type": "string"}, "description": "Setup notes."},
+                        },
+                        "required": ["capability", "route", "tool_name"],
+                    },
+                    "description": "Optional capability bindings.",
+                },
+                "setup_steps": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional setup instruction steps.",
+                },
+                "first_run_test": {
+                    "type": "string",
+                    "description": "Optional first-run test instruction.",
+                },
+            },
+            "required": ["name", "description", "instructions", "write_policy", "allowed_tools", "output_contract"],
+        },
+    },
+}

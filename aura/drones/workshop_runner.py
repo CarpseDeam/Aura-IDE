@@ -6,7 +6,7 @@ import threading
 from dataclasses import dataclass
 from typing import Any
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, Signal, Slot
 
 from aura.backends.api import APIAgentBackend
 from aura.client.events import ApiError, ContentDelta, Done
@@ -216,6 +216,48 @@ class DroneWorkshopRunner(QObject):
         super().__init__(parent)
         self._cancel_event = threading.Event()
         self._backend: APIAgentBackend | None = None
+
+        # Stored params for threaded execution via do_run()
+        self._ws_conversation: list[dict[str, str]] | None = None
+        self._ws_provider_id: str = ""
+        self._ws_model: str = ""
+        self._ws_thinking: str = "disabled"
+        self._ws_temperature: float = 0.4
+
+    def configure(
+        self,
+        conversation: list[dict[str, str]],
+        provider_id: str,
+        model: str,
+        thinking: str = "disabled",
+        temperature: float = 0.4,
+    ) -> None:
+        """Store params for the next run and reset the cancel flag."""
+        self._ws_conversation = conversation
+        self._ws_provider_id = provider_id
+        self._ws_model = model
+        self._ws_thinking = thinking
+        self._ws_temperature = temperature
+        self._cancel_event.clear()
+
+    @Slot()
+    def do_run(self) -> None:
+        """Run the workshop from previously stored params.
+
+        Called via QThread.started signal so execution stays on the
+        worker thread.
+        """
+        conv = self._ws_conversation
+        if conv is None:
+            self.apiError.emit(0, "Runner not configured")
+            return
+        self.run(
+            conversation=conv,
+            provider_id=self._ws_provider_id,
+            model=self._ws_model,
+            thinking=self._ws_thinking,
+            temperature=self._ws_temperature,
+        )
 
     def cancel(self) -> None:
         """Request cancellation (thread-safe)."""
