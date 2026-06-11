@@ -404,10 +404,10 @@ def test_cd_wrapper_is_stripped_from_terminal_command(tmp_workspace):
          "python -m py_compile database.py"),
         ("cd /workspace ; python -m py_compile database.py",
          "python -m py_compile database.py"),
-        ("cd \"C:\\Users\\me\" && python -m py_compile database.py",
-         "python -m py_compile database.py"),
         ("chdir /workspace && python -m py_compile database.py",
          "python -m py_compile database.py"),
+        ("cd frontend && npm test",
+         "cd frontend && npm test"),
     ]
     for raw, expected in cases:
         result = _CD_WRAPPER_RE.sub('', raw, count=1).lstrip()

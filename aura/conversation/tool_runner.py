@@ -46,7 +46,7 @@ DEFAULT_PY_COMPILE_TIMEOUT_SECONDS = 30
 MAX_TERMINAL_TIMEOUT_SECONDS = 300
 
 _CD_WRAPPER_RE = re.compile(
-    r'^(?:cd|chdir)\s+(?:"[^"]*"|\'[^\']*\'|\S+)\s*(?:&&|;)\s*',
+    r'^(?:cd|chdir)\s+(?:"/workspace"|\'/workspace\'|/workspace)\s*(?:&&|;)\s*',
     re.IGNORECASE
 )
 

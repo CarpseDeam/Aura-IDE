@@ -293,7 +293,7 @@ class DroneEditorDialog(QDialog):
                 output_contract=output_contract,
                 first_run_test=first_run_test,
                 budget=budget,
-                scope="project",
+                scope="global",
                 enabled=True,
                 created_by="user",
                 created_at=now,

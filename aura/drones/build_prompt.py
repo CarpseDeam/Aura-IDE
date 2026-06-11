@@ -9,7 +9,7 @@ def build_drone_creation_prompt(brief: DroneBuildBrief) -> str:
     """Return a single user-message string for the Planner/Worker pipeline.
 
     The prompt tells the Planner to dispatch a Worker that creates a saved
-    Drone JSON file under ``.aura/drones/``.
+    Drone via the DroneStore API.
     """
     lines: list[str] = []
     lines.append(
@@ -81,5 +81,5 @@ def build_drone_creation_prompt(brief: DroneBuildBrief) -> str:
         "details or access that are truly needed later (e.g. API keys at runtime)."
     )
     lines.append("")
-    lines.append("Dispatch a Worker to create the saved Drone JSON file.")
+    lines.append("Dispatch a Worker to create the saved Drone.")
     return "\n".join(lines)
