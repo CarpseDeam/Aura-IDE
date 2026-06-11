@@ -497,6 +497,7 @@ class SpecCard(QFrame):
                 WorkerOutcomeStatus.approval_rejected.value: ("Approval rejected", DANGER),
                 WorkerOutcomeStatus.cancelled.value: ("Cancelled", DANGER),
                 WorkerOutcomeStatus.harness_error.value: ("Harness error", DANGER),
+                WorkerOutcomeStatus.needs_planner_resolution.value: ("Planner resolving mismatch", WARN),
             }
             normalized = normalize_outcome_status(status)
             if normalized in mapping:
@@ -539,6 +540,7 @@ class SpecCard(QFrame):
         mapping = {
             WorkflowStatus.intent_captured: ("Intent captured", FG_DIM),
             WorkflowStatus.plan_ready: ("Awaiting dispatch", FG_DIM),
+            WorkflowStatus.planner_resolving: ("Planner resolving mismatch", WARN),
             WorkflowStatus.dispatched: ("Running", FG_DIM),
             WorkflowStatus.editing: ("Editing", ACCENT),
             WorkflowStatus.validating: ("Validating", WARN),

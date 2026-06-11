@@ -14,6 +14,7 @@ from aura.conversation.tool_limits import WRITE_TOOLS
 class WorkflowStatus(str, enum.Enum):
     intent_captured = "intent_captured"
     plan_ready = "plan_ready"
+    planner_resolving = "planner_resolving"
     dispatched = "dispatched"
     editing = "editing"
     validating = "validating"
@@ -216,6 +217,10 @@ class WorkflowState:
         blockers = tuple(str(item) for item in (extras or {}).get("errors", []) if isinstance(extras, dict))
         if outcome == WorkerOutcomeStatus.cancelled.value:
             final_status = WorkflowStatus.cancelled
+        elif outcome == WorkerOutcomeStatus.needs_planner_resolution.value or (
+            isinstance(extras, dict) and extras.get("planner_resolution_needed")
+        ):
+            final_status = WorkflowStatus.planner_resolving
         elif ok and not needs_followup and not _not_applied_outcome(write_outcome):
             final_status = WorkflowStatus.done
         elif outcome in {
@@ -227,13 +232,29 @@ class WorkflowState:
         else:
             final_status = WorkflowStatus.failed_retryable
 
+        # Compute blocker/failure reason specially for planner_resolving
+        if final_status == WorkflowStatus.planner_resolving and isinstance(extras, dict):
+            mismatch_question = extras.get("mismatch_question", "")
+            if mismatch_question:
+                blocker_reason = mismatch_question
+                failure_reason = ""
+            else:
+                blocker_reason = failure_reason
+        else:
+            blocker_reason = (
+                "" if final_status in {WorkflowStatus.done, WorkflowStatus.cancelled} else failure_reason
+            )
+            if final_status == WorkflowStatus.done:
+                failure_reason = ""
+
         return replace(
             state,
             status=final_status,
             pending_user_action=_pending_action(final_status, needs_followup),
-            blocker_reason="" if final_status in {WorkflowStatus.done, WorkflowStatus.cancelled} else failure_reason,
-            failure_reason="" if final_status == WorkflowStatus.done else failure_reason,
-            follow_up_required=needs_followup or final_status == WorkflowStatus.failed_retryable,
+            blocker_reason=blocker_reason,
+            failure_reason=failure_reason,
+            follow_up_required=needs_followup
+                or final_status in {WorkflowStatus.failed_retryable, WorkflowStatus.planner_resolving},
             validation_status=state.validation_status,
             write_outcome=write_outcome or state.write_outcome,
             caveats=(*state.caveats, *caveats),
@@ -326,6 +347,8 @@ def _first_error(summary: str, extras: dict[str, Any] | None) -> str:
 
 
 def _pending_action(status: WorkflowStatus, needs_followup: bool) -> str:
+    if status == WorkflowStatus.planner_resolving:
+        return "Planner is resolving the Worker mismatch."
     if status == WorkflowStatus.failed_retryable:
         return "Review the blocker, then dispatch a follow-up or revise the plan."
     if status == WorkflowStatus.failed_nonrecoverable:

@@ -22,6 +22,7 @@ from aura.gui.cards.plan_writer_card import PlanWriterCard
 from aura.gui.cards.spec_card import SpecCard
 from aura.gui.cards.terminal_card import TerminalCard
 from aura.gui.cards.user_card import UserCard
+from aura.gui.cards.mismatch_resolution_card import MismatchResolutionCard
 from aura.gui.cards.worker_summary_card import WorkerSummaryCard
 from aura.gui.controllers import ToolStreamController
 from aura.gui.theme import (
@@ -73,6 +74,7 @@ class ChatView(QScrollArea):
         self._plan_writer_cards: dict[str, PlanWriterCard] = {}
         self._worker_summary_cards: dict[str, WorkerSummaryCard] = {}
         self._worker_summary_disabled: bool = True
+        self._mismatch_resolution_cards: dict[str, MismatchResolutionCard] = {}
         self._compact_tools: bool = False
         self._compact_tool_names: dict[str, str] = {}
         self._is_bulk_updating: bool = False
@@ -219,6 +221,7 @@ class ChatView(QScrollArea):
         self._spec_cards.clear()
         self._plan_writer_cards.clear()
         self._worker_summary_cards.clear()
+        self._mismatch_resolution_cards.clear()
         self._terminal_cards.clear()
         self._controllers.clear()
         self._clear_code_card_routes()
@@ -665,6 +668,13 @@ class ChatView(QScrollArea):
         if self._current_aura is not None:
             self._current_aura.set_glow_state("coding")
 
+    def begin_planner_resolution_aura(self) -> None:
+        """Start or restart the Planner resolution aura (thinking glow)."""
+        if self._current_aura is not None:
+            self._current_aura.set_glow_state("thinking")
+        else:
+            self.begin_assistant()
+
     def assistant_done(self) -> None:
         ac = self._current_assistant
         if ac is None:
@@ -761,3 +771,22 @@ class ChatView(QScrollArea):
         )
         self._worker_summary_cards[tool_call_id] = card
         self._add_card(card)
+
+    def add_mismatch_resolution_card(
+        self, tool_call_id: str, kind: str = "", question: str = ""
+    ) -> MismatchResolutionCard:
+        """Add or update a mismatch resolution card for the given tool call."""
+        existing = self._mismatch_resolution_cards.get(tool_call_id)
+        if existing is not None:
+            existing.update_mismatch(kind, question)
+            return existing
+        card = MismatchResolutionCard(tool_call_id, kind, question, parent=self)
+        self._mismatch_resolution_cards[tool_call_id] = card
+        self._add_card(card)
+        return card
+
+    def mark_mismatch_resolved(self, tool_call_id: str) -> None:
+        """Mark a mismatch resolution card as resolved."""
+        card = self._mismatch_resolution_cards.get(tool_call_id)
+        if card is not None:
+            card.mark_resolved()

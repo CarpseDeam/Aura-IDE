@@ -8,6 +8,7 @@ from PySide6.QtWidgets import QLabel
 from aura.gui.cards.code_writer_card import CodeWriterCard
 from aura.gui.cards.plan_writer_card import PlanWriterCard
 from aura.gui.cards.tool_call_card import ToolCallCard
+from aura.gui.cards.mismatch_resolution_card import MismatchResolutionCard, STATE_RESOLVED
 from aura.gui.cards.worker_summary_card import WorkerSummaryCard
 from aura.gui.chat_view import ChatView
 
@@ -252,3 +253,52 @@ def test_worker_summary_flag_setter_toggles(qapp) -> None:
     chat.add_worker_summary("dispatch-1", "goal", True, "done")
     cards = chat.findChildren(WorkerSummaryCard)
     assert len(cards) == 1
+
+
+class TestMismatchResolutionCard:
+    """Tests for MismatchResolutionCard and its ChatView plumbing."""
+
+    def test_add_mismatch_card_stores_in_chat_view(self, qapp) -> None:
+        chat = ChatView()
+        chat.begin_assistant()
+
+        chat.add_mismatch_resolution_card("m1", "contract_gate", "Which field?")
+
+        cards = chat.findChildren(MismatchResolutionCard)
+        assert len(cards) == 1
+        assert "m1" in chat._mismatch_resolution_cards
+
+    def test_adding_same_tool_call_id_reuses_card(self, qapp) -> None:
+        chat = ChatView()
+        chat.begin_assistant()
+
+        card1 = chat.add_mismatch_resolution_card("m1", "A", "Q1")
+        card2 = chat.add_mismatch_resolution_card("m1", "B", "Q2")
+
+        cards = chat.findChildren(MismatchResolutionCard)
+        assert len(cards) == 1
+        assert card1 is card2
+        assert card1._kind == "B"
+        assert card1._question == "Q2"
+        assert card1._state == "resolving"
+
+    def test_mark_mismatch_resolved_updates_card(self, qapp) -> None:
+        chat = ChatView()
+        chat.begin_assistant()
+
+        chat.add_mismatch_resolution_card("m1", "kind", "q")
+        chat.mark_mismatch_resolved("m1")
+
+        card = chat._mismatch_resolution_cards["m1"]
+        assert card._state == STATE_RESOLVED
+
+    def test_mark_mismatch_resolved_unknown_id_no_crash(self, qapp) -> None:
+        chat = ChatView()
+        chat.mark_mismatch_resolved("nonexistent")  # should not raise
+
+    def test_reset_clears_mismatch_cards(self, qapp) -> None:
+        chat = ChatView()
+        chat.begin_assistant()
+        chat.add_mismatch_resolution_card("m1", "kind", "q")
+        chat.reset()
+        assert chat._mismatch_resolution_cards == {}

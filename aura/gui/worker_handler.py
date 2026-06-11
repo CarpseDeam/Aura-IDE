@@ -52,6 +52,7 @@ class WorkerEventHandler(QObject):
         self._session_usage: dict[str, dict[str, int]] = {}
         self._active_workflow: WorkflowState | None = None
         self._wired_spec_cards: set[str] = set()
+        self._active_mismatch_card_id: str | None = None
 
     # ---- public property -------------------------------------------------------
 
@@ -113,6 +114,11 @@ class WorkerEventHandler(QObject):
         summary: str,
     ) -> None:
         """Always show the SpecCard; auto-dispatch or wait for card interaction."""
+        if self._active_mismatch_card_id is not None:
+            self._chat.mark_mismatch_resolved(self._active_mismatch_card_id)
+            self._active_mismatch_card_id = None
+            self._chat.stop_current_aura()
+
         file_list = list(files)
         self._set_active_workflow(
             WorkflowState.intent_captured(
@@ -254,6 +260,12 @@ class WorkerEventHandler(QObject):
             needs_followup=bool(needs_followup),
             metadata=metadata,
         )
+        is_mismatch = self._is_planner_resolution_result(status, metadata)
+        if is_mismatch:
+            kind, question = self._mismatch_display(metadata)
+            self._chat.add_mismatch_resolution_card(tool_call_id, kind, question)
+            self._active_mismatch_card_id = tool_call_id
+            suppress_main_summary = True
         self._playground.stop_aura()
         if needs_followup is None:
             self._playground.worker_finished(ok, summary, status=status)
@@ -261,6 +273,9 @@ class WorkerEventHandler(QObject):
             self._playground.worker_finished(
                 ok, summary, needs_followup=bool(needs_followup), status=status
             )
+
+        if is_mismatch:
+            self._chat.begin_planner_resolution_aura()
 
         card = self._get_spec_card(tool_call_id)
         if card:
@@ -288,6 +303,21 @@ class WorkerEventHandler(QObject):
                 )
             )
         self._clear_active_spec_card(tool_call_id)
+
+    @staticmethod
+    def _is_planner_resolution_result(status: str | None, metadata: dict) -> bool:
+        if status == "needs_planner_resolution":
+            return True
+        extras = metadata.get("extras") if isinstance(metadata.get("extras"), dict) else {}
+        return bool(extras.get("planner_resolution_needed"))
+
+    @staticmethod
+    def _mismatch_display(metadata: dict) -> tuple[str, str]:
+        extras = metadata.get("extras") if isinstance(metadata.get("extras"), dict) else {}
+        return (
+            extras.get("mismatch_kind", ""),
+            extras.get("mismatch_question", ""),
+        )
 
     @staticmethod
     def _is_recoverable_internal_worker_result(

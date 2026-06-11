@@ -700,5 +700,188 @@ class TestDispatchActions:
         assert SpecCard._workflow_status_label(WorkflowStatus.editing)[0] == "Editing"
         assert SpecCard._workflow_status_label(WorkflowStatus.validating)[0] == "Validating"
         assert SpecCard._workflow_status_label(WorkflowStatus.blocked)[0] == "Blocked"
+        assert SpecCard._workflow_status_label(WorkflowStatus.planner_resolving)[0] == "Planner resolving mismatch"
         assert SpecCard._workflow_status_label(WorkflowStatus.failed_retryable)[0] == "Failed"
         assert SpecCard._workflow_status_label(WorkflowStatus.done)[0] == "Done"
+
+    def test_finished_status_label_supports_needs_planner_resolution(self, qapp) -> None:
+        from aura.conversation.dispatch import WorkerOutcomeStatus
+        from aura.gui.cards.spec_card import SpecCard
+
+        label, color = SpecCard._finished_status_label(False, "needs_planner_resolution")
+        assert label == "Planner resolving mismatch"
+
+
+class TestMismatchResolutionWiring:
+    """Verify mismatch resolution card is wired correctly."""
+
+    def test_mismatch_worker_finish_adds_resolution_card(
+        self, handler: WorkerEventHandler, bridge: Mock, chat: Mock,
+    ) -> None:
+        bridge.worker_result_metadata.return_value = {
+            "extras": {
+                "planner_resolution_needed": True,
+                "mismatch_kind": "contract_gate",
+                "mismatch_question": "Which field?",
+            }
+        }
+        handler._on_worker_finished(
+            "tc1", False, "Mismatch detected", needs_followup=True,
+            status="needs_planner_resolution",
+        )
+        chat.add_mismatch_resolution_card.assert_called_once_with(
+            "tc1", "contract_gate", "Which field?"
+        )
+        assert handler._active_mismatch_card_id == "tc1"
+
+    def test_mismatch_worker_finish_suppresses_worker_summary(
+        self, handler: WorkerEventHandler, bridge: Mock, chat: Mock,
+    ) -> None:
+        bridge.worker_result_metadata.return_value = {
+            "extras": {
+                "planner_resolution_needed": True,
+                "mismatch_kind": "contract_gate",
+                "mismatch_question": "Which field?",
+            }
+        }
+        handler._on_worker_finished(
+            "tc1", False, "Mismatch", needs_followup=True,
+            status="needs_planner_resolution",
+        )
+        chat.add_worker_summary.assert_not_called()
+
+    def test_mismatch_via_status_string_only(
+        self, handler: WorkerEventHandler, bridge: Mock, chat: Mock,
+    ) -> None:
+        bridge.worker_result_metadata.return_value = {}
+        handler._on_worker_finished(
+            "tc1", False, "Mismatch via status", needs_followup=True,
+            status="needs_planner_resolution",
+        )
+        chat.add_mismatch_resolution_card.assert_called_once_with(
+            "tc1", "", ""
+        )
+        assert handler._active_mismatch_card_id == "tc1"
+
+    def test_mismatch_via_extras_flag_only(
+        self, handler: WorkerEventHandler, bridge: Mock, chat: Mock,
+    ) -> None:
+        bridge.worker_result_metadata.return_value = {
+            "extras": {
+                "planner_resolution_needed": True,
+                "mismatch_kind": "missing_field",
+            }
+        }
+        handler._on_worker_finished(
+            "tc1", False, "Mismatch via extras", needs_followup=True,
+            status="needs_followup",
+        )
+        chat.add_mismatch_resolution_card.assert_called_once_with(
+            "tc1", "missing_field", ""
+        )
+        assert handler._active_mismatch_card_id == "tc1"
+
+    def test_normal_needs_followup_does_not_add_mismatch_card(
+        self, handler: WorkerEventHandler, bridge: Mock, chat: Mock,
+    ) -> None:
+        bridge.worker_result_metadata.return_value = {
+            "extras": {"recoverable": True}
+        }
+        handler._on_worker_finished(
+            "tc1", False, "Needs another pass", needs_followup=True,
+            status="needs_followup",
+        )
+        chat.add_mismatch_resolution_card.assert_not_called()
+        assert handler._active_mismatch_card_id is None
+
+    def test_normal_completed_does_not_add_mismatch_card(
+        self, handler: WorkerEventHandler, bridge: Mock, chat: Mock,
+    ) -> None:
+        bridge.worker_result_metadata.return_value = {}
+        handler._on_worker_finished(
+            "tc1", True, "Done", needs_followup=False, status="completed",
+        )
+        chat.add_mismatch_resolution_card.assert_not_called()
+        assert handler._active_mismatch_card_id is None
+
+    def test_next_dispatch_resolves_previous_mismatch_card(
+        self, handler: WorkerEventHandler, bridge: Mock, chat: Mock,
+    ) -> None:
+        bridge.worker_result_metadata.return_value = {
+            "extras": {
+                "planner_resolution_needed": True,
+                "mismatch_kind": "X",
+                "mismatch_question": "?",
+            }
+        }
+        handler._on_worker_finished(
+            "tc1", False, "Mismatch", needs_followup=True,
+            status="needs_planner_resolution",
+        )
+        assert handler._active_mismatch_card_id == "tc1"
+        chat.mark_mismatch_resolved.reset_mock()
+        handler._on_worker_dispatch_requested(
+            "tc2", "goal", ["f.py"], "spec", "acc", "summary",
+        )
+        chat.mark_mismatch_resolved.assert_called_once_with("tc1")
+        assert handler._active_mismatch_card_id is None
+
+    def test_dispatch_without_mismatch_card_does_not_call_mark_resolved(
+        self, handler: WorkerEventHandler, chat: Mock,
+    ) -> None:
+        assert handler._active_mismatch_card_id is None
+        handler._on_worker_dispatch_requested(
+            "tc1", "goal", ["f.py"], "spec", "acc", "summary",
+        )
+        chat.mark_mismatch_resolved.assert_not_called()
+
+    def test_mismatch_finish_calls_begin_planner_resolution_aura(
+        self, handler: WorkerEventHandler, bridge: Mock, chat: Mock,
+    ) -> None:
+        bridge.worker_result_metadata.return_value = {
+            "extras": {
+                "planner_resolution_needed": True,
+                "mismatch_kind": "X",
+                "mismatch_question": "?",
+            }
+        }
+        handler._on_worker_finished(
+            "tc1", False, "Mismatch", needs_followup=True,
+            status="needs_planner_resolution",
+        )
+        assert chat.begin_planner_resolution_aura.called
+
+    def test_normal_finish_does_not_call_begin_planner_resolution_aura(
+        self, handler: WorkerEventHandler, bridge: Mock, chat: Mock,
+    ) -> None:
+        bridge.worker_result_metadata.return_value = {}
+        handler._on_worker_finished(
+            "tc1", True, "Done", needs_followup=False, status="completed",
+        )
+        assert not chat.begin_planner_resolution_aura.called
+
+    def test_next_dispatch_after_mismatch_stops_chat_aura(
+        self, handler: WorkerEventHandler, bridge: Mock, chat: Mock,
+    ) -> None:
+        bridge.worker_result_metadata.return_value = {
+            "extras": {"planner_resolution_needed": True}
+        }
+        handler._on_worker_finished(
+            "tc1", False, "M", needs_followup=True,
+            status="needs_planner_resolution",
+        )
+        chat.stop_current_aura.reset_mock()
+        handler._on_worker_dispatch_requested(
+            "tc2", "goal", ["f.py"], "spec", "acc", "summary",
+        )
+        assert chat.stop_current_aura.called
+        assert handler._active_mismatch_card_id is None
+
+    def test_dispatch_without_mismatch_does_not_stop_chat_aura(
+        self, handler: WorkerEventHandler, chat: Mock,
+    ) -> None:
+        assert handler._active_mismatch_card_id is None
+        handler._on_worker_dispatch_requested(
+            "tc1", "goal", ["f.py"], "spec", "acc", "summary",
+        )
+        chat.stop_current_aura.assert_not_called()

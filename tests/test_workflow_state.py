@@ -64,3 +64,62 @@ def test_workflow_finish_maps_nonrecoverable_failure() -> None:
     assert finished.status == WorkflowStatus.failed_nonrecoverable
     assert finished.follow_up_required is False
     assert finished.failure_reason.startswith("Harness error")
+
+
+def test_workflow_finish_maps_needs_planner_resolution() -> None:
+    state = WorkflowState.intent_captured("tc1", "Fix mismatch")
+
+    finished = state.finish(
+        ok=False,
+        summary="Worker found a mismatch",
+        needs_followup=True,
+        status=WorkerOutcomeStatus.needs_planner_resolution.value,
+    )
+
+    assert finished.status == WorkflowStatus.planner_resolving
+    assert finished.follow_up_required is True
+    assert "Planner is resolving" in finished.pending_user_action
+
+
+def test_workflow_finish_maps_planner_resolution_needed_extras() -> None:
+    state = WorkflowState.intent_captured("tc1", "Fix mismatch via extras")
+
+    finished = state.finish(
+        ok=False,
+        summary="Worker found a mismatch via extras",
+        needs_followup=True,
+        status=WorkerOutcomeStatus.needs_followup.value,
+        extras={"planner_resolution_needed": True},
+    )
+
+    assert finished.status == WorkflowStatus.planner_resolving
+    assert finished.follow_up_required is True
+
+
+def test_mismatch_question_becomes_blocker_reason() -> None:
+    state = WorkflowState.intent_captured("tc1", "Fix mismatch with question")
+
+    finished = state.finish(
+        ok=False,
+        summary="Mismatch summary",
+        needs_followup=True,
+        status=WorkerOutcomeStatus.needs_planner_resolution.value,
+        extras={"mismatch_question": "Should we use X or Y?"},
+    )
+
+    assert finished.status == WorkflowStatus.planner_resolving
+    assert finished.blocker_reason == "Should we use X or Y?"
+    assert finished.failure_reason == ""
+
+
+def test_normal_needs_followup_still_maps_to_failed_retryable() -> None:
+    state = WorkflowState.intent_captured("tc1", "Fix login")
+
+    finished = state.finish(
+        ok=False,
+        summary="Validation still failing",
+        needs_followup=True,
+        status=WorkerOutcomeStatus.needs_followup.value,
+    )
+
+    assert finished.status == WorkflowStatus.failed_retryable
