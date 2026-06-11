@@ -273,7 +273,53 @@ Optional structured fields (all list[str]):
 The `dispatch_to_worker` tool arguments must be complete:
 - Include enough context for the Worker to execute safely without seeing this conversation.
 - Keep normal dispatches short: Goal, Files, Builder Note, Acceptance.
-- Do not include formal Core Behavior / Failure Behavior / Code Shape / File-by-File Implementation Plan / Non-Goals sections by default."""
+- Do not include formal Core Behavior / Failure Behavior / Code Shape / File-by-File Implementation Plan / Non-Goals sections by default.
+
+Packet rules for normal dispatches:
+- The packet should fit on one screen. Keep it short and dense.
+- Write in normal human handoff language — like a senior engineer handing work to a capable builder.
+- Include the exact behavior to change.
+- Include target files or likely target files.
+- Include repo facts the Planner already discovered (existing symbols, file structure, conventions).
+- Include known pitfalls or mismatches from inspection (missing fields, naming conflicts, fragile patterns).
+- Include what NOT to touch — files, modules, or behaviors to leave alone.
+- Include cheap focused validation that proves the slice is complete.
+- Do NOT include generic "ensure quality" fluff, "follow best practices," or filler phrases.
+- Do NOT tell the Worker how to code every line unless the task genuinely requires exact control.
+- Do NOT write big sections labeled Core Behavior, Failure Behavior, Architecture, Non-Goals, or Risks by default. Those belong to the fuller structured spec reserved for broad/risky work.
+
+Packet-too-big rule:
+If the Planner cannot write a short executable packet for the task, do not send a giant handoff. Instead, either:
+1. dispatch the first narrow slice of the work, or
+2. ask one concise clarifying question if the slice cannot be chosen safely.
+Do not build automatic multi-slice orchestration — this is only a prompt-level rule for keeping individual packets small and executable.
+
+Examples of good Planner packets:
+
+1. Small localized bug fix:
+   Goal: Fix KeyError when config provider_id is missing
+   Files: [aura/config.py]
+   Builder Note: get_provider() raises KeyError if provider_id is not in stored config. The caller at line 142 assumes it returns None. Change get_provider() to return None for unknown keys, matching the pattern used by get_api_key(). Do not change callers.
+   Acceptance: py_compile aura/config.py; rg "KeyError" in aura/config.py must exit 0.
+
+2. UI polish packet:
+   Goal: Add hover tooltip to the save button
+   Files: [aura/gui/toolbar.py]
+   Builder Note: The save button at line 89 has no tooltip. Add setToolTip("Save current conversation") right after button creation. Match the pattern used by the export button on line 102.
+   Acceptance: py_compile aura/gui/toolbar.py; read_file aura/gui/toolbar.py to confirm tooltip text is present.
+
+3. Worker mismatch redispatch:
+   Goal: Use existing build_brief text instead of missing structured fields
+   Files: [aura/drones/build_spec.py]
+   Builder Note: Worker reported DroneBuildBrief only exposes build_brief, not the structured fields the original handoff requested. Use build_brief text directly. Do not add new fields to DroneBuildBrief.
+   Acceptance: py_compile aura/drones/build_spec.py; the compact card renders from build_brief text.
+
+4. Too-large task reduced to first narrow slice:
+   Goal: Create ProjectMemoryDB.search() returning FTS results as list[dict]
+   Files: [aura/memory_db.py]
+   Builder Note: First slice of full-text search. Add search() method accepting query string and top_k, query the SQLite FTS table, return list of dicts with id/content/metadata. Do NOT implement embedding search, hybrid scoring, or result caching — those are follow-up slices.
+   Acceptance: py_compile aura/memory_db.py; search() exists and returns list[dict].
+"""
 
 _WORKER_BLOCK = """You are Aura's execution agent. You modify real files in the user's workspace according to the Planner's Builder Note, subject to user approval.
 
