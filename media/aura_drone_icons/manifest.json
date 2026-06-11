@@ -1,0 +1,291 @@
+{
+  "icons": [
+    {
+      "id": "smart_toy",
+      "label": "Smart Toy",
+      "file": "smart_toy.svg",
+      "source_icon": "smart_toy",
+      "source_path": "material-design-icons-master/src/hardware/smart_toy/materialicons/24px.svg"
+    },
+    {
+      "id": "bolt",
+      "label": "Bolt",
+      "file": "bolt.svg",
+      "source_icon": "bolt",
+      "source_path": "material-design-icons-master/src/content/bolt/materialicons/24px.svg"
+    },
+    {
+      "id": "rocket_launch",
+      "label": "Rocket Launch",
+      "file": "rocket_launch.svg",
+      "source_icon": "rocket_launch",
+      "source_path": "material-design-icons-master/src/action/rocket_launch/materialicons/24px.svg"
+    },
+    {
+      "id": "commit",
+      "label": "Commit",
+      "file": "commit.svg",
+      "source_icon": "commit",
+      "source_path": "material-design-icons-master/src/action/commit/materialicons/24px.svg"
+    },
+    {
+      "id": "upload",
+      "label": "Upload",
+      "file": "upload.svg",
+      "source_icon": "upload",
+      "source_path": "material-design-icons-master/src/file/upload/materialicons/24px.svg"
+    },
+    {
+      "id": "sync",
+      "label": "Sync",
+      "file": "sync.svg",
+      "source_icon": "sync",
+      "source_path": "material-design-icons-master/src/notification/sync/materialicons/24px.svg"
+    },
+    {
+      "id": "history",
+      "label": "History",
+      "file": "history.svg",
+      "source_icon": "history",
+      "source_path": "material-design-icons-master/src/action/history/materialicons/24px.svg"
+    },
+    {
+      "id": "bug_report",
+      "label": "Bug Report",
+      "file": "bug_report.svg",
+      "source_icon": "bug_report",
+      "source_path": "material-design-icons-master/src/action/bug_report/materialicons/24px.svg"
+    },
+    {
+      "id": "manage_search",
+      "label": "Manage Search",
+      "file": "manage_search.svg",
+      "source_icon": "manage_search",
+      "source_path": "material-design-icons-master/src/search/manage_search/materialicons/24px.svg"
+    },
+    {
+      "id": "search",
+      "label": "Search",
+      "file": "search.svg",
+      "source_icon": "search",
+      "source_path": "material-design-icons-master/src/action/search/materialicons/24px.svg"
+    },
+    {
+      "id": "travel_explore",
+      "label": "Travel Explore",
+      "file": "travel_explore.svg",
+      "source_icon": "travel_explore",
+      "source_path": "material-design-icons-master/src/social/travel_explore/materialicons/24px.svg"
+    },
+    {
+      "id": "rule",
+      "label": "Rule",
+      "file": "rule.svg",
+      "source_icon": "rule",
+      "source_path": "material-design-icons-master/src/action/rule/materialicons/24px.svg"
+    },
+    {
+      "id": "task_alt",
+      "label": "Task Alt",
+      "file": "task_alt.svg",
+      "source_icon": "task_alt",
+      "source_path": "material-design-icons-master/src/action/task_alt/materialicons/24px.svg"
+    },
+    {
+      "id": "checklist",
+      "label": "Checklist",
+      "file": "checklist.svg",
+      "source_icon": "checklist",
+      "source_path": "material-design-icons-master/src/editor/checklist/materialicons/24px.svg"
+    },
+    {
+      "id": "article",
+      "label": "Article",
+      "file": "article.svg",
+      "source_icon": "article",
+      "source_path": "material-design-icons-master/src/action/article/materialicons/24px.svg"
+    },
+    {
+      "id": "description",
+      "label": "Description",
+      "file": "description.svg",
+      "source_icon": "description",
+      "source_path": "material-design-icons-master/src/action/description/materialicons/24px.svg"
+    },
+    {
+      "id": "draft",
+      "label": "Draft",
+      "file": "draft.svg",
+      "source_icon": "drafts",
+      "source_path": "material-design-icons-master/src/content/drafts/materialicons/24px.svg"
+    },
+    {
+      "id": "terminal",
+      "label": "Terminal",
+      "file": "terminal.svg",
+      "source_icon": "terminal",
+      "source_path": "material-design-icons-master/src/action/terminal/materialicons/24px.svg"
+    },
+    {
+      "id": "code",
+      "label": "Code",
+      "file": "code.svg",
+      "source_icon": "code",
+      "source_path": "material-design-icons-master/src/action/code/materialicons/24px.svg"
+    },
+    {
+      "id": "build",
+      "label": "Build",
+      "file": "build.svg",
+      "source_icon": "build",
+      "source_path": "material-design-icons-master/src/action/build/materialicons/24px.svg"
+    },
+    {
+      "id": "construction",
+      "label": "Construction",
+      "file": "construction.svg",
+      "source_icon": "construction",
+      "source_path": "material-design-icons-master/src/social/construction/materialicons/24px.svg"
+    },
+    {
+      "id": "extension",
+      "label": "Extension",
+      "file": "extension.svg",
+      "source_icon": "extension",
+      "source_path": "material-design-icons-master/src/action/extension/materialicons/24px.svg"
+    },
+    {
+      "id": "hub",
+      "label": "Hub",
+      "file": "hub.svg",
+      "source_icon": "hub",
+      "source_path": "material-design-icons-master/src/communication/hub/materialicons/24px.svg"
+    },
+    {
+      "id": "memory",
+      "label": "Memory",
+      "file": "memory.svg",
+      "source_icon": "memory",
+      "source_path": "material-design-icons-master/src/hardware/memory/materialicons/24px.svg"
+    },
+    {
+      "id": "science",
+      "label": "Science",
+      "file": "science.svg",
+      "source_icon": "science",
+      "source_path": "material-design-icons-master/src/social/science/materialicons/24px.svg"
+    },
+    {
+      "id": "folder",
+      "label": "Folder",
+      "file": "folder.svg",
+      "source_icon": "folder",
+      "source_path": "material-design-icons-master/src/file/folder/materialicons/24px.svg"
+    },
+    {
+      "id": "inventory",
+      "label": "Inventory",
+      "file": "inventory.svg",
+      "source_icon": "inventory_2",
+      "source_path": "material-design-icons-master/src/content/inventory_2/materialicons/24px.svg"
+    },
+    {
+      "id": "campaign",
+      "label": "Campaign",
+      "file": "campaign.svg",
+      "source_icon": "campaign",
+      "source_path": "material-design-icons-master/src/navigation/campaign/materialicons/24px.svg"
+    },
+    {
+      "id": "move_up",
+      "label": "Move Up",
+      "file": "move_up.svg",
+      "source_icon": "move_up",
+      "source_path": "material-design-icons-master/src/editor/move_up/materialicons/24px.svg"
+    },
+    {
+      "id": "settings",
+      "label": "Settings",
+      "file": "settings.svg",
+      "source_icon": "settings",
+      "source_path": "material-design-icons-master/src/action/settings/materialicons/24px.svg"
+    },
+    {
+      "id": "send",
+      "label": "Send",
+      "file": "send.svg",
+      "source_icon": "send",
+      "source_path": "material-design-icons-master/src/content/send/materialicons/24px.svg"
+    },
+    {
+      "id": "save",
+      "label": "Save",
+      "file": "save.svg",
+      "source_icon": "save",
+      "source_path": "material-design-icons-master/src/content/save/materialicons/24px.svg"
+    },
+    {
+      "id": "done",
+      "label": "Done",
+      "file": "done.svg",
+      "source_icon": "done",
+      "source_path": "material-design-icons-master/src/action/done/materialicons/24px.svg"
+    },
+    {
+      "id": "warning",
+      "label": "Warning",
+      "file": "warning.svg",
+      "source_icon": "warning",
+      "source_path": "material-design-icons-master/src/alert/warning/materialicons/24px.svg"
+    }
+  ],
+  "colors": [
+    {
+      "id": "purple",
+      "label": "Purple",
+      "value": "#7c5cff"
+    },
+    {
+      "id": "blue",
+      "label": "Blue",
+      "value": "#4f8cff"
+    },
+    {
+      "id": "cyan",
+      "label": "Cyan",
+      "value": "#00d4ff"
+    },
+    {
+      "id": "green",
+      "label": "Green",
+      "value": "#43d17a"
+    },
+    {
+      "id": "yellow",
+      "label": "Yellow",
+      "value": "#f6c945"
+    },
+    {
+      "id": "orange",
+      "label": "Orange",
+      "value": "#ff9f43"
+    },
+    {
+      "id": "red",
+      "label": "Red",
+      "value": "#ff5c7a"
+    },
+    {
+      "id": "pink",
+      "label": "Pink",
+      "value": "#ff66c4"
+    },
+    {
+      "id": "gray",
+      "label": "Gray",
+      "value": "#8f95a3"
+    }
+  ],
+  "default_icon": "smart_toy",
+  "default_color": "purple"
+}
