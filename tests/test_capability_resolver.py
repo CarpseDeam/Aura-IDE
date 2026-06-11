@@ -440,7 +440,7 @@ class TestAppRouteProvider:
 class TestGeneratedCodeFallback:
     def test_fallback_candidate_produced(self) -> None:
         resolver = CapabilityResolver([GeneratedCodeFallbackProvider()])
-        resolution = resolver.resolve(_req("unknown_op"), _ctx())
+        resolution = resolver.resolve(_req("build a tool for unknown_op"), _ctx())
         assert len(resolution.candidates) == 1
         assert resolution.candidates[0].route_kind == "generated_code"
         assert resolution.candidates[0].source == "aura_codegen"
@@ -449,7 +449,7 @@ class TestGeneratedCodeFallback:
 
     def test_fallback_selected_when_no_other_provider(self) -> None:
         resolver = CapabilityResolver([GeneratedCodeFallbackProvider()])
-        resolution = resolver.resolve(_req("unknown_op"), _ctx())
+        resolution = resolver.resolve(_req("create a new tool for unknown_op"), _ctx())
         assert len(resolution.selected_bindings) == 1
         assert resolution.selected_bindings[0].route_kind == "generated_code"
         assert resolution.selected_bindings[0].setup_status == "pending"
@@ -571,12 +571,12 @@ class TestArbitraryRouteKind:
         """Fallback setup notes tell the Worker to create a dynamic tool."""
         provider = GeneratedCodeFallbackProvider()
         result = provider.find_candidates(
-            (CapabilityRequirement(capability="check_status"),),
+            (CapabilityRequirement(capability="create a dynamic tool for check_status"),),
             CapabilityContext(workspace_root=_WORKSPACE),
         )
         assert len(result) == 1
         assert "Worker must create a real dynamic tool" in result[0].setup_notes
-        assert "check_status" in result[0].setup_notes
+        assert "create a dynamic tool for check_status" in result[0].setup_notes
 
     def test_candidate_command_roundtrip(self) -> None:
         """CapabilityCandidate.command to_dict/from_dict roundtrip."""
@@ -623,17 +623,17 @@ class TestIntegrationRealProviders:
         resolution = resolver.resolve(
             (
                 CapabilityRequirement(capability="search_code"),
-                CapabilityRequirement(capability="unknown_thing"),
+                CapabilityRequirement(capability="build a tool for unknown_thing"),
             ),
             ctx,
         )
         bindings = {b.capability: b for b in resolution.selected_bindings}
         assert bindings["search_code"].route_kind == "static_tool"
-        assert bindings["unknown_thing"].route_kind == "generated_code"
+        assert bindings["build a tool for unknown_thing"].route_kind == "generated_code"
         # allowed_tools should include the static tools, but not the fallback (empty tool_names)
         assert "grep_search" in resolution.allowed_tools
-        assert "unknown_thing" not in resolution.allowed_tools
-        assert bindings["unknown_thing"].tool_names == ()
+        assert "build a tool for unknown_thing" not in resolution.allowed_tools
+        assert bindings["build a tool for unknown_thing"].tool_names == ()
 
     def test_dynamic_tool_selected_when_static_unavailable(self) -> None:
         ctx = _ctx(dynamic=("my_dynamic_tool",))
@@ -680,7 +680,7 @@ class TestIntegrationRealProviders:
         """Map key exists but no mapped tool is available — static provider skips it."""
         ctx = _ctx(available=())  # nothing available
         resolver = CapabilityResolver([StaticToolProvider(), GeneratedCodeFallbackProvider()])
-        resolution = resolver.resolve(_req("search_code"), ctx)
+        resolution = resolver.resolve(_req("build a new tool for xyz_search"), ctx)
         # No static candidate, so fallback is selected.
         assert resolution.selected_bindings[0].route_kind == "generated_code"
 

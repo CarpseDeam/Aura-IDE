@@ -1,107 +1,84 @@
-"""Build a user-message prompt from an approved DroneBuildBrief."""
-
 from __future__ import annotations
 
 from aura.drones.build_spec import DroneBuildBrief
 
 
-def build_drone_creation_prompt(brief: DroneBuildBrief) -> str:
-    """Return a single user-message string for the Planner/Worker pipeline.
+def _cap_requirements_lines(plan) -> list[str]:
+    """Build instruction lines for capability requirements or skip."""
+    lines: list[str] = []
+    if plan.capability_requirements:
+        lines.append(
+            "2. For the capability_requirements above, call resolve_capability."
+        )
+        lines.append(
+            "3. Merge resolved tools with the allowed_tools from the plan."
+        )
+        lines.append(
+            "4. Populate capability_bindings and setup_steps from the resolution."
+        )
+    else:
+        lines.append(
+            "2. No external capabilities needed \u2014 skip resolve_capability."
+        )
+    return lines
 
-    The prompt tells the Planner to dispatch a Worker that creates a saved
-    Drone via the DroneStore API.
+
+def _generated_code_line(plan) -> str:
+    if not plan.generated_code_allowed:
+        return (
+            "6. DO NOT create helper scripts, generated code, or dynamic tools."
+        )
+    return (
+        "6. Generated code is allowed for this Drone \u2014 use it only "
+        "for the specific new tool/integration."
+    )
+
+
+def build_drone_creation_prompt(brief: DroneBuildBrief) -> str:
+    """Return a Planner-facing prompt to build a Drone from an approved brief.
+
+    Uses the deterministic build compiler to produce a compiled build plan,
+    then embeds the plan in the prompt so the Planner does not need to
+    independently assess tool inventory or schema.
     """
+    from aura.drones.build_compiler import compile_drone_build_plan
+    from aura.drones.definition import default_tools_for_policy
+
+    # Use the full harness tool surface as available tools
+    available = frozenset(default_tools_for_policy("normal_diff_approval"))
+    plan = compile_drone_build_plan(brief.build_brief, available)
+
     lines: list[str] = []
     lines.append(
-        "The user has approved this Drone Build Brief. "
-        "Please build the Drone described below."
+        "The user has approved this Drone Build Brief. Build the Drone."
     )
     lines.append("")
-    lines.append("## Approved Drone Build Brief")
-    lines.append("")
+    lines.append("## Build Brief")
     lines.append(brief.build_brief)
     lines.append("")
+    lines.append("## Compiled Build Plan")
+    lines.append(f"- allowed_tools: {list(plan.allowed_tools)}")
+    if plan.capability_requirements:
+        lines.append("- capability_requirements to resolve:")
+        for cr in plan.capability_requirements:
+            lines.append(f"  - {cr.capability}: {cr.purpose}")
+    if plan.warnings:
+        lines.append("- warnings:")
+        for w in plan.warnings:
+            lines.append(f"  - {w}")
+    lines.append(f"- generated_code_allowed: {plan.generated_code_allowed}")
+    lines.append("")
     lines.append("## Instructions")
+    lines.append(
+        "1. Use the allowed_tools listed above directly in the DroneDefinition."
+    )
+    lines.extend(_cap_requirements_lines(plan))
+    lines.append(
+        "5. Call save_drone_definition with the complete DroneDefinition."
+    )
+    lines.append(_generated_code_line(plan))
     lines.append("")
     lines.append(
-        "1. Read ``aura/drones/definition.py`` to understand the ``DroneDefinition`` "
-        "schema. Note ``default_tools_for_policy()`` which lists the standard harness "
-        "tools available for each write policy."
+        "Do NOT create scripts \u2014 just call save_drone_definition."
     )
-    lines.append("")
-    lines.append(
-        "2. Assess the brief. Determine what tools the Drone needs to do its job."
-    )
-    lines.append("")
-    lines.append(
-        "3. Decide whether the Drone needs external capabilities:"
-    )
-    lines.append(
-        "   - If EVERY needed tool is already in the existing harness (read_file, "
-        "write_file, git_status, run_terminal_command, grep_search, "
-        "list_directory, etc.): choose ``allowed_tools`` directly from the "
-        "harness. Leave ``capability_requirements``, ``capability_bindings``, "
-        "``setup_steps``, and ``first_run_test`` empty."
-    )
-    lines.append(
-        "   - If the brief needs an external or unknown capability NOT in the "
-        "harness (e.g. email, browser automation, database, external API, MCP): "
-        "call ``resolve_capability`` for ONLY those specific capabilities. "
-        "Merge the resolved tool names with harness tools for the overall "
-        "``allowed_tools`` list."
-    )
-    lines.append("")
-    lines.append(
-        "4. Call ``save_drone_definition`` (available as a Worker tool) to persist "
-        "the Drone. Pass all required DroneDefinition fields. "
-        "If you omit ``id``, the tool will auto-generate a safe slug from the name. "
-        "Do NOT call ``DroneStore.save_drone()`` directly — use the tool. "
-        "Do NOT manually write ``.aura/drones/*.json`` files."
-    )
-    lines.append("")
-    lines.append(
-        "5. For Drones that need external capabilities, populate the capability "
-        "fields from ``resolve_capability`` results:"
-    )
-    lines.append(
-        "   - ``capability_requirements`` — the requirements from the brief."
-    )
-    lines.append(
-        "   - ``capability_bindings`` — the selected bindings from ``resolve_capability``."
-    )
-    lines.append(
-        "   - ``setup_steps`` — any setup steps needed before the Drone can run."
-    )
-    lines.append(
-        "   - ``first_run_test`` — a quick smoke test to verify the Drone works."
-    )
-    lines.append("")
-    lines.append(
-        "6. Include all other required ``DroneDefinition`` fields. "
-        "Read the schema from ``aura/drones/definition.py``."
-    )
-    lines.append(
-        "7. Do NOT create a second Drone system. Do NOT open or depend on "
-        "``DroneEditorDialog``."
-    )
-    lines.append(
-        "8. DO NOT create Python scripts (e.g., ``scripts/create_*.py``, "
-        "``scripts/verify_*.py``), helper files, verifier scripts, scratch files, "
-        "or any repo artifacts for the Drone build. "
-        "The only acceptable output is calling ``save_drone_definition``."
-    )
-    lines.append(
-        "9. Include any access, setup, safety, and harness notes from the brief in "
-        "the Drone's instructions. If runtime access or a connector is needed, "
-        "describe that requirement clearly."
-    )
-    lines.append(
-        "10. Store no secrets in the Drone definition. Ask the user only for "
-        "details or access that are truly needed later (e.g. API keys at runtime)."
-    )
-    lines.append("")
-    lines.append("The final expected result is a saved Drone visible in Drone Bay.")
-    lines.append("Do not create scripts — just call ``save_drone_definition``.")
-    lines.append("")
-    lines.append("Dispatch a Worker to create the saved Drone.")
     return "\n".join(lines)

@@ -10,6 +10,7 @@ from aura.drones.capability_resolver import (
     AppRouteProvider,
     CapabilityContext,
     CapabilityResolver,
+    CoreToolIntentProvider,
     DynamicToolProvider,
     GeneratedCodeFallbackProvider,
     InstalledMCPProvider,
@@ -527,6 +528,7 @@ class PlannerHandlersMixin:
         resolver = CapabilityResolver(
             providers=[
                 StaticToolProvider(),
+                CoreToolIntentProvider(),
                 DynamicToolProvider(),
                 InstalledMCPProvider(),
                 MCPDiscoveryProvider(),

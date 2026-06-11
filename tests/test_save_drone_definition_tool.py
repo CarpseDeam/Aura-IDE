@@ -88,11 +88,11 @@ def test_build_drone_creation_prompt_forbids_scripts() -> None:
 
     # Must explicitly say no scripts/helper files
     assert "DO NOT create" in prompt
-    assert "scripts/" in prompt
-    assert "save_drone_definition" in prompt
 
-    # May mention DroneStore.save_drone() only to say not to call it
-    assert "Do NOT call ``DroneStore.save_drone()``" in prompt
+    # Must reference the compiled build plan
+    assert "Compiled Build Plan" in prompt
+    assert "allowed_tools" in prompt
+    assert "Build Brief" in prompt
 
-    # Must mention the final expected result
-    assert "saved Drone visible in Drone Bay" in prompt
+    # Must NOT reference definition.py schema files directly
+    assert "definition.py" not in prompt
