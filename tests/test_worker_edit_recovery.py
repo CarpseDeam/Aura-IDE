@@ -1103,3 +1103,59 @@ def test_normalize_worker_path_variants():
     # Note: .\\foo means "./foo" (current-dir/foo), NOT ".foo" (dot-prefixed dir)
     assert _normalize_worker_path(".aura\\tmp\\dump_bar.py") == ".aura/tmp/dump_bar.py"
     assert _is_validation_scratch_path(".aura\\tmp\\dump_bar.py"), "normalized backslash path should be scratch"
+
+
+def test_structured_json_mismatch_promotes_to_planner_resolution(tmp_workspace):
+    """A worker final report of structured-JSON mismatch becomes needs_planner_resolution."""
+    req = WorkerDispatchRequest(
+        goal="Add compute_value to a.py",
+        files=["a.py"],
+        spec="Add compute_value to a.py.",
+        acceptance="",
+        summary="Add compute_value",
+    )
+    proxy = _DispatchProxy(
+        parent_widget=Mock(),
+        registry_factory=lambda mode: ToolRegistry(tmp_workspace, mode=mode),
+        approval_proxy=Mock(
+            request_approval=MagicMock(return_value=ApprovalDecision("approve")),
+            consume_last_event=MagicMock(return_value=None),
+        ),
+        workspace_root=tmp_workspace,
+    )
+    report = json.dumps(
+        {
+            "status": "needs_planner_resolution",
+            "mismatch": {
+                "kind": "missing_symbol",
+                "file_paths": ["a.py"],
+                "requested": "Add compute_value",
+                "observed": "compute_value already exists in b.py",
+                "worker_recommendation": "Rename the new function",
+                "question_for_planner": "Should I rename it?",
+            },
+        }
+    )
+    hook = MagicMock(side_effect=[iter([_done(report)])])
+
+    try:
+        _register_worker_hook(hook)
+        result = proxy._run_worker("dispatch-1", req, SimpleNamespace(cancel_event=None))
+    finally:
+        hooks.unregister("generate_worker_code")
+
+    # Planner control-flow, not a failure.
+    assert result.status == "needs_planner_resolution"
+    assert result.ok is False
+    assert result.needs_followup is True
+    assert result.recoverable is True
+    # Not treated as a harness/internal error.
+    assert result.extras["worker_internal_error"] is False
+    assert result.extras["errors"] == []
+    # Mismatch facts surfaced for the Planner.
+    assert result.mismatch is not None
+    assert result.mismatch.kind == "missing_symbol"
+    assert result.extras["planner_resolution_needed"] is True
+    assert result.extras["mismatch_kind"] == "missing_symbol"
+    assert result.extras["mismatch_question"] == "Should I rename it?"
+    assert "needs Planner resolution" in result.summary

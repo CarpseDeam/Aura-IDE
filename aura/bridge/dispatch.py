@@ -446,9 +446,12 @@ class _DispatchProxy(QObject):
         structured_failure = _parse_structured_worker_failure(final_report)
         if structured_failure:
             if structured_failure.get("status") == "needs_planner_resolution":
-                # Mismatch from structured JSON — flow into continuation
+                # Mismatch from structured JSON — promote into continuation as
+                # Planner control-flow, not a failure.
                 if not continuation.get("mismatch"):
                     continuation["mismatch"] = structured_failure.get("mismatch")
+                continuation["status"] = "needs_planner_resolution"
+                continuation["reason"] = "planner_resolution_needed"
             else:
                 result_errors.append(_format_structured_worker_failure(structured_failure))
 
@@ -557,6 +560,14 @@ class _DispatchProxy(QObject):
         if is_implementation and not relay.touched_files and not relay.failed_tool_results and not internal_error and not relay.api_errors:
             result_caveats.append("Worker made no changes, reported no blocker, and ran no meaningful validation.")
 
+        # Planner control-flow: a structured mismatch report is not a failure.
+        # Parse it once here so the severity branch and extras can both reuse it.
+        mismatch = WorkerMismatch.from_dict(continuation.get("mismatch"))
+        has_planner_resolution_mismatch = (
+            mismatch is not None
+            or continuation.get("status") == "needs_planner_resolution"
+        )
+
         # Severity-based classification
         has_hard_failure = bool(result_errors)
         has_internal_failure = bool(internal_error or relay.api_errors)
@@ -585,7 +596,12 @@ class _DispatchProxy(QObject):
         is_broad = files_count >= 3 or bool(req.allowed_responsibilities) or bool(req.risk_notes)
 
         # Determine severity
-        if has_hard_failure:
+        if has_planner_resolution_mismatch:
+            # Planner control-flow, not a validation/harness/edit/hard failure.
+            ok = False
+            needs_followup = True
+            recoverable = True
+        elif has_hard_failure:
             ok = False
             needs_followup = not has_internal_failure
             recoverable = (
@@ -629,7 +645,7 @@ class _DispatchProxy(QObject):
             if result_caveats:
                 if not summary_continuation.get("reason"):
                     summary_continuation["reason"] = result_caveats[0]
-        if validation_not_run and not has_recoverable_edit_blocker:
+        if validation_not_run and not has_recoverable_edit_blocker and not has_planner_resolution_mismatch:
             summary_continuation["status"] = "validation_not_run"
             summary_continuation["reason"] = "Files changed but validation did not run."
         if has_diagnostic_environment_blocker and not summary_continuation.get("status"):
@@ -711,7 +727,7 @@ class _DispatchProxy(QObject):
         if isinstance(task_shape_ms, (int, float)):
             extras["task_shape_ms"] = task_shape_ms
 
-        mismatch = WorkerMismatch.from_dict(continuation.get("mismatch"))
+        # mismatch was parsed once above for the severity branch; reuse it.
         if mismatch is not None:
             extras["planner_resolution_needed"] = True
             extras["mismatch_kind"] = mismatch.kind
@@ -1235,6 +1251,7 @@ def _build_worker_summary(
         "completed": "✅  Worker completed successfully",
         "completed_with_caveats": "✅  Worker completed with caveats",
         "needs_followup": "⚠️  Worker needs follow-up",
+        "needs_planner_resolution": "⚠️  Worker needs Planner resolution",
         "validation_failed": "❌  Validation failed",
         "edit_mechanics_blocked": "⚠️  Edit mechanics blocked",
         "craft_blocked": "❌  Craft blocked",
@@ -1248,6 +1265,7 @@ def _build_worker_summary(
         "completed": "None — ready for review",
         "completed_with_caveats": "Review caveats below",
         "needs_followup": "Re-dispatch with follow-up",
+        "needs_planner_resolution": "Planner will revise the handoff",
         "validation_failed": "Fix validation failure — see below",
         "edit_mechanics_blocked": "Re-dispatch — edit tool failure",
         "craft_blocked": "Review and re-specify",

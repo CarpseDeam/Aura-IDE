@@ -1713,7 +1713,7 @@ class ConversationManager:
             return True
         if result.extras.get("planner_resolution_needed"):
             return True
-        if getattr(result, "needs_planner_resolution", False):
+        if infer_outcome_status(result) == WorkerOutcomeStatus.needs_planner_resolution.value:
             return True
         return bool(result.needs_followup or result.recoverable or result.phase_boundary)
 

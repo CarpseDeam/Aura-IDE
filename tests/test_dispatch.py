@@ -651,6 +651,22 @@ def test_raw_rg_passed_does_not_count_as_validation_success():
     assert not _final_report_claims_validation('rg "old" app/tray.py passed')
 
 
+def test_summary_renders_needs_planner_resolution_label():
+    summary = _build_worker_summary(
+        WorkerDispatchRequest(goal="Fix", files=["a.py"], spec="spec", acceptance=""),
+        History(),
+        [],
+        [],
+        {"status": "needs_planner_resolution"},
+        [],
+        status="needs_planner_resolution",
+    )
+
+    assert "Worker needs Planner resolution" in summary
+    assert "Planner will revise the handoff" in summary
+    assert not summary.startswith("Harness error")
+
+
 def test_structured_worker_failure_summary_is_not_harness_error():
     summary = _build_worker_summary(
         WorkerDispatchRequest(goal="Fix", files=["a.py"], spec="spec", acceptance=""),
@@ -1492,6 +1508,17 @@ class TestMismatchDispatchFlow:
             summary="Need planner",
             extras={"planner_resolution_needed": True},
         )
+        assert ConversationManager._failed_dispatch_allows_planner_continuation(result)
+
+    def test_explicit_status_allows_continuation_without_mismatch_extras(self):
+        """Explicit status=needs_planner_resolution allows continuation with no mismatch/extras."""
+        result = WorkerDispatchResult(
+            ok=False,
+            summary="Need planner",
+            status=WorkerOutcomeStatus.needs_planner_resolution.value,
+        )
+        assert result.mismatch is None
+        assert not result.extras
         assert ConversationManager._failed_dispatch_allows_planner_continuation(result)
 
     def test_mismatch_error_signature_includes_facts(self):

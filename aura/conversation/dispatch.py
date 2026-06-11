@@ -287,9 +287,9 @@ def infer_outcome_status(result: WorkerDispatchResult) -> str:
     if result.cancelled:
         return WorkerOutcomeStatus.cancelled.value
     if result.mismatch is not None:
-        return WorkerOutcomeStatus.needs_planner_resolution
+        return WorkerOutcomeStatus.needs_planner_resolution.value
     if result.extras.get("planner_resolution_needed"):
-        return WorkerOutcomeStatus.needs_planner_resolution
+        return WorkerOutcomeStatus.needs_planner_resolution.value
     if not result.ok:
         extras = result.extras if isinstance(result.extras, dict) else {}
         errors = extras.get("errors") if isinstance(extras.get("errors"), list) else []
