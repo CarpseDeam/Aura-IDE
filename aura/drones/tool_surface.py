@@ -6,7 +6,7 @@ from typing import Any
 
 from aura.conversation.tools.registry import ToolRegistry
 from aura.drones.capabilities import CapabilityBinding  # noqa: F401
-from aura.drones.definition import WRITE_TOOLS, DroneDefinition, default_tools_for_policy
+from aura.drones.definition import TERMINAL_TOOLS, WRITE_TOOLS, DroneDefinition, default_tools_for_policy
 
 
 @dataclass(frozen=True)
@@ -64,6 +64,7 @@ def build_drone_tool_surface(workspace_root: Path, drone: DroneDefinition) -> Dr
     #    bindings also get stripped.
     if drone.write_policy == "read_only":
         allowed_set.difference_update(WRITE_TOOLS)
+        allowed_set.difference_update(TERMINAL_TOOLS)
 
     # 5. Re-fetch tool defs (MCP connects may have added schemas)
     all_defs = registry.tool_defs()

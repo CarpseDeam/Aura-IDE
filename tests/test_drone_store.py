@@ -413,3 +413,42 @@ def test_editor_simulated_update_preserves_first_run_test(tmp_path: Path) -> Non
     assert loaded is not None
     assert loaded.name == "Updated Name"
     assert loaded.first_run_test == "run --smoke"
+
+
+def test_ignores_unknown_top_level_fields() -> None:
+    """Unknown top-level keys in JSON do not prevent loading."""
+    data: dict = {
+        "id": "unknown-field-drone",
+        "name": "Tolerant Drone",
+        "description": "Test",
+        "instructions": "Do something",
+        "write_policy": "read_only",
+        "allowed_tools": [],
+        "output_contract": "None",
+        "unknown_field": "should_not_crash",
+        "extra_dict": {"x": 1},
+    }
+    drone = _drone_from_dict(data)
+    assert drone.id == "unknown-field-drone"
+    assert drone.name == "Tolerant Drone"
+
+
+def test_ignores_unknown_budget_fields() -> None:
+    """Unknown keys in the budget dict do not prevent loading."""
+    data: dict = {
+        "id": "budget-unknown-drone",
+        "name": "Budget Tolerant Drone",
+        "description": "Test",
+        "instructions": "Do something",
+        "write_policy": "read_only",
+        "allowed_tools": [],
+        "output_contract": "None",
+        "budget": {
+            "max_tool_rounds": 5,
+            "timeout_seconds": 120,
+            "unknown_budget_key": "should_not_crash",
+        },
+    }
+    drone = _drone_from_dict(data)
+    assert drone.budget.max_tool_rounds == 5
+    assert drone.budget.timeout_seconds == 120

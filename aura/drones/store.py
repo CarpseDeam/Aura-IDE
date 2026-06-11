@@ -4,7 +4,7 @@ import json
 import logging
 import re
 import tempfile
-from dataclasses import asdict
+from dataclasses import asdict, fields
 from pathlib import Path
 
 from aura.drones.capabilities import CapabilityBinding, CapabilityRequirement
@@ -30,7 +30,9 @@ def _drone_from_dict(data: dict) -> DroneDefinition:
     if "allowed_tools" in data and isinstance(data["allowed_tools"], list):
         data = {**data, "allowed_tools": tuple(data["allowed_tools"])}
     if "budget" in data and isinstance(data["budget"], dict):
-        data = {**data, "budget": DroneBudget(**data["budget"])}
+        known_budget_fields = {f.name for f in fields(DroneBudget)}
+        budget_filtered = {k: v for k, v in data["budget"].items() if k in known_budget_fields}
+        data = {**data, "budget": DroneBudget(**budget_filtered)}
     if "capability_requirements" in data and isinstance(data["capability_requirements"], list):
         data = {
             **data,
@@ -47,7 +49,9 @@ def _drone_from_dict(data: dict) -> DroneDefinition:
         }
     if "setup_steps" in data and isinstance(data["setup_steps"], list):
         data = {**data, "setup_steps": tuple(str(x) for x in data["setup_steps"])}
-    drone = DroneDefinition(**data)
+    known_fields = {f.name for f in fields(DroneDefinition)}
+    filtered = {k: v for k, v in data.items() if k in known_fields}
+    drone = DroneDefinition(**filtered)
     DroneStore.validate_drone(drone)
     return drone
 

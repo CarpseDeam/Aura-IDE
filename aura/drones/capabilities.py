@@ -38,6 +38,7 @@ class CapabilityCandidate:
     setup_required: bool = False
     setup_notes: str = ""
     tool_names: tuple[str, ...] = ()
+    command: str = ""
     install_command: str = ""
     docs_url: str = ""
 
@@ -50,6 +51,7 @@ class CapabilityCandidate:
             "setup_required": self.setup_required,
             "setup_notes": self.setup_notes,
             "tool_names": list(self.tool_names),
+            "command": self.command,
             "install_command": self.install_command,
             "docs_url": self.docs_url,
         }
@@ -70,6 +72,7 @@ class CapabilityCandidate:
             setup_required=bool(data.get("setup_required", False)),
             setup_notes=str(data.get("setup_notes", "")),
             tool_names=tool_names,
+            command=str(data.get("command", "")),
             install_command=str(data.get("install_command", "")),
             docs_url=str(data.get("docs_url", "")),
         )

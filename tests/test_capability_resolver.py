@@ -445,6 +445,7 @@ class TestGeneratedCodeFallback:
         assert resolution.candidates[0].route_kind == "generated_code"
         assert resolution.candidates[0].source == "aura_codegen"
         assert resolution.candidates[0].confidence == 0.0
+        assert resolution.candidates[0].tool_names == ()
 
     def test_fallback_selected_when_no_other_provider(self) -> None:
         resolver = CapabilityResolver([GeneratedCodeFallbackProvider()])
@@ -452,6 +453,7 @@ class TestGeneratedCodeFallback:
         assert len(resolution.selected_bindings) == 1
         assert resolution.selected_bindings[0].route_kind == "generated_code"
         assert resolution.selected_bindings[0].setup_status == "pending"
+        assert resolution.selected_bindings[0].tool_names == ()
 
     def test_fallback_not_selected_when_higher_provider_exists(self) -> None:
         static = StaticToolProvider()
@@ -565,6 +567,44 @@ class TestArbitraryRouteKind:
         resolution = resolver.resolve(_req("custom"), _ctx())
         assert resolution.selected_bindings[0].route_kind == "my-custom_kind!"
 
+    def test_fallback_setup_notes_instruct_worker(self) -> None:
+        """Fallback setup notes tell the Worker to create a dynamic tool."""
+        provider = GeneratedCodeFallbackProvider()
+        result = provider.find_candidates(
+            (CapabilityRequirement(capability="check_status"),),
+            CapabilityContext(workspace_root=_WORKSPACE),
+        )
+        assert len(result) == 1
+        assert "Worker must create a real dynamic tool" in result[0].setup_notes
+        assert "check_status" in result[0].setup_notes
+
+    def test_candidate_command_roundtrip(self) -> None:
+        """CapabilityCandidate.command to_dict/from_dict roundtrip."""
+        original = CapabilityCandidate(
+            capability="mcp_task",
+            route_kind="mcp",
+            source="test",
+            confidence=0.5,
+            tool_names=("tool_a",),
+            command="python -m mcp-server",
+            install_command="pip install mcp-server",
+        )
+        data = original.to_dict()
+        restored = CapabilityCandidate.from_dict(data)
+        assert restored.command == original.command
+        assert restored.install_command == original.install_command
+        assert restored.capability == original.capability
+        assert restored.tool_names == original.tool_names
+
+    def test_candidate_command_default_empty(self) -> None:
+        """CapabilityCandidate defaults command to empty string."""
+        cand = CapabilityCandidate(
+            capability="test",
+            route_kind="test",
+            source="test",
+        )
+        assert cand.command == ""
+
 
 # ---------------------------------------------------------------------------
 # Integration test: real providers together
@@ -590,10 +630,10 @@ class TestIntegrationRealProviders:
         bindings = {b.capability: b for b in resolution.selected_bindings}
         assert bindings["search_code"].route_kind == "static_tool"
         assert bindings["unknown_thing"].route_kind == "generated_code"
-        # allowed_tools should include the static tools and the fallback tool name
+        # allowed_tools should include the static tools, but not the fallback (empty tool_names)
         assert "grep_search" in resolution.allowed_tools
-        assert "unknown_thing" in resolution.allowed_tools
-        assert bindings["unknown_thing"].tool_names == ("unknown_thing",)
+        assert "unknown_thing" not in resolution.allowed_tools
+        assert bindings["unknown_thing"].tool_names == ()
 
     def test_dynamic_tool_selected_when_static_unavailable(self) -> None:
         ctx = _ctx(dynamic=("my_dynamic_tool",))

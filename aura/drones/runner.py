@@ -113,7 +113,7 @@ class DroneRunner(QObject):
         tool_defs = list(surface.tool_defs)
 
         # 3. Build messages
-        system_prompt = self._build_system_prompt()
+        system_prompt = self._build_system_prompt(surface.setup_notes)
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": self._drone.instructions},
@@ -249,7 +249,17 @@ class DroneRunner(QObject):
                                     ensure_ascii=False,
                                 )
                             elif name == "run_terminal_command":
-                                ok, result_str = self._execute_terminal_command(args)
+                                if read_only:
+                                    ok = False
+                                    result_str = json.dumps(
+                                        {
+                                            "ok": False,
+                                            "error": "terminal commands not allowed for read-only Drones",
+                                        },
+                                        ensure_ascii=False,
+                                    )
+                                else:
+                                    ok, result_str = self._execute_terminal_command(args)
                             else:
                                 result = registry.execute(
                                     name,
@@ -467,7 +477,7 @@ class DroneRunner(QObject):
             timeout = min(45, self._drone.budget.timeout_seconds)
         return max(1, min(timeout, self._drone.budget.timeout_seconds))
 
-    def _build_system_prompt(self) -> str:
+    def _build_system_prompt(self, setup_notes: tuple[str, ...] = ()) -> str:
         """Build the system prompt for this drone."""
         budget_min = max(1, self._drone.budget.timeout_seconds // 60)
         is_read_only = self._drone.write_policy == "read_only"
@@ -480,6 +490,14 @@ class DroneRunner(QObject):
                 "You can approve, reject, approve all, or reject all."
             )
 
+        notes_section = ""
+        if setup_notes:
+            notes_section = "## Capability/setup notes\n" + "\n".join(f"- {n}" for n in setup_notes) + "\n\n"
+
+        first_run_section = ""
+        if self._drone.first_run_test:
+            first_run_section = f"## First-run test\n{self._drone.first_run_test}\n\n"
+
         return (
             f"You are a focused worker drone: \"{self._drone.name}\".\n\n"
             f"{self._drone.description}\n\n"
@@ -490,5 +508,7 @@ class DroneRunner(QObject):
             f"- Provide a clear summary of what you found or accomplished.\n"
             f"- Keep responses concise and relevant.\n"
             f"- Budget: {self._drone.budget.max_tool_rounds} tool rounds, {budget_min} minute timeout.\n\n"
+            f"{notes_section}"
+            f"{first_run_section}"
             f"## Output contract\n{self._drone.output_contract}"
         )

@@ -53,6 +53,17 @@ class TestDroneToolSurface:
         for rt in READ_ONLY_TOOLS:
             assert rt in surface.allowed_tools
 
+    def test_read_only_drones_strip_terminal_tools(self, tmp_path):
+        """Read-only drone strips TERMINAL_TOOLS even if explicitly in allowed_tools."""
+        drone = _drone(
+            write_policy="read_only",
+            allowed_tools=READ_ONLY_TOOLS + TERMINAL_TOOLS,
+        )
+        surface = build_drone_tool_surface(tmp_path, drone)
+        assert "run_terminal_command" not in surface.allowed_tools
+        for rt in READ_ONLY_TOOLS:
+            assert rt in surface.allowed_tools
+
     def test_explicit_allowed_tools_filters_tool_defs(self, tmp_path):
         """Only the explicitly listed tools appear in tool_defs."""
         drone = _drone(

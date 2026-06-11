@@ -81,7 +81,7 @@ class CapabilityResolver:
                     tool_names=cand.tool_names,
                     setup_status="ready" if not cand.setup_required else "pending",
                     setup_notes=cand.setup_notes,
-                    command=cand.install_command,
+                    command=cand.command,
                     metadata={},
                 )
             )
@@ -273,6 +273,7 @@ class MCPDiscoveryProvider:
                     setup_required=bool(item.get("setup_required", True)),
                     setup_notes=str(item.get("setup_notes", "")),
                     tool_names=tool_names,
+                    command=str(item.get("command", "")),
                     install_command=str(item.get("install_command", "")),
                     docs_url=str(item.get("docs_url", "")),
                 )
@@ -394,11 +395,12 @@ class GeneratedCodeFallbackProvider:
                     route_kind="generated_code",
                     source="aura_codegen",
                     confidence=0.0,
-                    tool_names=(req.capability,) if req.capability else (),
+                    tool_names=(),
                     setup_required=True,
                     setup_notes=(
-                        f"Aura can generate a dynamic tool/script for "
-                        f"'{req.capability}' when needed."
+                        f"A Worker must create a real dynamic tool under .aura/tools "
+                        f"for capability '{req.capability}' first. Then save the actual "
+                        f"generated tool name in capability_bindings and allowed_tools."
                     ),
                 )
             )
