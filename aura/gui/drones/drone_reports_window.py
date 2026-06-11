@@ -40,7 +40,6 @@ class DroneReportsWindow(QDialog):
         self._geometry_restore_done = False
         self._initial_geometry = initial_geometry.strip()
         self._cards: dict[str, QWidget] = {}
-        self._close_guard: bool = False
         self._geometry_save_timer = QTimer(self)
         self._geometry_save_timer.setSingleShot(True)
         self._geometry_save_timer.setInterval(250)
@@ -87,7 +86,7 @@ class DroneReportsWindow(QDialog):
             f"QToolButton {{ color: {FG_DIM}; font-size: 16px; border: none; padding: 2px 6px; }}"
             f"QToolButton:hover {{ color: {FG}; background: #222230; border-radius: 4px; }}"
         )
-        close_btn.clicked.connect(self.close)
+        close_btn.clicked.connect(self._hide_window)
         header_layout.addWidget(close_btn)
 
         outer.addWidget(header)
@@ -188,8 +187,6 @@ class DroneReportsWindow(QDialog):
 
     def hideEvent(self, event) -> None:
         super().hideEvent(event)
-        if self._close_guard:
-            return
         self._schedule_geometry_save()
         self.visibility_changed.emit(False)
 
@@ -214,18 +211,13 @@ class DroneReportsWindow(QDialog):
         if card is not None and hasattr(card, "set_cancelling"):
             card.set_cancelling()
 
-    def closeEvent(self, event: QCloseEvent) -> None:
-        """Prevent destruction — Drone Reports is a stable live monitor.
-
-        Closing must never delete cards, clear runs, or touch runner state.
-        The window stays open for the full lifecycle of active runs.
-        """
-        event.ignore()
-        if self._close_guard:
-            return
-        self._close_guard = True
+    def _hide_window(self) -> None:
+        """Hide without going through the close machinery."""
         self.hide()
-        self._close_guard = False
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        """WM close → accept so Qt hides via its own path. WA_DeleteOnClose=False prevents deletion."""
+        event.accept()
 
     def _refresh_empty_state(self) -> None:
         self._empty_label.setVisible(not self._cards)
