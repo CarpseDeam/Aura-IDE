@@ -211,6 +211,38 @@ class AssistantCard(QFrame):
         self._tool_status.setVisible(False)
         self._stop_thinking_animation()
 
+    # ---- simple public API for Workshop use ------------------------------
+
+    def show_thinking_message(self, text: str = "Thinking") -> None:
+        """Show a thinking indicator with the given message."""
+        self._thinking_label.setText(text)
+        self._start_thinking_animation()
+
+    def set_content(self, text: str) -> None:
+        """Set the assistant response content (non-streaming)."""
+        self._stop_thinking_animation()
+        self._content_label.stop_timer()
+        self._content_label.reset_buffer()
+        self._content_label.append(text)
+        self._content_label._flush()
+        self._content_label.setVisible(True)
+        self._assistant_text = text
+        self.finalize_content()
+
+    def set_error(self, text: str) -> None:
+        """Display an error message on the card."""
+        self._stop_thinking_animation()
+        self._assistant_text = text
+        self._content_label.stop_timer()
+        self._content_label.reset_buffer()
+        self._content_label.append(text)
+        self._content_label._flush()
+        self._content_label.setVisible(True)
+        # Render error as plain-ish markdown (no code-block reflow needed)
+        html = _render_markdown_with_code(text)
+        self._content_label.setTextFormat(Qt.TextFormat.RichText)
+        self._content_label.setText(html)
+
     # ---- copy button -----------------------------------------------------
 
     def _on_copy(self) -> None:

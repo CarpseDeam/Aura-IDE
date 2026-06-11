@@ -697,7 +697,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             self._refresh_drone_context()
 
     def _on_build_drone(self) -> None:
-        """Open the Drone Workshop dialog."""
+        """Open the Drone Workshop dialog (modeless)."""
         dlg = DroneWorkshopDialog(
             workspace_root=self._workspace_root,
             provider_id=self._settings.planner_provider,
@@ -707,7 +707,9 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             parent=self,
         )
         dlg.buildSpecApproved.connect(self._on_drone_build_brief_approved)
-        dlg.exec()
+        dlg.drone_build_requested.connect(self._on_drone_workshop_build_requested)
+        dlg.finished.connect(dlg.deleteLater)
+        dlg.show()
 
     def _on_drone_build_brief_approved(self, brief: object) -> None:
         """Handle an approved Drone Build Brief from the Workshop."""
@@ -745,6 +747,42 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         prompt = build_drone_creation_prompt(brief)
 
         # Show a brief visible message so the user sees the handoff.
+        QMessageBox.information(
+            self,
+            "Drone Build Brief",
+            "Building Drone from approved Workshop brief.",
+        )
+
+        payload = SendPayload(text=prompt, attachments=[])
+        self._send_handler.handle_send(payload, self.current_model(), self.current_thinking())
+
+    def _on_drone_workshop_build_requested(self, brief: object) -> None:
+        """Handle a build request from the modeless Drone Workshop dialog."""
+        from aura.drones.build_spec import DroneBuildBrief
+
+        if not isinstance(brief, DroneBuildBrief):
+            return
+
+        from PySide6.QtWidgets import QMessageBox
+
+        # Guard: workspace required
+        if self._workspace_root is None:
+            QMessageBox.warning(self, "Drone Build Brief", "No workspace root is set.")
+            return
+
+        # Guard: bridge running
+        if self._bridge.is_running():
+            QMessageBox.information(
+                self,
+                "Drone Build Brief",
+                "Aura is currently processing a request. "
+                "Please wait for it to finish, then try again.",
+            )
+            return
+
+        # Ready to build — create prompt and send through normal pathway.
+        prompt = build_drone_creation_prompt(brief)
+
         QMessageBox.information(
             self,
             "Drone Build Brief",
