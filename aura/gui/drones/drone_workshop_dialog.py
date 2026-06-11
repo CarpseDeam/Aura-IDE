@@ -23,7 +23,9 @@ from aura.drones.build_spec import DroneBuildBrief
 from aura.drones.workshop_runner import DroneWorkshopResponse, DroneWorkshopRunner
 from aura.gui.cards.assistant_card import AssistantCard
 from aura.gui.cards.user_card import UserCard
-from aura.gui.theme import ACCENT, BG, BG_ALT, BG_RAISED, BORDER, FG, FG_DIM, FG_MUTED
+from aura.gui.cards._helpers import _fade_in_widget
+from aura.gui.theme import ACCENT, BG, BG_ALT, BG_RAISED, BORDER, FG, FG_DIM, FG_MUTED, FG_ITALIC
+from aura.gui.widgets.aura_glow import AuraWidget
 
 
 class _WorkshopTextEdit(QTextEdit):
@@ -87,6 +89,9 @@ class DroneWorkshopDialog(QDialog):
         self._runner_thread: QThread | None = None
         self._runner: DroneWorkshopRunner | None = None
         self._thinking_card: AssistantCard | None = None
+        self._empty_hint: QLabel | None = None
+        self._aura_wrapper: AuraWidget | None = None
+        self._response_received = False
 
         self.setWindowTitle("Drone Workshop")
         self.resize(900, 720)
@@ -135,6 +140,12 @@ class DroneWorkshopDialog(QDialog):
         self._msg_layout = QVBoxLayout(self._msg_column)
         self._msg_layout.setContentsMargins(8, 8, 8, 8)
         self._msg_layout.setSpacing(10)
+
+        self._empty_hint = QLabel("Tell Aura what kind of Drone you want to build.")
+        self._empty_hint.setStyleSheet(f"color: {FG_ITALIC}; font-style: italic;")
+        self._empty_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._msg_layout.addWidget(self._empty_hint)
+
         self._msg_layout.addStretch()
 
         self._msg_scroll.setWidget(self._msg_column)
@@ -142,29 +153,41 @@ class DroneWorkshopDialog(QDialog):
         conv_layout.addWidget(self._msg_scroll, 1)
 
         # -- Input row --
-        input_row = QHBoxLayout()
-        input_row.setSpacing(8)
+        input_frame = QFrame()
+        input_frame.setStyleSheet(
+            f"QFrame {{"
+            f"  background: rgba(34, 34, 40, 0.65);"
+            f"  border: 1px solid rgba(255, 255, 255, 0.08);"
+            f"  border-radius: 16px;"
+            f"}}"
+        )
+        input_frame_layout = QHBoxLayout(input_frame)
+        input_frame_layout.setContentsMargins(14, 8, 8, 10)
+        input_frame_layout.setSpacing(8)
 
         self._input_edit = _WorkshopTextEdit()
         self._input_edit.setStyleSheet(
-            f"QTextEdit {{ background: {BG_RAISED}; border: 1px solid {BORDER}; "
-            f"border-radius: 5px; padding: 4px 6px; color: {FG}; }}"
+            f"QTextEdit {{ background: transparent; border: none; "
+            f"padding: 4px 6px; color: {FG}; }}"
         )
         self._input_edit.submitted.connect(self._on_send)
-        input_row.addWidget(self._input_edit, 1)
+        input_frame_layout.addWidget(self._input_edit, 1)
 
-        self._send_btn = QPushButton("Send")
+        self._send_btn = QPushButton("→")
+        font = self._send_btn.font()
+        font.setPointSize(16)
+        self._send_btn.setFont(font)
         self._send_btn.setObjectName("primary")
         self._send_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._send_btn.setStyleSheet(
             f"QPushButton#primary {{ background: {ACCENT}; color: {BG}; "
             f"border: 1px solid {ACCENT}; border-radius: 6px; "
-            f"padding: 6px 18px; font-weight: 600; font-size: 13px; }}"
+            f"padding: 6px 14px; font-weight: 600; font-size: 16px; }}"
         )
         self._send_btn.clicked.connect(self._on_send)
-        input_row.addWidget(self._send_btn)
+        input_frame_layout.addWidget(self._send_btn)
 
-        conv_layout.addLayout(input_row)
+        conv_layout.addWidget(input_frame)
 
         self._splitter.addWidget(conversation_widget)
 
@@ -183,11 +206,9 @@ class DroneWorkshopDialog(QDialog):
 
         # Compact build brief card
         self._brief_card = QFrame()
-        self._brief_card.setFrameStyle(QFrame.StyledPanel | QFrame.Raised)
-        self._brief_card.setMaximumHeight(140)
         self._brief_card.setStyleSheet(
             f"QFrame {{ background: {BG_RAISED}; border: 1px solid {BORDER}; "
-            f"border-radius: 8px; padding: 12px; }}"
+            f"border-left: 3px solid {ACCENT}; border-radius: 8px; padding: 12px; }}"
         )
         card_layout = QVBoxLayout(self._brief_card)
         card_layout.setContentsMargins(12, 8, 12, 8)
@@ -293,8 +314,10 @@ class DroneWorkshopDialog(QDialog):
         if self._runner_thread is not None and self._runner_thread.isRunning():
             return  # runner already active
 
+        self._response_received = False
+
         # Add user message card to column
-        user_card = UserCard(text, self._msg_column)
+        user_card = UserCard(text, parent=self._msg_column)
         self._add_message_card(user_card)
         self._conversation.append({"role": "user", "content": text})
         self._input_edit.clear()
@@ -302,7 +325,7 @@ class DroneWorkshopDialog(QDialog):
         # Disable input and build button while running; show thinking state
         self._input_edit.setEnabled(False)
         self._send_btn.setEnabled(False)
-        self._send_btn.setText("Thinking…")
+        self._send_btn.setText("…")
         self._build_btn.setEnabled(False)
         self._send_btn.setStyleSheet(
             "QPushButton { background: #2a2a30; color: #555566; "
@@ -310,32 +333,56 @@ class DroneWorkshopDialog(QDialog):
             "padding: 6px 18px; font-weight: 600; font-size: 13px; }"
         )
 
-        # Start assistant message — show thinking card
-        self._thinking_card = AssistantCard(self._msg_column)
-        self._thinking_card.show_thinking_message("Aura is thinking…")
-        self._add_message_card(self._thinking_card)
+        try:
+            # Start assistant message — show thinking card
+            self._thinking_card = AssistantCard(parent=self._msg_column)
+            self._thinking_card.show_thinking_message("Aura is thinking…")
+            self._aura_wrapper = AuraWidget(self._thinking_card, glow_color=ACCENT, glow_spread=14, parent=self._msg_column)
+            self._add_message_card(self._aura_wrapper)
+            self._aura_wrapper.start_aura()
+            self._aura_wrapper.set_glow_state("thinking")
 
-        self._runner = DroneWorkshopRunner(parent=None)
-        self._runner_thread = QThread(self)
-        self._runner.moveToThread(self._runner_thread)
+            self._runner = DroneWorkshopRunner(parent=None)
+            self._runner_thread = QThread(self)
+            self._runner.moveToThread(self._runner_thread)
 
-        # Connect signals
-        self._runner.responseReady.connect(self._on_response_ready)
-        self._runner.apiError.connect(self._on_api_error)
-        self._runner.finished.connect(self._on_runner_finished)
+            # Connect signals
+            self._runner.responseReady.connect(self._on_response_ready)
+            self._runner.apiError.connect(self._on_api_error)
+            self._runner.finished.connect(self._on_runner_finished)
 
-        self._runner_thread.started.connect(
-            lambda: self._runner.run(
-                conversation=self._conversation,
-                provider_id=self._provider_id,
-                model=self._model,
-                thinking=self._thinking,
-                temperature=self._temperature,
+            self._runner_thread.started.connect(
+                lambda: self._runner.run(
+                    conversation=self._conversation,
+                    provider_id=self._provider_id,
+                    model=self._model,
+                    thinking=self._thinking,
+                    temperature=self._temperature,
+                )
             )
-        )
-        self._runner_thread.start()
+            self._runner_thread.start()
+        except Exception as exc:
+            if self._aura_wrapper is not None:
+                self._aura_wrapper.stop_aura()
+                self._aura_wrapper = None
+            if self._thinking_card is None:
+                self._thinking_card = AssistantCard(parent=self._msg_column)
+                self._add_message_card(self._thinking_card)
+            self._thinking_card.set_error(f"Error: {exc}")
+            self._input_edit.setEnabled(True)
+            self._send_btn.setEnabled(True)
+            self._send_btn.setText("→")
+            self._send_btn.setStyleSheet(
+                f"QPushButton#primary {{ background: {ACCENT}; color: {BG}; "
+                f"border: 1px solid {ACCENT}; border-radius: 6px; "
+                f"padding: 6px 14px; font-weight: 600; font-size: 16px; }}"
+            )
 
     def _on_response_ready(self, response: DroneWorkshopResponse) -> None:
+        if self._aura_wrapper is not None:
+            self._aura_wrapper.stop_aura()
+            self._aura_wrapper = None
+        self._response_received = True
         if response.kind == "error":
             if self._thinking_card:
                 self._thinking_card.set_error(f"Error: {response.message}")
@@ -371,20 +418,32 @@ class DroneWorkshopDialog(QDialog):
                 self._build_btn.setText("Build this Drone")
 
     def _on_api_error(self, status_code: int, message: str) -> None:
+        if self._aura_wrapper is not None:
+            self._aura_wrapper.stop_aura()
+            self._aura_wrapper = None
+        self._response_received = True
         if self._thinking_card:
             self._thinking_card.set_error(f"API Error ({status_code}): {message}")
         self._build_btn.setEnabled(False)
         self._build_btn.setText("Build this Drone")
 
     def _on_runner_finished(self) -> None:
+        if self._aura_wrapper is not None:
+            self._aura_wrapper.stop_aura()
+            self._aura_wrapper = None
+
+        # If no response was received, show a generic error
+        if not self._response_received and self._thinking_card is not None:
+            self._thinking_card.set_error("No response received — the conversation ended unexpectedly.")
+
         # Re-enable input; restore Send button
         self._input_edit.setEnabled(True)
         self._send_btn.setEnabled(True)
-        self._send_btn.setText("Send")
+        self._send_btn.setText("→")
         self._send_btn.setStyleSheet(
-            f"QPushButton {{ background: {ACCENT}; color: {BG}; "
+            f"QPushButton#primary {{ background: {ACCENT}; color: {BG}; "
             f"border: 1px solid {ACCENT}; border-radius: 6px; "
-            f"padding: 6px 18px; font-weight: 600; font-size: 13px; }}"
+            f"padding: 6px 14px; font-weight: 600; font-size: 16px; }}"
         )
         # Re-enable build button if a valid brief is available
         if self._last_valid_brief is not None and self._last_valid_brief.is_ready_to_build():
@@ -422,12 +481,15 @@ class DroneWorkshopDialog(QDialog):
 
     def _add_message_card(self, card: QWidget) -> None:
         """Add a card to the message column and auto-scroll."""
+        if self._empty_hint is not None:
+            self._empty_hint.setVisible(False)
         # Remove the bottom stretch spacer
         if self._msg_layout.count():
             last = self._msg_layout.itemAt(self._msg_layout.count() - 1)
             if last and last.spacerItem():
                 self._msg_layout.removeItem(last)
         self._msg_layout.addWidget(card)
+        _fade_in_widget(card)
         # Add stretch back to keep messages at top
         self._msg_layout.addStretch()
         self._scroll_to_bottom()
