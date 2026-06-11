@@ -984,6 +984,19 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         runner.receiptReady.connect(self._on_drone_receipt)
         runner.finished.connect(lambda rid=run_id: self._on_drone_finished(rid))
 
+        # Standard Qt worker lifetime cleanup — no blocking wait on GUI thread.
+        # runner.finished fires from the worker thread:
+        #   • thread.quit is queued to the main-thread QThread object → tells the
+        #     worker event loop to exit cleanly.
+        #   • runner.deleteLater is a direct connection (runner lives on the worker
+        #     thread, signal emitted from the worker thread) → DeferredDelete posted
+        #     to the worker event queue, processed before the thread exits.
+        # thread.finished fires after the worker event loop exits → thread.deleteLater
+        # is queued to the main thread and handled safely.
+        runner.finished.connect(thread.quit)
+        runner.finished.connect(runner.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+
         # Wire approval for write-capable drones.
         if run_drone.write_policy != "read_only":
             runner.approval_requested.connect(
@@ -1004,10 +1017,16 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         thread.start()
 
     def _can_start_drone(self, drone: DroneDefinition) -> bool:
-        active_runs = [
-            record for record in self._drone_runs.values()
-            if record["runner"].run_state.is_active
-        ]
+        active_runs = []
+        for record in self._drone_runs.values():
+            try:
+                if record["runner"].run_state.is_active:
+                    active_runs.append(record)
+            except RuntimeError:
+                # C++ QObject already freed (deleteLater on worker thread fired
+                # before _on_drone_finished ran on main thread).  Treat as finished.
+                logger.debug("[DroneRun] _can_start_drone: runner C++ object already deleted")
+
         has_write_active = any(
             record["drone"].write_policy != "read_only" for record in active_runs
         )
@@ -1138,27 +1157,32 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._edge_rail.set_drone_run_pip_state(run_id, drone_name, status)
 
     def _remove_drone_run_pip(self, run_id: str) -> None:
+        logger.debug("[DroneRun] remove_drone_run_pip run_id=%s", run_id)
         self._edge_rail.remove_drone_run_pip(run_id)
         self._position_edge_tabs()
 
     def _on_drone_finished(self, run_id: str) -> None:
-        """Clean up after drone run completes."""
-        record = self._drone_runs.get(run_id)
+        """UI/bookkeeping cleanup after a drone run.
+
+        Thread and object lifetime are managed entirely by the signal connections
+        wired in _start_drone_run (runner.finished→thread.quit, runner.finished→
+        runner.deleteLater, thread.finished→thread.deleteLater).  Do NOT touch
+        thread or runner here — the runner C++ object may already have been freed
+        by its direct deleteLater connection on the worker thread before this slot
+        runs on the main thread.
+        """
+        record = self._drone_runs.pop(run_id, None)
         if record is None:
+            logger.debug("[DroneRun] _on_drone_finished: unknown run_id=%s (already cleaned up?)", run_id)
             return
         runner = record["runner"]
-        thread = record["thread"]
         drone = record["drone"]
-        self._edge_rail.set_drone_run_pip_state(run_id, drone.name, runner.run_state.status)
+        logger.debug("[DroneRun] finished  run_id=%s  drone=%s", run_id, drone.name)
+        # Pip state already reflects the final status via statusChanged signal;
+        # schedule timed removal so the user can see the final badge briefly.
         QTimer.singleShot(15000, lambda rid=run_id: self._remove_drone_run_pip(rid))
-        # Thread cleanup.
-        thread.quit()
-        thread.wait(1000)
-        thread.deleteLater()
-        runner.deleteLater()
         if self._write_drone_run_id == run_id:
             self._write_drone_run_id = None
-        self._drone_runs.pop(run_id, None)
         if self._drone_runner is runner:
             self._drone_runner = None
             self._companion.set_drone_runner(None)
@@ -1216,13 +1240,13 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             self._drone_reports_window.show_and_raise()
 
     def _on_close_drone_card(self, run_id: str = "") -> None:
-        """Close/dismiss the completed run card."""
+        """Dismiss a completed run card. Idempotent — safe to call multiple times."""
+        logger.debug("[DroneRun] close card run_id=%s", run_id)
         if run_id:
             self._drone_reports_window.remove_run_card(run_id)
             self._remove_drone_run_pip(run_id)
         else:
             self._drone_reports_window.clear()
-        self._active_run_card = None
 
     def _on_drone_approval_requested(
         self,

@@ -1,7 +1,11 @@
 """Floating Drone Reports window for live runs and saved receipts."""
 from __future__ import annotations
 
+import logging
+
 from PySide6.QtCore import QByteArray, Qt, QTimer, Signal
+
+logger = logging.getLogger(__name__)
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QDialog,
@@ -134,6 +138,7 @@ class DroneReportsWindow(QDialog):
 
     def add_run_card(self, run_id: str, card: QWidget) -> None:
         """Insert or replace one run/receipt card."""
+        logger.debug("[DroneReports] add_run_card run_id=%s", run_id)
         self.remove_run_card(run_id)
         self._cards[run_id] = card
         card.setParent(self._card_host)
@@ -143,8 +148,10 @@ class DroneReportsWindow(QDialog):
         self._refresh_empty_state()
 
     def remove_run_card(self, run_id: str) -> None:
+        logger.debug("[DroneReports] remove_run_card run_id=%s", run_id)
         card = self._cards.pop(run_id, None)
         if card is None:
+            logger.debug("[DroneReports] remove_run_card: card not found (already removed?)")
             return
         self._card_layout.removeWidget(card)
         card.deleteLater()
@@ -187,6 +194,7 @@ class DroneReportsWindow(QDialog):
 
     def hideEvent(self, event) -> None:
         super().hideEvent(event)
+        logger.debug("[DroneReports] hideEvent (cards=%d)", len(self._cards))
         self._schedule_geometry_save()
         self.visibility_changed.emit(False)
 
@@ -213,12 +221,13 @@ class DroneReportsWindow(QDialog):
 
     def _hide_window(self) -> None:
         """Hide without going through the close machinery."""
+        logger.debug("[DroneReports] _hide_window called")
         self.hide()
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        """WM close → ignore and defer hide via singleShot to avoid re-entrant close/hide crashes."""
-        event.ignore()
-        QTimer.singleShot(0, self._hide_window)
+        """WM close → accept so Qt hides via its own path. WA_DeleteOnClose=False prevents deletion."""
+        logger.debug("[DroneReports] closeEvent accepted (WA_DeleteOnClose=False → hide only)")
+        event.accept()
 
     def _refresh_empty_state(self) -> None:
         self._empty_label.setVisible(not self._cards)
