@@ -119,7 +119,7 @@ class DroneBayPane(QWidget):
         self._card_container.setStyleSheet("background: transparent;")
         self._card_layout = QVBoxLayout(self._card_container)
         self._card_layout.setContentsMargins(0, 0, 0, 0)
-        self._card_layout.setSpacing(4)
+        self._card_layout.setSpacing(2)
         self._card_layout.addStretch(1)
 
         scroll.setWidget(self._card_container)
@@ -161,6 +161,7 @@ class DroneBayPane(QWidget):
             row_widget = self._build_drone_row(drone, last_run_info)
             self._card_layout.addWidget(row_widget)
 
+        self._card_layout.addStretch(1)
 
 
     def set_workspace_root(self, root: Path | None) -> None:
@@ -202,22 +203,27 @@ class DroneBayPane(QWidget):
 
     def _make_policy_badge(self, write_policy: str, compact: bool = False) -> QLabel:
         if write_policy == "read_only":
-            text = "Read-only"
+            text = "Read"
+            tooltip = "Read-only — Drone can inspect files but not write"
             color = WARN
         elif write_policy == "ask_before_writes":
-            text = "Ask writes"
+            text = "Ask"
+            tooltip = "Ask writes — Aura asks before writing"
             color = ACCENT
         elif write_policy == "normal_diff_approval":
-            text = "Diff approval"
+            text = "Diff"
+            tooltip = "Diff approval — Aura asks before writing"
             color = SUCCESS
         else:
             text = write_policy
+            tooltip = ""
             color = FG_DIM
 
         badge = QLabel(text)
+        badge.setToolTip(tooltip)
         badge.setStyleSheet(
-            f"font-size: 10px; font-weight: 600; color: {color}; "
-            f"background: transparent; padding: 2px 8px; "
+            f"font-size: 9px; font-weight: 600; color: {color}; "
+            f"background: transparent; padding: 1px 6px; "
             f"border-radius: 4px;"
         )
         return badge
@@ -244,19 +250,20 @@ class DroneBayPane(QWidget):
         wrapper_layout = QVBoxLayout(wrapper)
         wrapper_layout.setContentsMargins(0, 0, 0, 0)
         wrapper_layout.setSpacing(0)
+        wrapper.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
 
         # ---- Always-visible row ----
         row = QFrame()
         row.setObjectName("droneRow")
-        row.setMinimumHeight(44)
+        row.setFixedHeight(44)
         row.setStyleSheet(
             f"QFrame#droneRow {{ background: transparent; border-bottom: 1px solid {BORDER}; padding: 0px; }}"
             f"QFrame#droneRow:hover {{ background: rgba(255,255,255,0.03); }}"
         )
 
         row_layout = QHBoxLayout(row)
-        row_layout.setContentsMargins(10, 0, 8, 0)
-        row_layout.setSpacing(8)
+        row_layout.setContentsMargins(8, 0, 6, 0)
+        row_layout.setSpacing(6)
         row_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
         # a) Name
@@ -264,18 +271,20 @@ class DroneBayPane(QWidget):
         name_label.setStyleSheet(
             f"font-size: 13px; font-weight: 700; color: {FG}; background: transparent;"
         )
-        name_label.setFixedWidth(140)
-        name_label.setMinimumWidth(140)
+        name_label.setFixedWidth(120)
+        name_label.setMinimumWidth(120)
         name_label.setContentsMargins(0, 0, 0, 0)
         row_layout.addWidget(name_label)
 
         # b) Short description (first ~60 chars)
-        short_desc = (drone.description[:57] + "...") if len(drone.description) > 60 else drone.description
+        short_desc = (drone.description[:47] + "...") if len(drone.description) > 60 else drone.description
         desc_label = QLabel(short_desc)
         desc_label.setStyleSheet(
             f"font-size: 12px; color: {FG_DIM}; background: transparent;"
         )
         desc_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        desc_label.setElideMode(Qt.TextElideMode.ElideRight)
+        desc_label.setToolTip(drone.description)
         desc_label.setContentsMargins(0, 0, 0, 0)
         row_layout.addWidget(desc_label, 1)
 
@@ -299,14 +308,14 @@ class DroneBayPane(QWidget):
                 dur_str = f"{elapsed:.0f}s"
             else:
                 dur_str = f"{elapsed/60:.1f}m"
-            last_run_label.setText(f"Last: {dur_str} / {tool_calls} calls")
+            last_run_label.setText(f"{dur_str} \u00b7 {tool_calls}")
             status = last_run_info.get("status", "")
             if status == "failed":
                 last_run_label.setStyleSheet(
                     f"font-size: 11px; color: {DANGER}; background: transparent;"
                 )
         else:
-            last_run_label.setText("Never run")
+            last_run_label.setText("Never")
             last_run_label.setStyleSheet(
                 f"font-size: 11px; color: {FG_MUTED}; background: transparent;"
             )
@@ -319,7 +328,7 @@ class DroneBayPane(QWidget):
         run_btn.setStyleSheet(
             f"QPushButton {{ background: {ACCENT}; color: {BG}; "
             f"border: 1px solid {ACCENT}; border-radius: 4px; "
-            f"padding: 3px 14px; font-size: 12px; font-weight: 600; }}"
+            f"padding: 2px 10px; font-size: 11px; font-weight: 600; }}"
             f"QPushButton:hover {{ background: #94b6ff; }}"
         )
         run_btn.clicked.connect(
@@ -330,11 +339,11 @@ class DroneBayPane(QWidget):
         # g) Overflow/details button
         detail_btn = QPushButton("\u22EF")
         detail_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        detail_btn.setFixedWidth(32)
+        detail_btn.setFixedWidth(28)
         detail_btn.setStyleSheet(
             f"QPushButton {{ background: transparent; color: {FG}; "
             f"border: 1px solid {BORDER}; border-radius: 4px; "
-            f"padding: 2px 8px; font-size: 14px; }}"
+            f"padding: 2px 6px; font-size: 14px; }}"
             f"QPushButton:hover {{ border-color: {ACCENT}; }}"
         )
         row_layout.addWidget(detail_btn)
