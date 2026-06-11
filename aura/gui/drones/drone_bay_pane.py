@@ -119,7 +119,7 @@ class DroneBayPane(QWidget):
         self._card_container.setStyleSheet("background: transparent;")
         self._card_layout = QVBoxLayout(self._card_container)
         self._card_layout.setContentsMargins(0, 0, 0, 0)
-        self._card_layout.setSpacing(6)
+        self._card_layout.setSpacing(4)
         self._card_layout.addStretch(1)
 
         scroll.setWidget(self._card_container)
@@ -161,8 +161,7 @@ class DroneBayPane(QWidget):
             row_widget = self._build_drone_row(drone, last_run_info)
             self._card_layout.addWidget(row_widget)
 
-        # Add run history section after drone rows
-        self.refresh_run_history()
+
 
     def set_workspace_root(self, root: Path | None) -> None:
         self._workspace_root = root
@@ -249,12 +248,10 @@ class DroneBayPane(QWidget):
         # ---- Always-visible row ----
         row = QFrame()
         row.setObjectName("droneRow")
-        row.setCursor(Qt.CursorShape.PointingHandCursor)
-        row.setFixedHeight(58)
+        row.setMinimumHeight(44)
         row.setStyleSheet(
-            f"QFrame#droneRow {{ background: {BG_RAISED}; border: 1px solid {BORDER}; "
-            f"border-radius: 8px; padding: 0px; }}"
-            f"QFrame#droneRow:hover {{ border-color: {ACCENT}; }}"
+            f"QFrame#droneRow {{ background: transparent; border-bottom: 1px solid {BORDER}; padding: 0px; }}"
+            f"QFrame#droneRow:hover {{ background: rgba(255,255,255,0.03); }}"
         )
 
         row_layout = QHBoxLayout(row)
@@ -278,9 +275,10 @@ class DroneBayPane(QWidget):
         desc_label.setStyleSheet(
             f"font-size: 12px; color: {FG_DIM}; background: transparent;"
         )
-        desc_label.setMaximumWidth(200)
+        desc_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        desc_label.setElideMode(Qt.TextElideMode.ElideRight)
         desc_label.setContentsMargins(0, 0, 0, 0)
-        row_layout.addWidget(desc_label)
+        row_layout.addWidget(desc_label, 1)
 
         # c) Write policy pill
         policy_pill = self._make_policy_badge(drone.write_policy, compact=True)
@@ -315,8 +313,6 @@ class DroneBayPane(QWidget):
             )
         last_run_label.setContentsMargins(0, 0, 0, 0)
         row_layout.addWidget(last_run_label)
-
-        row_layout.addStretch(1)
 
         # f) Run button
         run_btn = QPushButton("Run")
@@ -526,17 +522,15 @@ class DroneBayPane(QWidget):
         def _toggle_detail() -> None:
             is_open = detail_widget.isVisible()
             detail_widget.setVisible(not is_open)
-            # Update border radii so row and detail panel connect seamlessly
+            # Update styles so row indicates expanded state
             if not is_open:
                 row.setStyleSheet(
-                    f"QFrame#droneRow {{ background: {BG_RAISED}; border: 1px solid {ACCENT}; "
-                    f"border-radius: 8px 8px 0 0; border-bottom: none; padding: 0px; }}"
+                    f"QFrame#droneRow {{ background: transparent; border-bottom: 2px solid {ACCENT}; padding: 0px; }}"
                 )
             else:
                 row.setStyleSheet(
-                    f"QFrame#droneRow {{ background: {BG_RAISED}; border: 1px solid {BORDER}; "
-                    f"border-radius: 8px; padding: 0px; }}"
-                    f"QFrame#droneRow:hover {{ border-color: {ACCENT}; }}"
+                    f"QFrame#droneRow {{ background: transparent; border-bottom: 1px solid {BORDER}; padding: 0px; }}"
+                    f"QFrame#droneRow:hover {{ background: rgba(255,255,255,0.03); }}"
                 )
 
         detail_btn.clicked.connect(_toggle_detail)
