@@ -10,6 +10,7 @@ from pathlib import Path
 from aura.drones.capabilities import CapabilityBinding, CapabilityRequirement
 from aura.drones.definition import DroneBudget, DroneDefinition, slugify
 from aura.drones.receipt import DroneReceipt
+from aura.paths import data_dir
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +20,11 @@ _WRITE_POLICIES = {"read_only", "ask_before_writes", "normal_diff_approval"}
 
 def _is_safe_drone_id(drone_id: str) -> bool:
     return bool(_DRONE_ID_RE.fullmatch(str(drone_id or "")))
+
+
+def _global_drones_root() -> Path:
+    """Return the global drones storage directory."""
+    return data_dir() / "drones"
 
 
 def _drone_from_dict(data: dict) -> DroneDefinition:
@@ -76,70 +82,129 @@ class DroneStore:
 
     @staticmethod
     def list_drones(workspace_root: Path) -> list[DroneDefinition]:
-        d = DroneStore.drones_dir(workspace_root)
-        if not d.exists():
-            return []
-        results: list[DroneDefinition] = []
-        for p in sorted(d.iterdir()):
-            if p.suffix != ".json":
-                continue
-            try:
-                data = json.loads(p.read_text(encoding="utf-8"))
-                results.append(_drone_from_dict(data))
-            except Exception:
-                logger.warning("Skipping invalid drone file: %s", p)
-        return results
+        seen: dict[str, DroneDefinition] = {}
+
+        # 1. Global: iterate subdirs, read drone.json from each
+        global_root = _global_drones_root()
+        if global_root.exists():
+            for subdir in sorted(global_root.iterdir()):
+                if not subdir.is_dir():
+                    continue
+                drone_file = subdir / "drone.json"
+                if not drone_file.exists():
+                    continue
+                try:
+                    data = json.loads(drone_file.read_text(encoding="utf-8"))
+                    drone = _drone_from_dict(data)
+                    seen[drone.id] = drone
+                except Exception:
+                    logger.warning("Skipping invalid global drone: %s", drone_file)
+
+        # 2. Legacy: workspace_root / ".aura" / "drones" / *.json
+        legacy_dir = DroneStore.drones_dir(workspace_root)
+        if legacy_dir.exists():
+            for p in sorted(legacy_dir.iterdir()):
+                if p.suffix != ".json":
+                    continue
+                try:
+                    data = json.loads(p.read_text(encoding="utf-8"))
+                    drone = _drone_from_dict(data)
+                    if drone.id not in seen:
+                        seen[drone.id] = drone
+                except Exception:
+                    logger.warning("Skipping invalid drone file: %s", p)
+
+        return sorted(seen.values(), key=lambda d: d.name)
 
     @staticmethod
     def load_drone(workspace_root: Path, drone_id: str) -> DroneDefinition | None:
         if not _is_safe_drone_id(drone_id):
             return None
-        d = DroneStore.drones_dir(workspace_root)
-        p = d / f"{drone_id}.json"
-        if not p.exists():
-            return None
-        try:
-            data = json.loads(p.read_text(encoding="utf-8"))
-            return _drone_from_dict(data)
-        except Exception:
-            logger.warning("Failed to load drone %s", drone_id)
-            return None
+
+        # 1. Check global first
+        global_file = _global_drones_root() / drone_id / "drone.json"
+        if global_file.exists():
+            try:
+                data = json.loads(global_file.read_text(encoding="utf-8"))
+                return _drone_from_dict(data)
+            except Exception:
+                logger.warning("Failed to load global drone %s", drone_id)
+                return None
+
+        # 2. Check legacy with best-effort migration
+        legacy_path = DroneStore.drones_dir(workspace_root) / f"{drone_id}.json"
+        if legacy_path.exists():
+            try:
+                data = json.loads(legacy_path.read_text(encoding="utf-8"))
+                drone = _drone_from_dict(data)
+                # Best-effort migration to global storage
+                try:
+                    DroneStore.save_drone(workspace_root, drone)
+                except Exception:
+                    logger.warning("Failed to migrate legacy drone %s to global", drone_id)
+                return drone
+            except Exception:
+                logger.warning("Failed to load legacy drone %s", drone_id)
+                return None
+
+        return None
 
     @staticmethod
     def save_drone(workspace_root: Path, drone: DroneDefinition) -> None:
         DroneStore.validate_drone(drone)
-        d = DroneStore._ensure_drones_dir(workspace_root)
-        p = d / f"{drone.id}.json"
+        global_root = _global_drones_root()
+        drone_dir = global_root / drone.id
+        drone_dir.mkdir(parents=True, exist_ok=True)
+        p = drone_dir / "drone.json"
         data = asdict(drone)
-        fd, tmp_path = tempfile.mkstemp(dir=str(d), suffix=".json")
+        fd, tmp_path = tempfile.mkstemp(dir=str(drone_dir), suffix=".json")
         with open(fd, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
         Path(tmp_path).replace(p)
 
     @staticmethod
     def delete_drone(workspace_root: Path, drone_id: str) -> bool:
-        """Remove a drone definition file. Returns True if deleted."""
+        """Remove a drone definition. Returns True if anything was deleted."""
         if not _is_safe_drone_id(drone_id):
             return False
-        d = DroneStore.drones_dir(workspace_root)
-        p = d / f"{drone_id}.json"
-        if not p.exists():
-            return False
-        p.unlink()
-        return True
+
+        deleted = False
+
+        # Delete from global
+        global_dir = _global_drones_root() / drone_id
+        global_file = global_dir / "drone.json"
+        if global_file.exists():
+            global_file.unlink()
+            try:
+                global_dir.rmdir()
+            except OSError:
+                pass
+            deleted = True
+
+        # Delete from legacy
+        legacy_path = DroneStore.drones_dir(workspace_root) / f"{drone_id}.json"
+        if legacy_path.exists():
+            legacy_path.unlink()
+            deleted = True
+
+        return deleted
 
     @staticmethod
     def next_id(workspace_root: Path, name: str) -> str:
         base = slugify(name)
         if not base:
             base = "drone"
-        d = DroneStore.drones_dir(workspace_root)
+
         candidate = base
         counter = 0
-        while (d / f"{candidate}.json").exists():
+
+        while True:
+            global_exists = (_global_drones_root() / candidate / "drone.json").exists()
+            legacy_exists = (DroneStore.drones_dir(workspace_root) / f"{candidate}.json").exists()
+            if not global_exists and not legacy_exists:
+                return candidate
             counter += 1
             candidate = f"{base}-{counter}"
-        return candidate
 
     @staticmethod
     def validate_drone(drone: DroneDefinition) -> None:
@@ -158,6 +223,8 @@ class DroneStore:
             raise ValueError("Drone max_tool_rounds must be at least 1")
         if drone.budget.timeout_seconds < 30:
             raise ValueError("Drone timeout_seconds must be at least 30")
+        if drone.scope not in ("global", "project"):
+            raise ValueError(f"Invalid Drone scope: {drone.scope}")
 
 
 class RunHistoryStore:

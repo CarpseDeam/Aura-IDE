@@ -22,7 +22,7 @@ class DroneDefinition:
     allowed_tools: tuple[str, ...]
     output_contract: str
     budget: DroneBudget = field(default_factory=DroneBudget)
-    scope: str = "project"
+    scope: str = "global"
     enabled: bool = True
     created_by: str = "user"
     created_at: str = ""

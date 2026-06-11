@@ -2,13 +2,23 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
+from aura import paths as aura_paths
 from aura.drones.capabilities import CapabilityBinding, CapabilityRequirement
 from aura.drones.definition import DroneBudget, DroneDefinition, default_tools_for_policy, slugify
-from aura.drones.store import DroneStore, _drone_from_dict
+from aura.drones.store import DroneStore, _drone_from_dict, _global_drones_root
+
+@pytest.fixture(autouse=True)
+def _patch_data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point data_dir to a tmp_path subdirectory for test isolation."""
+    monkeypatch.setattr(aura_paths, "data_dir", lambda: tmp_path / "data")
+    # Also patch the already-imported reference in store module
+    monkeypatch.setattr("aura.drones.store.data_dir", lambda: tmp_path / "data")
+
 
 # ---------------------------------------------------------------------------
 # list / load / save / delete
@@ -72,10 +82,11 @@ def test_save_creates_directory(tmp_path: Path) -> None:
         allowed_tools=(),
         output_contract="Return a summary",
     )
-    drone_dir = tmp_path / ".aura" / "drones"
+    drone_dir = _global_drones_root() / "first"
     assert not drone_dir.exists()
     DroneStore.save_drone(tmp_path, drone)
     assert drone_dir.exists()
+    assert (drone_dir / "drone.json").exists()
 
 
 def test_save_rejects_missing_required_fields(tmp_path: Path) -> None:
@@ -147,8 +158,7 @@ def test_save_updates_existing(tmp_path: Path) -> None:
 
 
 def test_invalid_json_skipped(tmp_path: Path) -> None:
-    drones_dir = DroneStore.drones_dir(tmp_path)
-    # Write a valid drone
+    # Write a valid drone (goes to global)
     drone = DroneDefinition(
         id="valid",
         name="Valid",
@@ -160,8 +170,10 @@ def test_invalid_json_skipped(tmp_path: Path) -> None:
     )
     DroneStore.save_drone(tmp_path, drone)
 
-    # Write an invalid json file
-    (drones_dir / "bad.json").write_text("{{{not json", encoding="utf-8")
+    # Write an invalid json file to the legacy path
+    legacy_dir = tmp_path / ".aura" / "drones"
+    legacy_dir.mkdir(parents=True)
+    (legacy_dir / "bad.json").write_text("{{{not json", encoding="utf-8")
 
     drones = DroneStore.list_drones(tmp_path)
     assert len(drones) == 1
@@ -228,7 +240,7 @@ def test_drone_definition_defaults() -> None:
         allowed_tools=(),
         output_contract="",
     )
-    assert d.scope == "project"
+    assert d.scope == "global"
     assert d.enabled is True
     assert d.created_by == "user"
     assert d.created_at == ""
@@ -452,3 +464,141 @@ def test_ignores_unknown_budget_fields() -> None:
     drone = _drone_from_dict(data)
     assert drone.budget.max_tool_rounds == 5
     assert drone.budget.timeout_seconds == 120
+
+
+# ---------------------------------------------------------------------------
+# global vs legacy storage
+# ---------------------------------------------------------------------------
+
+
+def test_legacy_drone_discovered(tmp_path: Path) -> None:
+    """Legacy .aura/drones/*.json files are discovered by list_drones."""
+    legacy_dir = tmp_path / ".aura" / "drones"
+    legacy_dir.mkdir(parents=True)
+    legacy_file = legacy_dir / "legacy-drone.json"
+    legacy_data = {
+        "id": "legacy-drone",
+        "name": "Legacy Drone",
+        "description": "A legacy drone",
+        "instructions": "Do the thing",
+        "write_policy": "read_only",
+        "allowed_tools": ["read_file"],
+        "output_contract": "A summary",
+    }
+    legacy_file.write_text(json.dumps(legacy_data), encoding="utf-8")
+
+    drones = DroneStore.list_drones(tmp_path)
+    assert len(drones) == 1
+    assert drones[0].id == "legacy-drone"
+    assert drones[0].name == "Legacy Drone"
+
+
+def test_global_wins_over_legacy(tmp_path: Path) -> None:
+    """When same id exists in global and legacy, global wins."""
+    global_drone = DroneDefinition(
+        id="duplicate",
+        name="Global Version",
+        description="I am global",
+        instructions="Global instructions",
+        write_policy="read_only",
+        allowed_tools=(),
+        output_contract="Global output",
+    )
+    DroneStore.save_drone(tmp_path, global_drone)
+
+    # Write legacy version with same id
+    legacy_dir = tmp_path / ".aura" / "drones"
+    legacy_dir.mkdir(parents=True)
+    legacy_data = {
+        "id": "duplicate",
+        "name": "Legacy Version",
+        "description": "I am legacy",
+        "instructions": "Legacy instructions",
+        "write_policy": "read_only",
+        "allowed_tools": [],
+        "output_contract": "Legacy output",
+    }
+    (legacy_dir / "duplicate.json").write_text(
+        json.dumps(legacy_data), encoding="utf-8"
+    )
+
+    drones = DroneStore.list_drones(tmp_path)
+    assert len(drones) == 1
+    assert drones[0].name == "Global Version"
+
+
+def test_legacy_migrated_on_load(tmp_path: Path) -> None:
+    """Loading a legacy drone migrates it to global storage."""
+    legacy_dir = tmp_path / ".aura" / "drones"
+    legacy_dir.mkdir(parents=True)
+    legacy_data = {
+        "id": "migrate-me",
+        "name": "Migrate Me",
+        "description": "Will be migrated",
+        "instructions": "Do migration",
+        "write_policy": "read_only",
+        "allowed_tools": [],
+        "output_contract": "Migration output",
+    }
+    (legacy_dir / "migrate-me.json").write_text(
+        json.dumps(legacy_data), encoding="utf-8"
+    )
+
+    drone = DroneStore.load_drone(tmp_path, "migrate-me")
+    assert drone is not None
+    assert drone.id == "migrate-me"
+    assert drone.name == "Migrate Me"
+
+    # Verify it was migrated to global
+    global_file = _global_drones_root() / "migrate-me" / "drone.json"
+    assert global_file.exists()
+    migrated_data = json.loads(global_file.read_text(encoding="utf-8"))
+    assert migrated_data["id"] == "migrate-me"
+
+
+def test_scope_defaults_to_global() -> None:
+    """DroneDefinition.scope defaults to 'global'."""
+    drone = DroneDefinition(
+        id="scope-test",
+        name="Scope Test",
+        description="",
+        instructions="Test",
+        write_policy="read_only",
+        allowed_tools=(),
+        output_contract="Output",
+    )
+    assert drone.scope == "global"
+
+
+def test_validate_drone_accepts_project_scope(tmp_path: Path) -> None:
+    """Drone with scope='project' passes validation."""
+    drone = DroneDefinition(
+        id="project-scope",
+        name="Project Scope",
+        description="",
+        instructions="Test",
+        write_policy="read_only",
+        allowed_tools=(),
+        output_contract="Output",
+        scope="project",
+    )
+    DroneStore.save_drone(tmp_path, drone)  # should not raise
+    loaded = DroneStore.load_drone(tmp_path, "project-scope")
+    assert loaded is not None
+    assert loaded.scope == "project"
+
+
+def test_validate_drone_rejects_invalid_scope(tmp_path: Path) -> None:
+    """Drone with invalid scope raises ValueError."""
+    drone = DroneDefinition(
+        id="bad-scope",
+        name="Bad Scope",
+        description="",
+        instructions="Test",
+        write_policy="read_only",
+        allowed_tools=(),
+        output_contract="Output",
+        scope="invalid_scope",
+    )
+    with pytest.raises(ValueError, match="Invalid Drone scope"):
+        DroneStore.save_drone(tmp_path, drone)

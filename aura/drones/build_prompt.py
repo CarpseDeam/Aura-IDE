@@ -38,9 +38,10 @@ def build_drone_creation_prompt(brief: DroneBuildBrief) -> str:
         "candidate providers — pick the simplest viable route for each capability."
     )
     lines.append(
-        "4. Create a JSON file under ``.aura/drones/`` that is compatible "
-        "with ``DroneDefinition``. Use ``DroneStore.next_id(workspace_root, name)`` "
-        "to generate a safe id from the Drone name."
+        "4. Use ``DroneStore.save_drone(workspace_root, drone)`` to persist the Drone. "
+        "Use ``DroneStore.next_id(workspace_root, name)`` to generate a safe id from "
+        "the Drone name. Do NOT manually write ``.aura/drones/*.json`` files. "
+        "The Drone will be saved globally and available across all workspaces."
     )
     lines.append(
         "5. Populate the capability fields from the resolution:"
