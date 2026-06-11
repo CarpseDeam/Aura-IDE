@@ -26,6 +26,8 @@ from aura.gui.cards._helpers import _MarkdownTextBlock
 from aura.gui.markdown_renderer import _render_markdown_with_code
 from aura.gui.theme import ACCENT, BG, BG_RAISED, BORDER, DANGER, FG, FG_DIM, FG_MUTED, SUCCESS, WARN
 
+MAX_PREVIEW_CHARS = 8000
+
 
 class DroneRunCard(QFrame):
     """Displays live progress of a Drone execution with streaming events.
@@ -466,19 +468,28 @@ class DroneRunCard(QFrame):
         """Deferred: render the full receipt summary markdown into the report area."""
         if self._receipt is None or not self._receipt.summary:
             return
+        summary = self._receipt.summary
+        capped = len(summary) > MAX_PREVIEW_CHARS
+        if capped:
+            summary = summary[:MAX_PREVIEW_CHARS]
         logger.debug(
-            "[DroneRunCard] _render_receipt_report start run_id=%s len=%d",
+            "[DroneRunCard] _render_receipt_report start run_id=%s len=%d capped=%s",
             self._receipt.run_id,
             len(self._receipt.summary),
+            capped,
         )
         # Remove placeholder
         if hasattr(self, '_report_placeholder') and self._report_placeholder is not None:
             self._report_layout.removeWidget(self._report_placeholder)
             self._report_placeholder.deleteLater()
             self._report_placeholder = None
-        html = _render_markdown_with_code(self._receipt.summary)
+        html = _render_markdown_with_code(summary)
         md_block = _MarkdownTextBlock(html, self._report_area)
         self._report_layout.addWidget(md_block)
+        if capped:
+            note = QLabel(f"(Report preview capped at {MAX_PREVIEW_CHARS} characters — use Copy Report for full content)")
+            note.setStyleSheet(f"color: {FG_MUTED}; font-size: 11px; background: transparent; margin-top: 4px;")
+            self._report_layout.addWidget(note)
         logger.debug("[DroneRunCard] _render_receipt_report end run_id=%s", self._receipt.run_id)
 
     def _copy_report(self) -> None:

@@ -262,11 +262,11 @@ class RunHistoryStore:
 
     @staticmethod
     def list_run_summaries(workspace_root: Path, limit: int = 50) -> list[dict]:
-        """Return lightweight run summaries sorted most-recent-first.
+        """Parse receipt JSON files and return lightweight summary dicts.
 
-        Only includes fields needed for history cards: run_id, drone_id,
-        drone_name, status, started_at, elapsed_seconds, tool_calls_count.
-        Does NOT load tool_calls, summary, errors, or output_contract.
+        Each JSON file is fully parsed (unavoidable to extract fields)
+        but only the lightweight fields are kept; tool_calls, summary,
+        errors, and output_contract are discarded.
         """
         d = RunHistoryStore.history_dir(workspace_root)
         if not d.exists():

@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
@@ -131,6 +135,7 @@ class DroneBayPane(QWidget):
 
     def refresh(self) -> None:
         """Reload drones from DroneStore and rebuild rows + run history."""
+        logger.debug("[DroneBay] refresh start workspace=%s", self._workspace_root)
         # Clear existing history section first
         self._clear_history_section()
         # Clear existing drone rows
@@ -150,6 +155,7 @@ class DroneBayPane(QWidget):
 
         # Build last-run lookup: map drone_id -> most recent run data
         all_runs = RunHistoryStore.list_run_summaries(self._workspace_root)
+        logger.debug("[DroneBay] refresh: %d drones, %d run summaries", len(drones), len(all_runs))
         last_run_by_drone: dict[str, dict] = {}
         for run_data in all_runs:
             did = run_data.get("drone_id", "")
@@ -158,10 +164,11 @@ class DroneBayPane(QWidget):
 
         for drone in drones:
             last_run_info = last_run_by_drone.get(drone.id)
-            row_widget = self._build_drone_row(drone, last_run_info)
+            row_widget = self._build_drone_row(drone, last_run_info, all_run_summaries=all_runs)
             self._card_layout.addWidget(row_widget)
 
         self._card_layout.addStretch(1)
+        logger.debug("[DroneBay] refresh end")
 
 
     def set_workspace_root(self, root: Path | None) -> None:
@@ -237,7 +244,7 @@ class DroneBayPane(QWidget):
         )
         return pill
 
-    def _build_drone_row(self, drone: DroneDefinition, last_run_info: dict | None) -> QWidget:
+    def _build_drone_row(self, drone: DroneDefinition, last_run_info: dict | None, all_run_summaries: list[dict] | None = None) -> QWidget:
         """Build a compact drone row with an expandable detail panel.
 
         Returns an outer QWidget containing the always-visible row QFrame
@@ -507,8 +514,12 @@ class DroneBayPane(QWidget):
 
         # Query runs filtered to this drone
         if self._workspace_root is not None:
-            drone_runs = RunHistoryStore.list_run_summaries(self._workspace_root)
-            filtered = [r for r in drone_runs if r.get("drone_id") == drone.id][:5]
+            if all_run_summaries is not None:
+                drone_runs = [r for r in all_run_summaries if r.get("drone_id") == drone.id][:5]
+            else:
+                drone_runs = RunHistoryStore.list_run_summaries(self._workspace_root)
+                drone_runs = [r for r in drone_runs if r.get("drone_id") == drone.id][:5]
+            filtered = drone_runs
         else:
             filtered = []
 
@@ -549,6 +560,7 @@ class DroneBayPane(QWidget):
 
     def refresh_run_history(self) -> None:
         """Reload run history from disk and rebuild the UI section."""
+        logger.debug("[DroneBay] refresh_run_history start")
         self._clear_history_section()
         self._run_history_widgets.clear()
 
@@ -600,6 +612,7 @@ class DroneBayPane(QWidget):
             section_layout.addWidget(card)
             self._run_history_widgets.append(card)
 
+        logger.debug("[DroneBay] refresh_run_history end (%d runs)", len(runs))
         self._card_layout.addWidget(self._history_section)
 
     def _build_history_card(self, run_data: dict) -> QFrame:
