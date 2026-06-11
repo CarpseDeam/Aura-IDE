@@ -1598,9 +1598,14 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             self._send_handler.clear_queue()
             self._input.set_queued_messages(0)
             self._reset_session_usage()
-            # Send the handoff as the first user message in the new conversation
-            handoff_payload = SendPayload(text=handoff_text, attachments=[])
-            self._send_handler.handle_send(handoff_payload, self.current_model(), self.current_thinking())
+            # Add handoff to bridge history as prior context (no API call)
+            self._bridge.history.append_user_text(
+                f"[Handoff from previous conversation — use as context for the next user request]\n\n{handoff_text}"
+            )
+            # Show local-only assistant message
+            self._chat.begin_assistant()
+            self._chat.append_content("Context loaded. What do you need?")
+            self._chat.assistant_done()
 
     def _on_tool_result(self, tool_id: str, name: str, ok: bool, result: str, extras: dict) -> None:
         self._chat.set_tool_result(tool_id, ok, result)
