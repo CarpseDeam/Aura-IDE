@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 from aura.conversation.dispatch import (
     WorkerDispatchRequest,
     WorkerDispatchResult,
+    WorkerMismatch,
     WorkerOutcomeStatus,
     infer_outcome_status,
     normalize_outcome_status,
@@ -24,12 +26,15 @@ from aura.bridge.dispatch import (
     _filter_scratch_write_records,
     _format_spec_as_user_message,
     _is_validation_scratch_path,
+    _parse_continuation_report,
+    _parse_structured_worker_failure,
     _unrecovered_validation_failures,
     _validation_results_for_task,
     _workspace_file_exists,
 )
 from aura.bridge.event_relay import _is_validation_terminal_record
 from aura.conversation.history import History
+from aura.conversation.manager import ConversationManager
 
 
 # WorkerDispatchRequest
@@ -1274,4 +1279,407 @@ def test_environment_caveat_is_not_edit_mechanics_failure():
     ) == WorkerOutcomeStatus.completed_with_caveats.value
 
 
+# WorkerMismatch
 
+
+def test_worker_mismatch_roundtrip():
+    original = WorkerMismatch(
+        kind=WorkerMismatch.MISSING_SYMBOL,
+        file_paths=["src/module.py"],
+        requested="Add function compute_value",
+        observed="Symbol compute_value already exists in another module",
+        worker_recommendation="Use a different name or merge the implementations",
+        question_for_planner="Should I rename or merge?",
+    )
+    data = original.to_dict()
+    restored = WorkerMismatch.from_dict(data)
+    assert restored is not None
+    assert restored.kind == original.kind
+    assert restored.file_paths == original.file_paths
+    assert restored.requested == original.requested
+    assert restored.observed == original.observed
+    assert restored.worker_recommendation == original.worker_recommendation
+    assert restored.question_for_planner == original.question_for_planner
+
+
+def test_worker_mismatch_from_dict_none():
+    assert WorkerMismatch.from_dict(None) is None
+
+
+def test_worker_mismatch_from_dict_non_dict():
+    assert WorkerMismatch.from_dict(42) is None
+    assert WorkerMismatch.from_dict("not a dict") is None
+    assert WorkerMismatch.from_dict([]) is None
+
+
+def test_worker_mismatch_from_dict_missing_fields():
+    restored = WorkerMismatch.from_dict({"kind": "missing_symbol"})
+    assert restored is not None
+    assert restored.kind == "missing_symbol"
+    assert restored.file_paths == []
+    assert restored.requested == ""
+    assert restored.observed == ""
+    assert restored.worker_recommendation == ""
+    assert restored.question_for_planner == ""
+
+
+def test_worker_mismatch_from_dict_coerces_types():
+    restored = WorkerMismatch.from_dict(
+        {
+            "kind": 42,
+            "file_paths": "single_path.py",
+            "requested": None,
+            "observed": 123,
+            "worker_recommendation": True,
+            "question_for_planner": ["not", "a", "string"],
+        }
+    )
+    assert restored is not None
+    assert restored.kind == "42"
+    assert restored.file_paths == ["single_path.py"]
+    assert restored.requested == "None"
+    assert restored.observed == "123"
+    assert restored.worker_recommendation == "True"
+    assert restored.question_for_planner == "['not', 'a', 'string']"
+
+
+# WorkerDispatchResult with mismatch
+
+
+def test_dispatch_result_to_tool_payload_includes_mismatch():
+    mismatch = WorkerMismatch(
+        kind=WorkerMismatch.SCHEMA_MISMATCH,
+        file_paths=["config.yaml"],
+        requested="Add field timeout=30",
+        observed="config.yaml uses different schema version",
+        worker_recommendation="Update schema version first",
+        question_for_planner="Should I update schema version?",
+    )
+    result = WorkerDispatchResult(
+        ok=False,
+        summary="Mismatch detected",
+        mismatch=mismatch,
+    )
+    payload = result.to_tool_payload()
+    assert "mismatch" in payload
+    assert payload["mismatch"]["kind"] == "schema_mismatch"
+    assert payload["mismatch"]["file_paths"] == ["config.yaml"]
+
+
+def test_dispatch_result_from_tool_payload_restores_mismatch():
+    payload = {
+        "ok": False,
+        "summary": "Mismatch",
+        "mismatch": {
+            "kind": "conflicting_spec",
+            "file_paths": ["a.py", "b.py"],
+            "requested": "Add feature X",
+            "observed": "Feature X conflicts with existing auth",
+            "worker_recommendation": "Disable auth override for X",
+            "question_for_planner": "Should I disable auth?",
+        },
+    }
+    restored = WorkerDispatchResult.from_tool_payload(payload)
+    assert restored.mismatch is not None
+    assert restored.mismatch.kind == "conflicting_spec"
+    assert restored.mismatch.file_paths == ["a.py", "b.py"]
+    assert restored.mismatch.requested == "Add feature X"
+
+
+def test_dispatch_result_no_mismatch_omitted():
+    result = WorkerDispatchResult(ok=True, summary="All good")
+    payload = result.to_tool_payload()
+    assert "mismatch" not in payload
+
+
+def test_dispatch_result_existing_payload_no_mismatch():
+    payload = {"ok": True, "summary": "Old style"}
+    restored = WorkerDispatchResult.from_tool_payload(payload)
+    assert restored.mismatch is None
+
+
+# normalize_outcome_status with needs_planner_resolution
+
+
+def test_normalize_needs_planner_resolution():
+    assert (
+        normalize_outcome_status("needs_planner_resolution")
+        == WorkerOutcomeStatus.needs_planner_resolution.value
+    )
+    assert (
+        normalize_outcome_status(WorkerOutcomeStatus.needs_planner_resolution)
+        == WorkerOutcomeStatus.needs_planner_resolution.value
+    )
+
+
+# infer_outcome_status with mismatch
+
+
+def test_infer_from_mismatch():
+    mismatch = WorkerMismatch(
+        kind=WorkerMismatch.MISSING_SYMBOL,
+        file_paths=["x.py"],
+        requested="Add func",
+        observed="Symbol exists",
+        worker_recommendation="Rename",
+        question_for_planner="Rename?",
+    )
+    result = WorkerDispatchResult(
+        ok=False, summary="Conflict", mismatch=mismatch
+    )
+    assert infer_outcome_status(result) == WorkerOutcomeStatus.needs_planner_resolution.value
+
+
+def test_infer_from_extras_planner_resolution_needed():
+    result = WorkerDispatchResult(
+        ok=False,
+        summary="Need planner input",
+        extras={"planner_resolution_needed": True},
+    )
+    assert infer_outcome_status(result) == WorkerOutcomeStatus.needs_planner_resolution.value
+
+
+def test_infer_explicit_status_wins_over_mismatch():
+    mismatch = WorkerMismatch(
+        kind=WorkerMismatch.MISSING_SYMBOL,
+        file_paths=["x.py"],
+        requested="Add func",
+        observed="Symbol exists",
+        worker_recommendation="Rename",
+        question_for_planner="Rename?",
+    )
+    result = WorkerDispatchResult(
+        ok=True, summary="Success", mismatch=mismatch,
+        status=WorkerOutcomeStatus.completed.value,
+    )
+    assert infer_outcome_status(result) == WorkerOutcomeStatus.completed.value
+
+
+# WorkerMismatch kind constants
+
+
+def test_worker_mismatch_kind_constants():
+    assert WorkerMismatch.MISSING_SYMBOL == "missing_symbol"
+    assert WorkerMismatch.SCHEMA_MISMATCH == "schema_mismatch"
+    assert WorkerMismatch.CONFLICTING_SPEC == "conflicting_spec"
+    assert WorkerMismatch.AMBIGUOUS_PRODUCT_DECISION == "ambiguous_product_decision"
+    assert WorkerMismatch.REPEATED_EDIT_FAILURE == "repeated_edit_failure"
+    assert WorkerMismatch.VALIDATION_UNCLEAR == "validation_unclear"
+
+
+class TestMismatchDispatchFlow:
+    """Tests for mismatch -> Planner resolution dispatch control-flow."""
+
+    def test_mismatch_allows_planner_continuation(self):
+        """_failed_dispatch_allows_planner_continuation returns True for mismatch."""
+        mismatch = WorkerMismatch(
+            kind=WorkerMismatch.MISSING_SYMBOL,
+            file_paths=["a.py"],
+            requested="Add func",
+            observed="Symbol already exists",
+            worker_recommendation="Rename",
+            question_for_planner="Should I rename?",
+        )
+        result = WorkerDispatchResult(
+            ok=False, summary="Mismatch", mismatch=mismatch
+        )
+        assert ConversationManager._failed_dispatch_allows_planner_continuation(result)
+
+    def test_planner_resolution_needed_extra_allows_continuation(self):
+        """_failed_dispatch_allows_planner_continuation returns True for extras flag."""
+        result = WorkerDispatchResult(
+            ok=False,
+            summary="Need planner",
+            extras={"planner_resolution_needed": True},
+        )
+        assert ConversationManager._failed_dispatch_allows_planner_continuation(result)
+
+    def test_mismatch_error_signature_includes_facts(self):
+        """Error signature includes mismatch kind, requested, observed, question."""
+        mismatch = WorkerMismatch(
+            kind=WorkerMismatch.MISSING_SYMBOL,
+            file_paths=["a.py"],
+            requested="Add compute_value",
+            observed="compute_value exists in b.py",
+            worker_recommendation="Use different name",
+            question_for_planner="Should I rename?",
+        )
+        result = WorkerDispatchResult(
+            ok=False, summary="Mismatch", mismatch=mismatch
+        )
+        sig = ConversationManager._worker_dispatch_error_signature(result)
+        assert "missing_symbol" in sig
+        assert "Add compute_value" in sig
+        assert "compute_value exists in b.py" in sig
+        assert "Should I rename?" in sig
+
+    def test_different_mismatch_questions_produce_different_signatures(self):
+        """Two mismatches with different questions yield different signatures."""
+        m1 = WorkerMismatch(
+            kind=WorkerMismatch.MISSING_SYMBOL,
+            file_paths=["a.py"],
+            requested="Add func",
+            observed="Conflict",
+            worker_recommendation="",
+            question_for_planner="Rename?",
+        )
+        m2 = WorkerMismatch(
+            kind=WorkerMismatch.MISSING_SYMBOL,
+            file_paths=["a.py"],
+            requested="Add func",
+            observed="Conflict",
+            worker_recommendation="",
+            question_for_planner="Merge instead?",
+        )
+        r1 = WorkerDispatchResult(ok=False, summary="M1", mismatch=m1)
+        r2 = WorkerDispatchResult(ok=False, summary="M2", mismatch=m2)
+        sig1 = ConversationManager._worker_dispatch_error_signature(r1)
+        sig2 = ConversationManager._worker_dispatch_error_signature(r2)
+        assert sig1 != sig2
+
+    def test_mismatch_is_not_internal_error(self):
+        """_is_worker_internal_error returns False for mismatch result."""
+        mismatch = WorkerMismatch(
+            kind=WorkerMismatch.SCHEMA_MISMATCH,
+            file_paths=["x.yaml"],
+            requested="Add field",
+            observed="Schema conflict",
+            worker_recommendation="",
+            question_for_planner="Which schema?",
+        )
+        result = WorkerDispatchResult(
+            ok=False, summary="Schema mismatch", mismatch=mismatch
+        )
+        assert not ConversationManager._is_worker_internal_error(result)
+
+    def test_mismatch_extras_in_payload(self):
+        """to_tool_payload includes planner_resolution_needed etc. when mismatch exists."""
+        mismatch = WorkerMismatch(
+            kind=WorkerMismatch.CONFLICTING_SPEC,
+            file_paths=["a.py", "b.py"],
+            requested="Add feature X",
+            observed="Feature X conflicts with Y",
+            worker_recommendation="Disable Y",
+            question_for_planner="Should I disable Y?",
+        )
+        result = WorkerDispatchResult(
+            ok=False, summary="Conflict", mismatch=mismatch
+        )
+        payload = result.to_tool_payload()
+        assert payload["extras"]["planner_resolution_needed"] is True
+        assert payload["extras"]["mismatch_kind"] == "conflicting_spec"
+        assert payload["extras"]["mismatch_question"] == "Should I disable Y?"
+
+    def test_no_mismatch_no_extra_extras(self):
+        """Normal result without mismatch doesn't get those extras injected."""
+        result = WorkerDispatchResult(
+            ok=False, summary="Regular failure",
+            extras={"some_other": "data"},
+        )
+        payload = result.to_tool_payload()
+        assert "extras" in payload
+        assert "planner_resolution_needed" not in payload["extras"]
+        assert "mismatch_kind" not in payload["extras"]
+        assert "mismatch_question" not in payload["extras"]
+        assert payload["extras"]["some_other"] == "data"
+
+    def test_ok_result_no_extras_without_mismatch(self):
+        """Result without mismatch and empty extras gets no extras in payload."""
+        result = WorkerDispatchResult(ok=True, summary="All good")
+        payload = result.to_tool_payload()
+        assert "extras" not in payload
+
+
+class TestMismatchParsing:
+    """Tests for _parse_continuation_report and _parse_structured_worker_failure mismatch handling."""
+
+    def test_parse_continuation_report_mismatch_json(self):
+        """<mismatch> containing a JSON object parses correctly."""
+        content = (
+            "<status>needs_followup</status>"
+            "<mismatch>{\"kind\": \"missing_symbol\", \"file_paths\": [\"a.py\"], "
+            "\"requested\": \"Add func\", \"observed\": \"Symbol exists\", "
+            "\"worker_recommendation\": \"Rename\", "
+            "\"question_for_planner\": \"Rename?\"}</mismatch>"
+            "<completed>Done</completed>"
+        )
+        result = _parse_continuation_report(content)
+        assert result["mismatch"] is not None
+        assert result["mismatch"]["kind"] == "missing_symbol"
+        assert result["mismatch"]["file_paths"] == ["a.py"]
+        assert result["mismatch"]["question_for_planner"] == "Rename?"
+
+    def test_parse_continuation_report_no_mismatch(self):
+        """Content without mismatch returns None for mismatch key."""
+        content = (
+            "<status>ok</status>"
+            "<completed>Task done</completed>"
+        )
+        result = _parse_continuation_report(content)
+        assert result["mismatch"] is None
+
+    def test_parse_continuation_report_mismatch_non_json(self):
+        """Mismatch text that isn't JSON is stored as {"raw": ...}."""
+        content = (
+            "<status>needs_followup</status>"
+            "<mismatch>Worker found a conflict but didn't format as JSON</mismatch>"
+        )
+        result = _parse_continuation_report(content)
+        assert result["mismatch"] is not None
+        assert result["mismatch"]["raw"] == "Worker found a conflict but didn't format as JSON"
+
+    def test_parse_structured_worker_failure_mismatch(self):
+        """JSON with status needs_planner_resolution and mismatch dict is recognized."""
+        data = {
+            "status": "needs_planner_resolution",
+            "mismatch": {
+                "kind": "conflicting_spec",
+                "file_paths": ["a.py"],
+                "requested": "Add X",
+                "observed": "X conflicts with Y",
+                "worker_recommendation": "",
+                "question_for_planner": "Disable Y?",
+            },
+        }
+        content = json.dumps(data)
+        result = _parse_structured_worker_failure(content)
+        assert result.get("status") == "needs_planner_resolution"
+        assert result["mismatch"]["kind"] == "conflicting_spec"
+
+    def test_compute_outcome_status_mismatch(self):
+        """_compute_outcome_status with mismatch status returns needs_planner_resolution."""
+        continuation = {"status": "needs_planner_resolution"}
+        outcome = _compute_outcome_status(
+            ok=False,
+            needs_followup=False,
+            recoverable=False,
+            has_internal_failure=False,
+            has_validation_failure=False,
+            has_recoverable_edit_blocker=False,
+            has_source_inspection_blocker=False,
+            has_no_work=False,
+            is_implementation=True,
+            has_unverified_acceptance=False,
+            has_hard_failure=False,
+            result_errors=[],
+            result_caveats=[],
+            continuation=continuation,
+        )
+        assert outcome == WorkerOutcomeStatus.needs_planner_resolution.value
+
+    def test_mismatch_does_not_break_existing_parsing(self):
+        """A normal continuation report still parses correctly after mismatch changes."""
+        content = (
+            "<status>needs_followup</status>"
+            "<reason>Validation errors</reason>"
+            "<completed>- Fixed test_a.py\n- Updated test_b.py</completed>"
+            "<remaining>- Fix test_c.py</remaining>"
+            "<recommended_next_step>Run tests again</recommended_next_step>"
+        )
+        result = _parse_continuation_report(content)
+        assert result["status"] == "needs_followup"
+        assert result["reason"] == "Validation errors"
+        assert result["completed"] == ["Fixed test_a.py", "Updated test_b.py"]
+        assert result["remaining"] == ["Fix test_c.py"]
+        assert result["recommended_next_step"] == "Run tests again"
+        assert result["mismatch"] is None

@@ -31,6 +31,9 @@ class WorkerOutcomeStatus(str, enum.Enum):
     needs_followup = "needs_followup"
     """Worker made partial progress; a follow-up dispatch is needed."""
 
+    needs_planner_resolution = "needs_planner_resolution"
+    """Worker encountered Planner handoff conflicts with repo reality."""
+
     validation_failed = "validation_failed"
     """Worker-produced code failed validation checks."""
 
@@ -158,6 +161,7 @@ class WorkerDispatchResult:
     validation: str | None = None
     suggested_next_spec: str | None = None
     extras: dict[str, Any] = field(default_factory=dict)
+    mismatch: WorkerMismatch | None = None
 
     def to_tool_payload(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -183,8 +187,15 @@ class WorkerDispatchResult:
             payload["validation"] = self.validation
         if self.suggested_next_spec is not None:
             payload["suggested_next_spec"] = self.suggested_next_spec
-        if self.extras:
-            payload["extras"] = self.extras
+        extras = dict(self.extras)
+        if self.mismatch is not None:
+            extras.setdefault("planner_resolution_needed", True)
+            extras.setdefault("mismatch_kind", self.mismatch.kind)
+            extras.setdefault("mismatch_question", self.mismatch.question_for_planner)
+        if extras:
+            payload["extras"] = extras
+        if self.mismatch is not None:
+            payload["mismatch"] = self.mismatch.to_dict()
         if self.status is not None:
             payload["status"] = self.status
         return payload
@@ -212,6 +223,59 @@ class WorkerDispatchResult:
                 str(data["suggested_next_spec"]) if data.get("suggested_next_spec") is not None else None
             ),
             extras=data.get("extras") if isinstance(data.get("extras"), dict) else {},
+            mismatch=WorkerMismatch.from_dict(data.get("mismatch")),
+        )
+
+
+@dataclass(frozen=True)
+class WorkerMismatch:
+    """Structured mismatch report: Worker discovered Planner handoff conflicts with repo reality."""
+
+    kind: str
+    file_paths: list[str]
+    requested: str
+    observed: str
+    worker_recommendation: str
+    question_for_planner: str
+
+    # Supported kind values
+    MISSING_SYMBOL = "missing_symbol"
+    SCHEMA_MISMATCH = "schema_mismatch"
+    CONFLICTING_SPEC = "conflicting_spec"
+    AMBIGUOUS_PRODUCT_DECISION = "ambiguous_product_decision"
+    REPEATED_EDIT_FAILURE = "repeated_edit_failure"
+    VALIDATION_UNCLEAR = "validation_unclear"
+
+    _KINDS = (
+        MISSING_SYMBOL,
+        SCHEMA_MISMATCH,
+        CONFLICTING_SPEC,
+        AMBIGUOUS_PRODUCT_DECISION,
+        REPEATED_EDIT_FAILURE,
+        VALIDATION_UNCLEAR,
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "kind": self.kind,
+            "file_paths": list(self.file_paths),
+            "requested": self.requested,
+            "observed": self.observed,
+            "worker_recommendation": self.worker_recommendation,
+            "question_for_planner": self.question_for_planner,
+        }
+
+    @classmethod
+    def from_dict(cls, raw: Any) -> "WorkerMismatch | None":
+        if not isinstance(raw, dict):
+            return None
+        return cls(
+            kind=str(raw.get("kind", "")),
+            file_paths=_require_list_str(raw.get("file_paths", []), "file_paths"),
+            requested=str(raw.get("requested", "")),
+            observed=str(raw.get("observed", "")),
+            worker_recommendation=str(raw.get("worker_recommendation", "")),
+            question_for_planner=str(raw.get("question_for_planner", "")),
         )
 
 
@@ -222,6 +286,10 @@ def infer_outcome_status(result: WorkerDispatchResult) -> str:
         return explicit
     if result.cancelled:
         return WorkerOutcomeStatus.cancelled.value
+    if result.mismatch is not None:
+        return WorkerOutcomeStatus.needs_planner_resolution
+    if result.extras.get("planner_resolution_needed"):
+        return WorkerOutcomeStatus.needs_planner_resolution
     if not result.ok:
         extras = result.extras if isinstance(result.extras, dict) else {}
         errors = extras.get("errors") if isinstance(extras.get("errors"), list) else []
@@ -363,6 +431,20 @@ def _string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(item) for item in value]
+
+
+def _require_list_str(value: Any, field: str = "") -> list[str]:
+    """Coerce a value to a list of strings.
+
+    If value is a list, each item is coerced to str.
+    If value is a single string, wraps it in a list.
+    Otherwise returns an empty list.
+    """
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    if isinstance(value, str):
+        return [value]
+    return []
 
 
 def _string_dict_list(value: Any) -> dict[str, list[str]]:
@@ -523,6 +605,7 @@ cancelled the dispatch and (if approved) the worker manager has finished.
 __all__ = [
     "WorkerDispatchRequest",
     "WorkerDispatchResult",
+    "WorkerMismatch",
     "WorkerOutcomeStatus",
     "WorkerTaskSpec",
     "TaskShape",

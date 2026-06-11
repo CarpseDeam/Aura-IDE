@@ -34,6 +34,7 @@ from aura.conversation import (
     History,
     WorkerDispatchRequest,
     WorkerDispatchResult,
+    WorkerMismatch,
     WorkerOutcomeStatus,
     WorkerTaskSpec,
     normalize_worker_task,
@@ -444,7 +445,12 @@ class _DispatchProxy(QObject):
 
         structured_failure = _parse_structured_worker_failure(final_report)
         if structured_failure:
-            result_errors.append(_format_structured_worker_failure(structured_failure))
+            if structured_failure.get("status") == "needs_planner_resolution":
+                # Mismatch from structured JSON — flow into continuation
+                if not continuation.get("mismatch"):
+                    continuation["mismatch"] = structured_failure.get("mismatch")
+            else:
+                result_errors.append(_format_structured_worker_failure(structured_failure))
 
         recoverable_write_failures = [
             r for r in write_failures if _is_recoverable_worker_write_failure(r)
@@ -705,6 +711,12 @@ class _DispatchProxy(QObject):
         if isinstance(task_shape_ms, (int, float)):
             extras["task_shape_ms"] = task_shape_ms
 
+        mismatch = WorkerMismatch.from_dict(continuation.get("mismatch"))
+        if mismatch is not None:
+            extras["planner_resolution_needed"] = True
+            extras["mismatch_kind"] = mismatch.kind
+            extras["mismatch_question"] = mismatch.question_for_planner
+
         spec_dict = req.to_dict()
         spec_dict["task_spec"] = task_spec.to_dict()
         record = WorkerDispatchRecord(
@@ -744,6 +756,7 @@ class _DispatchProxy(QObject):
             validation=continuation.get("validation_text"),
             suggested_next_spec=continuation.get("recommended_next_step"),
             extras=extras,
+            mismatch=mismatch,
         )
 
 
@@ -789,6 +802,8 @@ def _compute_outcome_status(
     if "craft_rejected" in failure_classes or reject_flags:
         return S.craft_rejected.value
     structured_status = str(continuation.get("status") or "")
+    if structured_status == "needs_planner_resolution":
+        return S.needs_planner_resolution.value
     if has_recoverable_edit_blocker or (
         not has_applied_writes
         and any(
@@ -976,6 +991,9 @@ def _parse_structured_worker_failure(content: str) -> dict[str, Any]:
         return {}
     if not isinstance(parsed, dict):
         return {}
+    # Recognize needs_planner_resolution as a structured handoff, not a failure.
+    if parsed.get("status") == "needs_planner_resolution" and isinstance(parsed.get("mismatch"), dict):
+        return parsed
     if parsed.get("ok") is not False:
         return {}
     failure_class = parsed.get("failure_class")
@@ -1778,6 +1796,17 @@ def _parse_continuation_report(content: str) -> dict[str, Any]:
             items.append(line)
         return items
 
+    mismatch_raw = section("mismatch").strip()
+    if mismatch_raw.startswith("{"):
+        try:
+            mismatch_data = json.loads(mismatch_raw)
+        except (json.JSONDecodeError, TypeError):
+            mismatch_data = {"raw": mismatch_raw}
+    elif mismatch_raw:
+        mismatch_data = {"raw": mismatch_raw}
+    else:
+        mismatch_data = None
+
     return {
         "status": section("status"),
         "reason": section("reason"),
@@ -1786,4 +1815,5 @@ def _parse_continuation_report(content: str) -> dict[str, Any]:
         "validation_text": section("validation"),
         "remaining": list_section("remaining"),
         "recommended_next_step": section("recommended_next_step"),
+        "mismatch": mismatch_data,
     }

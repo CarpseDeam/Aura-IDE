@@ -1709,6 +1709,12 @@ class ConversationManager:
             return False
         if result.extras.get("dispatch_spec_rejected"):
             return True
+        if result.mismatch is not None:
+            return True
+        if result.extras.get("planner_resolution_needed"):
+            return True
+        if getattr(result, "needs_planner_resolution", False):
+            return True
         return bool(result.needs_followup or result.recoverable or result.phase_boundary)
 
     @staticmethod
@@ -1767,6 +1773,13 @@ class ConversationManager:
             parts.append("recoverable")
         if result.phase_boundary:
             parts.append("phase_boundary")
+        if result.mismatch is not None:
+            parts.extend([
+                result.mismatch.kind,
+                result.mismatch.requested,
+                result.mismatch.observed,
+                result.mismatch.question_for_planner,
+            ])
         if not parts:
             parts.append(" ".join(result.summary.split())[:240])
         return ";".join(parts)
@@ -1791,6 +1804,11 @@ class ConversationManager:
                 message = (
                     "Plan incomplete — missing required dispatch details. "
                     "The same Worker handoff was rejected twice, so I stopped automatic redispatch."
+                )
+            elif result.mismatch is not None or result.extras.get("planner_resolution_needed"):
+                message = (
+                    "The same Worker mismatch was returned twice. I stopped automatic redispatch "
+                    "so the Planner handoff can change."
                 )
             else:
                 message = (
