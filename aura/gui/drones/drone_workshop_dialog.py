@@ -64,7 +64,6 @@ class _WorkshopTextEdit(QTextEdit):
 class DroneWorkshopDialog(QDialog):
     """Dialog for building a Drone via conversation with Aura."""
 
-    buildSpecApproved = Signal(object)  # emits DroneBuildBrief (legacy)
     drone_build_requested = Signal(object)  # emits DroneBuildBrief
 
     def __init__(
@@ -337,10 +336,10 @@ class DroneWorkshopDialog(QDialog):
         self._runner_thread.start()
 
     def _on_response_ready(self, response: DroneWorkshopResponse) -> None:
-        if response.error:
+        if response.kind == "error":
             if self._thinking_card:
-                self._thinking_card.set_error(f"Error: {response.error}")
-            self._conversation.append({"role": "assistant", "content": response.error})
+                self._thinking_card.set_error(f"Error: {response.message}")
+            self._conversation.append({"role": "assistant", "content": response.message})
             self._build_btn.setEnabled(False)
             self._build_btn.setText("Build this Drone")
             return
@@ -370,12 +369,6 @@ class DroneWorkshopDialog(QDialog):
             else:
                 self._build_btn.setEnabled(False)
                 self._build_btn.setText("Build this Drone")
-
-        elif response.kind == "error":
-            if self._thinking_card:
-                self._thinking_card.set_error(f"Error: {response.message}")
-            self._build_btn.setEnabled(False)
-            self._build_btn.setText("Build this Drone")
 
     def _on_api_error(self, status_code: int, message: str) -> None:
         if self._thinking_card:
@@ -410,7 +403,6 @@ class DroneWorkshopDialog(QDialog):
     def _on_approve_build(self) -> None:
         """User clicked Build this Drone — emit signal and accept."""
         if self._last_valid_brief is not None:
-            self.buildSpecApproved.emit(self._last_valid_brief)
             self.drone_build_requested.emit(self._last_valid_brief)
         self.accept()
 
