@@ -619,7 +619,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
                         self, "Git Init Failed", msg
                     )
 
-    def _on_project_selected(self, root_path: Path) -> None:
+    def _on_project_selected(self, root_path: Path, *, restore_last: bool = True) -> None:
         from aura.projects.store import ProjectStore
         project = ProjectStore().create_or_update_project(root_path)
         self._companion.set_current_project(project.id, project.name)
@@ -648,7 +648,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._refresh_status_bar()
 
         # Optionally restore last conversation from the new workspace
-        if self._settings.restore_last_conversation:
+        if self._settings.restore_last_conversation and restore_last:
             QTimer.singleShot(0, lambda: self._persistence.restore_last(root_path))
 
     def _on_new_project(self) -> None:
@@ -1468,7 +1468,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             )
             return
         if self._workspace_root is not None and self._workspace_root.resolve() != project_root.resolve():
-            self._on_project_selected(project_root)
+            self._on_project_selected(project_root, restore_last=False)
         try:
             self._persistence.load_and_apply(conversation_path)
             self._send_handler.clear_queue()
