@@ -29,8 +29,9 @@ from aura.gui.drones.chain_canvas import (
     ChainEdgeItem,
     ChainNodeItem,
 )
-from aura.drones.chain_store import load_chain, save_chain, delete_chain, list_chains
-from aura.drones.drone_registry import DroneRegistry
+from aura.drones.chain import ChainDefinition
+from aura.drones.chain_store import _chain_from_dict, load_chain, save_chain, delete_chain, list_chains
+from aura.drones.store import DroneStore
 from aura.gui.drones.drone_workshop_panel import DroneWorkshopPanel
 from aura.gui.drones.workflow_list_pane import WorkflowListPane
 
@@ -154,7 +155,7 @@ class _DroneCard(QFrame):
         drag = QDrag(self)
         mime_data = drag.mimeData()
         mime_data.setText(self.drone_id)
-        mime_data.setData("application/x-auradrone", self.drone_id.encode())
+        mime_data.setData("application/x-aura-drone-id", self.drone_id.encode())
         pixmap = QPixmap(self.size())
         self.render(pixmap)
         drag.setPixmap(pixmap)
@@ -197,18 +198,17 @@ class _DroneRosterWidget(QScrollArea):
             item = self._layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
-        registry = DroneRegistry(self._workspace_root)
-        drones = registry.list_drones()
+        drones = DroneStore.list_drones(self._workspace_root)
         if not drones:
             empty = QLabel("No drones saved yet.\nClick + New Drone to build one.")
             empty.setWordWrap(True)
             empty.setStyleSheet(f"color: {_qss_color(FG_MUTED)}; font-size: 11px; padding: 8px;")
             self._layout.insertWidget(self._layout.count() - 1, empty)
         for d in drones:
-            card = _DroneCard(d["id"], d["name"], d.get("description", ""), d.get("accepts", "any"), d.get("produces", "any"))
-            card._on_run = lambda did=d["id"]: self._editor.runDroneRequested.emit(did)
-            card._on_edit = lambda did=d["id"]: self._editor.editDroneRequested.emit(did)
-            card._on_delete = lambda did=d["id"]: self._editor.deleteDroneRequested.emit(did)
+            card = _DroneCard(d.id, d.name, d.description, d.accepts or "any", d.produces or "any")
+            card._on_run = lambda did=d.id: self._editor.runDroneRequested.emit(did)
+            card._on_edit = lambda did=d.id: self._editor.editDroneRequested.emit(did)
+            card._on_delete = lambda did=d.id: self._editor.deleteDroneRequested.emit(did)
             self._layout.insertWidget(self._layout.count() - 1, card)
 
 
@@ -685,10 +685,11 @@ class ChainEditor(QWidget):
                 self._chain_name = data.get("name", "")
                 self._chain_desc = data.get("description", "")
                 self._auto_route = data.get("auto_route", False)
-                self._canvas.load_chain(data)
+                chain_def = _chain_from_dict(data)
+                drone_lookup = self._build_drone_lookup()
+                self._canvas.load_chain(chain_def, drone_lookup)
                 self._dirty = False
                 self._update_title_label()
-                self._build_drone_lookup()
                 self._property_panel.rebuild()
                 self._update_context_panel()
                 return
@@ -697,16 +698,15 @@ class ChainEditor(QWidget):
         self._chain_name = ""
         self._chain_desc = ""
         self._auto_route = False
-        self._canvas.load_chain({"nodes": [], "edges": [], "name": "", "description": "", "auto_route": False})
+        chain_def = ChainDefinition(id="", name="", description="", nodes=(), edges=())
+        self._canvas.load_chain(chain_def, self._build_drone_lookup())
         self._dirty = False
         self._current_chain_id = None
         self._update_title_label()
         self._property_panel.rebuild()
 
-    def _build_drone_lookup(self) -> None:
-        registry = DroneRegistry(self._workspace_root)
-        drone_map = {d["id"]: d for d in registry.list_drones()}
-        self._canvas.set_drone_lookup(drone_map)
+    def _build_drone_lookup(self) -> dict[str, DroneDefinition]:
+        return {d.id: d for d in DroneStore.list_drones(self._workspace_root)}
 
     def _sync_form_from_chain(self) -> None:
         if self._property_panel is None:
@@ -734,18 +734,18 @@ class ChainEditor(QWidget):
 
     def _snapshot_chain(self) -> dict:
         self._sync_chain_from_form()
-        data = self._canvas.save_chain()
-        data["name"] = self._chain_name
-        data["description"] = self._chain_desc
-        data["auto_route"] = self._auto_route
-        return data
+        nodes, edges = self._canvas.to_chain_nodes_and_edges()
+        return {
+            "nodes": nodes,
+            "edges": edges,
+            "name": self._chain_name,
+            "description": self._chain_desc,
+            "auto_route": self._auto_route,
+        }
 
     def _save_chain(self) -> None:
         self._sync_chain_from_form()
-        data = self._canvas.save_chain()
-        data["name"] = self._chain_name
-        data["description"] = self._chain_desc
-        data["auto_route"] = self._auto_route
+        data = self._snapshot_chain()
 
         if self._chain_id:
             save_chain(self._workspace_root, self._chain_id, data)
@@ -760,10 +760,7 @@ class ChainEditor(QWidget):
 
     def _save_chain_as(self) -> None:
         self._sync_chain_from_form()
-        data = self._canvas.save_chain()
-        data["name"] = self._chain_name
-        data["description"] = self._chain_desc
-        data["auto_route"] = self._auto_route
+        data = self._snapshot_chain()
         chain_id = save_chain(self._workspace_root, None, data)
         self._chain_id = chain_id
         self._current_chain_id = chain_id
@@ -773,19 +770,17 @@ class ChainEditor(QWidget):
 
     def _validate_chain(self) -> None:
         self._sync_chain_from_form()
-        data = self._canvas.save_chain()
-        nodes = data.get("nodes", [])
-        edges = data.get("edges", [])
+        nodes, edges = self._canvas.to_chain_nodes_and_edges()
         issues: list[str] = []
 
         if not nodes:
             issues.append("No nodes in the workflow.")
         node_ids = {n["id"] for n in nodes}
         for e in edges:
-            if e["source"] not in node_ids:
-                issues.append(f"Edge references missing source node {e['source']}.")
-            if e["dest"] not in node_ids:
-                issues.append(f"Edge references missing destination node {e['dest']}.")
+            if e["from_node"] not in node_ids:
+                issues.append(f"Edge references missing source node {e['from_node']}.")
+            if e["to_node"] not in node_ids:
+                issues.append(f"Edge references missing destination node {e['to_node']}.")
 
         has_draft = any(n.get("is_draft") for n in nodes)
         if has_draft:
@@ -1042,23 +1037,12 @@ class ChainEditor(QWidget):
         if draft_id is None or draft_id not in self._canvas._nodes:
             return
         node = self._canvas._nodes[draft_id]
-        node.is_draft = False
-        node._drone_id = spec.drone_id
-        node._goal_template = spec.goal_template
+        node._is_draft = False
+        node.goal_template = spec.goal_template
 
-        if spec.build_mode == BuildMode.EXISTING:
-            registry = DroneRegistry(self._workspace_root)
-            drone_data = registry.get_drone(spec.drone_id)
-            if drone_data:
-                node.drone = drone_data
-                node.drone_name = drone_data["name"]
-        else:
-            from aura.drones.drone_registry import DroneRegistry
-            registry = DroneRegistry(self._workspace_root)
-            drone_data = registry.get_drone(spec.drone_id)
-            if drone_data:
-                node.drone = drone_data
-                node.drone_name = drone_data["name"]
+        drone_def = DroneStore.load_drone(self._workspace_root, spec.drone_id)
+        if drone_def is not None:
+            node._drone = drone_def
 
         node.update()
         self._workshop_draft_node_id = None
@@ -1066,7 +1050,8 @@ class ChainEditor(QWidget):
         node.setSelected(True)
         self._roster.populate()
         self._on_selection_changed()
-        self.set_status(f"Drone settled: {node.drone_name}", "ok")
+        drone_name = node._drone.name if node._drone else "?"
+        self.set_status(f"Drone settled: {drone_name}", "ok")
 
     # ------------------------------------------------------------------
     # Run / Delete
@@ -1106,6 +1091,11 @@ class ChainEditor(QWidget):
         if self._roster is not None:
             self._roster.set_workspace_root(self._workspace_root)
             self._roster.populate()
+        if self._canvas._nodes:
+            data = self._snapshot_chain()
+            chain_def = _chain_from_dict(data)
+            drone_lookup = self._build_drone_lookup()
+            self._canvas.load_chain(chain_def, drone_lookup)
 
     def chain_editor(self) -> ChainEditor:
         """Return self for compatibility with popout window accessor."""

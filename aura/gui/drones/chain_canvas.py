@@ -983,7 +983,13 @@ class ChainCanvas(QGraphicsView):
             return
         super().contextMenuEvent(event)
 
-    def _canvas_add_draft_node(self, scene_pos: QPointF) -> ChainNodeItem:
+    def _canvas_add_draft_node(
+        self,
+        scene_pos: QPointF,
+        draft_name: str = "Untitled Drone",
+        draft_accepts: str = "",
+        draft_produces: str = "",
+    ) -> ChainNodeItem:
         node_id = f"draft-{uuid.uuid4().hex[:8]}"
         item = ChainNodeItem(
             node_id=node_id,
@@ -991,7 +997,9 @@ class ChainCanvas(QGraphicsView):
             goal_template="",
             canvas=self,
             is_draft=True,
-            draft_name="Untitled Drone",
+            draft_name=draft_name,
+            draft_accepts=draft_accepts,
+            draft_produces=draft_produces,
         )
         item.setPos(scene_pos - QPointF(NODE_WIDTH / 2, NODE_HEIGHT / 2))
         self._scene.addItem(item)
@@ -1001,6 +1009,15 @@ class ChainCanvas(QGraphicsView):
         item.setSelected(True)
         self.canvasChanged.emit()
         return item
+
+    def create_draft_node(
+        self,
+        name: str = "Untitled Drone",
+        accepts: str = "any",
+        produces: str = "any",
+    ) -> ChainNodeItem:
+        center = self.mapToScene(self.viewport().rect().center())
+        return self._canvas_add_draft_node(center, draft_name=name, draft_accepts=accepts, draft_produces=produces)
 
     # ---- Space background ----
 
