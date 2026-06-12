@@ -550,7 +550,7 @@ class ChainEditor(QWidget):
             btn = QToolButton()
             btn.setText(name)
             btn.setCheckable(True)
-            btn.setFlat(True)
+            btn.setAutoRaise(True)
             btn.clicked.connect(lambda checked, n=name: self._set_active_mode(n))
             mode_layout.addWidget(btn)
             self._mode_buttons[name] = btn
