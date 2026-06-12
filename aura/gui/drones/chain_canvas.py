@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import time
 import uuid
 from pathlib import Path
 
@@ -12,9 +13,9 @@ from PySide6.QtGui import (
     QFontMetrics,
     QLinearGradient,
     QPainter,
+    QPainterPath,
     QPen,
     QPixmap,
-    QRadialGradient,
 )
 from PySide6.QtWidgets import (
     QGraphicsItem,
@@ -39,10 +40,11 @@ from aura.gui.theme import (
     WARN,
 )
 
-NODE_WIDTH = 140
-NODE_HEIGHT = 60
+NODE_WIDTH = 180
+NODE_HEIGHT = 72
 PORT_RADIUS = 4
 PORT_DIAMETER = PORT_RADIUS * 2
+NODE_RADIUS = 14
 
 
 def _qt_color(value, fallback="#ffffff"):
@@ -198,11 +200,11 @@ class ChainNodeItem(QGraphicsObject):
     @property
     def border_color(self) -> QColor:
         if self._is_draft:
-            return QColor("#9b8bb5")
+            return QColor("#9d7cd8")
         if self._missing:
             return _qt_color(DANGER)
         policy = getattr(self._drone, "write_policy", "read_only")
-        return _qt_color(SUCCESS) if policy == "read_only" else _qt_color(WARN)
+        return QColor("#7dcfff") if policy == "read_only" else QColor("#e0af68")
 
     def _position_ports(self) -> None:
         """Place input/output ports on left and right edges."""
@@ -213,89 +215,175 @@ class ChainNodeItem(QGraphicsObject):
         return QRectF(0, 0, NODE_WIDTH, NODE_HEIGHT)
 
     def paint(self, painter: QPainter, option, widget=None) -> None:
-        rect = self.boundingRect().adjusted(1, 1, -1, -1)
+        rect = self.boundingRect()
+        pad_x = 12
+        inner_w = NODE_WIDTH - pad_x * 2
 
-        # Body
-        painter.setBrush(QBrush(_qt_color(BG_ALT)))
-        border = self.border_color
-        pen_w = 2
-        if self.isSelected():
-            border = _qt_color(ACCENT)
-            pen_w = 3
-        painter.setPen(QPen(border, pen_w))
-        painter.drawRoundedRect(rect, 6, 6)
+        # --- Glass body ---
+        painter.setBrush(QBrush(QColor(22, 24, 32, 128)))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawRoundedRect(rect, NODE_RADIUS, NODE_RADIUS)
 
+        # --- Glow & border colors ---
         if self._is_draft:
-            # Draft node: show draft name and inferred badges
-            painter.setPen(QPen(_qt_color(FG)))
+            glow_color = QColor("#9d7cd8")
+            border_style = Qt.PenStyle.DashLine
+        elif self._missing:
+            glow_color = _qt_color(DANGER)
+            border_style = Qt.PenStyle.SolidLine
+        else:
+            policy = getattr(self._drone, "write_policy", "read_only")
+            if policy == "read_only":
+                glow_color = QColor("#7dcfff")
+            else:
+                glow_color = QColor("#e0af68")
+            border_style = Qt.PenStyle.SolidLine
+
+        if self.isSelected():
+            glow_color = _qt_color(ACCENT)
+
+        adjusted = rect.adjusted(1, 1, -1, -1)
+        adj_radius = NODE_RADIUS - 1
+
+        # --- Layered glow strokes ---
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        outer = QColor(glow_color)
+        outer.setAlpha(20)
+        painter.setPen(QPen(outer, 5))
+        painter.drawRoundedRect(adjusted, adj_radius, adj_radius)
+
+        mid = QColor(glow_color)
+        mid.setAlpha(35)
+        painter.setPen(QPen(mid, 2.5))
+        painter.drawRoundedRect(adjusted, adj_radius, adj_radius)
+
+        # --- Main border ---
+        if self.isSelected():
+            pen_w = 2
+            main_border = _qt_color(ACCENT)
+        else:
+            pen_w = 1
+            main_border = QColor(255, 255, 255, 23)
+        painter.setPen(QPen(main_border, pen_w, border_style))
+        painter.drawRoundedRect(adjusted, adj_radius, adj_radius)
+
+        # --- Top sheen (glass reflection) ---
+        sheen_rect = QRectF(rect.x() + 3, rect.y() + 2, rect.width() - 6, (rect.height() - 4) * 0.30)
+        sheen_grad = QLinearGradient(sheen_rect.topLeft(), sheen_rect.bottomLeft())
+        sheen_grad.setColorAt(0.0, QColor(255, 255, 255, 15))
+        sheen_grad.setColorAt(1.0, QColor(255, 255, 255, 0))
+        painter.setBrush(sheen_grad)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawRoundedRect(sheen_rect, 6, 6)
+
+        # --- Inner highlight (1px bright stroke at top inset) ---
+        painter.setPen(QPen(QColor(255, 255, 255, 13), 1))
+        painter.drawLine(
+            QPointF(rect.x() + NODE_RADIUS, rect.y() + 1.5),
+            QPointF(rect.x() + NODE_WIDTH - NODE_RADIUS, rect.y() + 1.5),
+        )
+
+        # --- Text ---
+        if self._is_draft:
+            # Row 1: Draft name
+            painter.setPen(QPen(QColor("#eaecef")))
             font = QFont()
             font.setBold(True)
-            font.setPointSize(11)
+            font.setPointSize(10)
             painter.setFont(font)
             name = self._draft_name or "Untitled Drone"
             fm = QFontMetrics(font)
-            name = fm.elidedText(name, Qt.TextElideMode.ElideRight, NODE_WIDTH - 12)
-            painter.drawText(QRectF(6, 4, NODE_WIDTH - 12, 18),
+            name = fm.elidedText(name, Qt.TextElideMode.ElideRight, inner_w)
+            painter.drawText(QRectF(pad_x, 6, inner_w, 16),
                              Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, name)
 
-            font_small = QFont()
-            font_small.setPointSize(8)
-            painter.setFont(font_small)
+            # Row 2: "draft" status pill
+            font_s = QFont()
+            font_s.setPointSize(7)
+            painter.setFont(font_s)
+            painter.setPen(QPen(QColor("#9d7cd8")))
+            painter.drawText(QRectF(pad_x, 22, inner_w, 12),
+                             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "draft")
+
+            # Row 3: Contract badges
             painter.setPen(QPen(_qt_color(FG_MUTED)))
-            painter.drawText(QRectF(6, 22, NODE_WIDTH - 12, 14),
+            font_xs = QFont()
+            font_xs.setPointSize(8)
+            painter.setFont(font_xs)
+            painter.drawText(QRectF(pad_x, 36, inner_w, 16),
                              Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                             "Draft Drone")
-            badge_y = 36
-            painter.drawText(QRectF(6, badge_y, NODE_WIDTH // 2 - 8, 14),
-                             Qt.AlignmentFlag.AlignLeft,
-                             f"in: {self._draft_accepts or '?'}")
-            painter.drawText(QRectF(NODE_WIDTH // 2 + 2, badge_y, NODE_WIDTH // 2 - 8, 14),
-                             Qt.AlignmentFlag.AlignLeft,
-                             f"out: {self._draft_produces or '?'}")
-            painter.drawText(QRectF(6, 48, NODE_WIDTH - 12, 10),
-                             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                             "Save before run")
+                             f"in: {self._draft_accepts or '?'}  \u2192  out: {self._draft_produces or '?'}")
+
+            # Row 4: Brief preview
+            if self._draft_brief:
+                font_t = QFont()
+                font_t.setPointSize(7)
+                painter.setFont(font_t)
+                painter.setPen(QPen(_qt_color(FG_MUTED)))
+                preview = self._draft_brief[:50]
+                if len(self._draft_brief) > 50:
+                    preview += "\u2026"
+                painter.drawText(QRectF(pad_x, 52, inner_w, 14),
+                                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, preview)
             return
 
-        # Drone name
-        painter.setPen(QPen(_qt_color(FG)))
+        # --- Real drone node ---
+        # Row 1: Drone name
+        painter.setPen(QPen(QColor("#eaecef")))
         font = QFont()
         font.setBold(True)
-        font.setPointSize(11)
+        font.setPointSize(10)
         painter.setFont(font)
         name = self._drone.name if self._drone else "(missing)"
         if self._missing:
             name += " (missing)"
-        # Truncate if needed
         fm = QFontMetrics(font)
-        name = fm.elidedText(name, Qt.TextElideMode.ElideRight, NODE_WIDTH - 12)
-        painter.drawText(QRectF(6, 4, NODE_WIDTH - 12, 18), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, name)
+        name = fm.elidedText(name, Qt.TextElideMode.ElideRight, inner_w)
+        painter.drawText(QRectF(pad_x, 6, inner_w, 16),
+                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, name)
 
-        # Badges
-        font_small = QFont()
-        font_small.setPointSize(8)
-        painter.setFont(font_small)
+        # Row 2: Status pill
+        font_s = QFont()
+        font_s.setPointSize(7)
+        painter.setFont(font_s)
+        if self._missing:
+            painter.setPen(QPen(_qt_color(DANGER)))
+            status_text = "missing"
+        else:
+            policy = getattr(self._drone, "write_policy", "read_only")
+            if policy == "read_only":
+                painter.setPen(QPen(QColor("#7dcfff")))
+                status_text = "read-only"
+            else:
+                painter.setPen(QPen(QColor("#e0af68")))
+                status_text = "writes"
+        painter.drawText(QRectF(pad_x, 22, inner_w, 12),
+                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, status_text)
+
+        # Row 3: Goal preview or contract info
         painter.setPen(QPen(_qt_color(FG_MUTED)))
+        font_m = QFont()
+        font_m.setPointSize(8)
+        painter.setFont(font_m)
         accepts = getattr(self._drone, "accepts", None) or "any"
         produces = getattr(self._drone, "produces", None) or "any"
-        badge_y = 24
-        painter.drawText(QRectF(6, badge_y, NODE_WIDTH // 2 - 8, 14),
-                         Qt.AlignmentFlag.AlignLeft, f"in: {accepts}")
-        painter.drawText(QRectF(NODE_WIDTH // 2 + 2, badge_y, NODE_WIDTH // 2 - 8, 14),
-                         Qt.AlignmentFlag.AlignLeft, f"out: {produces}")
-
-        # Goal preview
         if self._goal_template:
-            font_goal = QFont()
-            font_goal.setPointSize(9)
-            font_goal.setItalic(True)
-            painter.setFont(font_goal)
-            painter.setPen(QPen(_qt_color(FG_MUTED)))
             preview = self._goal_template[:40]
             if len(self._goal_template) > 40:
-                preview += "…"
-            painter.drawText(QRectF(6, 38, NODE_WIDTH - 12, 18),
-                             Qt.AlignmentFlag.AlignLeft, preview)
+                preview += "\u2026"
+            painter.drawText(QRectF(pad_x, 36, inner_w, 16),
+                             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, preview)
+            # Row 4: Contract badges
+            font_t = QFont()
+            font_t.setPointSize(7)
+            painter.setFont(font_t)
+            painter.drawText(QRectF(pad_x, 52, inner_w, 14),
+                             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                             f"in: {accepts}  \u2192  out: {produces}")
+        else:
+            painter.drawText(QRectF(pad_x, 38, inner_w, 16),
+                             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                             f"in: {accepts}  \u2192  out: {produces}")
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
@@ -319,6 +407,9 @@ class ChainEdgeItem(QGraphicsPathItem):
         self.setAcceptHoverEvents(True)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
         self._hovered = False
+        self._bezier_curve: QPainterPath | None = None
+        self._glow_color = QColor("#8b9eeb")
+        self._pen_style = Qt.PenStyle.SolidLine
         self._adjust()
 
     @property
@@ -328,6 +419,17 @@ class ChainEdgeItem(QGraphicsPathItem):
     @property
     def to_node_id(self) -> str:
         return self._to_node_id
+
+    def paint(self, painter: QPainter, option, widget=None) -> None:
+        # Draw glow strokes behind the main path
+        if self._bezier_curve is not None:
+            for w, alpha in [(6, 15), (3, 30)]:
+                c = QColor(self._glow_color)
+                c.setAlpha(alpha)
+                painter.setPen(QPen(c, w, self._pen_style))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawPath(self._bezier_curve)
+        super().paint(painter, option, widget)
 
     def _adjust(self) -> None:
         """Recalculate the bezier path to follow port positions."""
@@ -343,21 +445,40 @@ class ChainEdgeItem(QGraphicsPathItem):
         path = self._build_bezier_path(p1, p2, p3, p4)
         self.setPath(path)
 
-        # Update pen
-        color = _qt_color(FG_MUTED)
-        if self.isSelected():
-            color = _qt_color(ACCENT)
-        if self._hovered:
-            color = _qt_color(ACCENT)
-        self.setPen(QPen(color, 2, Qt.PenStyle.SolidLine))
+        # Store bezier-only curve for glow painting
+        self._bezier_curve = self._build_bezier_curve(p1, p2, p3, p4)
 
-    def _build_bezier_path(self, p1, p2, p3, p4):
-        from PySide6.QtGui import QPainterPath
+        # Determine lane color and style
+        src_draft = self._source_port.parent_node.is_draft
+        tgt_draft = self._target_port.parent_node.is_draft
+        is_draft_edge = src_draft or tgt_draft
+
+        if is_draft_edge:
+            self._glow_color = QColor("#9d7cd8")
+            self._pen_style = Qt.PenStyle.DashLine
+        else:
+            self._glow_color = QColor("#8b9eeb")
+            self._pen_style = Qt.PenStyle.SolidLine
+
+        if self.isSelected():
+            self._glow_color = _qt_color(ACCENT)
+        if self._hovered:
+            self._glow_color = _qt_color(ACCENT)
+
+        # Main pen
+        main_color = self._glow_color
+        main_width = 1.5 if not self.isSelected() else 2.5
+        self.setPen(QPen(main_color, main_width, self._pen_style))
+
+    def _build_bezier_curve(self, p1, p2, p3, p4) -> QPainterPath:
         path = QPainterPath()
         path.moveTo(p1)
         path.cubicTo(p2, p3, p4)
-        # Arrow head
-        arrow_size = 8
+        return path
+
+    def _build_bezier_path(self, p1, p2, p3, p4):
+        path = self._build_bezier_curve(p1, p2, p3, p4)
+        arrow_size = 7
         angle = -path.angleAtPercent(1.0)
         arrow_p1 = p4 + QPointF(
             arrow_size * math.cos(math.radians(angle - 30)),
@@ -413,8 +534,8 @@ class ChainCanvas(QGraphicsView):
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
         self.setInteractive(True)
-        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setAcceptDrops(True)
@@ -429,15 +550,12 @@ class ChainCanvas(QGraphicsView):
         # Empty state text (created lazily by load_chain / _update_empty_text)
         self._empty_text: QGraphicsTextItem | None = None
 
-        # Space background
+        # Space background (static cached pixmap)
         self._space_bg_cache: QPixmap | None = None
-        self._stars: list[tuple[float, float, float, float]] = []
-        self._precompute_stars(400)
-        self._space_offset_x = 0.0
-        self._space_offset_y = 0.0
-        self._space_timer = QTimer(self)
-        self._space_timer.timeout.connect(self._on_space_tick)
-        self._space_timer.start(100)
+
+        # Double-click detection for fit-view
+        self._last_click_time: float = 0.0
+        self._last_click_pos: QPointF = QPointF()
 
     def _update_empty_text(self) -> None:
         if self._empty_text is not None:
@@ -603,6 +721,21 @@ class ChainCanvas(QGraphicsView):
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             scene_pos = self.mapToScene(event.position().toPoint())
+
+            # Double-click on empty canvas → fit view
+            now = time.monotonic()
+            dx = abs(scene_pos.x() - self._last_click_pos.x())
+            dy = abs(scene_pos.y() - self._last_click_pos.y())
+            if (now - self._last_click_time < 0.4 and dx < 15 and dy < 15):
+                items = self._scene.items(scene_pos)
+                if not items or all(isinstance(i, QGraphicsTextItem) for i in items):
+                    self._fit_view()
+                    self._last_click_time = 0.0
+                    event.accept()
+                    return
+            self._last_click_time = now
+            self._last_click_pos = scene_pos
+
             items = self._scene.items(scene_pos)
             output_port = self._find_output_port(items)
             if output_port is not None:
@@ -651,16 +784,22 @@ class ChainCanvas(QGraphicsView):
         super().keyPressEvent(event)
 
     def wheelEvent(self, event) -> None:
-        """Zoom with Ctrl+scroll or plain scroll."""
-        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
-            factor = 1.15
-            if event.angleDelta().y() > 0:
-                self.scale(factor, factor)
-            else:
-                self.scale(1 / factor, 1 / factor)
-            event.accept()
+        """Zoom around cursor with plain scroll wheel, clamped to safe range."""
+        factor = 1.12
+        if event.angleDelta().y() > 0:
+            s = factor
         else:
-            super().wheelEvent(event)
+            s = 1 / factor
+
+        current = self.transform().m11()
+        new_scale = current * s
+        if new_scale < 0.15:
+            s = 0.15 / current
+        elif new_scale > 4.0:
+            s = 4.0 / current
+
+        self.scale(s, s)
+        event.accept()
 
     # ---- Drag & drop from palette ----
 
@@ -812,13 +951,14 @@ class ChainCanvas(QGraphicsView):
         self.canvasChanged.emit()
 
     def contextMenuEvent(self, event) -> None:
-        item_at_pos = self.itemAt(event.pos())
-        if item_at_pos is None or isinstance(item_at_pos, QGraphicsTextItem):
+        scene_pos = self.mapToScene(event.pos())
+        items = self._scene.items(scene_pos)
+        if not items or all(isinstance(i, (QGraphicsTextItem,)) for i in items):
             menu = QMenu()
             add_draft_action = menu.addAction("Create Drone Here")
             action = menu.exec(event.globalPos())
             if action == add_draft_action:
-                self._canvas_add_draft_node(self.mapToScene(event.pos()))
+                self._canvas_add_draft_node(scene_pos)
             return
         super().contextMenuEvent(event)
 
@@ -848,76 +988,53 @@ class ChainCanvas(QGraphicsView):
         painter.resetTransform()
 
         viewport_rect = self.viewport().rect()
-        painter.fillRect(viewport_rect, QColor("#0a0a10"))
+        painter.fillRect(viewport_rect, QColor("#060608"))
 
         cache = self._space_bg_cache
         if cache is None or cache.size() != viewport_rect.size():
             cache = self._build_space_cache(viewport_rect.size())
             self._space_bg_cache = cache
-        painter.drawPixmap(viewport_rect, cache)
-
-        visible_rect = self.mapToScene(viewport_rect).boundingRect()
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
-        for sx, sy, size, brightness in self._stars:
-            wx = (sx + self._space_offset_x) % (visible_rect.width() + 200) + visible_rect.left() - 100
-            wy = (sy + self._space_offset_y) % (visible_rect.height() + 200) + visible_rect.top() - 100
-            if not visible_rect.contains(wx, wy):
-                continue
-            view_pos = self.mapFromScene(QPointF(wx, wy))
-            alpha = int(40 + brightness * 200)
-            painter.setBrush(QColor(200, 210, 255, alpha))
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawEllipse(view_pos, size, size)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.drawPixmap(viewport_rect.topLeft(), cache)
         painter.restore()
 
-    def _precompute_stars(self, count: int = 400) -> None:
-        import random
-        rng = random.Random(42)
-        for _ in range(count):
-            x = rng.uniform(-4000, 4000)
-            y = rng.uniform(-3000, 3000)
-            size = rng.uniform(0.6, 2.2)
-            brightness = rng.uniform(0.0, 1.0) ** 2
-            self._stars.append((x, y, size, brightness))
-
     def _build_space_cache(self, size) -> QPixmap:
+        import random
         pixmap = QPixmap(size)
         pixmap.fill(Qt.GlobalColor.transparent)
         p = QPainter(pixmap)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-
         w, h = size.width(), size.height()
 
-        center_x, center_y = w / 2, h / 2
-        max_dist = math.sqrt(center_x ** 2 + center_y ** 2)
-        vignette_gradient = QRadialGradient(QPointF(center_x, center_y), max_dist * 0.75)
-        vignette_gradient.setColorAt(0.0, QColor(0, 0, 0, 0))
-        vignette_gradient.setColorAt(0.6, QColor(0, 0, 0, 40))
-        vignette_gradient.setColorAt(1.0, QColor(0, 0, 0, 180))
-        p.fillRect(0, 0, w, h, vignette_gradient)
+        # Diagonal nebula band (top-left to bottom-right)
+        nebula1 = QLinearGradient(QPointF(0, 0), QPointF(w, h))
+        nebula1.setColorAt(0.0, QColor(157, 124, 216, 0))
+        nebula1.setColorAt(0.25, QColor(157, 124, 216, 8))
+        nebula1.setColorAt(0.45, QColor(122, 162, 247, 12))
+        nebula1.setColorAt(0.60, QColor(125, 207, 255, 8))
+        nebula1.setColorAt(0.78, QColor(247, 118, 142, 4))
+        nebula1.setColorAt(1.0, QColor(157, 124, 216, 0))
+        p.fillRect(0, 0, w, h, nebula1)
 
-        nebula_gradient = QLinearGradient(QPointF(0, h * 0.3), QPointF(w * 0.7, 0))
-        nebula_gradient.setColorAt(0.0, QColor(90, 70, 160, 0))
-        nebula_gradient.setColorAt(0.35, QColor(90, 70, 160, 15))
-        nebula_gradient.setColorAt(0.55, QColor(110, 80, 180, 18))
-        nebula_gradient.setColorAt(0.75, QColor(70, 60, 140, 8))
-        nebula_gradient.setColorAt(1.0, QColor(50, 45, 120, 0))
-        p.fillRect(0, 0, w, h, nebula_gradient)
-
-        nebula2 = QLinearGradient(QPointF(w * 0.6, h * 0.7), QPointF(w * 0.2, h))
-        nebula2.setColorAt(0.0, QColor(80, 60, 150, 0))
-        nebula2.setColorAt(0.5, QColor(100, 75, 170, 10))
-        nebula2.setColorAt(1.0, QColor(60, 50, 130, 0))
+        # Opposite diagonal depth band
+        nebula2 = QLinearGradient(QPointF(w, 0), QPointF(0, h))
+        nebula2.setColorAt(0.0, QColor(100, 80, 180, 0))
+        nebula2.setColorAt(0.35, QColor(110, 85, 190, 6))
+        nebula2.setColorAt(0.55, QColor(125, 207, 255, 4))
+        nebula2.setColorAt(0.75, QColor(80, 65, 155, 3))
+        nebula2.setColorAt(1.0, QColor(90, 70, 160, 0))
         p.fillRect(0, 0, w, h, nebula2)
+
+        # Subtle static stars
+        rng = random.Random(42)
+        for _ in range(250):
+            sx = rng.uniform(0, w)
+            sy = rng.uniform(0, h)
+            sr = rng.uniform(0.4, 1.5)
+            sa = rng.randint(20, 80)
+            c = QColor(200, 208, 240, sa)
+            p.setBrush(QBrush(c))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.drawEllipse(QPointF(sx, sy), sr, sr)
 
         p.end()
         return pixmap
-
-    def _on_space_tick(self) -> None:
-        if not self.isVisible():
-            return
-        self._space_offset_x += 0.15
-        self._space_offset_y += 0.08
-        if self._stars:
-            self.viewport().update()

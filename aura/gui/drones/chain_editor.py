@@ -646,6 +646,7 @@ class ChainEditor(QWidget):
 
         # ---- Left panel: mode bar + stack ----
         left_panel = QWidget()
+        left_panel.setStyleSheet("background: rgba(20, 20, 26, 128);")
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(0)
@@ -668,14 +669,14 @@ class ChainEditor(QWidget):
         # Status bar
         self._status_label = QLabel("Ready")
         self._status_label.setStyleSheet(f"""
-            background: {_qss_color(BG_ALT)}; color: {_qss_color(FG_MUTED)};
+            background: rgba(20, 20, 26, 180); color: {_qss_color(FG_MUTED)};
             padding: 4px 8px; border-top: 1px solid {_qss_color(BORDER)};
         """)
         layout.addWidget(self._status_label)
 
     def _build_toolbar(self) -> QWidget:
         toolbar = QWidget()
-        toolbar.setStyleSheet(f"background: {_qss_color(BG_ALT)}; border-bottom: 1px solid {_qss_color(BORDER)};")
+        toolbar.setStyleSheet(f"background: rgba(20, 20, 26, 217); border-bottom: 1px solid {_qss_color(BORDER)};")
         t_layout = QHBoxLayout(toolbar)
         t_layout.setContentsMargins(8, 4, 8, 4)
         t_layout.setSpacing(4)
@@ -687,14 +688,14 @@ class ChainEditor(QWidget):
         btn_style = f"""
             QPushButton {{
                 background: {_qss_color(BG_RAISED)}; color: {_qss_color(FG)};
-                border: 1px solid {_qss_color(BORDER)}; border-radius: 4px;
+                border: 1px solid {_qss_color(BORDER)}; border-radius: 7px;
                 padding: 6px 14px; font-size: 12px;
             }}
             QPushButton:hover {{
-                background: {_qss_color(BORDER)}; border-color: {_qss_color(BORDER_STRONG)};
+                background: {_qss_color(BORDER_STRONG)}; border-color: {_qss_color(BORDER_STRONG)};
             }}
             QPushButton:pressed {{
-                background: {_qss_color(BORDER_STRONG)};
+                background: {_qss_color(BORDER)};
             }}
         """
 
@@ -1021,8 +1022,8 @@ class ChainEditor(QWidget):
                 btn.setStyleSheet(f"""
                     QToolButton {{
                         background: {_qss_color(ACCENT)}; color: {_qss_color(BG)};
-                        border: 1px solid {_qss_color(ACCENT)}; border-radius: 4px;
-                        padding: 6px 10px; font-weight: 600;
+                        border: none; border-radius: 7px;
+                        padding: 5px 10px; font-weight: 600;
                     }}
                 """)
             else:
@@ -1030,8 +1031,8 @@ class ChainEditor(QWidget):
                 btn.setStyleSheet(f"""
                     QToolButton {{
                         background: transparent; color: {_qss_color(FG_MUTED)};
-                        border: 1px solid {_qss_color(BORDER)}; border-radius: 4px;
-                        padding: 6px 10px;
+                        border: none; border-radius: 7px;
+                        padding: 5px 10px;
                     }}
                     QToolButton:hover {{
                         background: {_qss_color(BG_RAISED)}; color: {_qss_color(FG)};
