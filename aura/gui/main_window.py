@@ -129,7 +129,7 @@ class _ChainRunWorker(QObject):
 
             # Find the failed node if applicable.
             failed_at = ""
-            nodes = d.get("nodes", {})
+            nodes = d.get("node_runs", {})
             for node_id, nr in nodes.items():
                 if nr.get("status") == "failed":
                     failed_at = node_id
@@ -1050,17 +1050,17 @@ class MainWindow(WindowChromeMixin, QMainWindow):
                 "<br>",
             ]
             for cn in consequential:
-                tools = cn.consequential_tools[:5]
+                tools = cn["consequential_tools"][:5]
                 tool_list = ", ".join(tools) if tools else "all tools"
-                drone_def = drone_lookup.get(cn.node.drone_id)
+                drone_def = drone_lookup.get(cn["drone_id"])
                 drone_name = (
                     drone_def.name
                     if drone_def
-                    else cn.node.drone_id
+                    else cn["drone_id"]
                 )
                 lines.append(
-                    f"• <b>{drone_name}</b> ({cn.node.drone_id})"
-                    f" — {cn.write_policy}: {tool_list}"
+                    f"• <b>{drone_name}</b> ({cn['drone_id']})"
+                    f" — {cn['write_policy']}: {tool_list}"
                 )
             lines.append("<br>Run anyway?")
             msg = "<br>".join(lines)
@@ -1104,7 +1104,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._chain_worker = None
 
         chain_name = result.get("chain_name", "Unknown")
-        nodes_data = result.get("nodes", {})
+        nodes_data = result.get("node_runs", {})
         status = result.get("status", "unknown")
         elapsed = result.get("elapsed", "")
         failed_at = result.get("failed_at", "")

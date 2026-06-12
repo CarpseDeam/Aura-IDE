@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
 
 from aura.drones.chain import ChainDefinition, ChainEdge, ChainNode, validate
 from aura.drones.chain_store import ChainStore
-from aura.drones.contracts import is_compatible
+from aura.drones.contracts import BUILTIN_TYPES, is_compatible
 from aura.drones.definition import DroneDefinition
 from aura.drones.store import DroneStore
 from aura.gui.drones.chain_canvas import ChainCanvas, ChainEdgeItem, ChainNodeItem
@@ -344,15 +344,30 @@ class _PropertyPanel(QScrollArea):
 
         # Compatibility check
         if from_node and from_node.drone and to_node and to_node.drone:
-            from_type = getattr(from_node.drone, "produces", None)
-            to_type = getattr(to_node.drone, "accepts", None)
-            if from_type and to_type:
-                compat = is_compatible(from_type, to_type)
-                if compat:
+            from_type_name = getattr(from_node.drone, "produces", None)
+            to_type_name = getattr(to_node.drone, "accepts", None)
+            if from_type_name and to_type_name:
+                from_at = BUILTIN_TYPES.get(from_type_name)
+                to_at = BUILTIN_TYPES.get(to_type_name)
+                if from_at is None or to_at is None:
+                    self._add_label(
+                        f"Type compatibility: Unknown type ({from_type_name} → {to_type_name})",
+                        color=WARN,
+                    )
+                elif is_compatible(from_at, to_at):
                     self._add_label("Type compatibility: Compatible", color=SUCCESS)
                 else:
-                    self._add_label(f"Type compatibility: Incompatible ({from_type} → {to_type})",
-                                    color=DANGER)
+                    self._add_label(
+                        f"Type compatibility: Incompatible ({from_type_name} → {to_type_name})",
+                        color=DANGER,
+                    )
+            elif not from_type_name and not to_type_name:
+                self._add_label("Type compatibility: No contracts", color=FG_MUTED)
+            elif not from_type_name:
+                self._add_label(
+                    f"Type compatibility: No output from {from_name}",
+                    color=WARN,
+                )
             else:
                 self._add_label("Type compatibility: Compatible", color=SUCCESS)
         else:
@@ -540,7 +555,7 @@ class ChainEditor(QWidget):
                 self._set_status("Loaded.", SUCCESS)
                 return
 
-        from datetime import datetime
+        from datetime import datetime, timezone
         self._chain_id = ChainStore.next_id(self._workspace_root, self._chain_name)
         self._chain_name = "New Workflow"
         self._chain_description = ""
@@ -555,8 +570,8 @@ class ChainEditor(QWidget):
             enabled=self._chain_enabled,
             nodes=[],
             edges=[],
-            created_at=datetime.now(),
-            updated_at=datetime.now(),
+            created_at=datetime.now(timezone.utc).isoformat(),
+            updated_at=datetime.now(timezone.utc).isoformat(),
         )
         self._canvas.load_chain(chain, drone_lookup)
         self._sync_form_from_chain()
@@ -596,7 +611,7 @@ class ChainEditor(QWidget):
 
     def _snapshot_chain(self) -> ChainDefinition:
         """Build a ChainDefinition from current canvas and form state."""
-        from datetime import datetime
+        from datetime import datetime, timezone
         self._sync_chain_from_form()
 
         nodes_data, edges_data = self._canvas.to_chain_nodes_and_edges()
@@ -611,7 +626,7 @@ class ChainEditor(QWidget):
             for e in edges_data
         ]
 
-        now = datetime.now()
+        now = datetime.now(timezone.utc).isoformat()
         return ChainDefinition(
             id=self._chain_id,
             name=self._chain_name,
@@ -639,11 +654,11 @@ class ChainEditor(QWidget):
         try:
             chain = self._snapshot_chain()
             drone_lookup = self._build_drone_lookup()
-            errors = validate(chain, drone_lookup)
-            if errors:
-                msg = "; ".join(str(e) for e in errors[:5])
-                if len(errors) > 5:
-                    msg += f" (+{len(errors) - 5} more)"
+            result = validate(chain, drone_lookup)
+            if not result.ok:
+                msg = "; ".join(result.errors[:5])
+                if len(result.errors) > 5:
+                    msg += f" (+{len(result.errors) - 5} more)"
                 self._set_status(f"Validation: {msg}", DANGER)
             else:
                 self._set_status("Validation: Valid", SUCCESS)

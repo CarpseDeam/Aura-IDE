@@ -70,3 +70,6 @@ def is_compatible(producer: ArtifactType, consumer: ArtifactType) -> bool:
         if producer_type != consumer_type:
             return False
     return True
+
+
+TYPE_NAMES: list[str] = sorted(BUILTIN_TYPES.keys())

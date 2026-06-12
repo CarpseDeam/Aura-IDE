@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from aura.drones.contracts import TYPE_NAMES
 from aura.drones.definition import DroneBudget, DroneDefinition, default_tools_for_policy
 from aura.drones.store import DroneStore
 from aura.gui.theme import ACCENT, BG, BG_ALT, BG_RAISED, BORDER, FG, FG_DIM
@@ -63,6 +64,23 @@ class DroneEditorDialog(QDialog):
             idx = self._policy_combo.findData(initial_write_policy)
             if idx >= 0:
                 self._policy_combo.setCurrentIndex(idx)
+
+        if drone is not None:
+            self._set_accepts_produces(drone)
+
+    def _set_accepts_produces(self, drone: DroneDefinition) -> None:
+        if drone.accepts:
+            idx = self._accepts_combo.findText(drone.accepts)
+            if idx >= 0:
+                self._accepts_combo.setCurrentIndex(idx)
+            else:
+                self._accepts_combo.setCurrentText(drone.accepts)
+        if drone.produces:
+            idx = self._produces_combo.findText(drone.produces)
+            if idx >= 0:
+                self._produces_combo.setCurrentIndex(idx)
+            else:
+                self._produces_combo.setCurrentText(drone.produces)
 
     # -- Public API --
 
@@ -117,6 +135,42 @@ class DroneEditorDialog(QDialog):
             f"border-radius: 5px; padding: 5px 8px; color: {FG}; }}"
         )
         layout.addWidget(self._policy_combo)
+
+        # Accepts (input contract)
+        accepts_label = QLabel("Accepts (input contract)")
+        accepts_label.setStyleSheet(
+            f"color: {FG}; font-weight: 600; font-size: 13px;"
+        )
+        layout.addWidget(accepts_label)
+        self._accepts_combo = QComboBox()
+        self._accepts_combo.setEditable(True)
+        self._accepts_combo.addItem("(any)", "")
+        for t in TYPE_NAMES:
+            self._accepts_combo.addItem(t, t)
+        self._accepts_combo.setCurrentIndex(0)
+        self._accepts_combo.setStyleSheet(
+            f"QComboBox {{ background: {BG_RAISED}; border: 1px solid {BORDER}; "
+            f"border-radius: 5px; padding: 5px 8px; color: {FG}; }}"
+        )
+        layout.addWidget(self._accepts_combo)
+
+        # Produces (output contract)
+        produces_label = QLabel("Produces (output contract)")
+        produces_label.setStyleSheet(
+            f"color: {FG}; font-weight: 600; font-size: 13px;"
+        )
+        layout.addWidget(produces_label)
+        self._produces_combo = QComboBox()
+        self._produces_combo.setEditable(True)
+        self._produces_combo.addItem("(any)", "")
+        for t in TYPE_NAMES:
+            self._produces_combo.addItem(t, t)
+        self._produces_combo.setCurrentIndex(0)
+        self._produces_combo.setStyleSheet(
+            f"QComboBox {{ background: {BG_RAISED}; border: 1px solid {BORDER}; "
+            f"border-radius: 5px; padding: 5px 8px; color: {FG}; }}"
+        )
+        layout.addWidget(self._produces_combo)
 
         # Output contract
         ocontract_label = QLabel("What should it bring back?")
@@ -227,6 +281,7 @@ class DroneEditorDialog(QDialog):
         self._rounds_spin.setValue(drone.budget.max_tool_rounds)
         self._timeout_spin.setValue(drone.budget.timeout_seconds)
         self._first_run_test_edit.setText(drone.first_run_test)
+        self._set_accepts_produces(drone)
 
     # -- Save logic --
 
@@ -279,6 +334,8 @@ class DroneEditorDialog(QDialog):
                 capability_requirements=self._drone.capability_requirements,
                 capability_bindings=self._drone.capability_bindings,
                 setup_steps=self._drone.setup_steps,
+                accepts=self._accepts_combo.currentText().strip(),
+                produces=self._produces_combo.currentText().strip(),
             )
         else:
             # Creating new drone
@@ -298,6 +355,8 @@ class DroneEditorDialog(QDialog):
                 created_by="user",
                 created_at=now,
                 updated_at=now,
+                accepts=self._accepts_combo.currentText().strip(),
+                produces=self._produces_combo.currentText().strip(),
             )
 
         DroneStore.save_drone(self._workspace_root, self._drone)
