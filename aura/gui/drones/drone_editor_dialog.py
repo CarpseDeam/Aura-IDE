@@ -283,6 +283,14 @@ class DroneEditorDialog(QDialog):
         self._first_run_test_edit.setText(drone.first_run_test)
         self._set_accepts_produces(drone)
 
+    @staticmethod
+    def _combo_value(combo: QComboBox) -> str:
+        data = combo.currentData()
+        if data is not None:
+            return data
+        text = combo.currentText().strip()
+        return "" if text == "(any)" else text
+
     # -- Save logic --
 
     def _on_save(self) -> None:
@@ -334,8 +342,8 @@ class DroneEditorDialog(QDialog):
                 capability_requirements=self._drone.capability_requirements,
                 capability_bindings=self._drone.capability_bindings,
                 setup_steps=self._drone.setup_steps,
-                accepts=self._accepts_combo.currentText().strip(),
-                produces=self._produces_combo.currentText().strip(),
+                accepts=self._combo_value(self._accepts_combo),
+                produces=self._combo_value(self._produces_combo),
             )
         else:
             # Creating new drone
@@ -355,8 +363,8 @@ class DroneEditorDialog(QDialog):
                 created_by="user",
                 created_at=now,
                 updated_at=now,
-                accepts=self._accepts_combo.currentText().strip(),
-                produces=self._produces_combo.currentText().strip(),
+                accepts=self._combo_value(self._accepts_combo),
+                produces=self._combo_value(self._produces_combo),
             )
 
         DroneStore.save_drone(self._workspace_root, self._drone)
