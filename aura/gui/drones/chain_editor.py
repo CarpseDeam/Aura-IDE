@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QSplitter,
     QStackedWidget,
     QTextEdit,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -31,6 +32,7 @@ from aura.drones.definition import DroneDefinition
 from aura.drones.store import DroneStore
 from aura.gui.drones.chain_canvas import ChainCanvas, ChainEdgeItem, ChainNodeItem
 from aura.gui.drones.drone_workshop_panel import DroneWorkshopPanel
+from aura.gui.drones.workflow_list_pane import WorkflowListPane
 from aura.gui.theme import (
     ACCENT,
     BG,
@@ -164,14 +166,11 @@ class _PropertyPanel(QScrollArea):
     def __init__(self, editor: ChainEditor, parent=None):
         super().__init__(parent)
         self._editor = editor
-        self.setMinimumWidth(220)
-        self.setMaximumWidth(320)
         self.setWidgetResizable(True)
         self.setStyleSheet(f"""
             QScrollArea {{
                 background: {BG.name()};
                 border: none;
-                border-left: 1px solid {BORDER.name()};
             }}
         """)
 
@@ -501,6 +500,9 @@ class ChainEditor(QWidget):
         self._workshop_draft_node_id: str | None = None
         self._palette_width = 260
 
+        # Dirty tracking for unsaved-changes prompt
+        self._dirty = False
+
         # Auto-save debounce timer
         self._auto_save_timer = QTimer(self)
         self._auto_save_timer.setSingleShot(True)
@@ -514,11 +516,9 @@ class ChainEditor(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # Toolbar
         toolbar = self._build_toolbar()
         layout.addWidget(toolbar)
 
-        # Splitter
         splitter = QSplitter(Qt.Orientation.Horizontal)
         self._splitter = splitter
         splitter.setStyleSheet(f"""
@@ -528,40 +528,114 @@ class ChainEditor(QWidget):
             }}
         """)
 
-        # Left: drone palette (behind QStackedWidget)
         self._palette = _DronePaletteList(self._workspace_root, self)
 
+        self._mode_buttons: dict[str, QToolButton] = {}
         self._left_stack = QStackedWidget()
 
+        # ---- Mode switcher (pill-tab bar) ----
+        mode_bar = QWidget()
+        mode_layout = QHBoxLayout(mode_bar)
+        mode_layout.setContentsMargins(4, 4, 4, 2)
+        mode_layout.setSpacing(3)
+        for name in ("Workflows", "Drones", "Details", "Workshop"):
+            btn = QToolButton()
+            btn.setText(name)
+            btn.setCheckable(True)
+            btn.setFlat(True)
+            btn.clicked.connect(lambda checked, n=name: self._set_active_mode(n))
+            mode_layout.addWidget(btn)
+            self._mode_buttons[name] = btn
+        mode_layout.addStretch()
+
+        # ---- Page 0: Workflows ----
+        workflows_page = QWidget()
+        wf_layout = QVBoxLayout(workflows_page)
+        wf_layout.setContentsMargins(0, 4, 0, 0)
+        wf_layout.setSpacing(4)
+        wf_header = QLabel("Workflows")
+        wf_header.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {FG_MUTED.name()}; padding: 0 8px;")
+        new_wf_btn = QPushButton("+ New")
+        new_wf_btn.setFlat(True)
+        new_wf_btn.setCursor(Qt.PointingHandCursor)
+        new_wf_btn.setStyleSheet(
+            f"QPushButton {{ color: {FG_MUTED.name()}; font-size: 11px; padding: 2px 6px; border: none; }}"
+            f"QPushButton:hover {{ color: {ACCENT.name()}; }}"
+        )
+        new_wf_btn.clicked.connect(self._on_new_workflow_from_list)
+        wf_header_row = QHBoxLayout()
+        wf_header_row.setContentsMargins(0, 0, 0, 0)
+        wf_header_row.addWidget(wf_header)
+        wf_header_row.addStretch()
+        wf_header_row.addWidget(new_wf_btn)
+        wf_layout.addLayout(wf_header_row)
+        self._workflow_list_pane = WorkflowListPane(self._workspace_root, self)
+        self._workflow_list_pane.editWorkflowRequested.connect(self._on_load_existing_workflow)
+        self._workflow_list_pane.newWorkflowRequested.connect(self._on_new_workflow_from_list)
+        self._workflow_list_pane.deleteWorkflowRequested.connect(self._on_delete_workflow_from_list)
+        self._workflow_list_pane.runWorkflowRequested.connect(self._on_run_workflow_from_list)
+        wf_layout.addWidget(self._workflow_list_pane, 1)
+        self._left_stack.addWidget(workflows_page)  # index 0
+
+        # ---- Page 1: Drones ----
         palette_container = QWidget()
         palette_layout = QVBoxLayout(palette_container)
         palette_layout.setContentsMargins(0, 4, 0, 0)
         palette_layout.setSpacing(4)
-
-        palette_header = QLabel("Drone Palette")
-        palette_header.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {FG_MUTED.name()}; padding: 0 8px;")
-        palette_layout.addWidget(palette_header)
+        palette_header_row = QHBoxLayout()
+        palette_header_row.setContentsMargins(0, 0, 0, 0)
+        palette_header_label = QLabel("Drone Palette")
+        palette_header_label.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {FG_MUTED.name()}; padding: 0 8px;")
+        palette_header_row.addWidget(palette_header_label)
+        palette_header_row.addStretch()
+        new_drone_btn = QPushButton("+ New Drone")
+        new_drone_btn.setFlat(True)
+        new_drone_btn.setCursor(Qt.PointingHandCursor)
+        new_drone_btn.setStyleSheet(
+            f"QPushButton {{ color: {FG_MUTED.name()}; font-size: 11px; padding: 2px 6px; border: none; }}"
+            f"QPushButton:hover {{ color: {ACCENT.name()}; }}"
+        )
+        new_drone_btn.clicked.connect(self._on_new_drone_clicked)
+        palette_header_row.addWidget(new_drone_btn)
+        palette_layout.addLayout(palette_header_row)
         palette_layout.addWidget(self._palette, 1)
+        self._left_stack.addWidget(palette_container)  # index 1
 
-        self._left_stack.addWidget(palette_container)  # index 0: palette
+        # ---- Page 2: Details ----
+        self._property_panel = _PropertyPanel(self)
+        details_page = QWidget()
+        details_layout = QVBoxLayout(details_page)
+        details_layout.setContentsMargins(0, 4, 0, 0)
+        details_layout.setSpacing(4)
+        details_header = QLabel("Properties")
+        details_header.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {FG_MUTED.name()}; padding: 0 8px;")
+        details_layout.addWidget(details_header)
+        details_layout.addWidget(self._property_panel, 1)
+        self._left_stack.addWidget(details_page)  # index 2
 
-        self._workshop_panel = None          # created lazily
-        self._workshop_container = None      # created lazily
+        self._workshop_panel = None
+        self._workshop_container = None
 
-        splitter.addWidget(self._left_stack)
+        # ---- Left panel: mode bar + stack ----
+        left_panel = QWidget()
+        left_layout = QVBoxLayout(left_panel)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(0)
+        left_layout.addWidget(mode_bar)
+        left_layout.addWidget(self._left_stack, 1)
+        splitter.addWidget(left_panel)
 
-        # Center: canvas
+        # ---- Center: canvas ----
         self._canvas = ChainCanvas(self)
         self._canvas.canvasChanged.connect(self._on_canvas_changed)
         splitter.addWidget(self._canvas)
 
-        # Right: property panel
-        self._property_panel = _PropertyPanel(self)
-        splitter.addWidget(self._property_panel)
-
-        # Set initial sizes: palette ~150px, canvas stretch, property ~280px
-        splitter.setSizes([150, 600, 280])
+        splitter.setSizes([220, 800])
         layout.addWidget(splitter, 1)
+
+        # Default to Drones mode after all pages exist
+        self._set_active_mode("Drones")
+        self._workflow_list_pane.refresh()
 
         # Status bar
         self._status_label = QLabel("Ready")
@@ -578,9 +652,9 @@ class ChainEditor(QWidget):
         t_layout.setContentsMargins(8, 4, 8, 4)
         t_layout.setSpacing(4)
 
-        title_label = QLabel("Workflow Studio")
-        title_label.setStyleSheet(f"font-size: 15px; font-weight: bold; color: {FG.name()}; padding-right: 12px;")
-        t_layout.addWidget(title_label)
+        self._title_label = QLabel(self._chain_name)
+        self._title_label.setStyleSheet(f"font-size: 15px; font-weight: bold; color: {FG.name()}; padding-right: 12px;")
+        t_layout.addWidget(self._title_label)
 
         btn_style = f"""
             QPushButton {{
@@ -601,6 +675,11 @@ class ChainEditor(QWidget):
         save_btn.clicked.connect(self._save_chain)
         t_layout.addWidget(save_btn)
 
+        save_as_btn = QPushButton("Save As")
+        save_as_btn.setStyleSheet(btn_style)
+        save_as_btn.clicked.connect(self._save_chain_as)
+        t_layout.addWidget(save_as_btn)
+
         validate_btn = QPushButton("Validate")
         validate_btn.setStyleSheet(btn_style)
         validate_btn.clicked.connect(self._validate_chain)
@@ -618,7 +697,7 @@ class ChainEditor(QWidget):
 
         t_layout.addStretch()
 
-        back_btn = QPushButton("← Back to Drone Bay")
+        back_btn = QPushButton("← Close")
         back_btn.setStyleSheet(btn_style)
         back_btn.clicked.connect(self.goBackRequested.emit)
         t_layout.addWidget(back_btn)
@@ -646,6 +725,8 @@ class ChainEditor(QWidget):
                 # Update form
                 self._sync_form_from_chain()
 
+                self._dirty = False
+                self._update_title_label()
                 self.set_status("Loaded.", SUCCESS)
                 return
 
@@ -669,6 +750,8 @@ class ChainEditor(QWidget):
         )
         self._canvas.load_chain(chain, drone_lookup)
         self._sync_form_from_chain()
+        self._dirty = False
+        self._update_title_label()
         self.set_status("New workflow.", FG_MUTED)
 
     def _build_drone_lookup(self) -> dict[str, DroneDefinition]:
@@ -742,6 +825,9 @@ class ChainEditor(QWidget):
         try:
             chain = self._snapshot_chain()
             ChainStore.save_chain(self._workspace_root, chain)
+            self._dirty = False
+            self._update_title_label()
+            self._workflow_list_pane.refresh()
             self.set_status("Saved.", SUCCESS)
         except Exception as exc:
             logger.exception("Failed to save chain")
@@ -767,10 +853,12 @@ class ChainEditor(QWidget):
     # ---- Callbacks ----
 
     def _on_canvas_changed(self) -> None:
+        self._dirty = True
         self._auto_save_timer.start()
         # Update property panel on selection change
         self._property_panel.rebuild()
         self._update_left_panel_mode()
+        self._update_title_label()
 
     def _on_chain_property_changed(self) -> None:
         self._on_canvas_changed()
@@ -790,7 +878,7 @@ class ChainEditor(QWidget):
         layout.setSpacing(4)
 
         # Back button
-        back_btn = QPushButton("\u2190 Back to Drone Palette")
+        back_btn = QPushButton("\u2190 Back to Drones")
         back_btn.setFlat(True)
         back_btn.setCursor(Qt.PointingHandCursor)
         back_btn.setStyleSheet(f"QPushButton {{ color: {FG_MUTED.name()}; text-align: left; padding: 2px; }}")
@@ -827,27 +915,33 @@ class ChainEditor(QWidget):
         layout.addWidget(self._workshop_panel, 1)
 
         self._workshop_container = container
-        self._left_stack.addWidget(container)  # index 1
+        self._left_stack.addWidget(container)  # index 3
         return container
 
     def _update_left_panel_mode(self) -> None:
         selection = self._canvas._scene.selectedItems()
         draft_node = None
+        non_draft = None
         for item in selection:
-            if isinstance(item, ChainNodeItem) and item.is_draft:
-                draft_node = item
-                break
+            if isinstance(item, ChainNodeItem):
+                if item.is_draft:
+                    draft_node = item
+                    break
+                else:
+                    non_draft = item
+            elif isinstance(item, ChainEdgeItem) and non_draft is None:
+                non_draft = item
 
         if draft_node:
-            # Save current palette width before expanding for workshop
-            if self._left_stack.currentIndex() == 0:
+            if self._left_stack.currentIndex() != 3:
                 self._palette_width = self._splitter.sizes()[0]
             self._show_workshop_for_draft(draft_node)
-            self._splitter.setSizes([340, self._splitter.sizes()[1], self._splitter.sizes()[2]])
-        else:
-            if self._left_stack.currentIndex() != 0:
-                self._splitter.setSizes([self._palette_width, self._splitter.sizes()[1], self._splitter.sizes()[2]])
-                self._left_stack.setCurrentIndex(0)
+            self._splitter.setSizes([340, self._splitter.sizes()[1]])
+            self._set_active_mode("Workshop")
+        elif non_draft:
+            self._set_active_mode("Details")
+            self._property_panel.rebuild()
+        # Nothing selected → do not auto-switch
 
     def _show_workshop_for_draft(self, draft_node: ChainNodeItem) -> None:
         if draft_node.node_id not in self._canvas._nodes:
@@ -855,11 +949,9 @@ class ChainEditor(QWidget):
 
         self._ensure_workshop_panel()
 
-        # Reset workshop state when switching to a different draft
         if draft_node.node_id != self._workshop_draft_node_id:
             self._workshop_panel.reset_workshop_state()
 
-        # Update header
         name = draft_node.draft_name or "Untitled Drone"
         accepts = draft_node.draft_accepts or "any"
         produces = draft_node.draft_produces or "any"
@@ -867,25 +959,164 @@ class ChainEditor(QWidget):
         self._ws_draft_label.setText(f"Building: {name}")
         self._ws_contracts_label.setText(f"In: {accepts}  \u00b7  Out: {produces}")
 
-        if self._left_stack.currentIndex() != 1:
-            self._left_stack.setCurrentIndex(1)
+        if self._left_stack.currentIndex() != 3:
+            self._left_stack.setCurrentIndex(3)
 
     def _on_back_to_palette(self) -> None:
-        # Deselect any draft node so palette comes back
         self._workshop_draft_node_id = None
         if self._workshop_panel is not None:
             self._workshop_panel.reset_workshop_state()
         self._canvas._scene.clearSelection()
-        self._left_stack.setCurrentIndex(0)
+        self._set_active_mode("Drones")
 
-    def _on_workshop_build_requested(self, brief) -> None:
-        if self._workshop_draft_node_id is None:
-            logger.warning("Workshop build requested but no draft node is active")
+    # ---- Mode switcher ----
+
+    def _set_active_mode(self, name: str) -> None:
+        index_map = {"Workflows": 0, "Drones": 1, "Details": 2, "Workshop": 3}
+        target = index_map[name]
+
+        if name == "Workshop":
+            if self._left_stack.currentIndex() != target:
+                self._palette_width = self._splitter.sizes()[0]
+            self._splitter.setSizes([340, self._splitter.sizes()[1]])
+        else:
+            if self._left_stack.currentIndex() == index_map.get("Workshop", 3):
+                self._splitter.setSizes([self._palette_width, self._splitter.sizes()[1]])
+
+        self._left_stack.setCurrentIndex(target)
+
+        for mode_name, btn in self._mode_buttons.items():
+            if mode_name == name:
+                btn.setChecked(True)
+                btn.setStyleSheet(f"""
+                    QToolButton {{
+                        background: {ACCENT.name()}; color: {BG.name()};
+                        border: 1px solid {ACCENT.name()}; border-radius: 4px;
+                        padding: 6px 10px; font-weight: 600;
+                    }}
+                """)
+            else:
+                btn.setChecked(False)
+                btn.setStyleSheet(f"""
+                    QToolButton {{
+                        background: transparent; color: {FG_MUTED.name()};
+                        border: 1px solid {BORDER.name()}; border-radius: 4px;
+                        padding: 6px 10px;
+                    }}
+                    QToolButton:hover {{
+                        background: {BG_RAISED.name()}; color: {FG.name()};
+                    }}
+                """)
+
+    # ---- Workflow list callbacks ----
+
+    def _on_load_existing_workflow(self, chain_id: str) -> None:
+        choice = self._prompt_save_changes()
+        if choice == "cancel":
             return
-        self.settle_draft_requested.emit({
-            "brief": brief,
-            "draft_node_id": self._workshop_draft_node_id,
-        })
+        if choice == "save":
+            self._save_chain()
+        self._load_or_create_chain(chain_id)
+        self._workflow_list_pane.refresh()
+
+    def _on_new_workflow_from_list(self) -> None:
+        choice = self._prompt_save_changes()
+        if choice == "cancel":
+            return
+        if choice == "save":
+            self._save_chain()
+        self._load_or_create_chain(None)
+        self._workflow_list_pane.refresh()
+
+    def _on_delete_workflow_from_list(self, chain_id: str) -> None:
+        reply = QMessageBox.question(
+            self,
+            "Delete Workflow",
+            "Delete this workflow? This cannot be undone.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            ChainStore.delete_chain(self._workspace_root, chain_id)
+        except Exception as exc:
+            self.set_status(f"Delete failed: {exc}", DANGER)
+            return
+        if chain_id == self._chain_id:
+            self._load_or_create_chain(None)
+        self._workflow_list_pane.refresh()
+
+    def _on_run_workflow_from_list(self, chain_id: str) -> None:
+        self._save_chain()
+        self.runChainRequested.emit(chain_id)
+
+    def _on_new_drone_clicked(self) -> None:
+        if self._workspace_root is None:
+            return
+        view_center = self._canvas.viewport().rect().center()
+        scene_pos = self._canvas.mapToScene(view_center)
+        node_item = self._canvas._canvas_add_draft_node(scene_pos)
+        self._canvas._scene.clearSelection()
+        node_item.setSelected(True)
+        canvasChanged = getattr(self._canvas, 'canvasChanged', None)
+        if canvasChanged:
+            canvasChanged.emit()
+
+    def _on_workshop_build_requested(self, brief: object) -> None:
+        logger.info("Workshop build requested, brief: %s", type(brief).__name__)
+
+        # Find the selected draft node on the canvas
+        draft_node_id = None
+        for item in self._canvas._scene.selectedItems():
+            dio = getattr(item, 'data', None)
+            if dio and getattr(dio, 'kind', None) == 'draft':
+                nd = getattr(item, 'node', None)
+                data = getattr(nd, 'data', None) if nd else dio
+                draft_node_id = data.get('id') if isinstance(data, dict) else (getattr(data, 'id', None) or getattr(nd, 'id', None))
+                break
+        if not draft_node_id:
+            fallback = self._workshop_draft_node_id
+            if fallback:
+                draft_node_id = fallback
+            else:
+                self.set_status("No draft node selected", DANGER)
+                return
+
+        # Try to extract drone_id from the brief metadata
+        drone_id = None
+        if isinstance(brief, dict):
+            extras = brief.get("extras", {})
+            drone_id = extras.get("drone_id") or brief.get("drone_id")
+        elif hasattr(brief, 'extras'):
+            extras = getattr(brief, 'extras', None) or {}
+            drone_id = extras.get("drone_id")
+
+        # Fallback: search DroneStore by recently saved
+        drone_def = None
+        if drone_id:
+            drone_def = DroneStore.load_drone(self._workspace_root, drone_id)
+
+        if drone_def is None:
+            # Fallback: find the most recently created drone
+            all_drones = DroneStore.list_drones(self._workspace_root)
+            if all_drones:
+                drone_def = all_drones[-1]
+                logger.info("Settling draft with last drone: %s", drone_def.name)
+
+        if drone_def is None:
+            self.set_status("Could not find saved drone to settle draft", DANGER)
+            return
+
+        success = self.settle_draft_node(draft_node_id, drone_def)
+        if success:
+            self._dirty = True
+            self._palette.populate()
+            self._workflow_list_pane.refresh()
+            self.set_status(f"Drone '{drone_def.name}' settled on canvas", SUCCESS)
+            self._set_active_mode("Drones")
+        else:
+            self.set_status(f"Settle failed for drone '{drone_def.name}'", DANGER)
 
     def settle_draft_node(self, node_id: str, drone_def) -> bool:
         """Replace a draft node with the real saved DroneDefinition."""
@@ -945,6 +1176,71 @@ class ChainEditor(QWidget):
             except Exception as exc:
                 self.set_status(f"Delete failed: {exc}", DANGER)
 
+    # ---- Title ----
+
+    def _update_title_label(self) -> None:
+        if not hasattr(self, '_title_label'):
+            return
+        if self._dirty:
+            self._title_label.setText(f"\u2022 {self._chain_name}")
+            self._title_label.setStyleSheet(
+                f"font-size: 15px; font-weight: bold; color: {ACCENT.name()}; padding-right: 12px;"
+            )
+        else:
+            self._title_label.setText(self._chain_name)
+            self._title_label.setStyleSheet(
+                f"font-size: 15px; font-weight: bold; color: {FG.name()}; padding-right: 12px;"
+            )
+
+    # ---- Save As ----
+
+    def _save_chain_as(self) -> None:
+        from PySide6.QtWidgets import QInputDialog
+        new_name, ok = QInputDialog.getText(
+            self, "Save Workflow As", "New workflow name:",
+            text=self._chain_name,
+        )
+        if not ok or not new_name.strip():
+            return
+        new_name = new_name.strip()
+        old_id = self._chain_id
+        try:
+            self._chain_name = new_name
+            self._chain_id = ChainStore.next_id(self._workspace_root, new_name)
+            chain = self._snapshot_chain()
+            from dataclasses import replace
+            chain = replace(chain, id=self._chain_id, name=self._chain_name)
+            ChainStore.save_chain(self._workspace_root, chain)
+            self._dirty = False
+            self._update_title_label()
+            self._workflow_list_pane.refresh()
+            self.set_status(f"Saved as '{new_name}'.", SUCCESS)
+        except Exception as exc:
+            self._chain_id = old_id
+            self.set_status(f"Save As failed: {exc}", DANGER)
+
+    # ---- Unsaved changes prompt ----
+
+    def _prompt_save_changes(self) -> str:
+        """Returns 'save', 'discard', or 'cancel'."""
+        if not self._dirty:
+            return "discard"
+        box = QMessageBox(self)
+        box.setWindowTitle("Unsaved Changes")
+        box.setText(f"'{self._chain_name}' has unsaved changes.")
+        box.setInformativeText("Do you want to save before switching?")
+        save_btn = box.addButton("Save", QMessageBox.ButtonRole.AcceptRole)
+        discard_btn = box.addButton("Discard", QMessageBox.ButtonRole.DestructiveRole)
+        cancel_btn = box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(save_btn)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked == save_btn:
+            return "save"
+        elif clicked == discard_btn:
+            return "discard"
+        return "cancel"
+
     # ---- Status bar ----
 
     def set_status(self, message: str, color: QColor = FG_MUTED) -> None:
@@ -959,6 +1255,8 @@ class ChainEditor(QWidget):
     def set_workspace_root(self, path: Path) -> None:
         self._workspace_root = path
         self._palette.set_workspace_root(path)
+        self._workflow_list_pane.set_workspace_root(path)
+        self._workflow_list_pane.refresh()
         self._load_or_create_chain(self._chain_id)
 
     @property

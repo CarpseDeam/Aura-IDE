@@ -50,7 +50,6 @@ from aura.gui.chat_view import ChatView
 from aura.gui.checkpoint_dialog import CheckpointDialog
 from aura.gui.conv_persistence import ConversationPersistence
 from aura.gui.drones.chain_editor import ChainEditor
-from aura.gui.drones.drone_bay_pane import DroneBayPane
 from aura.gui.drones.drone_editor_dialog import DroneEditorDialog
 from aura.gui.drones.drone_reports_window import DroneReportsWindow
 from aura.gui.drones.drone_run_card import DroneRunCard
@@ -265,24 +264,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         )
         self._playground.set_aura_wrapper(self._playground_aura)
 
-        # Drone Bay
-        self._drone_bay = DroneBayPane(workspace_root=self._workspace_root, parent=self)
-        self._playground.set_drone_bay(self._drone_bay)
-        self._drone_bay.newDroneRequested.connect(self._on_new_drone)
-        self._drone_bay.buildDroneRequested.connect(self._on_build_drone)
-        self._drone_bay.newWorkflowRequested.connect(self._on_new_workflow)
-        self._drone_bay.editDroneRequested.connect(self._on_edit_drone)
-        self._drone_bay.duplicateDroneRequested.connect(self._on_duplicate_drone)
-        self._drone_bay.deleteDroneRequested.connect(self._on_delete_drone)
-        self._drone_bay.launchDroneRequested.connect(self._on_launch_drone)
-        self._drone_bay.makeToolRequested.connect(self._on_make_drone_tool)
-        self._drone_bay.viewRunReceiptRequested.connect(self._on_view_drone_receipt)
-
-        # Workflow signals (via drone bay's workflow list pane)
-        self._drone_bay._workflow_list.runWorkflowRequested.connect(self._on_run_workflow)
-        self._drone_bay._workflow_list.editWorkflowRequested.connect(self._on_edit_workflow)
-        self._drone_bay._workflow_list.deleteWorkflowRequested.connect(self._on_delete_workflow)
-        self._drone_bay._workflow_list.newWorkflowRequested.connect(self._on_new_workflow)
 
         self._chain_editor: ChainEditor | None = None
 
@@ -602,12 +583,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._companion.set_current_project(_project.id, _project.name)
         self._update_workspace_label()
         self._left_pane.refresh_projects(path)
-        if hasattr(self, '_drone_bay'):
-            self._drone_bay.set_workspace_root(path)
-            self._drone_bay.refresh()
-            if hasattr(self._drone_bay, '_workflow_list'):
-                self._drone_bay._workflow_list.set_workspace_root(path)
-                self._drone_bay._workflow_list.refresh()
         # Close chain editor when workspace root changes
         if self._chain_editor is not None:
             self._playground.hide_chain_editor()
@@ -719,12 +694,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
         self._workspace_root = root_path
         self._checkpoint_dialog = None
-        if hasattr(self, '_drone_bay'):
-            self._drone_bay.set_workspace_root(root_path)
-            self._drone_bay.refresh()
-            if hasattr(self._drone_bay, '_workflow_list'):
-                self._drone_bay._workflow_list.set_workspace_root(root_path)
-                self._drone_bay._workflow_list.refresh()
         self._bridge.set_workspace_root(root_path)
         self._input.set_workspace_root(root_path)
         self._send_handler.set_workspace_root(root_path)
@@ -771,13 +740,25 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         if self._drone_runs:
             self._drone_reports_window.toggle()
         else:
-            self._playground.toggle_drone_bay()
+            self._open_or_toggle_drone_workbay()
         self._sync_drone_tab_checked()
         self._position_edge_tabs()
 
+    def _open_or_toggle_drone_workbay(self) -> None:
+        """Open the Drone Workbay (ChainEditor) or toggle it off."""
+        if self._workspace_root is None:
+            return
+        if self._playground.is_chain_editor_open():
+            self._playground.hide_chain_editor()
+        else:
+            if self._chain_editor is None:
+                self._on_new_workflow()
+            else:
+                self._playground.toggle_chain_editor()
+
     def _sync_drone_tab_checked(self) -> None:
         if self._edge_rail.drone_tab is not None:
-            is_open = self._playground.is_drone_bay_open() or self._drone_reports_window.is_open()
+            is_open = self._playground.is_chain_editor_open() or self._drone_reports_window.is_open()
             self._edge_rail.drone_tab.setChecked(is_open)
 
     def _on_new_drone(self) -> None:
@@ -786,7 +767,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             parent=self,
         )
         if dlg.exec() == QDialog.DialogCode.Accepted:
-            self._drone_bay.refresh()
             self._refresh_drone_context()
 
     def _on_build_drone(self) -> None:
@@ -944,9 +924,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             initial_write_policy=write_policy,
         )
         if dialog.exec() == QDialog.DialogCode.Accepted:
-            # Refresh drone bay to show the new drone
-            if self._drone_bay is not None:
-                self._drone_bay.refresh()
             self._refresh_drone_context()
 
     def _on_edit_drone(self, drone_id: str) -> None:
@@ -959,7 +936,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             drone=drone,
         )
         if dlg.exec() == QDialog.DialogCode.Accepted:
-            self._drone_bay.refresh()
             self._refresh_drone_context()
 
     def _on_duplicate_drone(self, drone_id: str) -> None:
@@ -999,7 +975,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             updated_at=now,
         )
         DroneStore.save_drone(self._workspace_root, dup)
-        self._drone_bay.refresh()
         self._refresh_drone_context()
 
     def _on_delete_drone(self, drone_id: str) -> None:
@@ -1012,7 +987,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         )
         if reply == QMessageBox.Yes:
             DroneStore.delete_drone(self._workspace_root, drone_id)
-            self._drone_bay.refresh()
             self._refresh_drone_context()
 
     def _refresh_drone_context(self) -> None:
@@ -1194,8 +1168,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._chat.append_content(report)
         self._chat.assistant_done()
 
-        # Refresh the workflow list so last-run info appears.
-        self._drone_bay._workflow_list.refresh()
 
     def _on_chain_run_error(self, msg: str, thread: QThread) -> None:
         """Handle chain run exception."""
@@ -1219,7 +1191,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         """Delete a workflow chain."""
         
         ChainStore.delete_chain(self._workspace_root, chain_id)
-        self._drone_bay._workflow_list.refresh()
         logger.info("Deleted workflow: %s", chain_id)
 
     def _on_new_workflow(self) -> None:
@@ -1515,13 +1486,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             self._companion.set_drone_runner(None)
             self._drone_runner_thread = None
         logger.debug("[DroneRun] _on_drone_finished end run_id=%s", run_id)
-        QTimer.singleShot(200, self._deferred_drone_bay_history_refresh)
-
-    def _deferred_drone_bay_history_refresh(self) -> None:
-        """Refresh Drone Bay history only if the bay is currently visible."""
-        logger.debug("[DroneRun] _deferred_drone_bay_history_refresh visible=%s", self._drone_bay.isVisible())
-        if self._drone_bay.isVisible():
-            self._drone_bay.refresh_run_history()
 
     def _on_drone_receipt(self, receipt: object) -> None:
         """Handle completed drone receipt — save to disk."""
@@ -1995,8 +1959,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
         # Normal Drone Bay refresh for successful saves
         if ok and name == "save_drone_definition" and extras.get("drone_saved"):
-            if hasattr(self, '_drone_bay') and self._drone_bay is not None:
-                self._drone_bay.refresh()
             self._refresh_drone_context()
 
         if ok and name in ("read_file", "read_files"):
@@ -2026,9 +1988,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
                 planner_provider=self._settings.planner_provider,
                 worker_provider=self._settings.worker_provider,
             )
-            # Refresh Drone Bay so newly created Drones appear.
-            if hasattr(self, '_drone_bay') and self._drone_bay is not None:
-                self._drone_bay.refresh()
             self._refresh_drone_context()
 
     def _on_diff_decided(

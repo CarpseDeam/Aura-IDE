@@ -122,7 +122,6 @@ class AuraPlayground(QWidget):
         # Stacked widget: index 0 = workspace view, index 1 = Drone Bay, index 2 = Chain Editor
         self._stack = QStackedWidget(self)
         self._stack.addWidget(self._outer_splitter)  # index 0
-        self._drone_bay: QWidget | None = None
         self._chain_editor: QWidget | None = None
 
         layout.addWidget(self._stack, 1)
@@ -153,10 +152,6 @@ class AuraPlayground(QWidget):
         # Aura wrapper reference for atmospheric synchronization
         self._aura_wrapper: AuraWidget | None = None
 
-    def set_drone_bay(self, drone_bay: QWidget) -> None:
-        self._drone_bay = drone_bay
-        self._stack.addWidget(drone_bay)  # index 1
-
     def set_chain_editor(self, chain_editor: QWidget) -> None:
         """Add or replace the chain editor at stack index 2."""
         if self._chain_editor is not None:
@@ -172,9 +167,9 @@ class AuraPlayground(QWidget):
             self.set_workspace_header("WORKFLOW EDITOR", show_close_all=False)
 
     def hide_chain_editor(self) -> None:
-        """Switch back to Drone Bay from chain editor."""
+        """Switch back to workspace from chain editor."""
         if self._stack.currentIndex() == 2:
-            self.switch_to_drone_bay()
+            self.switch_to_workspace()
 
     def set_workspace_header(self, text: str, show_close_all: bool = True) -> None:
         """Update the header label and visibility of Close All button."""
@@ -187,30 +182,12 @@ class AuraPlayground(QWidget):
             self._stack.setCurrentIndex(0)
             self.set_workspace_header("WORKSPACE", show_close_all=True)
 
-    def switch_to_drone_bay(self) -> None:
-        """Switch the stacked widget to the Drone Bay view (index 1)."""
-        if self._drone_bay is not None and self._stack.currentIndex() != 1:
-            self._stack.setCurrentIndex(1)
-            self.set_workspace_header("DRONE BAY", show_close_all=False)
-
-    def is_drone_bay_open(self) -> bool:
-        """Return True if the Drone Bay is currently visible."""
-        return self._drone_bay is not None and self._stack.currentIndex() == 1
-
     def is_chain_editor_open(self) -> bool:
         """Return True if the chain editor is currently displayed in the stack."""
         return self._chain_editor is not None and self._stack.currentIndex() == 2
 
-    def toggle_drone_bay(self) -> None:
-        if self._drone_bay is None:
-            return
-        if self._stack.currentIndex() == 0:
-            self.switch_to_drone_bay()
-        else:
-            self.switch_to_workspace()
-
     def refresh_drone_bay(self) -> None:
-        if self._drone_bay is not None and hasattr(self._drone_bay, 'refresh'):
+        if hasattr(self, '_drone_bay') and self._drone_bay is not None and hasattr(self._drone_bay, 'refresh'):
             self._drone_bay.refresh()
 
     def set_aura_wrapper(self, wrapper: AuraWidget) -> None:
