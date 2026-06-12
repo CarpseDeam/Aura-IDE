@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aura"
-version = "1.7.0"
+version = "1.7.10"
 description = "Aura — desktop chat troubleshooter for code, supporting DeepSeek, OpenAI, Anthropic, OpenRouter, and MCP."
 requires-python = ">=3.10"
 dependencies = [
