@@ -9,7 +9,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from aura.config import MAX_READ_BYTES, SKIP_DIRS, SKIP_FILE_SUFFIXES, get_subprocess_kwargs
+from aura.config import SKIP_DIRS, SKIP_FILE_SUFFIXES, get_subprocess_kwargs
 
 
 def _should_skip(path: Path) -> bool:
@@ -101,6 +101,7 @@ def _build_result(
     include_pattern: str | None,
     auto_regex_retry: bool = False,
     truncated: bool = False,
+    skipped_details: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     result = {
         "ok": True,
@@ -108,6 +109,7 @@ def _build_result(
         "engine": engine,
         "searched_files": searched_files,
         "skipped_files": skipped_files,
+        "skipped_details": skipped_details or [],
         "truncated": truncated,
         "regex_mode": regex_mode,
         "auto_regex_retry": auto_regex_retry,
@@ -276,6 +278,7 @@ def _grep_ripgrep(
             engine="ripgrep",
             searched_files=len(candidates),
             skipped_files=skipped_files,
+            skipped_details=[],
             truncated=truncated,
             regex_mode=regex,
             include_pattern=include,
@@ -308,78 +311,74 @@ def _grep_python(
     matches: list[dict[str, Any]] = []
     candidates, skipped_files = _collect_candidate_files(workspace_root, include_pattern)
     searched_files = 0
+    skipped_details: list[dict[str, Any]] = []
 
     for file_path in candidates:
         rel = _safe_relative_to(file_path, workspace_root).as_posix()
         try:
-            file_size = file_path.stat().st_size
-            if file_size > MAX_READ_BYTES:
-                skipped_files += 1
-                continue
+            with open(file_path, "r", encoding="utf-8", errors="strict") as f:
+                for line_num, raw_line in enumerate(f, start=1):
+                    line = raw_line.rstrip("\n").rstrip("\r")
+                    if compiled is not None:
+                        match = compiled.search(line)
+                        if match:
+                            if len(matches) >= max_results:
+                                return _build_result(
+                                    matches=matches,
+                                    engine="python",
+                                    searched_files=searched_files + 1,
+                                    skipped_files=skipped_files,
+                                    skipped_details=skipped_details,
+                                    truncated=True,
+                                    regex_mode=regex_mode,
+                                    include_pattern=include_pattern,
+                                )
+                            matches.append({
+                                "path": rel,
+                                "line_number": line_num,
+                                "line": line.strip(),
+                                "match_column": match.start(),
+                            })
+                    else:
+                        search_line = line if case_sensitive else line.lower()
+                        search_pattern = pattern if case_sensitive else pattern.lower()
+                        col = search_line.find(search_pattern)
+                        if col != -1:
+                            if len(matches) >= max_results:
+                                return _build_result(
+                                    matches=matches,
+                                    engine="python",
+                                    searched_files=searched_files + 1,
+                                    skipped_files=skipped_files,
+                                    skipped_details=skipped_details,
+                                    truncated=True,
+                                    regex_mode=regex_mode,
+                                    include_pattern=include_pattern,
+                                )
+                            matches.append({
+                                "path": rel,
+                                "line_number": line_num,
+                                "line": line.strip(),
+                                "match_column": col,
+                            })
+            searched_files += 1
 
-            raw = file_path.read_bytes()
-            if b"\x00" in raw:
-                skipped_files += 1
-                continue
-
-            try:
-                text = raw.decode("utf-8")
-            except UnicodeDecodeError:
-                skipped_files += 1
-                continue
-        except (OSError, PermissionError):
+        except UnicodeDecodeError:
             skipped_files += 1
-            continue
-
-        searched_files += 1
-
-        for line_num, line in enumerate(text.splitlines(), start=1):
-            if compiled is not None:
-                match = compiled.search(line)
-                if match:
-                    if len(matches) >= max_results:
-                        return _build_result(
-                            matches=matches,
-                            engine="python",
-                            searched_files=searched_files,
-                            skipped_files=skipped_files,
-                            truncated=True,
-                            regex_mode=regex_mode,
-                            include_pattern=include_pattern,
-                        )
-                    matches.append({
-                        "path": rel,
-                        "line_number": line_num,
-                        "line": line.strip(),
-                        "match_column": match.start(),
-                    })
-            else:
-                search_line = line if case_sensitive else line.lower()
-                search_pattern = pattern if case_sensitive else pattern.lower()
-                col = search_line.find(search_pattern)
-                if col != -1:
-                    if len(matches) >= max_results:
-                        return _build_result(
-                            matches=matches,
-                            engine="python",
-                            searched_files=searched_files,
-                            skipped_files=skipped_files,
-                            truncated=True,
-                            regex_mode=regex_mode,
-                            include_pattern=include_pattern,
-                        )
-                    matches.append({
-                        "path": rel,
-                        "line_number": line_num,
-                        "line": line.strip(),
-                        "match_column": col,
-                    })
+            skipped_details.append({"path": rel, "reason": "binary or non-UTF-8 encoding"})
+        except PermissionError:
+            skipped_files += 1
+            skipped_details.append({"path": rel, "reason": "permission denied"})
+        except OSError:
+            skipped_files += 1
+            skipped_details.append({"path": rel, "reason": "read error"})
 
     return _build_result(
         matches=matches,
         engine="python",
         searched_files=searched_files,
         skipped_files=skipped_files,
+        skipped_details=skipped_details,
         truncated=False,
         regex_mode=regex_mode,
         include_pattern=include_pattern,

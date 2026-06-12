@@ -160,7 +160,7 @@ class TestGrepPython:
     def test_binary_file_skipped(self, tmp_path: Path) -> None:
         """Binary files that can't be decoded as UTF-8 are counted as skipped."""
         binary = tmp_path / "data.bin"
-        binary.write_bytes(b"\x00\xff\xfe")
+        binary.write_bytes(b"\x80\x81\x82")
         readable = tmp_path / "readable.txt"
         readable.write_text("hello world\n", encoding="utf-8")
 
@@ -171,17 +171,21 @@ class TestGrepPython:
         assert result["searched_files"] == 1
         assert result["skipped_files"] == 1
 
-    def test_skipped_large_and_binary_files_are_counted(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("aura.conversation.tools.grep.MAX_READ_BYTES", 8)
+    def test_skipped_large_and_binary_files_are_counted(self, tmp_path: Path) -> None:
         (tmp_path / "large.txt").write_text("0123456789abcdef", encoding="utf-8")
-        (tmp_path / "binary.bin").write_bytes(b"\x00\x01\x02")
+        (tmp_path / "binary.bin").write_bytes(b"\x80\x81\x82")
         (tmp_path / "small.txt").write_text("needle\n", encoding="utf-8")
 
         result = grep_files(tmp_path, "needle")
 
         assert result["ok"] is True
-        assert result["searched_files"] == 1
-        assert result["skipped_files"] == 2
+        assert result["searched_files"] == 2
+        assert result["skipped_files"] == 1
+        assert len(result["matches"]) == 1
+        assert result["matches"][0]["path"] == "small.txt"
+        assert len(result["skipped_details"]) == 1
+        assert result["skipped_details"][0]["path"] == "binary.bin"
+        assert "encoding" in result["skipped_details"][0]["reason"]
 
     def test_grep_finds_private_method_names(self, tmp_path: Path) -> None:
         target = tmp_path / "gui"
@@ -237,6 +241,22 @@ class TestGrepPython:
         assert len(result["matches"]) == 1
         assert result["matches"][0]["path"] == "zzz_target.txt"
         assert result["searched_files"] == 151
+
+    def test_skipped_details_for_binary_and_permission(self, tmp_path: Path) -> None:
+        (tmp_path / "binary.bin").write_bytes(b"\x80\x81\x82")
+        large_file = tmp_path / "large.txt"
+        large_file.write_text("line\n" * 50000 + "target_needle\n", encoding="utf-8")
+
+        result = grep_files(tmp_path, "target_needle")
+
+        assert result["ok"] is True
+        assert result["searched_files"] == 1
+        assert result["skipped_files"] == 1
+        assert len(result["matches"]) == 1
+        assert result["matches"][0]["path"] == "large.txt"
+        assert len(result["skipped_details"]) == 1
+        assert result["skipped_details"][0]["path"] == "binary.bin"
+        assert "encoding" in result["skipped_details"][0]["reason"]
 
     def test_no_match_reports_searched_files(self, tmp_workspace: Path) -> None:
         result = grep_files(tmp_workspace, "definitely absent")
