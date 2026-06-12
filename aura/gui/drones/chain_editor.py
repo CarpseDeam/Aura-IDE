@@ -121,6 +121,26 @@ class _DroneCard(QFrame):
         meta.setStyleSheet(f"color: {_qss_color(FG_DIM)}; font-size: 10px; background: transparent; border: none;")
         layout.addWidget(meta)
 
+        # -- action buttons ------------------------------------------------
+        self._on_run = lambda: None
+        self._on_edit = lambda: None
+        self._on_delete = lambda: None
+
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(4)
+        btn_style = (
+            f"QPushButton {{ background: {_qss_color(SURFACE)}; color: {_qss_color(FG_MUTED)}; "
+            f"border: 1px solid {_qss_color(BORDER)}; border-radius: 4px; padding: 2px 6px; font-size: 11px; }}"
+            f"QPushButton:hover {{ color: {_qss_color(FG)}; border-color: {_qss_color(ACCENT_DIM)}; }}"
+        )
+        for text, callback_attr in [("▶ Run", "_on_run"), ("✎ Edit", "_on_edit"), ("✕ Delete", "_on_delete")]:
+            btn = QPushButton(text)
+            btn.setStyleSheet(btn_style)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.clicked.connect(lambda checked, cb=callback_attr: (getattr(self, cb, None) or (lambda: None))())
+            btn_layout.addWidget(btn)
+        layout.addLayout(btn_layout)
+
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.LeftButton:
             self._drag_start_pos = event.position().toPoint()
@@ -148,9 +168,10 @@ class _DroneCard(QFrame):
 class _DroneRosterWidget(QScrollArea):
     """Displays all available drones as cards in a vertical flow."""
 
-    def __init__(self, workspace_root: Path, parent: QWidget | None = None) -> None:
+    def __init__(self, workspace_root: Path, editor: ChainEditor, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._workspace_root = workspace_root
+        self._editor = editor
         self.setWidgetResizable(True)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setStyleSheet(
@@ -185,6 +206,9 @@ class _DroneRosterWidget(QScrollArea):
             self._layout.insertWidget(self._layout.count() - 1, empty)
         for d in drones:
             card = _DroneCard(d["id"], d["name"], d.get("description", ""), d.get("accepts", "any"), d.get("produces", "any"))
+            card._on_run = lambda did=d["id"]: self._editor.runDroneRequested.emit(did)
+            card._on_edit = lambda did=d["id"]: self._editor.editDroneRequested.emit(did)
+            card._on_delete = lambda did=d["id"]: self._editor.deleteDroneRequested.emit(did)
             self._layout.insertWidget(self._layout.count() - 1, card)
 
 
@@ -374,7 +398,10 @@ class ChainEditor(QWidget):
 
     titleChanged = Signal(str)
     closeRequested = Signal()
-    runDroneRequested = Signal(str, str)
+    runChainRequested = Signal(str)
+    goBackRequested = Signal()
+    settle_draft_requested = Signal(dict)
+    runDroneRequested = Signal(str)
     editDroneRequested = Signal(str)
     deleteDroneRequested = Signal(str)
 
@@ -442,7 +469,7 @@ class ChainEditor(QWidget):
         self._build_left_panel()
 
         # Center – canvas
-        self._canvas = ChainCanvas(self._workspace_root, self)
+        self._canvas = ChainCanvas(self)
         self._canvas.setStyleSheet(f"background: {_qss_color(BG)}; border: none;")
         self._canvas.canvasChanged.connect(self._on_canvas_changed)
         self._canvas._scene.selectionChanged.connect(self._on_selection_changed)
@@ -479,7 +506,7 @@ class ChainEditor(QWidget):
         layout.addLayout(header_row)
 
         # Roster
-        self._roster = _DroneRosterWidget(self._workspace_root)
+        self._roster = _DroneRosterWidget(self._workspace_root, self)
         layout.addWidget(self._roster, 1)
 
         self._splitter.addWidget(container)
@@ -1053,7 +1080,7 @@ class ChainEditor(QWidget):
         if not data:
             QMessageBox.warning(self, "Cannot Run", "Workflow data not found.")
             return
-        self.runDroneRequested.emit(self._current_chain_id, data.get("name", ""))
+        self.runChainRequested.emit(self._current_chain_id)
 
     def _on_delete_clicked(self) -> None:
         if self._current_chain_id is None:
