@@ -56,12 +56,17 @@ def build_drone_creation_prompt(brief: DroneBuildBrief, accepts: str = "", produ
     lines.append("## Build Brief")
     lines.append(brief.build_brief)
 
-    if accepts or produces:
-        lines.append("")
-        lines.append("## Contract Context")
-        lines.append(f"- Accepts (input type): {accepts or 'any'}")
-        lines.append(f"- Produces (output type): {produces or 'any'}")
-        lines.append("- The DroneDefinition MUST set these exact accepts/produces values.")
+    lines.append("")
+    lines.append("## Contract Context")
+    if accepts:
+        lines.append(f"- Accepts (exact contract): {accepts}")
+    else:
+        lines.append('- Accepts: free-form / any (set field to "")')
+    if produces:
+        lines.append(f"- Produces (exact contract): {produces}")
+    else:
+        lines.append('- Produces: free-form / any (set field to "")')
+    lines.append("- The DroneDefinition MUST set these exact accepts/produces values.")
 
     lines.append("")
     lines.append("## Compiled Build Plan")

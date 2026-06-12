@@ -77,6 +77,7 @@ class DroneWorkshopPanel(QWidget):
 
     drone_build_requested = Signal(object)  # emits DroneBuildBrief
     cancelled = Signal()
+    cancelled_and_back_requested = Signal()
 
     def __init__(
         self,
@@ -291,7 +292,7 @@ class DroneWorkshopPanel(QWidget):
             f"border: 1px solid {BORDER}; border-radius: 6px; "
             f"padding: 6px 20px; font-weight: 600; }}"
         )
-        cancel_btn.clicked.connect(self.cancelled.emit)
+        cancel_btn.clicked.connect(self.cancel)
         button_row.addWidget(cancel_btn)
 
         self._build_btn = QPushButton("Build this Drone")
@@ -484,10 +485,64 @@ class DroneWorkshopPanel(QWidget):
     # -- Public API --
 
     def cancel(self) -> None:
-        """Cancel the runner if running and clear the last valid brief."""
+        """Cancel the runner if running, clear the last valid brief, and request back to palette."""
         if self._runner is not None:
             self._runner.cancel()
         self._last_valid_brief = None
+        self.cancelled.emit()
+        self.cancelled_and_back_requested.emit()
+
+    def reset_workshop_state(self) -> None:
+        """Clear conversation, brief editor, and cancel any active runner."""
+        # Cancel active runner
+        if self._runner is not None:
+            self._runner.cancel()
+        if self._runner_thread is not None:
+            self._runner_thread.quit()
+            self._runner_thread = None
+        self._runner = None
+
+        # Clear conversation
+        self._conversation.clear()
+        self._last_valid_brief = None
+
+        # Remove all message cards from the column (keep empty hint and stretch)
+        while self._msg_layout.count():
+            item = self._msg_layout.takeAt(0)
+            w = item.widget()
+            if w is not None and w is not self._empty_hint:
+                w.deleteLater()
+
+        # Reset empty hint visibility
+        if self._empty_hint is not None:
+            self._empty_hint.setVisible(True)
+        self._msg_layout.addStretch()
+
+        # Reset brief card to empty state
+        self._brief_valid_widget.setVisible(False)
+        self._brief_empty.setVisible(True)
+
+        # Reset build button
+        self._build_btn.setEnabled(False)
+        self._build_btn.setText("Build this Drone")
+
+        # Clean up thinking/aural state if any
+        if self._aura_wrapper is not None:
+            self._aura_wrapper.stop_aura()
+            self._aura_wrapper = None
+        if self._thinking_card is not None:
+            self._thinking_card._stop_thinking_animation()
+            self._thinking_card = None
+
+        # Re-enable input
+        self._input_edit.setEnabled(True)
+        self._send_btn.setEnabled(True)
+        self._send_btn.setText("\u2192")
+        self._send_btn.setStyleSheet(
+            f"QPushButton#primary {{ background: {ACCENT}; color: {BG}; "
+            f"border: 1px solid {ACCENT}; border-radius: 6px; "
+            f"padding: 6px 14px; font-weight: 600; font-size: 16px; }}"
+        )
 
     def result_brief(self) -> DroneBuildBrief | None:
         """Return the last valid build brief."""

@@ -428,7 +428,7 @@ class ChainCanvas(QGraphicsView):
         self._space_offset_y = 0.0
         self._space_timer = QTimer(self)
         self._space_timer.timeout.connect(self._on_space_tick)
-        self._space_timer.start(50)
+        self._space_timer.start(100)
 
     def _update_empty_text(self) -> None:
         if self._empty_text:
@@ -799,18 +799,17 @@ class ChainCanvas(QGraphicsView):
         self.canvasChanged.emit()
 
     def contextMenuEvent(self, event) -> None:
-        scene_pos = self.mapToScene(event.position().toPoint())
-        item_at_pos = self._scene.itemAt(scene_pos)
+        item_at_pos = self.itemAt(event.pos())
         if item_at_pos is None or isinstance(item_at_pos, QGraphicsTextItem):
             menu = QMenu()
             add_draft_action = menu.addAction("Create Drone Here")
             action = menu.exec(event.globalPos())
             if action == add_draft_action:
-                self._canvas_add_draft_node(scene_pos)
+                self._canvas_add_draft_node(self.mapToScene(event.pos()))
             return
         super().contextMenuEvent(event)
 
-    def _canvas_add_draft_node(self, scene_pos: QPointF) -> None:
+    def _canvas_add_draft_node(self, scene_pos: QPointF) -> ChainNodeItem:
         node_id = f"draft-{uuid.uuid4().hex[:8]}"
         item = ChainNodeItem(
             node_id=node_id,
@@ -824,14 +823,20 @@ class ChainCanvas(QGraphicsView):
         self._scene.addItem(item)
         self._nodes[node_id] = item
         self._update_empty_text()
+        self._scene.clearSelection()
+        item.setSelected(True)
         self.canvasChanged.emit()
+        return item
 
     # ---- Space background ----
 
     def drawBackground(self, painter: QPainter, rect: QRectF) -> None:
-        painter.fillRect(rect, QColor("#0a0a10"))
+        painter.save()
+        painter.resetTransform()
 
         viewport_rect = self.viewport().rect()
+        painter.fillRect(viewport_rect, QColor("#0a0a10"))
+
         cache = self._space_bg_cache
         if cache is None or cache.size() != viewport_rect.size():
             cache = self._build_space_cache(viewport_rect.size())
@@ -851,6 +856,7 @@ class ChainCanvas(QGraphicsView):
             painter.setPen(Qt.PenStyle.NoPen)
             painter.drawEllipse(view_pos, size, size)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.restore()
 
     def _precompute_stars(self, count: int = 400) -> None:
         import random
@@ -896,7 +902,9 @@ class ChainCanvas(QGraphicsView):
         return pixmap
 
     def _on_space_tick(self) -> None:
+        if not self.isVisible():
+            return
         self._space_offset_x += 0.15
         self._space_offset_y += 0.08
         if self._stars:
-            self._scene.invalidate(self._scene.sceneRect(), QGraphicsScene.SceneLayer.BackgroundLayer)
+            self.viewport().update()

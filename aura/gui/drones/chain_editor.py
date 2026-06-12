@@ -499,6 +499,7 @@ class ChainEditor(QWidget):
 
         # Workshop draft settlement
         self._workshop_draft_node_id: str | None = None
+        self._palette_width = 260
 
         # Auto-save debounce timer
         self._auto_save_timer = QTimer(self)
@@ -519,6 +520,7 @@ class ChainEditor(QWidget):
 
         # Splitter
         splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._splitter = splitter
         splitter.setStyleSheet(f"""
             QSplitter::handle {{
                 background: {BORDER.name()};
@@ -821,6 +823,7 @@ class ChainEditor(QWidget):
             parent=self,
         )
         self._workshop_panel.drone_build_requested.connect(self._on_workshop_build_requested)
+        self._workshop_panel.cancelled_and_back_requested.connect(self._on_back_to_palette)
         layout.addWidget(self._workshop_panel, 1)
 
         self._workshop_container = container
@@ -836,9 +839,14 @@ class ChainEditor(QWidget):
                 break
 
         if draft_node:
+            # Save current palette width before expanding for workshop
+            if self._left_stack.currentIndex() == 0:
+                self._palette_width = self._splitter.sizes()[0]
             self._show_workshop_for_draft(draft_node)
+            self._splitter.setSizes([340, self._splitter.sizes()[1], self._splitter.sizes()[2]])
         else:
             if self._left_stack.currentIndex() != 0:
+                self._splitter.setSizes([self._palette_width, self._splitter.sizes()[1], self._splitter.sizes()[2]])
                 self._left_stack.setCurrentIndex(0)
 
     def _show_workshop_for_draft(self, draft_node: ChainNodeItem) -> None:
@@ -846,6 +854,10 @@ class ChainEditor(QWidget):
             return
 
         self._ensure_workshop_panel()
+
+        # Reset workshop state when switching to a different draft
+        if draft_node.node_id != self._workshop_draft_node_id:
+            self._workshop_panel.reset_workshop_state()
 
         # Update header
         name = draft_node.draft_name or "Untitled Drone"
@@ -860,6 +872,9 @@ class ChainEditor(QWidget):
 
     def _on_back_to_palette(self) -> None:
         # Deselect any draft node so palette comes back
+        self._workshop_draft_node_id = None
+        if self._workshop_panel is not None:
+            self._workshop_panel.reset_workshop_state()
         self._canvas._scene.clearSelection()
         self._left_stack.setCurrentIndex(0)
 

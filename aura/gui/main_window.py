@@ -1878,6 +1878,15 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._input.focus_editor()
         self._send_handler.process_message_queue(self.current_model(), self.current_thinking())
 
+        # Clear any stale draft settlement that didn't receive a save_drone_definition result
+        if self._pending_draft_settle is not None:
+            editor, draft_node_id = self._pending_draft_settle
+            self._pending_draft_settle = None
+            try:
+                editor.set_status("Build incomplete — no drone saved.", DANGER)
+            except Exception:
+                logger.debug("Could not set stale draft settlement status", exc_info=True)
+
     def _on_stream_done(self, finish_reason: str, full_message: dict) -> None:
         # If the model produced tool calls, it's not actually done — the bridge
         # will execute them and loop back. Keep the aura alive.
@@ -1963,7 +1972,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             drone_id = extras.get("drone_id")
             if self._pending_draft_settle is not None and drone_id:
                 editor, draft_node_id = self._pending_draft_settle
-                self._pending_draft_settle = None
                 try:
                     drone_def = DroneStore.load_drone(self._workspace_root, drone_id)
                     if drone_def is None:
@@ -1975,6 +1983,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
                         if not success:
                             logger.warning(f"Settle draft: settle_draft_node returned False for {draft_node_id}")
                             editor.set_status("Build failed — check conversation", DANGER)
+                        else:
+                            self._pending_draft_settle = None
                 except Exception:
                     logger.exception("Error settling draft node")
 
