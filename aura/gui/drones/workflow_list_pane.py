@@ -95,18 +95,43 @@ class WorkflowListPane(QWidget):
                 item.widget().deleteLater()
 
         self._layout.addStretch(2)
-        empty = QLabel(
-            "No workflows yet.\n\n"
-            "Create a workflow chain to automate multi-step drone pipelines."
+
+        label1 = QLabel("No workflows yet.")
+        label1.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label1.setStyleSheet(
+            f"font-size: 14px; font-weight: 700; color: {FG};"
+            f" background: transparent; padding: 0 16px;"
         )
-        empty.setObjectName("workflowEmpty")
-        empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        empty.setWordWrap(True)
-        empty.setStyleSheet(
-            f"color: {FG_MUTED}; font-size: 13px; padding: 16px; "
-            f"background: transparent;"
+        self._layout.addWidget(label1)
+
+        label2 = QLabel(
+            "Create a reusable workflow by connecting saved Drones."
         )
-        self._layout.addWidget(empty)
+        label2.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label2.setWordWrap(True)
+        label2.setStyleSheet(
+            f"font-size: 12px; color: {FG_MUTED}; background: transparent;"
+            f" padding: 4px 16px 8px 16px;"
+        )
+        self._layout.addWidget(label2)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+        create_btn = QPushButton("Create a Workflow")
+        create_btn.setObjectName("primary")
+        create_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        create_btn.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        create_btn.setStyleSheet(
+            f"QPushButton#primary {{ background: {ACCENT}; color: {BG};"
+            f" border: 1px solid {ACCENT}; border-radius: 6px;"
+            f" padding: 8px 20px; font-weight: 600; font-size: 13px; }}"
+            f"QPushButton#primary:hover {{ background: #94b6ff; }}"
+        )
+        create_btn.clicked.connect(self.newWorkflowRequested.emit)
+        btn_row.addWidget(create_btn)
+        btn_row.addStretch(1)
+        self._layout.addLayout(btn_row)
+
         self._layout.addStretch(3)
 
     @staticmethod

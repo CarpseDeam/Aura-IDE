@@ -38,6 +38,7 @@ class DroneBayPane(QWidget):
 
     newDroneRequested = Signal()
     buildDroneRequested = Signal()
+    newWorkflowRequested = Signal()
     editDroneRequested = Signal(str)
     duplicateDroneRequested = Signal(str)
     deleteDroneRequested = Signal(str)
@@ -68,46 +69,59 @@ class DroneBayPane(QWidget):
         header_layout.setContentsMargins(0, 0, 0, 0)
         header_layout.setSpacing(2)
 
-        title = QLabel("Drones")
-        title.setObjectName("droneBayTitle")
-        title.setStyleSheet(
+        self._header_title = QLabel("Drones")
+        self._header_title.setObjectName("droneBayTitle")
+        self._header_title.setStyleSheet(
             f"font-size: 18px; font-weight: 700; color: {FG}; background: transparent;"
         )
-        header_layout.addWidget(title)
+        header_layout.addWidget(self._header_title)
 
-        subtitle = QLabel(
+        self._header_subtitle = QLabel(
             "Small focused workers Aura can save and launch for repeatable tasks."
         )
-        subtitle.setObjectName("droneBaySubtitle")
-        subtitle.setStyleSheet(
+        self._header_subtitle.setObjectName("droneBaySubtitle")
+        self._header_subtitle.setStyleSheet(
             f"font-size: 12px; color: {FG_DIM}; background: transparent;"
         )
-        subtitle.setWordWrap(True)
-        header_layout.addWidget(subtitle)
+        self._header_subtitle.setWordWrap(True)
+        header_layout.addWidget(self._header_subtitle)
 
-        new_btn = QPushButton("+ New Drone")
-        new_btn.setObjectName("primary")
-        new_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        new_btn.setStyleSheet(
+        self._new_drone_btn = QPushButton("+ New Drone")
+        self._new_drone_btn.setObjectName("primary")
+        self._new_drone_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._new_drone_btn.setStyleSheet(
             f"QPushButton#primary {{ background: {ACCENT}; color: {BG}; "
             f"border: 1px solid {ACCENT}; border-radius: 6px; "
             f"padding: 6px 16px; font-weight: 600; font-size: 13px; }}"
             f"QPushButton#primary:hover {{ background: #94b6ff; }}"
         )
-        new_btn.clicked.connect(self.newDroneRequested.emit)
-        header_layout.addWidget(new_btn)
+        self._new_drone_btn.clicked.connect(self.newDroneRequested.emit)
+        header_layout.addWidget(self._new_drone_btn)
 
-        design_btn = QPushButton("Build a Drone")
-        design_btn.setObjectName("secondary")
-        design_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        design_btn.setStyleSheet(
+        self._design_drone_btn = QPushButton("Build a Drone")
+        self._design_drone_btn.setObjectName("secondary")
+        self._design_drone_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._design_drone_btn.setStyleSheet(
             f"QPushButton#secondary {{ background: transparent; color: {ACCENT}; "
             f"border: 1px solid {ACCENT}; border-radius: 6px; "
             f"padding: 6px 16px; font-weight: 600; font-size: 13px; }}"
             f"QPushButton#secondary:hover {{ background: rgba(122, 162, 247, 0.10); }}"
         )
-        design_btn.clicked.connect(self.buildDroneRequested.emit)
-        header_layout.addWidget(design_btn)
+        self._design_drone_btn.clicked.connect(self.buildDroneRequested.emit)
+        header_layout.addWidget(self._design_drone_btn)
+
+        self._new_workflow_btn = QPushButton("Create a Workflow")
+        self._new_workflow_btn.setObjectName("primary")
+        self._new_workflow_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._new_workflow_btn.setStyleSheet(
+            f"QPushButton#primary {{ background: {ACCENT}; color: {BG}; "
+            f"border: 1px solid {ACCENT}; border-radius: 6px; "
+            f"padding: 6px 16px; font-weight: 600; font-size: 13px; }}"
+            f"QPushButton#primary:hover {{ background: #94b6ff; }}"
+        )
+        self._new_workflow_btn.clicked.connect(self.newWorkflowRequested.emit)
+        self._new_workflow_btn.hide()
+        header_layout.addWidget(self._new_workflow_btn)
 
         layout.addWidget(header)
 
@@ -220,7 +234,22 @@ class DroneBayPane(QWidget):
     def _on_tab_changed(self, index: int) -> None:
         """Switch the stacked widget and refresh workflows if selected."""
         self._stack.setCurrentIndex(index)
-        if index == 1:  # Workflows tab
+        if index == 0:
+            self._header_title.setText("Drones")
+            self._header_subtitle.setText(
+                "Small focused workers Aura can save and launch for repeatable tasks."
+            )
+            self._new_drone_btn.show()
+            self._design_drone_btn.show()
+            self._new_workflow_btn.hide()
+        else:
+            self._header_title.setText("Workflows")
+            self._header_subtitle.setText(
+                "Connect saved Drones into reusable automation pipelines."
+            )
+            self._new_drone_btn.hide()
+            self._design_drone_btn.hide()
+            self._new_workflow_btn.show()
             self._workflow_list.refresh()
 
     # -- Internal helpers --

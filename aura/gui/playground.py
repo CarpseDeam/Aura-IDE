@@ -172,9 +172,9 @@ class AuraPlayground(QWidget):
             self.set_workspace_header("WORKFLOW EDITOR", show_close_all=False)
 
     def hide_chain_editor(self) -> None:
-        """Switch back to workspace view from chain editor."""
+        """Switch back to Drone Bay from chain editor."""
         if self._stack.currentIndex() == 2:
-            self.switch_to_workspace()
+            self.switch_to_drone_bay()
 
     def set_workspace_header(self, text: str, show_close_all: bool = True) -> None:
         """Update the header label and visibility of Close All button."""

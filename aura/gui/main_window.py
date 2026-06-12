@@ -266,6 +266,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._playground.set_drone_bay(self._drone_bay)
         self._drone_bay.newDroneRequested.connect(self._on_new_drone)
         self._drone_bay.buildDroneRequested.connect(self._on_build_drone)
+        self._drone_bay.newWorkflowRequested.connect(self._on_new_workflow)
         self._drone_bay.editDroneRequested.connect(self._on_edit_drone)
         self._drone_bay.duplicateDroneRequested.connect(self._on_duplicate_drone)
         self._drone_bay.deleteDroneRequested.connect(self._on_delete_drone)
