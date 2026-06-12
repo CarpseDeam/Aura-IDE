@@ -55,12 +55,11 @@ class DroneRunCard(QFrame):
       │                                                │
       │  ▶ Show tool output (12 calls)                │
       │                                                │
-      │  [Copy Report]  [Close]                       │
+      │  [Copy Report]                                 │
       └──────────────────────────────────────────────┘
     """
 
     cancelRequested = Signal()
-    closeRequested = Signal()
 
     def __init__(self, drone: DroneDefinition, parent: QWidget | None = None, readonly: bool = False) -> None:
         super().__init__(parent)
@@ -235,27 +234,16 @@ class DroneRunCard(QFrame):
         self._cancel_btn.clicked.connect(self.cancelRequested.emit)
         btn_layout.addWidget(self._cancel_btn)
 
-        self._close_btn = QPushButton("Close")
-        self._close_btn.setStyleSheet(
-            f"QPushButton {{ background: #1a1a24; color: {FG_DIM}; "
-            f"border: 1px solid {BORDER}; border-radius: 6px; "
-            f"padding: 4px 16px; font-size: 12px; }}"
-            f"QPushButton:hover {{ background: #222230; color: {FG}; }}"
-        )
-        self._close_btn.clicked.connect(self.closeRequested.emit)
-        self._close_btn.hide()
-        btn_layout.addWidget(self._close_btn)
+
 
         layout.addLayout(btn_layout)
 
         # Initial visibility
         if self._is_readonly_view:
             self._cancel_btn.hide()
-            self._close_btn.show()
             self._live_area.hide()
         else:
             self._cancel_btn.show()
-            self._close_btn.hide()
 
     # -- Expander logic --
 
@@ -339,7 +327,6 @@ class DroneRunCard(QFrame):
                 f"background: #0a1a10; border: 1px solid {SUCCESS};"
             )
             self._cancel_btn.hide()
-            self._close_btn.show()
         elif normalized == "cancelled":
             self._status_badge.setStyleSheet(
                 f"color: {FG_MUTED}; font-size: 11px; font-weight: 600; "
@@ -347,7 +334,6 @@ class DroneRunCard(QFrame):
                 f"background: #18191f; border: 1px solid {FG_MUTED};"
             )
             self._cancel_btn.hide()
-            self._close_btn.show()
         elif normalized in ("failed", "timed_out"):
             self._status_badge.setStyleSheet(
                 f"color: {DANGER}; font-size: 11px; font-weight: 600; "
@@ -355,7 +341,6 @@ class DroneRunCard(QFrame):
                 f"background: #1a0a0a; border: 1px solid {DANGER};"
             )
             self._cancel_btn.hide()
-            self._close_btn.show()
 
     def on_content_delta(self, text: str) -> None:
         """Append streaming content to the live status area."""
@@ -461,7 +446,6 @@ class DroneRunCard(QFrame):
 
         self._copy_btn.show()
         self._cancel_btn.hide()
-        self._close_btn.show()
         logger.debug("[DroneRunCard] on_receipt_ready end run_id=%s", receipt.run_id)
 
     def _render_receipt_report(self) -> None:
@@ -540,7 +524,6 @@ class DroneRunCard(QFrame):
 
         self._cancel_btn.hide()
         self._copy_btn.show()
-        self._close_btn.show()
 
         # Populate tool calls for the expander
         for tc in receipt.tool_calls:

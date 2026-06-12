@@ -1005,9 +1005,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
                 )
             )
 
-        # Wire cancel/close buttons.
+        # Wire cancel button.
         run_card.cancelRequested.connect(lambda rid=run_id: self._on_cancel_drone_run(rid))
-        run_card.closeRequested.connect(lambda rid=run_id: self._on_close_drone_card(rid))
 
         self._edge_rail.add_drone_run_pip(run_id, run_drone.name)
         self._position_edge_tabs()
@@ -1233,9 +1232,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         card_id = f"receipt:{run_id}"
         self._drone_reports_window.add_run_card(card_id, run_card)
 
-        # Wire close
-        run_card.closeRequested.connect(lambda cid=card_id: self._on_close_drone_card(cid))
-
         self._drone_reports_window.show_and_focus(card_id)
 
     def _on_focus_drone_run(self, run_id: str = "") -> None:
@@ -1245,15 +1241,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             return
         if self._drone_runs:
             self._drone_reports_window.show_and_raise()
-
-    def _on_close_drone_card(self, run_id: str = "") -> None:
-        """Dismiss a completed run card. Idempotent — safe to call multiple times."""
-        logger.debug("[DroneRun] close card run_id=%s", run_id)
-        if run_id:
-            self._drone_reports_window.remove_run_card(run_id)
-            self._remove_drone_run_pip(run_id)
-        else:
-            self._drone_reports_window.clear()
 
     def _on_drone_approval_requested(
         self,
