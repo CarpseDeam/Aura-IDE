@@ -31,3 +31,7 @@ class ReadHandlersMixin:
     def _handle_read_file_outline(self, args, approval_cb, reject_all) -> ToolExecResult:
         payload = self._fs_handler.handle_read_file_outline(args)
         return ToolExecResult(ok=payload.get("ok", True), payload=payload)
+
+    def _handle_read_file_range(self, args, approval_cb, reject_all) -> ToolExecResult:
+        payload = self._fs_handler.handle_read_file_range(args)
+        return ToolExecResult(ok=payload.get("ok", True), payload=payload)

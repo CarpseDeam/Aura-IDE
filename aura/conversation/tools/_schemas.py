@@ -119,6 +119,40 @@ READ_TOOL_DEFS: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_file_range",
+            "description": (
+                "Read a specific range of lines from a file (1-based, inclusive). "
+                "Use this after read_file_outline or a previous read_file tells you which line "
+                "numbers to inspect — it is far more context-efficient than re-reading the whole "
+                "file when you only need a specific function or section. "
+                "Also use this to recover when a previous read_file result was truncated: "
+                "the truncation marker tells you the original length so you can calculate "
+                "which line ranges remain unread. "
+                "The path argument MUST be relative to the workspace root."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Workspace-relative path, e.g. 'aura/config.py'.",
+                    },
+                    "start_line": {
+                        "type": "integer",
+                        "description": "First line to read (1-based, inclusive).",
+                    },
+                    "end_line": {
+                        "type": "integer",
+                        "description": "Last line to read (1-based, inclusive).",
+                    },
+                },
+                "required": ["path", "start_line", "end_line"],
+            },
+        },
+    },
             {
                 "type": "function",
                 "function": {

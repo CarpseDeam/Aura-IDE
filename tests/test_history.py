@@ -360,6 +360,151 @@ def test_prune_truncates_large_tool_results():
     assert "[... result truncated" in tool_msg["content"]
 
 
+def test_prune_truncation_marker_includes_original_length_and_tool_name():
+    """Truncation markers must include original length, new length, and tool name."""
+    h = History()
+    h.append_user_text("Turn 1")
+    # 10000 chars exceeds the 8 KB source floor, so it will be truncated to 8000.
+    long_content = "y" * 10000
+    h.append_assistant({
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "read_file", "arguments": "{}"}}],
+    })
+    h.append_tool_result("c1", long_content)
+    h.append_user_text("Turn 2")
+    h.append_assistant({"role": "assistant", "content": "ok"})
+
+    # With keep_last_n_turns=1 both turns are preserved; Pass 3 truncates turn 0
+    # (preserved but not current) to source floor (8000 chars) since 10000 > 8000.
+    h.prune_for_context(max_tokens=50, keep_last_n_turns=1, max_tool_result_chars=200)
+
+    tool_msg = h.messages[2]
+    assert "10000" in tool_msg["content"]   # original length in marker
+    assert "read_file" in tool_msg["content"]  # tool name in marker
+
+
+def test_prune_old_turns_dropped_before_current_turn_is_crushed():
+    """Dropping old turns (Pass 2) must happen before current-turn tool results are truncated."""
+    h = History()
+
+    # Turn 0 (first) — old, lots of content
+    h.append_user_text("Old task")
+    h.append_assistant({
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [{"id": "old1", "type": "function", "function": {"name": "read_file", "arguments": "{}"}}],
+    })
+    old_content = "old " * 2000  # 8000 chars
+    h.append_tool_result("old1", old_content)
+    h.append_assistant({"role": "assistant", "content": "done"})
+
+    # Turn 1 (current)
+    current_content = "current_code " * 400  # 5200 chars, not huge
+    h.append_user_text("Current task")
+    h.append_assistant({
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [{"id": "cur1", "type": "function", "function": {"name": "read_file", "arguments": "{}"}}],
+    })
+    h.append_tool_result("cur1", current_content)
+
+    # Set budget just tight enough to need pruning, keep_last_n_turns=1
+    # Turn 0 should be dropped/summarised rather than current turn being crushed.
+    h.prune_for_context(max_tokens=2000, keep_last_n_turns=1, max_tool_result_chars=200)
+
+    # Current turn's read_file result must still be present and mostly intact
+    # (either fully intact or >=8000 floor, but since it's only 5200 chars it should be untouched)
+    last_tool = next(
+        m for m in reversed(h.messages) if m.get("role") == "tool"
+    )
+    assert "current_code" in last_tool["content"], (
+        "Current-turn tool result should not have been crushed to tiny preview"
+    )
+
+
+def test_prune_source_read_tools_get_higher_floor_in_current_turn():
+    """Source-reading tool results keep the 8 KB floor when Pass 4 is the last resort.
+
+    The budget is set so that Pass 4 runs (current turn is over budget) but satisfies
+    the constraint after truncating the source tool to _SOURCE_FLOOR_CHARS — meaning
+    Pass 5 never fires and the 8 KB floor is preserved.
+    """
+    from aura.conversation.history import _SOURCE_FLOOR_CHARS
+
+    h = History()
+    h.append_user_text("Coding task")
+    source_content = "def foo():\n    pass\n" * 500  # ~10 KB → ~2500 tokens
+    h.append_assistant({
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [{"id": "rf1", "type": "function", "function": {"name": "read_file", "arguments": "{}"}}],
+    })
+    h.append_tool_result("rf1", source_content)
+
+    # Budget: tight enough to trigger Pass 4 (initial estimate ~2530 tokens)
+    # but satisfied after truncation to 8000 chars + marker (~2050 tokens).
+    h.prune_for_context(max_tokens=2200, keep_last_n_turns=5, max_tool_result_chars=200)
+
+    tool_msg = next(m for m in h.messages if m.get("role") == "tool")
+    assert len(tool_msg["content"]) >= _SOURCE_FLOOR_CHARS, (
+        f"read_file result was crushed to {len(tool_msg['content'])} chars, "
+        f"expected at least {_SOURCE_FLOOR_CHARS}"
+    )
+
+
+def test_prune_non_source_tools_crushed_before_source_tools():
+    """Under budget pressure, non-source tool results shrink to 2 KB while source
+    tools keep their 8 KB floor — when the budget is satisfied after Pass 4.
+    """
+    h = History()
+    h.append_user_text("Task")
+
+    h.append_assistant({
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {"id": "g1", "type": "function", "function": {"name": "git_status", "arguments": "{}"}},
+            {"id": "rf1", "type": "function", "function": {"name": "read_file", "arguments": "{}"}},
+        ],
+    })
+    non_source = "git output " * 500   # 5500 chars → ~1375 tokens
+    source = "def bar():\n    pass\n" * 500   # 9500 chars → ~2375 tokens
+    h.append_tool_result("g1", non_source)
+    h.append_tool_result("rf1", source)
+
+    # Budget chosen so Pass 4 runs (total ~3775 tokens > 3500)
+    # and is satisfied after: git→2000+marker, rf→8000+marker → ~2580 tokens < 3500.
+    h.prune_for_context(max_tokens=3500, keep_last_n_turns=5, max_tool_result_chars=200)
+
+    msgs_by_id = {m.get("tool_call_id"): m for m in h.messages if m.get("role") == "tool"}
+    git_len = len(msgs_by_id["g1"]["content"])
+    rf_len = len(msgs_by_id["rf1"]["content"])
+
+    assert git_len < rf_len, (
+        f"git_status result ({git_len}) should be shorter than read_file result ({rf_len}) after pruning"
+    )
+
+
+def test_get_tool_name_for_result_resolves_parallel_calls():
+    """_get_tool_name_for_result must resolve tool names for parallel tool calls."""
+    h = History()
+    h.append_user_text("task")
+    h.append_assistant({
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {"id": "a1", "type": "function", "function": {"name": "read_file", "arguments": "{}"}},
+            {"id": "a2", "type": "function", "function": {"name": "grep_search", "arguments": "{}"}},
+        ],
+    })
+    h.append_tool_result("a1", "file content")
+    h.append_tool_result("a2", "grep results")
+
+    assert h._get_tool_name_for_result(2) == "read_file"
+    assert h._get_tool_name_for_result(3) == "grep_search"
+
+
 # ---------------------------------------------------------------------------
 # __len__
 # ---------------------------------------------------------------------------

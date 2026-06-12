@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable
 
-from aura.conversation.tools.fs_read import glob_files, list_directory, read_file, read_file_outline
+from aura.conversation.tools.fs_read import glob_files, list_directory, read_file, read_file_outline, read_file_range
 
 
 class FsReadHandler:
@@ -124,3 +124,22 @@ class FsReadHandler:
         """
         target = self._resolve(args.get("path", ""))
         return read_file_outline(self._root, target)
+
+    def handle_read_file_range(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Read a specific line range from a file (1-based, inclusive).
+
+        Args:
+            args: Must contain "path", "start_line", and "end_line".
+
+        Returns:
+            Payload dict from read_file_range().
+        """
+        start_line = args.get("start_line")
+        end_line = args.get("end_line")
+        if not isinstance(start_line, int) or not isinstance(end_line, int):
+            return {"ok": False, "error": "start_line and end_line must be integers"}
+        try:
+            target = self._resolve(args.get("path", ""))
+        except ValueError as e:
+            return {"ok": False, "error": str(e)}
+        return read_file_range(self._root, target, start_line, end_line)

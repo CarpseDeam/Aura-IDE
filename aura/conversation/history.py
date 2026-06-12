@@ -18,6 +18,22 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
+# Tools whose results carry source code that the Worker needs to read and act on.
+# These get a higher truncation floor to avoid starvation during active coding tasks.
+SOURCE_READ_TOOLS: frozenset[str] = frozenset({
+    "read_file",
+    "read_files",
+    "read_file_range",
+    "grep_search",
+    "find_usages",
+    "read_file_outline",
+})
+
+# Minimum chars kept for source-reading tool results when under pressure.
+_SOURCE_FLOOR_CHARS: int = 8_000
+# Moderate cap for preserved-but-not-current turns.
+_MODERATE_CHARS: int = 2_000
+
 
 
 @dataclass
@@ -188,6 +204,24 @@ class History:
                 indices.append(i)
         return indices
 
+    def _get_tool_name_for_result(self, msg_idx: int) -> str | None:
+        """Return the tool name for the tool-result message at msg_idx.
+
+        Scans backwards through history to find the assistant message whose
+        tool_calls contains a call matching the tool_call_id of the result.
+        """
+        target_id = self.messages[msg_idx].get("tool_call_id")
+        if not target_id:
+            return None
+        for i in range(msg_idx - 1, -1, -1):
+            msg = self.messages[i]
+            if msg.get("role") == "assistant":
+                for tc in (msg.get("tool_calls") or []):
+                    if tc.get("id") == target_id:
+                        fn = tc.get("function")
+                        return fn.get("name") if isinstance(fn, dict) else None
+        return None
+
     def prune_for_context(
         self,
         max_tokens: int = 60_000,
@@ -198,112 +232,157 @@ class History:
 
         Preserves:
         - System prompt (always)
-        - The first user turn (to retain the user's original request/context)
-        - The last keep_last_n_turns user turns (the recent conversation)
+        - The first user turn (original request context)
+        - The last keep_last_n_turns user turns (recent conversation)
 
-        Strategy:
-        1. If already under limit, return immediately.
-        2. For turns NOT in the preserved set, truncate large tool results
-           (role=="tool") to max_tool_result_chars + a summary marker.
-        3. If still over limit, drop entire middle turns (oldest first) until
-           under the budget.
+        Priority order — each pass only runs if still over budget:
+          1. Truncate tool results in non-preserved (old middle) turns.
+             Source-reading tools keep a moderate floor even here.
+          2. Drop entire non-preserved turns oldest-first (summary placeholder).
+             Dropping old turns is always preferable to crushing the current turn.
+          3. Truncate preserved-but-not-current turns with a moderate cap.
+             Source-reading tools keep an 8 KB floor.
+          4. Last resort: truncate the current (active) turn.
+             Source-reading tools keep an 8 KB floor; other tools get 2 KB.
+          5. Truly last resort: reduce current-turn source floor to 2 KB.
 
         A "turn" is all messages from a user message up to (but not including)
-        the next user message. Assistant and tool messages belong to the turn
-        that starts with the user message immediately preceding them.
+        the next user message.
         """
         if self.estimate_tokens() <= max_tokens:
             return
 
         turn_starts = self._turn_indices()
         if not turn_starts:
-            # No user messages — nothing to prune. Just truncate large tool
-            # results globally as a fallback.
             self._truncate_tool_results_in_range(0, len(self.messages), max_tool_result_chars)
             return
 
         num_turns = len(turn_starts)
-        preserved: set[int] = set()
 
-        # Always preserve the first turn.
-        preserved.add(0)
+        def _preserved(n: int) -> set[int]:
+            p: set[int] = {0}
+            for t in range(max(0, n - keep_last_n_turns), n):
+                p.add(t)
+            return p
 
-        # Preserve the last keep_last_n_turns turns.
-        for t in range(max(0, num_turns - keep_last_n_turns), num_turns):
-            preserved.add(t)
+        def turn_range(t: int) -> tuple[int, int]:
+            s = turn_starts[t]
+            e = turn_starts[t + 1] if t + 1 < num_turns else len(self.messages)
+            return s, e
 
-        # --- Pass 1: truncate large tool results in non-preserved turns ---
-        for turn_idx in range(num_turns):
-            if turn_idx in preserved:
+        preserved = _preserved(num_turns)
+        current_turn_idx = num_turns - 1
+
+        # --- Pass 1: truncate tool results in non-preserved turns ---
+        # Source-reading tools keep a moderate 2 KB floor even in old turns.
+        for t in range(num_turns):
+            if t in preserved:
                 continue
-            start = turn_starts[turn_idx]
-            end = turn_starts[turn_idx + 1] if turn_idx + 1 < num_turns else len(self.messages)
-            self._truncate_tool_results_in_range(start, end, max_tool_result_chars)
+            s, e = turn_range(t)
+            self._truncate_tool_results_in_range(
+                s, e, max_tool_result_chars,
+                source_tool_min_chars=_MODERATE_CHARS,
+            )
 
         if self.estimate_tokens() <= max_tokens:
             return
 
-        # --- Pass 1.5: if still over budget, aggressively truncate tool results
-        # in preserved turns too (the current turn may have ballooned).
-        if self.estimate_tokens() > max_tokens:
-            aggressive_chars = max_tool_result_chars // 2
-            for turn_idx in range(num_turns):
-                if turn_idx not in preserved:
-                    continue  # already done above
-                start = turn_starts[turn_idx]
-                end = turn_starts[turn_idx + 1] if turn_idx + 1 < num_turns else len(self.messages)
-                self._truncate_tool_results_in_range(start, end, aggressive_chars)
-
-        if self.estimate_tokens() <= max_tokens:
-            return
-
-        # --- Pass 2: drop entire middle turns ---
-        # Find turns that are neither first nor in the last N.
-        droppable = sorted(
-            [t for t in range(num_turns) if t not in preserved],
-            reverse=True,  # drop oldest middle turns first
-        )
-        for turn_idx in droppable:
+        # --- Pass 2: drop entire non-preserved turns (oldest first) ---
+        # Dropping old turns is always better than crushing the current turn.
+        droppable = sorted(t for t in range(num_turns) if t not in preserved)
+        for t in droppable:
             if self.estimate_tokens() <= max_tokens:
                 return
-            start = turn_starts[turn_idx]
-            end = turn_starts[turn_idx + 1] if turn_idx + 1 < num_turns else len(self.messages)
-            # Replace messages in this range with a single user message
-            # that summarizes what was dropped, so the model knows context
-            # was removed.
-            dropped_count = end - start
-            user_msg = self.messages[start]  # the user message that started this turn
+            s, e = turn_range(t)
+            dropped_count = e - s
+            user_msg = self.messages[s]
             summary = (
                 f"[Earlier conversation pruned to stay within context limit. "
                 f"A turn with {dropped_count} messages was removed. "
                 f"The user had said: \"{user_msg.get('content', '')[:200]}\"]"
             )
-            replacement = {"role": "user", "content": summary}
-            self.messages[start:end] = [replacement]
-            # Rebuild turn indices since we mutated the list.
+            self.messages[s:e] = [{"role": "user", "content": summary}]
+            # Rebuild indices after mutation.
             turn_starts = self._turn_indices()
-            # Rebuild droppable — recalculate preserved and droppable
             num_turns = len(turn_starts)
-            preserved = {0} | set(range(max(0, num_turns - keep_last_n_turns), num_turns))
-            droppable = sorted(
-                [t for t in range(num_turns) if t not in preserved],
-                reverse=True,
+            current_turn_idx = num_turns - 1
+            preserved = _preserved(num_turns)
+            droppable = sorted(t for t in range(num_turns) if t not in preserved)
+
+        if self.estimate_tokens() <= max_tokens:
+            return
+
+        # --- Pass 3: truncate preserved turns EXCEPT the current (last) turn ---
+        # Non-source tools: moderate cap (2 KB). Source tools: 8 KB floor.
+        for t in range(num_turns):
+            if t not in preserved or t == current_turn_idx:
+                continue
+            s, e = turn_range(t)
+            self._truncate_tool_results_in_range(
+                s, e, _MODERATE_CHARS,
+                source_tool_min_chars=_SOURCE_FLOOR_CHARS,
             )
 
+        if self.estimate_tokens() <= max_tokens:
+            return
+
+        # --- Pass 4: last resort — truncate the current (active) turn ---
+        # Non-source tools: 2 KB. Source-reading tools: 8 KB floor.
+        s = turn_starts[current_turn_idx]
+        self._truncate_tool_results_in_range(
+            s, len(self.messages), _MODERATE_CHARS,
+            source_tool_min_chars=_SOURCE_FLOOR_CHARS,
+        )
+
+        if self.estimate_tokens() <= max_tokens:
+            return
+
+        # --- Pass 5: truly last resort — reduce source floor to 2 KB ---
+        self._truncate_tool_results_in_range(
+            turn_starts[current_turn_idx], len(self.messages),
+            _MODERATE_CHARS,
+            source_tool_min_chars=_MODERATE_CHARS,
+        )
+
     def _truncate_tool_results_in_range(
-        self, start: int, end: int, max_chars: int
+        self,
+        start: int,
+        end: int,
+        max_chars: int,
+        source_tool_min_chars: int = 0,
     ) -> None:
-        """Truncate tool-result messages in messages[start:end] to max_chars."""
+        """Truncate tool-result messages in messages[start:end] to max_chars.
+
+        If source_tool_min_chars > max_chars, results from SOURCE_READ_TOOLS
+        are kept at max(max_chars, source_tool_min_chars) instead.
+
+        Truncation markers include original length, new length, and tool name
+        so the Worker can recover by re-reading specific ranges.
+        """
         for i in range(start, min(end, len(self.messages))):
             msg = self.messages[i]
             if msg.get("role") != "tool":
                 continue
             content = msg.get("content", "")
-            if isinstance(content, str) and len(content) > max_chars:
-                truncated = content[:max_chars]
+            if not isinstance(content, str):
+                continue
+
+            actual_max = max_chars
+            tool_name: str | None = None
+            if source_tool_min_chars > max_chars:
+                tool_name = self._get_tool_name_for_result(i)
+                if tool_name in SOURCE_READ_TOOLS:
+                    actual_max = source_tool_min_chars
+
+            if len(content) > actual_max:
+                if tool_name is None:
+                    tool_name = self._get_tool_name_for_result(i)
+                original_len = len(content)
                 msg["content"] = (
-                    f"{truncated}\n\n[... result truncated from "
-                    f"{len(content)} to {max_chars} chars to save context ...]"
+                    f"{content[:actual_max]}\n\n"
+                    f"[... result truncated: {original_len} → {actual_max} chars "
+                    f"(tool: {tool_name or 'unknown'}) "
+                    f"— use read_file_range with start_line/end_line to re-read specific sections ...]"
                 )
 
     # ---- API view -----------------------------------------------------------

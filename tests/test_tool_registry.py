@@ -228,6 +228,42 @@ class TestReadFileOutline:
         assert result.ok is False
 
 
+# read_file_range
+
+
+class TestReadFileRange:
+    """Tests for the read_file_range tool."""
+
+    def test_valid(self, registry: ToolRegistry, approve_cb: MagicMock):
+        with patch("aura.conversation.tools.fs_handler.read_file_range") as mock_rfr:
+            mock_rfr.return_value = {
+                "ok": True, "path": "src/main.py",
+                "start_line": 10, "end_line": 20, "total_lines": 100, "content": "code here",
+            }
+            result = _handler("read_file_range")(
+                registry, {"path": "src/main.py", "start_line": 10, "end_line": 20}, approve_cb, False
+            )
+        assert result.ok is True
+
+    def test_missing_line_args(self, registry: ToolRegistry, approve_cb: MagicMock):
+        result = registry.execute("read_file_range", {"path": "src/main.py"}, approve_cb, False)
+        assert result.ok is False
+
+    def test_non_integer_lines(self, registry: ToolRegistry, approve_cb: MagicMock):
+        result = registry.execute(
+            "read_file_range", {"path": "src/main.py", "start_line": "10", "end_line": "20"},
+            approve_cb, False,
+        )
+        assert result.ok is False
+
+    def test_dotdot_path(self, registry: ToolRegistry, approve_cb: MagicMock):
+        result = registry.execute(
+            "read_file_range", {"path": "../secret.py", "start_line": 1, "end_line": 5},
+            approve_cb, False,
+        )
+        assert result.ok is False
+
+
 # grep_search
 
 
@@ -1676,6 +1712,7 @@ class TestHandlerRegistration:
     EXPECTED_TOOLS = {
         "read_file",
         "read_files",
+        "read_file_range",
         "list_directory",
         "glob",
         "grep_search",
@@ -1749,6 +1786,7 @@ class TestModeToolSurfaces:
         assert tool_names == {
             "read_file",
             "read_files",
+            "read_file_range",
             "read_file_outline",
             "list_directory",
             "glob",

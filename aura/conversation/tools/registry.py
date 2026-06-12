@@ -223,6 +223,7 @@ class ToolRegistry(
 # Populate the dispatch table after ToolRegistry is defined
 TOOL_HANDLERS["read_file"] = ToolRegistry._handle_read_file
 TOOL_HANDLERS["read_files"] = ToolRegistry._handle_read_files
+TOOL_HANDLERS["read_file_range"] = ToolRegistry._handle_read_file_range
 TOOL_HANDLERS["list_directory"] = ToolRegistry._handle_list_directory
 TOOL_HANDLERS["glob"] = ToolRegistry._handle_glob
 TOOL_HANDLERS["grep_search"] = ToolRegistry._handle_grep_search

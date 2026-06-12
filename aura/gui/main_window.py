@@ -963,6 +963,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         )
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self._refresh_drone_context()
+            if self._drone_workbay is not None and self._drone_workbay.isVisible():
+                self._drone_workbay.chain_editor().refresh_roster()
 
     def _on_duplicate_drone(self, drone_id: str) -> None:
         drone = DroneStore.load_drone(self._workspace_root, drone_id)
@@ -1007,13 +1009,15 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         reply = QMessageBox.question(
             self,
             "Delete Drone",
-            "Are you sure you want to delete this Drone?",
+            "Are you sure you want to delete this drone?\n\nAny workflow that references this drone will show a missing node.",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )
         if reply == QMessageBox.Yes:
             DroneStore.delete_drone(self._workspace_root, drone_id)
             self._refresh_drone_context()
+            if self._drone_workbay is not None and self._drone_workbay.isVisible():
+                self._drone_workbay.chain_editor().refresh_roster()
 
     def _refresh_drone_context(self) -> None:
         refresher = getattr(self._bridge, "refresh_tier1_context", None)

@@ -49,6 +49,76 @@ def read_file(workspace_root: Path, target: Path) -> dict[str, Any]:
     return {"ok": True, "path": rel, "content": text, "truncated": truncated}
 
 
+def read_file_range(
+    workspace_root: Path,
+    target: Path,
+    start_line: int,
+    end_line: int,
+) -> dict[str, Any]:
+    """Read a specific line range from a file (1-based, inclusive on both ends).
+
+    Returns the selected lines as a single string, plus metadata about the
+    range and total line count so the caller can orient themselves.
+    """
+    if not target.exists():
+        return {"ok": False, "error": f"file not found: {safe_relative_to(target, workspace_root)}"}
+    if not target.is_file():
+        return {"ok": False, "error": f"not a regular file: {safe_relative_to(target, workspace_root)}"}
+    if start_line < 1:
+        return {"ok": False, "error": "start_line must be >= 1"}
+    if end_line < start_line:
+        return {"ok": False, "error": "end_line must be >= start_line"}
+
+    truncated_file = False
+    try:
+        file_size = target.stat().st_size
+        if file_size > MAX_READ_BYTES:
+            truncated_file = True
+        with open(target, "rb") as f:
+            raw = f.read(MAX_READ_BYTES)
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return {"ok": False, "error": f"file cannot be decoded as UTF-8: {safe_relative_to(target, workspace_root)}"}
+    except Exception as e:
+        return {"ok": False, "error": f"error reading file: {e}"}
+
+    lines = text.splitlines(keepends=True)
+    total_lines = len(lines)
+
+    if start_line > total_lines:
+        return {
+            "ok": False,
+            "error": (
+                f"start_line {start_line} is beyond the readable portion of the file "
+                f"({total_lines} lines loaded"
+                + (f", file truncated at {MAX_READ_BYTES} bytes" if truncated_file else "")
+                + ")"
+            ),
+        }
+
+    actual_end = min(end_line, total_lines)
+    selected = lines[start_line - 1 : actual_end]
+    content = "".join(selected)
+
+    rel = safe_relative_to(target, workspace_root).as_posix()
+    result: dict[str, Any] = {
+        "ok": True,
+        "path": rel,
+        "start_line": start_line,
+        "end_line": actual_end,
+        "total_lines": total_lines,
+        "content": content,
+    }
+    if truncated_file:
+        result["note"] = (
+            f"File was truncated at {MAX_READ_BYTES} bytes; "
+            f"actual total line count may be higher than {total_lines}."
+        )
+    if actual_end < end_line:
+        result["clamped"] = True
+    return result
+
+
 def read_file_outline(workspace_root: Path, target: Path) -> dict[str, Any]:
     """Extract class names, function signatures, and imports from a file.
 

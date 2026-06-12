@@ -4,10 +4,10 @@ import logging
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QDrag, QFont, QPainter, QPixmap
-from PySide6.QtCore import QMimeData
+from PySide6.QtGui import QColor, QDrag, QFont, QPainter, QPixmap, QIcon, QEnterEvent, QMouseEvent, QResizeEvent
 from PySide6.QtWidgets import (
     QCheckBox,
+    QDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -23,965 +23,852 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from aura.drones.chain import ChainDefinition, ChainEdge, ChainNode, validate
-from aura.drones.chain_store import ChainStore
-from aura.drones.contracts import BUILTIN_TYPES, is_compatible
-from aura.drones.definition import DroneDefinition
-from aura.drones.store import DroneStore
-from aura.gui.drones.chain_canvas import ChainCanvas, ChainEdgeItem, ChainNodeItem
-from aura.gui.drones.drone_workshop_panel import DroneWorkshopPanel
-from aura.gui.drones.workflow_list_pane import WorkflowListPane
-from aura.gui.theme import (
-    ACCENT,
-    BG,
-    BG_ALT,
-    BG_RAISED,
-    BORDER,
-    BORDER_STRONG,
-    DANGER,
-    FG,
-    FG_DIM,
-    FG_MUTED,
-    SUCCESS,
-    WARN,
+from aura.drones.build_spec import BuildMode, BuildSpec
+from aura.drones.chain_canvas import (
+    ChainCanvas,
+    ChainEdgeItem,
+    ChainNodeItem,
 )
+from aura.drones.chain_store import load_chain, save_chain, delete_chain, list_chains
+from aura.drones.drone_registry import DroneRegistry
+from aura.drones.drone_workshop_panel import DroneWorkshopPanel
+from aura.drones.workflow_list_pane import WorkflowListPane
+from aura.drones.workshop_chat_handler import WorkshopChatHandler
 
 logger = logging.getLogger(__name__)
 
-
-def _widget_valid(w) -> bool:
-    """Return True if the widget is not None and the underlying C++ object is alive."""
-    if w is None:
-        return False
-    try:
-        from shiboken6 import isValid
-    except ImportError:
-        return True  # best-effort if shiboken not available
-    return isValid(w)
-
-
-def _qss_color(color: QColor | str) -> str:
-    """Return a CSS hex string from a QColor or plain string."""
-    return color.name() if hasattr(color, "name") else str(color)
-
-
-def _qss_darker(color: QColor | str, factor: int = 120) -> str:
-    """Return a darkened CSS hex string from a QColor or plain string."""
-    return QColor(str(color)).darker(factor).name()
+# ---------------------------------------------------------------------------
+# Galaxy palette
+# ---------------------------------------------------------------------------
+BG = "#0d0d12"
+SURFACE = "#14141c"
+SURFACE_RAISED = "#1a1a25"
+BORDER = "#282838"
+FG = "#e0ddf0"
+FG_MUTED = "#8f8ca0"
+FG_DIM = "#5f5d70"
+ACCENT = "#c4b5fd"
+ACCENT_DIM = "#7c6bb0"
+DRONE_PURPLE = "#8b5cf6"
+SEPARATOR = "#282838"
 
 
+def _widget_valid(w: object) -> bool:
+    """Check a widget hasn't been C++ deleted (PySide6 sip.isdeleted)."""
+    from PySide6 import sip
+    return not sip.isdeleted(w)
+
+
+def _qss_color(hex_str: str) -> str:
+    """Return a QColor string suitable for inline stylesheet use."""
+    c = QColor(hex_str)
+    return f"rgba({c.red()},{c.green()},{c.blue()},{c.alpha() / 255:.2f})"
+
+
+def _qss_darker(hex_str: str, factor: float = 0.6) -> str:
+    """Darken a hex color by factor (0-1)."""
+    c = QColor(hex_str)
+    return f"rgba({int(c.red() * factor)},{int(c.green() * factor)},{int(c.blue() * factor)},{c.alpha() / 255:.2f})"
+
+
+# ---------------------------------------------------------------------------
+# DroneCard – roster item
+# ---------------------------------------------------------------------------
 class _DroneCard(QFrame):
-    """A single drone card with drag-to-canvas support."""
+    """A single drone card in the roster with drag initiation."""
 
-    def __init__(self, drone: DroneDefinition, parent=None):
+    def __init__(self, drone_id: str, name: str, description: str, accepts: str, produces: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._drone = drone
+        self.drone_id = drone_id
+        self.drone_name = name
+        self.accepts = accepts
+        self.produces = produces
+        self.setObjectName("drone_card")
+        self.setStyleSheet(
+            f"#drone_card {{"
+            f"  background: {_qss_color(SURFACE_RAISED)};"
+            f"  border: 1px solid {_qss_color(BORDER)};"
+            f"  border-radius: 6px;"
+            f"  padding: 6px;"
+            f"}}"
+            f"#drone_card:hover {{"
+            f"  border-color: {_qss_color(ACCENT_DIM)};"
+            f"  background: {_qss_darker(ACCENT_DIM, 0.15)};"
+            f"}}"
+        )
+        self.setCursor(Qt.PointingHandCursor)
         self._drag_start_pos = None
 
-        self.setStyleSheet(
-            f"background: {_qss_color(BG_RAISED)};"
-            f"border: 1px solid {_qss_color(BORDER)};"
-            "border-radius: 6px; padding: 8px; margin: 2px 4px;"
-        )
-
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 6, 8, 6)
-        layout.setSpacing(4)
+        layout.setContentsMargins(6, 4, 6, 4)
+        layout.setSpacing(2)
 
-        # Top row: name + write-policy pill
-        top_row = QHBoxLayout()
-        top_row.setSpacing(4)
+        title = QLabel(name)
+        title_font = QFont()
+        title_font.setBold(True)
+        title_font.setPixelSize(12)
+        title.setFont(title_font)
+        title.setStyleSheet(f"color: {_qss_color(FG)}; background: transparent; border: none;")
+        layout.addWidget(title)
 
-        name_lbl = QLabel(drone.name)
-        f = QFont()
-        f.setBold(True)
-        name_lbl.setFont(f)
-        name_lbl.setStyleSheet(f"color: {_qss_color(FG)}; background: transparent;")
-        top_row.addWidget(name_lbl)
-        top_row.addStretch()
+        if description:
+            desc = QLabel(description)
+            desc.setWordWrap(True)
+            desc.setMaximumHeight(32)
+            desc.setStyleSheet(f"color: {_qss_color(FG_MUTED)}; font-size: 11px; background: transparent; border: none;")
+            layout.addWidget(desc)
 
-        policy = getattr(drone, "write_policy", "read_only")
-        pill_color = SUCCESS if policy == "read_only" else WARN
-        pill_text = "read_only" if policy == "read_only" else "write"
-        pill = QLabel(pill_text)
-        pill.setStyleSheet(
-            f"background: {_qss_color(pill_color)}; color: {_qss_color(BG)};"
-            "border-radius: 4px; padding: 1px 6px;"
-            "font-size: 10px; font-weight: bold;"
-        )
-        top_row.addWidget(pill)
-        layout.addLayout(top_row)
+        meta = QLabel(f"In: {accepts}  ·  Out: {produces}")
+        meta.setStyleSheet(f"color: {_qss_color(FG_DIM)}; font-size: 10px; background: transparent; border: none;")
+        layout.addWidget(meta)
 
-        # Description
-        desc_text = drone.description or ""
-        desc = QLabel(desc_text)
-        desc.setWordWrap(True)
-        desc.setMaximumHeight(30)
-        desc.setStyleSheet(f"color: {_qss_color(FG_MUTED)}; background: transparent; font-size: 11px;")
-        layout.addWidget(desc)
-
-        # Action buttons row
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(4)
-
-        self._run_btn = QPushButton("\u25b6 Run")
-        self._edit_btn = QPushButton("\u270e Edit")
-        self._del_btn = QPushButton("\u2715 Delete")
-
-        for btn in (self._run_btn, self._edit_btn, self._del_btn):
-            btn.setFlat(True)
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setStyleSheet(
-                f"QPushButton {{ color: {_qss_color(FG_MUTED)}; background: transparent;"
-                "border: none; padding: 2px 8px; font-size: 11px; }}"
-                f"QPushButton:hover {{ color: {_qss_color(FG)};"
-                f"background: {_qss_color(BG_ALT)}; border-radius: 3px; }}"
-            )
-
-        btn_row.addWidget(self._run_btn)
-        btn_row.addWidget(self._edit_btn)
-        btn_row.addWidget(self._del_btn)
-        btn_row.addStretch()
-        layout.addLayout(btn_row)
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._drag_start_pos = event.pos()
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.LeftButton:
+            self._drag_start_pos = event.position().toPoint()
         super().mousePressEvent(event)
 
-    def mouseMoveEvent(self, event):
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
         if self._drag_start_pos is None:
             return
-        if (event.pos() - self._drag_start_pos).manhattanLength() < 10:
+        if (event.position().toPoint() - self._drag_start_pos).manhattanLength() < 10:
             return
         drag = QDrag(self)
-        md = QMimeData()
-        md.setData("application/x-aura-drone-id", self._drone.id.encode("utf-8"))
-        drag.setMimeData(md)
-        pixmap = QPixmap(160, 30)
-        pixmap.fill(QColor(BG_ALT))
-        painter = QPainter(pixmap)
-        painter.setPen(FG)
-        painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, self._drone.name)
-        painter.end()
+        mime_data = drag.mimeData()
+        mime_data.setText(self.drone_id)
+        mime_data.setData("application/x-auradrone", self.drone_id.encode())
+        pixmap = QPixmap(self.size())
+        self.render(pixmap)
         drag.setPixmap(pixmap)
-        self._drag_start_pos = None
-        drag.exec(Qt.DropAction.CopyAction)
-
-    def mouseReleaseEvent(self, event):
-        self._drag_start_pos = None
-        super().mouseReleaseEvent(event)
+        drag.setHotSpot(event.position().toPoint())
+        drag.exec(Qt.CopyAction)
 
 
-class _DroneRosterWidget(QWidget):
-    """Scrollable card roster of available drones with drag-to-canvas support."""
+# ---------------------------------------------------------------------------
+# DroneRosterWidget – scrollable gallery of drone cards
+# ---------------------------------------------------------------------------
+class _DroneRosterWidget(QScrollArea):
+    """Displays all available drones as cards in a vertical flow."""
 
-    runRequested = Signal(str)
-    editRequested = Signal(str)
-    deleteRequested = Signal(str)
-
-    def __init__(self, workspace_root: Path, editor: ChainEditor, parent=None):
+    def __init__(self, workspace_root: Path, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._workspace_root = workspace_root
-        self._editor = editor
+        self.setWidgetResizable(True)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setStyleSheet(
+            f"QScrollArea {{ background: transparent; border: none; }}"
+            f"QScrollBar:vertical {{ background: {_qss_color(BG)}; width: 6px; border-radius: 3px; }}"
+            f"QScrollBar::handle:vertical {{ background: {_qss_color(BORDER)}; border-radius: 3px; min-height: 20px; }}"
+            f"QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}"
+        )
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-
-        self._scroll = QScrollArea()
-        self._scroll.setWidgetResizable(True)
-        self._scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
-
-        self._container = QWidget()
-        self._container.setStyleSheet("background: transparent;")
-        self._card_layout = QVBoxLayout(self._container)
-        self._card_layout.setContentsMargins(4, 4, 4, 4)
-        self._card_layout.setSpacing(2)
-
-        self._scroll.setWidget(self._container)
-        layout.addWidget(self._scroll)
+        self._content = QWidget()
+        self._content.setStyleSheet("background: transparent;")
+        self._layout = QVBoxLayout(self._content)
+        self._layout.setContentsMargins(4, 4, 4, 4)
+        self._layout.setSpacing(4)
+        self._layout.addStretch()
+        self.setWidget(self._content)
 
     def set_workspace_root(self, path: Path) -> None:
         self._workspace_root = path
-        self.populate()
 
     def populate(self) -> None:
-        while self._card_layout.count():
-            item = self._card_layout.takeAt(0)
-            w = item.widget()
-            if w:
-                w.deleteLater()
-
-        drones = DroneStore.list_drones(self._workspace_root)
-        read_only = []
-        write_capable = []
+        while self._layout.count() > 1:
+            item = self._layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        registry = DroneRegistry(self._workspace_root)
+        drones = registry.list_drones()
+        if not drones:
+            empty = QLabel("No drones saved yet.\nClick + New Drone to build one.")
+            empty.setWordWrap(True)
+            empty.setStyleSheet(f"color: {_qss_color(FG_MUTED)}; font-size: 11px; padding: 8px;")
+            self._layout.insertWidget(self._layout.count() - 1, empty)
         for d in drones:
-            policy = getattr(d, "write_policy", "read_only")
-            if policy == "read_only":
-                read_only.append(d)
-            else:
-                write_capable.append(d)
-
-        def _add_section_label(text: str) -> None:
-            lbl = QLabel(text)
-            f = QFont()
-            f.setBold(True)
-            f.setPointSize(9)
-            lbl.setFont(f)
-            lbl.setStyleSheet(
-                f"color: {_qss_color(FG_MUTED)}; background: transparent;"
-                "padding: 4px 8px 2px 8px;"
-            )
-            self._card_layout.addWidget(lbl)
-
-        if read_only:
-            _add_section_label("Read-only Drones")
-            for d in read_only:
-                self._add_drone_card(d)
-
-        if write_capable:
-            _add_section_label("Write-capable Drones")
-            for d in write_capable:
-                self._add_drone_card(d)
-
-        self._card_layout.addStretch()
-
-    def _add_drone_card(self, drone: DroneDefinition) -> None:
-        card = _DroneCard(drone, parent=self._container)
-        card._run_btn.clicked.connect(lambda d=drone: self.runRequested.emit(d.id))
-        card._edit_btn.clicked.connect(lambda d=drone: self.editRequested.emit(d.id))
-        card._del_btn.clicked.connect(lambda d=drone: self.deleteRequested.emit(d.id))
-        self._card_layout.addWidget(card)
+            card = _DroneCard(d["id"], d["name"], d.get("description", ""), d.get("accepts", "any"), d.get("produces", "any"))
+            self._layout.insertWidget(self._layout.count() - 1, card)
 
 
+# ---------------------------------------------------------------------------
+# _PropertyPanel – shows chain/node/edge properties when selected
+# ---------------------------------------------------------------------------
 class _PropertyPanel(QScrollArea):
-    """Right sidebar showing chain/node/edge properties."""
+    """Scrollable form showing chain-level, node, or edge properties."""
 
-    def __init__(self, editor: ChainEditor, parent=None):
+    def __init__(self, editor: ChainEditor, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._editor = editor
+        self._chain_name_input: QLineEdit | None = None
+        self._chain_desc_input: QTextEdit | None = None
+        self._auto_route_cb: QCheckBox | None = None
+
         self.setWidgetResizable(True)
-        self.setStyleSheet(f"""
-            QScrollArea {{
-                background: {_qss_color(BG)};
-                border: none;
-            }}
-        """)
-
-        self._container = QWidget()
-        self._container.setStyleSheet(f"background: {_qss_color(BG)};")
-        self._layout = QVBoxLayout(self._container)
-        self._layout.setContentsMargins(8, 8, 8, 8)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setStyleSheet(
+            f"QScrollArea {{ background: transparent; border: none; }}"
+            f"QScrollBar:vertical {{ background: {_qss_color(BG)}; width: 6px; border-radius: 3px; }}"
+            f"QScrollBar::handle:vertical {{ background: {_qss_color(BORDER)}; border-radius: 3px; min-height: 20px; }}"
+        )
+        self._content = QWidget()
+        self._content.setStyleSheet("background: transparent;")
+        self._layout = QVBoxLayout(self._content)
+        self._layout.setContentsMargins(8, 4, 8, 4)
         self._layout.setSpacing(6)
-        self.setWidget(self._container)
+        self._layout.addStretch()
+        self.setWidget(self._content)
 
-        self._rebuild_chain_form()
-
-    def clear(self) -> None:
-        """Remove all child widgets from the layout."""
-        while self._layout.count():
+    # -- helpers ----------------------------------------------------------
+    def _clear(self) -> None:
+        while self._layout.count() > 1:
             item = self._layout.takeAt(0)
-            w = item.widget()
-            if w:
-                # Null editor refs to this widget before deleteLater
-                if w is self._editor._chain_name_input:
-                    self._editor._chain_name_input = None
-                if w is self._editor._chain_desc_input:
-                    self._editor._chain_desc_input = None
-                if w is self._editor._chain_enabled_check:
-                    self._editor._chain_enabled_check = None
-                if w is self._editor._chain_schedule_input:
-                    self._editor._chain_schedule_input = None
-                w.deleteLater()
+            if item.widget():
+                item.widget().deleteLater()
+        self._chain_name_input = None
+        self._chain_desc_input = None
+        self._auto_route_cb = None
 
-    def _add_label(self, text: str, bold: bool = False, color: QColor | None = None) -> QLabel:
+    def _add_label(self, text: str, bold: bool = False, color: str = FG) -> QLabel:
         lbl = QLabel(text)
+        lbl.setWordWrap(True)
+        f = QFont()
+        f.setPixelSize(12)
         if bold:
-            f = QFont()
             f.setBold(True)
-            lbl.setFont(f)
-        if color:
-            lbl.setStyleSheet(f"color: {_qss_color(color)}; background: transparent;")
-        else:
-            lbl.setStyleSheet(f"color: {_qss_color(FG)}; background: transparent;")
-        self._layout.addWidget(lbl)
+        lbl.setFont(f)
+        lbl.setStyleSheet(f"color: {_qss_color(color)}; background: transparent; border: none;")
+        self._layout.insertWidget(self._layout.count() - 1, lbl)
         return lbl
 
     def _add_separator(self) -> None:
         sep = QFrame()
-        sep.setFrameShape(QFrame.Shape.HLine)
-        sep.setStyleSheet(f"color: {_qss_color(BORDER)}; background: {_qss_color(BORDER)}; max-height: 1px;")
-        self._layout.addWidget(sep)
+        sep.setFrameShape(QFrame.HLine)
+        sep.setStyleSheet(f"background: {_qss_color(SEPARATOR)}; border: none; max-height: 1px;")
+        self._layout.insertWidget(self._layout.count() - 1, sep)
 
-    # ---- Chain form ----
-
-    def _rebuild_chain_form(self) -> None:
-        self.clear()
-        self._editor._chain_name_input = QLineEdit()
-        self._editor._chain_desc_input = QTextEdit()
-        self._editor._chain_enabled_check = QCheckBox("Workflow enabled")
-        self._editor._chain_schedule_input = QLineEdit()
-
-        self._add_label("Workflow Properties", bold=True)
-        self._add_separator()
-
-        self._add_label("Name")
-        self._editor._chain_name_input.setStyleSheet(f"""
-            QLineEdit {{ background: {_qss_color(BG_RAISED)}; color: {_qss_color(FG)};
-                          border: 1px solid {_qss_color(BORDER)}; border-radius: 3px; padding: 4px; }}
-        """)
-        self._layout.addWidget(self._editor._chain_name_input)
-
-        self._add_label("Description")
-        self._editor._chain_desc_input.setMaximumHeight(60)
-        self._editor._chain_desc_input.setStyleSheet(f"""
-            QTextEdit {{ background: {_qss_color(BG_RAISED)}; color: {_qss_color(FG)};
-                         border: 1px solid {_qss_color(BORDER)}; border-radius: 3px; padding: 4px; }}
-        """)
-        self._layout.addWidget(self._editor._chain_desc_input)
-
-        self._editor._chain_enabled_check.setStyleSheet(f"""
-            QCheckBox {{ color: {_qss_color(FG)}; background: transparent; }}
-        """)
-        self._layout.addWidget(self._editor._chain_enabled_check)
-
-        self._add_label("Schedule")
-        self._editor._chain_schedule_input.setPlaceholderText("Manual only (future)")
-        self._editor._chain_schedule_input.setEnabled(False)
-        self._editor._chain_schedule_input.setStyleSheet(f"""
-            QLineEdit {{ background: {_qss_color(BG_ALT)}; color: {_qss_color(FG_MUTED)};
-                         border: 1px solid {_qss_color(BORDER)}; border-radius: 3px; padding: 4px; }}
-        """)
-        self._layout.addWidget(self._editor._chain_schedule_input)
-
-        self._layout.addStretch()
-
-        # Connect change signals
-        self._editor._chain_name_input.textChanged.connect(self._editor._on_chain_property_changed)
-        self._editor._chain_desc_input.textChanged.connect(self._editor._on_chain_property_changed)
-        self._editor._chain_enabled_check.toggled.connect(self._editor._on_chain_property_changed)
-
-    # ---- Node form ----
-
-    def _rebuild_node_form(self, node_items: list[ChainNodeItem]) -> None:
-        if not node_items:
-            return
-        self.clear()
-        node = node_items[0]  # Show first selected
-
-        if node.is_draft:
-            # Draft node form
-            self._add_label("Draft Drone", bold=True, color=QColor("#9b8bb5"))
-            self._add_separator()
-
-            # Draft name (editable)
-            self._add_label("Name")
-            name_input = QLineEdit()
-            name_input.setText(node.draft_name)
-            name_input.setStyleSheet(f"""
-                QLineEdit {{ background: {_qss_color(BG_RAISED)}; color: {_qss_color(FG)};
-                             border: 1px solid {_qss_color(BORDER)}; border-radius: 3px; padding: 4px; }}
-            """)
-            name_input.textChanged.connect(
-                lambda text, n=node: setattr(n, 'draft_name', text)
-            )
-            self._layout.addWidget(name_input)
-
-            # Draft accepts / produces (read-only)
-            self._add_label(f"In: {node.draft_accepts or '?'}", color=FG_DIM)
-            self._add_label(f"Out: {node.draft_produces or '?'}", color=FG_DIM)
-
-            # Draft brief (read-only)
-            if node.draft_brief:
-                self._add_label(f"Brief: {node.draft_brief}", color=FG_MUTED)
-
-            self._add_separator()
-
-            # Remove button
-            remove_btn = QPushButton("Remove Draft")
-            remove_btn.setStyleSheet(f"""
-                QPushButton {{ background: {_qss_color(DANGER)}; color: white; border: none;
-                              border-radius: 4px; padding: 6px; }}
-                QPushButton:hover {{ background: {_qss_darker(DANGER, 120)}; }}
-            """)
-            remove_btn.clicked.connect(lambda: self._editor._canvas._remove_node(node))
-            self._layout.addWidget(remove_btn)
-
-            self._add_label(
-                "Draft Drone — save as a real Drone before running this workflow.",
-                color=FG_MUTED,
-            )
-
-            self._layout.addStretch()
-            return
-
-        self._add_label("Node Properties", bold=True)
-        self._add_separator()
-
-        # Drone name
-        name = node.drone.name if node.drone else "(missing)"
-        if node.missing:
-            name += " (missing)"
-        name_lbl = self._add_label(name, bold=True)
-        if node.missing:
-            name_lbl.setStyleSheet(f"color: {_qss_color(DANGER)}; background: transparent;")
-
-        # Write policy
-        policy = getattr(node.drone, "write_policy", "read_only") if node.drone else "?"
-        policy_color = SUCCESS if policy == "read_only" else WARN
-        self._add_label(f"Policy: {policy}", color=policy_color)
-
-        # Accepts / Produces
-        accepts = getattr(node.drone, "accepts", None) or "any"
-        produces = getattr(node.drone, "produces", None) or "any"
-        self._add_label(f"In: {accepts}", color=FG_DIM)
-        self._add_label(f"Out: {produces}", color=FG_DIM)
-
-        self._add_separator()
-
-        # Goal template
-        self._add_label("Goal Template")
-        goal_input = QTextEdit()
-        goal_input.setPlainText(node.goal_template)
-        goal_input.setMaximumHeight(80)
-        goal_input.setPlaceholderText("Optional per-node goal. Overrides drone default.")
-        goal_input.setStyleSheet(f"""
-            QTextEdit {{ background: {_qss_color(BG_RAISED)}; color: {_qss_color(FG)};
-                         border: 1px solid {_qss_color(BORDER)}; border-radius: 3px; padding: 4px; }}
-        """)
-        goal_input.textChanged.connect(
-            lambda: self._on_goal_changed(node, goal_input.toPlainText())
+    def _add_text_input(self, label: str, value: str, placeholder: str = "", changed_slot=None) -> QLineEdit:
+        self._add_label(label, bold=False, color=FG_MUTED)
+        inp = QLineEdit(value)
+        inp.setPlaceholderText(placeholder)
+        inp.setStyleSheet(
+            f"QLineEdit {{"
+            f"  background: {_qss_color(SURFACE)};"
+            f"  border: 1px solid {_qss_color(BORDER)};"
+            f"  border-radius: 4px;"
+            f"  padding: 4px 6px;"
+            f"  color: {_qss_color(FG)};"
+            f"}}"
+            f"QLineEdit:focus {{ border-color: {_qss_color(ACCENT_DIM)}; }}"
         )
-        self._layout.addWidget(goal_input)
+        if changed_slot:
+            inp.textChanged.connect(changed_slot)
+        self._layout.insertWidget(self._layout.count() - 1, inp)
+        return inp
 
-        self._add_separator()
+    def _add_text_edit(self, label: str, value: str, placeholder: str = "", changed_slot=None) -> QTextEdit:
+        self._add_label(label, bold=False, color=FG_MUTED)
+        te = QTextEdit(value)
+        te.setPlaceholderText(placeholder)
+        te.setMaximumHeight(80)
+        te.setStyleSheet(
+            f"QTextEdit {{"
+            f"  background: {_qss_color(SURFACE)};"
+            f"  border: 1px solid {_qss_color(BORDER)};"
+            f"  border-radius: 4px;"
+            f"  padding: 4px 6px;"
+            f"  color: {_qss_color(FG)};"
+            f"}}"
+            f"QTextEdit:focus {{ border-color: {_qss_color(ACCENT_DIM)}; }}"
+        )
+        if changed_slot:
+            te.textChanged.connect(changed_slot)
+        self._layout.insertWidget(self._layout.count() - 1, te)
+        return te
 
-        # Remove button
-        remove_btn = QPushButton("Remove Node")
-        remove_btn.setStyleSheet(f"""
-            QPushButton {{ background: {_qss_color(DANGER)}; color: white; border: none;
-                          border-radius: 4px; padding: 6px; }}
-            QPushButton:hover {{ background: {_qss_darker(DANGER, 120)}; }}
-        """)
-        remove_btn.clicked.connect(lambda: self._editor._canvas._remove_node(node))
-        self._layout.addWidget(remove_btn)
+    def _add_checkbox(self, label: str, checked: bool, toggled_slot=None) -> QCheckBox:
+        cb = QCheckBox(label)
+        cb.setChecked(checked)
+        cb.setStyleSheet(
+            f"QCheckBox {{ color: {_qss_color(FG)}; spacing: 6px; }}"
+            f"QCheckBox::indicator {{ width: 14px; height: 14px; }}"
+        )
+        if toggled_slot:
+            cb.toggled.connect(toggled_slot)
+        self._layout.insertWidget(self._layout.count() - 1, cb)
+        return cb
 
-        self._layout.addStretch()
-
-    def _on_goal_changed(self, node: ChainNodeItem, goal: str) -> None:
-        if node.is_draft:
-            return
-        node.goal_template = goal
-        node.update()
-        self._editor._on_canvas_changed()
-
-    # ---- Edge form ----
-
-    def _rebuild_edge_form(self, edge_items: list[ChainEdgeItem]) -> None:
-        if not edge_items:
-            return
-        self.clear()
-        edge = edge_items[0]
-
-        self._add_label("Edge Properties", bold=True)
-        self._add_separator()
-
-        from_node = self._editor._canvas._nodes.get(edge.from_node_id)
-        to_node = self._editor._canvas._nodes.get(edge.to_node_id)
-        from_name = from_node.drone.name if from_node and from_node.drone else edge.from_node_id
-        to_name = to_node.drone.name if to_node and to_node.drone else edge.to_node_id
-
-        self._add_label(f"From: {from_name}", color=FG)
-        self._add_label(f"To: {to_name}", color=FG)
-
-        # Compatibility check
-        if from_node and from_node.drone and to_node and to_node.drone:
-            from_type_name = getattr(from_node.drone, "produces", None)
-            to_type_name = getattr(to_node.drone, "accepts", None)
-            if from_type_name and to_type_name:
-                from_at = BUILTIN_TYPES.get(from_type_name)
-                to_at = BUILTIN_TYPES.get(to_type_name)
-                if from_at is None or to_at is None:
-                    self._add_label(
-                        f"Type compatibility: Unknown type ({from_type_name} \u2192 {to_type_name})",
-                        color=WARN,
-                    )
-                elif is_compatible(from_at, to_at):
-                    self._add_label("Type compatibility: Compatible", color=SUCCESS)
-                else:
-                    self._add_label(
-                        f"Type compatibility: Incompatible ({from_type_name} \u2192 {to_type_name})",
-                        color=DANGER,
-                    )
-            elif not from_type_name and not to_type_name:
-                self._add_label("Type compatibility: No contracts", color=FG_MUTED)
-            elif not from_type_name:
-                self._add_label(
-                    f"Type compatibility: No output from {from_name}",
-                    color=WARN,
-                )
-            else:
-                self._add_label("Type compatibility: Compatible", color=SUCCESS)
-        else:
-            self._add_label("Type compatibility: Unknown", color=FG_MUTED)
-
-        self._add_separator()
-
-        remove_btn = QPushButton("Remove Edge")
-        remove_btn.setStyleSheet(f"""
-            QPushButton {{ background: {_qss_color(DANGER)}; color: white; border: none;
-                          border-radius: 4px; padding: 6px; }}
-            QPushButton:hover {{ background: {_qss_darker(DANGER, 120)}; }}
-        """)
-        remove_btn.clicked.connect(lambda: self._editor._canvas._remove_edge(edge))
-        self._layout.addWidget(remove_btn)
-
-        self._layout.addStretch()
-
-    # ---- Public rebuild ----
-
+    # -- rebuild ----------------------------------------------------------
     def rebuild(self) -> None:
-        selection = self._editor._canvas.scene().selectedItems()
-        node_items = [i for i in selection if isinstance(i, ChainNodeItem)]
-        edge_items = [i for i in selection if isinstance(i, ChainEdgeItem)]
+        self._clear()
+        items = self._editor._canvas._scene.selectedItems()
+        nodes = [i for i in items if isinstance(i, ChainNodeItem)]
+        edges = [i for i in items if isinstance(i, ChainEdgeItem)]
 
-        if node_items:
-            self._rebuild_node_form(node_items)
-        elif edge_items:
-            self._rebuild_edge_form(edge_items)
+        if nodes:
+            self._rebuild_node_form(nodes[0])
+        elif edges:
+            self._rebuild_edge_form(edges[0])
         else:
             self._rebuild_chain_form()
 
+    def _rebuild_chain_form(self) -> None:
+        self._add_label("Workflow Properties", bold=True)
+        self._add_separator()
 
+        self._chain_name_input = self._add_text_input(
+            "Name", self._editor._chain_name, "Workflow name",
+            changed_slot=self._editor._on_chain_property_changed,
+        )
+        self._chain_desc_input = self._add_text_edit(
+            "Description", self._editor._chain_desc, "Describe the workflow\u2026",
+            changed_slot=self._editor._on_chain_property_changed,
+        )
+        self._auto_route_cb = self._add_checkbox(
+            "Let the AI route between steps (auto-route)",
+            getattr(self._editor, '_auto_route', False),
+            toggled_slot=self._editor._on_chain_property_changed,
+        )
+        self._add_label(f"Chain ID: {self._editor._current_chain_id or '(unsaved)'}", color=FG_DIM)
+
+    def _rebuild_node_form(self, node: ChainNodeItem) -> None:
+        self._add_label("Node Properties", bold=True)
+        self._add_separator()
+        name = node.drone.name if node.drone else "(missing)"
+        if node.missing:
+            name += " (missing)"
+        self._add_label(name, bold=True)
+
+        if node.drone:
+            desc = node.drone.description
+            if desc:
+                self._add_label(str(desc), color=FG_MUTED)
+            self._add_label(f"In: {node.drone.accepts}  ·  Out: {node.drone.produces}", color=FG_DIM)
+
+        if node.goal_template:
+            self._add_label("Goal Template", color=FG_MUTED)
+            gt = QTextEdit(node.goal_template)
+            gt.setReadOnly(True)
+            gt.setMaximumHeight(60)
+            gt.setStyleSheet(
+                f"QTextEdit {{"
+                f"  background: {_qss_color(SURFACE)};"
+                f"  border: 1px solid {_qss_color(BORDER)};"
+                f"  border-radius: 4px;"
+                f"  padding: 4px;"
+                f"  color: {_qss_color(FG)};"
+                f"}}"
+            )
+            self._layout.insertWidget(self._layout.count() - 1, gt)
+
+    def _rebuild_edge_form(self, edge: ChainEdgeItem) -> None:
+        self._add_label("Connection", bold=True)
+        self._add_separator()
+        src_name = edge.source_node.drone.name if edge.source_node and edge.source_node.drone else "(unknown)"
+        dst_name = edge.dest_node.drone.name if edge.dest_node and edge.dest_node.drone else "(unknown)"
+        self._add_label(f"{src_name}  \u2192  {dst_name}", color=FG)
+
+
+# ---------------------------------------------------------------------------
+# ChainEditor – central workbay canvas + drone roster + contextual panel
+# ---------------------------------------------------------------------------
 class ChainEditor(QWidget):
-    """Full-view chain editor with toolbar, palette, canvas, and property panel."""
+    """Permanent 3-pane workbay: drone roster (left) | canvas (center) | details/workshop (right)."""
 
-    runChainRequested = Signal(str)
-    goBackRequested = Signal()
-    settle_draft_requested = Signal(object)  # dict: {"brief": DroneBuildBrief, "draft_node_id": str}
-    runDroneRequested = Signal(str)    # drone_id
-    editDroneRequested = Signal(str)   # drone_id
-    deleteDroneRequested = Signal(str) # drone_id
+    titleChanged = Signal(str)
+    closeRequested = Signal()
+    runDroneRequested = Signal(str, str)
+    editDroneRequested = Signal(str)
+    deleteDroneRequested = Signal(str)
+
+    _AUTO_SAVE_MS = 1200
 
     def __init__(
         self,
         workspace_root: Path,
-        chain_id: str | None = None,
-        parent=None,
         provider_id: str = "deepseek",
         model: str = "",
-        thinking: str = "disabled",
-        temperature: float = 0.4,
-    ):
+        thinking: bool = False,
+        temperature: float = 0.7,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         self._workspace_root = workspace_root
         self._provider_id = provider_id
         self._model = model
         self._thinking = thinking
         self._temperature = temperature
-
-        # Chain identity (set after load or creation)
-        self._chain_id: str = ""
-        self._chain_name: str = "New Workflow"
-        self._chain_description: str = ""
-        self._chain_enabled: bool = True
-        self._chain_schedule: str = ""
-
-        # Widget references (set up by property panel)
-        self._chain_name_input: QLineEdit | None = None
-        self._chain_desc_input: QTextEdit | None = None
-        self._chain_enabled_check: QCheckBox | None = None
-        self._chain_schedule_input: QLineEdit | None = None
-
-        # Runtime state — must be initialized before layout/load which may reference them
-        self._workshop_draft_node_id: str | None = None
-        self._last_manual_mode = "Drones"
-        self._palette_width = 260
+        self._current_chain_id: str | None = None
+        self._chain_id: str | None = None
+        self._chain_name = ""
+        self._chain_desc = ""
+        self._auto_route = False
         self._dirty = False
+        self._workshop_draft_node_id: str | None = None
+        self._workshop_container: QWidget | None = None
+        self._workshop_panel: DroneWorkshopPanel | None = None
+        self._ws_draft_label: QLabel | None = None
+        self._ws_contracts_label: QLabel | None = None
+        self._roster: _DroneRosterWidget | None = None
+        self._property_panel: _PropertyPanel | None = None
+        self._right_stack: QStackedWidget | None = None
 
-        # Auto-save debounce timer — must exist before _on_canvas_changed() fires
+        self._build_layout()
+        self._load_or_create_chain(None)
+        self._roster.populate()
+
         self._auto_save_timer = QTimer(self)
         self._auto_save_timer.setSingleShot(True)
-        self._auto_save_timer.setInterval(300)
+        self._auto_save_timer.setInterval(self._AUTO_SAVE_MS)
         self._auto_save_timer.timeout.connect(self._save_chain)
 
-        # Build layout
-        self._build_layout()
-
-        # Wire selection changes to panel switching
-        self._canvas._scene.selectionChanged.connect(self._on_selection_changed)
-
-        # Load or create chain
-        self._load_or_create_chain(chain_id)
-
-    # ---- Layout ----
-
+    # ------------------------------------------------------------------
+    # Layout
+    # ------------------------------------------------------------------
     def _build_layout(self) -> None:
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        # --- Toolbar (permanent workflow bar) -------------------------
+        self._build_toolbar(root)
+
+        # --- 3-pane splitter ------------------------------------------
+        self._splitter = QSplitter(Qt.Horizontal)
+        self._splitter.setHandleWidth(2)
+        self._splitter.setStyleSheet(
+            f"QSplitter::handle {{ background: {_qss_color(BORDER)}; }}"
+        )
+        root.addWidget(self._splitter, 1)
+
+        # Left panel – always drone roster
+        self._build_left_panel()
+
+        # Center – canvas
+        self._canvas = ChainCanvas(self._workspace_root, self)
+        self._canvas.setStyleSheet(f"background: {_qss_color(BG)}; border: none;")
+        self._canvas.canvasChanged.connect(self._on_canvas_changed)
+        self._canvas._scene.selectionChanged.connect(self._on_selection_changed)
+        self._splitter.addWidget(self._canvas)
+
+        # Right panel – contextual (details / workshop)
+        self._build_right_panel()
+
+        self._splitter.setSizes([220, 580, 0])
+
+    def _build_left_panel(self) -> None:
+        container = QWidget()
+        container.setStyleSheet(f"background: {_qss_color(SURFACE)}; border-right: 1px solid {_qss_color(BORDER)};")
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 4, 0, 0)
         layout.setSpacing(0)
 
-        toolbar = self._build_toolbar()
-        layout.addWidget(toolbar)
-
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        self._splitter = splitter
-        splitter.setStyleSheet(f"""
-            QSplitter::handle {{
-                background: {_qss_color(BORDER)};
-                width: 1px;
-            }}
-        """)
-
-        self._roster = _DroneRosterWidget(self._workspace_root, self)
-        self._roster.runRequested.connect(self.runDroneRequested.emit)
-        self._roster.editRequested.connect(self.editDroneRequested.emit)
-        self._roster.deleteRequested.connect(self.deleteDroneRequested.emit)
-
-        self._mode_buttons: dict[str, QToolButton] = {}
-        self._left_stack = QStackedWidget()
-
-        # ---- Mode switcher (pill-tab bar) ----
-        mode_bar = QWidget()
-        mode_layout = QHBoxLayout(mode_bar)
-        mode_layout.setContentsMargins(4, 4, 4, 2)
-        mode_layout.setSpacing(3)
-        for name in ("Workflows", "Drones"):
-            btn = QToolButton()
-            btn.setText(name)
-            btn.setCheckable(True)
-            btn.setAutoRaise(True)
-            btn.clicked.connect(lambda checked, n=name: self._set_active_mode(n))
-            mode_layout.addWidget(btn)
-            self._mode_buttons[name] = btn
-        mode_layout.addStretch()
-
-        # ---- Page 0: Workflows ----
-        workflows_page = QWidget()
-        wf_layout = QVBoxLayout(workflows_page)
-        wf_layout.setContentsMargins(0, 4, 0, 0)
-        wf_layout.setSpacing(4)
-        wf_header = QLabel("Workflows")
-        wf_header.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {_qss_color(FG_MUTED)}; padding: 0 8px;")
-        new_wf_btn = QPushButton("+ New")
-        new_wf_btn.setFlat(True)
-        new_wf_btn.setCursor(Qt.PointingHandCursor)
-        new_wf_btn.setStyleSheet(
-            f"QPushButton {{ color: {_qss_color(FG_MUTED)}; font-size: 11px; padding: 2px 6px; border: none; }}"
-            f"QPushButton:hover {{ color: {_qss_color(ACCENT)}; }}"
-        )
-        new_wf_btn.clicked.connect(self._on_new_workflow_from_list)
-        wf_header_row = QHBoxLayout()
-        wf_header_row.setContentsMargins(0, 0, 0, 0)
-        wf_header_row.addWidget(wf_header)
-        wf_header_row.addStretch()
-        wf_header_row.addWidget(new_wf_btn)
-        wf_layout.addLayout(wf_header_row)
-        self._workflow_list_pane = WorkflowListPane(self._workspace_root, self)
-        self._workflow_list_pane.editWorkflowRequested.connect(self._on_load_existing_workflow)
-        self._workflow_list_pane.newWorkflowRequested.connect(self._on_new_workflow_from_list)
-        self._workflow_list_pane.deleteWorkflowRequested.connect(self._on_delete_workflow_from_list)
-        self._workflow_list_pane.runWorkflowRequested.connect(self._on_run_workflow_from_list)
-        wf_layout.addWidget(self._workflow_list_pane, 1)
-        self._left_stack.addWidget(workflows_page)  # index 0
-
-        # ---- Page 1: Drones ----
-        palette_container = QWidget()
-        palette_layout = QVBoxLayout(palette_container)
-        palette_layout.setContentsMargins(0, 4, 0, 0)
-        palette_layout.setSpacing(4)
-        palette_header_row = QHBoxLayout()
-        palette_header_row.setContentsMargins(0, 0, 0, 0)
-        palette_header_label = QLabel("Drones")
-        palette_header_label.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {_qss_color(FG_MUTED)}; padding: 0 8px;")
-        palette_header_row.addWidget(palette_header_label)
-        palette_header_row.addStretch()
+        # Header row: "Drones" + "+ New Drone"
+        header_row = QHBoxLayout()
+        header_row.setContentsMargins(8, 2, 8, 4)
+        drones_label = QLabel("Drones")
+        drones_label.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {_qss_color(FG)}; padding: 0;")
+        header_row.addWidget(drones_label)
+        header_row.addStretch()
         new_drone_btn = QPushButton("+ New Drone")
         new_drone_btn.setFlat(True)
         new_drone_btn.setCursor(Qt.PointingHandCursor)
         new_drone_btn.setStyleSheet(
+            f"QPushButton {{ color: {_qss_color(ACCENT)}; font-size: 11px; font-weight: bold; padding: 2px 6px; border: none; }}"
+            f"QPushButton:hover {{ color: {_qss_color(FG)}; }}"
+        )
+        new_drone_btn.clicked.connect(self._on_new_drone_clicked)
+        header_row.addWidget(new_drone_btn)
+        layout.addLayout(header_row)
+
+        # Roster
+        self._roster = _DroneRosterWidget(self._workspace_root)
+        layout.addWidget(self._roster, 1)
+
+        self._splitter.addWidget(container)
+
+    def _build_right_panel(self) -> None:
+        self._right_stack = QStackedWidget()
+        self._right_stack.setStyleSheet(f"background: {_qss_color(SURFACE)}; border-left: 1px solid {_qss_color(BORDER)};")
+
+        # --- Page 0: Property Panel (Details) -------------------------
+        details_container = QWidget()
+        details_layout = QVBoxLayout(details_container)
+        details_layout.setContentsMargins(0, 4, 0, 0)
+        details_layout.setSpacing(4)
+
+        details_header_row = QHBoxLayout()
+        details_header_row.setContentsMargins(8, 2, 8, 4)
+        details_header = QLabel("Properties")
+        details_header.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {_qss_color(FG_MUTED)}; padding: 0;")
+        details_header_row.addWidget(details_header)
+        details_header_row.addStretch()
+        clear_btn = QPushButton("Clear")
+        clear_btn.setFlat(True)
+        clear_btn.setCursor(Qt.PointingHandCursor)
+        clear_btn.setStyleSheet(
             f"QPushButton {{ color: {_qss_color(FG_MUTED)}; font-size: 11px; padding: 2px 6px; border: none; }}"
             f"QPushButton:hover {{ color: {_qss_color(ACCENT)}; }}"
         )
-        new_drone_btn.clicked.connect(self._on_new_drone_clicked)
-        palette_header_row.addWidget(new_drone_btn)
-        palette_layout.addLayout(palette_header_row)
-        palette_layout.addWidget(self._roster, 1)
-        self._left_stack.addWidget(palette_container)  # index 1
+        clear_btn.clicked.connect(self._on_clear_selection)
+        details_header_row.addWidget(clear_btn)
+        details_layout.addLayout(details_header_row)
 
-        # ---- Page 2: Details ----
         self._property_panel = _PropertyPanel(self)
-        details_page = QWidget()
-        details_layout = QVBoxLayout(details_page)
-        details_layout.setContentsMargins(0, 4, 0, 0)
-        details_layout.setSpacing(4)
-        details_header = QLabel("Properties")
-        details_header.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {_qss_color(FG_MUTED)}; padding: 0 8px;")
-        details_layout.addWidget(details_header)
         details_layout.addWidget(self._property_panel, 1)
-        self._left_stack.addWidget(details_page)  # index 2
+        self._right_stack.addWidget(details_container)  # page 0
 
-        self._workshop_panel = None
-        self._workshop_container = None
+        self._splitter.addWidget(self._right_stack)
 
-        # ---- Left panel: mode bar + stack ----
-        left_panel = QWidget()
-        left_panel.setStyleSheet("background: rgba(20, 20, 26, 128);")
-        left_layout = QVBoxLayout(left_panel)
-        left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.setSpacing(0)
-        left_layout.addWidget(mode_bar)
-        left_layout.addWidget(self._left_stack, 1)
-        splitter.addWidget(left_panel)
-
-        # ---- Center: canvas ----
-        self._canvas = ChainCanvas(self)
-        self._canvas.canvasChanged.connect(self._on_canvas_changed)
-        splitter.addWidget(self._canvas)
-
-        splitter.setSizes([220, 800])
-        layout.addWidget(splitter, 1)
-
-        # Default to Drones mode after all pages exist
-        self._set_active_mode("Drones")
-        self._workflow_list_pane.refresh()
-
-        # Status bar
-        self._status_label = QLabel("Ready")
-        self._status_label.setStyleSheet(f"""
-            background: rgba(20, 20, 26, 180); color: {_qss_color(FG_MUTED)};
-            padding: 4px 8px; border-top: 1px solid {_qss_color(BORDER)};
-        """)
-        layout.addWidget(self._status_label)
-
-    def _build_toolbar(self) -> QWidget:
+    def _build_toolbar(self, root_layout: QVBoxLayout) -> None:
         toolbar = QWidget()
-        toolbar.setStyleSheet(f"background: rgba(20, 20, 26, 217); border-bottom: 1px solid {_qss_color(BORDER)};")
-        t_layout = QHBoxLayout(toolbar)
-        t_layout.setContentsMargins(8, 4, 8, 4)
-        t_layout.setSpacing(4)
+        toolbar.setFixedHeight(36)
+        toolbar.setStyleSheet(
+            f"background: {_qss_color(SURFACE)};"
+            f"border-bottom: 1px solid {_qss_color(BORDER)};"
+        )
+        tb_layout = QHBoxLayout(toolbar)
+        tb_layout.setContentsMargins(8, 2, 8, 2)
+        tb_layout.setSpacing(6)
 
-        self._title_label = QLabel(self._chain_name)
-        self._title_label.setStyleSheet(f"font-size: 15px; font-weight: bold; color: {_qss_color(FG)}; padding-right: 12px;")
-        t_layout.addWidget(self._title_label)
+        # Title label
+        self._title_label = QLabel("Untitled Workflow")
+        self._title_label.setStyleSheet(
+            f"font-size: 13px; font-weight: bold; color: {_qss_color(FG)}; padding-right: 10px; background: transparent; border: none;"
+        )
+        tb_layout.addWidget(self._title_label)
+        tb_layout.addStretch()
 
-        btn_style = f"""
-            QPushButton {{
-                background: {_qss_color(BG_RAISED)}; color: {_qss_color(FG)};
-                border: 1px solid {_qss_color(BORDER)}; border-radius: 7px;
-                padding: 6px 14px; font-size: 12px;
-            }}
-            QPushButton:hover {{
-                background: {_qss_color(BORDER_STRONG)}; border-color: {_qss_color(BORDER_STRONG)};
-            }}
-            QPushButton:pressed {{
-                background: {_qss_color(BORDER)};
-            }}
-        """
+        btn_style = (
+            f"QPushButton {{"
+            f"  background: {_qss_color(SURFACE_RAISED)};"
+            f"  border: 1px solid {_qss_color(BORDER)};"
+            f"  border-radius: 4px;"
+            f"  color: {_qss_color(FG)};"
+            f"  padding: 2px 10px;"
+            f"  font-size: 11px;"
+            f"}}"
+            f"QPushButton:hover {{"
+            f"  border-color: {_qss_color(ACCENT_DIM)};"
+            f"  color: {_qss_color(ACCENT)};"
+            f"}}"
+        )
 
+        # New
+        new_btn = QPushButton("New")
+        new_btn.setStyleSheet(btn_style)
+        new_btn.setCursor(Qt.PointingHandCursor)
+        new_btn.clicked.connect(self._on_new_workflow_from_list)
+        tb_layout.addWidget(new_btn)
+
+        # Load
+        load_btn = QPushButton("Load")
+        load_btn.setStyleSheet(btn_style)
+        load_btn.setCursor(Qt.PointingHandCursor)
+        load_btn.clicked.connect(self._on_load_dialog)
+        tb_layout.addWidget(load_btn)
+
+        # Save
         save_btn = QPushButton("Save")
         save_btn.setStyleSheet(btn_style)
+        save_btn.setCursor(Qt.PointingHandCursor)
         save_btn.clicked.connect(self._save_chain)
-        t_layout.addWidget(save_btn)
+        tb_layout.addWidget(save_btn)
 
+        # Save As
         save_as_btn = QPushButton("Save As")
         save_as_btn.setStyleSheet(btn_style)
+        save_as_btn.setCursor(Qt.PointingHandCursor)
         save_as_btn.clicked.connect(self._save_chain_as)
-        t_layout.addWidget(save_as_btn)
+        tb_layout.addWidget(save_as_btn)
 
+        # Validate
         validate_btn = QPushButton("Validate")
         validate_btn.setStyleSheet(btn_style)
+        validate_btn.setCursor(Qt.PointingHandCursor)
         validate_btn.clicked.connect(self._validate_chain)
-        t_layout.addWidget(validate_btn)
+        tb_layout.addWidget(validate_btn)
 
+        # Run
         run_btn = QPushButton("Run")
-        run_btn.setStyleSheet(btn_style)
+        run_btn.setStyleSheet(
+            f"QPushButton {{"
+            f"  background: {_qss_color(ACCENT_DIM)};"
+            f"  border: 1px solid {_qss_color(ACCENT_DIM)};"
+            f"  border-radius: 4px;"
+            f"  color: {_qss_color(FG)};"
+            f"  padding: 2px 10px;"
+            f"  font-size: 11px;"
+            f"}}"
+            f"QPushButton:hover {{"
+            f"  background: {_qss_color(ACCENT)};"
+            f"}}"
+        )
+        run_btn.setCursor(Qt.PointingHandCursor)
         run_btn.clicked.connect(self._on_run_clicked)
-        t_layout.addWidget(run_btn)
+        tb_layout.addWidget(run_btn)
 
+        # Delete
         delete_btn = QPushButton("Delete")
-        delete_btn.setStyleSheet(btn_style)
+        delete_btn.setStyleSheet(
+            f"QPushButton {{"
+            f"  background: transparent;"
+            f"  border: 1px solid transparent;"
+            f"  border-radius: 4px;"
+            f"  color: {_qss_color(FG_MUTED)};"
+            f"  padding: 2px 8px;"
+            f"  font-size: 11px;"
+            f"}}"
+            f"QPushButton:hover {{"
+            f"  color: #f87171;"
+            f"}}"
+        )
+        delete_btn.setCursor(Qt.PointingHandCursor)
         delete_btn.clicked.connect(self._on_delete_clicked)
-        t_layout.addWidget(delete_btn)
+        tb_layout.addWidget(delete_btn)
 
-        self._workflow_tool_buttons = [save_btn, save_as_btn, validate_btn, run_btn, delete_btn]
+        # Close
+        close_btn = QPushButton("Close")
+        close_btn.setStyleSheet(
+            f"QPushButton {{"
+            f"  background: transparent;"
+            f"  border: 1px solid transparent;"
+            f"  border-radius: 4px;"
+            f"  color: {_qss_color(FG_MUTED)};"
+            f"  padding: 2px 8px;"
+            f"  font-size: 11px;"
+            f"}}"
+            f"QPushButton:hover {{"
+            f"  color: #f87171;"
+            f"}}"
+        )
+        close_btn.setCursor(Qt.PointingHandCursor)
+        close_btn.clicked.connect(self.closeRequested.emit)
+        tb_layout.addWidget(close_btn)
 
-        t_layout.addStretch()
+        root_layout.addWidget(toolbar)
 
-        back_btn = QPushButton("\u2190 Close")
-        back_btn.setStyleSheet(btn_style)
-        back_btn.clicked.connect(self.goBackRequested.emit)
-        t_layout.addWidget(back_btn)
-
-        return toolbar
-
-    # ---- Load / create chain ----
-
+    # ------------------------------------------------------------------
+    # Chain loading / saving
+    # ------------------------------------------------------------------
     def _load_or_create_chain(self, chain_id: str | None) -> None:
+        self._current_chain_id = chain_id
         if chain_id:
-            chain = ChainStore.load_chain(self._workspace_root, chain_id)
-            if chain is not None:
-                self._chain_id = chain.id
-                self._chain_name = chain.name or "Untitled"
-                self._chain_description = chain.description or ""
-                self._chain_enabled = chain.enabled
-                self._chain_schedule = chain.schedule or ""
-
-                # Load drones for lookup
-                drone_lookup = self._build_drone_lookup()
-
-                # Load canvas
-                self._canvas.load_chain(chain, drone_lookup)
-
-                # Update form
-                self._sync_form_from_chain()
-
+            data = load_chain(self._workspace_root, chain_id)
+            if data:
+                self._chain_id = chain_id
+                self._chain_name = data.get("name", "")
+                self._chain_desc = data.get("description", "")
+                self._auto_route = data.get("auto_route", False)
+                self._canvas.load_chain(data)
                 self._dirty = False
                 self._update_title_label()
-                self.set_status("Loaded.", SUCCESS)
+                self._build_drone_lookup()
+                self._property_panel.rebuild()
+                self._update_context_panel()
                 return
-
-        from datetime import datetime, timezone
-        self._chain_id = ChainStore.next_id(self._workspace_root, self._chain_name)
-        self._chain_name = "New Workflow"
-        self._chain_description = ""
-        self._chain_enabled = True
-        self._chain_schedule = ""
-
-        drone_lookup = self._build_drone_lookup()
-        chain = ChainDefinition(
-            id=self._chain_id,
-            name=self._chain_name,
-            description=self._chain_description,
-            enabled=self._chain_enabled,
-            nodes=[],
-            edges=[],
-            created_at=datetime.now(timezone.utc).isoformat(),
-            updated_at=datetime.now(timezone.utc).isoformat(),
-        )
-        self._canvas.load_chain(chain, drone_lookup)
-        self._sync_form_from_chain()
+        # New chain
+        self._chain_id = None
+        self._chain_name = ""
+        self._chain_desc = ""
+        self._auto_route = False
+        self._canvas.load_chain({"nodes": [], "edges": [], "name": "", "description": "", "auto_route": False})
         self._dirty = False
+        self._current_chain_id = None
         self._update_title_label()
-        self.set_status("New workflow.", FG_MUTED)
+        self._property_panel.rebuild()
 
-    def _build_drone_lookup(self) -> dict[str, DroneDefinition]:
-        drones = DroneStore.list_drones(self._workspace_root)
-        return {d.id: d for d in drones}
+    def _build_drone_lookup(self) -> None:
+        registry = DroneRegistry(self._workspace_root)
+        drone_map = {d["id"]: d for d in registry.list_drones()}
+        self._canvas.set_drone_lookup(drone_map)
 
     def _sync_form_from_chain(self) -> None:
-        if _widget_valid(self._chain_name_input):
-            self._chain_name_input.blockSignals(True)
-            self._chain_name_input.setText(self._chain_name)
-            self._chain_name_input.blockSignals(False)
-        if _widget_valid(self._chain_desc_input):
-            self._chain_desc_input.blockSignals(True)
-            self._chain_desc_input.setPlainText(self._chain_description)
-            self._chain_desc_input.blockSignals(False)
-        if _widget_valid(self._chain_enabled_check):
-            self._chain_enabled_check.blockSignals(True)
-            self._chain_enabled_check.setChecked(self._chain_enabled)
-            self._chain_enabled_check.blockSignals(False)
-        if _widget_valid(self._chain_schedule_input):
-            self._chain_schedule_input.blockSignals(True)
-            self._chain_schedule_input.setText(self._chain_schedule)
-            self._chain_schedule_input.blockSignals(False)
+        if self._property_panel is None:
+            return
+        pp = self._property_panel
+        if not _widget_valid(pp):
+            return
+        if pp._chain_name_input and _widget_valid(pp._chain_name_input):
+            pp._chain_name_input.setText(self._chain_name)
+        if pp._chain_desc_input and _widget_valid(pp._chain_desc_input):
+            pp._chain_desc_input.setText(self._chain_desc)
+        if pp._auto_route_cb and _widget_valid(pp._auto_route_cb):
+            pp._auto_route_cb.setChecked(self._auto_route)
 
     def _sync_chain_from_form(self) -> None:
-        if _widget_valid(self._chain_name_input):
-            self._chain_name = self._chain_name_input.text()
-        if _widget_valid(self._chain_desc_input):
-            self._chain_description = self._chain_desc_input.toPlainText()
-        if _widget_valid(self._chain_enabled_check):
-            self._chain_enabled = self._chain_enabled_check.isChecked()
+        pp = self._property_panel
+        if pp is None or not _widget_valid(pp):
+            return
+        if pp._chain_name_input and _widget_valid(pp._chain_name_input):
+            self._chain_name = pp._chain_name_input.text().strip()
+        if pp._chain_desc_input and _widget_valid(pp._chain_desc_input):
+            self._chain_desc = pp._chain_desc_input.toPlainText().strip()
+        if pp._auto_route_cb and _widget_valid(pp._auto_route_cb):
+            self._auto_route = pp._auto_route_cb.isChecked()
 
-    # ---- Snapshots & Save ----
-
-    def _snapshot_chain(self) -> ChainDefinition:
-        """Build a ChainDefinition from current canvas and form state."""
-        from datetime import datetime, timezone
+    def _snapshot_chain(self) -> dict:
         self._sync_chain_from_form()
-
-        nodes_data, edges_data = self._canvas.to_chain_nodes_and_edges()
-
-        chain_nodes = [
-            ChainNode(id=n["id"], drone_id=n["drone_id"],
-                      goal_template=n["goal_template"], position=n["position"],
-                      is_draft=n.get("is_draft", False),
-                      draft_name=n.get("draft_name", ""),
-                      draft_accepts=n.get("draft_accepts", ""),
-                      draft_produces=n.get("draft_produces", ""),
-                      draft_brief=n.get("draft_brief", ""))
-            for n in nodes_data
-        ]
-        chain_edges = [
-            ChainEdge(from_node=e["from_node"], to_node=e["to_node"])
-            for e in edges_data
-        ]
-
-        now = datetime.now(timezone.utc).isoformat()
-        return ChainDefinition(
-            id=self._chain_id,
-            name=self._chain_name,
-            description=self._chain_description,
-            enabled=self._chain_enabled,
-            schedule=self._chain_schedule,
-            nodes=chain_nodes,
-            edges=chain_edges,
-            created_at=now,
-            updated_at=now,
-        )
+        data = self._canvas.save_chain()
+        data["name"] = self._chain_name
+        data["description"] = self._chain_desc
+        data["auto_route"] = self._auto_route
+        return data
 
     def _save_chain(self) -> None:
-        try:
-            chain = self._snapshot_chain()
-            ChainStore.save_chain(self._workspace_root, chain)
-            self._dirty = False
-            self._update_title_label()
-            self._workflow_list_pane.refresh()
-            self.set_status("Saved.", SUCCESS)
-        except Exception as exc:
-            logger.exception("Failed to save chain")
-            self.set_status(f"Save failed: {exc}", DANGER)
+        self._sync_chain_from_form()
+        data = self._canvas.save_chain()
+        data["name"] = self._chain_name
+        data["description"] = self._chain_desc
+        data["auto_route"] = self._auto_route
 
-    # ---- Validate ----
+        if self._chain_id:
+            save_chain(self._workspace_root, self._chain_id, data)
+            self._current_chain_id = self._chain_id
+        else:
+            chain_id = save_chain(self._workspace_root, None, data)
+            self._chain_id = chain_id
+            self._current_chain_id = chain_id
+        self._dirty = False
+        self._update_title_label()
+        self.set_status("Workflow saved.", "ok")
+
+    def _save_chain_as(self) -> None:
+        self._sync_chain_from_form()
+        data = self._canvas.save_chain()
+        data["name"] = self._chain_name
+        data["description"] = self._chain_desc
+        data["auto_route"] = self._auto_route
+        chain_id = save_chain(self._workspace_root, None, data)
+        self._chain_id = chain_id
+        self._current_chain_id = chain_id
+        self._dirty = False
+        self._update_title_label()
+        self.set_status(f"Saved as {self._chain_name or chain_id}", "ok")
 
     def _validate_chain(self) -> None:
-        try:
-            chain = self._snapshot_chain()
-            drone_lookup = self._build_drone_lookup()
-            result = validate(chain, drone_lookup)
-            if not result.ok:
-                msg = "; ".join(result.errors[:5])
-                if len(result.errors) > 5:
-                    msg += f" (+{len(result.errors) - 5} more)"
-                self.set_status(f"Validation: {msg}", DANGER)
-            else:
-                self.set_status("Validation: Valid", SUCCESS)
-        except Exception as exc:
-            self.set_status(f"Validation error: {exc}", DANGER)
+        self._sync_chain_from_form()
+        data = self._canvas.save_chain()
+        nodes = data.get("nodes", [])
+        edges = data.get("edges", [])
+        issues: list[str] = []
 
-    # ---- Callbacks ----
+        if not nodes:
+            issues.append("No nodes in the workflow.")
+        node_ids = {n["id"] for n in nodes}
+        for e in edges:
+            if e["source"] not in node_ids:
+                issues.append(f"Edge references missing source node {e['source']}.")
+            if e["dest"] not in node_ids:
+                issues.append(f"Edge references missing destination node {e['dest']}.")
 
+        has_draft = any(n.get("is_draft") for n in nodes)
+        if has_draft:
+            issues.append("One or more draft nodes have not been built yet.")
+
+        if issues:
+            msg = "\n".join(f"• {i}" for i in issues)
+            QMessageBox.warning(self, "Validation", f"Issues found:\n\n{msg}")
+            self.set_status("Validation failed.", "error")
+        else:
+            QMessageBox.information(self, "Validation", "Workflow looks valid.")
+            self.set_status("Validation passed.", "ok")
+
+    def _prompt_save_changes(self) -> str | None:
+        """Ask user whether to Save, Discard, or Cancel. Returns 'save', 'discard', or None (cancel)."""
+        result = QMessageBox.question(
+            self,
+            "Unsaved Changes",
+            "Save changes to current workflow?",
+            QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
+            QMessageBox.Save,
+        )
+        if result == QMessageBox.Save:
+            self._save_chain()
+            return "save"
+        elif result == QMessageBox.Discard:
+            return "discard"
+        return "cancel"
+
+    def _update_title_label(self) -> None:
+        name = self._chain_name or "Untitled Workflow"
+        suffix = " *" if self._dirty else ""
+        self._title_label.setText(f"\u25c6 {name}{suffix}")
+
+    def set_status(self, text: str, level: str = "info") -> None:
+        """Display a status message (can be connected to main window status bar)."""
+        logger.info(f"ChainEditor status [{level}]: {text}")
+
+    # ------------------------------------------------------------------
+    # Workspace root
+    # ------------------------------------------------------------------
+    def set_workspace_root(self, path: Path) -> None:
+        self._workspace_root = path
+        self._roster.set_workspace_root(path)
+        self._load_or_create_chain(self._chain_id)
+
+    @property
+    def workspace_root(self) -> Path:
+        return self._workspace_root
+
+    # ------------------------------------------------------------------
+    # Canvas event handlers
+    # ------------------------------------------------------------------
     def _on_canvas_changed(self) -> None:
         self._dirty = True
         self._auto_save_timer.start()
-        # Update property panel on selection change
         self._property_panel.rebuild()
-        self._update_left_panel_mode()
+        self._update_context_panel()
         self._update_title_label()
 
     def _on_chain_property_changed(self) -> None:
-        # Sync form state into chain attributes immediately so edits survive panel rebuild
-        self._sync_chain_from_form()
-        self._on_canvas_changed()
+        self._dirty = True
+        self._auto_save_timer.start()
+        self._update_title_label()
 
     def _on_selection_changed(self) -> None:
-        self._update_left_panel_mode()
+        self._update_context_panel()
 
-    # ---- Left panel switching (palette vs. workshop) ----
+    # ------------------------------------------------------------------
+    # Contextual right panel
+    # ------------------------------------------------------------------
+    def _update_context_panel(self) -> None:
+        """Show/hide right panel based on canvas selection."""
+        selection = self._canvas._scene.selectedItems()
+        node_items = [i for i in selection if isinstance(i, ChainNodeItem)]
+        edge_items = [i for i in selection if isinstance(i, ChainEdgeItem)]
 
+        if not node_items and not edge_items:
+            # Nothing selected: hide right panel
+            sizes = self._splitter.sizes()
+            if len(sizes) >= 3:
+                self._splitter.setSizes([sizes[0], sizes[0] + sizes[1] + sizes[2], 0])
+            return
+
+        if node_items:
+            node = node_items[0]
+            if node.is_draft:
+                self._ensure_workshop_panel()
+                self._show_workshop_for_draft(node)
+                self._right_stack.setCurrentIndex(1)
+                w = max(300, self.width() - 500)
+                self._splitter.setSizes([220, w, 280])
+                return
+
+        # Non-draft node or edge: show property panel
+        self._right_stack.setCurrentIndex(0)
+        self._property_panel.rebuild()
+        w = max(300, self.width() - 500)
+        self._splitter.setSizes([220, w, 280])
+
+    def _on_clear_selection(self) -> None:
+        """Clear canvas selection and hide right panel."""
+        self._canvas._scene.clearSelection()
+        sizes = self._splitter.sizes()
+        if len(sizes) >= 3:
+            self._splitter.setSizes([sizes[0], sizes[0] + sizes[1] + sizes[2], 0])
+
+    # ------------------------------------------------------------------
+    # Workshop panel (lazy, right panel page 1)
+    # ------------------------------------------------------------------
     def _ensure_workshop_panel(self) -> QWidget:
         if self._workshop_container is not None:
             return self._workshop_container
@@ -995,7 +882,10 @@ class ChainEditor(QWidget):
         back_btn = QPushButton("\u2190 Back")
         back_btn.setFlat(True)
         back_btn.setCursor(Qt.PointingHandCursor)
-        back_btn.setStyleSheet(f"QPushButton {{ color: {_qss_color(FG_MUTED)}; text-align: left; padding: 2px; }}")
+        back_btn.setStyleSheet(
+            f"QPushButton {{ color: {_qss_color(FG_MUTED)}; text-align: left; padding: 2px; }}"
+            f"QPushButton:hover {{ color: {_qss_color(ACCENT)}; }}"
+        )
         back_btn.clicked.connect(self._on_back_to_palette)
         layout.addWidget(back_btn)
 
@@ -1029,122 +919,45 @@ class ChainEditor(QWidget):
         layout.addWidget(self._workshop_panel, 1)
 
         self._workshop_container = container
-        self._left_stack.addWidget(container)  # index 3
+        self._right_stack.addWidget(container)  # page 1
         return container
-
-    def _update_left_panel_mode(self) -> None:
-        selection = self._canvas._scene.selectedItems()
-        draft_node = None
-        non_draft = None
-        for item in selection:
-            if isinstance(item, ChainNodeItem):
-                if item.is_draft:
-                    draft_node = item
-                    break
-                else:
-                    non_draft = item
-            elif isinstance(item, ChainEdgeItem) and non_draft is None:
-                non_draft = item
-
-        if draft_node:
-            if self._left_stack.currentIndex() != 3:
-                self._palette_width = self._splitter.sizes()[0]
-            self._show_workshop_for_draft(draft_node)
-            self._splitter.setSizes([340, self._splitter.sizes()[1]])
-            self._set_active_mode("Workshop")
-        elif non_draft:
-            self._set_active_mode("Details")
-            self._property_panel.rebuild()
-        # Nothing selected → do not auto-switch
 
     def _show_workshop_for_draft(self, draft_node: ChainNodeItem) -> None:
         if draft_node.node_id not in self._canvas._nodes:
             return
-
         self._ensure_workshop_panel()
-
         if draft_node.node_id != self._workshop_draft_node_id:
             self._workshop_panel.reset_workshop_state()
-
         name = draft_node.draft_name or "Untitled Drone"
         accepts = draft_node.draft_accepts or "any"
         produces = draft_node.draft_produces or "any"
         self._workshop_draft_node_id = draft_node.node_id
         self._ws_draft_label.setText(f"Building: {name}")
-        self._ws_contracts_label.setText(f"In: {accepts}  \u00b7  Out: {produces}")
+        self._ws_contracts_label.setText(f"In: {accepts}  ·  Out: {produces}")
 
-        if self._left_stack.currentIndex() != 3:
-            self._left_stack.setCurrentIndex(3)
+    def _on_workshop_build_requested(self, spec: BuildSpec) -> None:
+        """Workshop has produced a build spec — settle the draft node."""
+        self.settle_draft_node(spec)
 
     def _on_back_to_palette(self) -> None:
+        """Clear selection and hide right panel."""
         self._workshop_draft_node_id = None
         if self._workshop_panel is not None:
             self._workshop_panel.reset_workshop_state()
         self._canvas._scene.clearSelection()
-        self._set_active_mode(self._last_manual_mode)
+        sizes = self._splitter.sizes()
+        if len(sizes) >= 3:
+            self._splitter.setSizes([sizes[0], sizes[0] + sizes[1] + sizes[2], 0])
 
-    # ---- Mode switcher ----
-
-    def _set_active_mode(self, name: str) -> None:
-        index_map = {"Workflows": 0, "Drones": 1, "Details": 2, "Workshop": 3}
-        target = index_map[name]
-
-        if name == "Workshop":
-            if self._left_stack.currentIndex() != target:
-                self._palette_width = self._splitter.sizes()[0]
-            self._splitter.setSizes([340, self._splitter.sizes()[1]])
-        else:
-            if self._left_stack.currentIndex() == index_map.get("Workshop", 3):
-                self._splitter.setSizes([self._palette_width, self._splitter.sizes()[1]])
-
-        # Track last manual mode (Details/Workshop auto-switches must not overwrite)
-        if name in ("Workflows", "Drones"):
-            self._last_manual_mode = name
-
-        # Show/hide workflow toolbar buttons based on mode
-        if hasattr(self, '_workflow_tool_buttons'):
-            if name == "Drones":
-                for b in self._workflow_tool_buttons:
-                    b.hide()
-            elif name == "Workflows":
-                for b in self._workflow_tool_buttons:
-                    b.show()
-
-        self._left_stack.setCurrentIndex(target)
-
-        for mode_name, btn in self._mode_buttons.items():
-            if mode_name == name:
-                btn.setChecked(True)
-                btn.setStyleSheet(f"""
-                    QToolButton {{
-                        background: {_qss_color(ACCENT)}; color: {_qss_color(BG)};
-                        border: none; border-radius: 7px;
-                        padding: 5px 10px; font-weight: 600;
-                    }}
-                """)
-            else:
-                btn.setChecked(False)
-                btn.setStyleSheet(f"""
-                    QToolButton {{
-                        background: transparent; color: {_qss_color(FG_MUTED)};
-                        border: none; border-radius: 7px;
-                        padding: 5px 10px;
-                    }}
-                    QToolButton:hover {{
-                        background: {_qss_color(BG_RAISED)}; color: {_qss_color(FG)};
-                    }}
-                """)
-
-    # ---- Workflow list callbacks ----
-
-    def _on_load_existing_workflow(self, chain_id: str) -> None:
-        choice = self._prompt_save_changes()
-        if choice == "cancel":
-            return
-        if choice == "save":
-            self._save_chain()
-        self._load_or_create_chain(chain_id)
-        self._workflow_list_pane.refresh()
+    # ------------------------------------------------------------------
+    # Drone roster interactions
+    # ------------------------------------------------------------------
+    def _on_new_drone_clicked(self) -> None:
+        """Create a draft node on the canvas and open workshop in the right panel."""
+        draft = self._canvas.create_draft_node("Untitled Drone", "any", "any")
+        self._canvas._scene.clearSelection()
+        draft.setSelected(True)
+        self._on_selection_changed()
 
     def _on_new_workflow_from_list(self) -> None:
         choice = self._prompt_save_changes()
@@ -1153,208 +966,120 @@ class ChainEditor(QWidget):
         if choice == "save":
             self._save_chain()
         self._load_or_create_chain(None)
-        self._workflow_list_pane.refresh()
+
+    def _on_load_existing_workflow(self, chain_id: str) -> None:
+        choice = self._prompt_save_changes()
+        if choice == "cancel":
+            return
+        if choice == "save":
+            self._save_chain()
+        self._load_or_create_chain(chain_id)
 
     def _on_delete_workflow_from_list(self, chain_id: str) -> None:
-        reply = QMessageBox.question(
-            self,
-            "Delete Workflow",
-            "Delete this workflow? This cannot be undone.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if reply != QMessageBox.StandardButton.Yes:
-            return
-        try:
-            ChainStore.delete_chain(self._workspace_root, chain_id)
-        except Exception as exc:
-            self.set_status(f"Delete failed: {exc}", DANGER)
-            return
-        if chain_id == self._chain_id:
+        delete_chain(self._workspace_root, chain_id)
+        if self._current_chain_id == chain_id:
             self._load_or_create_chain(None)
-        self._workflow_list_pane.refresh()
 
     def _on_run_workflow_from_list(self, chain_id: str) -> None:
-        self._save_chain()
-        self.runChainRequested.emit(chain_id)
+        self._load_or_create_chain(chain_id)
+        self._on_run_clicked()
 
-    def _on_new_drone_clicked(self) -> None:
-        if self._workspace_root is None:
+    # ------------------------------------------------------------------
+    # Load dialog
+    # ------------------------------------------------------------------
+    def _on_load_dialog(self) -> None:
+        if self._dirty and not self._prompt_save_changes():
             return
-        view_center = self._canvas.viewport().rect().center()
-        scene_pos = self._canvas.mapToScene(view_center)
-        node_item = self._canvas._canvas_add_draft_node(scene_pos)
-        self._canvas._scene.clearSelection()
-        node_item.setSelected(True)
-        canvasChanged = getattr(self._canvas, 'canvasChanged', None)
-        if canvasChanged:
-            canvasChanged.emit()
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Load Workflow")
+        dlg.resize(480, 400)
+        layout = QVBoxLayout(dlg)
+        wf_list = WorkflowListPane(self._workspace_root, dlg)
+        layout.addWidget(wf_list)
+        wf_list.set_workspace_root(self._workspace_root)
 
-    def _on_workshop_build_requested(self, brief: object) -> None:
-        logger.info("Workshop build requested, brief: %s", type(brief).__name__)
+        result_chain_id: list[str | None] = [None]
+        wf_list.editWorkflowRequested.connect(lambda cid: (result_chain_id.__setitem__(0, cid), dlg.accept()))  # type: ignore[func-returns-value]
+        wf_list.newWorkflowRequested.connect(lambda: (self._on_new_workflow_from_list(), dlg.accept()))
+        wf_list.deleteWorkflowRequested.connect(self._on_delete_workflow_from_list)
+        wf_list.runWorkflowRequested.connect(lambda cid: (self._on_run_workflow_from_list(cid), dlg.accept()))
 
-        # Find the selected draft node on the canvas
-        draft_node_id = None
-        for item in self._canvas._scene.selectedItems():
-            dio = getattr(item, 'data', None)
-            if dio and getattr(dio, 'kind', None) == 'draft':
-                nd = getattr(item, 'node', None)
-                data = getattr(nd, 'data', None) if nd else dio
-                draft_node_id = data.get('id') if isinstance(data, dict) else (getattr(data, 'id', None) or getattr(nd, 'id', None))
-                break
-        if not draft_node_id:
-            fallback = self._workshop_draft_node_id
-            if fallback:
-                draft_node_id = fallback
-            else:
-                self.set_status("No draft node selected", DANGER)
-                return
+        if dlg.exec() == QDialog.DialogCode.Accepted and result_chain_id[0]:
+            self._load_or_create_chain(result_chain_id[0])
 
-        self.settle_draft_requested.emit({"brief": brief, "draft_node_id": draft_node_id})
-        self.set_status("Building drone\u2026")
+    # ------------------------------------------------------------------
+    # Settle draft node into a real drone
+    # ------------------------------------------------------------------
+    def settle_draft_node(self, spec: BuildSpec) -> None:
+        draft_id = self._workshop_draft_node_id
+        if draft_id is None or draft_id not in self._canvas._nodes:
+            return
+        node = self._canvas._nodes[draft_id]
+        node.is_draft = False
+        node._drone_id = spec.drone_id
+        node._goal_template = spec.goal_template
 
-    def settle_draft_node(self, node_id: str, drone_def) -> bool:
-        """Replace a draft node with the real saved DroneDefinition."""
-        item = self._canvas._nodes.get(node_id)
-        if item is None:
-            logger.warning(f"Cannot settle draft: node {node_id} not found on canvas")
-            return False
-        if not item.is_draft:
-            logger.warning(f"Cannot settle draft: node {node_id} is no longer a draft")
-            return False
+        if spec.build_mode == BuildMode.EXISTING:
+            registry = DroneRegistry(self._workspace_root)
+            drone_data = registry.get_drone(spec.drone_id)
+            if drone_data:
+                node.drone = drone_data
+                node.drone_name = drone_data["name"]
+        else:
+            from aura.drones.drone_registry import DroneRegistry
+            registry = DroneRegistry(self._workspace_root)
+            drone_data = registry.get_drone(spec.drone_id)
+            if drone_data:
+                node.drone = drone_data
+                node.drone_name = drone_data["name"]
 
-        # Mutate the ChainNodeItem to become a real drone node
-        item._is_draft = False
-        item._drone = drone_def
-        item._drone_id = drone_def.id
-        item._draft_name = ""
-        item._draft_accepts = ""
-        item._draft_produces = ""
-        item._draft_brief = ""
-        item._missing = False
-        item.update()  # trigger repaint
-
-        # Persist chain
-        self._save_chain()
-
-        # Refresh roster to show the new drone
-        self._roster.populate()
-
-        # Reset workshop state
+        node.update()
         self._workshop_draft_node_id = None
-
-        # Switch left panel back to palette, refresh property panel
         self._canvas._scene.clearSelection()
-        item.setSelected(True)
-        self._update_left_panel_mode()
-        self._property_panel.rebuild()
+        node.setSelected(True)
+        self._roster.populate()
+        self._on_selection_changed()
+        self.set_status(f"Drone settled: {node.drone_name}", "ok")
 
-        return True
-
+    # ------------------------------------------------------------------
+    # Run / Delete
+    # ------------------------------------------------------------------
     def _on_run_clicked(self) -> None:
-        self._save_chain()
-        self.runChainRequested.emit(self._chain_id)
+        if self._dirty:
+            self._save_chain()
+        if not self._current_chain_id:
+            QMessageBox.warning(self, "Cannot Run", "Save the workflow first.")
+            return
+        data = load_chain(self._workspace_root, self._current_chain_id)
+        if not data:
+            QMessageBox.warning(self, "Cannot Run", "Workflow data not found.")
+            return
+        self.runDroneRequested.emit(self._current_chain_id, data.get("name", ""))
 
     def _on_delete_clicked(self) -> None:
-        reply = QMessageBox.question(
+        if self._current_chain_id is None:
+            QMessageBox.information(self, "Nothing to Delete", "No workflow is loaded.")
+            return
+        result = QMessageBox.question(
             self,
             "Delete Workflow",
-            f"Are you sure you want to delete '{self._chain_name}'?\nThis cannot be undone.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
+            f"Permanently delete '{self._chain_name or self._current_chain_id}'?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
         )
-        if reply == QMessageBox.StandardButton.Yes:
-            try:
-                ChainStore.delete_chain(self._workspace_root, self._chain_id)
-                self.set_status("Deleted.", SUCCESS)
-                self.goBackRequested.emit()
-            except Exception as exc:
-                self.set_status(f"Delete failed: {exc}", DANGER)
+        if result == QMessageBox.Yes:
+            delete_chain(self._workspace_root, self._current_chain_id)
+            self._load_or_create_chain(None)
 
-    # ---- Title ----
+    # ------------------------------------------------------------------
+    # Public helpers
+    # ------------------------------------------------------------------
+    def refresh_roster(self) -> None:
+        """Refresh the drone roster after external edit/delete. Called by main window."""
+        if self._roster is not None:
+            self._roster.set_workspace_root(self._workspace_root)
+            self._roster.populate()
 
-    def _update_title_label(self) -> None:
-        if not hasattr(self, '_title_label'):
-            return
-        if self._dirty:
-            self._title_label.setText(f"\u2022 {self._chain_name}")
-            self._title_label.setStyleSheet(
-                f"font-size: 15px; font-weight: bold; color: {_qss_color(ACCENT)}; padding-right: 12px;"
-            )
-        else:
-            self._title_label.setText(self._chain_name)
-            self._title_label.setStyleSheet(
-                f"font-size: 15px; font-weight: bold; color: {_qss_color(FG)}; padding-right: 12px;"
-            )
-
-    # ---- Save As ----
-
-    def _save_chain_as(self) -> None:
-        from PySide6.QtWidgets import QInputDialog
-        new_name, ok = QInputDialog.getText(
-            self, "Save Workflow As", "New workflow name:",
-            text=self._chain_name,
-        )
-        if not ok or not new_name.strip():
-            return
-        new_name = new_name.strip()
-        old_id = self._chain_id
-        try:
-            self._chain_name = new_name
-            self._chain_id = ChainStore.next_id(self._workspace_root, new_name)
-            chain = self._snapshot_chain()
-            from dataclasses import replace
-            chain = replace(chain, id=self._chain_id, name=self._chain_name)
-            ChainStore.save_chain(self._workspace_root, chain)
-            self._dirty = False
-            self._update_title_label()
-            self._workflow_list_pane.refresh()
-            self.set_status(f"Saved as '{new_name}'.", SUCCESS)
-        except Exception as exc:
-            self._chain_id = old_id
-            self.set_status(f"Save As failed: {exc}", DANGER)
-
-    # ---- Unsaved changes prompt ----
-
-    def _prompt_save_changes(self) -> str:
-        """Returns 'save', 'discard', or 'cancel'."""
-        if not self._dirty:
-            return "discard"
-        box = QMessageBox(self)
-        box.setWindowTitle("Unsaved Changes")
-        box.setText(f"'{self._chain_name}' has unsaved changes.")
-        box.setInformativeText("Do you want to save before switching?")
-        save_btn = box.addButton("Save", QMessageBox.ButtonRole.AcceptRole)
-        discard_btn = box.addButton("Discard", QMessageBox.ButtonRole.DestructiveRole)
-        cancel_btn = box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
-        box.setDefaultButton(save_btn)
-        box.exec()
-        clicked = box.clickedButton()
-        if clicked == save_btn:
-            return "save"
-        elif clicked == discard_btn:
-            return "discard"
-        return "cancel"
-
-    # ---- Status bar ----
-
-    def set_status(self, message: str, color: QColor | str = FG_MUTED) -> None:
-        color_value = color.name() if hasattr(color, "name") else str(color)
-        self._status_label.setText(message)
-        self._status_label.setStyleSheet(f"""
-            background: {_qss_color(BG_ALT)}; color: {color_value};
-            padding: 4px 8px; border-top: 1px solid {_qss_color(BORDER)};
-        """)
-
-    # ---- Workspace root ----
-
-    def set_workspace_root(self, path: Path) -> None:
-        self._workspace_root = path
-        self._roster.set_workspace_root(path)
-        self._workflow_list_pane.set_workspace_root(path)
-        self._workflow_list_pane.refresh()
-        self._load_or_create_chain(self._chain_id)
-
-    @property
-    def workspace_root(self) -> Path:
-        return self._workspace_root
+    def chain_editor(self) -> ChainEditor:
+        """Return self for compatibility with popout window accessor."""
+        return self
