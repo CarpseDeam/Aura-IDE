@@ -50,6 +50,10 @@ function ChatScreen() {
           updated[updated.length - 1] = { ...last, text: last.text + text };
           return updated;
         }
+        // If the last message is a final assistant from history whose text already starts with this delta text, skip — stale delta for a message we already have.
+        if (last && last.role === 'assistant' && last.final && last.text.startsWith(text)) {
+          return prev;
+        }
         return [...prev, { id: `msg_${Date.now()}`, role: 'assistant', text, final: false }];
       });
     });
@@ -64,6 +68,7 @@ function ChatScreen() {
         const updated = [...prev];
         const last = updated[updated.length - 1];
         if (last.role === 'assistant') {
+          if (last.final) return prev; // Already complete from history, skip stale event
           if (finishReason === 'cancelled' && !text) {
             updated[updated.length - 1] = { ...last, final: true };
           } else {
@@ -89,9 +94,34 @@ function ChatScreen() {
     };
   }, [phase]);
 
+  // History loading — fetch conversation history once connected with project+conversation
+  useEffect(() => {
+    if (phase !== 'connected' || !projectId || !conversationId) return;
+
+    socket.send('conversation.history', { project_id: projectId, thread_id: conversationId }, desktopId, projectId, conversationId);
+
+    const unsubHistory = socket.on('conversation.history_result', (msg: any) => {
+      if (msg.payload?.error) {
+        console.warn('conversation.history_result error:', msg.payload.error);
+        return;
+      }
+      const historyMsgs: Message[] = (msg.payload?.messages || []).map((m: any, i: number) => ({
+        id: `hist_${i}_${m.role}`,
+        role: m.role,
+        text: m.content ?? '',
+        final: true,
+      }));
+      setMessages(historyMsgs);
+    });
+
+    return () => {
+      unsubHistory();
+    };
+  }, [phase, desktopId, projectId, conversationId]);
+
   const sendMessage = useCallback(() => {
     const text = input.trim();
-    if (!text || streaming || !desktopId) return;
+    if (!text || streaming || !desktopId || !projectId || !conversationId) return;
     setMessages(prev => [...prev, { id: `msg_${Date.now()}`, role: 'user', text, final: true }]);
     setInput('');
     setStreaming(true);
@@ -185,18 +215,18 @@ function ChatScreen() {
       {/* Header */}
       <header style={{
         ...glassCard,
-        margin: '0.75rem 0 0.5rem',
-        padding: '0.75rem 1rem',
+        margin: '0.4rem 0 0.3rem',
+        padding: '0.45rem 0.75rem',
         display: 'flex',
         alignItems: 'center',
-        gap: '0.75rem',
+        gap: '0.5rem',
       }}>
         <button
           onClick={() => navigate('/login')}
           aria-label="Back"
           style={{
             background: 'transparent', border: 'none',
-            color: tokens.fgDim, fontSize: '1.4rem',
+            color: tokens.fgDim, fontSize: '1.2rem',
             padding: '0.1rem 0.4rem',
           }}
         >
@@ -204,33 +234,81 @@ function ChatScreen() {
         </button>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{
-            fontSize: '0.95rem', fontWeight: 600,
+            fontSize: '0.9rem', fontWeight: 600,
             whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
           }}>
             {desktopName}
           </div>
-          <div style={{ fontSize: '0.7rem', color: tokens.fgMuted, marginTop: 2 }}>
+          <div style={{ fontSize: '0.65rem', color: tokens.fgMuted, marginTop: 2 }}>
             Aura Desktop
           </div>
           {safeCtx.project_name && (
-            <div style={{ fontSize: '0.7rem', color: tokens.fgMuted, marginTop: 2 }}>
+            <div style={{ fontSize: '0.65rem', color: tokens.fgMuted, marginTop: 2 }}>
               Project: {safeCtx.project_name}
             </div>
           )}
         </div>
         <span style={statusPillStyle('connected')}>
-          ● Online
+          ●{' '}
+          {!projectId || !conversationId
+            ? 'Select a conversation'
+            : messages.length === 0 && !streaming
+              ? 'Send a message to begin'
+              : 'Online'}
         </span>
       </header>
 
       {/* Messages */}
-      <main style={{ flex: 1, overflow: 'auto', padding: '0.5rem 0 0.25rem' }}>
-        {messages.length === 0 && (
-          <EmptyState />
+      <main style={{ flex: 1, overflow: 'auto', padding: '0.3rem 0 0.2rem' }}>
+        {messages.length === 0 ? (
+          phase === 'connected' && (!projectId || !conversationId) ? (
+            <div style={{
+              textAlign: 'center',
+              marginTop: '3rem',
+              color: tokens.fgMuted,
+              padding: '1rem',
+            }}>
+              <div style={{
+                fontSize: '2.4rem',
+                color: tokens.warn,
+                opacity: 0.55,
+                marginBottom: '0.5rem',
+                letterSpacing: '0.2em',
+                fontWeight: 700,
+              }}>
+                ◌
+              </div>
+              <div style={{ fontSize: '0.95rem', color: tokens.fgDim }}>
+                No conversation selected
+              </div>
+              <div style={{ fontSize: '0.78rem', marginTop: 6, marginBottom: 14 }}>
+                Pick a project thread to start chatting.
+              </div>
+              <button
+                onClick={() => navigate('/projects')}
+                style={{
+                  padding: '0.6rem 1.2rem',
+                  background: tokens.accent,
+                  color: '#0a0f1f',
+                  border: 'none',
+                  borderRadius: 10,
+                  fontSize: '0.85rem',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  boxShadow: `0 6px 22px -8px ${tokens.accentGlow}`,
+                }}
+              >
+                Go to Projects
+              </button>
+            </div>
+          ) : (
+            <EmptyState />
+          )
+        ) : (
+          messages.map((m, idx) => (
+            <MessageBubble key={m.id} message={m} previous={messages[idx - 1]} />
+          ))
         )}
-        {messages.map((m, idx) => (
-          <MessageBubble key={m.id} message={m} previous={messages[idx - 1]} />
-        ))}
         <div ref={bottomRef} />
       </main>
 
@@ -302,14 +380,14 @@ function ChatScreen() {
           ) : (
             <button
               onClick={sendMessage}
-              disabled={!input.trim() || !desktopId}
+              disabled={!input.trim() || !desktopId || !projectId || !conversationId}
               aria-label="Send"
               style={{
                 width: 44, height: 44, borderRadius: 22,
-                background: !input.trim() || !desktopId ? tokens.borderStrong : tokens.accent,
-                color: !input.trim() || !desktopId ? tokens.fgMuted : '#0a0f1f',
+                background: !input.trim() || !desktopId || !projectId || !conversationId ? tokens.borderStrong : tokens.accent,
+                color: !input.trim() || !desktopId || !projectId || !conversationId ? tokens.fgMuted : '#0a0f1f',
                 border: 'none', fontSize: '1.15rem', fontWeight: 700,
-                boxShadow: !input.trim() || !desktopId ? 'none' : `0 6px 22px -8px ${tokens.accentGlow}`,
+                boxShadow: !input.trim() || !desktopId || !projectId || !conversationId ? 'none' : `0 6px 22px -8px ${tokens.accentGlow}`,
               }}
             >
               ↑
@@ -330,20 +408,20 @@ function MessageBubble({ message: m, previous }: { message: Message; previous?: 
       style={{
         display: 'flex',
         justifyContent: isUser ? 'flex-end' : 'flex-start',
-        marginTop: tightTop ? 4 : 12,
-        padding: '0 0.25rem',
+        marginTop: tightTop ? 2 : 8,
+        padding: '0 0.15rem',
       }}
     >
       <div style={{
         maxWidth: '82%',
-        padding: '0.7rem 0.95rem',
+        padding: '0.35rem 0.7rem',
         background: isUser ? tokens.userBubble : tokens.assistantBubble,
         border: `1px solid ${tokens.border}`,
         color: tokens.fg,
         borderRadius: 16,
         borderBottomRightRadius: isUser ? 6 : 16,
         borderBottomLeftRadius: !isUser ? 6 : 16,
-        fontSize: '0.95rem',
+        fontSize: '0.85rem',
         lineHeight: 1.42,
         whiteSpace: 'pre-wrap',
         wordBreak: 'break-word',

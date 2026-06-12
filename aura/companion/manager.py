@@ -31,6 +31,7 @@ from aura.companion.protocol import (
     make_envelope,
 )
 from aura.drones.store import RunHistoryStore
+from aura.conversation.persistence import load_conversation
 from aura.projects.store import ProjectStore
 from aura.settings import AppSettings, resolve_role_default_model
 
@@ -50,6 +51,7 @@ class CompanionManager(QObject):
     pairing_code_available = Signal(str)       # Emitted when a pairing code is generated
     pairing_code_invalidated = Signal()        # Emitted when a pairing code is cancelled
     pairing_complete = Signal(str)             # Emitted when a phone pairs successfully (param: device_name)
+    conversation_selected_by_companion = Signal(Path, Path)  # project_root_path, conversation_path
 
     def __init__(self, settings: AppSettings | None = None, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -378,6 +380,8 @@ class CompanionManager(QObject):
             self._handle_pair_cancel(msg)
         elif msg_type == "companion.verify":
             self._handle_companion_verify(msg)
+        elif msg_type == "conversation.history":
+            self._handle_conversation_history(msg)
 
     # ── Bridge chat handlers ────────────────────────────────
 
@@ -515,11 +519,120 @@ class CompanionManager(QObject):
                 "error": "Missing thread_id or project_id",
             })
             return
-        self._current_project_id = project_id
-        self._reply_to_sender(msg, "conversation.selected", {
-            "project_id": project_id,
-            "thread_id": thread_id,
-        })
+        try:
+            store = ProjectStore()
+            project = store.load_project(project_id)
+            if not project:
+                self._reply_to_sender(msg, "conversation.selected", {
+                    "error": "Project not found",
+                })
+                return
+            thread = store.load_thread(project, thread_id)
+            if not thread:
+                self._reply_to_sender(msg, "conversation.selected", {
+                    "error": "Thread not found",
+                })
+                return
+            if thread.conversation_path is None:
+                self._reply_to_sender(msg, "conversation.selected", {
+                    "error": "Thread has no conversation file",
+                })
+                return
+            if self._bridge and self._bridge.is_running():
+                self._reply_to_sender(msg, "conversation.selected", {
+                    "error": "Desktop is busy",
+                })
+                return
+            self._current_project_id = project_id
+            self._current_conversation_id = thread_id
+            self.conversation_selected_by_companion.emit(project.root_path, thread.conversation_path)
+            self._reply_to_sender(msg, "conversation.selected", {
+                "project_id": project_id,
+                "thread_id": thread_id,
+            })
+        except Exception as exc:
+            logger.error("[Companion] conversation.select error: %s", exc)
+            self._reply_to_sender(msg, "conversation.selected", {
+                "error": str(exc),
+            })
+
+    def _handle_conversation_history(self, msg: dict) -> None:
+        payload = msg.get("payload", {})
+        project_id = payload.get("project_id") or self._current_project_id
+        thread_id = payload.get("thread_id") or self._current_conversation_id
+        if not project_id or not thread_id:
+            self._reply_to_sender(msg, "conversation.history_result", {
+                "project_id": project_id,
+                "thread_id": thread_id,
+                "messages": [],
+                "error": "Missing project_id or thread_id",
+            })
+            return
+        try:
+            if thread_id == self._current_conversation_id and self._bridge is not None:
+                raw_messages = self._bridge.history.messages
+            else:
+                store = ProjectStore()
+                project = store.load_project(project_id)
+                if not project:
+                    self._reply_to_sender(msg, "conversation.history_result", {
+                        "project_id": project_id,
+                        "thread_id": thread_id,
+                        "messages": [],
+                        "error": "Project not found",
+                    })
+                    return
+                thread = store.load_thread(project, thread_id)
+                if not thread or thread.conversation_path is None:
+                    self._reply_to_sender(msg, "conversation.history_result", {
+                        "project_id": project_id,
+                        "thread_id": thread_id,
+                        "messages": [],
+                        "error": "Thread or conversation file not found",
+                    })
+                    return
+                loaded = load_conversation(thread.conversation_path)
+                raw_messages = loaded.history.messages
+
+            mobile_messages: list[dict] = []
+            for m in raw_messages:
+                role = m.get("role", "")
+                if role in ("tool", "system"):
+                    continue
+                content = m.get("content")
+                if role == "user":
+                    if isinstance(content, str):
+                        text = content
+                    elif isinstance(content, list):
+                        parts = [
+                            p.get("text", "")
+                            for p in content
+                            if isinstance(p, dict) and p.get("type") == "text"
+                        ]
+                        text = " ".join(parts)
+                    else:
+                        continue
+                    if not text:
+                        continue
+                    mobile_messages.append({"role": role, "content": text})
+                elif role == "assistant":
+                    if not isinstance(content, str) or not content:
+                        continue
+                    mobile_messages.append({"role": role, "content": content})
+
+            self._reply_to_sender(msg, "conversation.history_result", {
+                "project_id": project_id,
+                "thread_id": thread_id,
+                "messages": mobile_messages,
+            })
+        except Exception as exc:
+            logger.error("[Companion] conversation.history error: %s", exc)
+            self._reply_to_sender(msg, "conversation.history_result", {
+                "project_id": project_id,
+                "thread_id": thread_id,
+                "messages": [],
+                "error": str(exc),
+            })
 
     def _handle_drone_list_recent(self, msg: dict) -> None:
         """List recent drone runs."""

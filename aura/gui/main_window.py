@@ -176,6 +176,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._companion = CompanionManager(self._settings)
         self._companion.connection_status_changed.connect(self._on_companion_status)
         self._companion.message_received.connect(self._on_companion_message)
+        self._companion.conversation_selected_by_companion.connect(self._on_companion_thread_selected)
         self._companion.set_bridge(self._bridge)
         self._companion.set_workspace_root(str(self._workspace_root))
         self._companion.start()
@@ -1459,6 +1460,13 @@ class MainWindow(WindowChromeMixin, QMainWindow):
     def _on_companion_message(self, msg: dict) -> None:
         """Handle an incoming companion message."""
         logger.debug("[MainWindow] Companion msg: %s", msg.get("type"))
+
+    def _on_companion_thread_selected(self, project_root: Path, conversation_path: Path) -> None:
+        if self._bridge.is_running():
+            return
+        if self._workspace_root is not None and self._workspace_root.resolve() != project_root.resolve():
+            self._on_project_selected(project_root)
+        self._on_thread_selected(conversation_path)
 
     def _on_open_update(self) -> None:
         dlg = UpdateDialog(self)

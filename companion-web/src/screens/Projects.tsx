@@ -29,6 +29,8 @@ function ProjectsScreen() {
   const [threads, setThreads] = useState<CompanionThread[]>([]);
   const [loadingThreads, setLoadingThreads] = useState(false);
   const [projectError, setProjectError] = useState('');
+  const [selectingThreadId, setSelectingThreadId] = useState<string | null>(null);
+  const [threadError, setThreadError] = useState('');
 
   // Early redirect for unpaired / missing desktop
   useEffect(() => {
@@ -59,9 +61,13 @@ function ProjectsScreen() {
       '';
     if (!desktopId) return;
 
-    socket.send('project.list_recent', {}, desktopId);
-
+    // 1. Register listeners
     const unsubProjectList = socket.on('project.list_result', (msg: any) => {
+      if (msg.payload?.error) {
+        setProjectError(msg.payload.error);
+        setLoading(false);
+        return;
+      }
       const list: CompanionProject[] | null = msg.payload?.projects;
       setProjects(list ?? []);
       setLoading(false);
@@ -70,6 +76,11 @@ function ProjectsScreen() {
     const unsubConversationList = socket.on(
       'conversation.list_result',
       (msg: any) => {
+        if (msg.payload?.error) {
+          setThreadError(msg.payload.error);
+          setLoadingThreads(false);
+          return;
+        }
         const list: CompanionThread[] | null = msg.payload?.threads;
         setThreads(list ?? []);
         setLoadingThreads(false);
@@ -82,8 +93,10 @@ function ProjectsScreen() {
         const payload = msg.payload || {};
         if (payload.error) {
           setProjectError(payload.error);
+          setSelectingThreadId(null);
           return;
         }
+        setSelectingThreadId(null);
         const safeCtx = {
           ...CompanionSocket.getStoredSafeContext(),
           project_id: payload.project_id,
@@ -93,6 +106,9 @@ function ProjectsScreen() {
         navigate('/chat');
       }
     );
+
+    // 2. Then send the request
+    socket.send('project.list_recent', {}, desktopId);
 
     return () => {
       unsubProjectList();
@@ -111,6 +127,7 @@ function ProjectsScreen() {
     setThreads([]);
     setLoadingThreads(true);
     setProjectError('');
+    setThreadError('');
 
     const desktopId =
       sessionStorage.getItem('companion_desktop_id') ||
@@ -120,6 +137,8 @@ function ProjectsScreen() {
   }
 
   function handleSelectThread(thread: CompanionThread) {
+    if (selectingThreadId) return;
+
     const desktopId =
       sessionStorage.getItem('companion_desktop_id') ||
       CompanionSocket.getStoredSafeContext().desktop_id ||
@@ -127,6 +146,7 @@ function ProjectsScreen() {
     if (!selectedProjectId || !desktopId) return;
 
     setProjectError('');
+    setSelectingThreadId(thread.id);
     socket.send(
       'conversation.select',
       { project_id: selectedProjectId, thread_id: thread.id },
@@ -288,7 +308,37 @@ function ProjectsScreen() {
           </div>
         )}
 
-        {!loading && projects.length === 0 && (
+        {!loading && projectError && projects.length === 0 && (
+          <div style={{ textAlign: 'center', padding: '1rem' }}>
+            <button
+              onClick={() => {
+                setProjectError('');
+                setLoading(true);
+                const desktopId =
+                  sessionStorage.getItem('companion_desktop_id') ||
+                  CompanionSocket.getStoredSafeContext().desktop_id ||
+                  '';
+                if (desktopId) {
+                  socket.send('project.list_recent', {}, desktopId);
+                }
+              }}
+              style={{
+                padding: '0.5rem 1rem',
+                background: 'transparent',
+                color: tokens.fg,
+                border: `1px solid ${tokens.borderStrong}`,
+                borderRadius: 10,
+                fontSize: '0.85rem',
+                fontWeight: 500,
+                cursor: 'pointer',
+              }}
+            >
+              Retry
+            </button>
+          </div>
+        )}
+
+        {!loading && !projectError && projects.length === 0 && (
           <div
             style={{
               textAlign: 'center',
@@ -392,7 +442,7 @@ function ProjectsScreen() {
                     </div>
                   )}
 
-                  {!loadingThreads && threads.length === 0 && (
+                  {!loadingThreads && threads.length === 0 && !threadError && (
                     <div
                       style={{
                         padding: '0.75rem 0.5rem',
@@ -405,8 +455,49 @@ function ProjectsScreen() {
                     </div>
                   )}
 
+                  {!loadingThreads && threadError && (
+                    <div
+                      style={{
+                        padding: '0.55rem 0.85rem',
+                        background: 'rgba(247,118,142,0.08)',
+                        border: `1px solid ${tokens.danger}`,
+                        color: tokens.danger,
+                        borderRadius: 10,
+                        fontSize: '0.85rem',
+                        marginBottom: '0.5rem',
+                      }}
+                    >
+                      {threadError}
+                      <button
+                        onClick={() => {
+                          setThreadError('');
+                          setLoadingThreads(true);
+                          const desktopId =
+                            sessionStorage.getItem('companion_desktop_id') ||
+                            CompanionSocket.getStoredSafeContext().desktop_id ||
+                            '';
+                          socket.send('conversation.list', { project_id: selectedProjectId! }, desktopId);
+                        }}
+                        style={{
+                          marginLeft: '0.5rem',
+                          padding: '0.2rem 0.6rem',
+                          background: 'transparent',
+                          color: tokens.fg,
+                          border: `1px solid ${tokens.borderStrong}`,
+                          borderRadius: 6,
+                          fontSize: '0.8rem',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Retry
+                      </button>
+                    </div>
+                  )}
+
                   {!loadingThreads &&
-                    threads.map((thread) => (
+                    threads.map((thread) => {
+                      const isSelecting = selectingThreadId === thread.id;
+                      return (
                       <div
                         key={thread.id}
                         onClick={() => handleSelectThread(thread)}
@@ -414,12 +505,18 @@ function ProjectsScreen() {
                           ...glassCard,
                           padding: '0.7rem 0.9rem',
                           marginBottom: '0.4rem',
-                          cursor: 'pointer',
+                          cursor: isSelecting ? 'default' : 'pointer',
                           display: 'flex',
                           alignItems: 'center',
                           gap: '0.6rem',
+                          opacity: isSelecting ? 0.55 : 1,
                         }}
                       >
+                        {isSelecting ? (
+                          <div style={{ flex: 1, fontSize: '0.85rem', color: tokens.fgMuted }}>
+                            Selecting…
+                          </div>
+                        ) : (
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <div
                             style={{
@@ -442,6 +539,7 @@ function ProjectsScreen() {
                             {formatDate(thread.updated_at)}
                           </div>
                         </div>
+                        )}
                         {thread.is_current && (
                           <span
                             style={{
@@ -455,7 +553,8 @@ function ProjectsScreen() {
                           />
                         )}
                       </div>
-                    ))}
+                      );
+                    })}
                 </div>
               )}
             </div>
