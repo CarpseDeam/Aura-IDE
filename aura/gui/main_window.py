@@ -8,7 +8,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 from PySide6.QtCore import QByteArray, QObject, Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QIcon
+from PySide6.QtGui import QColor, QIcon
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -57,6 +57,7 @@ from aura.gui.drones.drone_run_card import DroneRunCard
 from aura.gui.drones.drone_summon_card import DroneSummonCard
 from aura.gui.drones.drone_workshop_dialog import DroneWorkshopDialog
 from aura.gui.edge_rails import EdgeTabRail
+from aura.gui.theme import DANGER, SUCCESS
 from aura.gui.input_panel import InputPanel, SendPayload
 from aura.gui.left_pane import LeftPane
 from aura.gui.main_window_toolbar import MainWindowToolbar
@@ -855,6 +856,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         draft_node = editor._canvas._nodes.get(draft_node_id)
         accepts = draft_node.draft_accepts if draft_node and draft_node.is_draft else ""
         produces = draft_node.draft_produces if draft_node and draft_node.is_draft else ""
+
+        editor.set_status("Building drone…", QColor("#9b8bb5"))
 
         prompt = build_drone_creation_prompt(brief, accepts=accepts, produces=produces)
 
@@ -1862,8 +1865,10 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
     def _on_started(self) -> None:
         self._input.set_streaming(True)
-        # If Drone Bay is open, switch back to workspace view so user sees the run
-        self._playground.switch_to_workspace()
+        # Switch from Drone Bay to workspace so the user sees the run —
+        # but do NOT switch away from the Chain Editor (Workflow Studio).
+        if not self._playground.is_chain_editor_open():
+            self._playground.switch_to_workspace()
         self._sync_drone_tab_checked()
 
     def _on_finished(self) -> None:
@@ -1963,10 +1968,13 @@ class MainWindow(WindowChromeMixin, QMainWindow):
                     drone_def = DroneStore.load_drone(self._workspace_root, drone_id)
                     if drone_def is None:
                         logger.warning(f"Settle draft: drone {drone_id} not found in store")
+                        editor.set_status("Build failed — check conversation", DANGER)
                     else:
+                        editor.set_status("Drone saved ✓", SUCCESS)
                         success = editor.settle_draft_node(draft_node_id, drone_def)
                         if not success:
                             logger.warning(f"Settle draft: settle_draft_node returned False for {draft_node_id}")
+                            editor.set_status("Build failed — check conversation", DANGER)
                 except Exception:
                     logger.exception("Error settling draft node")
 

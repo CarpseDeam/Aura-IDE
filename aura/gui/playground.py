@@ -197,6 +197,10 @@ class AuraPlayground(QWidget):
         """Return True if the Drone Bay is currently visible."""
         return self._drone_bay is not None and self._stack.currentIndex() == 1
 
+    def is_chain_editor_open(self) -> bool:
+        """Return True if the chain editor is currently displayed in the stack."""
+        return self._chain_editor is not None and self._stack.currentIndex() == 2
+
     def toggle_drone_bay(self) -> None:
         if self._drone_bay is None:
             return

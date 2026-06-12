@@ -644,7 +644,7 @@ class ChainEditor(QWidget):
                 # Update form
                 self._sync_form_from_chain()
 
-                self._set_status("Loaded.", SUCCESS)
+                self.set_status("Loaded.", SUCCESS)
                 return
 
         from datetime import datetime, timezone
@@ -667,7 +667,7 @@ class ChainEditor(QWidget):
         )
         self._canvas.load_chain(chain, drone_lookup)
         self._sync_form_from_chain()
-        self._set_status("New workflow.", FG_MUTED)
+        self.set_status("New workflow.", FG_MUTED)
 
     def _build_drone_lookup(self) -> dict[str, DroneDefinition]:
         drones = DroneStore.list_drones(self._workspace_root)
@@ -740,10 +740,10 @@ class ChainEditor(QWidget):
         try:
             chain = self._snapshot_chain()
             ChainStore.save_chain(self._workspace_root, chain)
-            self._set_status("Saved.", SUCCESS)
+            self.set_status("Saved.", SUCCESS)
         except Exception as exc:
             logger.exception("Failed to save chain")
-            self._set_status(f"Save failed: {exc}", DANGER)
+            self.set_status(f"Save failed: {exc}", DANGER)
 
     # ---- Validate ----
 
@@ -756,11 +756,11 @@ class ChainEditor(QWidget):
                 msg = "; ".join(result.errors[:5])
                 if len(result.errors) > 5:
                     msg += f" (+{len(result.errors) - 5} more)"
-                self._set_status(f"Validation: {msg}", DANGER)
+                self.set_status(f"Validation: {msg}", DANGER)
             else:
-                self._set_status("Validation: Valid", SUCCESS)
+                self.set_status("Validation: Valid", SUCCESS)
         except Exception as exc:
-            self._set_status(f"Validation error: {exc}", DANGER)
+            self.set_status(f"Validation error: {exc}", DANGER)
 
     # ---- Callbacks ----
 
@@ -925,14 +925,14 @@ class ChainEditor(QWidget):
         if reply == QMessageBox.StandardButton.Yes:
             try:
                 ChainStore.delete_chain(self._workspace_root, self._chain_id)
-                self._set_status("Deleted.", SUCCESS)
+                self.set_status("Deleted.", SUCCESS)
                 self.goBackRequested.emit()
             except Exception as exc:
-                self._set_status(f"Delete failed: {exc}", DANGER)
+                self.set_status(f"Delete failed: {exc}", DANGER)
 
     # ---- Status bar ----
 
-    def _set_status(self, message: str, color: QColor = FG_MUTED) -> None:
+    def set_status(self, message: str, color: QColor = FG_MUTED) -> None:
         self._status_label.setText(message)
         self._status_label.setStyleSheet(f"""
             background: {BG_ALT.name()}; color: {color.name()};
