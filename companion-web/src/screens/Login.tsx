@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import CompanionSocket, { socket } from '../api/socket';
 import { tokens, glassCard, primaryButton, ghostButton, inputBase, statusPillStyle } from '../ui/theme';
 
-type Phase = 'idle' | 'connecting' | 'connected' | 'pairing' | 'paired' | 'error';
+type Phase = 'idle' | 'checking' | 'connecting' | 'connected' | 'pairing' | 'paired' | 'error' | 'unavailable';
 
 function LoginScreen() {
   const navigate = useNavigate();
@@ -28,6 +28,7 @@ function LoginScreen() {
   const timeoutRef = useRef<ReturnType<typeof setTimeout>>();
   const autoStartedRef = useRef(false);
   const clearedOldPairing = useRef(false);
+  const autoCheckRef = useRef(false);
 
   // Clear old pairing state when QR/ticket params are present, so the scanned
   // QR flow wins over any stale stored token/context.
@@ -68,6 +69,19 @@ function LoginScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Auto-check reachability on mount for already-paired users
+  useEffect(() => {
+    if (!alreadyPaired || qrCode || qrTicket) return;
+    if (autoCheckRef.current) return;
+    autoCheckRef.current = true;
+    if (socket.connected) {
+      setPhase('connected');
+      return;
+    }
+    checkReachable();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     const onFocus = () => forceRender(n => n + 1);
     window.addEventListener('focus', onFocus);
@@ -94,6 +108,49 @@ function LoginScreen() {
       reject(new Error('timeout'));
     }, 10000);
   }), [relayUrl]);
+
+  const checkReachable = useCallback(async () => {
+    const storedRelay = CompanionSocket.getStoredRelayUrl();
+    const effectiveRelay = storedRelay || import.meta.env.VITE_AURA_RELAY_WS_URL || '';
+    if (!effectiveRelay) {
+      setPhase('unavailable');
+      setError('No relay configured.');
+      return;
+    }
+    setPhase('checking');
+    setError('');
+    socket.connect(effectiveRelay);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const unsub = socket.on('welcome', () => {
+          unsub();
+          if (timeoutRef.current) {
+            clearTimeout(timeoutRef.current);
+            timeoutRef.current = undefined;
+          }
+          resolve();
+        });
+        timeoutRef.current = setTimeout(() => {
+          unsub();
+          reject(new Error('timeout'));
+        }, 10000);
+      });
+      setPhase('connected');
+      setError('');
+    } catch {
+      setPhase('unavailable');
+      setError('Connection timed out — desktop not reachable.');
+    }
+  }, []);
+
+  const handlePairAgain = useCallback(() => {
+    socket.logout();
+    CompanionSocket.clearStoredState();
+    sessionStorage.removeItem('companion_desktop_id');
+    sessionStorage.removeItem('companion_desktop_name');
+    setPhase('idle');
+    forceRender(n => n + 1);
+  }, [forceRender]);
 
   const handlePair = useCallback(async () => {
     if (!pairingCode) {
@@ -230,15 +287,6 @@ function LoginScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [qrTicket]);
 
-  const handleReconnect = () => {
-    setPhase('connecting');
-    socket.connect(relayUrl);
-    const unsub = socket.on('welcome', () => {
-      unsub();
-      navigate('/chat', { replace: true });
-    });
-  };
-
   const handleClearPairing = () => {
     socket.logout();
     CompanionSocket.setStoredToken('');
@@ -270,44 +318,104 @@ function LoginScreen() {
     const storedDesktopName = sessionStorage.getItem('companion_desktop_name') 
       || CompanionSocket.getStoredSafeContext().desktop_name 
       || '';
+    const safeCtx = CompanionSocket.getStoredSafeContext();
+
+    if (phase === 'checking') {
+      return (
+        <div style={pageWrap} className="fade-in">
+          <Wordmark />
+          <div style={card}>
+            <div style={{ textAlign: 'center', padding: '1.5rem 0', color: tokens.fgDim }}>
+              <div style={{
+                width: 36, height: 36, borderRadius: '50%',
+                border: `3px solid ${tokens.border}`,
+                borderTopColor: tokens.accent,
+                animation: 'spin 0.9s linear infinite',
+                margin: '0 auto 1rem',
+              }} />
+              <div style={{ fontSize: '0.9rem' }}>Checking connection to your Aura desktop…</div>
+              <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    if (phase === 'connected') {
+      return (
+        <div style={pageWrap} className="fade-in">
+          <Wordmark />
+          <div style={card}>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: '1.1rem', fontWeight: 600, color: tokens.success, marginBottom: 4 }}>
+                Connected
+              </div>
+              <div style={{ color: tokens.fgDim, fontSize: '0.9rem' }}>
+                {storedDesktopName
+                  ? `Connected to ${storedDesktopName}`
+                  : 'Connected to your desktop'}
+              </div>
+            </div>
+            <button
+              onClick={() => {
+                if (safeCtx.project_id) {
+                  navigate('/chat', { replace: true });
+                } else {
+                  navigate('/projects', { replace: true });
+                }
+              }}
+              style={primaryButton}
+            >
+              Continue
+            </button>
+            <button onClick={handleClearPairing} style={ghostButton}>
+              Pair a different desktop
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    if (phase === 'unavailable') {
+      return (
+        <div style={pageWrap} className="fade-in">
+          <Wordmark />
+          <div style={card}>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: '1.1rem', fontWeight: 600, color: tokens.danger, marginBottom: 4 }}>
+                Previous desktop unavailable
+              </div>
+              <div style={{ color: tokens.fgDim, fontSize: '0.9rem' }}>
+                {error || 'Could not reach your Aura desktop.'}
+              </div>
+            </div>
+            <button onClick={handlePairAgain} style={primaryButton}>
+              Pair again
+            </button>
+            <button onClick={checkReachable} style={ghostButton}>
+              Retry
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    // Fallback — should not normally happen
     return (
       <div style={pageWrap} className="fade-in">
         <Wordmark />
         <div style={card}>
-          {socket.connected ? (
-            <>
-              <div style={{ textAlign: 'center' }}>
-                <div style={{ fontSize: '1.1rem', fontWeight: 600, color: tokens.success, marginBottom: 4 }}>
-                  Connected
-                </div>
-                <div style={{ color: tokens.fgDim, fontSize: '0.9rem' }}>
-                  {storedDesktopName 
-                    ? `Connected to ${storedDesktopName}`
-                    : 'Connected to a desktop'}
-                </div>
-              </div>
-              <button onClick={() => navigate('/chat', { replace: true })} style={primaryButton}>
-                Continue
-              </button>
-              <button onClick={() => { handleClearPairing(); navigate('/login', { replace: true }); }} style={ghostButton}>
-                Pair a different desktop
-              </button>
-            </>
-          ) : (
-            <>
-              <div style={{ textAlign: 'center' }}>
-                <div style={{ color: tokens.fgDim, fontSize: '0.9rem', marginBottom: 4 }}>
-                  This phone was paired before, but the desktop is not reachable.
-                </div>
-              </div>
-              <button onClick={() => { handleClearPairing(); navigate('/login', { replace: true }); }} style={primaryButton}>
-                Scan desktop QR
-              </button>
-              <button onClick={() => { handleClearPairing(); navigate('/login', { replace: true }); }} style={ghostButton}>
-                Pair a different desktop
-              </button>
-            </>
-          )}
+          <div style={{ textAlign: 'center', padding: '1.5rem 0', color: tokens.fgDim }}>
+            <div style={{
+              width: 36, height: 36, borderRadius: '50%',
+              border: `3px solid ${tokens.border}`,
+              borderTopColor: tokens.accent,
+              animation: 'spin 0.9s linear infinite',
+              margin: '0 auto 1rem',
+            }} />
+            <div style={{ fontSize: '0.9rem' }}>Checking connection to your Aura desktop…</div>
+            <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+          </div>
         </div>
       </div>
     );
@@ -466,10 +574,12 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 function labelFor(p: Phase): string {
   if (p === 'idle') return 'Idle';
+  if (p === 'checking') return 'Checking…';
   if (p === 'connecting') return 'Connecting';
   if (p === 'connected') return 'Online';
   if (p === 'pairing') return 'Pairing';
   if (p === 'paired') return 'Paired';
+  if (p === 'unavailable') return 'Unavailable';
   return 'Offline';
 }
 

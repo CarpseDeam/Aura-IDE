@@ -66,6 +66,10 @@ class CompanionSocket {
     try { localStorage.removeItem(CompanionSocket.STORAGE_KEY_RELAY); } catch {}
   }
 
+  static getStoredRelayUrl(): string {
+    return localStorage.getItem(CompanionSocket.STORAGE_KEY_RELAY) || '';
+  }
+
   connect(relayUrl: string, deviceToken?: string, deviceId?: string): void {
     const token = deviceToken || CompanionSocket.getStoredToken();
     const id = deviceId || CompanionSocket.getStoredDeviceId();
