@@ -160,7 +160,7 @@ def test_prompt_mentions_setup_steps() -> None:
 
 
 def test_prompt_mentions_first_run_test() -> None:
-    """Prompt must instruct to save a complete DroneDefinition."""
+    """Prompt must instruct to dispatch a full DroneDefinition via Worker."""
     brief = DroneBuildBrief(
         response_type="brief",
         message="Ready.",
@@ -169,7 +169,7 @@ def test_prompt_mentions_first_run_test() -> None:
     )
     prompt = build_drone_creation_prompt(brief)
     assert "save_drone_definition" in prompt
-    assert "complete DroneDefinition" in prompt
+    assert "full DroneDefinition" in prompt
 
 
 def test_prompt_includes_build_brief_verbatim() -> None:

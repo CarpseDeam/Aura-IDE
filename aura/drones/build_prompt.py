@@ -8,17 +8,17 @@ def _cap_requirements_lines(plan) -> list[str]:
     lines: list[str] = []
     if plan.capability_requirements:
         lines.append(
-            "2. For the capability_requirements above, call resolve_capability."
+            "- Resolve each capability via resolve_capability."
         )
         lines.append(
-            "3. Merge resolved tools with the allowed_tools from the plan."
+            "- Merge resolved tools with the allowed_tools from the plan."
         )
         lines.append(
-            "4. Populate capability_bindings and setup_steps from the resolution."
+            "- Populate capability_bindings and setup_steps from the resolution."
         )
     else:
         lines.append(
-            "2. No external capabilities needed \u2014 skip resolve_capability."
+            "- No external capabilities needed \u2014 skip resolve_capability."
         )
     return lines
 
@@ -26,10 +26,10 @@ def _cap_requirements_lines(plan) -> list[str]:
 def _generated_code_line(plan) -> str:
     if not plan.generated_code_allowed:
         return (
-            "6. DO NOT create helper scripts, generated code, or dynamic tools."
+            "- DO NOT create helper scripts, generated code, or dynamic tools."
         )
     return (
-        "6. Generated code is allowed for this Drone \u2014 use it only "
+        "- Generated code is allowed for this Drone \u2014 use it only "
         "for the specific new tool/integration."
     )
 
@@ -70,15 +70,18 @@ def build_drone_creation_prompt(brief: DroneBuildBrief) -> str:
     lines.append("")
     lines.append("## Instructions")
     lines.append(
-        "1. Use the allowed_tools listed above directly in the DroneDefinition."
+        "- Use the allowed_tools listed above directly in the DroneDefinition."
     )
     lines.extend(_cap_requirements_lines(plan))
     lines.append(
-        "5. Call save_drone_definition with the complete DroneDefinition."
+        "- Use dispatch_to_worker to send the full DroneDefinition to a Worker. "
+        "The Worker must call save_drone_definition to persist it. "
+        "Include all DroneDefinition fields in the dispatch spec."
     )
     lines.append(_generated_code_line(plan))
     lines.append("")
     lines.append(
-        "Do NOT create scripts \u2014 just call save_drone_definition."
+        "You are the Planner. You do NOT have save_drone_definition \u2014 "
+        "only the Worker does. Use dispatch_to_worker."
     )
     return "\n".join(lines)
