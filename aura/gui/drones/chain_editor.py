@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import Qt, QMimeData, QTimer, Signal
 from PySide6.QtGui import QColor, QDrag, QFont, QPainter, QPixmap, QIcon, QEnterEvent, QMouseEvent, QResizeEvent
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -152,14 +152,16 @@ class _DroneCard(QFrame):
             return
         if (event.position().toPoint() - self._drag_start_pos).manhattanLength() < 10:
             return
-        drag = QDrag(self)
-        mime_data = drag.mimeData()
+        mime_data = QMimeData()
         mime_data.setText(self.drone_id)
         mime_data.setData("application/x-aura-drone-id", self.drone_id.encode())
+        drag = QDrag(self)
+        drag.setMimeData(mime_data)
         pixmap = QPixmap(self.size())
         self.render(pixmap)
         drag.setPixmap(pixmap)
         drag.setHotSpot(event.position().toPoint())
+        self._drag_start_pos = None
         drag.exec(Qt.CopyAction)
 
 
