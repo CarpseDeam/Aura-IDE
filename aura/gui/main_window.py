@@ -773,6 +773,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         workbay = self._drone_workbay_window
         editor = workbay.chain_editor
         editor.goBackRequested.connect(workbay.hide)
+        editor.closeRequested.connect(workbay.hide)
         editor.settle_draft_requested.connect(self._on_chain_editor_settle_draft)
         editor.runChainRequested.connect(lambda cid: self._on_run_workflow(cid))
         editor.runDroneRequested.connect(self._on_launch_drone)
@@ -963,8 +964,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         )
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self._refresh_drone_context()
-            if self._drone_workbay is not None and self._drone_workbay.isVisible():
-                self._drone_workbay.chain_editor().refresh_roster()
+            if self._drone_workbay_window is not None and self._drone_workbay_window.isVisible():
+                self._drone_workbay_window.chain_editor.refresh_roster()
 
     def _on_duplicate_drone(self, drone_id: str) -> None:
         drone = DroneStore.load_drone(self._workspace_root, drone_id)
@@ -1016,8 +1017,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         if reply == QMessageBox.Yes:
             DroneStore.delete_drone(self._workspace_root, drone_id)
             self._refresh_drone_context()
-            if self._drone_workbay is not None and self._drone_workbay.isVisible():
-                self._drone_workbay.chain_editor().refresh_roster()
+            if self._drone_workbay_window is not None and self._drone_workbay_window.isVisible():
+                self._drone_workbay_window.chain_editor.refresh_roster()
 
     def _refresh_drone_context(self) -> None:
         refresher = getattr(self._bridge, "refresh_tier1_context", None)
@@ -1247,6 +1248,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         workbay = self._drone_workbay_window
         editor = workbay.chain_editor
         editor.goBackRequested.connect(workbay.hide)
+        editor.closeRequested.connect(workbay.hide)
         editor.settle_draft_requested.connect(self._on_chain_editor_settle_draft)
 
         def on_run(cid: str) -> None:

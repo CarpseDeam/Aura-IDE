@@ -410,6 +410,7 @@ class ChainEditor(QWidget):
     def __init__(
         self,
         workspace_root: Path,
+        chain_id: str | None = None,
         provider_id: str = "deepseek",
         model: str = "",
         thinking: bool = False,
@@ -438,7 +439,7 @@ class ChainEditor(QWidget):
         self._right_stack: QStackedWidget | None = None
 
         self._build_layout()
-        self._load_or_create_chain(None)
+        self._load_or_create_chain(chain_id)
         self._roster.populate()
 
         self._auto_save_timer = QTimer(self)
