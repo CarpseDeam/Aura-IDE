@@ -74,10 +74,6 @@ function LoginScreen() {
     if (!alreadyPaired || qrCode || qrTicket) return;
     if (autoCheckRef.current) return;
     autoCheckRef.current = true;
-    if (socket.connected) {
-      setPhase('connected');
-      return;
-    }
     checkReachable();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -130,23 +126,25 @@ function LoginScreen() {
     setError('');
     socket.connect(effectiveRelay);
 
-    // Step 1: wait for welcome
-    try {
-      await new Promise<void>((resolve, reject) => {
-        let unsub: (() => void) | null = null;
-        unsub = socket.on('welcome', () => {
-          unsub?.();
-          resolve();
+    // Step 1: wait for welcome (only if a new connection was actually opened)
+    if (!socket.connected) {
+      try {
+        await new Promise<void>((resolve, reject) => {
+          let unsub: (() => void) | null = null;
+          unsub = socket.on('welcome', () => {
+            unsub?.();
+            resolve();
+          });
+          timeoutRef.current = setTimeout(() => {
+            unsub?.();
+            reject(new Error('Connection timed out — relay not reachable.'));
+          }, 10000);
         });
-        timeoutRef.current = setTimeout(() => {
-          unsub?.();
-          reject(new Error('Connection timed out — relay not reachable.'));
-        }, 10000);
-      });
-    } catch (e: any) {
-      setPhase('unavailable');
-      setError(e?.message || 'Connection timed out — relay not reachable.');
-      return;
+      } catch (e: any) {
+        setPhase('unavailable');
+        setError(e?.message || 'Connection timed out — relay not reachable.');
+        return;
+      }
     }
 
     // Step 2: verify authenticated pairing + desktop reachable
