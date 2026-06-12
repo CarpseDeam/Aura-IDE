@@ -51,6 +51,16 @@ from aura.gui.theme import (
 logger = logging.getLogger(__name__)
 
 
+def _qss_color(color: QColor | str) -> str:
+    """Return a CSS hex string from a QColor or plain string."""
+    return color.name() if hasattr(color, "name") else str(color)
+
+
+def _qss_darker(color: QColor | str, factor: int = 120) -> str:
+    """Return a darkened CSS hex string from a QColor or plain string."""
+    return QColor(str(color)).darker(factor).name()
+
+
 class _DronePaletteList(QListWidget):
     """Left sidebar listing available drones with drag-to-canvas support."""
 
@@ -65,25 +75,25 @@ class _DronePaletteList(QListWidget):
         self.setSpacing(2)
         self.setStyleSheet(f"""
             QListWidget {{
-                background: {BG_RAISED.name()};
+                background: {_qss_color(BG_RAISED)};
                 border: none;
                 padding: 4px;
-                color: {FG.name()};
+                color: {_qss_color(FG)};
             }}
             QListWidget::item {{
                 padding: 6px 8px;
                 border-radius: 4px;
-                border: 1px solid {BORDER.name()};
+                border: 1px solid {_qss_color(BORDER)};
                 margin: 2px 0;
-                background: {BG_ALT.name()};
+                background: {_qss_color(BG_ALT)};
             }}
             QListWidget::item:hover {{
-                background: {BG.name()};
-                border: 1px solid {BORDER_STRONG.name()};
+                background: {_qss_color(BG)};
+                border: 1px solid {_qss_color(BORDER_STRONG)};
             }}
             QListWidget::item:selected {{
-                background: {ACCENT.name()};
-                color: {BG.name()};
+                background: {_qss_color(ACCENT)};
+                color: {_qss_color(BG)};
             }}
         """)
 
@@ -169,13 +179,13 @@ class _PropertyPanel(QScrollArea):
         self.setWidgetResizable(True)
         self.setStyleSheet(f"""
             QScrollArea {{
-                background: {BG.name()};
+                background: {_qss_color(BG)};
                 border: none;
             }}
         """)
 
         self._container = QWidget()
-        self._container.setStyleSheet(f"background: {BG.name()};")
+        self._container.setStyleSheet(f"background: {_qss_color(BG)};")
         self._layout = QVBoxLayout(self._container)
         self._layout.setContentsMargins(8, 8, 8, 8)
         self._layout.setSpacing(6)
@@ -198,16 +208,16 @@ class _PropertyPanel(QScrollArea):
             f.setBold(True)
             lbl.setFont(f)
         if color:
-            lbl.setStyleSheet(f"color: {color.name()}; background: transparent;")
+            lbl.setStyleSheet(f"color: {_qss_color(color)}; background: transparent;")
         else:
-            lbl.setStyleSheet(f"color: {FG.name()}; background: transparent;")
+            lbl.setStyleSheet(f"color: {_qss_color(FG)}; background: transparent;")
         self._layout.addWidget(lbl)
         return lbl
 
     def _add_separator(self) -> None:
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.HLine)
-        sep.setStyleSheet(f"color: {BORDER.name()}; background: {BORDER.name()}; max-height: 1px;")
+        sep.setStyleSheet(f"color: {_qss_color(BORDER)}; background: {_qss_color(BORDER)}; max-height: 1px;")
         self._layout.addWidget(sep)
 
     # ---- Chain form ----
@@ -224,21 +234,21 @@ class _PropertyPanel(QScrollArea):
 
         self._add_label("Name")
         self._editor._chain_name_input.setStyleSheet(f"""
-            QLineEdit {{ background: {BG_RAISED.name()}; color: {FG.name()};
-                          border: 1px solid {BORDER.name()}; border-radius: 3px; padding: 4px; }}
+            QLineEdit {{ background: {_qss_color(BG_RAISED)}; color: {_qss_color(FG)};
+                          border: 1px solid {_qss_color(BORDER)}; border-radius: 3px; padding: 4px; }}
         """)
         self._layout.addWidget(self._editor._chain_name_input)
 
         self._add_label("Description")
         self._editor._chain_desc_input.setMaximumHeight(60)
         self._editor._chain_desc_input.setStyleSheet(f"""
-            QTextEdit {{ background: {BG_RAISED.name()}; color: {FG.name()};
-                         border: 1px solid {BORDER.name()}; border-radius: 3px; padding: 4px; }}
+            QTextEdit {{ background: {_qss_color(BG_RAISED)}; color: {_qss_color(FG)};
+                         border: 1px solid {_qss_color(BORDER)}; border-radius: 3px; padding: 4px; }}
         """)
         self._layout.addWidget(self._editor._chain_desc_input)
 
         self._editor._chain_enabled_check.setStyleSheet(f"""
-            QCheckBox {{ color: {FG.name()}; background: transparent; }}
+            QCheckBox {{ color: {_qss_color(FG)}; background: transparent; }}
         """)
         self._layout.addWidget(self._editor._chain_enabled_check)
 
@@ -246,8 +256,8 @@ class _PropertyPanel(QScrollArea):
         self._editor._chain_schedule_input.setPlaceholderText("Manual only (future)")
         self._editor._chain_schedule_input.setEnabled(False)
         self._editor._chain_schedule_input.setStyleSheet(f"""
-            QLineEdit {{ background: {BG_ALT.name()}; color: {FG_MUTED.name()};
-                         border: 1px solid {BORDER.name()}; border-radius: 3px; padding: 4px; }}
+            QLineEdit {{ background: {_qss_color(BG_ALT)}; color: {_qss_color(FG_MUTED)};
+                         border: 1px solid {_qss_color(BORDER)}; border-radius: 3px; padding: 4px; }}
         """)
         self._layout.addWidget(self._editor._chain_schedule_input)
 
@@ -276,8 +286,8 @@ class _PropertyPanel(QScrollArea):
             name_input = QLineEdit()
             name_input.setText(node.draft_name)
             name_input.setStyleSheet(f"""
-                QLineEdit {{ background: {BG_RAISED.name()}; color: {FG.name()};
-                             border: 1px solid {BORDER.name()}; border-radius: 3px; padding: 4px; }}
+                QLineEdit {{ background: {_qss_color(BG_RAISED)}; color: {_qss_color(FG)};
+                             border: 1px solid {_qss_color(BORDER)}; border-radius: 3px; padding: 4px; }}
             """)
             name_input.textChanged.connect(
                 lambda text, n=node: setattr(n, 'draft_name', text)
@@ -297,9 +307,9 @@ class _PropertyPanel(QScrollArea):
             # Remove button
             remove_btn = QPushButton("Remove Draft")
             remove_btn.setStyleSheet(f"""
-                QPushButton {{ background: {DANGER.name()}; color: white; border: none;
+                QPushButton {{ background: {_qss_color(DANGER)}; color: white; border: none;
                               border-radius: 4px; padding: 6px; }}
-                QPushButton:hover {{ background: {DANGER.darker(120).name()}; }}
+                QPushButton:hover {{ background: {_qss_darker(DANGER, 120)}; }}
             """)
             remove_btn.clicked.connect(lambda: self._editor._canvas._remove_node(node))
             self._layout.addWidget(remove_btn)
@@ -321,7 +331,7 @@ class _PropertyPanel(QScrollArea):
             name += " (missing)"
         name_lbl = self._add_label(name, bold=True)
         if node.missing:
-            name_lbl.setStyleSheet(f"color: {DANGER.name()}; background: transparent;")
+            name_lbl.setStyleSheet(f"color: {_qss_color(DANGER)}; background: transparent;")
 
         # Write policy
         policy = getattr(node.drone, "write_policy", "read_only") if node.drone else "?"
@@ -343,8 +353,8 @@ class _PropertyPanel(QScrollArea):
         goal_input.setMaximumHeight(80)
         goal_input.setPlaceholderText("Optional per-node goal. Overrides drone default.")
         goal_input.setStyleSheet(f"""
-            QTextEdit {{ background: {BG_RAISED.name()}; color: {FG.name()};
-                         border: 1px solid {BORDER.name()}; border-radius: 3px; padding: 4px; }}
+            QTextEdit {{ background: {_qss_color(BG_RAISED)}; color: {_qss_color(FG)};
+                         border: 1px solid {_qss_color(BORDER)}; border-radius: 3px; padding: 4px; }}
         """)
         goal_input.textChanged.connect(
             lambda: self._on_goal_changed(node, goal_input.toPlainText())
@@ -356,9 +366,9 @@ class _PropertyPanel(QScrollArea):
         # Remove button
         remove_btn = QPushButton("Remove Node")
         remove_btn.setStyleSheet(f"""
-            QPushButton {{ background: {DANGER.name()}; color: white; border: none;
+            QPushButton {{ background: {_qss_color(DANGER)}; color: white; border: none;
                           border-radius: 4px; padding: 6px; }}
-            QPushButton:hover {{ background: {DANGER.darker(120).name()}; }}
+            QPushButton:hover {{ background: {_qss_darker(DANGER, 120)}; }}
         """)
         remove_btn.clicked.connect(lambda: self._editor._canvas._remove_node(node))
         self._layout.addWidget(remove_btn)
@@ -400,14 +410,14 @@ class _PropertyPanel(QScrollArea):
                 to_at = BUILTIN_TYPES.get(to_type_name)
                 if from_at is None or to_at is None:
                     self._add_label(
-                        f"Type compatibility: Unknown type ({from_type_name} → {to_type_name})",
+                        f"Type compatibility: Unknown type ({from_type_name} \u2192 {to_type_name})",
                         color=WARN,
                     )
                 elif is_compatible(from_at, to_at):
                     self._add_label("Type compatibility: Compatible", color=SUCCESS)
                 else:
                     self._add_label(
-                        f"Type compatibility: Incompatible ({from_type_name} → {to_type_name})",
+                        f"Type compatibility: Incompatible ({from_type_name} \u2192 {to_type_name})",
                         color=DANGER,
                     )
             elif not from_type_name and not to_type_name:
@@ -426,9 +436,9 @@ class _PropertyPanel(QScrollArea):
 
         remove_btn = QPushButton("Remove Edge")
         remove_btn.setStyleSheet(f"""
-            QPushButton {{ background: {DANGER.name()}; color: white; border: none;
+            QPushButton {{ background: {_qss_color(DANGER)}; color: white; border: none;
                           border-radius: 4px; padding: 6px; }}
-            QPushButton:hover {{ background: {DANGER.darker(120).name()}; }}
+            QPushButton:hover {{ background: {_qss_darker(DANGER, 120)}; }}
         """)
         remove_btn.clicked.connect(lambda: self._editor._canvas._remove_edge(edge))
         self._layout.addWidget(remove_btn)
@@ -521,7 +531,7 @@ class ChainEditor(QWidget):
         self._splitter = splitter
         splitter.setStyleSheet(f"""
             QSplitter::handle {{
-                background: {BORDER.name()};
+                background: {_qss_color(BORDER)};
                 width: 1px;
             }}
         """)
@@ -552,13 +562,13 @@ class ChainEditor(QWidget):
         wf_layout.setContentsMargins(0, 4, 0, 0)
         wf_layout.setSpacing(4)
         wf_header = QLabel("Workflows")
-        wf_header.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {FG_MUTED.name()}; padding: 0 8px;")
+        wf_header.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {_qss_color(FG_MUTED)}; padding: 0 8px;")
         new_wf_btn = QPushButton("+ New")
         new_wf_btn.setFlat(True)
         new_wf_btn.setCursor(Qt.PointingHandCursor)
         new_wf_btn.setStyleSheet(
-            f"QPushButton {{ color: {FG_MUTED.name()}; font-size: 11px; padding: 2px 6px; border: none; }}"
-            f"QPushButton:hover {{ color: {ACCENT.name()}; }}"
+            f"QPushButton {{ color: {_qss_color(FG_MUTED)}; font-size: 11px; padding: 2px 6px; border: none; }}"
+            f"QPushButton:hover {{ color: {_qss_color(ACCENT)}; }}"
         )
         new_wf_btn.clicked.connect(self._on_new_workflow_from_list)
         wf_header_row = QHBoxLayout()
@@ -583,15 +593,15 @@ class ChainEditor(QWidget):
         palette_header_row = QHBoxLayout()
         palette_header_row.setContentsMargins(0, 0, 0, 0)
         palette_header_label = QLabel("Drone Palette")
-        palette_header_label.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {FG_MUTED.name()}; padding: 0 8px;")
+        palette_header_label.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {_qss_color(FG_MUTED)}; padding: 0 8px;")
         palette_header_row.addWidget(palette_header_label)
         palette_header_row.addStretch()
         new_drone_btn = QPushButton("+ New Drone")
         new_drone_btn.setFlat(True)
         new_drone_btn.setCursor(Qt.PointingHandCursor)
         new_drone_btn.setStyleSheet(
-            f"QPushButton {{ color: {FG_MUTED.name()}; font-size: 11px; padding: 2px 6px; border: none; }}"
-            f"QPushButton:hover {{ color: {ACCENT.name()}; }}"
+            f"QPushButton {{ color: {_qss_color(FG_MUTED)}; font-size: 11px; padding: 2px 6px; border: none; }}"
+            f"QPushButton:hover {{ color: {_qss_color(ACCENT)}; }}"
         )
         new_drone_btn.clicked.connect(self._on_new_drone_clicked)
         palette_header_row.addWidget(new_drone_btn)
@@ -606,7 +616,7 @@ class ChainEditor(QWidget):
         details_layout.setContentsMargins(0, 4, 0, 0)
         details_layout.setSpacing(4)
         details_header = QLabel("Properties")
-        details_header.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {FG_MUTED.name()}; padding: 0 8px;")
+        details_header.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {_qss_color(FG_MUTED)}; padding: 0 8px;")
         details_layout.addWidget(details_header)
         details_layout.addWidget(self._property_panel, 1)
         self._left_stack.addWidget(details_page)  # index 2
@@ -638,33 +648,33 @@ class ChainEditor(QWidget):
         # Status bar
         self._status_label = QLabel("Ready")
         self._status_label.setStyleSheet(f"""
-            background: {BG_ALT.name()}; color: {FG_MUTED.name()};
-            padding: 4px 8px; border-top: 1px solid {BORDER.name()};
+            background: {_qss_color(BG_ALT)}; color: {_qss_color(FG_MUTED)};
+            padding: 4px 8px; border-top: 1px solid {_qss_color(BORDER)};
         """)
         layout.addWidget(self._status_label)
 
     def _build_toolbar(self) -> QWidget:
         toolbar = QWidget()
-        toolbar.setStyleSheet(f"background: {BG_ALT.name()}; border-bottom: 1px solid {BORDER.name()};")
+        toolbar.setStyleSheet(f"background: {_qss_color(BG_ALT)}; border-bottom: 1px solid {_qss_color(BORDER)};")
         t_layout = QHBoxLayout(toolbar)
         t_layout.setContentsMargins(8, 4, 8, 4)
         t_layout.setSpacing(4)
 
         self._title_label = QLabel(self._chain_name)
-        self._title_label.setStyleSheet(f"font-size: 15px; font-weight: bold; color: {FG.name()}; padding-right: 12px;")
+        self._title_label.setStyleSheet(f"font-size: 15px; font-weight: bold; color: {_qss_color(FG)}; padding-right: 12px;")
         t_layout.addWidget(self._title_label)
 
         btn_style = f"""
             QPushButton {{
-                background: {BG_RAISED.name()}; color: {FG.name()};
-                border: 1px solid {BORDER.name()}; border-radius: 4px;
+                background: {_qss_color(BG_RAISED)}; color: {_qss_color(FG)};
+                border: 1px solid {_qss_color(BORDER)}; border-radius: 4px;
                 padding: 6px 14px; font-size: 12px;
             }}
             QPushButton:hover {{
-                background: {BORDER.name()}; border-color: {BORDER_STRONG.name()};
+                background: {_qss_color(BORDER)}; border-color: {_qss_color(BORDER_STRONG)};
             }}
             QPushButton:pressed {{
-                background: {BORDER_STRONG.name()};
+                background: {_qss_color(BORDER_STRONG)};
             }}
         """
 
@@ -695,7 +705,7 @@ class ChainEditor(QWidget):
 
         t_layout.addStretch()
 
-        back_btn = QPushButton("← Close")
+        back_btn = QPushButton("\u2190 Close")
         back_btn.setStyleSheet(btn_style)
         back_btn.clicked.connect(self.goBackRequested.emit)
         t_layout.addWidget(back_btn)
@@ -879,13 +889,13 @@ class ChainEditor(QWidget):
         back_btn = QPushButton("\u2190 Back to Drones")
         back_btn.setFlat(True)
         back_btn.setCursor(Qt.PointingHandCursor)
-        back_btn.setStyleSheet(f"QPushButton {{ color: {FG_MUTED.name()}; text-align: left; padding: 2px; }}")
+        back_btn.setStyleSheet(f"QPushButton {{ color: {_qss_color(FG_MUTED)}; text-align: left; padding: 2px; }}")
         back_btn.clicked.connect(self._on_back_to_palette)
         layout.addWidget(back_btn)
 
         # Workshop header
         ws_header = QLabel("Drone Workshop")
-        ws_header.setStyleSheet(f"font-size: 13px; font-weight: bold; color: {FG.name()}; padding: 2px 0;")
+        ws_header.setStyleSheet(f"font-size: 13px; font-weight: bold; color: {_qss_color(FG)}; padding: 2px 0;")
         layout.addWidget(ws_header)
 
         # Draft info header
@@ -896,7 +906,7 @@ class ChainEditor(QWidget):
 
         self._ws_contracts_label = QLabel()
         self._ws_contracts_label.setWordWrap(True)
-        self._ws_contracts_label.setStyleSheet(f"color: {FG_MUTED.name()}; font-size: 11px;")
+        self._ws_contracts_label.setStyleSheet(f"color: {_qss_color(FG_MUTED)}; font-size: 11px;")
         layout.addWidget(self._ws_contracts_label)
 
         # Workshop panel
@@ -988,8 +998,8 @@ class ChainEditor(QWidget):
                 btn.setChecked(True)
                 btn.setStyleSheet(f"""
                     QToolButton {{
-                        background: {ACCENT.name()}; color: {BG.name()};
-                        border: 1px solid {ACCENT.name()}; border-radius: 4px;
+                        background: {_qss_color(ACCENT)}; color: {_qss_color(BG)};
+                        border: 1px solid {_qss_color(ACCENT)}; border-radius: 4px;
                         padding: 6px 10px; font-weight: 600;
                     }}
                 """)
@@ -997,12 +1007,12 @@ class ChainEditor(QWidget):
                 btn.setChecked(False)
                 btn.setStyleSheet(f"""
                     QToolButton {{
-                        background: transparent; color: {FG_MUTED.name()};
-                        border: 1px solid {BORDER.name()}; border-radius: 4px;
+                        background: transparent; color: {_qss_color(FG_MUTED)};
+                        border: 1px solid {_qss_color(BORDER)}; border-radius: 4px;
                         padding: 6px 10px;
                     }}
                     QToolButton:hover {{
-                        background: {BG_RAISED.name()}; color: {FG.name()};
+                        background: {_qss_color(BG_RAISED)}; color: {_qss_color(FG)};
                     }}
                 """)
 
@@ -1082,7 +1092,7 @@ class ChainEditor(QWidget):
                 return
 
         self.settle_draft_requested.emit({"brief": brief, "draft_node_id": draft_node_id})
-        self.set_status("Building drone…")
+        self.set_status("Building drone\u2026")
 
     def settle_draft_node(self, node_id: str, drone_def) -> bool:
         """Replace a draft node with the real saved DroneDefinition."""
@@ -1150,12 +1160,12 @@ class ChainEditor(QWidget):
         if self._dirty:
             self._title_label.setText(f"\u2022 {self._chain_name}")
             self._title_label.setStyleSheet(
-                f"font-size: 15px; font-weight: bold; color: {ACCENT.name()}; padding-right: 12px;"
+                f"font-size: 15px; font-weight: bold; color: {_qss_color(ACCENT)}; padding-right: 12px;"
             )
         else:
             self._title_label.setText(self._chain_name)
             self._title_label.setStyleSheet(
-                f"font-size: 15px; font-weight: bold; color: {FG.name()}; padding-right: 12px;"
+                f"font-size: 15px; font-weight: bold; color: {_qss_color(FG)}; padding-right: 12px;"
             )
 
     # ---- Save As ----
@@ -1213,8 +1223,8 @@ class ChainEditor(QWidget):
         color_value = color.name() if hasattr(color, "name") else str(color)
         self._status_label.setText(message)
         self._status_label.setStyleSheet(f"""
-            background: {BG_ALT.name()}; color: {color_value};
-            padding: 4px 8px; border-top: 1px solid {BORDER.name()};
+            background: {_qss_color(BG_ALT)}; color: {color_value};
+            padding: 4px 8px; border-top: 1px solid {_qss_color(BORDER)};
         """)
 
     # ---- Workspace root ----
