@@ -380,9 +380,10 @@ class History:
                 original_len = len(content)
                 msg["content"] = (
                     f"{content[:actual_max]}\n\n"
-                    f"[... result truncated: {original_len} → {actual_max} chars "
-                    f"(tool: {tool_name or 'unknown'}) "
-                    f"— use read_file_range with start_line/end_line to re-read specific sections ...]"
+                    f"[... result truncated: {original_len} chars -> {actual_max} chars "
+                    f"(tool: {tool_name or 'unknown'}). "
+                    f"Use grep_search or read_file_outline to find exact line numbers, "
+                    f"then use read_file_range with those line numbers to read the missing section ...]"
                 )
 
     # ---- API view -----------------------------------------------------------

@@ -57,8 +57,9 @@ def read_file_range(
 ) -> dict[str, Any]:
     """Read a specific line range from a file (1-based, inclusive on both ends).
 
-    Returns the selected lines as a single string, plus metadata about the
-    range and total line count so the caller can orient themselves.
+    Streams the file line-by-line so it can reach any line in a large file
+    without loading the whole thing into memory or being limited to the first
+    MAX_READ_BYTES. Returns the selected lines as a single string plus metadata.
     """
     if not target.exists():
         return {"ok": False, "error": f"file not found: {safe_relative_to(target, workspace_root)}"}
@@ -69,36 +70,35 @@ def read_file_range(
     if end_line < start_line:
         return {"ok": False, "error": "end_line must be >= start_line"}
 
-    truncated_file = False
+    selected: list[str] = []
+    total_lines = 0
     try:
-        file_size = target.stat().st_size
-        if file_size > MAX_READ_BYTES:
-            truncated_file = True
-        with open(target, "rb") as f:
-            raw = f.read(MAX_READ_BYTES)
-        text = raw.decode("utf-8")
+        with open(target, encoding="utf-8", errors="replace") as fh:
+            for lineno, line in enumerate(fh, start=1):
+                total_lines = lineno
+                if start_line <= lineno <= end_line:
+                    selected.append(line)
+                elif lineno > end_line:
+                    # Keep counting so total_lines is accurate, but stop
+                    # accumulating content.  Drain the remaining lines cheaply.
+                    for _ in fh:
+                        total_lines += 1
+                    break
     except UnicodeDecodeError:
         return {"ok": False, "error": f"file cannot be decoded as UTF-8: {safe_relative_to(target, workspace_root)}"}
     except Exception as e:
         return {"ok": False, "error": f"error reading file: {e}"}
 
-    lines = text.splitlines(keepends=True)
-    total_lines = len(lines)
-
     if start_line > total_lines:
         return {
             "ok": False,
             "error": (
-                f"start_line {start_line} is beyond the readable portion of the file "
-                f"({total_lines} lines loaded"
-                + (f", file truncated at {MAX_READ_BYTES} bytes" if truncated_file else "")
-                + ")"
+                f"start_line {start_line} is beyond end of file ({total_lines} lines)"
             ),
         }
 
     actual_end = min(end_line, total_lines)
-    selected = lines[start_line - 1 : actual_end]
-    content = "".join(selected)
+    clamped = actual_end < end_line
 
     rel = safe_relative_to(target, workspace_root).as_posix()
     result: dict[str, Any] = {
@@ -107,15 +107,13 @@ def read_file_range(
         "start_line": start_line,
         "end_line": actual_end,
         "total_lines": total_lines,
-        "content": content,
+        "content": "".join(selected),
     }
-    if truncated_file:
-        result["note"] = (
-            f"File was truncated at {MAX_READ_BYTES} bytes; "
-            f"actual total line count may be higher than {total_lines}."
-        )
-    if actual_end < end_line:
+    if clamped:
         result["clamped"] = True
+        result["note"] = (
+            f"end_line {end_line} was beyond EOF; clamped to {actual_end} (total {total_lines} lines)."
+        )
     return result
 
 
