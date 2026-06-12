@@ -13,6 +13,7 @@ from PySide6.QtGui import (
     QFontMetrics,
     QLinearGradient,
     QPainter,
+    QRadialGradient,
     QPainterPath,
     QPen,
     QPixmap,
@@ -219,8 +220,12 @@ class ChainNodeItem(QGraphicsObject):
         pad_x = 12
         inner_w = NODE_WIDTH - pad_x * 2
 
-        # --- Glass body ---
-        painter.setBrush(QBrush(QColor(22, 24, 32, 128)))
+        # --- Glass body (vertical gradient) ---
+        body_grad = QLinearGradient(rect.topLeft(), rect.bottomLeft())
+        body_grad.setColorAt(0.0, QColor(40, 44, 58, 120))
+        body_grad.setColorAt(0.5, QColor(26, 29, 40, 128))
+        body_grad.setColorAt(1.0, QColor(18, 20, 28, 138))
+        painter.setBrush(QBrush(body_grad))
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawRoundedRect(rect, NODE_RADIUS, NODE_RADIUS)
 
@@ -245,15 +250,31 @@ class ChainNodeItem(QGraphicsObject):
         adjusted = rect.adjusted(1, 1, -1, -1)
         adj_radius = NODE_RADIUS - 1
 
+        # --- Capability inner tint ---
+        tint_grad = QRadialGradient(
+            QPointF(rect.width() / 2, rect.height() * 0.80),
+            max(rect.width(), rect.height()) * 0.55,
+        )
+        tint_grad.setColorAt(0.0, QColor(glow_color.red(), glow_color.green(), glow_color.blue(), 14))
+        tint_grad.setColorAt(1.0, QColor(glow_color.red(), glow_color.green(), glow_color.blue(), 0))
+        painter.save()
+        clip = QPainterPath()
+        clip.addRoundedRect(rect, NODE_RADIUS, NODE_RADIUS)
+        painter.setClipPath(clip)
+        painter.setBrush(tint_grad)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawRect(rect)
+        painter.restore()
+
         # --- Layered glow strokes ---
         painter.setBrush(Qt.BrushStyle.NoBrush)
         outer = QColor(glow_color)
-        outer.setAlpha(20)
+        outer.setAlpha(38)
         painter.setPen(QPen(outer, 5))
         painter.drawRoundedRect(adjusted, adj_radius, adj_radius)
 
         mid = QColor(glow_color)
-        mid.setAlpha(35)
+        mid.setAlpha(60)
         painter.setPen(QPen(mid, 2.5))
         painter.drawRoundedRect(adjusted, adj_radius, adj_radius)
 
@@ -263,21 +284,21 @@ class ChainNodeItem(QGraphicsObject):
             main_border = _qt_color(ACCENT)
         else:
             pen_w = 1
-            main_border = QColor(255, 255, 255, 23)
+            main_border = QColor(255, 255, 255, 40)
         painter.setPen(QPen(main_border, pen_w, border_style))
         painter.drawRoundedRect(adjusted, adj_radius, adj_radius)
 
         # --- Top sheen (glass reflection) ---
-        sheen_rect = QRectF(rect.x() + 3, rect.y() + 2, rect.width() - 6, (rect.height() - 4) * 0.30)
+        sheen_rect = QRectF(rect.x() + 3, rect.y() + 2, rect.width() - 6, (rect.height() - 4) * 0.34)
         sheen_grad = QLinearGradient(sheen_rect.topLeft(), sheen_rect.bottomLeft())
-        sheen_grad.setColorAt(0.0, QColor(255, 255, 255, 15))
+        sheen_grad.setColorAt(0.0, QColor(255, 255, 255, 30))
         sheen_grad.setColorAt(1.0, QColor(255, 255, 255, 0))
         painter.setBrush(sheen_grad)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawRoundedRect(sheen_rect, 6, 6)
 
         # --- Inner highlight (1px bright stroke at top inset) ---
-        painter.setPen(QPen(QColor(255, 255, 255, 13), 1))
+        painter.setPen(QPen(QColor(255, 255, 255, 32), 1))
         painter.drawLine(
             QPointF(rect.x() + NODE_RADIUS, rect.y() + 1.5),
             QPointF(rect.x() + NODE_WIDTH - NODE_RADIUS, rect.y() + 1.5),
@@ -1005,24 +1026,33 @@ class ChainCanvas(QGraphicsView):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = size.width(), size.height()
 
-        # Diagonal nebula band (top-left to bottom-right)
-        nebula1 = QLinearGradient(QPointF(0, 0), QPointF(w, h))
-        nebula1.setColorAt(0.0, QColor(157, 124, 216, 0))
-        nebula1.setColorAt(0.25, QColor(157, 124, 216, 8))
-        nebula1.setColorAt(0.45, QColor(122, 162, 247, 12))
-        nebula1.setColorAt(0.60, QColor(125, 207, 255, 8))
-        nebula1.setColorAt(0.78, QColor(247, 118, 142, 4))
-        nebula1.setColorAt(1.0, QColor(157, 124, 216, 0))
-        p.fillRect(0, 0, w, h, nebula1)
+        # Radial gas clouds (layered additive)
+        # Violet main bloom
+        g1 = QRadialGradient(QPointF(0.30 * w, 0.58 * h), 0.46 * w)
+        g1.setColorAt(0.0, QColor(157, 124, 216, 72))
+        g1.setColorAt(0.45, QColor(150, 115, 205, 34))
+        g1.setColorAt(1.0, QColor(157, 124, 216, 0))
+        p.fillRect(0, 0, w, h, g1)
 
-        # Opposite diagonal depth band
-        nebula2 = QLinearGradient(QPointF(w, 0), QPointF(0, h))
-        nebula2.setColorAt(0.0, QColor(100, 80, 180, 0))
-        nebula2.setColorAt(0.35, QColor(110, 85, 190, 6))
-        nebula2.setColorAt(0.55, QColor(125, 207, 255, 4))
-        nebula2.setColorAt(0.75, QColor(80, 65, 155, 3))
-        nebula2.setColorAt(1.0, QColor(90, 70, 160, 0))
-        p.fillRect(0, 0, w, h, nebula2)
+        # Warm magenta pocket
+        g2 = QRadialGradient(QPointF(0.52 * w, 0.68 * h), 0.40 * w)
+        g2.setColorAt(0.0, QColor(247, 118, 142, 55))
+        g2.setColorAt(0.5, QColor(205, 95, 140, 24))
+        g2.setColorAt(1.0, QColor(247, 118, 142, 0))
+        p.fillRect(0, 0, w, h, g2)
+
+        # Blue upper drift
+        g3 = QRadialGradient(QPointF(0.62 * w, 0.34 * h), 0.42 * w)
+        g3.setColorAt(0.0, QColor(122, 162, 247, 40))
+        g3.setColorAt(0.5, QColor(110, 140, 220, 18))
+        g3.setColorAt(1.0, QColor(122, 162, 247, 0))
+        p.fillRect(0, 0, w, h, g3)
+
+        # Cyan accent
+        g4 = QRadialGradient(QPointF(0.80 * w, 0.55 * h), 0.28 * w)
+        g4.setColorAt(0.0, QColor(125, 207, 255, 28))
+        g4.setColorAt(1.0, QColor(125, 207, 255, 0))
+        p.fillRect(0, 0, w, h, g4)
 
         # Subtle static stars
         rng = random.Random(42)
