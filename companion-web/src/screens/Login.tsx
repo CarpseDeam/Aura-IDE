@@ -29,16 +29,21 @@ function LoginScreen() {
   const autoStartedRef = useRef(false);
   const clearedOldPairing = useRef(false);
 
-  // If QR/ticket params are present, clear old pairing state so it doesn't block
-  const hasQrParams = !!(searchParams.get('ticket') || (searchParams.get('code') && searchParams.get('desktop') && searchParams.get('relay')));
-  if (hasQrParams && alreadyPaired && !clearedOldPairing.current) {
-    clearedOldPairing.current = true;
-    CompanionSocket.clearStoredState();
-    sessionStorage.removeItem('companion_desktop_id');
-    sessionStorage.removeItem('companion_desktop_name');
-    forceRender(n => n + 1);
-    return;
-  }
+  // Clear old pairing state when QR/ticket params are present, so the scanned
+  // QR flow wins over any stale stored token/context.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const hasQrParams = !!(params.get('ticket') || (params.get('code') && params.get('desktop') && params.get('relay')));
+    if (hasQrParams && alreadyPaired && !clearedOldPairing.current) {
+      clearedOldPairing.current = true;
+      socket.logout();
+      CompanionSocket.clearStoredState();
+      sessionStorage.removeItem('companion_desktop_id');
+      sessionStorage.removeItem('companion_desktop_name');
+      forceRender(n => n + 1);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Forget the URL params after we read them so a refresh doesn't re-trigger.
   useEffect(() => {
@@ -200,7 +205,7 @@ function LoginScreen() {
   // Auto-pair: if we landed here with all URL params, run the whole flow once.
   useEffect(() => {
     if (autoStartedRef.current) return;
-    if (qrCode && qrDesktop && qrRelay && !alreadyPaired) {
+    if (qrCode && qrDesktop && qrRelay) {
       autoStartedRef.current = true;
       (async () => {
         try {
@@ -219,7 +224,6 @@ function LoginScreen() {
   useEffect(() => {
     if (!qrTicket) return;
     if (autoStartedRef.current) return;
-    if (alreadyPaired) return;
     const configuredRelay = import.meta.env.VITE_AURA_RELAY_WS_URL || 'ws://localhost:8765';
     setRelayUrl(configuredRelay);
     autoPairWithTicket(qrTicket, configuredRelay);
@@ -296,7 +300,7 @@ function LoginScreen() {
                   This phone was paired before, but the desktop is not reachable.
                 </div>
               </div>
-              <button onClick={() => navigate('/login', { replace: true })} style={primaryButton}>
+              <button onClick={() => { handleClearPairing(); navigate('/login', { replace: true }); }} style={primaryButton}>
                 Scan desktop QR
               </button>
               <button onClick={() => { handleClearPairing(); navigate('/login', { replace: true }); }} style={ghostButton}>
