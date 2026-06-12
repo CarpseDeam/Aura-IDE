@@ -287,6 +287,16 @@ class CompanionManager(QObject):
         self.pairing_code_invalidated.emit()
         logger.info("[Companion] Pairing cancelled")
 
+    def _handle_companion_verify(self, msg: dict) -> None:
+        """Respond to phone connection verification — lightweight, read-only."""
+        desktop_name = self._settings.companion_display_name or get_device_display_name()
+        self._reply_to_sender(msg, "companion.verify_ack", {
+            "desktop_id": get_device_id(),
+            "desktop_name": desktop_name,
+            "project_id": self._current_project_id,
+            "conversation_id": self._current_conversation_id,
+        })
+
     # ── Internal ────────────────────────────────────────────
 
     def _connect(self) -> None:
@@ -366,6 +376,8 @@ class CompanionManager(QObject):
             self._handle_pair_verify(msg)
         elif msg_type == "pair.cancel":
             self._handle_pair_cancel(msg)
+        elif msg_type == "companion.verify":
+            self._handle_companion_verify(msg)
 
     # ── Bridge chat handlers ────────────────────────────────
 

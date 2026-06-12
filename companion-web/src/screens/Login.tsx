@@ -117,29 +117,91 @@ function LoginScreen() {
       setError('No relay configured.');
       return;
     }
+
+    const safeCtx = CompanionSocket.getStoredSafeContext();
+    const storedDesktopId = safeCtx.desktop_id || '';
+    if (!storedDesktopId) {
+      setPhase('unavailable');
+      setError('No paired desktop found.');
+      return;
+    }
+
     setPhase('checking');
     setError('');
     socket.connect(effectiveRelay);
+
+    // Step 1: wait for welcome
     try {
       await new Promise<void>((resolve, reject) => {
-        const unsub = socket.on('welcome', () => {
-          unsub();
-          if (timeoutRef.current) {
-            clearTimeout(timeoutRef.current);
-            timeoutRef.current = undefined;
-          }
+        let unsub: (() => void) | null = null;
+        unsub = socket.on('welcome', () => {
+          unsub?.();
           resolve();
         });
         timeoutRef.current = setTimeout(() => {
-          unsub();
-          reject(new Error('timeout'));
+          unsub?.();
+          reject(new Error('Connection timed out — relay not reachable.'));
         }, 10000);
       });
+    } catch (e: any) {
+      setPhase('unavailable');
+      setError(e?.message || 'Connection timed out — relay not reachable.');
+      return;
+    }
+
+    // Step 2: verify authenticated pairing + desktop reachable
+    try {
+      await new Promise<void>((resolve, reject) => {
+        let unsubAck: (() => void) | null = null;
+        let unsubAuthErr: (() => void) | null = null;
+        let unsubError: (() => void) | null = null;
+
+        const cleanup = () => {
+          if (timeoutRef.current) { clearTimeout(timeoutRef.current); timeoutRef.current = undefined; }
+          unsubAck?.();
+          unsubAuthErr?.();
+          unsubError?.();
+        };
+
+        unsubAck = socket.on('companion.verify_ack', (data: any) => {
+          // Update safe context with fresh data from desktop
+          const prev = CompanionSocket.getStoredSafeContext();
+          const updated: any = { ...prev };
+          if (data.payload?.desktop_name) {
+            updated.desktop_name = data.payload.desktop_name;
+            sessionStorage.setItem('companion_desktop_name', data.payload.desktop_name);
+          }
+          if (data.payload?.project_id !== undefined) updated.project_id = data.payload.project_id;
+          if (data.payload?.conversation_id !== undefined) updated.conversation_id = data.payload.conversation_id;
+          CompanionSocket.setStoredSafeContext(updated);
+
+          cleanup();
+          resolve();
+        });
+
+        unsubAuthErr = socket.on('auth.error', () => {
+          cleanup();
+          reject(new Error('Stored pairing is no longer valid. Pair again.'));
+        });
+
+        unsubError = socket.on('error', (data: any) => {
+          cleanup();
+          reject(new Error(data.payload?.message || 'Desktop not reachable.'));
+        });
+
+        socket.send('companion.verify', {}, storedDesktopId);
+
+        timeoutRef.current = setTimeout(() => {
+          cleanup();
+          reject(new Error('Verification timed out — desktop not reachable.'));
+        }, 10000);
+      });
+
       setPhase('connected');
       setError('');
-    } catch {
+    } catch (e: any) {
       setPhase('unavailable');
-      setError('Connection timed out — desktop not reachable.');
+      setError(e?.message || 'Desktop not reachable.');
     }
   }, []);
 
@@ -287,13 +349,7 @@ function LoginScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [qrTicket]);
 
-  const handleClearPairing = () => {
-    socket.logout();
-    CompanionSocket.setStoredToken('');
-    sessionStorage.removeItem('companion_desktop_id');
-    sessionStorage.removeItem('companion_desktop_name');
-    forceRender(n => n + 1);
-  };
+
 
   const pageWrap: React.CSSProperties = {
     minHeight: '100dvh',
@@ -368,7 +424,7 @@ function LoginScreen() {
             >
               Continue
             </button>
-            <button onClick={handleClearPairing} style={ghostButton}>
+            <button onClick={handlePairAgain} style={ghostButton}>
               Pair a different desktop
             </button>
           </div>
