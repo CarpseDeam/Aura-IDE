@@ -753,12 +753,12 @@ class MainWindow(WindowChromeMixin, QMainWindow):
                     self._on_new_workflow()
                 else:
                     self._playground.toggle_chain_editor()
-        except Exception:
+        except Exception as exc:
             logger.exception("Failed to open Drone Workbay")
             QMessageBox.warning(
                 self,
                 "Workbay Error",
-                "Failed to open the Drone Workbay.\n\nCheck the logs for details.",
+                f"Failed to open the Drone Workbay:\n\n{type(exc).__name__}: {exc}",
             )
 
     def _sync_drone_tab_checked(self) -> None:

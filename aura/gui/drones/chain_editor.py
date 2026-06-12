@@ -487,6 +487,17 @@ class ChainEditor(QWidget):
         self._chain_enabled_check: QCheckBox | None = None
         self._chain_schedule_input: QLineEdit | None = None
 
+        # Runtime state — must be initialized before layout/load which may reference them
+        self._workshop_draft_node_id: str | None = None
+        self._palette_width = 260
+        self._dirty = False
+
+        # Auto-save debounce timer — must exist before _on_canvas_changed() fires
+        self._auto_save_timer = QTimer(self)
+        self._auto_save_timer.setSingleShot(True)
+        self._auto_save_timer.setInterval(300)
+        self._auto_save_timer.timeout.connect(self._save_chain)
+
         # Build layout
         self._build_layout()
 
@@ -495,19 +506,6 @@ class ChainEditor(QWidget):
 
         # Load or create chain
         self._load_or_create_chain(chain_id)
-
-        # Workshop draft settlement
-        self._workshop_draft_node_id: str | None = None
-        self._palette_width = 260
-
-        # Dirty tracking for unsaved-changes prompt
-        self._dirty = False
-
-        # Auto-save debounce timer
-        self._auto_save_timer = QTimer(self)
-        self._auto_save_timer.setSingleShot(True)
-        self._auto_save_timer.setInterval(300)
-        self._auto_save_timer.timeout.connect(self._save_chain)
 
     # ---- Layout ----
 
