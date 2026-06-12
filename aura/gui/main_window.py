@@ -1963,16 +1963,19 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         if ok and name == "summon_drone" and extras.get("summon_drone"):
             self._handle_summon_drone_result(tool_id, extras)
 
-        if ok and name == "save_drone_definition" and extras.get("drone_saved"):
-            if hasattr(self, '_drone_bay') and self._drone_bay is not None:
-                self._drone_bay.refresh()
-            self._refresh_drone_context()
-
-            # Draft settlement after save_drone_definition
+        # --- Draft settlement: consume pending state immediately ---
+        if name == "save_drone_definition" and self._pending_draft_settle is not None:
+            editor, draft_node_id = self._pending_draft_settle
+            self._pending_draft_settle = None
             drone_id = extras.get("drone_id")
-            if self._pending_draft_settle is not None and drone_id:
-                editor, draft_node_id = self._pending_draft_settle
-                self._pending_draft_settle = None
+            if not ok or not extras.get("drone_saved") or not drone_id:
+                # Save was malformed or failed — leave draft in place
+                try:
+                    editor.set_status("Build failed — check conversation", DANGER)
+                except Exception:
+                    logger.debug("Could not set draft settlement status", exc_info=True)
+            else:
+                # Valid save — load and settle the draft node
                 try:
                     drone_def = DroneStore.load_drone(self._workspace_root, drone_id)
                     if drone_def is None:
@@ -1989,6 +1992,12 @@ class MainWindow(WindowChromeMixin, QMainWindow):
                         editor.set_status("Build failed — check conversation", DANGER)
                     except Exception:
                         logger.debug("Could not set draft settlement status", exc_info=True)
+
+        # Normal Drone Bay refresh for successful saves
+        if ok and name == "save_drone_definition" and extras.get("drone_saved"):
+            if hasattr(self, '_drone_bay') and self._drone_bay is not None:
+                self._drone_bay.refresh()
+            self._refresh_drone_context()
 
         if ok and name in ("read_file", "read_files"):
             try:
