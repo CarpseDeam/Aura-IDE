@@ -60,6 +60,12 @@ class CompanionSocket {
     return !!CompanionSocket.getStoredToken();
   }
 
+  static clearStoredState(): void {
+    CompanionSocket.setStoredToken('');
+    CompanionSocket.setStoredSafeContext({});
+    try { localStorage.removeItem(CompanionSocket.STORAGE_KEY_RELAY); } catch {}
+  }
+
   connect(relayUrl: string, deviceToken?: string, deviceId?: string): void {
     const token = deviceToken || CompanionSocket.getStoredToken();
     const id = deviceId || CompanionSocket.getStoredDeviceId();

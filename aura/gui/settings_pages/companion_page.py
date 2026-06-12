@@ -22,7 +22,7 @@ import time
 from typing import Optional
 
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QFont, QGuiApplication
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QFormLayout,
     QFrame,
@@ -30,7 +30,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
-    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -89,7 +88,6 @@ class CompanionPage(QWidget):
         self._countdown_timer.setInterval(1000)
         self._countdown_timer.timeout.connect(self._tick_countdown)
         self._pairing_expires_at: float = 0.0
-        self._pair_url: str = ""
         self._auto_pair_on_connect: bool = False
 
         outer = QVBoxLayout(self)
@@ -177,24 +175,23 @@ class CompanionPage(QWidget):
         info_col = QVBoxLayout()
         info_col.setSpacing(8)
 
-        pair_subtitle = QLabel("Scan with your phone")
+        pair_subtitle = QLabel("Scan to connect your phone")
         pair_subtitle.setStyleSheet(f"color: {FG}; font-size: 14px; font-weight: 600;")
         info_col.addWidget(pair_subtitle)
 
-        pair_sub = QLabel("Open the Aura Companion web app, then point your camera at the QR.\nOr type the code below if you're testing locally.")
+        pair_sub = QLabel("Scan this QR with your phone to connect to this Aura desktop.")
         pair_sub.setStyleSheet(f"color: {FG_DIM}; font-size: 11px;")
         pair_sub.setWordWrap(True)
         info_col.addWidget(pair_sub)
 
-        code_caption = QLabel("Pairing code")
-        code_caption.setStyleSheet(f"color: {FG_MUTED}; font-size: 10px; text-transform: uppercase; letter-spacing: 0.12em;")
+        code_caption = QLabel("Can't scan? Enter this code:")
+        code_caption.setStyleSheet(f"color: {FG_DIM}; font-size: 11px;")
         info_col.addWidget(code_caption)
 
         self._code_text = QLabel("------")
         code_font = QFont("JetBrains Mono")
         code_font.setStyleHint(QFont.StyleHint.Monospace)
-        code_font.setPointSize(22)
-        code_font.setBold(True)
+        code_font.setPointSize(14)
         self._code_text.setFont(code_font)
         self._code_text.setStyleSheet(
             f"color: {ACCENT}; letter-spacing: 0.32em; background: {BG_RAISED};"
@@ -209,28 +206,8 @@ class CompanionPage(QWidget):
         self._expiry_label.setStyleSheet(f"color: {FG_DIM}; font-size: 11px;")
         info_col.addWidget(self._expiry_label)
 
-        url_caption = QLabel("Pair URL (open on phone)")
-        url_caption.setStyleSheet(f"color: {FG_MUTED}; font-size: 10px; text-transform: uppercase; letter-spacing: 0.12em;")
-        info_col.addWidget(url_caption)
-
-        self._url_label = QLabel("")
-        self._url_label.setStyleSheet(
-            f"color: {FG}; background: {BG_RAISED}; border: 1px solid {BORDER};"
-            f" border-radius: 6px; padding: 6px 10px; font-size: 10px;"
-            " font-family: 'JetBrains Mono', 'Consolas', monospace;"
-        )
-        self._url_label.setWordWrap(True)
-        self._url_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self._url_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
-        info_col.addWidget(self._url_label)
-
         button_row = QHBoxLayout()
         button_row.setSpacing(8)
-        self._copy_url_btn = QPushButton("Copy URL")
-        self._copy_url_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._copy_url_btn.setStyleSheet(self._ghost_button_style())
-        self._copy_url_btn.clicked.connect(self._on_copy_url)
-        button_row.addWidget(self._copy_url_btn)
 
         self._cancel_pair_btn = QPushButton("Cancel")
         self._cancel_pair_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -347,7 +324,6 @@ class CompanionPage(QWidget):
         else:
             self._auto_pair_on_connect = False
             self._countdown_timer.stop()
-            self._pair_url = ""
             self._pair_card.setVisible(False)
             self._error_label.setVisible(False)
             self._on_connection_status("disabled")
@@ -370,24 +346,16 @@ class CompanionPage(QWidget):
             return
         code = info.get("code", "")
         expires_at = float(info.get("expires_at", 0.0))
-        pair_url = info.get("pair_url", "")
-        self._pair_url = pair_url
+        qr_data = info.get("pair_url", "")
         self._pairing_expires_at = expires_at
         self._code_text.setText(code)
-        self._url_label.setText(pair_url)
-        self._qr_label.set_data(pair_url)
+        self._qr_label.set_data(qr_data)
         self._pair_card.setVisible(True)
         self._countdown_timer.start()
         self._tick_countdown()
 
     def _on_pair_clicked(self) -> None:
         self._start_pairing()
-
-    def _on_copy_url(self) -> None:
-        if self._pair_url:
-            QGuiApplication.clipboard().setText(self._pair_url)
-            self._copy_url_btn.setText("Copied!")
-            QTimer.singleShot(1200, lambda: self._copy_url_btn.setText("Copy URL"))
 
     def _on_cancel_pair(self) -> None:
         if self._manager is not None:
@@ -397,7 +365,6 @@ class CompanionPage(QWidget):
                 pass
         self._pair_card.setVisible(False)
         self._countdown_timer.stop()
-        self._pair_url = ""
 
     def _on_pairing_invalidated(self) -> None:
         self._pair_card.setVisible(False)
@@ -406,7 +373,7 @@ class CompanionPage(QWidget):
     def _on_pairing_complete(self, device_name: str) -> None:
         self._pair_card.setVisible(False)
         self._countdown_timer.stop()
-        self._paired_status_label.setText(f"✔  Paired with {device_name}")
+        self._paired_status_label.setText(f"Phone connected: {device_name}")
         self._paired_status_label.setStyleSheet(f"color: {SUCCESS}; font-size: 11px; padding: 2px 4px;")
 
     def _tick_countdown(self) -> None:

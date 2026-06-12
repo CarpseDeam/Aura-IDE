@@ -27,6 +27,18 @@ function LoginScreen() {
   const alreadyPaired = CompanionSocket.isPaired();
   const timeoutRef = useRef<ReturnType<typeof setTimeout>>();
   const autoStartedRef = useRef(false);
+  const clearedOldPairing = useRef(false);
+
+  // If QR/ticket params are present, clear old pairing state so it doesn't block
+  const hasQrParams = !!(searchParams.get('ticket') || (searchParams.get('code') && searchParams.get('desktop') && searchParams.get('relay')));
+  if (hasQrParams && alreadyPaired && !clearedOldPairing.current) {
+    clearedOldPairing.current = true;
+    CompanionSocket.clearStoredState();
+    sessionStorage.removeItem('companion_desktop_id');
+    sessionStorage.removeItem('companion_desktop_name');
+    forceRender(n => n + 1);
+    return;
+  }
 
   // Forget the URL params after we read them so a refresh doesn't re-trigger.
   useEffect(() => {
@@ -39,6 +51,16 @@ function LoginScreen() {
 
   useEffect(() => () => {
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
+  }, []);
+
+  // Auto-connect on mount for non-paired users
+  useEffect(() => {
+    if (alreadyPaired || qrCode || qrTicket) return;
+    if (socket.connected || socket.connecting) return;
+    const defaultRelay = import.meta.env.VITE_AURA_RELAY_WS_URL || 'ws://localhost:8765';
+    setRelayUrl(defaultRelay);
+    handleConnect().catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -239,17 +261,49 @@ function LoginScreen() {
     gap: '1rem',
   };
 
-  // Already paired
+  // Already paired (no QR params)
   if (alreadyPaired && !qrCode && !qrTicket) {
+    const storedDesktopName = sessionStorage.getItem('companion_desktop_name') 
+      || CompanionSocket.getStoredSafeContext().desktop_name 
+      || '';
     return (
       <div style={pageWrap} className="fade-in">
         <Wordmark />
         <div style={card}>
-          <div style={{ textAlign: 'center', color: tokens.fgDim, fontSize: '0.9rem' }}>
-            Already paired with a desktop.
-          </div>
-          <button onClick={handleReconnect} style={primaryButton}>Reconnect</button>
-          <button onClick={handleClearPairing} style={ghostButton}>Pair a different desktop</button>
+          {socket.connected ? (
+            <>
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ fontSize: '1.1rem', fontWeight: 600, color: tokens.success, marginBottom: 4 }}>
+                  Connected
+                </div>
+                <div style={{ color: tokens.fgDim, fontSize: '0.9rem' }}>
+                  {storedDesktopName 
+                    ? `Connected to ${storedDesktopName}`
+                    : 'Connected to a desktop'}
+                </div>
+              </div>
+              <button onClick={() => navigate('/chat', { replace: true })} style={primaryButton}>
+                Continue
+              </button>
+              <button onClick={() => { handleClearPairing(); navigate('/login', { replace: true }); }} style={ghostButton}>
+                Pair a different desktop
+              </button>
+            </>
+          ) : (
+            <>
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ color: tokens.fgDim, fontSize: '0.9rem', marginBottom: 4 }}>
+                  This phone was paired before, but the desktop is not reachable.
+                </div>
+              </div>
+              <button onClick={() => navigate('/login', { replace: true })} style={primaryButton}>
+                Scan desktop QR
+              </button>
+              <button onClick={() => { handleClearPairing(); navigate('/login', { replace: true }); }} style={ghostButton}>
+                Pair a different desktop
+              </button>
+            </>
+          )}
         </div>
       </div>
     );
@@ -264,9 +318,9 @@ function LoginScreen() {
       <div style={card}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem' }}>
           <div>
-            <div style={{ fontSize: '1.1rem', fontWeight: 600, letterSpacing: '0.01em' }}>Pair your phone</div>
+            <div style={{ fontSize: '1.1rem', fontWeight: 600, letterSpacing: '0.01em' }}>Pair with desktop</div>
             <div style={{ color: tokens.fgDim, fontSize: '0.8rem', marginTop: 4 }}>
-              {desktopName ? `with ${desktopName}` : 'Connect to a running Aura desktop'}
+              Scan the QR from Aura Desktop → Settings → Companion
             </div>
           </div>
           <span style={statusPillStyle(
@@ -309,16 +363,6 @@ function LoginScreen() {
           </div>
         ) : (
           <>
-            <Field label="Relay URL">
-              <input
-                value={relayUrl}
-                onChange={e => setRelayUrl(e.target.value)}
-                placeholder="ws://192.168.1.x:8765"
-                style={inputBase}
-                disabled={phase === 'connecting' || phase === 'connected' || phase === 'pairing'}
-              />
-            </Field>
-
             {phase !== 'connected' && (
               <button
                 onClick={() => { handleConnect().catch(() => {}); }}
@@ -329,7 +373,7 @@ function LoginScreen() {
                   color: phase === 'connecting' ? tokens.fgMuted : '#0a0f1f',
                 }}
               >
-                {phase === 'connecting' ? 'Connecting…' : 'Connect to Relay'}
+                {phase === 'connecting' ? 'Connecting…' : 'Connect'}
               </button>
             )}
 
@@ -339,7 +383,7 @@ function LoginScreen() {
                   <input
                     value={pairingCode}
                     onChange={e => setPairingCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6))}
-                    placeholder="ABC234"
+                    placeholder="Enter code from desktop"
                     style={{
                       ...inputBase,
                       textAlign: 'center',
@@ -353,20 +397,22 @@ function LoginScreen() {
                   />
                 </Field>
 
-                <Field label="Desktop ID (from QR)">
-                  <input
-                    value={desktopId}
-                    onChange={e => setDesktopId(e.target.value)}
-                    placeholder="desktop_xxxxxxxx"
-                    style={{ ...inputBase, fontSize: '0.8rem', fontFamily: '"JetBrains Mono", monospace' }}
-                  />
-                </Field>
+                {!qrCode && !qrTicket && (
+                  <Field label="Desktop ID">
+                    <input
+                      value={desktopId}
+                      onChange={e => setDesktopId(e.target.value)}
+                      placeholder="desktop_xxxxxxxx"
+                      style={{ ...inputBase, fontSize: '0.8rem', fontFamily: '"JetBrains Mono", monospace' }}
+                    />
+                  </Field>
+                )}
 
-                <Field label="This phone's name">
+                <Field label="Phone name">
                   <input
                     value={phoneName}
                     onChange={e => setPhoneName(e.target.value)}
-                    placeholder="My Phone"
+                    placeholder="Aura Companion"
                     style={inputBase}
                   />
                 </Field>
@@ -378,10 +424,6 @@ function LoginScreen() {
             )}
           </>
         )}
-      </div>
-
-      <div style={{ marginTop: '1.25rem', color: tokens.fgMuted, fontSize: '0.72rem', textAlign: 'center' }}>
-        Tip: scan the QR shown in Aura → Settings → Companion.
       </div>
     </div>
   );
