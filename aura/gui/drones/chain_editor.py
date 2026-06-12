@@ -51,6 +51,17 @@ from aura.gui.theme import (
 logger = logging.getLogger(__name__)
 
 
+def _widget_valid(w) -> bool:
+    """Return True if the widget is not None and the underlying C++ object is alive."""
+    if w is None:
+        return False
+    try:
+        from shiboken6 import isValid
+    except ImportError:
+        return True  # best-effort if shiboken not available
+    return isValid(w)
+
+
 def _qss_color(color: QColor | str) -> str:
     """Return a CSS hex string from a QColor or plain string."""
     return color.name() if hasattr(color, "name") else str(color)
@@ -199,6 +210,15 @@ class _PropertyPanel(QScrollArea):
             item = self._layout.takeAt(0)
             w = item.widget()
             if w:
+                # Null editor refs to this widget before deleteLater
+                if w is self._editor._chain_name_input:
+                    self._editor._chain_name_input = None
+                if w is self._editor._chain_desc_input:
+                    self._editor._chain_desc_input = None
+                if w is self._editor._chain_enabled_check:
+                    self._editor._chain_enabled_check = None
+                if w is self._editor._chain_schedule_input:
+                    self._editor._chain_schedule_input = None
                 w.deleteLater()
 
     def _add_label(self, text: str, bold: bool = False, color: QColor | None = None) -> QLabel:
@@ -767,29 +787,29 @@ class ChainEditor(QWidget):
         return {d.id: d for d in drones}
 
     def _sync_form_from_chain(self) -> None:
-        if self._chain_name_input:
+        if _widget_valid(self._chain_name_input):
             self._chain_name_input.blockSignals(True)
             self._chain_name_input.setText(self._chain_name)
             self._chain_name_input.blockSignals(False)
-        if self._chain_desc_input:
+        if _widget_valid(self._chain_desc_input):
             self._chain_desc_input.blockSignals(True)
             self._chain_desc_input.setPlainText(self._chain_description)
             self._chain_desc_input.blockSignals(False)
-        if self._chain_enabled_check:
+        if _widget_valid(self._chain_enabled_check):
             self._chain_enabled_check.blockSignals(True)
             self._chain_enabled_check.setChecked(self._chain_enabled)
             self._chain_enabled_check.blockSignals(False)
-        if self._chain_schedule_input:
+        if _widget_valid(self._chain_schedule_input):
             self._chain_schedule_input.blockSignals(True)
             self._chain_schedule_input.setText(self._chain_schedule)
             self._chain_schedule_input.blockSignals(False)
 
     def _sync_chain_from_form(self) -> None:
-        if self._chain_name_input:
+        if _widget_valid(self._chain_name_input):
             self._chain_name = self._chain_name_input.text()
-        if self._chain_desc_input:
+        if _widget_valid(self._chain_desc_input):
             self._chain_description = self._chain_desc_input.toPlainText()
-        if self._chain_enabled_check:
+        if _widget_valid(self._chain_enabled_check):
             self._chain_enabled = self._chain_enabled_check.isChecked()
 
     # ---- Snapshots & Save ----
@@ -869,6 +889,8 @@ class ChainEditor(QWidget):
         self._update_title_label()
 
     def _on_chain_property_changed(self) -> None:
+        # Sync form state into chain attributes immediately so edits survive panel rebuild
+        self._sync_chain_from_form()
         self._on_canvas_changed()
 
     def _on_selection_changed(self) -> None:
