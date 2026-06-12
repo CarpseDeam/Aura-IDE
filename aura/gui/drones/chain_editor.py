@@ -1209,10 +1209,11 @@ class ChainEditor(QWidget):
 
     # ---- Status bar ----
 
-    def set_status(self, message: str, color: QColor = FG_MUTED) -> None:
+    def set_status(self, message: str, color: QColor | str = FG_MUTED) -> None:
+        color_value = color.name() if hasattr(color, "name") else str(color)
         self._status_label.setText(message)
         self._status_label.setStyleSheet(f"""
-            background: {BG_ALT.name()}; color: {color.name()};
+            background: {BG_ALT.name()}; color: {color_value};
             padding: 4px 8px; border-top: 1px solid {BORDER.name()};
         """)
 
