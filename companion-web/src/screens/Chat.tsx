@@ -98,9 +98,11 @@ function ChatScreen() {
   useEffect(() => {
     if (phase !== 'connected' || !projectId || !conversationId) return;
 
-    socket.send('conversation.history', { project_id: projectId, thread_id: conversationId }, desktopId, projectId, conversationId);
-
     const unsubHistory = socket.on('conversation.history_result', (msg: any) => {
+      // Ignore stale results from previous selections
+      if (msg.payload?.project_id !== projectId || msg.payload?.thread_id !== conversationId) {
+        return;
+      }
       if (msg.payload?.error) {
         console.warn('conversation.history_result error:', msg.payload.error);
         return;
@@ -113,6 +115,8 @@ function ChatScreen() {
       }));
       setMessages(historyMsgs);
     });
+
+    socket.send('conversation.history', { project_id: projectId, thread_id: conversationId }, desktopId, projectId, conversationId);
 
     return () => {
       unsubHistory();

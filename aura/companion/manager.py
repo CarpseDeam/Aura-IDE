@@ -63,6 +63,8 @@ class CompanionManager(QObject):
         self._workspace_root: str = ""
         self._current_project_id: str = ""
         self._current_conversation_id: str = ""
+        self._conversation_loaded: bool = False
+        self._pending_select_msg: dict | None = None
         self._pending_chat_id: str = ""
         self._pending_chat_phone_id: str = ""
         self._current_pairing_code: str = ""
@@ -130,6 +132,7 @@ class CompanionManager(QObject):
 
     def set_current_conversation(self, conversation_id: str) -> None:
         self._current_conversation_id = conversation_id
+        self._conversation_loaded = bool(conversation_id)
 
     # ── Send ────────────────────────────────────────────────
 
@@ -418,6 +421,7 @@ class CompanionManager(QObject):
 
         self._current_project_id = project_id
         self._current_conversation_id = conversation_id
+        self._conversation_loaded = True
 
         if self._bridge.is_running():
             reply_error("A conversation is already in progress on the desktop.")
@@ -543,17 +547,37 @@ class CompanionManager(QObject):
                     "error": "Desktop is busy",
                 })
                 return
-            self._current_project_id = project_id
-            self._current_conversation_id = thread_id
+            self._pending_select_msg = msg
             self.conversation_selected_by_companion.emit(project.root_path, thread.conversation_path)
-            self._reply_to_sender(msg, "conversation.selected", {
-                "project_id": project_id,
-                "thread_id": thread_id,
-            })
         except Exception as exc:
             logger.error("[Companion] conversation.select error: %s", exc)
             self._reply_to_sender(msg, "conversation.selected", {
                 "error": str(exc),
+            })
+
+    def complete_conversation_select(self, success: bool, error_text: str = "") -> None:
+        """Called by MainWindow after attempting to load a companion-requested thread."""
+        msg = self._pending_select_msg
+        self._pending_select_msg = None
+        if msg is None:
+            return
+        payload = msg.get("payload", {})
+        thread_id = payload.get("thread_id", "")
+        project_id = payload.get("project_id", self._current_project_id)
+        if success:
+            self._current_project_id = project_id
+            self._current_conversation_id = thread_id
+            self._conversation_loaded = True
+            self._reply_to_sender(msg, "conversation.selected", {
+                "project_id": project_id,
+                "thread_id": thread_id,
+            })
+        else:
+            self._reply_to_sender(msg, "conversation.selected", {
+                "project_id": project_id,
+                "thread_id": thread_id,
+                "status": "error",
+                "error": error_text,
             })
 
     def _handle_conversation_history(self, msg: dict) -> None:
@@ -569,7 +593,7 @@ class CompanionManager(QObject):
             })
             return
         try:
-            if thread_id == self._current_conversation_id and self._bridge is not None:
+            if self._conversation_loaded and thread_id == self._current_conversation_id and self._bridge is not None:
                 raw_messages = self._bridge.history.messages
             else:
                 store = ProjectStore()

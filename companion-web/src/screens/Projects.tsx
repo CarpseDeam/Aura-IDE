@@ -91,8 +91,8 @@ function ProjectsScreen() {
       'conversation.selected',
       (msg: any) => {
         const payload = msg.payload || {};
-        if (payload.error) {
-          setProjectError(payload.error);
+        if (payload.status === 'error' || payload.error) {
+          setProjectError(payload.error || payload.status || 'Failed to select conversation');
           setSelectingThreadId(null);
           return;
         }

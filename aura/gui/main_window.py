@@ -1463,10 +1463,21 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
     def _on_companion_thread_selected(self, project_root: Path, conversation_path: Path) -> None:
         if self._bridge.is_running():
+            self._companion.complete_conversation_select(
+                False, "Desktop is busy — wait for the current response to finish, or click Stop."
+            )
             return
         if self._workspace_root is not None and self._workspace_root.resolve() != project_root.resolve():
             self._on_project_selected(project_root)
-        self._on_thread_selected(conversation_path)
+        try:
+            self._persistence.load_and_apply(conversation_path)
+            self._send_handler.clear_queue()
+            self._input.set_queued_messages(0)
+            self._reset_session_usage()
+            self._companion.complete_conversation_select(True)
+        except Exception as _err:
+            QMessageBox.warning(self, APP_NAME, f"Could not open conversation:\n{_err}")
+            self._companion.complete_conversation_select(False, str(_err))
 
     def _on_open_update(self) -> None:
         dlg = UpdateDialog(self)
