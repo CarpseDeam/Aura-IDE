@@ -1972,21 +1972,23 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             drone_id = extras.get("drone_id")
             if self._pending_draft_settle is not None and drone_id:
                 editor, draft_node_id = self._pending_draft_settle
+                self._pending_draft_settle = None
                 try:
                     drone_def = DroneStore.load_drone(self._workspace_root, drone_id)
                     if drone_def is None:
-                        logger.warning(f"Settle draft: drone {drone_id} not found in store")
+                        logger.warning(f"Cannot settle draft {draft_node_id}: drone {drone_id!r} not loadable")
                         editor.set_status("Build failed — check conversation", DANGER)
                     else:
-                        editor.set_status("Drone saved ✓", SUCCESS)
                         success = editor.settle_draft_node(draft_node_id, drone_def)
                         if not success:
-                            logger.warning(f"Settle draft: settle_draft_node returned False for {draft_node_id}")
+                            logger.warning(f"Cannot settle draft {draft_node_id}: settle_draft_node returned False")
                             editor.set_status("Build failed — check conversation", DANGER)
-                        else:
-                            self._pending_draft_settle = None
                 except Exception:
                     logger.exception("Error settling draft node")
+                    try:
+                        editor.set_status("Build failed — check conversation", DANGER)
+                    except Exception:
+                        logger.debug("Could not set draft settlement status", exc_info=True)
 
         if ok and name in ("read_file", "read_files"):
             try:
