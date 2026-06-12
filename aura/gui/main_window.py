@@ -775,6 +775,9 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         editor.goBackRequested.connect(workbay.hide)
         editor.settle_draft_requested.connect(self._on_chain_editor_settle_draft)
         editor.runChainRequested.connect(lambda cid: self._on_run_workflow(cid))
+        editor.runDroneRequested.connect(self._on_launch_drone)
+        editor.editDroneRequested.connect(self._on_edit_drone)
+        editor.deleteDroneRequested.connect(self._on_delete_drone)
         workbay.geometry_saved.connect(self._on_drone_workbay_geometry_saved)
         workbay.show_and_raise()
 

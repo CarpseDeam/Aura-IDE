@@ -5,15 +5,13 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QDrag, QFont, QPainter, QPixmap
+from PySide6.QtCore import QMimeData
 from PySide6.QtWidgets import (
-    QAbstractItemView,
     QCheckBox,
     QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QListWidget,
-    QListWidgetItem,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -72,113 +70,189 @@ def _qss_darker(color: QColor | str, factor: int = 120) -> str:
     return QColor(str(color)).darker(factor).name()
 
 
-class _DronePaletteList(QListWidget):
-    """Left sidebar listing available drones with drag-to-canvas support."""
+class _DroneCard(QFrame):
+    """A single drone card with drag-to-canvas support."""
 
-    def __init__(self, workspace_root: Path, parent=None):
+    def __init__(self, drone: DroneDefinition, parent=None):
+        super().__init__(parent)
+        self._drone = drone
+        self._drag_start_pos = None
+
+        self.setStyleSheet(
+            f"background: {_qss_color(BG_RAISED)};"
+            f"border: 1px solid {_qss_color(BORDER)};"
+            "border-radius: 6px; padding: 8px; margin: 2px 4px;"
+        )
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(4)
+
+        # Top row: name + write-policy pill
+        top_row = QHBoxLayout()
+        top_row.setSpacing(4)
+
+        name_lbl = QLabel(drone.name)
+        f = QFont()
+        f.setBold(True)
+        name_lbl.setFont(f)
+        name_lbl.setStyleSheet(f"color: {_qss_color(FG)}; background: transparent;")
+        top_row.addWidget(name_lbl)
+        top_row.addStretch()
+
+        policy = getattr(drone, "write_policy", "read_only")
+        pill_color = SUCCESS if policy == "read_only" else WARN
+        pill_text = "read_only" if policy == "read_only" else "write"
+        pill = QLabel(pill_text)
+        pill.setStyleSheet(
+            f"background: {_qss_color(pill_color)}; color: {_qss_color(BG)};"
+            "border-radius: 4px; padding: 1px 6px;"
+            "font-size: 10px; font-weight: bold;"
+        )
+        top_row.addWidget(pill)
+        layout.addLayout(top_row)
+
+        # Description
+        desc_text = drone.description or ""
+        desc = QLabel(desc_text)
+        desc.setWordWrap(True)
+        desc.setMaximumHeight(30)
+        desc.setStyleSheet(f"color: {_qss_color(FG_MUTED)}; background: transparent; font-size: 11px;")
+        layout.addWidget(desc)
+
+        # Action buttons row
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(4)
+
+        self._run_btn = QPushButton("\u25b6 Run")
+        self._edit_btn = QPushButton("\u270e Edit")
+        self._del_btn = QPushButton("\u2715 Delete")
+
+        for btn in (self._run_btn, self._edit_btn, self._del_btn):
+            btn.setFlat(True)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setStyleSheet(
+                f"QPushButton {{ color: {_qss_color(FG_MUTED)}; background: transparent;"
+                "border: none; padding: 2px 8px; font-size: 11px; }}"
+                f"QPushButton:hover {{ color: {_qss_color(FG)};"
+                f"background: {_qss_color(BG_ALT)}; border-radius: 3px; }}"
+            )
+
+        btn_row.addWidget(self._run_btn)
+        btn_row.addWidget(self._edit_btn)
+        btn_row.addWidget(self._del_btn)
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_start_pos = event.pos()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._drag_start_pos is None:
+            return
+        if (event.pos() - self._drag_start_pos).manhattanLength() < 10:
+            return
+        drag = QDrag(self)
+        md = QMimeData()
+        md.setData("application/x-aura-drone-id", self._drone.id.encode("utf-8"))
+        drag.setMimeData(md)
+        pixmap = QPixmap(160, 30)
+        pixmap.fill(QColor(BG_ALT))
+        painter = QPainter(pixmap)
+        painter.setPen(FG)
+        painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, self._drone.name)
+        painter.end()
+        drag.setPixmap(pixmap)
+        self._drag_start_pos = None
+        drag.exec(Qt.DropAction.CopyAction)
+
+    def mouseReleaseEvent(self, event):
+        self._drag_start_pos = None
+        super().mouseReleaseEvent(event)
+
+
+class _DroneRosterWidget(QWidget):
+    """Scrollable card roster of available drones with drag-to-canvas support."""
+
+    runRequested = Signal(str)
+    editRequested = Signal(str)
+    deleteRequested = Signal(str)
+
+    def __init__(self, workspace_root: Path, editor: ChainEditor, parent=None):
         super().__init__(parent)
         self._workspace_root = workspace_root
-        self.setDragEnabled(True)
-        self.setDragDropMode(QAbstractItemView.DragDropMode.DragOnly)
-        self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.setMinimumWidth(140)
-        self.setMaximumWidth(220)
-        self.setSpacing(2)
-        self.setStyleSheet(f"""
-            QListWidget {{
-                background: {_qss_color(BG_RAISED)};
-                border: none;
-                padding: 4px;
-                color: {_qss_color(FG)};
-            }}
-            QListWidget::item {{
-                padding: 6px 8px;
-                border-radius: 4px;
-                border: 1px solid {_qss_color(BORDER)};
-                margin: 2px 0;
-                background: {_qss_color(BG_ALT)};
-            }}
-            QListWidget::item:hover {{
-                background: {_qss_color(BG)};
-                border: 1px solid {_qss_color(BORDER_STRONG)};
-            }}
-            QListWidget::item:selected {{
-                background: {_qss_color(ACCENT)};
-                color: {_qss_color(BG)};
-            }}
-        """)
+        self._editor = editor
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+
+        self._container = QWidget()
+        self._container.setStyleSheet("background: transparent;")
+        self._card_layout = QVBoxLayout(self._container)
+        self._card_layout.setContentsMargins(4, 4, 4, 4)
+        self._card_layout.setSpacing(2)
+
+        self._scroll.setWidget(self._container)
+        layout.addWidget(self._scroll)
 
     def set_workspace_root(self, path: Path) -> None:
         self._workspace_root = path
-        self._populate()
+        self.populate()
 
-    def _populate(self) -> None:
-        self.clear()
+    def populate(self) -> None:
+        while self._card_layout.count():
+            item = self._card_layout.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+
         drones = DroneStore.list_drones(self._workspace_root)
-        # Group by write policy
-        read_only_items = []
-        write_items = []
+        read_only = []
+        write_capable = []
         for d in drones:
             policy = getattr(d, "write_policy", "read_only")
             if policy == "read_only":
-                read_only_items.append(d)
+                read_only.append(d)
             else:
-                write_items.append(d)
+                write_capable.append(d)
 
-        self._add_section_header("Read-only Drones")
-        for d in read_only_items:
-            self._add_drone_item(d)
+        def _add_section_label(text: str) -> None:
+            lbl = QLabel(text)
+            f = QFont()
+            f.setBold(True)
+            f.setPointSize(9)
+            lbl.setFont(f)
+            lbl.setStyleSheet(
+                f"color: {_qss_color(FG_MUTED)}; background: transparent;"
+                "padding: 4px 8px 2px 8px;"
+            )
+            self._card_layout.addWidget(lbl)
 
-        self._add_section_header("Write-capable Drones")
-        for d in write_items:
-            self._add_drone_item(d)
+        if read_only:
+            _add_section_label("Read-only Drones")
+            for d in read_only:
+                self._add_drone_card(d)
 
-    def _add_section_header(self, text: str) -> None:
-        item = QListWidgetItem(text)
-        item.setFlags(Qt.ItemFlag.NoItemFlags)
-        item.setForeground(FG_MUTED)
-        font = QFont()
-        font.setBold(True)
-        font.setPointSize(9)
-        item.setFont(font)
-        self.addItem(item)
+        if write_capable:
+            _add_section_label("Write-capable Drones")
+            for d in write_capable:
+                self._add_drone_card(d)
 
-    def _add_drone_item(self, drone: DroneDefinition) -> None:
-        item = QListWidgetItem(drone.name)
-        item.setData(Qt.ItemDataRole.UserRole, drone.id)
-        item.setToolTip(drone.description)
-        self.addItem(item)
+        self._card_layout.addStretch()
 
-    def mimeData(self, items) -> QDrag:
-        """Override to encode drone_id in custom mime type."""
-        md = super().mimeData(items)
-        current = self.currentItem()
-        if current:
-            drone_id = current.data(Qt.ItemDataRole.UserRole)
-            if drone_id:
-                md.setData("application/x-aura-drone-id", drone_id.encode("utf-8"))
-        return md
-
-    def startDrag(self, supportedActions) -> None:
-        current = self.currentItem()
-        if current and current.data(Qt.ItemDataRole.UserRole) is not None:
-            drag = QDrag(self)
-            md = self.mimeData([current])
-            drag.setMimeData(md)
-            pixmap = QPixmap(120, 30)
-            pixmap.fill(QColor(BG_ALT))
-            painter = QPainter(pixmap)
-            painter.setPen(FG)
-            painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, current.text())
-            painter.end()
-            drag.setPixmap(pixmap)
-            drag.exec(Qt.DropAction.CopyAction)
-        else:
-            super().startDrag(supportedActions)
-
-    def populate(self) -> None:
-        """Public alias to refresh the palette."""
-        self._populate()
+    def _add_drone_card(self, drone: DroneDefinition) -> None:
+        card = _DroneCard(drone, parent=self._container)
+        card._run_btn.clicked.connect(lambda d=drone: self.runRequested.emit(d.id))
+        card._edit_btn.clicked.connect(lambda d=drone: self.editRequested.emit(d.id))
+        card._del_btn.clicked.connect(lambda d=drone: self.deleteRequested.emit(d.id))
+        self._card_layout.addWidget(card)
 
 
 class _PropertyPanel(QScrollArea):
@@ -486,6 +560,9 @@ class ChainEditor(QWidget):
     runChainRequested = Signal(str)
     goBackRequested = Signal()
     settle_draft_requested = Signal(object)  # dict: {"brief": DroneBuildBrief, "draft_node_id": str}
+    runDroneRequested = Signal(str)    # drone_id
+    editDroneRequested = Signal(str)   # drone_id
+    deleteDroneRequested = Signal(str) # drone_id
 
     def __init__(
         self,
@@ -519,6 +596,7 @@ class ChainEditor(QWidget):
 
         # Runtime state — must be initialized before layout/load which may reference them
         self._workshop_draft_node_id: str | None = None
+        self._last_manual_mode = "Drones"
         self._palette_width = 260
         self._dirty = False
 
@@ -556,7 +634,10 @@ class ChainEditor(QWidget):
             }}
         """)
 
-        self._palette = _DronePaletteList(self._workspace_root, self)
+        self._roster = _DroneRosterWidget(self._workspace_root, self)
+        self._roster.runRequested.connect(self.runDroneRequested.emit)
+        self._roster.editRequested.connect(self.editDroneRequested.emit)
+        self._roster.deleteRequested.connect(self.deleteDroneRequested.emit)
 
         self._mode_buttons: dict[str, QToolButton] = {}
         self._left_stack = QStackedWidget()
@@ -566,7 +647,7 @@ class ChainEditor(QWidget):
         mode_layout = QHBoxLayout(mode_bar)
         mode_layout.setContentsMargins(4, 4, 4, 2)
         mode_layout.setSpacing(3)
-        for name in ("Workflows", "Drones", "Details", "Workshop"):
+        for name in ("Workflows", "Drones"):
             btn = QToolButton()
             btn.setText(name)
             btn.setCheckable(True)
@@ -612,7 +693,7 @@ class ChainEditor(QWidget):
         palette_layout.setSpacing(4)
         palette_header_row = QHBoxLayout()
         palette_header_row.setContentsMargins(0, 0, 0, 0)
-        palette_header_label = QLabel("Drone Palette")
+        palette_header_label = QLabel("Drones")
         palette_header_label.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {_qss_color(FG_MUTED)}; padding: 0 8px;")
         palette_header_row.addWidget(palette_header_label)
         palette_header_row.addStretch()
@@ -626,7 +707,7 @@ class ChainEditor(QWidget):
         new_drone_btn.clicked.connect(self._on_new_drone_clicked)
         palette_header_row.addWidget(new_drone_btn)
         palette_layout.addLayout(palette_header_row)
-        palette_layout.addWidget(self._palette, 1)
+        palette_layout.addWidget(self._roster, 1)
         self._left_stack.addWidget(palette_container)  # index 1
 
         # ---- Page 2: Details ----
@@ -723,6 +804,8 @@ class ChainEditor(QWidget):
         delete_btn.setStyleSheet(btn_style)
         delete_btn.clicked.connect(self._on_delete_clicked)
         t_layout.addWidget(delete_btn)
+
+        self._workflow_tool_buttons = [save_btn, save_as_btn, validate_btn, run_btn, delete_btn]
 
         t_layout.addStretch()
 
@@ -909,7 +992,7 @@ class ChainEditor(QWidget):
         layout.setSpacing(4)
 
         # Back button
-        back_btn = QPushButton("\u2190 Back to Drones")
+        back_btn = QPushButton("\u2190 Back")
         back_btn.setFlat(True)
         back_btn.setCursor(Qt.PointingHandCursor)
         back_btn.setStyleSheet(f"QPushButton {{ color: {_qss_color(FG_MUTED)}; text-align: left; padding: 2px; }}")
@@ -998,7 +1081,7 @@ class ChainEditor(QWidget):
         if self._workshop_panel is not None:
             self._workshop_panel.reset_workshop_state()
         self._canvas._scene.clearSelection()
-        self._set_active_mode("Drones")
+        self._set_active_mode(self._last_manual_mode)
 
     # ---- Mode switcher ----
 
@@ -1013,6 +1096,19 @@ class ChainEditor(QWidget):
         else:
             if self._left_stack.currentIndex() == index_map.get("Workshop", 3):
                 self._splitter.setSizes([self._palette_width, self._splitter.sizes()[1]])
+
+        # Track last manual mode (Details/Workshop auto-switches must not overwrite)
+        if name in ("Workflows", "Drones"):
+            self._last_manual_mode = name
+
+        # Show/hide workflow toolbar buttons based on mode
+        if hasattr(self, '_workflow_tool_buttons'):
+            if name == "Drones":
+                for b in self._workflow_tool_buttons:
+                    b.hide()
+            elif name == "Workflows":
+                for b in self._workflow_tool_buttons:
+                    b.show()
 
         self._left_stack.setCurrentIndex(target)
 
@@ -1141,8 +1237,8 @@ class ChainEditor(QWidget):
         # Persist chain
         self._save_chain()
 
-        # Refresh palette to show the new drone
-        self._palette.populate()
+        # Refresh roster to show the new drone
+        self._roster.populate()
 
         # Reset workshop state
         self._workshop_draft_node_id = None
@@ -1254,7 +1350,7 @@ class ChainEditor(QWidget):
 
     def set_workspace_root(self, path: Path) -> None:
         self._workspace_root = path
-        self._palette.set_workspace_root(path)
+        self._roster.set_workspace_root(path)
         self._workflow_list_pane.set_workspace_root(path)
         self._workflow_list_pane.refresh()
         self._load_or_create_chain(self._chain_id)
