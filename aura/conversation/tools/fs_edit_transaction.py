@@ -2,11 +2,11 @@
 from __future__ import annotations
 
 import ast
-import hashlib
 from pathlib import Path
 from typing import Any
 
 from aura.ast_utils import parse_python_ast
+from aura.conversation.tools.fs_read import read_file_snapshot
 from aura.conversation.tools.fs_write import _failure_payload, _rel_path, replace_line_range
 
 
@@ -692,14 +692,13 @@ def propose_edit_transaction(
     if not target.is_file():
         return _failure_payload(workspace_root, target, f"not a regular file: {rel}", "path_error")
     try:
-        original = target.read_bytes().decode("utf-8")
+        original, current_hash, _file_size = read_file_snapshot(target)
     except UnicodeDecodeError:
         return _failure_payload(workspace_root, target, "file is not valid UTF-8 text", "internal_error")
     except OSError:
         return _failure_payload(workspace_root, target, "failed to read file", "internal_error")
 
     if expected_file_hash is not None:
-        current_hash = hashlib.sha256(original.encode("utf-8")).hexdigest()
         if current_hash != expected_file_hash:
             return _failure_payload(
                 workspace_root,

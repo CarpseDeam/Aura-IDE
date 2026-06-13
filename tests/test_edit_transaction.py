@@ -5,6 +5,7 @@ from pathlib import Path
 
 from aura.conversation.tools._types import ApprovalDecision
 from aura.conversation.tools.fs_edit_transaction import propose_edit_transaction
+from aura.conversation.tools.fs_read import read_file
 from aura.conversation.tools.registry import TOOL_HANDLERS, ToolRegistry
 
 
@@ -770,6 +771,22 @@ def test_stale_expected_file_hash_rejects_without_write(tmp_workspace: Path):
     assert proposal["ok"] is False
     assert proposal["failure_class"] == "edit_transaction_hash_mismatch"
     assert target.read_text(encoding="utf-8") == original
+
+
+def test_expected_file_hash_uses_read_file_raw_byte_hash(tmp_workspace: Path):
+    target = tmp_workspace / "sample.py"
+    target.write_bytes(b"def alpha():\r\n    return 1\r\n")
+    read_result = read_file(tmp_workspace, target)
+
+    proposal = propose_edit_transaction(
+        tmp_workspace,
+        target,
+        [{"op": "replace_function", "symbol_name": "alpha", "new_definition": "def alpha():\n    return 2"}],
+        expected_file_hash=read_result["content_hash"],
+    )
+
+    assert read_result["content_hash"] == hashlib.sha256(target.read_bytes()).hexdigest()
+    assert proposal["ok"] is True
 
 
 def test_crlf_input_preserves_crlf_after_transaction(tmp_workspace: Path):

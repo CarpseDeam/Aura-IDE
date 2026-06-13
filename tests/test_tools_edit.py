@@ -208,6 +208,17 @@ def test_edit_line_exact_single_line(sample_py_file: Path, tmp_workspace: Path):
     assert result["match_tier"] == "exact"
 
 
+def test_edit_line_exact_when_exact_substring_is_not_unique(tmp_workspace: Path):
+    f = tmp_workspace / "line_exact.py"
+    f.write_text("target\nprefix target suffix\n", encoding="utf-8")
+
+    result = propose_edit(tmp_workspace, f, "target", "replacement")
+
+    assert result["ok"] is True
+    assert result["match_tier"] == "line_exact"
+    assert result["new_content"] == "replacementprefix target suffix\n"
+
+
 # propose_edit — Tier 3: Fuzzy whitespace-agnostic match
 
 def test_edit_fuzzy_indentation_change(tmp_workspace: Path):

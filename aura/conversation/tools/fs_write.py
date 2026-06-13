@@ -7,6 +7,7 @@ from pathlib import Path
 import hashlib
 from typing import Any
 
+from aura.conversation.tools.fs_read import read_file_snapshot
 from aura.paths import safe_is_relative_to, safe_relative_to
 
 
@@ -252,6 +253,578 @@ def _preview_block(text: str, limit: int = 160) -> str:
     return compact[:limit] + "..."
 
 
+def _find_all_spans(text: str, needle: str) -> list[tuple[int, int]]:
+    spans: list[tuple[int, int]] = []
+    if not needle:
+        return spans
+    start = text.find(needle)
+    while start >= 0:
+        spans.append((start, start + len(needle)))
+        start = text.find(needle, start + len(needle))
+    return spans
+
+
+def _line_offsets(lines_with_nl: list[str]) -> list[int]:
+    offsets: list[int] = []
+    current = 0
+    for line in lines_with_nl:
+        offsets.append(current)
+        current += len(line)
+    offsets.append(current)
+    return offsets
+
+
+def _dominant_newline(text: str, fallback: str = "\n") -> str:
+    crlf = text.count("\r\n")
+    lf = text.count("\n") - crlf
+    cr = text.count("\r") - crlf
+    if crlf >= lf and crlf >= cr and crlf > 0:
+        return "\r\n"
+    if cr > lf and cr > 0:
+        return "\r"
+    if lf > 0:
+        return "\n"
+    return fallback
+
+
+def _normalize_newlines(text: str, newline: str) -> str:
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    return normalized.replace("\n", newline)
+
+
+def _replace_span(text: str, start: int, end: int, new: str) -> str:
+    return text[:start] + new + text[end:]
+
+
+def _replacement_for_span(
+    content: str,
+    start: int,
+    end: int,
+    new: str,
+    *,
+    normalize_replacement_newlines: bool,
+) -> str:
+    if not normalize_replacement_newlines:
+        return new
+    fallback = _dominant_newline(content)
+    newline = _dominant_newline(content[start:end], fallback=fallback)
+    return _normalize_newlines(new, newline)
+
+
+def _replace_spans(
+    content: str,
+    spans: list[tuple[int, int]],
+    new: str,
+    *,
+    normalize_replacement_newlines: bool,
+) -> str:
+    updated = content
+    for start, end in reversed(spans):
+        replacement = _replacement_for_span(
+            content,
+            start,
+            end,
+            new,
+            normalize_replacement_newlines=normalize_replacement_newlines,
+        )
+        updated = _replace_span(updated, start, end, replacement)
+    return updated
+
+
+def _span_line_number(text: str, offset: int) -> int:
+    return text.count("\n", 0, offset) + 1
+
+
+def _line_context(text: str, start: int, end: int, limit: int = 2) -> str:
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").splitlines()
+    start_line = _span_line_number(text, start)
+    end_line = _span_line_number(text, end)
+    before = max(1, start_line - limit)
+    after = min(len(lines), end_line + limit)
+    return "\n".join(lines[before - 1:after])
+
+
+def _build_span_candidates(
+    text: str,
+    spans: list[tuple[int, int]],
+    limit: int = 3,
+) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    seen: set[tuple[int, int]] = set()
+    for start, end in spans:
+        key = (start, end)
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append(
+            {
+                "start_line": _span_line_number(text, start),
+                "end_line": _span_line_number(text, max(start, end - 1)),
+                "text": _preview_block(_line_context(text, start, end)),
+            }
+        )
+        if len(candidates) >= limit:
+            break
+    return candidates
+
+
+def _build_line_candidates(
+    file_lines: list[str],
+    line_matches: list[int],
+    window_len: int,
+    limit: int = 3,
+) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    seen: set[tuple[int, int]] = set()
+    for idx in line_matches:
+        key = (idx, idx + window_len)
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append(
+            {
+                "start_line": idx + 1,
+                "end_line": idx + window_len,
+                "text": "\n".join(file_lines[idx:idx + window_len]),
+            }
+        )
+        if len(candidates) >= limit:
+            break
+    return candidates
+
+
+def _not_found_replacement(
+    *,
+    best_ratio: float,
+    nearest_candidates: list[dict[str, Any]],
+    match_tier: str = "fuzzy",
+    occurrence_count: int | None = None,
+    old: str = "",
+    sanitized: bool = False,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "ok": False,
+        "reason": "not_found",
+        "match_tier": match_tier,
+        "old": old,
+        "error": (
+            f"old_str not found in file. Best fuzzy match ratio: {best_ratio:.3f} "
+            f"(threshold: 0.75). Tried exact, line-exact, and fuzzy matching."
+        ),
+        "best_fuzzy_ratio": round(best_ratio, 3),
+        "best_ratio": round(best_ratio, 4),
+        "nearest_candidates": nearest_candidates,
+    }
+    if occurrence_count is not None:
+        result["occurrence_count"] = occurrence_count
+    if sanitized:
+        result["sanitized"] = True
+    return result
+
+
+def _ambiguous_replacement(
+    *,
+    error: str,
+    match_tier: str,
+    occurrence_count: int,
+    nearest_candidates: list[dict[str, Any]],
+    old: str,
+    sanitized: bool,
+    best_ratio: float | None = None,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "ok": False,
+        "reason": "ambiguous",
+        "match_tier": match_tier,
+        "old": old,
+        "error": error,
+        "occurrence_count": occurrence_count,
+        "nearest_candidates": nearest_candidates,
+    }
+    if best_ratio is not None:
+        result["best_fuzzy_ratio"] = round(best_ratio, 3)
+        result["best_ratio"] = round(best_ratio, 4)
+    if sanitized:
+        result["sanitized"] = True
+    return result
+
+
+def apply_replacement_to_content(
+    content: str,
+    old_str: str,
+    new_str: str,
+    *,
+    occurrence: int | None = None,
+    allow_multiple: bool = False,
+    sanitize: bool = True,
+    raw_first: bool = False,
+    exact_duplicates_are_ambiguous: bool = False,
+    normalize_replacement_newlines: bool = False,
+) -> dict[str, Any]:
+    """Apply one old/new replacement to an in-memory content string.
+
+    The matching tiers mirror edit_file: exact string, exact line window,
+    then whitespace-tolerant fuzzy line matching with ambiguity rejection.
+    """
+    if raw_first:
+        raw_result = apply_replacement_to_content(
+            content,
+            old_str,
+            new_str,
+            occurrence=occurrence,
+            allow_multiple=allow_multiple,
+            sanitize=False,
+            raw_first=False,
+            exact_duplicates_are_ambiguous=exact_duplicates_are_ambiguous,
+            normalize_replacement_newlines=normalize_replacement_newlines,
+        )
+        if (
+            raw_result.get("ok")
+            or raw_result.get("reason") == "ambiguous"
+            or raw_result.get("occurrence_count")
+        ):
+            return raw_result
+        sanitized_result = apply_replacement_to_content(
+            content,
+            old_str,
+            new_str,
+            occurrence=occurrence,
+            allow_multiple=allow_multiple,
+            sanitize=sanitize,
+            raw_first=False,
+            exact_duplicates_are_ambiguous=exact_duplicates_are_ambiguous,
+            normalize_replacement_newlines=normalize_replacement_newlines,
+        )
+        if sanitized_result.get("sanitized"):
+            sanitized_result["sanitized_fallback"] = True
+        return sanitized_result
+
+    if sanitize:
+        old, new, sanitized = _sanitize_edit_strings(old_str, new_str)
+    else:
+        old, new, sanitized = old_str, new_str, False
+
+    if old == "":
+        return _not_found_replacement(
+            best_ratio=0.0,
+            nearest_candidates=[],
+            old=old,
+            sanitized=sanitized,
+        )
+
+    # ---- Tier 1: Exact string match ----
+    exact_spans = _find_all_spans(content, old)
+    if occurrence is not None and exact_spans:
+        if occurrence <= len(exact_spans):
+            start, end = exact_spans[occurrence - 1]
+            replacement = _replacement_for_span(
+                content,
+                start,
+                end,
+                new,
+                normalize_replacement_newlines=normalize_replacement_newlines,
+            )
+            result: dict[str, Any] = {
+                "ok": True,
+                "content": _replace_span(content, start, end, replacement),
+                "match_tier": "exact",
+                "occurrence_count": len(exact_spans),
+            }
+            if sanitized:
+                result["sanitized"] = True
+            return result
+        return _not_found_replacement(
+            best_ratio=0.0,
+            nearest_candidates=_build_span_candidates(content, exact_spans),
+            match_tier="exact",
+            occurrence_count=len(exact_spans),
+            old=old,
+            sanitized=sanitized,
+        )
+    if len(exact_spans) == 1:
+        start, end = exact_spans[0]
+        replacement = _replacement_for_span(
+            content,
+            start,
+            end,
+            new,
+            normalize_replacement_newlines=normalize_replacement_newlines,
+        )
+        result = {
+            "ok": True,
+            "content": _replace_span(content, start, end, replacement),
+            "match_tier": "exact",
+        }
+        if sanitized:
+            result["sanitized"] = True
+        return result
+    if len(exact_spans) > 1:
+        if allow_multiple:
+            result = {
+                "ok": True,
+                "content": _replace_spans(
+                    content,
+                    exact_spans,
+                    new,
+                    normalize_replacement_newlines=normalize_replacement_newlines,
+                ),
+                "match_tier": "exact",
+                "occurrence_count": len(exact_spans),
+            }
+            if sanitized:
+                result["sanitized"] = True
+            return result
+        if exact_duplicates_are_ambiguous:
+            return _ambiguous_replacement(
+                error=(
+                    "ambiguous: old_str matches multiple exact blocks in the file. "
+                    "old_str does not uniquely identify the target."
+                ),
+                match_tier="exact",
+                occurrence_count=len(exact_spans),
+                nearest_candidates=_build_span_candidates(content, exact_spans),
+                old=old,
+                sanitized=sanitized,
+            )
+
+    # Prepare line-based structures for Tiers 2 & 3.
+    lines_with_nl = content.splitlines(keepends=True)
+    file_lines = content.splitlines()
+    old_lines = old.splitlines()
+    window_len = len(old_lines)
+
+    if not old_lines:
+        return _not_found_replacement(
+            best_ratio=0.0,
+            nearest_candidates=[],
+            old=old,
+            sanitized=sanitized,
+        )
+
+    # ---- Tier 2: Line-by-line exact match ----
+    line_matches: list[int] = []
+    if window_len <= len(file_lines):
+        for i in range(len(file_lines) - window_len + 1):
+            if file_lines[i:i + window_len] == old_lines:
+                line_matches.append(i)
+
+    if line_matches:
+        offsets = _line_offsets(lines_with_nl)
+        line_spans = [
+            (offsets[start], offsets[start + window_len])
+            for start in line_matches
+        ]
+        if occurrence is not None:
+            if occurrence <= len(line_spans):
+                start, end = line_spans[occurrence - 1]
+                replacement = _replacement_for_span(
+                    content,
+                    start,
+                    end,
+                    new,
+                    normalize_replacement_newlines=normalize_replacement_newlines,
+                )
+                result = {
+                    "ok": True,
+                    "content": _replace_span(content, start, end, replacement),
+                    "match_tier": "line_exact",
+                    "occurrence_count": len(line_spans),
+                }
+                if sanitized:
+                    result["sanitized"] = True
+                return result
+            return _not_found_replacement(
+                best_ratio=0.0,
+                nearest_candidates=_build_line_candidates(file_lines, line_matches, window_len),
+                match_tier="line_exact",
+                occurrence_count=len(line_spans),
+                old=old,
+                sanitized=sanitized,
+            )
+        if len(line_spans) == 1:
+            start, end = line_spans[0]
+            replacement = _replacement_for_span(
+                content,
+                start,
+                end,
+                new,
+                normalize_replacement_newlines=normalize_replacement_newlines,
+            )
+            result = {
+                "ok": True,
+                "content": _replace_span(content, start, end, replacement),
+                "match_tier": "line_exact",
+            }
+            if sanitized:
+                result["sanitized"] = True
+            return result
+        if allow_multiple:
+            result = {
+                "ok": True,
+                "content": _replace_spans(
+                    content,
+                    line_spans,
+                    new,
+                    normalize_replacement_newlines=normalize_replacement_newlines,
+                ),
+                "match_tier": "line_exact",
+                "occurrence_count": len(line_spans),
+            }
+            if sanitized:
+                result["sanitized"] = True
+            return result
+        if exact_duplicates_are_ambiguous:
+            return _ambiguous_replacement(
+                error=(
+                    "ambiguous: old_str matches multiple exact line blocks in the file. "
+                    "old_str does not uniquely identify the target."
+                ),
+                match_tier="line_exact",
+                occurrence_count=len(line_spans),
+                nearest_candidates=_build_line_candidates(file_lines, line_matches, window_len),
+                old=old,
+                sanitized=sanitized,
+            )
+
+    # ---- Tier 3: Whitespace-agnostic fuzzy line matching ----
+    candidates: list[tuple[int, float]] = []
+    best_ratio = 0.0
+    all_near_matches: list[tuple[int, float]] = []
+
+    if len(old_lines) <= len(file_lines):
+        normalized_old = [line.strip() for line in old_lines]
+        normalized_old_block = "\n".join(normalized_old)
+
+        for i in range(len(file_lines) - len(old_lines) + 1):
+            window = file_lines[i:i + len(old_lines)]
+            normalized_window = [line.strip() for line in window]
+            normalized_window_block = "\n".join(normalized_window)
+            ratio = difflib.SequenceMatcher(
+                None, normalized_old_block, normalized_window_block
+            ).ratio()
+            if ratio > best_ratio:
+                best_ratio = ratio
+            if ratio >= 0.75:
+                candidates.append((i, ratio))
+            if ratio > 0.5:
+                all_near_matches.append((i, ratio))
+
+    def _build_nearest_candidates() -> list[dict[str, Any]]:
+        sorted_matches = sorted(all_near_matches, key=lambda x: -x[1])
+        return _build_line_candidates(
+            file_lines,
+            [idx for idx, _ratio in sorted_matches],
+            window_len,
+        )
+
+    if occurrence is not None and candidates:
+        if occurrence <= len(candidates):
+            start_idx, ratio = candidates[occurrence - 1]
+            start = _line_offsets(lines_with_nl)[start_idx]
+            end = _line_offsets(lines_with_nl)[start_idx + len(old_lines)]
+            replacement = _replacement_for_span(
+                content,
+                start,
+                end,
+                new,
+                normalize_replacement_newlines=normalize_replacement_newlines,
+            )
+            result = {
+                "ok": True,
+                "content": _replace_span(content, start, end, replacement),
+                "match_tier": "fuzzy",
+                "fuzzy_ratio": round(ratio, 3),
+                "occurrence_count": len(candidates),
+            }
+            if sanitized:
+                result["sanitized"] = True
+            return result
+        return _not_found_replacement(
+            best_ratio=best_ratio,
+            nearest_candidates=_build_nearest_candidates(),
+            match_tier="fuzzy",
+            occurrence_count=len(candidates),
+            old=old,
+            sanitized=sanitized,
+        )
+
+    if len(candidates) == 1:
+        start_idx, ratio = candidates[0]
+        offsets = _line_offsets(lines_with_nl)
+        start = offsets[start_idx]
+        end = offsets[start_idx + len(old_lines)]
+        replacement = _replacement_for_span(
+            content,
+            start,
+            end,
+            new,
+            normalize_replacement_newlines=normalize_replacement_newlines,
+        )
+        result = {
+            "ok": True,
+            "content": _replace_span(content, start, end, replacement),
+            "match_tier": "fuzzy",
+            "fuzzy_ratio": round(ratio, 3),
+        }
+        if sanitized:
+            result["sanitized"] = True
+        return result
+
+    if len(candidates) > 1:
+        max_ratio = max(r for _, r in candidates)
+        top_candidates = [(i, r) for i, r in candidates if max_ratio - r < 0.001]
+        if len(top_candidates) == 1:
+            start_idx = top_candidates[0][0]
+            offsets = _line_offsets(lines_with_nl)
+            start = offsets[start_idx]
+            end = offsets[start_idx + len(old_lines)]
+            replacement = _replacement_for_span(
+                content,
+                start,
+                end,
+                new,
+                normalize_replacement_newlines=normalize_replacement_newlines,
+            )
+            result = {
+                "ok": True,
+                "content": _replace_span(content, start, end, replacement),
+                "match_tier": "fuzzy",
+                "fuzzy_ratio": round(max_ratio, 3),
+            }
+            if sanitized:
+                result["sanitized"] = True
+            return result
+
+        line_count = len(old_lines)
+        lines_detail = "\n".join(
+            f"  Candidate {j+1}: lines {start+1}-{start+line_count}"
+            for j, (start, _) in enumerate(top_candidates)
+        )
+        error_msg = (
+            f"ambiguous: old_str matches {len(top_candidates)} blocks "
+            f"in the file (best ratio: {max_ratio:.3f}).\n"
+            f"{lines_detail}\n"
+            f"old_str does not uniquely identify the target. "
+            f"Add more surrounding context lines to disambiguate."
+        )
+        return _ambiguous_replacement(
+            error=error_msg,
+            match_tier="fuzzy",
+            occurrence_count=len(top_candidates),
+            nearest_candidates=_build_nearest_candidates(),
+            old=old,
+            sanitized=sanitized,
+            best_ratio=max_ratio,
+        )
+
+    return _not_found_replacement(
+        best_ratio=best_ratio,
+        nearest_candidates=_build_nearest_candidates(),
+        old=old,
+        sanitized=sanitized,
+    )
+
+
 def propose_patch_file(
     workspace_root: Path,
     target: Path,
@@ -259,21 +832,20 @@ def propose_patch_file(
     expected_file_hash: str | None = None,
     description: str | None = None,
 ) -> dict[str, Any]:
-    """Propose an atomic multi-hunk exact-text patch for one existing file."""
+    """Propose an atomic multi-hunk patch for one existing file."""
     rel = _rel_path(workspace_root, target)
     if not target.exists():
         return _failure_payload(workspace_root, target, f"file not found: {rel}", "path_error")
     if not target.is_file():
         return _failure_payload(workspace_root, target, f"not a regular file: {rel}", "path_error")
     try:
-        original = target.read_text(encoding="utf-8")
+        original, current_hash, _file_size = read_file_snapshot(target)
     except UnicodeDecodeError:
         return _failure_payload(workspace_root, target, "file is not valid UTF-8 text", "internal_error")
     except OSError:
         return _failure_payload(workspace_root, target, "failed to read file", "internal_error")
 
     if expected_file_hash is not None:
-        current_hash = hashlib.sha256(original.encode("utf-8")).hexdigest()
         if current_hash != expected_file_hash:
             return _failure_payload(
                 workspace_root,
@@ -316,50 +888,59 @@ def propose_patch_file(
                 hunk_index=index,
             )
 
-        count = proposed.count(old)
-        if count == 0:
+        match = apply_replacement_to_content(
+            proposed,
+            old,
+            new,
+            occurrence=occurrence if explicit_occurrence else None,
+            allow_multiple=allow_multiple and not explicit_occurrence,
+            raw_first=True,
+            exact_duplicates_are_ambiguous=True,
+            normalize_replacement_newlines=True,
+        )
+        if not match.get("ok"):
+            reason = str(match.get("reason") or "not_found")
+            failure_class = "patch_hunk_ambiguous" if reason == "ambiguous" else "patch_hunk_not_found"
+            error = (
+                "patch_file hunk old block is ambiguous."
+                if failure_class == "patch_hunk_ambiguous"
+                else "patch_file hunk old block was not found."
+            )
+            if (
+                failure_class == "patch_hunk_not_found"
+                and explicit_occurrence
+                and int(match.get("occurrence_count") or 0) > 0
+            ):
+                error = "patch_file hunk occurrence exceeds matching old block count."
+            extra: dict[str, Any] = {
+                "hunk_index": index,
+                "old_preview": _preview_block(str(match.get("old") or old)),
+                "suggested_next_action": (
+                    "Provide occurrence or make the old block more specific."
+                    if failure_class == "patch_hunk_ambiguous"
+                    else "Re-read the file and submit one corrected patch_file transaction."
+                ),
+            }
+            for key in (
+                "match_tier",
+                "best_fuzzy_ratio",
+                "best_ratio",
+                "fuzzy_ratio",
+                "nearest_candidates",
+                "occurrence_count",
+                "sanitized",
+                "sanitized_fallback",
+            ):
+                if key in match:
+                    extra[key] = match[key]
             return _failure_payload(
                 workspace_root,
                 target,
-                "patch_file hunk old block was not found.",
-                "patch_hunk_not_found",
-                hunk_index=index,
-                old_preview=_preview_block(old),
-                suggested_next_action="Re-read the file and submit one corrected patch_file transaction.",
+                error,
+                failure_class,
+                **extra,
             )
-        if count > 1 and not allow_multiple and not explicit_occurrence:
-            return _failure_payload(
-                workspace_root,
-                target,
-                "patch_file hunk old block is ambiguous.",
-                "patch_hunk_ambiguous",
-                hunk_index=index,
-                old_preview=_preview_block(old),
-                occurrence_count=count,
-                suggested_next_action="Provide occurrence or make the old block more specific.",
-            )
-
-        if allow_multiple and not explicit_occurrence:
-            proposed = proposed.replace(old, new)
-            continue
-
-        if occurrence > count:
-            return _failure_payload(
-                workspace_root,
-                target,
-                "patch_file hunk occurrence exceeds matching old block count.",
-                "patch_hunk_not_found",
-                hunk_index=index,
-                old_preview=_preview_block(old),
-                occurrence_count=count,
-                suggested_next_action="Re-read the file and submit one corrected patch_file transaction.",
-            )
-        start = -1
-        search_from = 0
-        for _ in range(occurrence):
-            start = proposed.find(old, search_from)
-            search_from = start + len(old)
-        proposed = proposed[:start] + new + proposed[start + len(old):]
+        proposed = str(match["content"])
 
     if target.suffix == ".py":
         try:
@@ -400,198 +981,46 @@ def propose_edit(
     except UnicodeDecodeError:
         return _failure_payload(workspace_root, target, "file is not valid UTF-8 text", "internal_error")
 
-    # Sanitize inputs: strip markdown fences, normalize whitespace.
-    old_str, new_str, sanitized = _sanitize_edit_strings(old_str, new_str)
-
-    # ---- Tier 1: Exact string match (fast path, backward compatible) ----
-    occurrences = original.count(old_str)
-    if occurrences == 1:
-        proposed = original.replace(old_str, new_str, 1)
+    match = apply_replacement_to_content(original, old_str, new_str)
+    if match.get("ok"):
         result: dict[str, Any] = {
             "ok": True,
             "path": rel,
             "rel_path": rel,
             "old_content": original,
-            "new_content": proposed,
+            "new_content": str(match["content"]),
             "is_new_file": False,
-            "match_tier": "exact",
+            "match_tier": match.get("match_tier", "exact"),
         }
-        if sanitized:
-            result["sanitized"] = True
+        for key in ("fuzzy_ratio", "sanitized"):
+            if key in match:
+                result[key] = match[key]
         return result
 
-    # Prepare line-based structures for Tiers 2 & 3.
-    lines_with_nl = original.splitlines(keepends=True)
-    file_lines = original.splitlines()
-    old_lines = old_str.splitlines()
-
-    if not old_lines:
-        # empty old_str after splitting — fall through to error below
-        return {
-            "ok": False,
-            "path": rel,
-            "rel_path": rel,
-            "error": (
-                "old_str not found in file. Best fuzzy match ratio: 0.000 "
-                "(threshold: 0.75). Tried exact, line-exact, and fuzzy matching."
-            ),
-            "failure_class": "edit_mechanics_old_str_not_found",
-            "edit_file_failure": True,
-            "suggested_tool": "edit_line_range",
-            "suggested_next_tool": "edit_line_range",
-            "suggested_next_action": "Re-read the file to see the actual content, then use edit_line_range with the exact line numbers you can see.",
-        }
-
-    # ---- Tier 2: Line-by-line exact match ----
-    line_matches: list[int] = []
-    window_len = len(old_lines)
-    if window_len <= len(file_lines):
-        for i in range(len(file_lines) - window_len + 1):
-            if file_lines[i:i + window_len] == old_lines:
-                line_matches.append(i)
-
-    if len(line_matches) == 1:
-        start_idx = line_matches[0]
-        proposed = replace_line_range(original, lines_with_nl, start_idx, start_idx + window_len, new_str)
-        result = {
-            "ok": True,
-            "path": rel,
-            "rel_path": rel,
-            "old_content": original,
-            "new_content": proposed,
-            "is_new_file": False,
-            "match_tier": "line_exact",
-        }
-        if sanitized:
-            result["sanitized"] = True
-        return result
-
-    # ---- Tier 3: Whitespace-agnostic fuzzy line matching ----
-    candidates: list[tuple[int, float]] = []
-    best_ratio = 0.0
-    all_near_matches: list[tuple[int, float]] = []  # for nearest_candidates
-
-    if len(old_lines) <= len(file_lines):
-        normalized_old = [line.strip() for line in old_lines]
-        normalized_old_block = "\n".join(normalized_old)
-
-        for i in range(len(file_lines) - len(old_lines) + 1):
-            window = file_lines[i:i + len(old_lines)]
-            normalized_window = [line.strip() for line in window]
-            normalized_window_block = "\n".join(normalized_window)
-            ratio = difflib.SequenceMatcher(
-                None, normalized_old_block, normalized_window_block
-            ).ratio()
-            if ratio > best_ratio:
-                best_ratio = ratio
-            if ratio >= 0.75:
-                candidates.append((i, ratio))
-            if ratio > 0.5:
-                all_near_matches.append((i, ratio))
-
-    def _build_nearest_candidates() -> list[dict[str, Any]]:
-        """Build nearest_candidates list from all_near_matches."""
-        sorted_matches = sorted(all_near_matches, key=lambda x: -x[1])
-        result = []
-        seen = set()
-        for idx, rat in sorted_matches:
-            block_text = "\n".join(file_lines[idx:idx + window_len])
-            key = (idx, idx + window_len)
-            if key not in seen:
-                seen.add(key)
-                result.append({
-                    "start_line": idx + 1,
-                    "end_line": idx + window_len,
-                    "text": block_text,
-                })
-            if len(result) >= 3:
-                break
-        return result
-
-    if len(candidates) == 1:
-        start_idx = candidates[0][0]
-        proposed = replace_line_range(
-            original, lines_with_nl, start_idx, start_idx + len(old_lines), new_str
-        )
-        result: dict[str, Any] = {
-            "ok": True,
-            "path": rel,
-            "rel_path": rel,
-            "old_content": original,
-            "new_content": proposed,
-            "is_new_file": False,
-            "match_tier": "fuzzy",
-            "fuzzy_ratio": round(candidates[0][1], 3),
-        }
-        if sanitized:
-            result["sanitized"] = True
-        return result
-
-    if len(candidates) > 1:
-        max_ratio = max(r for _, r in candidates)
-        top_candidates = [(i, r) for i, r in candidates if max_ratio - r < 0.001]
-        if len(top_candidates) == 1:
-            start_idx = top_candidates[0][0]
-            proposed = replace_line_range(
-                original, lines_with_nl, start_idx, start_idx + len(old_lines), new_str
-            )
-            result: dict[str, Any] = {
-                "ok": True,
-                "path": rel,
-                "rel_path": rel,
-                "old_content": original,
-                "new_content": proposed,
-                "is_new_file": False,
-                "match_tier": "fuzzy",
-                "fuzzy_ratio": round(max_ratio, 3),
-            }
-            if sanitized:
-                result["sanitized"] = True
-            return result
-
-        # Multiple top candidates — ambiguous
-        line_count = len(old_lines)
-        lines_detail = "\n".join(
-            f"  Candidate {j+1}: lines {start+1}-{start+line_count}"
-            for j, (start, _) in enumerate(top_candidates)
-        )
-        error_msg = (
-            f"ambiguous: old_str matches {len(top_candidates)} blocks "
-            f"in the file (best ratio: {max_ratio:.3f}).\n"
-            f"{lines_detail}\n"
-            f"old_str does not uniquely identify the target. "
-            f"Add more surrounding context lines to disambiguate."
-        )
-        return {
-            "ok": False,
-            "path": rel,
-            "rel_path": rel,
-            "error": error_msg,
-            "failure_class": "edit_mechanics_ambiguous_match",
-            "edit_file_failure": True,
-            "suggested_tool": "edit_line_range",
-            "suggested_next_tool": "edit_line_range",
-            "suggested_next_action": "Re-read the file to see the actual content, then use edit_line_range with the exact line numbers you can see.",
-            "best_fuzzy_ratio": round(max_ratio, 3),
-            "nearest_candidates": _build_nearest_candidates(),
-        }
-
-    # ---- All tiers failed ----
-    error_msg = (
-        f"old_str not found in file. Best fuzzy match ratio: {best_ratio:.3f} "
-        f"(threshold: 0.75). Tried exact, line-exact, and fuzzy matching."
+    failure_class = (
+        "edit_mechanics_ambiguous_match"
+        if match.get("reason") == "ambiguous"
+        else "edit_mechanics_old_str_not_found"
     )
-    return {
+    payload: dict[str, Any] = {
         "ok": False,
         "path": rel,
         "rel_path": rel,
-        "error": error_msg,
-        "failure_class": "edit_mechanics_old_str_not_found",
+        "error": str(match.get("error") or "old_str not found in file."),
+        "failure_class": failure_class,
         "edit_file_failure": True,
         "suggested_tool": "edit_line_range",
         "suggested_next_tool": "edit_line_range",
         "suggested_next_action": "Re-read the file to see the actual content, then use edit_line_range with the exact line numbers you can see.",
-        "best_fuzzy_ratio": round(best_ratio, 3),
-        "best_ratio": round(best_ratio, 4),
-        "nearest_candidates": _build_nearest_candidates(),
     }
+    for key in (
+        "best_fuzzy_ratio",
+        "best_ratio",
+        "nearest_candidates",
+        "match_tier",
+        "occurrence_count",
+        "sanitized",
+    ):
+        if key in match:
+            payload[key] = match[key]
+    return payload

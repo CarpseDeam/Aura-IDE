@@ -66,6 +66,12 @@ def _stream_file_version(target: Path) -> tuple[str, int]:
     return digest.hexdigest(), file_size
 
 
+def read_file_snapshot(target: Path) -> tuple[str, str, int]:
+    """Return UTF-8 text plus the raw-byte content hash and size."""
+    raw = target.read_bytes()
+    return raw.decode("utf-8"), hashlib.sha256(raw).hexdigest(), len(raw)
+
+
 def read_file_range(
     workspace_root: Path,
     target: Path,
