@@ -64,6 +64,11 @@ def _chain_from_dict(data: dict) -> ChainDefinition:
         if isinstance(gpos, list):
             gpos = tuple(gpos)
         filtered_g = {k: v for k, v in g.items() if k in known_goal_fields}
+        # Accept legacy goal_id/goal keys
+        if not filtered_g.get("id") and "goal_id" in g:
+            filtered_g["id"] = g["goal_id"]
+        if not filtered_g.get("objective") and "goal" in g:
+            filtered_g["objective"] = g["goal"]
         goals_list.append(
             ChainGoal(
                 id=filtered_g.get("id", f"goal-{len(goals_list)}"),
@@ -224,6 +229,8 @@ def load_chain(workspace_root: Path, chain_id: str) -> dict | None:
         logger.warning("Failed to load chain %s", chain_id)
         return None
 
+    had_goals = "goals" in data
+
     # --- Normalize goals ---
     mission_goal = data.get("mission_goal", "")
     goal_planet_data = data.get("goal_planet", {})
@@ -249,15 +256,11 @@ def load_chain(workspace_root: Path, chain_id: str) -> dict | None:
             }]
 
     # --- Normalize node goal_ids ---
-    if data["goals"]:
+    if data["goals"] and not had_goals:
         first_goal_id = data["goals"][0]["id"]
         for node in data.get("nodes", []):
             if node.get("is_assignment") and not node.get("goal_id", ""):
                 node["goal_id"] = first_goal_id
-
-    # Always preserve mission_goal for backward compat
-    if data["goals"]:
-        data["mission_goal"] = data["goals"][0].get("objective", mission_goal)
 
     return data
 
@@ -282,20 +285,6 @@ def save_chain(workspace_root: Path, chain_id: str | None, data: dict) -> str:
     if not isinstance(goals, list):
         goals = []
         data["goals"] = goals
-
-    # Set mission_goal from first goal for backward compat
-    if goals and isinstance(goals[0], dict):
-        data["mission_goal"] = goals[0].get("objective", data.get("mission_goal", ""))
-
-    # Write goal_planet compat from first goal
-    if goals and isinstance(goals[0], dict):
-        first_goal = goals[0]
-        data["goal_planet"] = {
-            "goal": first_goal.get("objective", ""),
-            "seed": first_goal.get("seed", 0),
-            "style": first_goal.get("style", "auto"),
-            "position": first_goal.get("position", [0, 0]),
-        }
 
     chains_dir = ChainStore._ensure_chains_dir()
     chain_dir = chains_dir / chain_id

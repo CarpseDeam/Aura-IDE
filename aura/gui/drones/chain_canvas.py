@@ -1048,8 +1048,8 @@ class GoalPlanetItem(QGraphicsObject):
 
     def to_dict(self) -> dict:
         return {
-            "goal_id": self._goal_id,
-            "goal": self._objective,
+            "id": self._goal_id,
+            "objective": self._objective,
             "title": self._title,
             "seed": self._seed,
             "style": self._style,
@@ -1057,9 +1057,9 @@ class GoalPlanetItem(QGraphicsObject):
         }
 
     def from_dict(self, data: dict) -> None:
-        self._goal_id = data.get("goal_id", "")
+        self._goal_id = data.get("id", data.get("goal_id", ""))
         self._title = data.get("title", "")
-        self._objective = data.get("goal", "")
+        self._objective = data.get("objective", data.get("goal", ""))
         self._seed = data.get("seed", 0)
         self._style = data.get("style", "auto")
         if "position" in data and len(data["position"]) == 2:
@@ -1320,7 +1320,7 @@ class ChainCanvas(QGraphicsView):
         goals_data_by_id: dict[str, dict] = {}
         if goal_planets_data:
             for gd in goal_planets_data:
-                gid = gd.get("goal_id", "")
+                gid = gd.get("id", gd.get("goal_id", ""))
                 if gid:
                     goals_data_by_id[gid] = gd
 

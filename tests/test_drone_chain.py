@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import asdict
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from aura import paths as aura_paths
 from aura.drones.chain import (
     ChainDefinition,
     ChainEdge,
+    ChainGoal,
     ChainNode,
     ChainValidation,
     topological_order,
@@ -18,7 +20,6 @@ from aura.drones.chain import (
 )
 from aura.drones.chain_store import ChainStore, _chain_from_dict
 from aura.drones.definition import DroneDefinition
-
 # ── Helpers ─────────────────────────────────────────────────────────
 
 
@@ -806,3 +807,374 @@ def test_old_chain_loads_without_draft_fields() -> None:
     node = chain.nodes[0]
     assert node.is_draft is False
     assert node.draft_name == ""
+
+
+# ── Multi-goal cleanup ─────────────────────────────────────────────
+
+
+@pytest.fixture(scope="session")
+def qapp():
+    """Provide a QApplication instance for GoalPlanetItem tests."""
+    import sys
+    from PySide6.QtWidgets import QApplication
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication(sys.argv)
+    yield app
+
+
+def test_two_goal_save_load_roundtrip(tmp_path: Path) -> None:
+    """Chain with 2 ChainGoal objects round-trips via ChainStore."""
+    chain = ChainDefinition(
+        id="two-goals",
+        name="Two Goals",
+        description="Has two goals",
+        goals=(
+            ChainGoal(id="g1", title="Goal 1", objective="First goal"),
+            ChainGoal(id="g2", title="Goal 2", objective="Second goal"),
+        ),
+    )
+    ChainStore.save_chain(tmp_path, chain)
+    loaded = ChainStore.load_chain(tmp_path, "two-goals")
+    assert loaded is not None
+    assert len(loaded.goals) == 2
+    assert loaded.goals[0].id == "g1"
+    assert loaded.goals[0].objective == "First goal"
+    assert loaded.goals[1].id == "g2"
+    assert loaded.goals[1].objective == "Second goal"
+    assert loaded.goals[0].id != loaded.goals[1].id
+
+
+def test_legacy_mission_goal_normalizes(tmp_path: Path) -> None:
+    """Legacy mission_goal without goals list normalizes into goals
+    and auto-assigns goal_id to untargeted assignment nodes."""
+    chain_dir = ChainStore.chains_dir() / "legacy-chain"
+    chain_dir.mkdir(parents=True)
+    raw_data = {
+        "id": "legacy-chain",
+        "name": "Legacy Chain",
+        "description": "A legacy chain",
+        "mission_goal": "Do the legacy thing",
+        "nodes": [
+            {"id": "n1", "drone_id": "drone-a", "is_assignment": True,
+             "goal_id": ""},
+        ],
+        "edges": [],
+    }
+    (chain_dir / "chain.json").write_text(json.dumps(raw_data))
+
+    # Use module-level load_chain which normalizes legacy data
+    from aura.drones.chain_store import load_chain as load_raw_chain
+    result = load_raw_chain(tmp_path, "legacy-chain")
+    assert result is not None
+    assert len(result["goals"]) == 1
+    assert result["goals"][0]["objective"] == "Do the legacy thing"
+
+    # Assignment node should have been auto-assigned to the migrated goal
+    assert len(result["nodes"]) == 1
+    assert result["nodes"][0]["goal_id"] == f"legacy-chain-goal-default"
+
+    # Verify _chain_from_dict constructs correctly from normalized data
+    chain = _chain_from_dict(result)
+    assert len(chain.goals) == 1
+    assert chain.goals[0].objective == "Do the legacy thing"
+
+
+# ── _chain_from_dict legacy key acceptance ─────────────────────────
+
+
+def test_chain_from_dict_accepts_legacy_goal_keys() -> None:
+    """_chain_from_dict accepts goal_id→id and goal→objective fallbacks."""
+    data = {
+        "id": "legacy-keys",
+        "name": "Legacy Keys",
+        "description": "",
+        "goals": [
+            {"goal_id": "g1", "goal": "do the thing", "title": "Goal 1", "position": [100, 200]},
+        ],
+    }
+    chain = _chain_from_dict(data)
+    assert len(chain.goals) == 1
+    assert chain.goals[0].id == "g1"
+    assert chain.goals[0].objective == "do the thing"
+    assert chain.goals[0].title == "Goal 1"
+    assert chain.goals[0].position == (100.0, 200.0)
+
+
+def test_chain_from_dict_accepts_mixed_old_new() -> None:
+    """_chain_from_dict handles one legacy and one modern goal dict."""
+    data = {
+        "id": "mixed",
+        "name": "Mixed",
+        "description": "",
+        "goals": [
+            {"goal_id": "g1", "goal": "old way", "title": "Old", "position": [0, 0]},
+            {"id": "g2", "objective": "new way", "title": "New", "position": [100, 0]},
+        ],
+    }
+    chain = _chain_from_dict(data)
+    assert len(chain.goals) == 2
+    assert chain.goals[0].id == "g1"
+    assert chain.goals[0].objective == "old way"
+    assert chain.goals[1].id == "g2"
+    assert chain.goals[1].objective == "new way"
+
+
+def test_chain_from_dict_canonical_preferred() -> None:
+    """When both canonical and legacy keys exist, canonical wins."""
+    data = {
+        "id": "both-keys",
+        "name": "Both Keys",
+        "description": "",
+        "goals": [
+            {
+                "id": "canonical-id",
+                "goal_id": "legacy-id",
+                "objective": "canonical objective",
+                "goal": "legacy objective",
+                "title": "Test",
+            },
+        ],
+    }
+    chain = _chain_from_dict(data)
+    assert len(chain.goals) == 1
+    assert chain.goals[0].id == "canonical-id"
+    assert chain.goals[0].objective == "canonical objective"
+
+
+# ── Module-level load_chain goal_id auto-assignment ────────────────
+
+
+def test_load_chain_does_not_autoassign_blank_goal_id_in_multigoal(tmp_path: Path) -> None:
+    """Modern multi-goal chain: assignment nodes with blank goal_id stay blank."""
+    chain_dir = ChainStore.chains_dir() / "multi-goal-chain"
+    chain_dir.mkdir(parents=True)
+    raw_data = {
+        "id": "multi-goal-chain",
+        "name": "Multi Goal",
+        "description": "",
+        "goals": [
+            {"id": "g1", "title": "Goal 1", "objective": "First"},
+            {"id": "g2", "title": "Goal 2", "objective": "Second"},
+        ],
+        "nodes": [
+            {"id": "n1", "drone_id": "drone-a", "is_assignment": True, "goal_id": ""},
+        ],
+        "edges": [],
+    }
+    (chain_dir / "chain.json").write_text(json.dumps(raw_data))
+
+    from aura.drones.chain_store import load_chain as load_raw_chain
+    result = load_raw_chain(tmp_path, "multi-goal-chain")
+    assert result is not None
+    assert len(result["nodes"]) == 1
+    # goal_id should remain empty — not auto-assigned
+    assert result["nodes"][0]["goal_id"] == ""
+
+
+def test_load_chain_autoassigns_for_legacy_single_goal(tmp_path: Path) -> None:
+    """Legacy single-goal chain auto-assigns goal_id to untargeted assignment nodes."""
+    chain_dir = ChainStore.chains_dir() / "legacy-assign-chain"
+    chain_dir.mkdir(parents=True)
+    raw_data = {
+        "id": "legacy-assign-chain",
+        "name": "Legacy Assign",
+        "description": "",
+        "mission_goal": "old goal",
+        "nodes": [
+            {"id": "n1", "drone_id": "drone-a", "is_assignment": True, "goal_id": ""},
+        ],
+        "edges": [],
+    }
+    (chain_dir / "chain.json").write_text(json.dumps(raw_data))
+
+    from aura.drones.chain_store import load_chain as load_raw_chain
+    result = load_raw_chain(tmp_path, "legacy-assign-chain")
+    assert result is not None
+    assert len(result["goals"]) == 1
+    # The auto-assigned goal id
+    expected_goal_id = f"legacy-assign-chain-goal-default"
+    assert result["goals"][0]["id"] == expected_goal_id
+    # The assignment node should now reference that goal
+    assert len(result["nodes"]) == 1
+    assert result["nodes"][0]["goal_id"] == expected_goal_id
+
+
+def test_goalplanet_item_to_dict_uses_canonical_keys(qapp) -> None:
+    """GoalPlanetItem.to_dict returns id and objective keys, not goal_id and goal."""
+    from unittest.mock import MagicMock
+    from aura.gui.drones.chain_canvas import GoalPlanetItem
+
+    mock_canvas = MagicMock()
+    gp = GoalPlanetItem(node_id="test-gp", canvas=mock_canvas, goal_id="goal-1")
+    gp._objective = "Test objective"
+    gp._title = "Test Title"
+
+    data = gp.to_dict()
+    assert "id" in data
+    assert "objective" in data
+    assert "goal_id" not in data
+    assert "goal" not in data
+    assert data["id"] == "goal-1"
+    assert data["objective"] == "Test objective"
+    assert data["title"] == "Test Title"
+
+
+def test_goalplanet_item_from_dict_accepts_both_shapes(qapp) -> None:
+    """GoalPlanetItem.from_dict accepts both old (goal_id/goal) and new (id/objective) keys."""
+    from unittest.mock import MagicMock
+    from aura.gui.drones.chain_canvas import GoalPlanetItem
+
+    mock_canvas = MagicMock()
+
+    # Old keys
+    gp = GoalPlanetItem(node_id="test-1", canvas=mock_canvas)
+    gp.from_dict({"goal_id": "g1", "goal": "Old objective", "title": "Old"})
+    assert gp.goal_id == "g1"
+    assert gp.objective == "Old objective"
+    assert gp._title == "Old"
+
+    # New keys
+    gp2 = GoalPlanetItem(node_id="test-2", canvas=mock_canvas)
+    gp2.from_dict({"id": "g2", "objective": "New objective", "title": "New"})
+    assert gp2.goal_id == "g2"
+    assert gp2.objective == "New objective"
+    assert gp2._title == "New"
+
+
+def test_assignment_goal_ids_survive_save_load(tmp_path: Path) -> None:
+    """Assignment nodes with goal_ids preserve those goal_ids through save/load."""
+    chain = ChainDefinition(
+        id="assign-goals",
+        name="Assign Goals",
+        description="Has assignment nodes with goal_ids",
+        goals=(
+            ChainGoal(id="g1", title="Goal 1", objective="First"),
+            ChainGoal(id="g2", title="Goal 2", objective="Second"),
+        ),
+        nodes=(
+            ChainNode(id="n1", drone_id="drone-a", is_assignment=True, goal_id="g1"),
+            ChainNode(id="n2", drone_id="drone-b", is_assignment=True, goal_id="g2"),
+        ),
+        edges=(),
+    )
+    ChainStore.save_chain(tmp_path, chain)
+    loaded = ChainStore.load_chain(tmp_path, "assign-goals")
+    assert loaded is not None
+    assert len(loaded.nodes) == 2
+    n1 = [n for n in loaded.nodes if n.id == "n1"][0]
+    n2 = [n for n in loaded.nodes if n.id == "n2"][0]
+    assert n1.goal_id == "g1"
+    assert n2.goal_id == "g2"
+
+
+def test_untargeted_assignment_blocked_in_multigoal(tmp_path: Path, monkeypatch) -> None:
+    """Assignment with no goal_id in multi-goal chain does not get mission objective injected."""
+    from aura.drones.chain_runner import _execute_node, ChainRun
+
+    chain = ChainDefinition(
+        id="multi-goal",
+        name="Multi Goal",
+        description="",
+        goals=(
+            ChainGoal(id="g1", title="Goal 1", objective="First goal"),
+            ChainGoal(id="g2", title="Goal 2", objective="Second goal"),
+        ),
+        mission_goal="Legacy fallback",
+    )
+
+    node = ChainNode(
+        id="n1",
+        drone_id="drone-a",
+        is_assignment=True,
+        goal_id="",
+        goal_template="Do the thing",
+    )
+
+    drone = DroneDefinition(
+        id="drone-a",
+        name="Drone A",
+        description="",
+        instructions="Do stuff",
+        write_policy="read_only",
+        allowed_tools=(),
+        output_contract="Output",
+    )
+
+    chain_run = ChainRun(
+        run_id="test-run",
+        chain_id="multi-goal",
+        status="running",
+        node_runs={},
+        started_at="",
+    )
+
+    captured_goal: str | None = None
+
+    def fake_run_read_only(**kwargs) -> dict:
+        nonlocal captured_goal
+        captured_goal = kwargs.get("goal", "")
+        return {"status": "completed", "receipt": {}}
+
+    monkeypatch.setattr(
+        "aura.drones.chain_runner.run_read_only_drone_sync",
+        fake_run_read_only,
+    )
+
+    _execute_node(
+        workspace_root=tmp_path,
+        chain_run=chain_run,
+        chain=chain,
+        node_id="n1",
+        node=node,
+        drone=drone,
+        node_map={"n1": node},
+        drone_lookup={"drone-a": drone},
+        timeout_seconds=30,
+        max_tool_rounds=8,
+        writes_approved=False,
+    )
+
+    assert captured_goal is not None
+    assert "## Mission Objective" not in captured_goal
+    assert "Do the thing" in captured_goal
+
+
+def test_load_chain_no_goal_planet_key(tmp_path: Path) -> None:
+    """Module-level save_chain does not write goal_planet key."""
+    from aura.drones.chain_store import save_chain as dict_save
+
+    data = {
+        "id": "no-gp",
+        "name": "No GP",
+        "description": "No GP test",
+        "goals": [
+            {"id": "g1", "title": "G1", "objective": "O1"},
+            {"id": "g2", "title": "G2", "objective": "O2"},
+        ],
+    }
+    dict_save(tmp_path, "no-gp", data)
+
+    chain_file = ChainStore.chains_dir() / "no-gp" / "chain.json"
+    raw = json.loads(chain_file.read_text())
+    assert "goal_planet" not in raw
+
+
+def test_load_chain_no_mission_goal_key(tmp_path: Path) -> None:
+    """Module-level save_chain does not write mission_goal key."""
+    from aura.drones.chain_store import save_chain as dict_save
+
+    data = {
+        "id": "no-mg",
+        "name": "No MG",
+        "description": "No mission_goal test",
+        "goals": [
+            {"id": "g1", "title": "G1", "objective": "O1"},
+            {"id": "g2", "title": "G2", "objective": "O2"},
+        ],
+    }
+    dict_save(tmp_path, "no-mg", data)
+
+    chain_file = ChainStore.chains_dir() / "no-mg" / "chain.json"
+    raw = json.loads(chain_file.read_text())
+    assert "mission_goal" not in raw

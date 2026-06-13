@@ -287,7 +287,7 @@ def _execute_node(
                 f"## Mission Objective\n{goal.objective}\n\n"
                 f"## Assignment\n{goal_text}"
             )
-        elif chain.mission_goal:
+        elif chain.mission_goal and len(chain.goals) <= 1:
             goal_text = (
                 f"## Mission Objective\n{chain.mission_goal}\n\n"
                 f"## Assignment\n{goal_text}"

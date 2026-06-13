@@ -1237,12 +1237,6 @@ class ChainEditor(QWidget):
         }
         if mission_core:
             result["mission_core"] = mission_core
-        # Persist first goal's objective as mission_goal for backward compat
-        if goals and isinstance(goals[0], dict) and goals[0].get("goal", "").strip():
-            result["mission_goal"] = goals[0]["goal"]
-            result["goal_planet"] = goals[0]
-        else:
-            result["mission_goal"] = ""
         return result
 
     def _save_chain(self) -> None:
@@ -1488,12 +1482,12 @@ class ChainEditor(QWidget):
         if self._roster is not None:
             self._roster.set_workspace_root(self._workspace_root)
             self._roster.populate()
-        if self._canvas._nodes or self._canvas._mission_core is not None or self._canvas._goal_planet is not None:
+        if self._canvas._nodes or self._canvas._mission_core is not None or self._canvas._goal_planets:
             data = self._snapshot_chain()
             chain_def = _chain_from_dict(data)
             drone_lookup = self._build_drone_lookup()
             mission_core_data = data.get("mission_core")
-            goal_planet_data = data.get("goal_planet")
+            goal_planet_data = data.get("goals", [])
             self._canvas.load_chain(chain_def, drone_lookup, mission_core_data, goal_planet_data)
 
     def refresh_run_state(self) -> None:
