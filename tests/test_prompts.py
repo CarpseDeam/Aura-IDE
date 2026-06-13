@@ -61,6 +61,22 @@ def test_tool_schema_uses_builder_note_style():
     assert "Do not require or default to formal sections" in spec_desc
 
 
+def test_dispatch_tool_schema_exposes_optional_target_regions():
+    params = DISPATCH_TOOL_DEF["function"]["parameters"]
+    target_regions = params["properties"]["target_regions"]
+
+    assert "target_regions" in params["properties"]
+    assert "target_regions" not in params["required"]
+    assert target_regions["type"] == "array"
+    assert target_regions["items"]["properties"]["path"]["type"] == "string"
+    assert target_regions["items"]["properties"]["symbol"]["type"] == "string"
+    assert target_regions["items"]["properties"]["start_line"]["type"] == "integer"
+    assert target_regions["items"]["properties"]["end_line"]["type"] == "integer"
+    assert "read_file_outline" in target_regions["description"]
+    assert "read_file_range" in target_regions["description"]
+    assert "expected_file_hash" in target_regions["description"]
+
+
 def test_snappy_planner_worker_rules():
     """Ensure snappy workflow and execution rules are present."""
     # Planner

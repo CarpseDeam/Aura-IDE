@@ -484,6 +484,40 @@ DISPATCH_TOOL_DEF: dict[str, Any] = {
                     "items": {"type": "string"},
                     "description": "Workspace-relative paths the worker should read and/or modify.",
                 },
+                "target_regions": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "description": "Workspace-relative file path.",
+                            },
+                            "symbol": {
+                                "type": "string",
+                                "description": "Class, function, method, or nearby target name.",
+                            },
+                            "start_line": {
+                                "type": "integer",
+                                "description": "Optional 1-based start line for the target range.",
+                            },
+                            "end_line": {
+                                "type": "integer",
+                                "description": "Optional 1-based end line for the target range.",
+                            },
+                            "note": {
+                                "type": "string",
+                                "description": "Short scope note for this target.",
+                            },
+                        },
+                    },
+                    "description": (
+                        "Use this when the Planner knows the relevant symbol or line range, "
+                        "especially in large files. It lets the Worker use read_file_outline "
+                        "and read_file_range around the target area, then patch with "
+                        "expected_file_hash from the range read."
+                    ),
+                },
                 "spec": {
                     "type": "string",
                     "description": (

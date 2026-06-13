@@ -227,6 +227,13 @@ def test_patch_file_invalid_python_blocks_before_approval(tmp_workspace, monkeyp
 
     assert result.ok is False
     assert result.payload["failure_class"] == "syntax_invalid"
+    assert "proposed_context" in result.payload
+    action = result.payload["suggested_next_action"]
+    assert "larger enclosing block" in action
+    assert "line before, the edited lines, and the line after" in action
+    assert "current expected_file_hash" in action
+    assert "Keep existing-file recovery on patch_file" in action
+    assert "write_file as a fallback" in action
     approval.assert_not_called()
     assert target.read_bytes() == original
 

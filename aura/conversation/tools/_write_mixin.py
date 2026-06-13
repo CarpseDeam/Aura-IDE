@@ -322,13 +322,19 @@ import difflib
 
 
 PATCH_FILE_REPAIR_ACTION = (
-    "Re-read the file, inspect proposed_context, then submit one corrected patch_file transaction. "
-    "Do not use write_file as a fallback for this existing-file edit."
+    "Re-read the current file and inspect proposed_context. Treat joined Python statements "
+    "or swallowed newlines as a likely patch boundary issue. Retry patch_file with a larger "
+    "enclosing block: the line before, the edited lines, and the line after. Use the current "
+    "expected_file_hash. Keep existing-file recovery on patch_file; do not use write_file as "
+    "a fallback for this existing-file edit."
 )
 
 PATCH_FILE_CRAFT_REPAIR_ACTION = (
-    "Re-read the file, inspect proposed_context and craft_issues, then submit one corrected patch_file transaction. "
-    "Do not use write_file as a fallback for this existing-file edit."
+    "Re-read the current file and inspect proposed_context and craft_issues. Treat joined "
+    "Python statements or swallowed newlines as a likely patch boundary issue. Retry "
+    "patch_file with a larger enclosing block: the line before, the edited lines, and the "
+    "line after. Use the current expected_file_hash. Keep existing-file recovery on "
+    "patch_file; do not use write_file as a fallback for this existing-file edit."
 )
 
 

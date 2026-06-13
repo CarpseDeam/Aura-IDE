@@ -78,6 +78,7 @@ class WorkerDispatchRequest:
     spec: str
     acceptance: str
     summary: str = ""
+    target_regions: list[dict[str, Any]] = field(default_factory=list)
     allowed_responsibilities: list[str] = field(default_factory=list)
     forbidden_responsibilities: list[str] = field(default_factory=list)
     required_outputs: list[str] = field(default_factory=list)
@@ -95,6 +96,7 @@ class WorkerDispatchRequest:
         payload = {
             "goal": self.goal,
             "files": list(self.files),
+            "target_regions": _target_region_list(self.target_regions),
             "spec": self.spec,
             "acceptance": self.acceptance,
             "summary": self.summary,
@@ -127,6 +129,7 @@ class WorkerDispatchRequest:
         return cls(
             goal=str(data.get("goal", "")),
             files=[str(f) for f in files],
+            target_regions=_target_region_list(data.get("target_regions")),
             spec=str(data.get("spec", "")),
             acceptance=str(data.get("acceptance", "")),
             summary=str(data.get("summary", "")),
@@ -335,6 +338,7 @@ class WorkerTaskSpec:
     """
     goal: str = ""
     files: list[str] = field(default_factory=list)
+    target_regions: list[dict[str, Any]] = field(default_factory=list)
     summary: str = ""
     builder_note: str = ""
     acceptance: str = ""
@@ -352,6 +356,7 @@ class WorkerTaskSpec:
         result: dict[str, Any] = {
             "goal": self.goal,
             "files": list(self.files),
+            "target_regions": _target_region_list(self.target_regions),
             "summary": self.summary,
             "builder_note": self.builder_note,
             "acceptance": self.acceptance,
@@ -412,6 +417,7 @@ class WorkerTaskSpec:
         return cls(
             goal=str(data.get("goal", "")),
             files=_str_list("files"),
+            target_regions=_target_region_list(data.get("target_regions")),
             summary=str(data.get("summary", "")),
             builder_note=str(data.get("builder_note", "")),
             acceptance=str(data.get("acceptance", "")),
@@ -431,6 +437,51 @@ def _string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(item) for item in value]
+
+
+def _target_region_list(value: Any) -> list[dict[str, Any]]:
+    """Coerce Planner-provided target regions into clean structured entries."""
+    if not isinstance(value, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        region: dict[str, Any] = {}
+        for key in ("path", "symbol", "note"):
+            text = _target_region_text(item.get(key))
+            if text:
+                region[key] = text
+        for key in ("start_line", "end_line"):
+            line = _target_region_line(item.get(key))
+            if line is not None:
+                region[key] = line
+        if region:
+            result.append(region)
+    return result
+
+
+def _target_region_text(value: Any) -> str:
+    if value is None or isinstance(value, bool):
+        return ""
+    if isinstance(value, (str, int, float)):
+        return str(value).strip()
+    return ""
+
+
+def _target_region_line(value: Any) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        line = value
+    elif isinstance(value, str):
+        text = value.strip()
+        if not re.fullmatch(r"\d+", text):
+            return None
+        line = int(text)
+    else:
+        return None
+    return line if line > 0 else None
 
 
 def _require_list_str(value: Any, field: str = "") -> list[str]:
@@ -567,6 +618,7 @@ def normalize_worker_task(req: WorkerDispatchRequest) -> WorkerTaskSpec:
     return WorkerTaskSpec(
         goal=req.goal,
         files=list(req.files),
+        target_regions=_target_region_list(req.target_regions),
         summary=req.summary,
         builder_note=req.spec,
         acceptance=req.acceptance,

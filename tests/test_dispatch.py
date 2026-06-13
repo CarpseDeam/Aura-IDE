@@ -10,6 +10,7 @@ from aura.conversation.dispatch import (
     WorkerDispatchResult,
     WorkerMismatch,
     WorkerOutcomeStatus,
+    WorkerTaskSpec,
     infer_outcome_status,
     normalize_outcome_status,
     normalize_worker_task,
@@ -286,6 +287,72 @@ def test_dispatch_request_expected_dataclass_fields_none():
     assert req.expected_dataclass_fields == {}
 
 
+def test_dispatch_request_target_regions_roundtrip_and_cleaning():
+    original = WorkerDispatchRequest(
+        goal="Scope edit",
+        files=["aura/foo.py"],
+        spec="Update the helper.",
+        acceptance="py_compile passes.",
+        target_regions=[
+            {
+                "path": "aura/foo.py",
+                "symbol": "Builder.build",
+                "start_line": "10",
+                "end_line": 20,
+                "note": "update validation",
+                "ignored": "value",
+            },
+            "not a dict",
+            {"path": ["bad"], "start_line": 0, "end_line": "x"},
+        ],
+    )
+
+    data = original.to_dict()
+    restored = WorkerDispatchRequest.from_dict(data)
+
+    assert data["target_regions"] == [
+        {
+            "path": "aura/foo.py",
+            "symbol": "Builder.build",
+            "note": "update validation",
+            "start_line": 10,
+            "end_line": 20,
+        }
+    ]
+    assert restored.target_regions == data["target_regions"]
+    assert WorkerDispatchRequest.from_dict({"target_regions": {"path": "x.py"}}).target_regions == []
+
+
+def test_worker_task_spec_target_regions_roundtrip():
+    original = WorkerTaskSpec(
+        goal="Scope edit",
+        files=["aura/foo.py"],
+        target_regions=[
+            {
+                "path": "aura/foo.py",
+                "symbol": "build_prompt",
+                "start_line": 80,
+                "end_line": "130",
+                "note": "replace stale handoff text",
+            }
+        ],
+    )
+
+    data = original.to_dict()
+    restored = WorkerTaskSpec.from_dict(data)
+
+    assert data["target_regions"] == [
+        {
+            "path": "aura/foo.py",
+            "symbol": "build_prompt",
+            "note": "replace stale handoff text",
+            "start_line": 80,
+            "end_line": 130,
+        }
+    ]
+    assert restored.target_regions == data["target_regions"]
+
+
 def test_task_shape_infers_new_tool_or_app():
     shape = infer_task_shape(
         goal="Build a release tracker app",
@@ -547,6 +614,42 @@ def test_worker_prompt_guides_search_validation_semantics():
     assert "pytest" not in prompt
 
 
+def test_worker_task_formatting_includes_target_regions():
+    req = WorkerDispatchRequest(
+        goal="Do things",
+        files=["aura/foo.py"],
+        spec="Do it.",
+        acceptance="Check it.",
+        target_regions=[
+            {
+                "path": "aura/foo.py",
+                "symbol": "ClassName.method",
+                "start_line": 120,
+                "end_line": 170,
+                "note": "update validation handling",
+            },
+            {
+                "path": "aura/foo.py",
+                "symbol": "build_prompt",
+                "note": "scope around the prompt assembly helper",
+            },
+            {
+                "path": "aura/foo.py",
+                "start_line": 80,
+                "end_line": 130,
+                "note": "replace stale handoff text",
+            },
+        ],
+    )
+
+    prompt = _format_spec_as_user_message(req)
+
+    assert prompt.index("Files") < prompt.index("Target Regions") < prompt.index("Builder Note")
+    assert "- aura/foo.py :: ClassName.method lines 120-170 — update validation handling" in prompt
+    assert "- aura/foo.py :: build_prompt — scope around the prompt assembly helper" in prompt
+    assert "- aura/foo.py lines 80-130 — replace stale handoff text" in prompt
+
+
 def test_worker_task_formatting_bugfix_uses_compact_task_shape_contract():
     req = WorkerDispatchRequest(
         goal="Fix failing import behavior",
@@ -683,8 +786,6 @@ def test_structured_worker_failure_summary_is_not_harness_error():
 
 # normalize_worker_task
 
-from aura.conversation.dispatch import normalize_worker_task, WorkerTaskSpec
-
 
 def test_normalize_worker_task_validation_commands_explicit():
     """Explicit validation_commands on the request should be forwarded directly."""
@@ -745,6 +846,20 @@ def test_normalize_worker_task_structured_fields():
     assert spec.risk_notes == ["breaks easily"]
     assert spec.contract is not None
     assert spec.contract.expected_dataclass_fields == {"MyClass": ["a"]}
+
+
+def test_normalize_worker_task_carries_target_regions():
+    req = WorkerDispatchRequest(
+        goal="Do things",
+        files=["x.py"],
+        spec="Do it.",
+        acceptance="Check it.",
+        target_regions=[{"path": "x.py", "symbol": "do_thing", "start_line": "12"}],
+    )
+
+    spec = normalize_worker_task(req)
+
+    assert spec.target_regions == [{"path": "x.py", "symbol": "do_thing", "start_line": 12}]
 
 
 # New focused tests for dispatch and approval proxy timeout and cancellation
