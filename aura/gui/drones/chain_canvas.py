@@ -41,8 +41,8 @@ NODE_HEIGHT = 76
 PORT_RADIUS = 3
 PORT_DIAMETER = PORT_RADIUS * 2
 NODE_RADIUS = 12
-MISSION_CORE_WIDTH = 400
-MISSION_CORE_HEIGHT = 200
+MISSION_CORE_WIDTH = 240
+MISSION_CORE_HEIGHT = 105
 ASSIGNMENT_WIDTH = 60
 ASSIGNMENT_HEIGHT = 24
 
@@ -434,7 +434,7 @@ class MissionCoreItem(QGraphicsObject):
         super().__init__()
         self._node_id = node_id
         self._canvas = canvas
-        self._title = "Mission Core"
+        self._title = "Mothership"
         self._goal = ""
         self._assigned_drone_ids: set[str] = set()
         self._cargo_count = 0
@@ -515,7 +515,7 @@ class MissionCoreItem(QGraphicsObject):
         # Card body
         painter.setBrush(QBrush(QColor("#1a1a24")))
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawRoundedRect(rect, NODE_RADIUS, NODE_RADIUS)
+        painter.drawRoundedRect(rect, 8, 8)
 
         # Glow border
         glow_color = QColor(_qt_color(ACCENT))
@@ -531,7 +531,7 @@ class MissionCoreItem(QGraphicsObject):
         glow_color.setAlpha(glow_alpha)
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.setPen(QPen(glow_color, 4))
-        painter.drawRoundedRect(rect.adjusted(1, 1, -1, -1), NODE_RADIUS - 1, NODE_RADIUS - 1)
+        painter.drawRoundedRect(rect.adjusted(1, 1, -1, -1), 7, 7)
 
         # Border
         border_color = QColor("#3a3a4a")
@@ -539,7 +539,7 @@ class MissionCoreItem(QGraphicsObject):
             border_color = _qt_color(ACCENT)
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.setPen(QPen(border_color, 1.5))
-        painter.drawRoundedRect(rect.adjusted(1, 1, -1, -1), NODE_RADIUS - 1, NODE_RADIUS - 1)
+        painter.drawRoundedRect(rect.adjusted(1, 1, -1, -1), 7, 7)
 
         # Drag hover highlight
         if self._drag_hovered:
@@ -547,16 +547,16 @@ class MissionCoreItem(QGraphicsObject):
             highlight_color.setAlpha(40)
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.setPen(QPen(highlight_color, 1, Qt.PenStyle.DashLine))
-            painter.drawRoundedRect(rect.adjusted(3, 3, -3, -3), NODE_RADIUS - 3, NODE_RADIUS - 3)
+            painter.drawRoundedRect(rect.adjusted(3, 3, -3, -3), 5, 5)
 
         # Title
         font_title = QFont()
-        font_title.setPixelSize(15)
+        font_title.setPixelSize(12)
         font_title.setBold(True)
         painter.setFont(font_title)
         painter.setPen(QPen(_qt_color(ACCENT)))
         painter.drawText(
-            QRectF(-w / 2 + 16, -h / 2 + 14, w - 32, 24),
+            QRectF(-w / 2 + 12, -h / 2 + 10, w - 24, 18),
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
             self._title,
         )
@@ -572,61 +572,32 @@ class MissionCoreItem(QGraphicsObject):
         painter.setBrush(QBrush(beacon_color))
         painter.setPen(Qt.PenStyle.NoPen)
         beacon_path = QPainterPath()
-        beacon_path.moveTo(QPointF(-w / 2 + 30, -h / 2 + 23))
-        beacon_path.lineTo(QPointF(-w / 2 + 33, -h / 2 + 26))
-        beacon_path.lineTo(QPointF(-w / 2 + 30, -h / 2 + 29))
-        beacon_path.lineTo(QPointF(-w / 2 + 27, -h / 2 + 26))
+        beacon_path.moveTo(QPointF(w / 2 - 24, -h / 2 + 16))
+        beacon_path.lineTo(QPointF(w / 2 - 21, -h / 2 + 19))
+        beacon_path.lineTo(QPointF(w / 2 - 24, -h / 2 + 22))
+        beacon_path.lineTo(QPointF(w / 2 - 27, -h / 2 + 19))
         beacon_path.closeSubpath()
         painter.drawPath(beacon_path)
 
-        # Goal preview (first ~3 lines, truncated)
-        if self._goal:
-            font_goal = QFont()
-            font_goal.setPixelSize(11)
-            painter.setFont(font_goal)
-            painter.setPen(QPen(_qt_color(FG_MUTED)))
-            lines = self._goal.split("\n")[:3]
-            preview = "\n".join(lines)
-            if len(self._goal) > len(preview):
-                preview += "\n\u2026"
-            goal_rect = QRectF(-w / 2 + 16, -h / 2 + 44, w - 32, 52)
-            painter.drawText(
-                goal_rect,
-                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
-                preview,
-            )
-
-        # "Drop drones here" hint when empty
-        if not self._assigned_drone_ids:
-            font_hint = QFont()
-            font_hint.setPixelSize(12)
-            font_hint.setItalic(True)
-            painter.setFont(font_hint)
-            if self._drag_hovered:
-                painter.setPen(QPen(_qt_color(ACCENT)))
-            else:
-                painter.setPen(QPen(_qt_color(FG_MUTED)))
-            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, "Drop drones here")
-
         # Metrics row
-        metrics_y = h / 2 - 28
         font_metrics = QFont()
-        font_metrics.setPixelSize(11)
+        font_metrics.setPixelSize(10)
         painter.setFont(font_metrics)
         painter.setPen(QPen(QColor("#eaecef")))
         drone_count = len(self._assigned_drone_ids)
-        metrics_text = f"\u2699 {drone_count} drones    \U0001f4e6 {self._cargo_count} cargo    \u2713 {self._output_status}"
+        metrics_text = f"\u2699 {drone_count}  \U0001f4e6 {self._cargo_count}  \u2713 {self._output_status}"
+        metrics_y = h / 2 - 32
         painter.drawText(
-            QRectF(-w / 2 + 16, metrics_y, w - 32, 20),
+            QRectF(-w / 2 + 12, metrics_y, w - 24, 16),
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
             metrics_text,
         )
 
         # "Run Mission" button (bottom-right)
-        btn_x = w / 2 - 126
-        btn_y = h / 2 - 36
-        btn_w = 110
-        btn_h = 26
+        btn_w = 100
+        btn_h = 22
+        btn_x = w / 2 - 8 - btn_w
+        btn_y = h / 2 - 8 - btn_h
         self._run_btn_rect = QRectF(btn_x, btn_y, btn_w, btn_h)
 
         btn_alpha = 150 if self._run_btn_hovered else 80
@@ -637,7 +608,7 @@ class MissionCoreItem(QGraphicsObject):
         painter.drawRoundedRect(self._run_btn_rect, 5, 5)
 
         font_btn = QFont()
-        font_btn.setPixelSize(11)
+        font_btn.setPixelSize(10)
         font_btn.setBold(True)
         painter.setFont(font_btn)
         painter.setPen(QPen(QColor("#ffffff")))
@@ -712,7 +683,7 @@ class MissionCoreItem(QGraphicsObject):
         }
 
     def from_dict(self, data: dict) -> None:
-        self._title = data.get("title", "Mission Core")
+        self._title = data.get("title", "Mothership")
         self._goal = data.get("goal", "")
         pos = data.get("position")
         if pos and len(pos) == 2:
@@ -727,6 +698,19 @@ class MissionCoreItem(QGraphicsObject):
         return super().itemChange(change, value)
 
 
+PALETTES: dict[str, tuple[str, str, str]] = {
+    "ice":    ("#7ec8e3", "#c8e6ff", "#5b9ecf"),
+    "lava":   ("#ff6b4a", "#ff9966", "#8b2500"),
+    "ocean":  ("#3b82f6", "#1e40af", "#0a1628"),
+    "forest": ("#4ade80", "#166534", "#0a2e0a"),
+    "desert": ("#f59e0b", "#d97706", "#78350f"),
+    "void":   ("#7c3aed", "#2e1065", "#0f0a1a"),
+    "toxic":  ("#a3e635", "#4d7c0f", "#1a2e05"),
+    "moon":   ("#cbd5e1", "#64748b", "#1e293b"),
+    "nebula": ("#c084fc", "#7e22ce", "#2a0a4a"),
+}
+
+
 class GoalPlanetItem(QGraphicsObject):
     """A small planet-like node representing the mission goal."""
 
@@ -738,6 +722,10 @@ class GoalPlanetItem(QGraphicsObject):
         self._canvas = canvas
         self._goal = ""
         self._glow_phase = 0.0
+        self._seed: int = 0
+        self._style: str = "auto"
+        self._planet_cache: QPixmap | None = None
+        self._cache_key: tuple = ()
 
         self._pulse_timer = QTimer(self)
         self._pulse_timer.setInterval(1200)
@@ -752,6 +740,7 @@ class GoalPlanetItem(QGraphicsObject):
         self.setAcceptDrops(True)
         self.setAcceptHoverEvents(True)
         self.setCursor(Qt.CursorShape.OpenHandCursor)
+        self._ensure_seed()
 
     @property
     def node_id(self) -> str:
@@ -771,6 +760,25 @@ class GoalPlanetItem(QGraphicsObject):
         self._glow_phase += 0.12
         self.update()
 
+    def _ensure_seed(self) -> None:
+        import random as _random
+        if self._seed == 0:
+            self._seed = _random.randint(1, 2**31 - 1)
+        self._invalidate_cache()
+
+    def _invalidate_cache(self) -> None:
+        self._planet_cache = None
+        self._cache_key = ()
+        self.update()
+
+    def _palette_for_seed(self) -> tuple:
+        return list(PALETTES.values())[self._seed % len(PALETTES)]
+
+    def reroll_seed(self) -> None:
+        import random as _random
+        self._seed = _random.randint(1, 2**31 - 1)
+        self._invalidate_cache()
+
     def boundingRect(self) -> QRectF:
         return QRectF(-44, -44, 88, 88)
 
@@ -778,37 +786,34 @@ class GoalPlanetItem(QGraphicsObject):
         center = QPointF(0, 0)
         radius = 30
 
-        # Radial gradient fill
-        accent_color = QColor("#e0af68")
-        gradient = QRadialGradient(center, radius)
-        warm = QColor(accent_color)
-        warm.setAlpha(200)
-        gradient.setColorAt(0.0, warm)
-        edge = QColor(accent_color)
-        edge.setAlpha(30)
-        gradient.setColorAt(1.0, edge)
-        painter.setBrush(QBrush(gradient))
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawEllipse(center, radius, radius)
+        # Cache check
+        is_sel = int(self.isSelected())
+        key = (self._seed, is_sel)
+        if self._planet_cache is None or self._cache_key != key:
+            self._planet_cache = self._render_planet(radius)
+            self._cache_key = key
 
-        # Ring border
-        border_color = QColor(accent_color)
-        if self.isSelected():
-            border_color = _qt_color(ACCENT)
-            border_color.setAlpha(200)
-        else:
-            border_color.setAlpha(120)
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.setPen(QPen(border_color, 1.5))
-        painter.drawEllipse(center, radius, radius)
+        # Draw cached planet body (origin at -radius, -radius since pixmap has padding)
+        pm = self._planet_cache
+        offset = QPointF(-pm.width() / 2, -pm.height() / 2)
+        painter.drawPixmap(offset, pm)
 
-        # Subtle outer glow (pulsing)
-        glow_alpha = int(15 + math.sin(self._glow_phase) * 8)
-        glow_color = QColor(accent_color)
-        glow_color.setAlpha(max(0, min(255, glow_alpha)))
+        # Pulsing atmosphere glow (not cached, animates)
+        atmos_str, _, _ = self._palette_for_seed()
+        atmos_color = QColor(atmos_str)
+        glow_alpha = int(12 + math.sin(self._glow_phase) * 6)
+        atmos_color.setAlpha(max(0, min(255, glow_alpha)))
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.setPen(QPen(glow_color, 3))
+        painter.setPen(QPen(atmos_color, 4))
         painter.drawEllipse(center, radius + 4, radius + 4)
+
+        # Selected ring
+        if self.isSelected():
+            sel_color = _qt_color(ACCENT)
+            sel_color.setAlpha(160)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(sel_color, 2))
+            painter.drawEllipse(center, radius + 2, radius + 2)
 
         # Goal text below
         font = QFont()
@@ -826,6 +831,116 @@ class GoalPlanetItem(QGraphicsObject):
             painter.setFont(font)
             painter.setPen(QPen(_qt_color(FG_MUTED)))
             painter.drawText(text_rect, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop, "Click to describe the goal.")
+
+    def _render_planet(self, radius: int) -> QPixmap:
+        import random as _random
+        rng = _random.Random(self._seed)
+
+        # Pixmap size includes padding for glow + rings
+        pad = 16
+        size = radius * 2 + pad * 2
+        pix = QPixmap(size, size)
+        pix.fill(Qt.GlobalColor.transparent)
+        p = QPainter(pix)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        center = QPointF(size / 2, size / 2)
+
+        atmos_str, light_str, dark_str = self._palette_for_seed()
+        atmos = QColor(atmos_str)
+        light = QColor(light_str)
+        dark = QColor(dark_str)
+
+        # Outer soft atmosphere
+        g_atmos = QRadialGradient(center, radius + 6)
+        a_outer = QColor(atmos)
+        a_outer.setAlpha(40)
+        a_inner = QColor(atmos)
+        a_inner.setAlpha(10)
+        g_atmos.setColorAt(0.0, a_inner)
+        g_atmos.setColorAt(0.7, a_outer)
+        g_atmos.setColorAt(1.0, QColor(atmos.red(), atmos.green(), atmos.blue(), 0))
+        p.setBrush(QBrush(g_atmos))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.drawEllipse(center, radius + 6, radius + 6)
+
+        # Planet body
+        g_body = QRadialGradient(center, radius)
+        g_body.setColorAt(0.0, light)
+        g_body.setColorAt(1.0, dark)
+        p.setBrush(QBrush(g_body))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.drawEllipse(center, radius, radius)
+
+        # Clip to planet circle
+        clip_path = QPainterPath()
+        clip_path.addEllipse(center, radius, radius)
+        p.setClipPath(clip_path)
+
+        # Surface bands
+        band_color = QColor(dark)
+        band_color.setAlpha(80)
+        p.setBrush(QBrush(band_color))
+        p.setPen(Qt.PenStyle.NoPen)
+        num_bands = rng.randint(1, 3)
+        for _ in range(num_bands):
+            band_y = center.y() + rng.uniform(-radius * 0.6, radius * 0.6)
+            band_h = rng.uniform(2, 8)
+            band_w = rng.uniform(radius * 0.7, radius * 1.4)
+            band_x = center.x() - band_w / 2 + rng.uniform(-4, 4)
+            p.drawRoundedRect(QRectF(band_x, band_y - band_h / 2, band_w, band_h), 3, 3)
+
+        # Darker accent band
+        accent = QColor(dark)
+        accent.setAlpha(120)
+        p.setBrush(QBrush(accent))
+        accent_y = center.y() + rng.uniform(-radius * 0.3, radius * 0.3)
+        accent_h = rng.uniform(2, 5)
+        accent_w = rng.uniform(radius * 0.5, radius * 1.0)
+        p.drawRoundedRect(QRectF(center.x() - accent_w / 2, accent_y - accent_h / 2, accent_w, accent_h), 2, 2)
+
+        # Speckles
+        speck_color = QColor(light)
+        speck_color.setAlpha(100)
+        p.setBrush(QBrush(speck_color))
+        num_speckles = rng.randint(12, 25)
+        for _ in range(num_speckles):
+            sx = center.x() + rng.uniform(-radius * 0.85, radius * 0.85)
+            sy = center.y() + rng.uniform(-radius * 0.85, radius * 0.85)
+            sr = rng.uniform(0.6, 1.8)
+            if (sx - center.x()) ** 2 + (sy - center.y()) ** 2 < (radius - 2) ** 2:
+                p.drawEllipse(QPointF(sx, sy), sr, sr)
+
+        # Craters
+        crater_color = QColor(dark)
+        crater_color.setAlpha(140)
+        p.setBrush(QBrush(crater_color))
+        num_craters = rng.randint(3, 8)
+        for _ in range(num_craters):
+            cx = center.x() + rng.uniform(-radius * 0.7, radius * 0.7)
+            cy = center.y() + rng.uniform(-radius * 0.7, radius * 0.7)
+            cr = rng.uniform(1.5, 3.5)
+            if (cx - center.x()) ** 2 + (cy - center.y()) ** 2 < (radius - 3) ** 2:
+                p.drawEllipse(QPointF(cx, cy), cr, cr)
+
+        p.setClipPath(QPainterPath(), Qt.ClipOperation.NoClip)
+
+        # Optional rings (seed % 10 < 3)
+        if self._seed % 10 < 3:
+            ring_color = QColor(atmos)
+            ring_color.setAlpha(80)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.setPen(QPen(ring_color, 1.5))
+            ring_radius = radius + rng.uniform(6, 12)
+            tilt = rng.uniform(0.3, 0.6)
+            p.drawEllipse(QRectF(
+                center.x() - ring_radius,
+                center.y() - ring_radius * tilt,
+                ring_radius * 2,
+                ring_radius * 2 * tilt,
+            ))
+
+        p.end()
+        return pix
 
     def dragEnterEvent(self, event) -> None:
         if event.mimeData().hasFormat("application/x-aura-drone-id"):
@@ -850,18 +965,24 @@ class GoalPlanetItem(QGraphicsObject):
     def to_dict(self) -> dict:
         return {
             "goal": self._goal,
+            "seed": self._seed,
+            "style": self._style,
             "position": [self.pos().x(), self.pos().y()],
         }
 
     def from_dict(self, data: dict) -> None:
         self._goal = data.get("goal", "")
+        self._seed = data.get("seed", 0)
+        self._style = data.get("style", "auto")
         if "position" in data and len(data["position"]) == 2:
             self.setPos(data["position"][0], data["position"][1])
+        self._ensure_seed()
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
             self._canvas._on_node_moved()
         elif change == QGraphicsItem.GraphicsItemChange.ItemSelectedHasChanged:
+            self._invalidate_cache()
             self._canvas._on_selection_changed()
         return super().itemChange(change, value)
 
@@ -1125,7 +1246,23 @@ class ChainCanvas(QGraphicsView):
     runMissionRequested = Signal()
 
     def __init__(self, parent=None):
+        # Set all attributes before super().__init__() because Qt paint events
+        # (drawForeground / drawBackground) fire during construction and will
+        # AttributeError if these are missing.
+        self._nodes: dict[str, ChainNodeItem] = {}
+        self._edges: list[ChainEdgeItem] = []
+        self._drawing_source_port: PortItem | None = None
+        self._rubber_band: QGraphicsLineItem | None = None
+        self._drawing_cancelled = False
+        self._empty_text: QGraphicsTextItem | None = None
+        self._mission_core: MissionCoreItem | None = None
+        self._goal_planet: GoalPlanetItem | None = None
+        self._space_bg_cache: QPixmap | None = None
+        self._last_click_time: float = 0.0
+        self._last_click_pos: QPointF = QPointF()
+
         super().__init__(parent)
+
         self._scene = QGraphicsScene(-2000, -2000, 4000, 4000, self)
         self.setScene(self._scene)
 
@@ -1137,27 +1274,6 @@ class ChainCanvas(QGraphicsView):
         self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setAcceptDrops(True)
-
-        # Drawing state
-        self._nodes: dict[str, ChainNodeItem] = {}
-        self._edges: list[ChainEdgeItem] = []
-        self._drawing_source_port: PortItem | None = None
-        self._rubber_band: QGraphicsLineItem | None = None
-        self._drawing_cancelled = False
-
-        # Empty state text (created lazily by load_chain / _update_empty_text)
-        self._empty_text: QGraphicsTextItem | None = None
-
-        # Mission core card
-        self._mission_core: MissionCoreItem | None = None
-        self._goal_planet: GoalPlanetItem | None = None
-
-        # Space background (static cached pixmap)
-        self._space_bg_cache: QPixmap | None = None
-
-        # Double-click detection for fit-view
-        self._last_click_time: float = 0.0
-        self._last_click_pos: QPointF = QPointF()
 
     def _update_empty_text(self) -> None:
         if self._empty_text is not None:
@@ -1251,8 +1367,8 @@ class ChainCanvas(QGraphicsView):
 
         # Auto-create default mission core + goal planet for empty chains
         if self._mission_core is None and self._goal_planet is None and not self._nodes:
-            self._canvas_add_mission_core(QPointF(0, 0))
-            self._canvas_add_goal_planet(QPointF(200, 0))
+            self._canvas_add_mission_core(QPointF(-160, 0))
+            self._canvas_add_goal_planet(QPointF(160, 0))
 
         # Auto-fit after a short delay
         QTimer.singleShot(100, self._fit_view)
@@ -1689,7 +1805,7 @@ class ChainCanvas(QGraphicsView):
             return
         node_id = f"mission-core-{uuid.uuid4().hex[:4]}"
         item = MissionCoreItem(node_id=node_id, canvas=self)
-        item.setPos(scene_pos - QPointF(MISSION_CORE_WIDTH / 2, MISSION_CORE_HEIGHT / 2))
+        item.setPos(scene_pos)
         self._scene.addItem(item)
         self._mission_core = item
         item.runRequested.connect(self.runMissionRequested.emit)

@@ -522,8 +522,32 @@ class _PropertyPanel(QScrollArea):
         self._layout.insertWidget(self._layout.count() - 1, goal_edit)
         self._add_label(f"Drone assignments orbit around this planet.", color=FG_MUTED)
 
+        btn_new_look = QPushButton("New Look")
+        btn_new_look.setStyleSheet(
+            f"QPushButton {{"
+            f"  background: {_qss_color(SURFACE)};"
+            f"  border: 1px solid {_qss_color(BORDER)};"
+            f"  color: {_qss_color(ACCENT)};"
+            f"  padding: 4px 8px;"
+            f"  border-radius: 3px;"
+            f"  font-size: 11px;"
+            f"}}"
+            f"QPushButton:hover {{"
+            f"  border-color: {_qss_color(ACCENT)};"
+            f"}}"
+        )
+        btn_new_look.clicked.connect(
+            lambda checked=False, p=planet: self._on_new_planet_look(p)
+        )
+        self._layout.insertWidget(self._layout.count() - 1, btn_new_look)
+
     def _on_goal_planet_goal_changed(self, planet: GoalPlanetItem, edit: QTextEdit) -> None:
         planet.goal = edit.toPlainText()
+        self._editor._dirty = True
+        self._editor._auto_save_timer.start()
+
+    def _on_new_planet_look(self, planet: GoalPlanetItem) -> None:
+        planet.reroll_seed()
         self._editor._dirty = True
         self._editor._auto_save_timer.start()
 
