@@ -627,10 +627,8 @@ class MissionCoreItem(QGraphicsObject):
             super().dragEnterEvent(event)
 
     def dragMoveEvent(self, event) -> None:
-        if event.mimeData().hasFormat("application/x-aura-drone-id"):
-            event.acceptProposedAction()
-        else:
-            super().dragMoveEvent(event)
+        event.ignore()
+        super().dragMoveEvent(event)
 
     def dropEvent(self, event) -> None:
         if event.mimeData().hasFormat("application/x-aura-drone-id"):
@@ -943,24 +941,16 @@ class GoalPlanetItem(QGraphicsObject):
         return pix
 
     def dragEnterEvent(self, event) -> None:
-        if event.mimeData().hasFormat("application/x-aura-drone-id"):
-            event.acceptProposedAction()
-        else:
-            super().dragEnterEvent(event)
+        event.ignore()
+        super().dragEnterEvent(event)
 
     def dragMoveEvent(self, event) -> None:
-        if event.mimeData().hasFormat("application/x-aura-drone-id"):
-            event.acceptProposedAction()
-        else:
-            super().dragMoveEvent(event)
+        event.ignore()
+        super().dragMoveEvent(event)
 
     def dropEvent(self, event) -> None:
-        if event.mimeData().hasFormat("application/x-aura-drone-id"):
-            drone_id = bytes(event.mimeData().data("application/x-aura-drone-id")).decode("utf-8")
-            self._canvas._handle_goal_planet_drop(self, drone_id)
-            event.acceptProposedAction()
-        else:
-            super().dropEvent(event)
+        event.ignore()
+        super().dropEvent(event)
 
     def to_dict(self) -> dict:
         return {
@@ -1114,129 +1104,7 @@ class ChainEdgeItem(QGraphicsPathItem):
             self._adjust()
         return super().itemChange(change, value)
 
-    def __init__(self, source_port: PortItem, target_port: PortItem, canvas: ChainCanvas):
-        super().__init__()
-        self._source_port = source_port
-        self._target_port = target_port
-        self._canvas = canvas
-        self._from_node_id = source_port.parent_node.node_id
-        self._to_node_id = target_port.parent_node.node_id
 
-        self.setAcceptHoverEvents(True)
-        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
-        self._hovered = False
-        self._bezier_curve: QPainterPath | None = None
-        self._glow_color = QColor("#8b9eeb")
-        self._pen_style = Qt.PenStyle.SolidLine
-        self._adjust()
-
-    @property
-    def from_node_id(self) -> str:
-        return self._from_node_id
-
-    @property
-    def to_node_id(self) -> str:
-        return self._to_node_id
-
-    def paint(self, painter: QPainter, option, widget=None) -> None:
-        # Draw glow strokes behind the main path
-        if self._bezier_curve is not None:
-            for w, alpha in [(4, 8), (2, 18)]:
-                c = QColor(self._glow_color)
-                c.setAlpha(alpha)
-                painter.setPen(QPen(c, w, self._pen_style))
-                painter.setBrush(Qt.BrushStyle.NoBrush)
-                painter.drawPath(self._bezier_curve)
-        super().paint(painter, option, widget)
-
-    def _adjust(self) -> None:
-        """Recalculate the bezier path to follow port positions."""
-        if not self._source_port or not self._target_port:
-            return
-        p1 = self._source_port.center_scene()
-        p4 = self._target_port.center_scene()
-        dx = abs(p4.x() - p1.x())
-        control_offset = max(50, dx * 0.5)
-        p2 = QPointF(p1.x() + control_offset, p1.y())
-        p3 = QPointF(p4.x() - control_offset, p4.y())
-
-        path = self._build_bezier_path(p1, p2, p3, p4)
-        self.setPath(path)
-
-        # Store bezier-only curve for glow painting
-        self._bezier_curve = self._build_bezier_curve(p1, p2, p3, p4)
-
-        # Determine lane color and style
-        src_draft = self._source_port.parent_node.is_draft
-        tgt_draft = self._target_port.parent_node.is_draft
-        is_draft_edge = src_draft or tgt_draft
-
-        if is_draft_edge:
-            self._glow_color = QColor("#9d7cd8")
-            self._pen_style = Qt.PenStyle.DashLine
-        else:
-            self._glow_color = QColor("#8b9eeb")
-            self._pen_style = Qt.PenStyle.SolidLine
-
-        if self.isSelected():
-            self._glow_color = _qt_color(ACCENT)
-        if self._hovered:
-            self._glow_color = _qt_color(ACCENT)
-
-        # Main pen
-        main_color = self._glow_color
-        main_width = 1.2 if not self.isSelected() else 2.0
-        self.setPen(QPen(main_color, main_width, self._pen_style))
-
-    def _build_bezier_curve(self, p1, p2, p3, p4) -> QPainterPath:
-        path = QPainterPath()
-        path.moveTo(p1)
-        path.cubicTo(p2, p3, p4)
-        return path
-
-    def _build_bezier_path(self, p1, p2, p3, p4):
-        path = self._build_bezier_curve(p1, p2, p3, p4)
-        arrow_size = 7
-        angle = -path.angleAtPercent(1.0)
-        arrow_p1 = p4 + QPointF(
-            arrow_size * math.cos(math.radians(angle - 30)),
-            arrow_size * math.sin(math.radians(angle - 30)),
-        )
-        arrow_p2 = p4 + QPointF(
-            arrow_size * math.cos(math.radians(angle + 30)),
-            arrow_size * math.sin(math.radians(angle + 30)),
-        )
-        path.moveTo(p4)
-        path.lineTo(arrow_p1)
-        path.moveTo(p4)
-        path.lineTo(arrow_p2)
-        return path
-
-    def contextMenuEvent(self, event) -> None:
-        menu = QMenu()
-        insert_action = menu.addAction("Insert Drone Between")
-        menu.addSeparator()
-        delete_action = menu.addAction("Delete Edge")
-        action = menu.exec(event.screenPos())
-        if action == insert_action:
-            self._canvas._canvas_insert_draft_between(self._source_port.parent_node, self._target_port.parent_node)
-        elif action == delete_action:
-            self._canvas._remove_edge(self)
-
-    def hoverEnterEvent(self, event) -> None:
-        self._hovered = True
-        self._adjust()
-        super().hoverEnterEvent(event)
-
-    def hoverLeaveEvent(self, event) -> None:
-        self._hovered = False
-        self._adjust()
-        super().hoverLeaveEvent(event)
-
-    def itemChange(self, change, value):
-        if change == QGraphicsItem.GraphicsItemChange.ItemSelectedHasChanged:
-            self._adjust()
-        return super().itemChange(change, value)
 
 
 class ChainCanvas(QGraphicsView):
@@ -1857,10 +1725,6 @@ class ChainCanvas(QGraphicsView):
         self.canvasChanged.emit()
 
     def _handle_mission_core_drop(self, mission_item: MissionCoreItem, drone_id: str) -> None:
-        # Redirect to goal planet if available
-        if self._goal_planet is not None:
-            self._handle_goal_planet_drop(self._goal_planet, drone_id)
-            return
         from aura.drones.store import DroneStore
         drone = DroneStore.load_drone(self._get_workspace_root(), drone_id)
         if drone is None:
@@ -1904,16 +1768,11 @@ class ChainCanvas(QGraphicsView):
         painter.restore()
 
     def drawForeground(self, painter: QPainter, rect: QRectF) -> None:
-        """Draw assignment connection lines from goal planet or mission core to assignments."""
+        """Draw assignment connection lines from Mothership to assignments."""
         if self._mission_core is None:
             return
-        # Draw from goal planet to assignments if present, else mission core
-        if self._goal_planet:
-            source_pos = self._goal_planet.pos()
-            source_right = source_pos + QPointF(36, 0)
-        else:
-            source_pos = self._mission_core.pos()
-            source_right = source_pos + QPointF(MISSION_CORE_WIDTH / 2, 0)
+        source_pos = self._mission_core.pos()
+        source_right = source_pos + QPointF(MISSION_CORE_WIDTH / 2, 0)
         painter.save()
         pen = QPen(_qt_color(ACCENT))
         pen.setAlpha(25)

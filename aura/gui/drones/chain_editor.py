@@ -520,7 +520,7 @@ class _PropertyPanel(QScrollArea):
             lambda: self._on_goal_planet_goal_changed(planet, goal_edit)
         )
         self._layout.insertWidget(self._layout.count() - 1, goal_edit)
-        self._add_label(f"Drone assignments orbit around this planet.", color=FG_MUTED)
+        self._add_label("This is the mission objective.", color=FG_MUTED)
 
         btn_new_look = QPushButton("New Look")
         btn_new_look.setStyleSheet(
