@@ -17,7 +17,7 @@ from aura.config import PROVIDERS, AppSettings, ModelInfo, ThinkingMode
 from aura.conversation.task_router import TaskLane, classify_user_request
 from aura.gui.input_panel import SendPayload
 from aura.drones.build_spec import DroneBuildBrief
-from aura.drones.build_prompt import build_drone_creation_prompt
+from aura.drones.build_prompt import build_drone_architect_prompt
 from aura.git_ops import (
     recent_commit_log,
     restore_to_snapshot,
@@ -197,41 +197,31 @@ class SendHandler(QObject):
         )
         return True
 
-    # ---- drone make -------------------------------------------------------
+    # ---- drone architect --------------------------------------------------
 
     def _handle_drone_make(
         self, payload: SendPayload, model: str, thinking: ThinkingMode
     ) -> None:
-        """Handle /drone make|create|build commands."""
+        """Handle /drone and /drone make|create|build commands."""
         if self._bridge.is_running():
             self._message_queue.append(payload)
             self._input.set_queued_messages(len(self._message_queue))
             return
 
         match = re.match(
-            r"/drone\s+(?:make|create|build)\s+(.+)",
+            r"/drone(?:\s+(?:make|create|build)\s+(.+))?$",
             payload.text.strip(),
             re.IGNORECASE,
         )
         brief = match.group(1).strip() if match else ""
 
-        if not brief:
-            self._chat.add_user(payload.text)
-            self._chat.add_info(
-                "Drone Creation",
-                "Tell Aura what kind of reusable drone to make. "
-                "Example: /drone make a docs checker that compares "
-                "README against the code.",
-            )
-            return
-
         brief_obj = DroneBuildBrief(
             response_type="brief",
             message="",
-            ready_to_build=True,
+            ready_to_build=bool(brief),
             build_brief=brief,
         )
-        compiled_prompt = build_drone_creation_prompt(brief_obj)
+        compiled_prompt = build_drone_architect_prompt(brief_obj)
         self._bridge.history.append_user_text(compiled_prompt)
         self._chat.add_user(payload.text)
         self._chat.begin_assistant()
@@ -262,10 +252,7 @@ class SendHandler(QObject):
         if action == "drone_help":
             self._chat.add_info(
                 "Drone Command",
-                "/drone make <brief> — Create a reusable Drone.\n\n"
-                "Example: /drone make a repo scout that finds likely bug "
-                "hotspots and returns file paths with reasons\n\n"
-                "Aliases: /drone create, /drone build",
+                "Describe the Drone you want to build.",
             )
             return
 

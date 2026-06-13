@@ -1330,6 +1330,15 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             capability_bindings=drone.capability_bindings,
             setup_steps=drone.setup_steps,
             first_run_test=drone.first_run_test,
+            accepts=drone.accepts,
+            produces=drone.produces,
+            runtime=drone.runtime,
+            entrypoint=drone.entrypoint,
+            smoke=drone.smoke,
+            permissions=drone.permissions,
+            secrets=drone.secrets,
+            dependencies=drone.dependencies,
+            manifest_version=drone.manifest_version,
         )
 
     def _handle_summon_drone_result(self, tool_id: str, extras: dict) -> None:
@@ -1872,7 +1881,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             self._handle_summon_drone_result(tool_id, extras)
 
         # Normal Drone Bay refresh for successful saves
-        if ok and name == "save_drone_definition" and extras.get("drone_saved"):
+        if ok and name in ("save_drone_definition", "register_drone_folder") and extras.get("drone_saved"):
             self._refresh_drone_context()
 
         if ok and name in ("read_file", "read_files"):

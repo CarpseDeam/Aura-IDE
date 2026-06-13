@@ -1313,3 +1313,30 @@ SAVE_DRONE_DEFINITION_TOOL_DEF: dict[str, Any] = {
         },
     },
 }
+
+
+REGISTER_DRONE_FOLDER_TOOL_DEF: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "register_drone_folder",
+        "description": (
+            "Validate and register a completed folder-backed Drone. "
+            "The folder must already contain drone.json, the Python entrypoint, "
+            "and the smoke check. This tool runs the smoke check before installing "
+            "the Drone into Aura's global Drone directory."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "folder_path": {
+                    "type": "string",
+                    "description": (
+                        "Workspace-relative path to the completed Drone folder, "
+                        "for example .aura/drone-build/source-scout."
+                    ),
+                },
+            },
+            "required": ["folder_path"],
+        },
+    },
+}

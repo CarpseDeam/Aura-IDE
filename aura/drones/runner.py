@@ -25,6 +25,7 @@ from aura.client.events import (
 from aura.config import get_provider, load_settings, resolve_role_default_model
 from aura.conversation.tools._types import ApprovalDecision, ApprovalRequest
 from aura.drones.definition import DroneDefinition
+from aura.drones.folder_runner import is_folder_backed_drone, run_folder_drone_sync
 from aura.drones.receipt import DroneReceipt
 from aura.drones.run import DroneRun
 from aura.drones.tool_surface import build_drone_tool_surface
@@ -99,6 +100,41 @@ class DroneRunner(QObject):
         instructions, loops through the agent backend until done or cancelled.
         """
         logger.info("Drone run started: %s (%s)", self._drone.name, self._run.run_id)
+        if is_folder_backed_drone(self._drone):
+            self._run.mark("running")
+            self.statusChanged.emit("running")
+            try:
+                goal = self._drone.description or self._drone.instructions
+                result = run_folder_drone_sync(
+                    self._workspace_root,
+                    self._drone.id,
+                    self._drone,
+                    goal,
+                    run=self._run,
+                )
+                summary = str(result.get("summary") or "")
+                if summary:
+                    self.contentDelta.emit(summary)
+                receipt_data = result.get("receipt")
+                receipt = (
+                    DroneReceipt.from_dict(receipt_data)
+                    if isinstance(receipt_data, dict)
+                    else None
+                )
+                if receipt is None:
+                    raise RuntimeError("Folder Drone did not return a receipt")
+                self._run.mark(str(result.get("status") or receipt.status))
+                self.statusChanged.emit(self._run.status)
+                self.receiptReady.emit(receipt)
+            except Exception as exc:
+                logger.exception("Folder-backed Drone runner error")
+                self._run.mark("failed")
+                self.statusChanged.emit("failed")
+                self.apiError.emit(-1, str(exc))
+            finally:
+                self.finished.emit()
+            return
+
         self._run.mark("running")
         self.statusChanged.emit("running")
         self._reject_all = False

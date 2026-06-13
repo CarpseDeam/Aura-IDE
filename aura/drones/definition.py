@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from typing import Any
 
 from aura.drones.capabilities import CapabilityBinding, CapabilityRequirement
 
@@ -33,6 +34,13 @@ class DroneDefinition:
     first_run_test: str = ""
     accepts: str = ""  # name of ArtifactType this drone consumes; empty = free-form goal
     produces: str = ""  # name of ArtifactType this drone emits; empty = unstructured summary
+    runtime: str = ""  # empty/llm = legacy tool-menu Drone; python = folder-backed Drone
+    entrypoint: str = ""  # e.g. "main:run" for folder-backed Drones
+    smoke: str = ""  # e.g. "smoke:run"
+    permissions: dict[str, Any] = field(default_factory=dict)
+    secrets: tuple[str, ...] = ()
+    dependencies: tuple[str, ...] = ()
+    manifest_version: str = "1"
 
 
 def slugify(name: str) -> str:

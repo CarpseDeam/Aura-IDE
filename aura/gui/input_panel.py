@@ -376,12 +376,11 @@ class InputPanel(QFrame):
 
         if text.strip().lower().startswith("/drone"):
             self._slash_hint.setText(
-                "Try: /drone make a repo scout that finds likely bug "
-                "hotspots and returns file paths with reasons"
+                "/drone enters Drone Architect mode. Describe the Drone you want to build."
             )
         else:
             self._slash_hint.setText(
-                "/drone make <brief>  —  Create a reusable Drone."
+                "/drone  —  Enter Drone Architect mode."
             )
         self._slash_hint.setVisible(True)
 

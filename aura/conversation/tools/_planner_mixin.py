@@ -458,6 +458,68 @@ class PlannerHandlersMixin:
                 payload={"ok": False, "error": str(e)},
             )
 
+    def _handle_register_drone_folder(
+        self,
+        args: dict[str, Any],
+        approval_cb: Any,
+        reject_all: bool,
+    ) -> ToolExecResult:
+        """Validate, smoke-test, and install a folder-backed Drone."""
+        folder_raw = str(args.get("folder_path") or "").strip()
+        if not folder_raw:
+            return ToolExecResult(
+                ok=False,
+                payload={"ok": False, "error": "folder_path is required"},
+            )
+        try:
+            folder = self._resolve_in_root(folder_raw)
+            if not folder.is_dir():
+                return ToolExecResult(
+                    ok=False,
+                    payload={"ok": False, "error": f"Drone folder does not exist: {folder_raw}"},
+                )
+
+            from aura.drones.folder_runner import run_drone_smoke
+
+            drone = DroneStore.load_drone_from_folder(folder)
+            smoke_result = run_drone_smoke(folder, drone)
+            if not bool(smoke_result.get("ok")):
+                return ToolExecResult(
+                    ok=False,
+                    payload={
+                        "ok": False,
+                        "error": "Drone smoke check failed",
+                        "smoke": smoke_result,
+                    },
+                )
+            drone = DroneStore.register_drone_folder(self._root, folder)
+            return ToolExecResult(
+                ok=True,
+                payload={
+                    "ok": True,
+                    "drone_saved": True,
+                    "folder_drone": True,
+                    "drone_id": drone.id,
+                    "id": drone.id,
+                    "name": drone.name,
+                    "runtime": drone.runtime,
+                    "entrypoint": drone.entrypoint,
+                    "smoke": drone.smoke,
+                    "permissions": drone.permissions,
+                    "smoke_result": smoke_result,
+                },
+                extras={
+                    "drone_saved": True,
+                    "drone_id": drone.id,
+                    "folder_drone": True,
+                },
+            )
+        except Exception as e:
+            return ToolExecResult(
+                ok=False,
+                payload={"ok": False, "error": str(e)},
+            )
+
     def _handle_resolve_capability(
         self,
         args: dict[str, Any],

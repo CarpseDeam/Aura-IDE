@@ -3,126 +3,88 @@ from __future__ import annotations
 from aura.drones.build_spec import DroneBuildBrief
 
 
-def _cap_requirements_lines(plan) -> list[str]:
-    """Build instruction lines for capability requirements or skip."""
+def build_drone_architect_prompt(
+    brief: DroneBuildBrief | None = None,
+    accepts: str = "",
+    produces: str = "",
+) -> str:
+    """Return the mode prompt for folder-backed Drone Architect builds."""
+    build_brief = (brief.build_brief if brief else "").strip()
     lines: list[str] = []
-    if plan.capability_requirements:
-        lines.append(
-            "- Resolve each capability via resolve_capability."
-        )
-        lines.append(
-            "- Merge resolved tools with the allowed_tools from the plan."
-        )
-        lines.append(
-            "- Populate capability_bindings and setup_steps from the resolution."
-        )
+    lines.append("# Drone Architect Mode")
+    lines.append("")
+    lines.append("You are Aura's Drone Architect.")
+    lines.append("")
+    lines.append("A Drone is a reusable runnable worker that Aura writes.")
+    lines.append("A finished Drone is a folder-backed artifact with code, a manifest, and a smoke check.")
+    lines.append("The harness is the factory. The Drone is the artifact.")
+    lines.append("")
+    lines.append("## Product Posture")
+    lines.append("- Do not edit the user's project as the Drone build itself.")
+    lines.append("- Do not assemble a Drone from a menu of existing harness tools.")
+    lines.append("- Do not make a new Drone depend on phantom harness tools such as `run_research`.")
+    lines.append("- Write code by default. Normal briefs like \"watch Reddit\", \"collect invoices\", or \"monitor this site\" imply code needs to be authored.")
+    lines.append("- Do not require the user to know implementation words like scraper, dynamic tool, connector, MCP, API client, browser adapter, or parser.")
+    lines.append("- MCP may be used only when it is the cleanest shortcut inside the implementation. MCP is not the product model.")
+    lines.append("- Ask a small clarifying question only when the Drone cannot be built responsibly from the brief.")
+    lines.append("")
+    lines.append("## Folder Shape")
+    lines.append("Create the Drone under a workspace-relative build folder such as `.aura/drone-build/<drone_id>/`:")
+    lines.append("- `drone.json`")
+    lines.append("- `main.py`")
+    lines.append("- `smoke.py`")
+    lines.append("- `requirements.txt` when needed")
+    lines.append("- `README.md` optional")
+    lines.append("")
+    lines.append("## Manifest Contract")
+    lines.append("`drone.json` must include:")
+    lines.append("- `id`, `name`, `version`, `description`")
+    lines.append("- `runtime`: `python`")
+    lines.append("- `entrypoint`: normally `main:run`")
+    lines.append("- `smoke`: normally `smoke:run`")
+    lines.append("- `accepts` and `produces` cargo contract labels")
+    lines.append("- `permissions`, `secrets`, and `dependencies`")
+    lines.append("")
+    lines.append("For compatibility with the Workbay GUI, also include:")
+    lines.append("- `instructions`: a short operational description")
+    lines.append("- `write_policy`: usually `read_only` unless the Drone needs to write")
+    lines.append("- `allowed_tools`: `[]` for new folder-backed Drones")
+    lines.append("- `output_contract`: a concise description of returned cargo")
+    lines.append("- `scope`: `global`")
+    lines.append("")
+    lines.append("## Python Contract")
+    lines.append("Implement `main.run(payload: dict) -> dict | list | str`.")
+    lines.append("Aura passes a dict containing `goal`, `input`, `workspace_root`, and `drone_id`.")
+    lines.append("Implement `smoke.run(payload: dict) -> dict` and return `{\"ok\": true}` when imports and a tiny execution check pass.")
+    lines.append("If network is needed, declare it in `permissions`, for example `{\"network\": true, \"domains\": [\"reddit.com\", \"hn.algolia.com\"]}`.")
+    lines.append("")
+    lines.append("## Source Scout Acceptance")
+    lines.append("If the user asks for a Source Scout that watches Reddit and Hacker News:")
+    lines.append("- Write its own code for Reddit RSS and Hacker News Algolia.")
+    lines.append("- Do not use `run_research`.")
+    lines.append("- Return candidate cargo with `title`, `source`, `url`, `snippet`, `timestamp`, `matched_topic`, and `reason`.")
+    lines.append("")
+    lines.append("## Completion")
+    lines.append("- If you are in Planner mode and cannot write files directly, dispatch one Worker to author the complete Drone folder and call `register_drone_folder`.")
+    lines.append("- If you have write tools directly, write the folder files yourself.")
+    lines.append("- Run any quick local checks that are useful.")
+    lines.append("- Call `register_drone_folder` with the workspace-relative folder path.")
+    lines.append("- Report the registered Drone id and what it returns.")
+    lines.append("- Do not call `save_drone_definition` for new builds.")
+    lines.append("")
+    if accepts or produces:
+        lines.append("## Requested Workflow Contract")
+        lines.append(f"- accepts: {accepts or 'any'}")
+        lines.append(f"- produces: {produces or 'any'}")
+        lines.append("")
+    if build_brief:
+        lines.append("## Build Brief")
+        lines.append(build_brief)
     else:
-        lines.append(
-            "- No external capabilities needed \u2014 skip resolve_capability."
-        )
-    return lines
-
-
-def _generated_code_line(plan) -> str:
-    if not plan.generated_code_allowed:
-        return (
-            "- DO NOT create helper scripts, generated code, or dynamic tools."
-        )
-    return (
-        "- Generated code is allowed for this Drone \u2014 use it only "
-        "for the specific new tool/integration."
-    )
+        lines.append("No build brief was supplied. Ask exactly: \"Describe the Drone you want to build.\"")
+    return "\n".join(lines)
 
 
 def build_drone_creation_prompt(brief: DroneBuildBrief, accepts: str = "", produces: str = "") -> str:
-    """Return a Planner-facing prompt to build a Drone from an approved brief.
-
-    Uses the deterministic build compiler to produce a compiled build plan,
-    then embeds the plan in the prompt so the Planner does not need to
-    independently assess tool inventory or schema.
-    """
-    from aura.drones.build_compiler import compile_drone_build_plan
-    from aura.drones.definition import default_tools_for_policy
-
-    # Use the full harness tool surface as available tools
-    available = frozenset(default_tools_for_policy("normal_diff_approval"))
-    plan = compile_drone_build_plan(brief.build_brief, available)
-
-    lines: list[str] = []
-    lines.append("## Clarification Gate")
-    lines.append(
-        "First, evaluate the build brief below to determine whether it has enough "
-        "concrete detail to define every required field of a DroneDefinition: "
-        "`name`, `description` (purpose), `instructions`, `write_policy`, "
-        "`output_contract`. The brief must make clear what task the drone does, "
-        "how it does it, whether it needs write access, and what it produces."
-    )
-    lines.append("")
-    lines.append("### Readiness Checklist")
-    lines.append("Before building, verify the brief makes the following fields clear:")
-    lines.append("- **name** \u2014 a clear, inferable name for the drone")
-    lines.append("- **purpose** \u2014 what the drone does and when the user would use it")
-    lines.append("- **what it should read or inspect** \u2014 the input or surface it works on")
-    lines.append("- **write access** \u2014 whether it is read-only or may write files / make changes")
-    lines.append("- **expected output** \u2014 what it produces")
-    lines.append("- **required surface or tool family** \u2014 e.g. repo, GitHub, docs, tests, browser, release notes, local files")
-    lines.append("")
-    lines.append("### Clarification Loop")
-    lines.append("If any of those details are missing or unclear:")
-    lines.append("- Ask the smallest useful clarifying question (or multiple fields when that is clearer).")
-    lines.append("- Do NOT dispatch a Worker.")
-    lines.append("- Do NOT call `save_drone_definition`.")
-    lines.append("- After the user responds, re-evaluate. If the brief is still not complete enough, ask follow-up clarification questions across multiple turns.")
-    lines.append("- Stop only when the brief is complete enough to build.")
-    lines.append("")
-    lines.append("If the brief is specific enough (all readiness checklist fields are inferable):")
-    lines.append("- Proceed with the build instructions below.")
-    lines.append("")
-    lines.append("### Examples")
-    lines.append("- **Vague:** `/drone make a GitHub helper` \u2192 Ask what GitHub task it should handle, and whether it should report only or make changes.")
-    lines.append("- **Specific:** `/drone make a docs checker that compares README claims against the repo and reports stale sections` \u2192 Proceed to build.")
-    lines.append("")
-    lines.append("## Build Brief")
-    lines.append(brief.build_brief)
-    lines.append("")
-    lines.append("## Contract Context")
-    if accepts:
-        lines.append(f"- Accepts (exact contract): {accepts}")
-    else:
-        lines.append('- Accepts: free-form / any (set field to "")')
-    if produces:
-        lines.append(f"- Produces (exact contract): {produces}")
-    else:
-        lines.append('- Produces: free-form / any (set field to "")')
-    lines.append("- The DroneDefinition MUST set these exact accepts/produces values.")
-
-    lines.append("")
-    lines.append("## Compiled Build Plan")
-    lines.append(f"- allowed_tools: {list(plan.allowed_tools)}")
-    if plan.capability_requirements:
-        lines.append("- capability_requirements to resolve:")
-        for cr in plan.capability_requirements:
-            lines.append(f"  - {cr.capability}: {cr.purpose}")
-    if plan.warnings:
-        lines.append("- warnings:")
-        for w in plan.warnings:
-            lines.append(f"  - {w}")
-    lines.append(f"- generated_code_allowed: {plan.generated_code_allowed}")
-    lines.append("")
-    lines.append("## Instructions")
-    lines.append(
-        "- Use the allowed_tools listed above directly in the DroneDefinition."
-    )
-    lines.extend(_cap_requirements_lines(plan))
-    lines.append(
-        "- Use dispatch_to_worker to send the full DroneDefinition to a Worker. "
-        "The Worker must call save_drone_definition to persist it. "
-        "Include all DroneDefinition fields in the dispatch spec."
-    )
-    lines.append(_generated_code_line(plan))
-    lines.append("")
-    lines.append(
-        "You are the Planner. You do NOT have save_drone_definition \u2014 "
-        "only the Worker does. Use dispatch_to_worker."
-    )
-    return "\n".join(lines)
+    """Compatibility alias for the new Drone Architect prompt."""
+    return build_drone_architect_prompt(brief, accepts=accepts, produces=produces)

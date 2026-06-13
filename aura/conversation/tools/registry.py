@@ -250,3 +250,4 @@ TOOL_HANDLERS["run_read_only_drone"] = ToolRegistry._handle_run_read_only_drone
 TOOL_HANDLERS["check_drone_run"] = ToolRegistry._handle_check_drone_run
 TOOL_HANDLERS["resolve_capability"] = ToolRegistry._handle_resolve_capability
 TOOL_HANDLERS["save_drone_definition"] = ToolRegistry._handle_save_drone_definition
+TOOL_HANDLERS["register_drone_folder"] = ToolRegistry._handle_register_drone_folder

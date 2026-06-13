@@ -25,6 +25,7 @@ from aura.conversation.tools.consequential import is_consequential
 from aura.conversation.tools.registry import ToolRegistry
 from aura.drones.contracts import BUILTIN_TYPES, ArtifactType, is_compatible
 from aura.drones.definition import WRITE_TOOLS, DroneDefinition, default_tools_for_policy
+from aura.drones.folder_runner import is_folder_backed_drone, run_folder_drone_sync
 from aura.drones.receipt import DroneReceipt
 from aura.drones.run import DroneRun
 from aura.drones.store import RunHistoryStore
@@ -592,6 +593,9 @@ def run_read_only_drone_sync(
         tool_calls_made, tool_errors, elapsed_seconds, receipt,
         approved_write_actions, rejected_write_actions.
     """
+    if is_folder_backed_drone(drone):
+        return run_folder_drone_sync(workspace_root, drone_id, drone, goal)
+
     return _run_drone_sync_impl(
         workspace_root, drone_id, drone, goal,
         write_enabled=False,
@@ -640,6 +644,9 @@ def run_write_capable_drone_sync(
     tool_calls_made, tool_errors, elapsed_seconds, receipt,
     approved_write_actions, rejected_write_actions.
     """
+    if is_folder_backed_drone(drone):
+        return run_folder_drone_sync(workspace_root, drone_id, drone, goal)
+
     return _run_drone_sync_impl(
         workspace_root, drone_id, drone, goal,
         write_enabled=True,

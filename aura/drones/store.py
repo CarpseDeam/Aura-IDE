@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import shutil
 import tempfile
 from dataclasses import asdict, fields
 from pathlib import Path
@@ -55,11 +56,48 @@ def _drone_from_dict(data: dict) -> DroneDefinition:
         }
     if "setup_steps" in data and isinstance(data["setup_steps"], list):
         data = {**data, "setup_steps": tuple(str(x) for x in data["setup_steps"])}
+    if "secrets" in data and isinstance(data["secrets"], list):
+        data = {**data, "secrets": tuple(str(x) for x in data["secrets"])}
+    if "dependencies" in data and isinstance(data["dependencies"], list):
+        data = {**data, "dependencies": tuple(str(x) for x in data["dependencies"])}
+    if isinstance(data.get("accepts"), dict):
+        accepts = data["accepts"]
+        data = {**data, "accepts": str(accepts.get("type") or accepts.get("name") or "")}
+    if isinstance(data.get("produces"), dict):
+        produces = data["produces"]
+        data = {**data, "produces": str(produces.get("type") or produces.get("name") or "")}
+    data = _normalize_manifest_defaults(data)
+    if "allowed_tools" in data and isinstance(data["allowed_tools"], list):
+        data = {**data, "allowed_tools": tuple(data["allowed_tools"])}
     known_fields = {f.name for f in fields(DroneDefinition)}
     filtered = {k: v for k, v in data.items() if k in known_fields}
     drone = DroneDefinition(**filtered)
     DroneStore.validate_drone(drone)
     return drone
+
+
+def _normalize_manifest_defaults(data: dict) -> dict:
+    """Fill legacy DroneDefinition fields from a folder-backed manifest."""
+    if not data.get("instructions"):
+        data = {**data, "instructions": str(data.get("description") or data.get("name") or "")}
+    if not data.get("write_policy"):
+        data = {**data, "write_policy": "read_only"}
+    if "allowed_tools" not in data:
+        data = {**data, "allowed_tools": []}
+    if not data.get("output_contract"):
+        produces = data.get("produces")
+        if isinstance(produces, str) and produces:
+            output_contract = f"Return {produces} cargo."
+        else:
+            output_contract = "Return JSON-serializable cargo or a concise text summary."
+        data = {**data, "output_contract": output_contract}
+    if not data.get("scope"):
+        data = {**data, "scope": "global"}
+    return data
+
+
+def _module_path_from_ref(ref: str) -> str:
+    return str(ref or "").split(":", 1)[0].strip()
 
 
 class DroneStore:
@@ -163,6 +201,70 @@ class DroneStore:
         Path(tmp_path).replace(p)
 
     @staticmethod
+    def drone_folder(drone_id: str) -> Path:
+        """Return the global folder for a registered Drone id."""
+        return _global_drones_root() / drone_id
+
+    @staticmethod
+    def load_drone_from_folder(folder: Path) -> DroneDefinition:
+        """Load and validate a folder-backed Drone manifest."""
+        folder = folder.resolve()
+        manifest = folder / "drone.json"
+        if not manifest.exists():
+            raise ValueError("drone.json is required")
+        try:
+            data = json.loads(manifest.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"drone.json is not valid JSON: {exc}") from exc
+
+        drone = _drone_from_dict(data)
+        if drone.runtime and drone.runtime != "python":
+            raise ValueError(f"Unsupported Drone runtime: {drone.runtime}")
+        if drone.runtime == "python" or drone.entrypoint or drone.smoke:
+            if drone.runtime != "python":
+                raise ValueError("Folder-backed Drones must set runtime to 'python'")
+            if not drone.entrypoint:
+                raise ValueError("entrypoint is required for python Drones")
+            if not drone.smoke:
+                raise ValueError("smoke is required for python Drones")
+            entry_module = _module_path_from_ref(drone.entrypoint)
+            smoke_module = _module_path_from_ref(drone.smoke)
+            if not entry_module:
+                raise ValueError("entrypoint must be formatted as module:function")
+            if not smoke_module:
+                raise ValueError("smoke must be formatted as module:function")
+            if not (folder / f"{entry_module.replace('.', '/')}.py").exists():
+                raise ValueError(f"entrypoint module does not exist: {entry_module}.py")
+            if not (folder / f"{smoke_module.replace('.', '/')}.py").exists():
+                raise ValueError(f"smoke module does not exist: {smoke_module}.py")
+        return drone
+
+    @staticmethod
+    def register_drone_folder(workspace_root: Path, source_folder: Path) -> DroneDefinition:
+        """Validate and install a folder-backed Drone into global storage."""
+        source_folder = source_folder.resolve()
+        drone = DroneStore.load_drone_from_folder(source_folder)
+        target_folder = _global_drones_root() / drone.id
+        target_folder.parent.mkdir(parents=True, exist_ok=True)
+
+        tmp_name = tempfile.mkdtemp(
+            dir=str(target_folder.parent),
+            prefix=f".{drone.id}-",
+        )
+        tmp_folder = Path(tmp_name)
+        try:
+            shutil.copytree(source_folder, tmp_folder, dirs_exist_ok=True)
+            DroneStore.load_drone_from_folder(tmp_folder)
+            if target_folder.exists():
+                shutil.rmtree(target_folder)
+            tmp_folder.replace(target_folder)
+        except Exception:
+            if tmp_folder.exists():
+                shutil.rmtree(tmp_folder, ignore_errors=True)
+            raise
+        return drone
+
+    @staticmethod
     def delete_drone(workspace_root: Path, drone_id: str) -> bool:
         """Remove a drone definition. Returns True if anything was deleted."""
         if not _is_safe_drone_id(drone_id):
@@ -174,11 +276,7 @@ class DroneStore:
         global_dir = _global_drones_root() / drone_id
         global_file = global_dir / "drone.json"
         if global_file.exists():
-            global_file.unlink()
-            try:
-                global_dir.rmdir()
-            except OSError:
-                pass
+            shutil.rmtree(global_dir, ignore_errors=True)
             deleted = True
 
         # Delete from legacy
@@ -225,6 +323,8 @@ class DroneStore:
             raise ValueError("Drone timeout_seconds must be at least 30")
         if drone.scope not in ("global", "project"):
             raise ValueError(f"Invalid Drone scope: {drone.scope}")
+        if drone.runtime and drone.runtime != "python":
+            raise ValueError(f"Invalid Drone runtime: {drone.runtime}")
 
 
 class RunHistoryStore:
