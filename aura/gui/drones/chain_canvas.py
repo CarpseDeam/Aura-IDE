@@ -572,7 +572,7 @@ class ChainCanvas(QGraphicsView):
         node_count = len(self._nodes)
         if node_count == 0:
             self.resetTransform()
-            self.fitInView(QRectF(-300, -100, 600, 200))
+            self.centerOn(0, 0)
         elif node_count == 1:
             self.resetTransform()
             node = next(iter(self._nodes.values()))
@@ -790,6 +790,7 @@ class ChainCanvas(QGraphicsView):
         self._scene.clearSelection()
         item.setSelected(True)
         self._update_empty_text()
+        self._fit_view()
         self.canvasChanged.emit()
 
     def _canvas_insert_draft_between(self, source_node: ChainNodeItem, target_node: ChainNodeItem) -> None:
