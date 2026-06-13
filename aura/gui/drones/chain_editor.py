@@ -8,6 +8,7 @@ from PySide6.QtCore import QMimeData, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QDrag, QFont, QMouseEvent, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QFrame,
     QHBoxLayout,
@@ -25,10 +26,10 @@ from PySide6.QtWidgets import (
 )
 
 from aura.drones.chain import ChainDefinition
+from aura.drones.chain_runner import get_last_chain_run
 from aura.drones.chain_store import _chain_from_dict, delete_chain, load_chain, save_chain
 from aura.drones.definition import DroneDefinition
 from aura.drones.store import DroneStore
-from aura.drones.chain_runner import get_last_chain_run
 from aura.gui.drones.chain_canvas import (
     ChainCanvas,
     ChainEdgeItem,
@@ -501,11 +502,31 @@ class _PropertyPanel(QScrollArea):
         self._editor._auto_save_timer.start()
 
     def _rebuild_goal_planet_form(self, planet: GoalPlanetItem) -> None:
-        self._add_label("Goal Planet", bold=True)
+        heading = f"Goal Planet \u2014 {planet.title}" if planet.title else "Goal Planet"
+        self._add_label(heading, bold=True)
         self._add_separator()
-        self._add_label("Mission Goal", color=FG_MUTED)
+
+        self._add_label("Title", color=FG_MUTED)
+        title_input = QLineEdit(planet.title)
+        title_input.setPlaceholderText("Short title for this goal")
+        title_input.setStyleSheet(
+            f"QLineEdit {{"
+            f"  background: {_qss_color(SURFACE)};"
+            f"  border: 1px solid {_qss_color(BORDER)};"
+            f"  border-radius: 4px;"
+            f"  color: {_qss_color(FG)};"
+            f"  font-size: 11px;"
+            f"  padding: 4px;"
+            f"}}"
+        )
+        title_input.textChanged.connect(
+            lambda text, p=planet, inp=title_input: self._on_goal_planet_title_changed(p, inp)
+        )
+        self._layout.insertWidget(self._layout.count() - 1, title_input)
+
+        self._add_label("Mission Objective", color=FG_MUTED)
         goal_edit = QTextEdit()
-        goal_edit.setPlainText(planet.goal)
+        goal_edit.setPlainText(planet.objective)
         goal_edit.setPlaceholderText("Describe the mission goal\u2026")
         goal_edit.setMaximumHeight(120)
         goal_edit.setStyleSheet(
@@ -544,7 +565,12 @@ class _PropertyPanel(QScrollArea):
         self._layout.insertWidget(self._layout.count() - 1, btn_new_look)
 
     def _on_goal_planet_goal_changed(self, planet: GoalPlanetItem, edit: QTextEdit) -> None:
-        planet.goal = edit.toPlainText()
+        planet.objective = edit.toPlainText()
+        self._editor._dirty = True
+        self._editor._auto_save_timer.start()
+
+    def _on_goal_planet_title_changed(self, planet: GoalPlanetItem, edit: QLineEdit) -> None:
+        planet.title = edit.text()
         self._editor._dirty = True
         self._editor._auto_save_timer.start()
 
@@ -664,6 +690,67 @@ class _PropertyPanel(QScrollArea):
 
         self._add_separator()
 
+        # Target Goal Planet
+        canvas = self._editor._canvas
+        goals = canvas._goal_planets
+        if node.goal_id and node.goal_id in goals:
+            gp = goals[node.goal_id]
+            display_title = gp.title or "Goal"
+            snippet = gp.objective[:80] + "\u2026" if len(gp.objective) > 80 else gp.objective
+            self._add_label(f"Target: {display_title}", bold=True)
+            self._add_label(snippet, color=FG_MUTED)
+            if len(goals) > 1:
+                self._add_label("Change target:", color=FG_DIM)
+                combo = QComboBox()
+                ordered = list(goals.values())
+                for gp_item in ordered:
+                    label = gp_item.title or gp_item.goal_id or "Goal"
+                    combo.addItem(label, gp_item.goal_id)
+                current_idx = next((i for i, g in enumerate(ordered) if g.goal_id == node.goal_id), 0)
+                combo.setCurrentIndex(current_idx)
+                combo.currentIndexChanged.connect(
+                    lambda idx, n=node, gps=ordered: self._on_assignment_goal_changed(n, gps[idx].goal_id)
+                )
+                combo.setStyleSheet(
+                    f"QComboBox {{"
+                    f"  background: {_qss_color(SURFACE)};"
+                    f"  border: 1px solid {_qss_color(BORDER)};"
+                    f"  border-radius: 4px;"
+                    f"  color: {_qss_color(FG)};"
+                    f"  padding: 3px 6px;"
+                    f"  font-size: 10px;"
+                    f"}}"
+                )
+                self._layout.insertWidget(self._layout.count() - 1, combo)
+        elif not node.goal_id:
+            self._add_label("Target: (not set)", bold=True, color="#e0af68")
+            if goals:
+                self._add_label("Change target:", color=FG_DIM)
+                combo = QComboBox()
+                combo.addItem("(none)", "")
+                ordered = list(goals.values())
+                for gp_item in ordered:
+                    label = gp_item.title or gp_item.goal_id or "Goal"
+                    combo.addItem(label, gp_item.goal_id)
+                combo.currentIndexChanged.connect(
+                    lambda idx, n=node, gps=[None] + ordered: self._on_assignment_goal_changed(
+                        n, gps[idx].goal_id if gps[idx] else ""
+                    )
+                )
+                combo.setStyleSheet(
+                    f"QComboBox {{"
+                    f"  background: {_qss_color(SURFACE)};"
+                    f"  border: 1px solid {_qss_color(BORDER)};"
+                    f"  border-radius: 4px;"
+                    f"  color: {_qss_color(FG)};"
+                    f"  padding: 3px 6px;"
+                    f"  font-size: 10px;"
+                    f"}}"
+                )
+                self._layout.insertWidget(self._layout.count() - 1, combo)
+
+        self._add_separator()
+
         self._add_label("Task", color=FG_MUTED)
         task_edit = QTextEdit(node.goal_template)
         task_edit.setPlaceholderText("What should this drone do for this mission?")
@@ -704,6 +791,13 @@ class _PropertyPanel(QScrollArea):
         node.goal_template = edit.toPlainText()
         self._editor._dirty = True
         self._editor._auto_save_timer.start()
+
+    def _on_assignment_goal_changed(self, node: ChainNodeItem, goal_id: str) -> None:
+        node.goal_id = goal_id
+        self._editor._dirty = True
+        self._editor._auto_save_timer.start()
+        # Refresh the panel to show updated target
+        self._editor._property_panel.rebuild()
 
     def _on_delete_assignment(self, node: ChainNodeItem) -> None:
         self._editor._canvas._remove_node(node)
@@ -1078,14 +1172,14 @@ class ChainEditor(QWidget):
                 chain_def = _chain_from_dict(data)
                 drone_lookup = self._build_drone_lookup()
                 mission_core_data = data.get("mission_core")
-                goal_planet_data = data.get("goal_planet")
-                self._canvas.load_chain(chain_def, drone_lookup, mission_core_data, goal_planet_data)
-                # Apply mission_goal to the Goal Planet (canonical field)
+                goal_planets_data = data.get("goals", [])
+                self._canvas.load_chain(chain_def, drone_lookup, mission_core_data, goal_planets_data)
+                # Apply canonical mission_goal to first goal planet if present
                 mission_goal = data.get("mission_goal", "")
-                if not mission_goal and goal_planet_data:
-                    mission_goal = goal_planet_data.get("goal", "")
-                if mission_goal and self._canvas._goal_planet is not None:
-                    self._canvas._goal_planet.goal = mission_goal
+                if mission_goal and self._canvas._goal_planets:
+                    first_gp = next(iter(self._canvas._goal_planets.values()))
+                    if not first_gp.objective:
+                        first_gp.objective = mission_goal
                 self._dirty = False
                 self._update_title_label()
                 self._property_panel.rebuild()
@@ -1132,22 +1226,21 @@ class ChainEditor(QWidget):
 
     def _snapshot_chain(self) -> dict:
         self._sync_chain_from_form()
-        nodes, edges, mission_core = self._canvas.to_chain_nodes_and_edges()
-        goal_planet = self._canvas.goal_planet_data
+        nodes, edges, mission_core, goals = self._canvas.to_chain_nodes_and_edges()
         result = {
             "nodes": nodes,
             "edges": edges,
             "name": self._chain_name,
             "description": self._chain_desc,
             "auto_route": self._auto_route,
+            "goals": goals,
         }
         if mission_core:
             result["mission_core"] = mission_core
-        if goal_planet:
-            result["goal_planet"] = goal_planet
-        # Persist the Goal Planet's goal at chain level for prompt injection
-        if goal_planet and goal_planet.get("goal", "").strip():
-            result["mission_goal"] = goal_planet["goal"]
+        # Persist first goal's objective as mission_goal for backward compat
+        if goals and isinstance(goals[0], dict) and goals[0].get("goal", "").strip():
+            result["mission_goal"] = goals[0]["goal"]
+            result["goal_planet"] = goals[0]
         else:
             result["mission_goal"] = ""
         return result
@@ -1179,7 +1272,7 @@ class ChainEditor(QWidget):
 
     def _validate_chain(self) -> None:
         self._sync_chain_from_form()
-        nodes, edges, _mission_core = self._canvas.to_chain_nodes_and_edges()
+        nodes, edges, _mission_core, _goals = self._canvas.to_chain_nodes_and_edges()
         issues: list[str] = []
 
         if not nodes:

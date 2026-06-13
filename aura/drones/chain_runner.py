@@ -208,7 +208,6 @@ def _execute_node(
     timeout_seconds: int,
     max_tool_rounds: int,
     writes_approved: bool,
-    mission_goal: str = "",
 ) -> dict:
     """Execute a single chain node and return its node_run dict.
 
@@ -216,6 +215,9 @@ def _execute_node(
     normalizes results, persists output.json, and returns the node_run dict.
     Does NOT set chain_run.status/ended_at or call _save_run_state.
     """
+    # ── Build goal lookup map ───────────────────────────
+    goal_map = {g.id: g for g in chain.goals}
+
     # ── Resolve inbound artifact ─────────────────────────
     inbound_artifacts: dict[str, Any] = {}
     inbound_summaries: dict[str, str] = {}
@@ -278,11 +280,18 @@ def _execute_node(
             )
 
     # ── Mission Objective (Goal Planet) ────────────────
-    if node.is_assignment and mission_goal:
-        goal_text = (
-            f"## Mission Objective\n{mission_goal}\n\n"
-            f"## Assignment\n{goal_text}"
-        )
+    if node.is_assignment:
+        goal = goal_map.get(node.goal_id)
+        if goal and goal.objective:
+            goal_text = (
+                f"## Mission Objective\n{goal.objective}\n\n"
+                f"## Assignment\n{goal_text}"
+            )
+        elif chain.mission_goal:
+            goal_text = (
+                f"## Mission Objective\n{chain.mission_goal}\n\n"
+                f"## Assignment\n{goal_text}"
+            )
 
     # ── Warehouse cargo for assignment nodes ────────────
     if node.is_assignment:
@@ -298,6 +307,17 @@ def _execute_node(
             output_path = workspace_root / artifact_path
             if not output_path.exists():
                 continue
+
+            # Resolve goal info for the completed node
+            completed_node = node_map.get(completed_nid)
+            goal_id_str = ""
+            goal_title_str = ""
+            if completed_node and completed_node.goal_id:
+                g = goal_map.get(completed_node.goal_id)
+                if g:
+                    goal_id_str = g.id
+                    goal_title_str = g.title or "Goal"
+
             try:
                 data = json.loads(output_path.read_text(encoding="utf-8"))
             except Exception:
@@ -307,6 +327,9 @@ def _execute_node(
             cargo_entry: dict[str, Any] = {
                 "node_id": completed_nid,
                 "drone_id": nr.get("drone_id", "?"),
+                "source_goal_id": goal_id_str,
+                "source_goal_title": goal_title_str,
+                "source_assignment_id": completed_nid,
             }
             summary = data.get("summary", "")
             evidence = data.get("evidence", "")
@@ -327,9 +350,16 @@ def _execute_node(
                 "Use this information in your work.\n\n"
             )
             for entry in warehouse_cargo:
-                goal_text += (
-                    f"- **{entry['drone_id']}** ({entry['node_id']}):"
-                )
+                src_goal = entry.get("source_goal_title", "")
+                if src_goal:
+                    goal_text += (
+                        f"From {src_goal}: "
+                        f"- **{entry['drone_id']}** ({entry['node_id']}):"
+                    )
+                else:
+                    goal_text += (
+                        f"- **{entry['drone_id']}** ({entry['node_id']}):"
+                    )
                 if "summary" in entry:
                     goal_text += f" {entry['summary']}"
                 goal_text += "\n"
@@ -588,7 +618,6 @@ def run_chain(
             timeout_seconds=timeout_seconds,
             max_tool_rounds=max_tool_rounds,
             writes_approved=(approval_callback is not None),
-            mission_goal=chain.mission_goal,
         )
         chain_run.node_runs[node_id] = node_run
 

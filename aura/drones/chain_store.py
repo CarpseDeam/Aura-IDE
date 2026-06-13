@@ -7,7 +7,7 @@ import tempfile
 from dataclasses import asdict, fields
 from pathlib import Path
 
-from aura.drones.chain import ChainDefinition, ChainEdge, ChainNode
+from aura.drones.chain import ChainDefinition, ChainEdge, ChainGoal, ChainNode
 from aura.drones.definition import slugify
 from aura.paths import data_dir
 
@@ -27,22 +27,28 @@ def _chain_from_dict(data: dict) -> ChainDefinition:
     Filters to known fields for forward compatibility.
     """
     nodes_list: list[ChainNode] = []
+    known_node_fields = {f.name for f in fields(ChainNode)}
     for n in data.get("nodes", []):
         pos = n.get("position", [0.0, 0.0])
         if isinstance(pos, list):
             pos = tuple(pos)
+        filtered_n = {k: v for k, v in n.items() if k in known_node_fields}
+        filtered_n.setdefault("id", "")
+        if "drone_id" not in filtered_n and "drone_id" in n:
+            filtered_n["drone_id"] = n["drone_id"]
         nodes_list.append(
             ChainNode(
-                id=n["id"],
-                drone_id=n.get("drone_id", "__draft__"),
-                goal_template=n.get("goal_template", ""),
+                id=filtered_n.get("id", ""),
+                drone_id=filtered_n.get("drone_id", "__draft__"),
+                goal_template=filtered_n.get("goal_template", ""),
                 position=pos,
-                is_draft=n.get("is_draft", False),
-                draft_name=n.get("draft_name", ""),
-                draft_accepts=n.get("draft_accepts", ""),
-                draft_produces=n.get("draft_produces", ""),
-                draft_brief=n.get("draft_brief", ""),
-                is_assignment=n.get("is_assignment", False),
+                is_draft=filtered_n.get("is_draft", False),
+                draft_name=filtered_n.get("draft_name", ""),
+                draft_accepts=filtered_n.get("draft_accepts", ""),
+                draft_produces=filtered_n.get("draft_produces", ""),
+                draft_brief=filtered_n.get("draft_brief", ""),
+                is_assignment=filtered_n.get("is_assignment", False),
+                goal_id=filtered_n.get("goal_id", ""),
             )
         )
 
@@ -51,10 +57,27 @@ def _chain_from_dict(data: dict) -> ChainDefinition:
         for e in data.get("edges", [])
     ]
 
+    goals_list: list[ChainGoal] = []
+    known_goal_fields = {f.name for f in fields(ChainGoal)}
+    for g in data.get("goals", []):
+        gpos = g.get("position", [0.0, 0.0])
+        if isinstance(gpos, list):
+            gpos = tuple(gpos)
+        filtered_g = {k: v for k, v in g.items() if k in known_goal_fields}
+        goals_list.append(
+            ChainGoal(
+                id=filtered_g.get("id", f"goal-{len(goals_list)}"),
+                title=filtered_g.get("title", ""),
+                objective=filtered_g.get("objective", ""),
+                position=gpos,
+            )
+        )
+
     known_fields = {f.name for f in fields(ChainDefinition)}
     filtered = {k: v for k, v in data.items() if k in known_fields}
     filtered["nodes"] = tuple(nodes_list)
     filtered["edges"] = tuple(edges_list)
+    filtered["goals"] = tuple(goals_list)
     return ChainDefinition(**filtered)
 
 
@@ -186,22 +209,63 @@ class ChainStore:
 # ---------------------------------------------------------------------------
 
 def load_chain(workspace_root: Path, chain_id: str) -> dict | None:
-    """Load a chain as a raw dict. Returns None if not found."""
+    """Load a chain as a raw dict. Returns None if not found.
+
+    Normalizes legacy data into the multi-goal model.
+    """
     if not _is_safe_chain_id(chain_id):
         return None
     chain_file = ChainStore.chains_dir() / chain_id / "chain.json"
     if not chain_file.exists():
         return None
     try:
-        return json.loads(chain_file.read_text(encoding="utf-8"))
+        data = json.loads(chain_file.read_text(encoding="utf-8"))
     except Exception:
         logger.warning("Failed to load chain %s", chain_id)
         return None
+
+    # --- Normalize goals ---
+    mission_goal = data.get("mission_goal", "")
+    goal_planet_data = data.get("goal_planet", {})
+
+    if "goals" not in data:
+        data["goals"] = []
+
+    if not data["goals"] and mission_goal:
+        data["goals"] = [{
+            "id": f"{chain_id}-goal-default",
+            "title": "Goal 1",
+            "objective": mission_goal,
+            "position": [160, 0],
+        }]
+    elif not data["goals"] and isinstance(goal_planet_data, dict):
+        planet_goal = goal_planet_data.get("goal", "")
+        if planet_goal:
+            data["goals"] = [{
+                "id": f"{chain_id}-goal-default",
+                "title": "Goal 1",
+                "objective": planet_goal,
+                "position": goal_planet_data.get("position", [160, 0]),
+            }]
+
+    # --- Normalize node goal_ids ---
+    if data["goals"]:
+        first_goal_id = data["goals"][0]["id"]
+        for node in data.get("nodes", []):
+            if node.get("is_assignment") and not node.get("goal_id", ""):
+                node["goal_id"] = first_goal_id
+
+    # Always preserve mission_goal for backward compat
+    if data["goals"]:
+        data["mission_goal"] = data["goals"][0].get("objective", mission_goal)
+
+    return data
 
 
 def save_chain(workspace_root: Path, chain_id: str | None, data: dict) -> str:
     """Persist a chain dict to disk. Generates an id if chain_id is None.
 
+    Ensures goals are canonical before writing.
     Returns the chain id used (new or existing).
     """
     if chain_id is None:
@@ -212,6 +276,27 @@ def save_chain(workspace_root: Path, chain_id: str | None, data: dict) -> str:
     data["id"] = chain_id
     if not data.get("name", "").strip():
         data["name"] = chain_id
+
+    # Ensure goals list is present
+    goals = data.get("goals", [])
+    if not isinstance(goals, list):
+        goals = []
+        data["goals"] = goals
+
+    # Set mission_goal from first goal for backward compat
+    if goals and isinstance(goals[0], dict):
+        data["mission_goal"] = goals[0].get("objective", data.get("mission_goal", ""))
+
+    # Write goal_planet compat from first goal
+    if goals and isinstance(goals[0], dict):
+        first_goal = goals[0]
+        data["goal_planet"] = {
+            "goal": first_goal.get("objective", ""),
+            "seed": first_goal.get("seed", 0),
+            "style": first_goal.get("style", "auto"),
+            "position": first_goal.get("position", [0, 0]),
+        }
+
     chains_dir = ChainStore._ensure_chains_dir()
     chain_dir = chains_dir / chain_id
     chain_dir.mkdir(parents=True, exist_ok=True)

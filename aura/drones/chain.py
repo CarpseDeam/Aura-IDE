@@ -7,6 +7,14 @@ from aura.drones.definition import DroneDefinition
 
 
 @dataclass(frozen=True)
+class ChainGoal:
+    id: str
+    title: str = ""
+    objective: str = ""
+    position: tuple[float, float] = (0.0, 0.0)
+
+
+@dataclass(frozen=True)
 class ChainNode:
     id: str
     drone_id: str
@@ -18,6 +26,7 @@ class ChainNode:
     draft_produces: str = ""
     draft_brief: str = ""
     is_assignment: bool = False
+    goal_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -38,6 +47,7 @@ class ChainDefinition:
     enabled: bool = True
     schedule: str = ""
     mission_goal: str = ""
+    goals: tuple[ChainGoal, ...] = ()
 
 
 @dataclass
