@@ -37,6 +37,7 @@ class ChainDefinition:
     updated_at: str = ""
     enabled: bool = True
     schedule: str = ""
+    mission_goal: str = ""
 
 
 @dataclass

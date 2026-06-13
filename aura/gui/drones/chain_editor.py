@@ -100,6 +100,8 @@ def _read_cargo_for_chain(workspace_root: Path, chain_id: str) -> tuple[list[dic
             if output_path.exists():
                 try:
                     data = json.loads(output_path.read_text(encoding="utf-8"))
+                    if not isinstance(data, dict):
+                        data = {"artifact": data}
                     label = data.get("summary", label)
                 except (json.JSONDecodeError, OSError):
                     label = "(unreadable output)"
@@ -1078,6 +1080,12 @@ class ChainEditor(QWidget):
                 mission_core_data = data.get("mission_core")
                 goal_planet_data = data.get("goal_planet")
                 self._canvas.load_chain(chain_def, drone_lookup, mission_core_data, goal_planet_data)
+                # Apply mission_goal to the Goal Planet (canonical field)
+                mission_goal = data.get("mission_goal", "")
+                if not mission_goal and goal_planet_data:
+                    mission_goal = goal_planet_data.get("goal", "")
+                if mission_goal and self._canvas._goal_planet is not None:
+                    self._canvas._goal_planet.goal = mission_goal
                 self._dirty = False
                 self._update_title_label()
                 self._property_panel.rebuild()
@@ -1137,6 +1145,11 @@ class ChainEditor(QWidget):
             result["mission_core"] = mission_core
         if goal_planet:
             result["goal_planet"] = goal_planet
+        # Persist the Goal Planet's goal at chain level for prompt injection
+        if goal_planet and goal_planet.get("goal", "").strip():
+            result["mission_goal"] = goal_planet["goal"]
+        else:
+            result["mission_goal"] = ""
         return result
 
     def _save_chain(self) -> None:

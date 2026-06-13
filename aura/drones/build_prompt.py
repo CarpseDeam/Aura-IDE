@@ -49,13 +49,34 @@ def build_drone_creation_prompt(brief: DroneBuildBrief, accepts: str = "", produ
     plan = compile_drone_build_plan(brief.build_brief, available)
 
     lines: list[str] = []
+    lines.append("## Clarification Gate")
     lines.append(
-        "The user has approved this Drone Build Brief. Build the Drone."
+        "First, evaluate the build brief below to determine whether it has enough "
+        "concrete detail to define every required field of a DroneDefinition: "
+        "`name`, `description` (purpose), `instructions`, `write_policy`, "
+        "`output_contract`. The brief must make clear what task the drone does, "
+        "how it does it, whether it needs write access, and what it produces."
     )
+    lines.append("")
+    lines.append(
+        "If the brief is too vague (missing any of those required details):"
+    )
+    lines.append(
+        "- Output exactly one short clarifying question to the user asking "
+        "for the missing specifics."
+    )
+    lines.append("- Do NOT dispatch a Worker.")
+    lines.append("- Do NOT call `save_drone_definition`.")
+    lines.append("- Stop there.")
+    lines.append("")
+    lines.append(
+        "If the brief is specific enough (name, purpose, instructions, "
+        "write_policy, and expected output are all inferable):"
+    )
+    lines.append("- Proceed with the build instructions below.")
     lines.append("")
     lines.append("## Build Brief")
     lines.append(brief.build_brief)
-
     lines.append("")
     lines.append("## Contract Context")
     if accepts:

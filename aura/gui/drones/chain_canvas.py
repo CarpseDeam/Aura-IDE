@@ -454,7 +454,7 @@ class MissionCoreItem(QGraphicsObject):
         self._canvas = canvas
         self._title = "Mothership"
         self._goal = ""
-        self._assigned_drone_ids: set[str] = set()
+        self._assigned_drone_ids: list[str] = []
         self._cargo_count = 0
         self._output_status = "idle"
         self._run_btn_rect = QRectF()
@@ -501,22 +501,23 @@ class MissionCoreItem(QGraphicsObject):
         self.update()
 
     @property
-    def assigned_drone_ids(self) -> set[str]:
+    def assigned_drone_ids(self) -> list[str]:
         return self._assigned_drone_ids
 
     @assigned_drone_ids.setter
-    def assigned_drone_ids(self, value: set[str]) -> None:
-        self._assigned_drone_ids = set(value)
+    def assigned_drone_ids(self, value: list[str]) -> None:
+        self._assigned_drone_ids = list(value)
         self.missionCoreChanged.emit()
         self.update()
 
     def add_assigned_drone(self, drone_id: str) -> None:
-        self._assigned_drone_ids.add(drone_id)
+        self._assigned_drone_ids.append(drone_id)
         self.missionCoreChanged.emit()
         self.update()
 
     def remove_assigned_drone(self, drone_id: str) -> None:
-        self._assigned_drone_ids.discard(drone_id)
+        if drone_id in self._assigned_drone_ids:
+            self._assigned_drone_ids.remove(drone_id)
         self.missionCoreChanged.emit()
         self.update()
 
@@ -733,7 +734,7 @@ class MissionCoreItem(QGraphicsObject):
         pos = data.get("position")
         if pos and len(pos) == 2:
             self.setPos(pos[0], pos[1])
-        self._assigned_drone_ids = set(data.get("assigned_drone_ids", []))
+        self._assigned_drone_ids = list(data.get("assigned_drone_ids", []))
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:

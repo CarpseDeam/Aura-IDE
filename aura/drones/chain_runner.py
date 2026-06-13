@@ -208,6 +208,7 @@ def _execute_node(
     timeout_seconds: int,
     max_tool_rounds: int,
     writes_approved: bool,
+    mission_goal: str = "",
 ) -> dict:
     """Execute a single chain node and return its node_run dict.
 
@@ -232,6 +233,8 @@ def _execute_node(
                 data = json.loads(
                     upstream_output.read_text(encoding="utf-8")
                 )
+                if not isinstance(data, dict):
+                    data = {"artifact": data}
                 upstream_node = node_map.get(edge.from_node)
                 upstream_drone = (
                     drone_lookup.get(upstream_node.drone_id)
@@ -274,6 +277,13 @@ def _execute_node(
                 f"\n\n## Input from {upstream_nid}\n{summary}"
             )
 
+    # ── Mission Objective (Goal Planet) ────────────────
+    if node.is_assignment and mission_goal:
+        goal_text = (
+            f"## Mission Objective\n{mission_goal}\n\n"
+            f"## Assignment\n{goal_text}"
+        )
+
     # ── Warehouse cargo for assignment nodes ────────────
     if node.is_assignment:
         warehouse_cargo: list[dict[str, Any]] = []
@@ -292,6 +302,8 @@ def _execute_node(
                 data = json.loads(output_path.read_text(encoding="utf-8"))
             except Exception:
                 continue
+            if not isinstance(data, dict):
+                data = {"artifact": data}
             cargo_entry: dict[str, Any] = {
                 "node_id": completed_nid,
                 "drone_id": nr.get("drone_id", "?"),
@@ -576,6 +588,7 @@ def run_chain(
             timeout_seconds=timeout_seconds,
             max_tool_rounds=max_tool_rounds,
             writes_approved=(approval_callback is not None),
+            mission_goal=chain.mission_goal,
         )
         chain_run.node_runs[node_id] = node_run
 

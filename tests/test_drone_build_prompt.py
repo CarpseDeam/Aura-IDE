@@ -18,7 +18,7 @@ def test_buildable_brief_prompt_includes_build_brief_text() -> None:
     assert brief.build_brief in prompt
 
 
-def test_prompt_includes_approved_language() -> None:
+def test_prompt_includes_clarification_gate() -> None:
     brief = DroneBuildBrief(
         response_type="brief",
         message="Test message",
@@ -26,10 +26,10 @@ def test_prompt_includes_approved_language() -> None:
         build_brief="Build a drone.",
     )
     prompt = build_drone_creation_prompt(brief)
-    assert "approved" in prompt
+    assert "evaluate" in prompt or "Clarification Gate" in prompt
 
 
-def test_prompt_mentions_design_and_create() -> None:
+def test_prompt_mentions_build_instruction() -> None:
     brief = DroneBuildBrief(
         response_type="brief",
         message="Test message",
@@ -37,7 +37,7 @@ def test_prompt_mentions_design_and_create() -> None:
         build_brief="Build a drone.",
     )
     prompt = build_drone_creation_prompt(brief)
-    assert "design and create" in prompt or "Build the Drone" in prompt
+    assert "dispatch_to_worker" in prompt
 
 
 def test_prompt_includes_access_setup_safety_notes() -> None:
@@ -265,3 +265,44 @@ def test_build_drone_creation_prompt_includes_compiled_plan() -> None:
     assert "run_terminal_command" in prompt
     # Must NOT ask Planner to figure out tool inventory themselves
     assert "definition.py" not in prompt
+
+
+def test_vague_brief_prompts_clarifying_question() -> None:
+    """A vague brief prompt tells the Planner to ask a clarifying question."""
+    brief = DroneBuildBrief(
+        response_type="brief",
+        message="Test message",
+        ready_to_build=True,
+        build_brief="Build a drone.",
+    )
+    prompt = build_drone_creation_prompt(brief)
+    assert "clarifying question" in prompt
+
+
+def test_specific_brief_prompts_dispatch_and_save() -> None:
+    """A specific brief prompt contains dispatch_to_worker and save_drone_definition."""
+    brief = DroneBuildBrief(
+        response_type="brief",
+        message="Test message",
+        ready_to_build=True,
+        build_brief="Build a drone.",
+    )
+    prompt = build_drone_creation_prompt(brief)
+    assert "dispatch_to_worker" in prompt
+    assert "save_drone_definition" in prompt
+
+
+def test_prompt_mentions_required_definition_fields() -> None:
+    """The prompt lists required DroneDefinition fields as clarity criteria."""
+    brief = DroneBuildBrief(
+        response_type="brief",
+        message="Test message",
+        ready_to_build=True,
+        build_brief="Build a drone.",
+    )
+    prompt = build_drone_creation_prompt(brief)
+    assert "name" in prompt
+    assert "description" in prompt
+    assert "instructions" in prompt
+    assert "write_policy" in prompt
+    assert "output_contract" in prompt
