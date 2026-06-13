@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 from aura.drones.build_spec import BuildSpec
 from aura.drones.chain import ChainDefinition
 from aura.drones.chain_store import _chain_from_dict, delete_chain, load_chain, save_chain
+from aura.drones.definition import DroneDefinition
 from aura.drones.store import DroneStore
 from aura.gui.drones.chain_canvas import (
     ChainCanvas,
