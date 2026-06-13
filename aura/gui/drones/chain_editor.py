@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from aura.drones.chain import ChainDefinition
+from aura.drones.chain import ChainDefinition, ChainGoal, ChainNode, ChainEdge, ChainValidation, validate
 from aura.drones.chain_runner import get_last_chain_run
 from aura.drones.chain_store import _chain_from_dict, delete_chain, load_chain, save_chain
 from aura.drones.definition import DroneDefinition
@@ -1174,12 +1174,6 @@ class ChainEditor(QWidget):
                 mission_core_data = data.get("mission_core")
                 goal_planets_data = data.get("goals", [])
                 self._canvas.load_chain(chain_def, drone_lookup, mission_core_data, goal_planets_data)
-                # Apply canonical mission_goal to first goal planet if present
-                mission_goal = data.get("mission_goal", "")
-                if mission_goal and self._canvas._goal_planets:
-                    first_gp = next(iter(self._canvas._goal_planets.values()))
-                    if not first_gp.objective:
-                        first_gp.objective = mission_goal
                 self._dirty = False
                 self._update_title_label()
                 self._property_panel.rebuild()
@@ -1269,6 +1263,7 @@ class ChainEditor(QWidget):
         nodes, edges, _mission_core, _goals = self._canvas.to_chain_nodes_and_edges()
         issues: list[str] = []
 
+        # Shallow checks
         if not nodes:
             issues.append("No nodes in the workflow.")
         node_ids = {n["id"] for n in nodes}
@@ -1281,6 +1276,50 @@ class ChainEditor(QWidget):
         has_draft = any(n.get("is_draft") for n in nodes)
         if has_draft:
             issues.append("One or more draft nodes have not been built yet.")
+
+        # Build ChainDefinition and run shared validate()
+        goal_planets_data = self._canvas.goal_planets_data
+        chain_goals = [
+            ChainGoal(
+                id=g["id"],
+                title=g.get("title", ""),
+                objective=g.get("objective", ""),
+                position=tuple(g.get("position", [0.0, 0.0])),
+            )
+            for g in goal_planets_data
+        ]
+        chain_nodes = [
+            ChainNode(
+                id=n["id"],
+                drone_id=n["drone_id"],
+                goal_template=n.get("goal_template", ""),
+                position=tuple(n.get("position", [0.0, 0.0])),
+                is_draft=n.get("is_draft", False),
+                draft_name=n.get("draft_name", ""),
+                draft_accepts=n.get("draft_accepts", ""),
+                draft_produces=n.get("draft_produces", ""),
+                draft_brief=n.get("draft_brief", ""),
+                is_assignment=n.get("is_assignment", False),
+                goal_id=n.get("goal_id", ""),
+            )
+            for n in nodes
+        ]
+        chain_edges = [
+            ChainEdge(from_node=e["from_node"], to_node=e["to_node"])
+            for e in edges
+        ]
+        chain_def = ChainDefinition(
+            id=self._chain_id or "",
+            name=self._chain_name,
+            description=self._chain_desc,
+            nodes=tuple(chain_nodes),
+            edges=tuple(chain_edges),
+            goals=tuple(chain_goals),
+        )
+        drone_lookup = self._build_drone_lookup()
+        validation_result = validate(chain_def, drone_lookup)
+        for err in validation_result.errors:
+            issues.append(err)
 
         if issues:
             msg = "\n".join(f"• {i}" for i in issues)

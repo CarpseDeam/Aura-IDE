@@ -201,4 +201,23 @@ def validate(
                 f"with '{consumer_type_name}'."
             )
 
+    # 7 + 8. Multi-goal goal_id checks
+    if len(chain.goals) > 1:
+        goal_ids = {g.id for g in chain.goals}
+        for node in chain.nodes:
+            if not node.is_assignment:
+                continue
+            # Blank goal_id when multiple goals exist
+            if not node.goal_id.strip():
+                errors.append(
+                    f"Assignment node '{node.id}' has no goal_id but the "
+                    f"workflow defines multiple goals. Target a specific goal."
+                )
+            # Unknown goal_id
+            elif node.goal_id.strip() not in goal_ids:
+                errors.append(
+                    f"Assignment node '{node.id}' targets unknown "
+                    f"goal_id '{node.goal_id}'."
+                )
+
     return ChainValidation(ok=len(errors) == 0, errors=errors)

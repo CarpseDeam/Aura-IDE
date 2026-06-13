@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from aura.drones.chain import ChainDefinition, ChainEdge, ChainNode
+from aura.drones.chain import ChainDefinition, ChainEdge, ChainGoal, ChainNode
 from aura.drones.chain_runner import (
     ChainRun,
     _load_run_state,
@@ -1494,3 +1494,72 @@ def test_artifact_repair_exhausted_met_false(
     assert "No ```json" in result["receipt"]["evidence"]
     # stream called 3 times (initial + 2 repairs)
     assert mock_backend.stream.call_count == 3
+
+
+# ── run_chain — multi-goal validation ─────────────────────────────
+
+
+@patch("aura.drones.chain_runner.run_read_only_drone_sync")
+def test_run_chain_fails_blank_goal_id_multigoal(
+    mock_runner, tmp_path: Path
+) -> None:
+    """run_chain raises ValueError when assignment node has blank goal_id in multi-goal."""
+    mock_runner.return_value = _make_mock_result()
+
+    drone = _make_drone("drone-a")
+    chain = ChainDefinition(
+        id="multi-goal",
+        name="Multi Goal",
+        description="",
+        goals=(
+            ChainGoal(id="g1", title="G1", objective="O1"),
+            ChainGoal(id="g2", title="G2", objective="O2"),
+        ),
+        nodes=(
+            ChainNode(
+                id="n1", drone_id="drone-a",
+                is_assignment=True, goal_id="",
+                goal_template="Do the thing",
+            ),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="Chain validation failed"):
+        run_chain(
+            workspace_root=tmp_path,
+            chain=chain,
+            drone_lookup={"drone-a": drone},
+        )
+
+
+@patch("aura.drones.chain_runner.run_read_only_drone_sync")
+def test_run_chain_fails_unknown_goal_id_multigoal(
+    mock_runner, tmp_path: Path
+) -> None:
+    """run_chain raises ValueError when assignment node targets unknown goal_id in multi-goal."""
+    mock_runner.return_value = _make_mock_result()
+
+    drone = _make_drone("drone-a")
+    chain = ChainDefinition(
+        id="multi-goal",
+        name="Multi Goal",
+        description="",
+        goals=(
+            ChainGoal(id="g1", title="G1", objective="O1"),
+            ChainGoal(id="g2", title="G2", objective="O2"),
+        ),
+        nodes=(
+            ChainNode(
+                id="n1", drone_id="drone-a",
+                is_assignment=True, goal_id="nonexistent",
+                goal_template="Do the thing",
+            ),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="Chain validation failed"):
+        run_chain(
+            workspace_root=tmp_path,
+            chain=chain,
+            drone_lookup={"drone-a": drone},
+        )

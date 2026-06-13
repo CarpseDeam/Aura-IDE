@@ -1723,6 +1723,14 @@ class ChainCanvas(QGraphicsView):
             elif len(self._goal_planets) == 1:
                 goal_id = next(iter(self._goal_planets.keys()))
 
+        # In multi-goal context, blank goal_id is invalid
+        if goal_id == "" and len(self._goal_planets) > 1:
+            logger.warning(
+                "Drop on Mission Core ignored: multiple goals exist but none is selected. "
+                "Drop on a specific Goal Planet instead."
+            )
+            return
+
         node_id = f"{drone_id}-{uuid.uuid4().hex[:4]}"
         item = ChainNodeItem(
             node_id=node_id,
