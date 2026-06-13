@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+from dataclasses import replace
 from pathlib import Path
 
 from PySide6.QtWidgets import (
@@ -19,7 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from aura.drones.contracts import TYPE_NAMES
-from aura.drones.definition import DroneBudget, DroneDefinition, default_tools_for_policy
+from aura.drones.definition import DroneBudget, DroneDefinition
 from aura.drones.store import DroneStore
 from aura.gui.theme import ACCENT, BG, BG_ALT, BG_RAISED, BORDER, FG, FG_DIM
 
@@ -322,50 +323,27 @@ class DroneEditorDialog(QDialog):
         )
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
-        if self._drone is not None:
-            # Updating existing drone
-            self._drone = DroneDefinition(
-                id=self._drone.id,
-                name=name,
-                description=description,
-                instructions=instructions,
-                write_policy=write_policy,
-                allowed_tools=default_tools_for_policy(write_policy),
-                output_contract=output_contract,
-                first_run_test=first_run_test,
-                budget=budget,
-                scope=self._drone.scope,
-                enabled=self._drone.enabled,
-                created_by=self._drone.created_by,
-                created_at=self._drone.created_at,
-                updated_at=now,
-                capability_requirements=self._drone.capability_requirements,
-                capability_bindings=self._drone.capability_bindings,
-                setup_steps=self._drone.setup_steps,
-                accepts=self._combo_value(self._accepts_combo),
-                produces=self._combo_value(self._produces_combo),
+        if self._drone is None:
+            QMessageBox.warning(
+                self,
+                "Drone Architect",
+                "New Drones must be built with /drone so Aura can create the folder, code, manifest, and smoke check.",
             )
-        else:
-            # Creating new drone
-            new_id = DroneStore.next_id(self._workspace_root, name)
-            self._drone = DroneDefinition(
-                id=new_id,
-                name=name,
-                description=description,
-                instructions=instructions,
-                write_policy=write_policy,
-                allowed_tools=default_tools_for_policy(write_policy),
-                output_contract=output_contract,
-                first_run_test=first_run_test,
-                budget=budget,
-                scope="global",
-                enabled=True,
-                created_by="user",
-                created_at=now,
-                updated_at=now,
-                accepts=self._combo_value(self._accepts_combo),
-                produces=self._combo_value(self._produces_combo),
-            )
+            return
+
+        self._drone = replace(
+            self._drone,
+            name=name,
+            description=description,
+            instructions=instructions,
+            write_policy=write_policy,
+            output_contract=output_contract,
+            first_run_test=first_run_test,
+            budget=budget,
+            updated_at=now,
+            accepts=self._combo_value(self._accepts_combo),
+            produces=self._combo_value(self._produces_combo),
+        )
 
         DroneStore.save_drone(self._workspace_root, self._drone)
         self.accept()

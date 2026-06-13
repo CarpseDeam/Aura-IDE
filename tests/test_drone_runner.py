@@ -1,133 +1,96 @@
 from __future__ import annotations
 
-import threading
-import time
+import json
+from pathlib import Path
 
-from aura.conversation.tools._types import ApprovalDecision, ApprovalRequest
-from aura.drones.definition import DroneBudget, DroneDefinition, default_tools_for_policy
+import pytest
+
+from aura import paths as aura_paths
+from aura.drones.definition import DroneDefinition
+from aura.drones.receipt import DroneReceipt
 from aura.drones.runner import DroneRunner
+from aura.drones.store import DroneStore
 
 
-def _write_capable_drone() -> DroneDefinition:
-    return DroneDefinition(
-        id="writer",
-        name="Writer",
-        description="Propose writes.",
-        instructions="Update one file.",
-        write_policy="normal_diff_approval",
-        allowed_tools=default_tools_for_policy("normal_diff_approval"),
-        output_contract="Summary.",
-        budget=DroneBudget(max_tool_rounds=2, timeout_seconds=30),
+@pytest.fixture(autouse=True)
+def _patch_data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(aura_paths, "data_dir", lambda: tmp_path / "data")
+    monkeypatch.setattr("aura.drones.store.data_dir", lambda: tmp_path / "data")
+
+
+def _register_folder_drone(workspace: Path) -> DroneDefinition:
+    folder = workspace / "build" / "runner-drone"
+    folder.mkdir(parents=True)
+    (folder / "main.py").write_text(
+        "def run(payload):\n"
+        "    return {'message': 'ran', 'goal': payload.get('goal')}\n",
+        encoding="utf-8",
     )
-
-
-def _approval_request() -> ApprovalRequest:
-    return ApprovalRequest(
-        tool_name="write_file",
-        rel_path="a.py",
-        old_content="",
-        new_content="print('hi')\n",
-        is_new_file=True,
+    (folder / "smoke.py").write_text(
+        "def run(payload):\n"
+        "    return {'ok': True}\n",
+        encoding="utf-8",
     )
-
-
-def test_drone_approval_callback_times_out_and_records_receipt_error(monkeypatch, tmp_path) -> None:
-    import aura.drones.runner as runner_module
-
-    monkeypatch.setattr(runner_module, "DRONE_APPROVAL_TIMEOUT_SECONDS", 0.01)
-    runner = DroneRunner(tmp_path, _write_capable_drone())
-    requested: list[ApprovalRequest] = []
-    runner.approval_requested.connect(requested.append)
-    errors: list[str] = []
-
-    decision = runner._build_approval_callback(errors)(_approval_request())
-
-    assert decision.action == "reject"
-    assert decision.metadata["approval_timeout"] is True
-    assert decision.metadata["failure_class"] == "approval_timeout"
-    assert decision.metadata["rel_path"] == "a.py"
-    assert errors == ["Drone diff approval timed out after 0s for write_file on a.py."]
-    assert len(requested) == 1
-    assert requested[0].approval_id
-    assert requested[0].approval_timeout_seconds == 0.01
-
-
-def test_drone_approval_callback_accepts_matching_approval_id(tmp_path) -> None:
-    runner = DroneRunner(tmp_path, _write_capable_drone())
-    completed: list[ApprovalDecision] = []
-
-    def invoke_callback() -> None:
-        completed.append(runner._build_approval_callback([])(_approval_request()))
-
-    thread = threading.Thread(target=invoke_callback)
-    thread.start()
-    try:
-        deadline = time.monotonic() + 1
-        while runner._approval_id is None and time.monotonic() < deadline:
-            time.sleep(0.001)
-        assert runner._approval_id is not None
-        runner.set_approval_result(
-            ApprovalDecision(action="approve", metadata={"source": "test"}),
-            approval_id=runner._approval_id,
-        )
-    finally:
-        thread.join(timeout=1)
-
-    assert not thread.is_alive()
-    assert completed == [ApprovalDecision(action="approve", metadata={"source": "test"})]
-
-
-def test_drone_approval_callback_ignores_stale_approval_id(monkeypatch, tmp_path) -> None:
-    import aura.drones.runner as runner_module
-
-    monkeypatch.setattr(runner_module, "DRONE_APPROVAL_TIMEOUT_SECONDS", 0.01)
-    runner = DroneRunner(tmp_path, _write_capable_drone())
-    requested: list[ApprovalRequest] = []
-    runner.approval_requested.connect(requested.append)
-
-    decision = runner._build_approval_callback([])(_approval_request())
-    runner.set_approval_result(
-        ApprovalDecision(action="approve"),
-        approval_id=requested[0].approval_id,
+    (folder / "drone.json").write_text(
+        json.dumps(
+            {
+                "id": "runner-drone",
+                "name": "Runner Drone",
+                "description": "Run this goal.",
+                "runtime": "python",
+                "entrypoint": "main:run",
+                "smoke": "smoke:run",
+                "instructions": "Run.",
+                "write_policy": "read_only",
+                "output_contract": "Return cargo.",
+            }
+        ),
+        encoding="utf-8",
     )
-
-    assert decision.action == "reject"
-    assert decision.metadata["approval_timeout"] is True
+    return DroneStore.register_drone_folder(workspace, folder)
 
 
-def test_runner_blocks_tool_not_in_allowed_set(tmp_path) -> None:
-    """Prove a DroneRunner's surface would block a tool outside allowed_tools."""
+def test_drone_runner_executes_folder_entrypoint(tmp_path: Path) -> None:
+    drone = _register_folder_drone(tmp_path)
+    runner = DroneRunner(tmp_path, drone)
+    statuses: list[str] = []
+    chunks: list[str] = []
+    receipts: list[DroneReceipt] = []
+
+    runner.statusChanged.connect(statuses.append)
+    runner.contentDelta.connect(chunks.append)
+    runner.receiptReady.connect(receipts.append)
+
+    runner.run()
+
+    assert statuses[-1] == "completed"
+    assert "ran" in "".join(chunks)
+    assert len(receipts) == 1
+    assert receipts[0].status == "completed"
+    assert receipts[0].produced_artifact == {
+        "message": "ran",
+        "goal": "Run this goal.",
+    }
+
+
+def test_drone_runner_rejects_non_folder_drone(tmp_path: Path) -> None:
     drone = DroneDefinition(
-        id="test",
-        name="Test",
-        description="",
-        instructions="",
+        id="old",
+        name="Old",
+        description="Old",
+        instructions="Use tools.",
         write_policy="read_only",
-        allowed_tools=("read_file",),
-        output_contract="",
-        budget=DroneBudget(max_tool_rounds=1, timeout_seconds=30),
+        output_contract="Summary.",
     )
-    from aura.drones.tool_surface import build_drone_tool_surface
+    runner = DroneRunner(tmp_path, drone)
+    errors: list[tuple[int, str]] = []
+    receipts: list[DroneReceipt] = []
 
-    surface = build_drone_tool_surface(tmp_path, drone)
-    assert "write_file" not in surface.allowed_tools
-    assert "read_file" in surface.allowed_tools
+    runner.apiError.connect(lambda code, message: errors.append((code, message)))
+    runner.receiptReady.connect(receipts.append)
 
+    runner.run()
 
-class TestRunTerminalCommandPolicy:
-    """Tests for run_terminal_command policy visibility."""
-
-    def test_not_in_read_only_policy(self):
-        """run_terminal_command is NOT available in read_only policy."""
-        tools = default_tools_for_policy("read_only")
-        assert "run_terminal_command" not in tools
-
-    def test_in_write_capable_policy(self):
-        """run_terminal_command IS available in normal_diff_approval policy."""
-        tools = default_tools_for_policy("normal_diff_approval")
-        assert "run_terminal_command" in tools
-
-    def test_in_ask_before_writes_policy(self):
-        """run_terminal_command IS available in ask_before_writes policy."""
-        tools = default_tools_for_policy("ask_before_writes")
-        assert "run_terminal_command" in tools
+    assert errors
+    assert "folder-backed" in errors[0][1]
+    assert receipts[0].status == "failed"

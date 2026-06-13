@@ -375,46 +375,6 @@ class AppRouteProvider:
 
 
 # ---------------------------------------------------------------------------
-# CoreToolIntentProvider
-# ---------------------------------------------------------------------------
-
-
-class CoreToolIntentProvider:
-    """Matches human capability phrases to harness tools via the core intent map."""
-
-    def find_candidates(
-        self,
-        requirements: tuple[CapabilityRequirement, ...],
-        context: CapabilityContext,
-    ) -> tuple[CapabilityCandidate, ...]:
-        from aura.drones.build_compiler import CORE_INTENT_MAP
-
-        candidates: list[CapabilityCandidate] = []
-        for req in requirements:
-            req_lower = req.capability.lower()
-            matched_tools: set[str] = set()
-            for keyword, tools in CORE_INTENT_MAP:
-                if keyword in req_lower:
-                    matched_tools.update(tools)
-            if not matched_tools:
-                continue
-            # Filter to tools available in the harness
-            available = [t for t in matched_tools if t in context.available_tool_names]
-            if available:
-                candidates.append(
-                    CapabilityCandidate(
-                        capability=req.capability,
-                        route_kind="core_intent",
-                        source="aura_core",
-                        confidence=0.92,
-                        tool_names=tuple(sorted(available)),
-                        setup_required=False,
-                    )
-                )
-        return tuple(candidates)
-
-
-# ---------------------------------------------------------------------------
 # GeneratedCodeFallbackProvider
 # ---------------------------------------------------------------------------
 
@@ -427,14 +387,9 @@ class GeneratedCodeFallbackProvider:
         requirements: tuple[CapabilityRequirement, ...],
         context: CapabilityContext,
     ) -> tuple[CapabilityCandidate, ...]:
-        from aura.drones.build_compiler import _GENERATED_CODE_KEYWORDS
-
+        _ = context
         candidates: list[CapabilityCandidate] = []
         for req in requirements:
-            cap_lower = req.capability.lower()
-            is_gen = any(kw in cap_lower for kw in _GENERATED_CODE_KEYWORDS)
-            if not is_gen:
-                continue
             candidates.append(
                 CapabilityCandidate(
                     capability=req.capability,
@@ -444,9 +399,8 @@ class GeneratedCodeFallbackProvider:
                     tool_names=(),
                     setup_required=True,
                     setup_notes=(
-                        f"A Worker must create a real dynamic tool under .aura/tools "
-                        f"for capability '{req.capability}' first. Then save the actual "
-                        f"generated tool name in capability_bindings and allowed_tools."
+                        f"A Worker must author real code for capability "
+                        f"'{req.capability}' before it can be used."
                     ),
                 )
             )

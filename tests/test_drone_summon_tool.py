@@ -1,29 +1,55 @@
 from __future__ import annotations
 
+import json
+
+import pytest
+
+from aura import paths as aura_paths
 from aura.conversation.tools._types import ApprovalDecision
 from aura.conversation.tools.registry import ToolRegistry
-from aura.drones.definition import DroneBudget, DroneDefinition, default_tools_for_policy
 from aura.drones.store import DroneStore
 
 
-def _save_drone(tmp_path) -> None:
-    DroneStore.save_drone(
-        tmp_path,
-        DroneDefinition(
-            id="test-scout",
-            name="Test Scout",
-            description="Find tests.",
-            instructions="Find relevant tests for the current change.",
-            write_policy="read_only",
-            allowed_tools=default_tools_for_policy("read_only"),
-            output_contract="Test list and rationale.",
-            budget=DroneBudget(max_tool_rounds=5, timeout_seconds=180),
-        ),
+@pytest.fixture(autouse=True)
+def _patch_data_dir(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(aura_paths, "data_dir", lambda: tmp_path / "data")
+    monkeypatch.setattr("aura.drones.store.data_dir", lambda: tmp_path / "data")
+
+
+def _register_drone(tmp_path) -> None:
+    folder = tmp_path / "build" / "test-scout"
+    folder.mkdir(parents=True)
+    (folder / "main.py").write_text(
+        "def run(payload):\n"
+        "    return {'ok': True}\n",
+        encoding="utf-8",
     )
+    (folder / "smoke.py").write_text(
+        "def run(payload):\n"
+        "    return {'ok': True}\n",
+        encoding="utf-8",
+    )
+    (folder / "drone.json").write_text(
+        json.dumps(
+            {
+                "id": "test-scout",
+                "name": "Test Scout",
+                "description": "Find tests.",
+                "runtime": "python",
+                "entrypoint": "main:run",
+                "smoke": "smoke:run",
+                "instructions": "Find relevant tests for the current change.",
+                "write_policy": "read_only",
+                "output_contract": "Test list and rationale.",
+            }
+        ),
+        encoding="utf-8",
+    )
+    DroneStore.register_drone_folder(tmp_path, folder)
 
 
 def test_summon_drone_returns_confirmation_metadata(tmp_path) -> None:
-    _save_drone(tmp_path)
+    _register_drone(tmp_path)
     registry = ToolRegistry(tmp_path, mode="planner")
 
     result = registry.execute(

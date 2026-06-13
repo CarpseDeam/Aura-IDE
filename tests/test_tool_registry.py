@@ -1731,10 +1731,6 @@ class TestHandlerRegistration:
         "web_fetch",
         "write_file",
         "delete_file",
-        "apply_edit_transaction",
-        "edit_file",
-        "edit_symbol",
-        "edit_line_range",
         "patch_file",
         "update_todo_list",
         "search_project_memory",
@@ -1746,6 +1742,7 @@ class TestHandlerRegistration:
         "get_workspace_snapshot",
         "summon_drone",
         "resolve_capability",
+        "register_drone_folder",
     }
 
     def test_all_expected_tools_present(self):
@@ -1855,6 +1852,7 @@ class TestModeToolSurfaces:
         assert "run_research" in tool_names  # Added!
         assert "launch_read_only_drone" in tool_names
         assert "check_drone_run" in tool_names
+        assert "register_drone_folder" in tool_names
         assert "dispatch_to_worker" not in tool_names
 
     def test_single_tool_surface(self, tmp_path: Path):
@@ -1869,14 +1867,15 @@ class TestModeToolSurfaces:
 
         assert "write_file" in tool_names
         assert "delete_file" in tool_names
-        assert "apply_edit_transaction" in tool_names
-        assert "edit_file" in tool_names
-        assert "edit_line_range" in tool_names
+        assert "apply_edit_transaction" not in tool_names
+        assert "edit_file" not in tool_names
+        assert "edit_line_range" not in tool_names
         assert "patch_file" in tool_names
         assert "run_terminal_command" in tool_names
         assert "run_research" in tool_names  # Added!
         assert "run_diagnostic_command" in tool_names
         assert "get_workspace_snapshot" in tool_names
+        assert "register_drone_folder" in tool_names
         assert "dispatch_to_worker" not in tool_names
 
 class TestProposeLineRangeEdit:

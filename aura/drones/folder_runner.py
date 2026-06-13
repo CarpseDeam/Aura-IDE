@@ -20,7 +20,7 @@ from aura.drones.store import DroneStore, RunHistoryStore
 
 
 def is_folder_backed_drone(drone: DroneDefinition) -> bool:
-    return drone.runtime == "python" and bool(drone.entrypoint)
+    return drone.runtime == "python" and bool(drone.entrypoint) and bool(drone.smoke)
 
 
 def run_drone_smoke(folder: Path, drone: DroneDefinition) -> dict[str, Any]:
@@ -51,6 +51,11 @@ def run_folder_drone_sync(
     run = run or DroneRun(drone=drone)
     run.mark("running")
     folder = DroneStore.drone_folder(drone_id)
+    if not is_folder_backed_drone(drone):
+        raise ValueError("Only folder-backed python Drones can be executed")
+    if not folder.is_dir():
+        raise ValueError(f"Registered Drone folder not found: {drone_id}")
+    DroneStore.load_drone_from_folder(folder)
     started_at = dt.datetime.fromtimestamp(run.started_at, tz=dt.timezone.utc).isoformat()
     errors: list[str] = []
     cargo: Any = None

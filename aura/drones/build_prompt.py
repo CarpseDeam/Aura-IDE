@@ -70,7 +70,6 @@ def build_drone_architect_prompt(
     lines.append("- Run any quick local checks that are useful.")
     lines.append("- Call `register_drone_folder` with the workspace-relative folder path.")
     lines.append("- Report the registered Drone id and what it returns.")
-    lines.append("- Do not call `save_drone_definition` for new builds.")
     lines.append("")
     if accepts or produces:
         lines.append("## Requested Workflow Contract")
@@ -83,8 +82,3 @@ def build_drone_architect_prompt(
     else:
         lines.append("No build brief was supplied. Ask exactly: \"Describe the Drone you want to build.\"")
     return "\n".join(lines)
-
-
-def build_drone_creation_prompt(brief: DroneBuildBrief, accepts: str = "", produces: str = "") -> str:
-    """Compatibility alias for the new Drone Architect prompt."""
-    return build_drone_architect_prompt(brief, accepts=accepts, produces=produces)

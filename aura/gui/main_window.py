@@ -894,28 +894,34 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             copy_name = f"{drone.name} Copy {counter}"
 
         new_id = DroneStore.next_id(self._workspace_root, copy_name)
+        source_folder = DroneStore.drone_folder(drone.id)
+        if not source_folder.is_dir():
+            QMessageBox.warning(self, "Duplicate Drone", "Registered Drone folder not found.")
+            return
+
         import datetime
+        import json
+        import shutil
+        import tempfile
+        from dataclasses import asdict, replace
+
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        dup = DroneDefinition(
+        dup = replace(
+            drone,
             id=new_id,
             name=copy_name,
-            description=drone.description,
-            instructions=drone.instructions,
-            write_policy=drone.write_policy,
-            allowed_tools=drone.allowed_tools,
-            output_contract=drone.output_contract,
-            budget=drone.budget,
-            scope=drone.scope,
-            capability_requirements=drone.capability_requirements,
-            capability_bindings=drone.capability_bindings,
-            setup_steps=drone.setup_steps,
-            first_run_test=drone.first_run_test,
             enabled=True,
-            created_by=drone.created_by,
             created_at=now,
             updated_at=now,
         )
-        DroneStore.save_drone(self._workspace_root, dup)
+        with tempfile.TemporaryDirectory(prefix=f"{new_id}-") as tmp:
+            build_folder = Path(tmp) / new_id
+            shutil.copytree(source_folder, build_folder)
+            (build_folder / "drone.json").write_text(
+                json.dumps(asdict(dup), indent=2),
+                encoding="utf-8",
+            )
+            DroneStore.register_drone_folder(self._workspace_root, build_folder)
         self._refresh_drone_context()
 
     def _on_delete_drone(self, drone_id: str) -> None:
@@ -1880,8 +1886,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         if ok and name == "summon_drone" and extras.get("summon_drone"):
             self._handle_summon_drone_result(tool_id, extras)
 
-        # Normal Drone Bay refresh for successful saves
-        if ok and name in ("save_drone_definition", "register_drone_folder") and extras.get("drone_saved"):
+        # Normal Drone Bay refresh for successful folder registrations.
+        if ok and name == "register_drone_folder" and extras.get("drone_saved"):
             self._refresh_drone_context()
 
         if ok and name in ("read_file", "read_files"):

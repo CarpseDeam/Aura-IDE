@@ -1,13 +1,21 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from aura import paths as aura_paths
 from aura.conversation.tools._types import ApprovalDecision
 from aura.conversation.tools.registry import TOOL_HANDLERS, ToolRegistry
-from aura.drones.definition import DroneBudget, DroneDefinition
+from aura.drones.store import DroneStore
+
+
+@pytest.fixture(autouse=True)
+def _patch_data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(aura_paths, "data_dir", lambda: tmp_path / "data")
+    monkeypatch.setattr("aura.drones.store.data_dir", lambda: tmp_path / "data")
 
 
 @pytest.fixture
@@ -17,56 +25,41 @@ def workspace(tmp_path: Path) -> Path:
     return ws
 
 
-@pytest.fixture
-def drone_store_dir(workspace: Path) -> Path:
-    d = workspace / ".aura" / "drones"
-    d.mkdir(parents=True)
-    return d
-
-
-def _save_read_only_drone(drone_dir: Path) -> str:
-    """Save a read-only drone for testing. Returns drone_id."""
-    import json
-    from dataclasses import asdict
-
-    drone = DroneDefinition(
-        id="bug-scout",
-        name="Bug Scout",
-        description="Investigates bugs by searching code paths.",
-        instructions="Search the codebase for the root cause of the reported issue.",
-        write_policy="read_only",
-        allowed_tools=("read_file", "grep_search", "search_codebase", "git_log", "git_diff", "git_status"),
-        output_contract="Summary of findings with file paths and line numbers.",
-        budget=DroneBudget(max_tool_rounds=5, timeout_seconds=120),
+def _register_drone(workspace: Path, *, write_policy: str = "read_only") -> str:
+    drone_id = "bug-scout" if write_policy == "read_only" else "writer-drone"
+    folder = workspace / "build" / drone_id
+    folder.mkdir(parents=True)
+    (folder / "main.py").write_text(
+        "def run(payload):\n"
+        "    return {'summary': payload.get('goal')}\n",
+        encoding="utf-8",
     )
-    path = drone_dir / f"{drone.id}.json"
-    path.write_text(json.dumps(asdict(drone), indent=2), encoding="utf-8")
-    return drone.id
-
-
-def _save_write_capable_drone(drone_dir: Path) -> str:
-    """Save a write-capable drone for testing. Returns drone_id."""
-    import json
-    from dataclasses import asdict
-
-    drone = DroneDefinition(
-        id="writer-drone",
-        name="Writer Drone",
-        description="Can write files.",
-        instructions="Write code for the user.",
-        write_policy="ask_before_writes",
-        allowed_tools=("read_file", "write_file", "edit_file"),
-        output_contract="Generated code.",
-        budget=DroneBudget(max_tool_rounds=5, timeout_seconds=120),
+    (folder / "smoke.py").write_text(
+        "def run(payload):\n"
+        "    return {'ok': True}\n",
+        encoding="utf-8",
     )
-    path = drone_dir / f"{drone.id}.json"
-    path.write_text(json.dumps(asdict(drone), indent=2), encoding="utf-8")
-    return drone.id
+    (folder / "drone.json").write_text(
+        json.dumps(
+            {
+                "id": drone_id,
+                "name": "Bug Scout" if write_policy == "read_only" else "Writer Drone",
+                "description": "Investigates bugs.",
+                "runtime": "python",
+                "entrypoint": "main:run",
+                "smoke": "smoke:run",
+                "instructions": "Run the entrypoint.",
+                "write_policy": write_policy,
+                "output_contract": "Return cargo.",
+            }
+        ),
+        encoding="utf-8",
+    )
+    DroneStore.register_drone_folder(workspace, folder)
+    return drone_id
 
 
 class TestRunReadOnlyDroneHandler:
-    """Tests for _handle_run_read_only_drone."""
-
     def test_handler_registered(self):
         assert "run_read_only_drone" in TOOL_HANDLERS
 
@@ -79,13 +72,10 @@ class TestRunReadOnlyDroneHandler:
             False,
         )
         assert result.ok is False
-        payload_str = str(result.payload).lower()
-        assert any(
-            word in payload_str for word in ("unknown", "not found", "nonexistent")
-        )
+        assert "no drone found" in str(result.payload).lower()
 
-    def test_rejects_write_capable_drone(self, workspace: Path, drone_store_dir: Path):
-        _save_write_capable_drone(drone_store_dir)
+    def test_rejects_write_capable_drone(self, workspace: Path):
+        _register_drone(workspace, write_policy="ask_before_writes")
         registry = ToolRegistry(workspace_root=workspace, read_only=False, mode="planner")
         result = registry.execute(
             "run_read_only_drone",
@@ -94,7 +84,7 @@ class TestRunReadOnlyDroneHandler:
             False,
         )
         assert result.ok is False
-        assert "write" in str(result.payload).lower() or "read_only" in str(result.payload).lower()
+        assert "read-only" in str(result.payload).lower() or "read_only" in str(result.payload).lower()
 
     def test_missing_drone_id(self, workspace: Path):
         registry = ToolRegistry(workspace_root=workspace, read_only=False, mode="planner")
@@ -106,8 +96,8 @@ class TestRunReadOnlyDroneHandler:
         )
         assert result.ok is False
 
-    def test_missing_goal(self, workspace: Path, drone_store_dir: Path):
-        _save_read_only_drone(drone_store_dir)
+    def test_missing_goal(self, workspace: Path):
+        _register_drone(workspace)
         registry = ToolRegistry(workspace_root=workspace, read_only=False, mode="planner")
         result = registry.execute(
             "run_read_only_drone",
@@ -118,18 +108,18 @@ class TestRunReadOnlyDroneHandler:
         assert result.ok is False
 
     @patch("aura.drones.sync_runner.run_read_only_drone_sync")
-    def test_valid_read_only_drone(self, mock_runner, workspace: Path, drone_store_dir: Path):
-        _save_read_only_drone(drone_store_dir)
+    def test_valid_read_only_drone(self, mock_runner, workspace: Path):
+        _register_drone(workspace)
         mock_runner.return_value = {
             "ok": True,
             "run_id": "run123",
             "drone_id": "bug-scout",
             "drone_name": "Bug Scout",
             "status": "completed",
-            "summary": "Found the bug in src/main.py line 42",
-            "tool_calls_made": 3,
+            "summary": "Found the bug",
+            "tool_calls_made": 0,
             "tool_errors": 0,
-            "elapsed_seconds": 5.2,
+            "elapsed_seconds": 0.1,
         }
         registry = ToolRegistry(workspace_root=workspace, read_only=False, mode="planner")
         result = registry.execute(
@@ -139,14 +129,12 @@ class TestRunReadOnlyDroneHandler:
             False,
         )
         assert result.ok is True
-        assert "bug-scout" in str(result.payload)
         assert "Found the bug" in str(result.payload)
         mock_runner.assert_called_once()
 
-    def test_per_turn_limit(self, workspace: Path, drone_store_dir: Path):
-        _save_read_only_drone(drone_store_dir)
+    def test_per_turn_limit(self, workspace: Path):
+        _register_drone(workspace)
         registry = ToolRegistry(workspace_root=workspace, read_only=False, mode="planner")
-        # Exhaust the limit
         with patch("aura.drones.sync_runner.run_read_only_drone_sync") as mock_runner:
             mock_runner.return_value = {
                 "ok": True,
@@ -155,24 +143,22 @@ class TestRunReadOnlyDroneHandler:
                 "drone_name": "Bug Scout",
                 "status": "completed",
                 "summary": "ok",
-                "tool_calls_made": 1,
+                "tool_calls_made": 0,
                 "tool_errors": 0,
-                "elapsed_seconds": 1.0,
+                "elapsed_seconds": 0.1,
             }
-            r1 = registry.execute(
+            assert registry.execute(
                 "run_read_only_drone",
                 {"drone_id": "bug-scout", "goal": "find bugs"},
                 MagicMock(return_value=ApprovalDecision(action="approve")),
                 False,
-            )
-            assert r1.ok is True
-            r2 = registry.execute(
+            ).ok
+            assert registry.execute(
                 "run_read_only_drone",
                 {"drone_id": "bug-scout", "goal": "find more bugs"},
                 MagicMock(return_value=ApprovalDecision(action="approve")),
                 False,
-            )
-            assert r2.ok is True
+            ).ok
             r3 = registry.execute(
                 "run_read_only_drone",
                 {"drone_id": "bug-scout", "goal": "find even more"},
@@ -184,8 +170,6 @@ class TestRunReadOnlyDroneHandler:
 
 
 class TestToolCatalogSurface:
-    """Verify run_read_only_drone appears in mode tool lists."""
-
     def test_planner_has_run_read_only_drone(self, tmp_path: Path):
         ws = tmp_path / "workspace"
         ws.mkdir()

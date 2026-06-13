@@ -20,8 +20,8 @@ class DroneDefinition:
     description: str
     instructions: str
     write_policy: str  # "read_only" | "ask_before_writes" | "normal_diff_approval"
-    allowed_tools: tuple[str, ...]
     output_contract: str
+    allowed_tools: tuple[str, ...] = ()
     budget: DroneBudget = field(default_factory=DroneBudget)
     scope: str = "global"
     enabled: bool = True
@@ -34,7 +34,7 @@ class DroneDefinition:
     first_run_test: str = ""
     accepts: str = ""  # name of ArtifactType this drone consumes; empty = free-form goal
     produces: str = ""  # name of ArtifactType this drone emits; empty = unstructured summary
-    runtime: str = ""  # empty/llm = legacy tool-menu Drone; python = folder-backed Drone
+    runtime: str = ""  # python = folder-backed Drone
     entrypoint: str = ""  # e.g. "main:run" for folder-backed Drones
     smoke: str = ""  # e.g. "smoke:run"
     permissions: dict[str, Any] = field(default_factory=dict)

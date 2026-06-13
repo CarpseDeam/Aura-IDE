@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 _DRONE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 _WRITE_POLICIES = {"read_only", "ask_before_writes", "normal_diff_approval"}
+_SUPPORTED_RUNTIMES = {"python"}
 
 
 def _is_safe_drone_id(drone_id: str) -> bool:
@@ -66,7 +67,7 @@ def _drone_from_dict(data: dict) -> DroneDefinition:
     if isinstance(data.get("produces"), dict):
         produces = data["produces"]
         data = {**data, "produces": str(produces.get("type") or produces.get("name") or "")}
-    data = _normalize_manifest_defaults(data)
+    data = _apply_manifest_defaults(data)
     if "allowed_tools" in data and isinstance(data["allowed_tools"], list):
         data = {**data, "allowed_tools": tuple(data["allowed_tools"])}
     known_fields = {f.name for f in fields(DroneDefinition)}
@@ -76,8 +77,8 @@ def _drone_from_dict(data: dict) -> DroneDefinition:
     return drone
 
 
-def _normalize_manifest_defaults(data: dict) -> dict:
-    """Fill legacy DroneDefinition fields from a folder-backed manifest."""
+def _apply_manifest_defaults(data: dict) -> dict:
+    """Fill UI compatibility defaults for a folder-backed manifest."""
     if not data.get("instructions"):
         data = {**data, "instructions": str(data.get("description") or data.get("name") or "")}
     if not data.get("write_policy"):
@@ -100,29 +101,20 @@ def _module_path_from_ref(ref: str) -> str:
     return str(ref or "").split(":", 1)[0].strip()
 
 
+def _validate_ref_format(ref: str, label: str) -> None:
+    module_name, sep, function_name = str(ref or "").partition(":")
+    if not sep or not module_name.strip() or not function_name.strip():
+        raise ValueError(f"{label} must be formatted as module:function")
+
+
 class DroneStore:
-    """Read/write Drones from/to the .aura/drones/ directory.
-
-    All methods are static; workspace_root is always passed explicitly.
-    """
-
-    @staticmethod
-    def drones_dir(workspace_root: Path) -> Path:
-        """Return the .aura/drones path without creating it."""
-        return workspace_root / ".aura" / "drones"
-
-    @staticmethod
-    def _ensure_drones_dir(workspace_root: Path) -> Path:
-        """Create and return the .aura/drones directory."""
-        d = workspace_root / ".aura" / "drones"
-        d.mkdir(parents=True, exist_ok=True)
-        return d
+    """Read registered folder-backed Drones from Aura's global Drone directory."""
 
     @staticmethod
     def list_drones(workspace_root: Path) -> list[DroneDefinition]:
+        _ = workspace_root
         seen: dict[str, DroneDefinition] = {}
 
-        # 1. Global: iterate subdirs, read drone.json from each
         global_root = _global_drones_root()
         if global_root.exists():
             for subdir in sorted(global_root.iterdir()):
@@ -135,63 +127,49 @@ class DroneStore:
                     data = json.loads(drone_file.read_text(encoding="utf-8"))
                     drone = _drone_from_dict(data)
                     seen[drone.id] = drone
-                except Exception:
-                    logger.warning("Skipping invalid global drone: %s", drone_file)
-
-        # 2. Legacy: workspace_root / ".aura" / "drones" / *.json
-        legacy_dir = DroneStore.drones_dir(workspace_root)
-        if legacy_dir.exists():
-            for p in sorted(legacy_dir.iterdir()):
-                if p.suffix != ".json":
-                    continue
-                try:
-                    data = json.loads(p.read_text(encoding="utf-8"))
-                    drone = _drone_from_dict(data)
-                    if drone.id not in seen:
-                        seen[drone.id] = drone
-                except Exception:
-                    logger.warning("Skipping invalid drone file: %s", p)
+                except Exception as exc:
+                    logger.warning("Skipping invalid Drone folder %s: %s", subdir, exc)
 
         return sorted(seen.values(), key=lambda d: d.name)
 
     @staticmethod
     def load_drone(workspace_root: Path, drone_id: str) -> DroneDefinition | None:
+        _ = workspace_root
         if not _is_safe_drone_id(drone_id):
             return None
 
-        # 1. Check global first
         global_file = _global_drones_root() / drone_id / "drone.json"
         if global_file.exists():
             try:
                 data = json.loads(global_file.read_text(encoding="utf-8"))
                 return _drone_from_dict(data)
-            except Exception:
-                logger.warning("Failed to load global drone %s", drone_id)
-                return None
-
-        # 2. Check legacy with best-effort migration
-        legacy_path = DroneStore.drones_dir(workspace_root) / f"{drone_id}.json"
-        if legacy_path.exists():
-            try:
-                data = json.loads(legacy_path.read_text(encoding="utf-8"))
-                drone = _drone_from_dict(data)
-                # Best-effort migration to global storage
-                try:
-                    DroneStore.save_drone(workspace_root, drone)
-                except Exception:
-                    logger.warning("Failed to migrate legacy drone %s to global", drone_id)
-                return drone
-            except Exception:
-                logger.warning("Failed to load legacy drone %s", drone_id)
+            except Exception as exc:
+                logger.warning("Failed to load Drone %s: %s", drone_id, exc)
                 return None
 
         return None
 
     @staticmethod
     def save_drone(workspace_root: Path, drone: DroneDefinition) -> None:
+        """Update the manifest for an already registered folder-backed Drone.
+
+        This is not a creation endpoint. New Drones must be installed with
+        register_drone_folder so their code and smoke check are present.
+        """
+        _ = workspace_root
         DroneStore.validate_drone(drone)
-        global_root = _global_drones_root()
-        drone_dir = global_root / drone.id
+        drone_dir = _global_drones_root() / drone.id
+        if not (drone_dir / "drone.json").exists():
+            raise ValueError("register_drone_folder is required before a Drone manifest can be updated")
+        DroneStore._write_manifest(drone_dir, drone)
+
+    @staticmethod
+    def drone_folder(drone_id: str) -> Path:
+        """Return the global folder for a registered Drone id."""
+        return _global_drones_root() / drone_id
+
+    @staticmethod
+    def _write_manifest(drone_dir: Path, drone: DroneDefinition) -> None:
         drone_dir.mkdir(parents=True, exist_ok=True)
         p = drone_dir / "drone.json"
         data = asdict(drone)
@@ -199,11 +177,6 @@ class DroneStore:
         with open(fd, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
         Path(tmp_path).replace(p)
-
-    @staticmethod
-    def drone_folder(drone_id: str) -> Path:
-        """Return the global folder for a registered Drone id."""
-        return _global_drones_root() / drone_id
 
     @staticmethod
     def load_drone_from_folder(folder: Path) -> DroneDefinition:
@@ -218,32 +191,32 @@ class DroneStore:
             raise ValueError(f"drone.json is not valid JSON: {exc}") from exc
 
         drone = _drone_from_dict(data)
-        if drone.runtime and drone.runtime != "python":
-            raise ValueError(f"Unsupported Drone runtime: {drone.runtime}")
-        if drone.runtime == "python" or drone.entrypoint or drone.smoke:
-            if drone.runtime != "python":
-                raise ValueError("Folder-backed Drones must set runtime to 'python'")
-            if not drone.entrypoint:
-                raise ValueError("entrypoint is required for python Drones")
-            if not drone.smoke:
-                raise ValueError("smoke is required for python Drones")
-            entry_module = _module_path_from_ref(drone.entrypoint)
-            smoke_module = _module_path_from_ref(drone.smoke)
-            if not entry_module:
-                raise ValueError("entrypoint must be formatted as module:function")
-            if not smoke_module:
-                raise ValueError("smoke must be formatted as module:function")
-            if not (folder / f"{entry_module.replace('.', '/')}.py").exists():
-                raise ValueError(f"entrypoint module does not exist: {entry_module}.py")
-            if not (folder / f"{smoke_module.replace('.', '/')}.py").exists():
-                raise ValueError(f"smoke module does not exist: {smoke_module}.py")
+        entry_module = _module_path_from_ref(drone.entrypoint)
+        smoke_module = _module_path_from_ref(drone.smoke)
+        if not (folder / f"{entry_module.replace('.', '/')}.py").exists():
+            raise ValueError(f"entrypoint module does not exist: {entry_module}.py")
+        if not (folder / f"{smoke_module.replace('.', '/')}.py").exists():
+            raise ValueError(f"smoke module does not exist: {smoke_module}.py")
         return drone
 
     @staticmethod
-    def register_drone_folder(workspace_root: Path, source_folder: Path) -> DroneDefinition:
+    def register_drone_folder(
+        workspace_root: Path,
+        source_folder: Path,
+        *,
+        smoke_result: dict | None = None,
+    ) -> DroneDefinition:
         """Validate and install a folder-backed Drone into global storage."""
+        _ = workspace_root
         source_folder = source_folder.resolve()
         drone = DroneStore.load_drone_from_folder(source_folder)
+        if smoke_result is None:
+            from aura.drones.folder_runner import run_drone_smoke
+
+            smoke_result = run_drone_smoke(source_folder, drone)
+        if not bool(smoke_result.get("ok")):
+            raise ValueError(f"Drone smoke check failed: {smoke_result}")
+
         target_folder = _global_drones_root() / drone.id
         target_folder.parent.mkdir(parents=True, exist_ok=True)
 
@@ -267,28 +240,23 @@ class DroneStore:
     @staticmethod
     def delete_drone(workspace_root: Path, drone_id: str) -> bool:
         """Remove a drone definition. Returns True if anything was deleted."""
+        _ = workspace_root
         if not _is_safe_drone_id(drone_id):
             return False
 
         deleted = False
 
-        # Delete from global
         global_dir = _global_drones_root() / drone_id
         global_file = global_dir / "drone.json"
         if global_file.exists():
             shutil.rmtree(global_dir, ignore_errors=True)
             deleted = True
 
-        # Delete from legacy
-        legacy_path = DroneStore.drones_dir(workspace_root) / f"{drone_id}.json"
-        if legacy_path.exists():
-            legacy_path.unlink()
-            deleted = True
-
         return deleted
 
     @staticmethod
     def next_id(workspace_root: Path, name: str) -> str:
+        _ = workspace_root
         base = slugify(name)
         if not base:
             base = "drone"
@@ -298,8 +266,7 @@ class DroneStore:
 
         while True:
             global_exists = (_global_drones_root() / candidate / "drone.json").exists()
-            legacy_exists = (DroneStore.drones_dir(workspace_root) / f"{candidate}.json").exists()
-            if not global_exists and not legacy_exists:
+            if not global_exists:
                 return candidate
             counter += 1
             candidate = f"{base}-{counter}"
@@ -323,8 +290,14 @@ class DroneStore:
             raise ValueError("Drone timeout_seconds must be at least 30")
         if drone.scope not in ("global", "project"):
             raise ValueError(f"Invalid Drone scope: {drone.scope}")
-        if drone.runtime and drone.runtime != "python":
-            raise ValueError(f"Invalid Drone runtime: {drone.runtime}")
+        if drone.runtime not in _SUPPORTED_RUNTIMES:
+            raise ValueError("Drone runtime must be 'python'")
+        if not drone.entrypoint.strip():
+            raise ValueError("Drone entrypoint is required")
+        if not drone.smoke.strip():
+            raise ValueError("Drone smoke is required")
+        _validate_ref_format(drone.entrypoint, "Drone entrypoint")
+        _validate_ref_format(drone.smoke, "Drone smoke")
 
 
 class RunHistoryStore:
