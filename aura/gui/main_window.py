@@ -1165,10 +1165,12 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         editor = workbay.chain_editor
         editor.goBackRequested.connect(workbay.hide)
         editor.closeRequested.connect(workbay.hide)
+        editor.runDroneRequested.connect(self._on_launch_drone)
+        editor.editDroneRequested.connect(self._on_edit_drone)
+        editor.deleteDroneRequested.connect(self._on_delete_drone)
 
         def on_run(cid: str) -> None:
             self._on_run_workflow(cid)
-
         editor.runChainRequested.connect(on_run)
         workbay.geometry_saved.connect(self._on_drone_workbay_geometry_saved)
         workbay.show_and_raise()
