@@ -329,7 +329,7 @@ class TestGrepSearch:
                 "skipped_files": 3,
                 "truncated": False,
                 "regex_mode": False,
-                "auto_regex_retry": True,
+                "auto_regex_retry": False,
                 "include_pattern": "**/*.py",
             }
             result = _handler("grep_search")(registry, {"pattern": "anything"}, approve_cb, False)
@@ -338,7 +338,7 @@ class TestGrepSearch:
         assert result.payload["engine"] == "python"
         assert result.payload["searched_files"] == 12
         assert result.payload["skipped_files"] == 3
-        assert result.payload["auto_regex_retry"] is True
+        assert result.payload["auto_regex_retry"] is False
 
 
 class TestToolSchemaDocs:

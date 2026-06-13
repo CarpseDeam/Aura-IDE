@@ -21,6 +21,8 @@ Each tool call goes through a circuit breaker that tracks consecutive timeouts o
 | `find_usages`       | Word-boundary symbol search for refactoring safety                | `symbol`, `include_pattern`, `max_results`                   |
 | `search_codebase`   | BM25 semantic search across the project index                     | `query`, `top_k`                                             |
 
+`grep_search` is for discovery: finding candidate files and line locations across the workspace. For exact verification of known edited content, use `read_file` or `read_file_range`.
+
 ## Write Tools
 
 | Tool               | Description                                                      | Parameters                                      |

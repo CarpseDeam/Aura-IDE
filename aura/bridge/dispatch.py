@@ -966,7 +966,7 @@ def _format_spec_as_user_message(task: WorkerTaskSpec | WorkerDispatchRequest) -
         "- If patch_file reports a hash mismatch or hunk failure, re-read the file and retry patch_file once with the new expected_file_hash; do not switch between edit tools.",
         "- Build the smallest complete implementation.",
         "- Own exact edits, validation, and code-quality decisions.",
-        "- Use grep_search for searching.",
+        "- Use grep_search for discovery; use read_file or read_file_range for exact known-file verification.",
         "- For absent-pattern validation, make intended no-match exit 0.",
         "- Code must work and be easy to work on.",
         "- Avoid public-library, tutorial, or demo ceremony unless requested.",

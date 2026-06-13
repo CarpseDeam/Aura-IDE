@@ -609,7 +609,8 @@ def test_worker_prompt_guides_search_validation_semantics():
 
     prompt = _format_spec_as_user_message(req)
 
-    assert "Use grep_search for searching" in prompt
+    assert "Use grep_search for discovery" in prompt
+    assert "read_file or read_file_range for exact known-file verification" in prompt
     assert "make intended no-match exit 0" in prompt
     assert "pytest" not in prompt
 

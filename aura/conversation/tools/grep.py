@@ -41,18 +41,7 @@ def grep_files(
 
     rg_path = shutil.which("rg")
     if rg_path:
-        result = _grep_ripgrep(
-            workspace_root,
-            pattern,
-            regex_mode,
-            case_sensitive,
-            max_results,
-            include_pattern,
-            rg_path=rg_path,
-        )
-        return _maybe_retry_as_regex(
-            result,
-            _grep_ripgrep,
+        return _grep_ripgrep(
             workspace_root,
             pattern,
             regex_mode,
@@ -62,17 +51,7 @@ def grep_files(
             rg_path=rg_path,
         )
 
-    result = _grep_python(
-        workspace_root,
-        pattern,
-        regex_mode,
-        case_sensitive,
-        max_results,
-        include_pattern,
-    )
-    return _maybe_retry_as_regex(
-        result,
-        _grep_python,
+    return _grep_python(
         workspace_root,
         pattern,
         regex_mode,
@@ -102,6 +81,7 @@ def _build_result(
     auto_regex_retry: bool = False,
     truncated: bool = False,
     skipped_details: list[dict[str, Any]] | None = None,
+    regex_hint: str | None = None,
 ) -> dict[str, Any]:
     result = {
         "ok": True,
@@ -115,6 +95,8 @@ def _build_result(
         "auto_regex_retry": auto_regex_retry,
         "include_pattern": include_pattern,
     }
+    if regex_hint:
+        result["regex_hint"] = regex_hint
     result["summary"] = _build_summary(result)
     return result
 
@@ -135,66 +117,23 @@ def _build_summary(result: dict[str, Any]) -> str:
     )
 
 
-def _maybe_retry_as_regex(
-    result: dict[str, Any],
-    grep_fn: Any,
-    workspace_root: Path,
-    pattern: str,
-    regex_mode: bool,
-    case_sensitive: bool,
-    max_results: int,
-    include_pattern: str | None,
-    **kwargs: Any,
-) -> dict[str, Any]:
-    if regex_mode or not result.get("ok") or result.get("matches") or not _looks_like_regex(pattern):
-        return result
-
-    retry = grep_fn(
-        workspace_root,
-        pattern,
-        True,
-        case_sensitive,
-        max_results,
-        include_pattern,
-        **kwargs,
-    )
-    if retry.get("ok"):
-        retry["auto_regex_retry"] = True
-        retry["summary"] = _build_summary(retry)
-        return retry
-
-    result["auto_regex_retry"] = True
-    result["regex_retry_error"] = retry.get("error")
-    result["summary"] = _build_summary(result)
-    return result
+def _regex_hint(pattern: str, regex_mode: bool, matches: list[dict[str, Any]]) -> str | None:
+    if regex_mode or matches or not _looks_like_regex(pattern):
+        return None
+    return "Pattern looks like regex syntax but regex_mode is false; search was treated as literal text."
 
 
-def _collect_candidate_files(workspace_root: Path, include_pattern: str | None) -> tuple[list[Path], int]:
-    candidates: list[Path] = []
-    skipped_files = 0
-
-    if include_pattern:
-        for file_path in workspace_root.rglob(include_pattern):
-            if not file_path.is_file():
-                continue
-            rel_path = _safe_relative_to(file_path, workspace_root)
-            if _should_skip(rel_path):
-                skipped_files += 1
-                continue
-            candidates.append(file_path)
+def _rg_path_text_to_rel(raw_path: str, root: Path, root_resolved: Path) -> str:
+    abs_match_path = Path(raw_path)
+    if not abs_match_path.is_absolute():
+        abs_match_path = (root / abs_match_path).resolve()
     else:
-        for root_dir, dirs, files in os.walk(workspace_root):
-            dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS)
-            for filename in sorted(files):
-                file_path = Path(root_dir) / filename
-                rel_path = _safe_relative_to(file_path, workspace_root)
-                if _should_skip(rel_path):
-                    skipped_files += 1
-                    continue
-                candidates.append(file_path)
+        abs_match_path = abs_match_path.resolve()
 
-    candidates.sort(key=lambda path: _safe_relative_to(path, workspace_root).as_posix())
-    return candidates, skipped_files
+    try:
+        return Path(os.path.relpath(abs_match_path, root_resolved)).as_posix()
+    except Exception:
+        return raw_path
 
 
 def _grep_ripgrep(
@@ -207,9 +146,8 @@ def _grep_ripgrep(
     rg_path: str | None = None,
 ) -> dict[str, Any]:
     exe = rg_path or shutil.which("rg") or "rg"
-    candidates, skipped_files = _collect_candidate_files(root, include)
 
-    cmd = [exe, "--json", "--column", "--hidden"]
+    cmd = [exe, "--json", "--column", "--hidden", "--no-ignore"]
     if not regex:
         cmd.append("--fixed-strings")
     if not case_sensitive:
@@ -237,6 +175,8 @@ def _grep_ripgrep(
         matches: list[dict[str, Any]] = []
         truncated = False
         root_resolved = root.resolve()
+        searched_paths: set[str] = set()
+        summary_searches: int | None = None
 
         for line in proc.stdout.splitlines():
             if not line.strip():
@@ -246,25 +186,30 @@ def _grep_ripgrep(
             except json.JSONDecodeError:
                 continue
 
-            if data.get("type") != "match":
+            event_type = data.get("type")
+            if event_type == "begin":
+                path_text = data.get("data", {}).get("path", {}).get("text")
+                if path_text:
+                    searched_paths.add(_rg_path_text_to_rel(path_text, root, root_resolved))
                 continue
 
-            if len(matches) >= max_results:
-                truncated = True
+            if event_type == "summary":
+                searches = data.get("data", {}).get("stats", {}).get("searches")
+                if isinstance(searches, int):
+                    summary_searches = searches
+                continue
+
+            if event_type != "match":
                 continue
 
             match_data = data["data"]
             raw_match_path = match_data["path"]["text"]
-            abs_match_path = Path(raw_match_path)
-            if not abs_match_path.is_absolute():
-                abs_match_path = (root / abs_match_path).resolve()
-            else:
-                abs_match_path = abs_match_path.resolve()
+            rel_path = _rg_path_text_to_rel(raw_match_path, root, root_resolved)
+            searched_paths.add(rel_path)
 
-            try:
-                rel_path = Path(os.path.relpath(abs_match_path, root_resolved)).as_posix()
-            except Exception:
-                rel_path = raw_match_path
+            if len(matches) >= max_results:
+                truncated = True
+                continue
 
             matches.append({
                 "path": rel_path,
@@ -273,15 +218,17 @@ def _grep_ripgrep(
                 "match_column": match_data["submatches"][0]["start"],
             })
 
+        searched_files = summary_searches if summary_searches is not None else len(searched_paths)
         return _build_result(
             matches=matches,
             engine="ripgrep",
-            searched_files=len(candidates),
-            skipped_files=skipped_files,
+            searched_files=searched_files,
+            skipped_files=0,
             skipped_details=[],
             truncated=truncated,
             regex_mode=regex,
             include_pattern=include,
+            regex_hint=_regex_hint(pattern, regex, matches),
         )
     except Exception as exc:
         return {"ok": False, "error": f"ripgrep error: {exc}"}
@@ -309,9 +256,32 @@ def _grep_python(
         return {"ok": False, "error": f"invalid regex: {exc}"}
 
     matches: list[dict[str, Any]] = []
-    candidates, skipped_files = _collect_candidate_files(workspace_root, include_pattern)
     searched_files = 0
+    skipped_files = 0
     skipped_details: list[dict[str, Any]] = []
+    candidates: list[Path] = []
+
+    if include_pattern:
+        for file_path in workspace_root.rglob(include_pattern):
+            if not file_path.is_file():
+                continue
+            rel_path = _safe_relative_to(file_path, workspace_root)
+            if _should_skip(rel_path):
+                skipped_files += 1
+                continue
+            candidates.append(file_path)
+    else:
+        for root_dir, dirs, files in os.walk(workspace_root):
+            dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS)
+            for filename in sorted(files):
+                file_path = Path(root_dir) / filename
+                rel_path = _safe_relative_to(file_path, workspace_root)
+                if _should_skip(rel_path):
+                    skipped_files += 1
+                    continue
+                candidates.append(file_path)
+
+    candidates.sort(key=lambda path: _safe_relative_to(path, workspace_root).as_posix())
 
     for file_path in candidates:
         rel = _safe_relative_to(file_path, workspace_root).as_posix()
@@ -332,6 +302,7 @@ def _grep_python(
                                     truncated=True,
                                     regex_mode=regex_mode,
                                     include_pattern=include_pattern,
+                                    regex_hint=_regex_hint(pattern, regex_mode, matches),
                                 )
                             matches.append({
                                 "path": rel,
@@ -354,6 +325,7 @@ def _grep_python(
                                     truncated=True,
                                     regex_mode=regex_mode,
                                     include_pattern=include_pattern,
+                                    regex_hint=_regex_hint(pattern, regex_mode, matches),
                                 )
                             matches.append({
                                 "path": rel,
@@ -382,4 +354,5 @@ def _grep_python(
         truncated=False,
         regex_mode=regex_mode,
         include_pattern=include_pattern,
+        regex_hint=_regex_hint(pattern, regex_mode, matches),
     )

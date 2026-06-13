@@ -160,10 +160,12 @@ READ_TOOL_DEFS: list[dict[str, Any]] = [
                 "function": {
                     "name": "grep_search",
                     "description": (
-                        "Search file contents in the workspace for a given string or regex pattern. "
+                        "Discover candidate files and locations by searching workspace file contents "
+                        "for a given string or regex pattern. This is a discovery tool, not proof of "
+                        "exact edited content; use read_file or read_file_range to verify known files. "
                         "Returns matching file paths, line numbers, the matching line content, "
                         "and the column where the match starts, plus search metadata such as the "
-                        "engine used, searched file count, skipped file count, truncation, and regex retry state. "
+                        "engine used, searched file count, skipped file count, truncation, and regex hint state. "
                         "Use this to find where functions are defined, variables are used, "
                         "error messages, or any text pattern across the codebase."
                     ),

@@ -101,14 +101,14 @@ class TestGrepPython:
         assert len(result["matches"]) == 1
         assert result["matches"][0]["path"] == "aura/config.py"
 
-    def test_regex_looking_pattern_auto_retries(self, tmp_workspace: Path) -> None:
-        """Regex-looking patterns retry in regex mode after a literal miss."""
+    def test_regex_looking_pattern_reports_hint_without_retry(self, tmp_workspace: Path) -> None:
+        """Regex-looking patterns remain literal and report a passive hint."""
         result = grep_files(tmp_workspace, r"^VALUE = 42$")
         assert result["ok"] is True
-        assert result["auto_regex_retry"] is True
-        assert result["regex_mode"] is True
-        assert len(result["matches"]) == 1
-        assert result["matches"][0]["path"] == "aura/config.py"
+        assert result["auto_regex_retry"] is False
+        assert result["regex_mode"] is False
+        assert result["matches"] == []
+        assert "regex_hint" in result
 
     def test_escaped_function_pattern_is_detected_as_regex(self, tmp_path: Path) -> None:
         file_path = tmp_path / "module.py"
@@ -118,10 +118,10 @@ class TestGrepPython:
 
         assert _looks_like_regex(r"def foo\(") is True
         assert result["ok"] is True
-        assert result["auto_regex_retry"] is True
-        assert result["regex_mode"] is True
-        assert len(result["matches"]) == 1
-        assert result["matches"][0]["path"] == "module.py"
+        assert result["auto_regex_retry"] is False
+        assert result["regex_mode"] is False
+        assert result["matches"] == []
+        assert "regex_hint" in result
 
     def test_invalid_regex(self, tmp_workspace: Path) -> None:
         """Malformed regex returns an error."""
@@ -299,6 +299,10 @@ class TestGrepRipgrep:
     def _rg_json_end(path: str) -> str:
         return json.dumps({"type": "end", "data": {"path": {"text": path}}})
 
+    @staticmethod
+    def _rg_json_summary(searches: int) -> str:
+        return json.dumps({"type": "summary", "data": {"stats": {"searches": searches}}})
+
     # -- ripgrep available ---------------------------------------------
 
     @pytest.fixture(autouse=True)
@@ -315,6 +319,7 @@ class TestGrepRipgrep:
             self._rg_json_begin("scripts/smoke.py"),
             self._rg_json_match("scripts/smoke.py", 1, "print('hello')", 6),
             self._rg_json_end("scripts/smoke.py"),
+            self._rg_json_summary(5),
         ]
         monkeypatch.setattr(
             subprocess, "run",
@@ -329,46 +334,48 @@ class TestGrepRipgrep:
         assert m["line_number"] == 1
         assert "hello" in m["line"]
         assert m["match_column"] == 6
+        assert result["searched_files"] == 5
 
     def test_no_matches(self, monkeypatch: pytest.MonkeyPatch,
                         tmp_workspace: Path) -> None:
         """rg returns exit code 1 (no matches) → empty match list."""
+        stdout_lines = [
+            self._rg_json_begin("README.md"),
+            self._rg_json_begin("aura/config.py"),
+            self._rg_json_summary(2),
+        ]
         monkeypatch.setattr(
             subprocess, "run",
-            _make_run([MockResult(returncode=1, stdout="")]),
+            _make_run([MockResult(returncode=1, stdout="\n".join(stdout_lines) + "\n")]),
         )
         result = grep_files(tmp_workspace, "nonexistent")
         assert result["ok"] is True
         assert len(result["matches"]) == 0
-        assert result["searched_files"] > 0
+        assert result["searched_files"] == 2
         assert result["auto_regex_retry"] is False
 
-    def test_auto_regex_retry_for_alternation(
+    def test_regex_hint_for_alternation_without_retry(
         self, monkeypatch: pytest.MonkeyPatch, tmp_workspace: Path
     ) -> None:
-        """An accidental alternation regex is retried without --fixed-strings."""
-        stdout_lines = [
-            self._rg_json_match("aura/config.py", 1, "VALUE = 42", 0),
-        ]
+        """An accidental alternation stays literal and reports a regex hint."""
         captured: list[list[str]] = []
 
         def _capture_run(*args: object, **kwargs: object) -> MockResult:
             cmd = args[0] if args else kwargs.get("cmd", [])
             captured.append(list(cmd))  # type: ignore[arg-type]
-            if len(captured) == 1:
-                return MockResult(returncode=1, stdout="")
-            return MockResult(stdout="\n".join(stdout_lines) + "\n")
+            return MockResult(returncode=1, stdout=self._rg_json_summary(5) + "\n")
 
         monkeypatch.setattr(subprocess, "run", _capture_run)
 
         result = grep_files(tmp_workspace, "VALUE|hello")
 
         assert result["ok"] is True
-        assert result["auto_regex_retry"] is True
-        assert result["regex_mode"] is True
-        assert len(result["matches"]) == 1
+        assert result["auto_regex_retry"] is False
+        assert result["regex_mode"] is False
+        assert result["matches"] == []
+        assert result["regex_hint"]
+        assert len(captured) == 1
         assert "--fixed-strings" in captured[0]
-        assert "--fixed-strings" not in captured[1]
 
     def test_non_zero_returncode(self, monkeypatch: pytest.MonkeyPatch,
                                  tmp_workspace: Path) -> None:
@@ -476,6 +483,10 @@ class TestGrepRipgrep:
         grep_files(tmp_workspace, "-pattern")
         cmd = captured[0]
         assert "--hidden" in cmd
+        assert "--no-ignore" in cmd
+        assert "!.git/" in cmd
+        assert "!.venv/" in cmd
+        assert "!*.import" in cmd
         assert "--" in cmd
         # Ensure -- is before the pattern
         idx_sep = cmd.index("--")

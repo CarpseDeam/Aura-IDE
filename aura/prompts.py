@@ -44,7 +44,7 @@ _WORKER_PASS_RULES = """Pass-level rules:
 - Do not run ecosystem-specific test suites by default. Run focused tests only when requested, explicitly handed off, or clearly needed and available.
 - Missing tools or dependencies are project environment setup caveats, not code validation failures. For Python projects, missing pytest/ruff/mypy from the project .venv means setup is needed.
 - Do not install dependencies globally by default in any ecosystem: no global pip, npm, cargo, or system package installs.
-- Terminal is for validation/build/test commands only. Use `read_file`, `read_files`, `grep_search`, and `read_file_outline` for source inspection. If structured reads fail, report a blocker.
+- Terminal is for validation/build/test commands only. Use `grep_search` for discovery and `read_file`, `read_files`, `read_file_range`, or `read_file_outline` for source inspection and exact known-file verification. If structured reads fail, report a blocker.
 - Scratch validation should use existing focused tests or explicit validation commands, not new project files.
 - Temporary validation files must NOT be written as project artifacts; .py files under .aura/tmp/ are scrubbed."""
 
@@ -202,11 +202,11 @@ _WORKER_ENGINEERING_RULES = """Implementation quality — follow these rules:
 - Validate touched Python with `python -m py_compile`.
 - If py_compile reports invalid syntax in a touched file, repair that file before unrelated validation, then rerun py_compile on that file.
 - Use focused existing tests only when directly relevant or requested; do not treat any ecosystem's test runner as generic default validation.
-- Terminal is for validation/build/test commands and dependency installs needed for the coding task. Use `read_file`, `read_files`, `read_file_outline`, `read_file_range`, and `grep_search` for source inspection. If structured reads fail, report a blocker.
+- Terminal is for validation/build/test commands and dependency installs needed for the coding task. Use `grep_search` for discovery and `read_file`, `read_files`, `read_file_outline`, or `read_file_range` for source inspection and exact known-file verification. If structured reads fail, report a blocker.
 - Worker terminal supports validation/build/test commands and dependency installs. Use structured read tools for source inspection. Do not use Python/shell commands to read source files. If structured reads fail, report a blocker.
 - Do not create root-level validation scratch files such as _check_acceptance.py, _check_ac7.py, or _check*.py.
 - Shell validation runs in the host shell but should use detected project-local tools when present. Python commands prefer the project-local .venv. Use `pytest`, `ruff`, or `mypy` only for Python-relevant work when available in the project .venv or explicitly requested. Do not use bare `grep`; use `rg` or `grep_search`, and use a check that exits 0 when the pattern is absent for negative checks.
-- For "old pattern must be absent" checks, use `grep_search` or an explicit validation command from the handoff.
+- For "old pattern must be absent" checks, use `grep_search` as discovery or an explicit validation command from the handoff; for exact known-file verification, use `read_file` or `read_file_range`.
 - Aura may auto-run focused py_compile for touched Python files as a completion safety net if you stop without running it.
 - Scratch validation should use existing focused tests or explicit validation commands. Temporary validation .py files must NOT be checked in as project artifacts.
 - Finish with changed files and validation results."""
@@ -382,8 +382,8 @@ Execution Protocol:
 - For broad or risky tasks, start with `update_todo_list`; this creates the visible execution plan for the user. Small localized tasks may stay fast.
 - Keep TODO statuses current when you use TODOs.
 - Build the smallest complete implementation. Do not use placeholders, elisions, fake scaffolding, or comments such as `// ... existing code`.
-- Use `read_file`, `read_files`, `read_file_outline`, `read_file_range`, and `grep_search` for source inspection. Do not use terminal, shell, or Python file reads to inspect source.
-- Validation commands should be focused. Use `grep_search` for source search and terminal only for validation/build/test or dependency installs needed for the coding task.
+- Use `grep_search` for discovery and `read_file`, `read_files`, `read_file_outline`, or `read_file_range` for source inspection and exact known-file verification. Do not use terminal, shell, or Python file reads to inspect source.
+- Validation commands should be focused. Use `grep_search` for source search discovery and terminal only for validation/build/test or dependency installs needed for the coding task.
 - Use pytest only for Python-relevant work when requested, explicitly handed off, or clearly necessary. Missing pytest/ruff/mypy is an environment condition; install what is needed or report a blocker if installation cannot be performed.
 - If a needed dependency is missing, install it with the project-appropriate command or add it to the existing dependency file style when the task requires a durable dependency change.
 - Resolution: when complete, state "Done." with changed files and validation results. Include blockers only if present.

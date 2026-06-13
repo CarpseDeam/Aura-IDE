@@ -211,6 +211,18 @@ class InputPanel(QFrame):
         self._editor.files_dropped.connect(self._on_files_dropped)
         outer.addWidget(self._editor)
 
+        # Slash command hint
+        self._slash_hint = QLabel()
+        self._slash_hint.setStyleSheet(
+            f"color: {FG_DIM}; font-size: 11px; padding: 2px 12px; background: transparent;"
+        )
+        self._slash_hint.setWordWrap(True)
+        self._slash_hint.setVisible(False)
+        outer.addWidget(self._slash_hint)
+
+        # Connect text changed for slash hint
+        self._editor.textChanged.connect(self._update_slash_hint)
+
         # Controls row.
         controls = QHBoxLayout()
         controls.setSpacing(10)
@@ -347,6 +359,31 @@ class InputPanel(QFrame):
             if w is not None:
                 w.deleteLater()
         self._chips_container.setVisible(False)
+
+    # ---- slash hint -------------------------------------------------------
+
+    def _update_slash_hint(self) -> None:
+        import re
+
+        text = self._editor.toPlainText()
+        if not text.startswith("/"):
+            self._slash_hint.setVisible(False)
+            return
+
+        if re.match(r"/drone\s+(make|create|build)\b", text, re.IGNORECASE):
+            self._slash_hint.setVisible(False)
+            return
+
+        if text.strip().lower().startswith("/drone"):
+            self._slash_hint.setText(
+                "Try: /drone make a repo scout that finds likely bug "
+                "hotspots and returns file paths with reasons"
+            )
+        else:
+            self._slash_hint.setText(
+                "/drone make <brief>  —  Create a reusable Drone."
+            )
+        self._slash_hint.setVisible(True)
 
     # ---- send -------------------------------------------------------------
 

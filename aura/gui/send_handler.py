@@ -259,6 +259,15 @@ class SendHandler(QObject):
         if action == "git_log":
             self._handle_git_log()
             return
+        if action == "drone_help":
+            self._chat.add_info(
+                "Drone Command",
+                "/drone make <brief> — Create a reusable Drone.\n\n"
+                "Example: /drone make a repo scout that finds likely bug "
+                "hotspots and returns file paths with reasons\n\n"
+                "Aliases: /drone create, /drone build",
+            )
+            return
 
         self._chat.add_error("Built-in action", f"Unsupported action: {action}")
 
