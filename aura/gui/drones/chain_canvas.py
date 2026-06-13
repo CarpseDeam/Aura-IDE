@@ -1172,6 +1172,7 @@ class ChainCanvas(QGraphicsView):
         self._edges.clear()
         self._drawing_source_port = None
         self._rubber_band = None
+        self._mission_core = None
         self._goal_planet = None
 
         for node_data in chain.nodes:
