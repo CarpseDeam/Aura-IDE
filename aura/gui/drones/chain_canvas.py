@@ -585,14 +585,7 @@ class ChainCanvas(QGraphicsView):
             except RuntimeError:
                 pass  # C++ object already deleted
             self._empty_text = None
-        if not self._nodes:
-            text = self._scene.addText(
-                "Drag drones here to build your workflow.",
-                QFont("Segoe UI", 14),
-            )
-            text.setDefaultTextColor(_qt_color(FG_MUTED))
-            text.setPos(-180, 0)
-            self._empty_text = text
+
 
     def load_chain(self, chain: ChainDefinition, drone_lookup: dict[str, DroneDefinition]) -> None:
         """Populate canvas from a ChainDefinition."""

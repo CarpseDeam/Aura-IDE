@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QTextEdit,
     QToolButton,
     QVBoxLayout,
+    QSizePolicy,
     QWidget,
 )
 
@@ -86,22 +87,22 @@ class _DroneCard(QFrame):
         self.setObjectName("drone_card")
         self.setStyleSheet(
             f"#drone_card {{"
-            f"  background: {_qss_color(SURFACE_RAISED)};"
-            f"  border: 1px solid {_qss_color(BORDER)};"
-            f"  border-radius: 6px;"
-            f"  padding: 6px;"
+            f"  background: rgba(22, 24, 33, 0.92);"
+            f"  border: 1px solid rgba(255, 255, 255, 0.06);"
+            f"  border-radius: 8px;"
             f"}}"
             f"#drone_card:hover {{"
-            f"  border-color: {_qss_color(ACCENT_DIM)};"
-            f"  background: {_qss_darker(ACCENT_DIM, 0.15)};"
+            f"  border-color: rgba(196, 181, 253, 0.25);"
+            f"  background: rgba(28, 30, 42, 0.94);"
             f"}}"
         )
         self.setCursor(Qt.PointingHandCursor)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
         self._drag_start_pos = None
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(6, 4, 6, 4)
-        layout.setSpacing(2)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(4)
 
         title = QLabel(name)
         title_font = QFont()
@@ -114,7 +115,6 @@ class _DroneCard(QFrame):
         if description:
             desc = QLabel(description)
             desc.setWordWrap(True)
-            desc.setMaximumHeight(32)
             desc.setStyleSheet(f"color: {_qss_color(FG_MUTED)}; font-size: 11px; background: transparent; border: none;")
             layout.addWidget(desc)
 
@@ -129,17 +129,68 @@ class _DroneCard(QFrame):
 
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(4)
-        btn_style = (
-            f"QPushButton {{ background: {_qss_color(SURFACE)}; color: {_qss_color(FG_MUTED)}; "
-            f"border: 1px solid {_qss_color(BORDER)}; border-radius: 4px; padding: 2px 6px; font-size: 11px; }}"
-            f"QPushButton:hover {{ color: {_qss_color(FG)}; border-color: {_qss_color(ACCENT_DIM)}; }}"
+
+        # Run
+        btn_run = QPushButton("▶ Run")
+        btn_run.setStyleSheet(
+            f"QPushButton {{"
+            f"  background: rgba(196, 181, 253, 0.12);"
+            f"  border: 1px solid rgba(196, 181, 253, 0.18);"
+            f"  border-radius: 4px;"
+            f"  color: {_qss_color(ACCENT)};"
+            f"  padding: 2px 8px;"
+            f"  font-size: 10px;"
+            f"}}"
+            f"QPushButton:hover {{"
+            f"  background: rgba(196, 181, 253, 0.22);"
+            f"  border-color: rgba(196, 181, 253, 0.35);"
+            f"  color: {_qss_color(FG)};"
+            f"}}"
         )
-        for text, callback_attr in [("▶ Run", "_on_run"), ("✎ Edit", "_on_edit"), ("✕ Delete", "_on_delete")]:
-            btn = QPushButton(text)
-            btn.setStyleSheet(btn_style)
-            btn.setCursor(Qt.PointingHandCursor)
-            btn.clicked.connect(lambda checked, cb=callback_attr: (getattr(self, cb, None) or (lambda: None))())
-            btn_layout.addWidget(btn)
+        btn_run.setCursor(Qt.PointingHandCursor)
+        btn_run.clicked.connect(lambda checked, cb="_on_run": (getattr(self, cb, None) or (lambda: None))())
+        btn_layout.addWidget(btn_run)
+
+        # Edit
+        btn_edit = QPushButton("✎ Edit")
+        btn_edit.setStyleSheet(
+            f"QPushButton {{"
+            f"  background: transparent;"
+            f"  border: 1px solid rgba(255, 255, 255, 0.05);"
+            f"  border-radius: 4px;"
+            f"  color: {_qss_color(FG_MUTED)};"
+            f"  padding: 2px 8px;"
+            f"  font-size: 10px;"
+            f"}}"
+            f"QPushButton:hover {{"
+            f"  border-color: rgba(255, 255, 255, 0.15);"
+            f"  color: {_qss_color(FG)};"
+            f"}}"
+        )
+        btn_edit.setCursor(Qt.PointingHandCursor)
+        btn_edit.clicked.connect(lambda checked, cb="_on_edit": (getattr(self, cb, None) or (lambda: None))())
+        btn_layout.addWidget(btn_edit)
+
+        # Delete
+        btn_delete = QPushButton("✕ Delete")
+        btn_delete.setStyleSheet(
+            f"QPushButton {{"
+            f"  background: transparent;"
+            f"  border: 1px solid transparent;"
+            f"  border-radius: 4px;"
+            f"  color: {_qss_color(FG_DIM)};"
+            f"  padding: 2px 8px;"
+            f"  font-size: 10px;"
+            f"}}"
+            f"QPushButton:hover {{"
+            f"  color: #f87171;"
+            f"  border-color: rgba(248, 113, 113, 0.20);"
+            f"}}"
+        )
+        btn_delete.setCursor(Qt.PointingHandCursor)
+        btn_delete.clicked.connect(lambda checked, cb="_on_delete": (getattr(self, cb, None) or (lambda: None))())
+        btn_layout.addWidget(btn_delete)
+
         layout.addLayout(btn_layout)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
