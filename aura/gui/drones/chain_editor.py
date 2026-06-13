@@ -24,7 +24,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from aura.drones.build_spec import BuildSpec
 from aura.drones.chain import ChainDefinition
 from aura.drones.chain_store import _chain_from_dict, delete_chain, load_chain, save_chain
 from aura.drones.definition import DroneDefinition
@@ -37,7 +36,6 @@ from aura.gui.drones.chain_canvas import (
     GoalPlanetItem,
     MissionCoreItem,
 )
-from aura.gui.drones.drone_workshop_panel import DroneWorkshopPanel
 from aura.gui.drones.workflow_list_pane import WorkflowListPane
 
 logger = logging.getLogger(__name__)
@@ -337,7 +335,7 @@ class _DroneRosterWidget(QScrollArea):
                 item.widget().deleteLater()
         drones = DroneStore.list_drones(self._workspace_root)
         if not drones:
-            empty = QLabel("No drones saved yet.\nClick + New Drone to build one.")
+            empty = QLabel("No drones saved yet. Ask Aura: /drone make a repo scout.")
             empty.setWordWrap(True)
             empty.setStyleSheet(f"color: {_qss_color(FG_MUTED)}; font-size: 11px; padding: 8px;")
             self._layout.insertWidget(self._layout.count() - 1, empty)
@@ -804,7 +802,6 @@ class ChainEditor(QWidget):
     closeRequested = Signal()
     runChainRequested = Signal(str)
     goBackRequested = Signal()
-    settle_draft_requested = Signal(dict)
     runDroneRequested = Signal(str)
     editDroneRequested = Signal(str)
     deleteDroneRequested = Signal(str)
@@ -833,11 +830,6 @@ class ChainEditor(QWidget):
         self._chain_desc = ""
         self._auto_route = False
         self._dirty = False
-        self._workshop_draft_node_id: str | None = None
-        self._workshop_container: QWidget | None = None
-        self._workshop_panel: DroneWorkshopPanel | None = None
-        self._ws_draft_label: QLabel | None = None
-        self._ws_contracts_label: QLabel | None = None
         self._roster: _DroneRosterWidget | None = None
         self._property_panel: _PropertyPanel | None = None
         self._right_stack: QStackedWidget | None = None
@@ -893,22 +885,13 @@ class ChainEditor(QWidget):
         layout.setContentsMargins(0, 4, 0, 0)
         layout.setSpacing(0)
 
-        # Header row: "Drones" + "+ New Drone"
+        # Header row
         header_row = QHBoxLayout()
         header_row.setContentsMargins(8, 2, 8, 4)
         drones_label = QLabel("Drones")
         drones_label.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {_qss_color(FG)}; padding: 0;")
         header_row.addWidget(drones_label)
         header_row.addStretch()
-        new_drone_btn = QPushButton("+ New Drone")
-        new_drone_btn.setFlat(True)
-        new_drone_btn.setCursor(Qt.PointingHandCursor)
-        new_drone_btn.setStyleSheet(
-            f"QPushButton {{ color: {_qss_color(ACCENT)}; font-size: 11px; font-weight: bold; padding: 2px 6px; border: none; }}"
-            f"QPushButton:hover {{ color: {_qss_color(FG)}; }}"
-        )
-        new_drone_btn.clicked.connect(self._on_new_drone_clicked)
-        header_row.addWidget(new_drone_btn)
         layout.addLayout(header_row)
 
         # Roster
@@ -1300,17 +1283,7 @@ class ChainEditor(QWidget):
             self._splitter.setSizes([220, w, 280])
             return
 
-        if node_items:
-            node = node_items[0]
-            if node.is_draft:
-                self._ensure_workshop_panel()
-                self._show_workshop_for_draft(node)
-                self._right_stack.setCurrentIndex(1)
-                w = max(300, self.width() - 500)
-                self._splitter.setSizes([220, w, 280])
-                return
-
-        # Non-draft node or edge: show property panel
+        # Node or edge: show property panel
         self._right_stack.setCurrentIndex(0)
         self._property_panel.rebuild()
         w = max(300, self.width() - 500)
@@ -1322,99 +1295,6 @@ class ChainEditor(QWidget):
         sizes = self._splitter.sizes()
         if len(sizes) >= 3:
             self._splitter.setSizes([sizes[0], sizes[0] + sizes[1] + sizes[2], 0])
-
-    # ------------------------------------------------------------------
-    # Workshop panel (lazy, right panel page 1)
-    # ------------------------------------------------------------------
-    def _ensure_workshop_panel(self) -> QWidget:
-        if self._workshop_container is not None:
-            return self._workshop_container
-
-        container = QWidget()
-        layout = QVBoxLayout(container)
-        layout.setContentsMargins(6, 6, 6, 6)
-        layout.setSpacing(4)
-
-        # Back button
-        back_btn = QPushButton("\u2190 Back")
-        back_btn.setFlat(True)
-        back_btn.setCursor(Qt.PointingHandCursor)
-        back_btn.setStyleSheet(
-            f"QPushButton {{ color: {_qss_color(FG_MUTED)}; text-align: left; padding: 2px; }}"
-            f"QPushButton:hover {{ color: {_qss_color(ACCENT)}; }}"
-        )
-        back_btn.clicked.connect(self._on_back_to_palette)
-        layout.addWidget(back_btn)
-
-        # Workshop header
-        ws_header = QLabel("Drone Workshop")
-        ws_header.setStyleSheet(f"font-size: 13px; font-weight: bold; color: {_qss_color(FG)}; padding: 2px 0;")
-        layout.addWidget(ws_header)
-
-        # Draft info header
-        self._ws_draft_label = QLabel()
-        self._ws_draft_label.setWordWrap(True)
-        self._ws_draft_label.setStyleSheet("font-weight: bold; font-size: 13px;")
-        layout.addWidget(self._ws_draft_label)
-
-        self._ws_contracts_label = QLabel()
-        self._ws_contracts_label.setWordWrap(True)
-        self._ws_contracts_label.setStyleSheet(f"color: {_qss_color(FG_MUTED)}; font-size: 11px;")
-        layout.addWidget(self._ws_contracts_label)
-
-        # Workshop panel
-        self._workshop_panel = DroneWorkshopPanel(
-            workspace_root=self._workspace_root,
-            provider_id=self._provider_id,
-            model=self._model,
-            thinking=self._thinking,
-            temperature=self._temperature,
-            parent=self,
-        )
-        self._workshop_panel.drone_build_requested.connect(self._on_workshop_build_requested)
-        self._workshop_panel.cancelled_and_back_requested.connect(self._on_back_to_palette)
-        layout.addWidget(self._workshop_panel, 1)
-
-        self._workshop_container = container
-        self._right_stack.addWidget(container)  # page 1
-        return container
-
-    def _show_workshop_for_draft(self, draft_node: ChainNodeItem) -> None:
-        if draft_node.node_id not in self._canvas._nodes:
-            return
-        self._ensure_workshop_panel()
-        if draft_node.node_id != self._workshop_draft_node_id:
-            self._workshop_panel.reset_workshop_state()
-        name = draft_node.draft_name or "Untitled Drone"
-        accepts = draft_node.draft_accepts or "any"
-        produces = draft_node.draft_produces or "any"
-        self._workshop_draft_node_id = draft_node.node_id
-        self._ws_draft_label.setText(f"Building: {name}")
-        self._ws_contracts_label.setText(f"In: {accepts}  ·  Out: {produces}")
-
-    def _on_workshop_build_requested(self, spec: BuildSpec) -> None:
-        """Workshop has produced a build spec — settle the draft node."""
-        self.settle_draft_node(spec)
-
-    def _on_back_to_palette(self) -> None:
-        """Clear selection and hide right panel."""
-        self._workshop_draft_node_id = None
-        if self._workshop_panel is not None:
-            self._workshop_panel.reset_workshop_state()
-        self._canvas._scene.clearSelection()
-        sizes = self._splitter.sizes()
-        if len(sizes) >= 3:
-            self._splitter.setSizes([sizes[0], sizes[0] + sizes[1] + sizes[2], 0])
-
-    # ------------------------------------------------------------------
-    # Drone roster interactions
-    # ------------------------------------------------------------------
-    def _on_new_drone_clicked(self) -> None:
-        """Create a draft node on the canvas and open workshop in the right panel."""
-        draft = self._canvas.create_draft_node("Untitled Drone", "any", "any")
-        self._canvas._scene.clearSelection()
-        draft.setSelected(True)
-        self._on_selection_changed()
 
     def _on_new_workflow_from_list(self) -> None:
         choice = self._prompt_save_changes()
@@ -1463,30 +1343,6 @@ class ChainEditor(QWidget):
 
         if dlg.exec() == QDialog.DialogCode.Accepted and result_chain_id[0]:
             self._load_or_create_chain(result_chain_id[0])
-
-    # ------------------------------------------------------------------
-    # Settle draft node into a real drone
-    # ------------------------------------------------------------------
-    def settle_draft_node(self, spec: BuildSpec) -> None:
-        draft_id = self._workshop_draft_node_id
-        if draft_id is None or draft_id not in self._canvas._nodes:
-            return
-        node = self._canvas._nodes[draft_id]
-        node._is_draft = False
-        node.goal_template = spec.goal_template
-
-        drone_def = DroneStore.load_drone(self._workspace_root, spec.drone_id)
-        if drone_def is not None:
-            node._drone = drone_def
-
-        node.update()
-        self._workshop_draft_node_id = None
-        self._canvas._scene.clearSelection()
-        node.setSelected(True)
-        self._roster.populate()
-        self._on_selection_changed()
-        drone_name = node._drone.name if node._drone else "?"
-        self.set_status(f"Drone settled: {drone_name}", "ok")
 
     # ------------------------------------------------------------------
     # Run / Delete

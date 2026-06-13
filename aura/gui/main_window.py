@@ -196,9 +196,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._toolbar.maximize_requested.connect(self._toggle_maximize)
         self._toolbar.close_requested.connect(self.close)
 
-        # Draft settlement state (chain editor workshop → Planner/Worker → real Drone)
-        self._pending_draft_settle: tuple | None = None  # (editor: ChainEditor, draft_node_id: str)
-
         # ----- status bar -----
         self._status_bar = AuraStatusBar(self)
         self.setStatusBar(self._status_bar)
@@ -774,7 +771,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         editor = workbay.chain_editor
         editor.goBackRequested.connect(workbay.hide)
         editor.closeRequested.connect(workbay.hide)
-        editor.settle_draft_requested.connect(self._on_chain_editor_settle_draft)
         editor.runChainRequested.connect(lambda cid: self._on_run_workflow(cid))
         editor.runDroneRequested.connect(self._on_launch_drone)
         editor.editDroneRequested.connect(self._on_edit_drone)
@@ -844,29 +840,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             "Drone Build Brief",
             "Building Drone from approved Workshop brief.",
         )
-
-        payload = SendPayload(text=prompt, attachments=[])
-        self._send_handler.handle_send(payload, self.current_model(), self.current_thinking())
-
-    def _on_chain_editor_settle_draft(self, payload: dict) -> None:
-        brief = payload["brief"]       # DroneBuildBrief
-        draft_node_id = payload["draft_node_id"]  # str
-
-        editor = self.sender()
-        if not isinstance(editor, ChainEditor):
-            logger.warning("settle_draft_requested from unexpected sender")
-            return
-
-        self._pending_draft_settle = (editor, draft_node_id)
-
-        # Read contract context from the draft node
-        draft_node = editor._canvas._nodes.get(draft_node_id)
-        accepts = draft_node.draft_accepts if draft_node and draft_node.is_draft else ""
-        produces = draft_node.draft_produces if draft_node and draft_node.is_draft else ""
-
-        editor.set_status("Building drone…", QColor("#9b8bb5"))
-
-        prompt = build_drone_creation_prompt(brief, accepts=accepts, produces=produces)
 
         payload = SendPayload(text=prompt, attachments=[])
         self._send_handler.handle_send(payload, self.current_model(), self.current_thinking())
@@ -1253,7 +1226,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         editor = workbay.chain_editor
         editor.goBackRequested.connect(workbay.hide)
         editor.closeRequested.connect(workbay.hide)
-        editor.settle_draft_requested.connect(self._on_chain_editor_settle_draft)
 
         def on_run(cid: str) -> None:
             self._on_run_workflow(cid)
@@ -1882,15 +1854,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._input.focus_editor()
         self._send_handler.process_message_queue(self.current_model(), self.current_thinking())
 
-        # Clear any stale draft settlement that didn't receive a save_drone_definition result
-        if self._pending_draft_settle is not None:
-            editor, draft_node_id = self._pending_draft_settle
-            self._pending_draft_settle = None
-            try:
-                editor.set_status("Build incomplete — no drone saved.", DANGER)
-            except Exception:
-                logger.debug("Could not set stale draft settlement status", exc_info=True)
-
     def _on_stream_done(self, finish_reason: str, full_message: dict) -> None:
         # If the model produced tool calls, it's not actually done — the bridge
         # will execute them and loop back. Keep the aura alive.
@@ -1966,36 +1929,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
         if ok and name == "summon_drone" and extras.get("summon_drone"):
             self._handle_summon_drone_result(tool_id, extras)
-
-        # --- Draft settlement: consume pending state immediately ---
-        if name == "save_drone_definition" and self._pending_draft_settle is not None:
-            editor, draft_node_id = self._pending_draft_settle
-            self._pending_draft_settle = None
-            drone_id = extras.get("drone_id")
-            if not ok or not extras.get("drone_saved") or not drone_id:
-                # Save was malformed or failed — leave draft in place
-                try:
-                    editor.set_status("Build failed — check conversation", DANGER)
-                except Exception:
-                    logger.debug("Could not set draft settlement status", exc_info=True)
-            else:
-                # Valid save — load and settle the draft node
-                try:
-                    drone_def = DroneStore.load_drone(self._workspace_root, drone_id)
-                    if drone_def is None:
-                        logger.warning(f"Cannot settle draft {draft_node_id}: drone {drone_id!r} not loadable")
-                        editor.set_status("Build failed — check conversation", DANGER)
-                    else:
-                        success = editor.settle_draft_node(draft_node_id, drone_def)
-                        if not success:
-                            logger.warning(f"Cannot settle draft {draft_node_id}: settle_draft_node returned False")
-                            editor.set_status("Build failed — check conversation", DANGER)
-                except Exception:
-                    logger.exception("Error settling draft node")
-                    try:
-                        editor.set_status("Build failed — check conversation", DANGER)
-                    except Exception:
-                        logger.debug("Could not set draft settlement status", exc_info=True)
 
         # Normal Drone Bay refresh for successful saves
         if ok and name == "save_drone_definition" and extras.get("drone_saved"):

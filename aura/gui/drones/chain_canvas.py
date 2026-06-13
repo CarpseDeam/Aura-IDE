@@ -1127,13 +1127,9 @@ class ChainEdgeItem(QGraphicsPathItem):
 
     def contextMenuEvent(self, event) -> None:
         menu = QMenu()
-        insert_action = menu.addAction("Insert Drone Between")
-        menu.addSeparator()
         delete_action = menu.addAction("Delete Edge")
         action = menu.exec(event.screenPos())
-        if action == insert_action:
-            self._canvas._canvas_insert_draft_between(self._source_port.parent_node, self._target_port.parent_node)
-        elif action == delete_action:
+        if action == delete_action:
             self._canvas._remove_edge(self)
 
     def hoverEnterEvent(self, event) -> None:
@@ -1508,87 +1504,12 @@ class ChainCanvas(QGraphicsView):
             super().dragMoveEvent(event)
 
     def dropEvent(self, event) -> None:
+        # Ignore drone drops on open canvas (drops on MissionCore/GoalPlanet
+        # are handled by those items' dropEvent).
         if event.mimeData().hasFormat("application/x-aura-drone-id"):
-            drone_id = bytes(event.mimeData().data("application/x-aura-drone-id")).decode("utf-8")
-            scene_pos = self.mapToScene(event.position().toPoint())
-            self._canvas_drop_drone(drone_id, scene_pos)
             event.acceptProposedAction()
         else:
             super().dropEvent(event)
-
-    def _canvas_drop_drone(self, drone_id: str, scene_pos: QPointF) -> None:
-        from aura.drones.store import DroneStore
-        drone = DroneStore.load_drone(self._get_workspace_root(), drone_id)
-        if drone is None:
-            return
-        node_id = f"{drone_id}-{uuid.uuid4().hex[:4]}"
-        item = ChainNodeItem(node_id=node_id, drone=drone, goal_template="", canvas=self)
-        item.setPos(scene_pos - QPointF(NODE_WIDTH / 2, NODE_HEIGHT / 2))
-        self._scene.addItem(item)
-        self._nodes[node_id] = item
-        self._scene.clearSelection()
-        item.setSelected(True)
-        self._update_empty_text()
-        self._fit_view()
-        self.canvasChanged.emit()
-
-    def _canvas_insert_draft_between(self, source_node: ChainNodeItem, target_node: ChainNodeItem) -> None:
-        edge_to_remove = None
-        for edge in self._edges:
-            if edge.from_node_id == source_node.node_id and edge.to_node_id == target_node.node_id:
-                edge_to_remove = edge
-                break
-        if edge_to_remove is None:
-            return
-        self._remove_edge(edge_to_remove)
-
-        if source_node.drone is not None:
-            draft_accepts = getattr(source_node.drone, "produces", "") or ""
-        elif source_node.is_draft:
-            draft_accepts = source_node.draft_produces or ""
-        else:
-            draft_accepts = ""
-
-        if target_node.drone is not None:
-            draft_produces = getattr(target_node.drone, "accepts", "") or ""
-        elif target_node.is_draft:
-            draft_produces = target_node.draft_accepts or ""
-        else:
-            draft_produces = ""
-
-        src_center = source_node.pos() + QPointF(NODE_WIDTH / 2, NODE_HEIGHT / 2)
-        tgt_center = target_node.pos() + QPointF(NODE_WIDTH / 2, NODE_HEIGHT / 2)
-        center = QPointF((src_center.x() + tgt_center.x()) / 2, (src_center.y() + tgt_center.y()) / 2)
-        draft_pos = center - QPointF(NODE_WIDTH / 2, NODE_HEIGHT / 2)
-
-        node_id = f"draft-{uuid.uuid4().hex[:8]}"
-        item = ChainNodeItem(
-            node_id=node_id,
-            drone=None,
-            goal_template="",
-            canvas=self,
-            is_draft=True,
-            draft_name="Untitled Drone",
-            draft_accepts=draft_accepts,
-            draft_produces=draft_produces,
-        )
-        item.setPos(draft_pos)
-        self._scene.addItem(item)
-        self._nodes[node_id] = item
-
-        edge1 = ChainEdgeItem(source_port=source_node.output_port, target_port=item.input_port, canvas=self)
-        self._scene.addItem(edge1)
-        self._edges.append(edge1)
-
-        edge2 = ChainEdgeItem(source_port=item.output_port, target_port=target_node.input_port, canvas=self)
-        self._scene.addItem(edge2)
-        self._edges.append(edge2)
-
-        self._scene.clearSelection()
-        item.setSelected(True)
-
-        self._update_empty_text()
-        self.canvasChanged.emit()
 
     def _get_workspace_root(self) -> Path:
         """Walk up parents to find ChainEditor's workspace_root."""
@@ -1667,52 +1588,13 @@ class ChainCanvas(QGraphicsView):
             add_goal_action = menu.addAction("Add Goal Planet")
             if self._goal_planet is not None:
                 add_goal_action.setEnabled(False)
-            add_drone_action = menu.addAction("Add Drone")
             action = menu.exec(event.globalPos())
             if action == add_mission_action:
                 self._canvas_add_mission_core(scene_pos)
             elif action == add_goal_action:
                 self._canvas_add_goal_planet(scene_pos)
-            elif action == add_drone_action:
-                self._canvas_add_draft_node(scene_pos)
             return
         super().contextMenuEvent(event)
-
-    def _canvas_add_draft_node(
-        self,
-        scene_pos: QPointF,
-        draft_name: str = "Untitled Drone",
-        draft_accepts: str = "",
-        draft_produces: str = "",
-    ) -> ChainNodeItem:
-        node_id = f"draft-{uuid.uuid4().hex[:8]}"
-        item = ChainNodeItem(
-            node_id=node_id,
-            drone=None,
-            goal_template="",
-            canvas=self,
-            is_draft=True,
-            draft_name=draft_name,
-            draft_accepts=draft_accepts,
-            draft_produces=draft_produces,
-        )
-        item.setPos(scene_pos - QPointF(NODE_WIDTH / 2, NODE_HEIGHT / 2))
-        self._scene.addItem(item)
-        self._nodes[node_id] = item
-        self._update_empty_text()
-        self._scene.clearSelection()
-        item.setSelected(True)
-        self.canvasChanged.emit()
-        return item
-
-    def create_draft_node(
-        self,
-        name: str = "Untitled Drone",
-        accepts: str = "any",
-        produces: str = "any",
-    ) -> ChainNodeItem:
-        center = self.mapToScene(self.viewport().rect().center())
-        return self._canvas_add_draft_node(center, draft_name=name, draft_accepts=accepts, draft_produces=produces)
 
     # ---- Mission core ----
 
