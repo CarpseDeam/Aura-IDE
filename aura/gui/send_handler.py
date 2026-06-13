@@ -6,6 +6,7 @@ execution. Delegates to the bridge, chat view, and input panel.
 
 from __future__ import annotations
 
+import re
 import threading
 from pathlib import Path
 
