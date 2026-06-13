@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import math
 import time
 import uuid
@@ -36,6 +37,8 @@ from aura.gui.theme import (
     FG_MUTED,
 )
 
+logger = logging.getLogger(__name__)
+
 NODE_WIDTH = 252
 NODE_HEIGHT = 76
 PORT_RADIUS = 3
@@ -55,6 +58,21 @@ def _qt_color(value, fallback="#ffffff"):
     if not color.isValid():
         color = QColor(fallback)
     return color
+
+
+def _is_valid_item(item) -> bool:
+    """Return True if the PySide6 C++ object backing item is still alive."""
+    if item is None:
+        return False
+    try:
+        import shiboken6
+        return shiboken6.isValid(item)
+    except Exception:
+        # shiboken6 unavailable — fall back to scene membership as a proxy
+        try:
+            return item.scene() is not None
+        except Exception:
+            return False
 
 
 class PortItem(QGraphicsItem):
@@ -1770,22 +1788,43 @@ class ChainCanvas(QGraphicsView):
 
     def drawForeground(self, painter: QPainter, rect: QRectF) -> None:
         """Draw assignment connection lines from Mothership to assignments."""
-        if self._mission_core is None:
-            return
-        source_pos = self._mission_core.pos()
-        source_right = source_pos + QPointF(MISSION_CORE_WIDTH / 2, 0)
-        painter.save()
-        pen = QPen(_qt_color(ACCENT))
-        pen.setAlpha(25)
-        pen.setWidthF(0.5)
-        pen.setStyle(Qt.PenStyle.DashLine)
-        painter.setPen(pen)
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        for node in self._nodes.values():
-            if node.is_assignment:
-                node_left_center = node.pos() + QPointF(0, ASSIGNMENT_HEIGHT / 2)
-                painter.drawLine(source_right, node_left_center)
-        painter.restore()
+        _saved = False
+        try:
+            mc = self._mission_core
+            if not _is_valid_item(mc):
+                return
+            if mc.scene() is None:
+                return
+
+            mc_rect = mc.sceneBoundingRect()
+            source_pt = QPointF(mc_rect.right(), mc_rect.center().y())
+
+            painter.save()
+            _saved = True
+
+            line_color = _qt_color(ACCENT)
+            line_color.setAlpha(25)
+            pen = QPen(line_color)
+            pen.setWidthF(0.5)
+            pen.setStyle(Qt.PenStyle.DashLine)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+
+            for node in list(self._nodes.values()):
+                if not _is_valid_item(node):
+                    continue
+                if node.scene() is None:
+                    continue
+                if not node.is_assignment:
+                    continue
+                node_rect = node.sceneBoundingRect()
+                target_pt = QPointF(node_rect.left(), node_rect.center().y())
+                painter.drawLine(source_pt, target_pt)
+        except Exception:
+            logger.exception("drawForeground error — suppressed to protect Qt paint cycle")
+        finally:
+            if _saved:
+                painter.restore()
 
     def _build_space_cache(self, size) -> QPixmap:
         import random
