@@ -40,12 +40,8 @@ from aura.conversation.tools.catalog import ToolCatalog
 from aura.conversation.tools.dynamic_registry import DynamicToolRegistry
 from aura.conversation.tools.executor import ToolExecutor
 from aura.conversation.tools.find_usages import find_usages  # noqa: F401
-from aura.conversation.tools.fs_edit_structured import propose_edit_symbol  # noqa: F401
-from aura.conversation.tools.fs_edit_transaction import propose_edit_transaction  # noqa: F401
 from aura.conversation.tools.fs_handler import FsReadHandler
 from aura.conversation.tools.fs_write import (  # noqa: F401
-    propose_edit,
-    propose_line_range_edit,
     propose_patch_file,
     propose_write,
 )
@@ -242,10 +238,6 @@ TOOL_HANDLERS["web_search"] = ToolRegistry._handle_web_search
 TOOL_HANDLERS["web_fetch"] = ToolRegistry._handle_web_fetch
 TOOL_HANDLERS["write_file"] = ToolRegistry._handle_write_file
 TOOL_HANDLERS["delete_file"] = ToolRegistry._handle_delete_file
-TOOL_HANDLERS["apply_edit_transaction"] = ToolRegistry._handle_apply_edit_transaction
-TOOL_HANDLERS["edit_file"] = ToolRegistry._handle_edit_file
-TOOL_HANDLERS["edit_symbol"] = ToolRegistry._handle_edit_symbol
-TOOL_HANDLERS["edit_line_range"] = ToolRegistry._handle_edit_line_range
 TOOL_HANDLERS["patch_file"] = ToolRegistry._handle_patch_file
 TOOL_HANDLERS["update_todo_list"] = ToolRegistry._handle_update_todo_list
 TOOL_HANDLERS["search_project_memory"] = ToolRegistry._handle_search_project_memory

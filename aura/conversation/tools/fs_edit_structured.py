@@ -192,7 +192,7 @@ def propose_edit_symbol(
             "old_content": "",
             "new_content": "",
             "is_new_file": False,
-            "error": "edit_symbol only supports Python (.py) files. Use edit_file for other languages.",
+            "error": "edit_symbol only supports Python (.py) files. Use patch_file for other languages.",
             "failure_class": "path_error",
         }
 
@@ -238,9 +238,9 @@ def propose_edit_symbol(
         available = info.get("available_symbols", {})
         has_symbols = any(available.values())
         error_extra = info.get("error", f"Symbol '{symbol_name}' not found")
-        suggested_tool = "edit_line_range" if has_symbols else "write_file"
+        suggested_tool = "patch_file" if has_symbols else "write_file"
         suggested_next_action = (
-            "Use read_file_outline or read_file to inspect available symbols, then use edit_line_range with exact line numbers."
+            "Use read_file_outline or read_file to inspect available symbols, then use patch_file with current exact text."
             if has_symbols
             else "No parseable symbols were available. Use write_file for a full-file repair or replacement."
         )
@@ -261,7 +261,7 @@ def propose_edit_symbol(
             "suggested_next_action": suggested_next_action,
             "available_symbols": available,
             "suggested_fallback": (
-                "read_file_outline/read_file then edit_line_range"
+                "read_file_outline/read_file then patch_file"
                 if has_symbols
                 else "write_file"
             ),
@@ -317,8 +317,8 @@ def propose_edit_symbol(
             "symbol_type": symbol_type,
             "symbol_name": symbol_name,
             "class_name": class_name,
-            "suggested_tool": "edit_symbol",
-            "suggested_next_tool": "edit_symbol",
+            "suggested_tool": "patch_file",
+            "suggested_next_tool": "patch_file",
             "suggested_next_action": "Repair the replacement syntax before any unrelated tool call.",
         }
 

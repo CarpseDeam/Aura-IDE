@@ -325,7 +325,7 @@ def _build_selection_prompt(
             "Use existing Aura file-edit tools and normal diff approval for any modification."
         )
         instructions.append(
-            "For Python whole function/class/method selections, prefer edit_symbol when appropriate; otherwise prefer edit_file over write_file."
+            "For existing-file modifications, read the file and use patch_file with exact replacement hunks; use write_file only for new files or intentional full-file replacement."
         )
 
     if ctx.selection_truncated:

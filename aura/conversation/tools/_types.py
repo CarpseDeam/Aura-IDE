@@ -14,7 +14,7 @@ RegistryMode = Literal["single", "planner", "worker", "researcher"]
 class ApprovalRequest:
     """Passed to approval_cb when a write is proposed."""
 
-    tool_name: str  # "write_file" or "edit_file"
+    tool_name: str  # e.g. "write_file" or "patch_file"
     rel_path: str
     old_content: str
     new_content: str

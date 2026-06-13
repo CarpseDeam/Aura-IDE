@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import hashlib
 from dataclasses import dataclass
 from typing import Any
 
@@ -124,42 +123,7 @@ def _tool_key(tool_name: str, args: dict[str, Any]) -> str:
     if tool_name == "run_terminal_command":
         command = args.get("command", "")
         return f"terminal:{command}"
-    if tool_name == "apply_edit_transaction":
-        return f"{tool_name}:{json.dumps(_apply_edit_transaction_signature(args), sort_keys=True, ensure_ascii=False)}"
     return f"{tool_name}:{args_json}"
-
-
-def _apply_edit_transaction_signature(args: dict[str, Any]) -> dict[str, Any]:
-    operations = args.get("operations")
-    markers: list[dict[str, Any]] = []
-    if isinstance(operations, list):
-        for op in operations:
-            if not isinstance(op, dict):
-                markers.append({"op": "invalid"})
-                continue
-            kind = str(op.get("op") or op.get("type") or "")
-            marker: dict[str, Any] = {
-                "op": kind,
-                "symbol_type": op.get("symbol_type"),
-                "symbol_name": op.get("symbol_name") or op.get("function_name") or op.get("method_name") or op.get("name"),
-                "class_name": op.get("class_name"),
-                "occurrence": op.get("occurrence"),
-                "allow_multiple": op.get("allow_multiple"),
-            }
-            for source_key, marker_key in (
-                ("old", "old_hash"),
-                ("new", "new_hash"),
-                ("text", "text_hash"),
-                ("new_definition", "new_definition_hash"),
-                ("content", "content_hash"),
-                ("start_marker", "start_marker_hash"),
-                ("end_marker", "end_marker_hash"),
-            ):
-                value = op.get(source_key)
-                if isinstance(value, str):
-                    marker[marker_key] = hashlib.sha256(value.encode("utf-8", errors="replace")).hexdigest()
-            markers.append({k: v for k, v in marker.items() if v not in (None, "")})
-    return {"path": args.get("path"), "operations": markers}
 
 
 def _annotate_content(content: str, info: dict[str, Any]) -> str:

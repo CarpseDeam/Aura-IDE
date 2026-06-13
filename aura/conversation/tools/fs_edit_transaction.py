@@ -128,7 +128,7 @@ def _exact_text_failure(
             "Provide occurrence to target one match, set allow_multiple true "
             "when replacing all matches is intended, or make the old/context block unique."
             if ambiguous
-            else "Re-read the file and submit one corrected apply_edit_transaction."
+            else "Re-read the file and submit one corrected patch_file."
         ),
     }
 

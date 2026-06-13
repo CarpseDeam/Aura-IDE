@@ -1,4 +1,4 @@
-"""Approval-gated write tools: write_file, edit_file, patch_file."""
+"""Approval-gated write helpers for write_file and patch_file."""
 from __future__ import annotations
 
 import difflib
@@ -50,7 +50,7 @@ def _stale_line_range_payload(
         "edit_mechanics_stale_line_range",
         suggested_tool="read_file",
         suggested_next_tool="read_file",
-        suggested_next_action="Re-read the file, then retry edit_line_range with corrected line numbers.",
+        suggested_next_action="Re-read the file, then retry patch_file with current exact text.",
         start_line=start_line,
         end_line=end_line,
     )
@@ -214,8 +214,8 @@ def propose_line_range_edit(
                 target,
                 f"replacement produces invalid Python: {exc}",
                 "syntax_invalid",
-                suggested_tool="edit_line_range",
-                suggested_next_tool="edit_line_range",
+                suggested_tool="patch_file",
+                suggested_next_tool="patch_file",
                 suggested_next_action="Repair the Python syntax in this file before any unrelated tool call.",
                 start_line=start_line,
                 end_line=end_line,
@@ -1009,9 +1009,9 @@ def propose_edit(
         "error": str(match.get("error") or "old_str not found in file."),
         "failure_class": failure_class,
         "edit_file_failure": True,
-        "suggested_tool": "edit_line_range",
-        "suggested_next_tool": "edit_line_range",
-        "suggested_next_action": "Re-read the file to see the actual content, then use edit_line_range with the exact line numbers you can see.",
+        "suggested_tool": "patch_file",
+        "suggested_next_tool": "patch_file",
+        "suggested_next_action": "Re-read the file to see the actual content, then use patch_file with current exact text.",
     }
     for key in (
         "best_fuzzy_ratio",

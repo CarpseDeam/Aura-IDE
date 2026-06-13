@@ -15,10 +15,6 @@ RegistryMode = Literal["single", "planner", "worker", "researcher"]
 WRITE_TOOLS = {
     "write_file",
     "delete_file",
-    "apply_edit_transaction",
-    "edit_file",
-    "edit_symbol",
-    "edit_line_range",
     "patch_file",
 }
 TERMINAL_TOOLS = {"run_terminal_command"}
