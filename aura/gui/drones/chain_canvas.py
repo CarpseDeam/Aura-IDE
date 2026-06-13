@@ -75,6 +75,31 @@ def _is_valid_item(item) -> bool:
             return False
 
 
+def _populate_planet_from_drone(drone: DroneDefinition) -> tuple[str, str]:
+    """Derive a deterministic (title, objective) pair from a DroneDefinition."""
+    if drone.name:
+        title = f"{drone.name} Target"
+    else:
+        desc_words = (drone.description or "").split()
+        if desc_words:
+            title = " ".join(desc_words[:5])
+        else:
+            title = "Mission Goal"
+
+    if drone.description:
+        objective = drone.description
+    elif drone.output_contract:
+        objective = drone.output_contract
+    elif drone.instructions:
+        objective = drone.instructions
+    elif drone.name:
+        objective = f"Complete the mission for {drone.name}"
+    else:
+        objective = "Complete the assigned task"
+
+    return title, objective
+
+
 class PortItem(QGraphicsItem):
     """Small circular port attached to a ChainNodeItem — input or output."""
 
@@ -1585,8 +1610,10 @@ class ChainCanvas(QGraphicsView):
         if event.mimeData().hasFormat("application/x-aura-drone-id"):
             drone_id = bytes(event.mimeData().data("application/x-aura-drone-id")).decode("utf-8")
             # Route background canvas drop to mission core if available
-            if self._mission_core is not None:
-                self._handle_mission_core_drop(self._mission_core, drone_id)
+            if self._mission_core is None:
+                scene_pos = self.mapToScene(event.position().toPoint())
+                self._canvas_add_mission_core(scene_pos)
+            self._handle_mission_core_drop(self._mission_core, drone_id)
             event.acceptProposedAction()
         else:
             super().dropEvent(event)
@@ -1696,6 +1723,9 @@ class ChainCanvas(QGraphicsView):
         self.canvasChanged.emit()
 
     def _canvas_add_goal_planet(self, scene_pos: QPointF) -> None:
+        self._canvas_add_goal_planet_with_data(scene_pos)
+
+    def _canvas_add_goal_planet_with_data(self, scene_pos: QPointF, title: str = "", objective: str = "") -> GoalPlanetItem:
         goal_id = f"goal-{uuid.uuid4().hex[:6]}"
         gp_item = GoalPlanetItem(
             node_id=f"goal-planet-{uuid.uuid4().hex[:4]}",
@@ -1703,36 +1733,41 @@ class ChainCanvas(QGraphicsView):
             goal_id=goal_id,
         )
         gp_item.setPos(scene_pos)
+        if title:
+            gp_item.title = title
+        if objective:
+            gp_item.objective = objective
         self._scene.addItem(gp_item)
         self._goal_planets[goal_id] = gp_item
         self._update_empty_text()
         self.canvasChanged.emit()
+        return gp_item
+    def _create_goal_planet_for_drone(self, drone: DroneDefinition) -> GoalPlanetItem:
+        title, objective = _populate_planet_from_drone(drone)
+        if self._mission_core is not None:
+            mc_pos = self._mission_core.pos()
+            base_x = mc_pos.x() + 200
+            base_y = mc_pos.y() - 40
+        else:
+            base_x = 160
+            base_y = 0
+        scene_pos = QPointF(base_x, base_y + len(self._goal_planets) * 100)
+        return self._canvas_add_goal_planet_with_data(scene_pos, title, objective)
 
-    def _handle_mission_core_drop(self, mission_item: MissionCoreItem, drone_id: str) -> None:
-        from aura.drones.store import DroneStore
-        drone = DroneStore.load_drone(self._get_workspace_root(), drone_id)
-        if drone is None:
-            return
+    def _ensure_goal_for_drone(self, drone: DroneDefinition, preferred_goal_id: str = "") -> str:
+        if preferred_goal_id and preferred_goal_id in self._goal_planets:
+            return preferred_goal_id
+        selected = [gp for gp in self._goal_planets.values() if gp.isSelected()]
+        if len(selected) == 1:
+            return selected[0].goal_id
+        if len(self._goal_planets) == 1:
+            return next(iter(self._goal_planets))
+        return self._create_goal_planet_for_drone(drone).goal_id
 
-        # Determine target goal
-        goal_id = ""
-        if self._goal_planets:
-            # Use selected goal planet if exactly one is selected
-            selected_goals = [gp for gp in self._goal_planets.values() if gp.isSelected()]
-            if len(selected_goals) == 1:
-                goal_id = selected_goals[0].goal_id
-            elif len(self._goal_planets) == 1:
-                goal_id = next(iter(self._goal_planets.keys()))
-
-        # In multi-goal context, blank goal_id is invalid
-        if goal_id == "" and len(self._goal_planets) > 1:
-            self.statusMessage.emit(
-                "Select a Goal Planet or drop the Drone on a specific Goal Planet.",
-                "warning",
-            )
-            return
-
-        node_id = f"{drone_id}-{uuid.uuid4().hex[:4]}"
+    def _create_drone_assignment(self, drone: DroneDefinition, goal_id: str) -> ChainNodeItem:
+        if self._mission_core is None:
+            self._canvas_add_mission_core(QPointF(-160, 0))
+        node_id = f"{drone.id}-{uuid.uuid4().hex[:4]}"
         item = ChainNodeItem(
             node_id=node_id,
             drone=drone,
@@ -1741,49 +1776,35 @@ class ChainCanvas(QGraphicsView):
             is_assignment=True,
             goal_id=goal_id,
         )
-        # Stack assignments vertically to the right of the mission core
-        mc_pos = mission_item.pos()
+        mc = self._mission_core
+        mc_pos = mc.pos()
         assignment_index = sum(1 for n in self._nodes.values() if n.is_assignment)
         x = mc_pos.x() + MISSION_CORE_WIDTH / 2 + 4
         y = mc_pos.y() - MISSION_CORE_HEIGHT / 2 + 6 + assignment_index * (ASSIGNMENT_HEIGHT + 4)
         item.setPos(x, y)
         self._scene.addItem(item)
         self._nodes[node_id] = item
-        mission_item.add_assigned_drone(drone_id)
+        mc.add_assigned_drone(drone.id)
         self._scene.clearSelection()
         item.setSelected(True)
         self._update_empty_text()
         self.canvasChanged.emit()
+        return item
+
+    def _handle_mission_core_drop(self, mission_item: MissionCoreItem, drone_id: str) -> None:
+        from aura.drones.store import DroneStore
+        drone = DroneStore.load_drone(self._get_workspace_root(), drone_id)
+        if drone is None:
+            return
+        goal_id = self._ensure_goal_for_drone(drone, "")
+        self._create_drone_assignment(drone, goal_id)
 
     def _handle_goal_planet_drop(self, planet_item: GoalPlanetItem, drone_id: str) -> None:
         from aura.drones.store import DroneStore
         drone = DroneStore.load_drone(self._get_workspace_root(), drone_id)
         if drone is None:
             return
-
-        node_id = f"{drone_id}-{uuid.uuid4().hex[:4]}"
-        item = ChainNodeItem(
-            node_id=node_id,
-            drone=drone,
-            goal_template="",
-            canvas=self,
-            is_assignment=True,
-            goal_id=planet_item.goal_id,
-        )
-        # Position to the right of the goal planet
-        gp_pos = planet_item.pos()
-        assignment_index = sum(1 for n in self._nodes.values() if n.is_assignment and n.goal_id == planet_item.goal_id)
-        x = gp_pos.x() + 60
-        y = gp_pos.y() - 20 + assignment_index * (ASSIGNMENT_HEIGHT + 4)
-        item.setPos(x, y)
-        self._scene.addItem(item)
-        self._nodes[node_id] = item
-        if self._mission_core:
-            self._mission_core.add_assigned_drone(drone_id)
-        self._scene.clearSelection()
-        item.setSelected(True)
-        self._update_empty_text()
-        self.canvasChanged.emit()
+        self._create_drone_assignment(drone, planet_item.goal_id)
 
     # ---- Space background ----
 
