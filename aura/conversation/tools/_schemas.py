@@ -655,6 +655,8 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
                 "Write the given content to a workspace file. "
                 "Use this for new files, or for an intentional full-file replacement only. "
                 "For normal existing-file edits, read the file first and use patch_file instead. "
+                "For intentional whole-file replacement of an existing file, set full_replace_existing "
+                "to true and provide replacement_reason; these fields are not for patch_file failure recovery. "
                 "The user MUST approve every write through a diff dialog before it is applied. "
                 "Existing files are backed up before being overwritten."
             ),
@@ -668,6 +670,21 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
                     "content": {
                         "type": "string",
                         "description": "Full new file content.",
+                    },
+                    "full_replace_existing": {
+                        "type": "boolean",
+                        "description": (
+                            "Optional. Only for intentional whole-file replacement of an existing file; "
+                            "do not use this to recover from a failed patch_file edit."
+                        ),
+                        "default": False,
+                    },
+                    "replacement_reason": {
+                        "type": "string",
+                        "description": (
+                            "Required with full_replace_existing=true. Explain why this existing file "
+                            "must be replaced wholesale instead of patched."
+                        ),
                     },
                 },
                 "required": ["path", "content"],

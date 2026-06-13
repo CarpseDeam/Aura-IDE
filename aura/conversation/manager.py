@@ -105,13 +105,14 @@ TASK_COMPLETION_TOOL_NAMES = {
     "git_log_file",
 }
 
-SYNTAX_REPAIR_ALWAYS_ALLOWED = {
+WORKER_RECOVERY_ALWAYS_ALLOWED = {
     "read_file",
     "read_files",
+    "read_file_range",
     "read_file_outline",
     "grep_search",
-    "search_codebase",
     "find_usages",
+    "search_codebase",
     "list_directory",
     "glob",
     "git_status",
@@ -123,12 +124,14 @@ SYNTAX_REPAIR_ALWAYS_ALLOWED = {
     "get_workspace_snapshot",
 }
 
+SYNTAX_REPAIR_ALWAYS_ALLOWED = WORKER_RECOVERY_ALWAYS_ALLOWED
+
 ACTION_COMPLETION_TOOL_NAMES = TASK_COMPLETION_TOOL_NAMES | WRITE_TOOLS
 
 WORKER_EDIT_RECOVERY_INSTRUCTION = (
-    "Previous edit failed recoverably. Re-read the file, then use patch_file "
-    "for existing-file code changes or write_file only for a new file or intentional full replacement. "
-    "Do not switch between edit tools trying random tactics. "
+    "Previous edit failed recoverably. Re-read the affected file with read_file or read_file_range, "
+    "then retry patch_file once with corrected hunks and the current expected_file_hash. "
+    "Do not use write_file as a fallback for an existing-file edit. "
     "Finish only after the edit is applied and touched Python files pass py_compile."
 )
 
@@ -415,14 +418,13 @@ class ConversationManager:
                                 if any_repair_failed:
                                     instruction = (
                                         "Previous py_compile failed. Re-read the touched "
-                                        "Python file, repair it with patch_file or write_file only "
-                                        "for a new file or intentional full replacement, then run python -m py_compile again. "
+                                        "Python file, repair it with patch_file, then run python -m py_compile again. "
                                         "Finish only after py_compile passes."
                                     )
                                 else:
                                     instruction = (
                                         "Validation caught invalid Python in the following file(s). "
-                                        "Re-read the file, repair with patch_file (or write_file for new/full replacement), "
+                                        "Re-read the file, repair with patch_file, "
                                         "then run python -m py_compile. "
                                         "Finish only after py_compile passes."
                                     )
@@ -1088,6 +1090,8 @@ class ConversationManager:
         path = _normalize_worker_path(raw_path) if raw_path else ""
         worker_file_state = worker_file_state if worker_file_state is not None else {}
         patch_failed_cycles = patch_failed_cycles if patch_failed_cycles is not None else {}
+        if name in WORKER_RECOVERY_ALWAYS_ALLOWED:
+            return None
         syntax_paths = self._syntax_repair_paths(syntax_repair_required)
         if syntax_paths and not self._syntax_repair_tool_allowed(name, args, syntax_paths):
             target = sorted(syntax_paths)[0]
@@ -1110,8 +1114,9 @@ class ConversationManager:
                 error=error_msg,
                 suggested_next_tool="patch_file",
                 suggested_next_action=(
-                    "Repair the touched file, then run python -m py_compile on it before continuing validation. "
-                    "Use patch_file for existing files or write_file only for a new file or intentional full-file repair."
+                    "Re-read the file, inspect proposed_context if present, then submit one corrected "
+                    "patch_file transaction with the current expected_file_hash. Run py_compile after "
+                    "the patch is applied."
                 ),
                 recoverable=not repair_failed,
             )
@@ -1502,8 +1507,9 @@ class ConversationManager:
                 state["failed_repairs"] = int(state.get("failed_repairs", 0)) + 1
             parsed["suggested_next_tool"] = "patch_file"
             parsed["suggested_next_action"] = (
-                "Repair the touched file, then run python -m py_compile on it before continuing validation. "
-                "Use patch_file for existing files or write_file only for a new file or intentional full-file repair."
+                "Re-read the file, inspect proposed_context if present, then submit one corrected "
+                "patch_file transaction with the current expected_file_hash. Run py_compile after "
+                "the patch is applied."
             )
             if int(state.get("failed_repairs", 0)) > 1:
                 parsed["recoverable"] = False

@@ -36,6 +36,32 @@ def _failure_payload(
     return payload
 
 
+def _proposal_context(text: str, line: int | None, radius: int = 4) -> dict:
+    lines = str(text).splitlines()
+    error_line = line if isinstance(line, int) and line > 0 else None
+    if not lines:
+        return {
+            "error_line": error_line,
+            "start_line": 0,
+            "end_line": 0,
+            "lines": [],
+        }
+
+    context_line = min(error_line or 1, len(lines))
+    radius = max(0, radius)
+    start_line = max(1, context_line - radius)
+    end_line = min(len(lines), context_line + radius)
+    return {
+        "error_line": error_line,
+        "start_line": start_line,
+        "end_line": end_line,
+        "lines": [
+            {"line": number, "text": lines[number - 1]}
+            for number in range(start_line, end_line + 1)
+        ],
+    }
+
+
 def _stale_line_range_payload(
     workspace_root: Path,
     target: Path,
@@ -946,14 +972,28 @@ def propose_patch_file(
         try:
             compile(proposed, target.name, "exec")
         except SyntaxError as exc:
+            syntax_line = exc.lineno if isinstance(exc.lineno, int) else None
+            extra: dict[str, Any] = {
+                "suggested_tool": "patch_file",
+                "suggested_next_tool": "patch_file",
+                "suggested_next_action": (
+                    "Re-read the file, inspect proposed_context, then submit one corrected patch_file transaction. "
+                    "Do not use write_file as a fallback for this existing-file edit."
+                ),
+                "proposed_context": _proposal_context(proposed, syntax_line),
+            }
+            if syntax_line is not None:
+                extra["syntax_error_line"] = syntax_line
+            if isinstance(exc.offset, int):
+                extra["syntax_error_offset"] = exc.offset
+            if isinstance(exc.text, str):
+                extra["syntax_error_text"] = exc.text.rstrip("\r\n")
             return _failure_payload(
                 workspace_root,
                 target,
                 f"replacement produces invalid Python: {exc}",
                 "syntax_invalid",
-                suggested_tool="patch_file",
-                suggested_next_tool="patch_file",
-                suggested_next_action="Repair the Python syntax in this file before any unrelated tool call.",
+                **extra,
             )
 
     return {

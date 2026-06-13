@@ -321,6 +321,43 @@ def _maybe_humanize_proposal(proposal: dict) -> ToolExecResult | None:
 import difflib
 
 
+PATCH_FILE_REPAIR_ACTION = (
+    "Re-read the file, inspect proposed_context, then submit one corrected patch_file transaction. "
+    "Do not use write_file as a fallback for this existing-file edit."
+)
+
+PATCH_FILE_CRAFT_REPAIR_ACTION = (
+    "Re-read the file, inspect proposed_context and craft_issues, then submit one corrected patch_file transaction. "
+    "Do not use write_file as a fallback for this existing-file edit."
+)
+
+
+def _proposal_context(text: str, line: int | None, radius: int = 4) -> dict:
+    lines = str(text).splitlines()
+    error_line = line if isinstance(line, int) and line > 0 else None
+    if not lines:
+        return {
+            "error_line": error_line,
+            "start_line": 0,
+            "end_line": 0,
+            "lines": [],
+        }
+
+    context_line = min(error_line or 1, len(lines))
+    radius = max(0, radius)
+    start_line = max(1, context_line - radius)
+    end_line = min(len(lines), context_line + radius)
+    return {
+        "error_line": error_line,
+        "start_line": start_line,
+        "end_line": end_line,
+        "lines": [
+            {"line": number, "text": lines[number - 1]}
+            for number in range(start_line, end_line + 1)
+        ],
+    }
+
+
 def _compute_craft_line_ranges(proposal: dict) -> list[tuple[int, int]]:
     proposed_lines = proposal.get("new_content", "").splitlines()
     if proposal.get("is_new_file"):
@@ -337,6 +374,35 @@ def _compute_craft_line_ranges(proposal: dict) -> list[tuple[int, int]]:
                 ranges.append((j1 + 1, j2 + 1))
         return ranges
     return [(1, len(proposed_lines) + 1)]
+
+
+def _issue_line(issue) -> int | None:
+    value = getattr(issue, "line", None)
+    if isinstance(value, int) and value > 0:
+        return value
+    if isinstance(value, str) and value.isdigit():
+        parsed = int(value)
+        return parsed if parsed > 0 else None
+    return None
+
+
+def _craft_context_line(
+    hard_issues: list,
+    issues: list,
+    changed_line_ranges: list[tuple[int, int]],
+) -> int | None:
+    for issue in hard_issues:
+        line = _issue_line(issue)
+        if line is not None:
+            return line
+    for issue in issues:
+        line = _issue_line(issue)
+        if line is not None:
+            return line
+    for start_line, _end_line in changed_line_ranges:
+        if isinstance(start_line, int) and start_line > 0:
+            return start_line
+    return None
 
 
 
@@ -372,13 +438,14 @@ def _run_craft_gate(
         is_new_file = proposal.get("is_new_file", False)
         task_shape_summary = _task_shape_summary(task_shape)
         ownership_context = OwnershipContext.AURA if (rel_path.startswith("aura/") and is_new_file) else OwnershipContext.FOREIGN
+        changed_line_ranges = _compute_craft_line_ranges(proposal)
         capsule = ProposalCapsule(
             path=Path(rel_path),
             language="python",
             tool_name=tool_name,
             original_code=proposal.get("old_content", ""),
             proposed_code=proposal["new_content"],
-            changed_line_ranges=_compute_craft_line_ranges(proposal),
+            changed_line_ranges=changed_line_ranges,
             is_new_file=is_new_file,
             ownership_context=ownership_context,
             contract=contract,
@@ -420,27 +487,31 @@ def _run_craft_gate(
             return None
 
         _log.info("[craft:block] %s blocked", rel_path)
-        issues = list(decision.hard_issues or decision.issues)
+        hard_issues = list(decision.hard_issues or [])
+        issues = list(hard_issues or decision.issues)
         failure_class = str(metadata.get("failure_class") or "craft_blocked")
         if failure_class not in {"craft_blocked", "craft_rejected", "syntax_invalid"}:
             failure_class = "craft_rejected"
         ok = False
+        context_line = _craft_context_line(hard_issues, issues, changed_line_ranges)
+        payload = {
+            "ok": ok,
+            "error": _craft_block_error(issues),
+            "path": rel_path,
+            "rel_path": rel_path,
+            "failure_class": failure_class,
+            "syntax_valid": not any(getattr(issue, "code", "") == "syntax-error" for issue in issues),
+            "is_new_file": is_new_file,
+            "craft_issues": [_craft_issue_payload(issue) for issue in issues],
+            "craft_metadata": metadata,
+            "proposed_context": _proposal_context(proposal.get("new_content", ""), context_line),
+        }
+        if tool_name == "patch_file":
+            payload["suggested_next_tool"] = "patch_file"
+            payload["suggested_next_action"] = PATCH_FILE_CRAFT_REPAIR_ACTION
         return ToolExecResult(
             ok=ok,
-            payload=_mark_not_applied(
-                {
-                    "ok": ok,
-                    "error": _craft_block_error(issues),
-                    "path": rel_path,
-                    "rel_path": rel_path,
-                    "failure_class": failure_class,
-                    "syntax_valid": not any(getattr(issue, "code", "") == "syntax-error" for issue in issues),
-                    "is_new_file": is_new_file,
-                    "craft_issues": [_craft_issue_payload(issue) for issue in issues],
-                    "craft_metadata": metadata,
-                },
-                failure_class,
-            )
+            payload=_mark_not_applied(payload, failure_class)
         )
     except Exception:
         _log.exception("CraftEngine failed for %s", rel_path)
@@ -538,22 +609,30 @@ def _python_syntax_error_payload(proposal: dict) -> dict | None:
     path = str(proposal.get("rel_path") or proposal.get("path") or "")
     if not path.endswith(".py"):
         return None
+    proposed_content = str(proposal.get("new_content") or "")
     try:
-        compile(str(proposal.get("new_content") or ""), path or "<proposal>", "exec")
+        compile(proposed_content, path or "<proposal>", "exec")
     except SyntaxError as exc:
+        syntax_line = exc.lineno if isinstance(exc.lineno, int) else None
+        payload = {
+            "ok": False,
+            "path": path,
+            "rel_path": path,
+            "error": f"replacement produces invalid Python: {exc}",
+            "failure_class": "syntax_invalid",
+            "syntax_valid": False,
+            "proposed_context": _proposal_context(proposed_content, syntax_line),
+            "suggested_next_tool": "patch_file",
+            "suggested_next_action": PATCH_FILE_REPAIR_ACTION,
+        }
+        if syntax_line is not None:
+            payload["syntax_error_line"] = syntax_line
+        if isinstance(exc.offset, int):
+            payload["syntax_error_offset"] = exc.offset
+        if isinstance(exc.text, str):
+            payload["syntax_error_text"] = exc.text.rstrip("\r\n")
         return _mark_not_applied(
-            {
-                "ok": False,
-                "path": path,
-                "rel_path": path,
-                "error": f"replacement produces invalid Python: {exc}",
-                "failure_class": "syntax_invalid",
-                "syntax_valid": False,
-                "suggested_next_tool": "patch_file",
-                "suggested_next_action": (
-                    "Re-read the file, then repair the Python syntax with patch_file before any unrelated tool call."
-                ),
-            },
+            payload,
             "syntax_invalid",
         )
     return None
@@ -954,6 +1033,34 @@ class WriteHandlersMixin:
                         "is_new_file": is_new_file,
                         "diagnostic_scratch": True,
                     },
+                )
+            replacement_reason = args.get("replacement_reason")
+            if (
+                self._mode == "worker"
+                and target.exists()
+                and not (
+                    args.get("full_replace_existing") is True
+                    and isinstance(replacement_reason, str)
+                    and replacement_reason.strip()
+                )
+            ):
+                return ToolExecResult(
+                    ok=False,
+                    payload=_mark_not_applied({
+                        "ok": False,
+                        "path": rel_path,
+                        "rel_path": rel_path,
+                        "error": (
+                            "write_file on an existing file in Worker mode requires "
+                            "full_replace_existing=true and a non-empty replacement_reason."
+                        ),
+                        "failure_class": "write_file_existing_file_requires_patch",
+                        "suggested_next_tool": "patch_file",
+                        "suggested_next_action": (
+                            "Use patch_file for existing-file edits. Only use write_file on an existing file "
+                            "when the task explicitly requires a full-file replacement and full_replace_existing is true."
+                        ),
+                    }, "write_file_existing_file_requires_patch"),
                 )
             proposal = _reg.propose_write(self._root, target, content)
             if not proposal.get("ok", False):
