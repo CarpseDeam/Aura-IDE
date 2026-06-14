@@ -242,7 +242,7 @@ class SendHandler(QObject):
           the brief as a drone build request.
         """
         match = re.match(
-            r"/drone(?:\s+(?:make|create|build)\s+(.+))?$",
+            r"/drone(?:\s+(?:make|create|build|fix|repair|improve|edit|update)\s+(.+))?$",
             payload.text.strip(),
             re.IGNORECASE,
         )
@@ -278,7 +278,7 @@ class SendHandler(QObject):
         self.drone_architect_mode_changed.emit(True)
         self._chat.add_info(
             "Drone Architect",
-            "Drone Architect mode active. Describe the Drone you want to build.",
+            "Drone Architect mode active. Describe the Drone you want to build or improve.",
         )
 
     def _exit_drone_architect_mode(self, payload: SendPayload) -> None:
@@ -344,7 +344,7 @@ class SendHandler(QObject):
         if action == "drone_help":
             self._chat.add_info(
                 "Drone Command",
-                "Describe the Drone you want to build.",
+                "Describe the Drone you want to build or improve.",
             )
             return
 

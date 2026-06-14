@@ -100,7 +100,7 @@ def _classify_built_in(normalized: str) -> str | None:
         return "restore_snapshot"
     if normalized == "/drone":
         return "drone_make"
-    if re.search(r"^/drone\s+(make|create|build)\b", normalized):
+    if re.search(r"^/drone\s+(make|create|build|fix|repair|improve|edit|update)\b", normalized):
         return "drone_make"
     return None
 
