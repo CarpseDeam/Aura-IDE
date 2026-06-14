@@ -12,7 +12,7 @@ from aura.drones.workspaces.store import DroneWorkspaceStore
 def install_candidate(workspace: DroneWorkspace, workspace_root: Path) -> dict:
     candidate_folder = candidate_dir(Path(workspace.project_root), workspace.workspace_id)
     drone = DroneStore.load_drone_from_folder(candidate_folder)
-    result = run_drone_readiness(candidate_folder, drone)
+    result = run_drone_readiness(candidate_folder, drone, workspace_root)
     if not result.get("ok"):
         return {"ok": False, "error": result.get("error", "Readiness failed"), "detail": result}
 
@@ -27,7 +27,7 @@ def install_candidate(workspace: DroneWorkspace, workspace_root: Path) -> dict:
 def reinstall_candidate(workspace: DroneWorkspace, workspace_root: Path) -> dict:
     candidate_folder = candidate_dir(Path(workspace.project_root), workspace.workspace_id)
     drone = DroneStore.load_drone_from_folder(candidate_folder)
-    result = run_drone_readiness(candidate_folder, drone)
+    result = run_drone_readiness(candidate_folder, drone, workspace_root)
     if not result.get("ok"):
         return {"ok": False, "error": result.get("error", "Readiness failed"), "detail": result}
 

@@ -111,7 +111,7 @@ class SendHandler(QObject):
             if lower == "/chat" or lower == "/drone" or lower.startswith("/drone off"):
                 self._chat.add_user(payload.text)
                 self._drone_coordinator.exit_drone_mode()
-                self._chat.add_info("Drone Workspaces", "Back to normal Aura.")
+                self._chat.add_info("Drone Builder", "Back to normal Aura.")
                 return
 
         route = classify_user_request(payload.text)

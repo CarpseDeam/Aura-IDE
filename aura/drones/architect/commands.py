@@ -5,7 +5,6 @@ from enum import Enum
 
 
 class DroneCommand(Enum):
-    INSTALL = "install"
     REVISE = "revise"
     DISCARD = "discard"
     NEW = "new"
@@ -13,14 +12,6 @@ class DroneCommand(Enum):
     HELP = "help"
     UNKNOWN = "unknown"
 
-
-_INSTALL_PATTERNS = [
-    r"^install\s*$",
-    r"^install it\s*$",
-    r"^install the drone\s*$",
-    r"^register it\s*$",
-    r"^register the drone\s*$",
-]
 
 _DISCARD_PATTERNS = [
     r"^discard\s*$",
@@ -82,10 +73,6 @@ def parse_drone_command(text: str, phase: str) -> tuple[DroneCommand, str | None
 
     # Phase-specific commands.
     if phase in _DECISION_COMMAND_PHASES:
-        for pattern in _INSTALL_PATTERNS:
-            if re.search(pattern, lowered):
-                return DroneCommand.INSTALL, None
-
         for pattern in _DISCARD_PATTERNS:
             if re.search(pattern, lowered):
                 return DroneCommand.DISCARD, None

@@ -128,11 +128,21 @@ def _read_cargo_for_chain(workspace_root: Path, chain_id: str) -> tuple[list[dic
 class _DroneCard(QFrame):
     """A single drone card in the roster with drag initiation."""
 
-    def __init__(self, drone_id: str, name: str, description: str, write_policy: str = "read_only", parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        drone_id: str,
+        name: str,
+        description: str,
+        write_policy: str = "read_only",
+        status: str = "Ready",
+        ready: bool = True,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         self.drone_id = drone_id
         self.drone_name = name
         self._write_policy = write_policy
+        self._ready = ready
         self.setObjectName("drone_card")
         self.setStyleSheet(
             "#drone_card {"
@@ -145,7 +155,7 @@ class _DroneCard(QFrame):
             "  background: rgba(24, 26, 36, 0.94);"
             "}"
         )
-        self.setCursor(Qt.PointingHandCursor)
+        self.setCursor(Qt.PointingHandCursor if ready else Qt.ArrowCursor)
         self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
         self._drag_start_pos = None
 
@@ -177,10 +187,29 @@ class _DroneCard(QFrame):
         title_row.addWidget(title, 1)
         layout.addLayout(title_row)
 
-        # Pill row: status pill + truncated description preview
+        # Pill row: status, policy, and truncated description preview
         pill_row = QHBoxLayout()
         pill_row.setContentsMargins(0, 0, 0, 0)
         pill_row.setSpacing(6)
+
+        status_color = {
+            "Ready": "#9ece6a",
+            "Needs Fix": "#f87171",
+            "Building": "#e0af68",
+            "Testing": "#e0af68",
+            "Draft": "#6e7382",
+        }.get(status, "#6e7382")
+        status_pill = QLabel(status)
+        status_pill.setStyleSheet(
+            f"color: {status_color};"
+            f"background: rgba(255, 255, 255, 0.05);"
+            f"border: 1px solid rgba(255, 255, 255, 0.08);"
+            f"border-radius: 3px;"
+            f"padding: 1px 5px;"
+            f"font-size: 10px;"
+        )
+        status_pill.setFixedHeight(16)
+        pill_row.addWidget(status_pill)
 
         policy_text = "read-only" if write_policy == "read_only" else "writes"
         policy_color = "#7dcfff" if write_policy == "read_only" else "#e0af68"
@@ -215,6 +244,7 @@ class _DroneCard(QFrame):
 
         # Run
         btn_run = QPushButton("▶ Run")
+        btn_run.setEnabled(ready)
         btn_run.setStyleSheet(
             f"QPushButton {{"
             f"  background: rgba(196, 181, 253, 0.12);"
@@ -229,9 +259,15 @@ class _DroneCard(QFrame):
             f"  border-color: rgba(196, 181, 253, 0.35);"
             f"  color: {_qss_color(FG)};"
             f"}}"
+            f"QPushButton:disabled {{"
+            f"  background: transparent;"
+            f"  border-color: rgba(255, 255, 255, 0.05);"
+            f"  color: {_qss_color(FG_MUTED)};"
+            f"}}"
         )
-        btn_run.setCursor(Qt.PointingHandCursor)
-        btn_run.clicked.connect(lambda checked, cb="_on_run": (getattr(self, cb, None) or (lambda: None))())
+        btn_run.setCursor(Qt.PointingHandCursor if ready else Qt.ArrowCursor)
+        if ready:
+            btn_run.clicked.connect(lambda checked, cb="_on_run": (getattr(self, cb, None) or (lambda: None))())
         btn_layout.addWidget(btn_run)
 
         # Edit
@@ -282,6 +318,8 @@ class _DroneCard(QFrame):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if not self._ready:
+            return
         if self._drag_start_pos is None:
             return
         if (event.position().toPoint() - self._drag_start_pos).manhattanLength() < 10:
@@ -334,17 +372,29 @@ class _DroneRosterWidget(QScrollArea):
             item = self._layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
-        drones = DroneStore.list_drones(self._workspace_root)
-        if not drones:
-            empty = QLabel("No Drones installed. Type /drone in chat to open Drone Architect.")
+        entries = DroneStore.list_drone_entries(self._workspace_root)
+        if not entries:
+            empty = QLabel("No Drones yet. Type /drone in chat to open Drone Builder.")
             empty.setWordWrap(True)
             empty.setStyleSheet(f"color: {_qss_color(FG_MUTED)}; font-size: 11px; padding: 8px;")
             self._layout.insertWidget(self._layout.count() - 1, empty)
-        for d in drones:
-            card = _DroneCard(d.id, d.name, d.description, d.write_policy)
-            card._on_run = lambda did=d.id: self._editor.runDroneRequested.emit(did)
-            card._on_edit = lambda did=d.id: self._editor.editDroneRequested.emit(did)
-            card._on_delete = lambda did=d.id: self._editor.deleteDroneRequested.emit(did)
+        for entry in entries:
+            action_id = (
+                f"builder:{entry.workspace_id}"
+                if entry.workspace_id and not entry.ready
+                else entry.id
+            )
+            card = _DroneCard(
+                entry.id,
+                entry.name,
+                entry.description,
+                entry.write_policy,
+                entry.status,
+                entry.ready,
+            )
+            card._on_run = lambda did=entry.id: self._editor.runDroneRequested.emit(did)
+            card._on_edit = lambda did=action_id: self._editor.editDroneRequested.emit(did)
+            card._on_delete = lambda did=action_id: self._editor.deleteDroneRequested.emit(did)
             self._layout.insertWidget(self._layout.count() - 1, card)
 
 

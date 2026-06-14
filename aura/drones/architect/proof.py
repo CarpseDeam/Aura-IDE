@@ -27,15 +27,15 @@ def run_candidate_proof(
         return ProofResult(
             drone_name=workspace.display_name,
             proof_status="failed",
-            what_tried=workspace.build_brief or "proof_run",
+            what_tried=workspace.build_brief or "Test Run",
             route_used="",
             output_sample="",
-            errors=[f"Failed to load drone.json: {exc}"],
+            errors=[f"Drone definition could not be loaded: {exc}"],
         )
 
     # Build trial-safe payload.
     payload = {
-        "goal": workspace.build_brief or "proof_run",
+        "goal": workspace.build_brief or "Test Run",
         "input": {},
         "workspace_root": str(workspace_root),
         "drone_id": drone.id,
@@ -71,7 +71,7 @@ def run_candidate_proof(
         proof_status = "passed"
 
     # Collect metadata.
-    what_tried = workspace.build_brief or drone.description or "proof_run"
+    what_tried = workspace.build_brief or drone.description or "Test Run"
     route_used = _extract_route(drone, result)
     output_sample = _extract_output_sample(result)
 

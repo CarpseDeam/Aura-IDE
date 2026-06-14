@@ -20,9 +20,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from aura.drones.definition import DroneDefinition
 from aura.drones.run import DroneRun
-from aura.drones.store import DroneStore, RunHistoryStore
+from aura.drones.store import DroneListEntry, DroneStore, RunHistoryStore
 from aura.gui.drones.drone_run_card import DroneRunCard
 from aura.gui.theme import ACCENT, BG, BG_RAISED, BORDER, DANGER, FG, FG_DIM, FG_MUTED, SUCCESS, WARN
 
@@ -165,23 +164,29 @@ class DroneBayPane(QWidget):
             self._show_empty_state()
             return
 
-        drones = DroneStore.list_drones(self._workspace_root)
-        if not drones:
+        entries = DroneStore.list_drone_entries(self._workspace_root)
+        if not entries:
             self._show_empty_state()
             return
 
         # Build last-run lookup: map drone_id -> most recent run data
         all_runs = RunHistoryStore.list_run_summaries(self._workspace_root)
-        logger.debug("[DroneBay] refresh: %d drones, %d run summaries", len(drones), len(all_runs))
+        logger.debug(
+            "[DroneBay] refresh: %d drones, %d run summaries",
+            len(entries),
+            len(all_runs),
+        )
         last_run_by_drone: dict[str, dict] = {}
         for run_data in all_runs:
             did = run_data.get("drone_id", "")
             if did and did not in last_run_by_drone:
                 last_run_by_drone[did] = run_data
 
-        for drone in drones:
-            last_run_info = last_run_by_drone.get(drone.id)
-            row_widget = self._build_drone_row(drone, last_run_info, all_run_summaries=all_runs)
+        for entry in entries:
+            last_run_info = last_run_by_drone.get(entry.id) if entry.ready else None
+            row_widget = self._build_drone_row(
+                entry, last_run_info, all_run_summaries=all_runs
+            )
             self._card_layout.addWidget(row_widget)
 
         self._card_layout.addStretch(1)
@@ -279,12 +284,41 @@ class DroneBayPane(QWidget):
         )
         return pill
 
-    def _build_drone_row(self, drone: DroneDefinition, last_run_info: dict | None, all_run_summaries: list[dict] | None = None) -> QWidget:
+    def _make_status_badge(self, status: str) -> QLabel:
+        if status == "Ready":
+            color = SUCCESS
+        elif status == "Needs Fix":
+            color = DANGER
+        elif status in {"Building", "Testing"}:
+            color = WARN
+        else:
+            color = FG_MUTED
+
+        badge = QLabel(status)
+        badge.setStyleSheet(
+            f"font-size: 10px; font-weight: 600; color: {color}; "
+            f"background: transparent; padding: 2px 8px; "
+            f"border: 1px solid {color}; border-radius: 4px;"
+        )
+        return badge
+
+    def _build_drone_row(
+        self,
+        entry: DroneListEntry,
+        last_run_info: dict | None,
+        all_run_summaries: list[dict] | None = None,
+    ) -> QWidget:
         """Build a compact drone row with an expandable detail panel.
 
         Returns an outer QWidget containing the always-visible row QFrame
         and the optionally-visible detail QFrame.
         """
+        drone = entry.drone
+        action_id = (
+            f"builder:{entry.workspace_id}"
+            if entry.workspace_id and not entry.ready
+            else entry.id
+        )
         wrapper = QWidget()
         wrapper.setObjectName("droneRowWrapper")
         wrapper.setStyleSheet("background: transparent;")
@@ -309,7 +343,7 @@ class DroneBayPane(QWidget):
         row_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
         # a) Name
-        name_label = QLabel(drone.name)
+        name_label = QLabel(entry.name)
         name_label.setStyleSheet(
             f"font-size: 13px; font-weight: 700; color: {FG}; background: transparent;"
         )
@@ -319,18 +353,25 @@ class DroneBayPane(QWidget):
         row_layout.addWidget(name_label)
 
         # b) Short description (first ~60 chars)
-        short_desc = (drone.description[:47] + "...") if len(drone.description) > 60 else drone.description
+        short_desc = (
+            (entry.description[:47] + "...")
+            if len(entry.description) > 60
+            else entry.description
+        )
         desc_label = QLabel(short_desc)
         desc_label.setStyleSheet(
             f"font-size: 12px; color: {FG_DIM}; background: transparent;"
         )
         desc_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        desc_label.setToolTip(drone.description)
+        desc_label.setToolTip(entry.description)
         desc_label.setContentsMargins(0, 0, 0, 0)
         row_layout.addWidget(desc_label, 1)
 
-        # c) Write policy pill
-        policy_pill = self._make_policy_badge(drone.write_policy, compact=True)
+        # c) Status and write policy pills
+        status_pill = self._make_status_badge(entry.status)
+        row_layout.addWidget(status_pill)
+
+        policy_pill = self._make_policy_badge(entry.write_policy, compact=True)
         row_layout.addWidget(policy_pill)
 
         # d) Trigger pill (Manual placeholder)
@@ -354,8 +395,13 @@ class DroneBayPane(QWidget):
                 last_run_label.setStyleSheet(
                     f"font-size: 11px; color: {DANGER}; background: transparent;"
                 )
-        else:
+        elif entry.ready:
             last_run_label.setText("Never")
+            last_run_label.setStyleSheet(
+                f"font-size: 11px; color: {FG_MUTED}; background: transparent;"
+            )
+        else:
+            last_run_label.setText("-")
             last_run_label.setStyleSheet(
                 f"font-size: 11px; color: {FG_MUTED}; background: transparent;"
             )
@@ -364,16 +410,24 @@ class DroneBayPane(QWidget):
 
         # f) Run button
         run_btn = QPushButton("Run")
-        run_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        run_btn.setEnabled(entry.ready)
+        run_btn.setCursor(
+            Qt.CursorShape.PointingHandCursor
+            if entry.ready
+            else Qt.CursorShape.ArrowCursor
+        )
         run_btn.setStyleSheet(
             f"QPushButton {{ background: {ACCENT}; color: {BG}; "
             f"border: 1px solid {ACCENT}; border-radius: 4px; "
             f"padding: 2px 10px; font-size: 11px; font-weight: 600; }}"
             f"QPushButton:hover {{ background: #94b6ff; }}"
+            f"QPushButton:disabled {{ background: transparent; color: {FG_MUTED}; "
+            f"border-color: {BORDER}; }}"
         )
-        run_btn.clicked.connect(
-            lambda checked=False, did=drone.id: self.launchDroneRequested.emit(did)
-        )
+        if entry.ready:
+            run_btn.clicked.connect(
+                lambda checked=False, did=entry.id: self.launchDroneRequested.emit(did)
+            )
         row_layout.addWidget(run_btn)
 
         # g) Overflow/details button
@@ -404,7 +458,7 @@ class DroneBayPane(QWidget):
         detail_layout.setSpacing(8)
 
         # a) Full description
-        desc_full = QLabel(drone.description)
+        desc_full = QLabel(entry.description)
         desc_full.setWordWrap(True)
         desc_full.setStyleSheet(
             f"font-size: 12px; color: {FG_DIM}; background: transparent;"
@@ -412,21 +466,26 @@ class DroneBayPane(QWidget):
         detail_layout.addWidget(desc_full)
 
         # b) Instructions preview
-        instr_label = QLabel("Instructions:")
-        instr_label.setStyleSheet(
-            f"font-size: 11px; font-weight: 600; color: {FG}; background: transparent;"
-        )
-        detail_layout.addWidget(instr_label)
-        instr_preview = drone.instructions[:300] + "..." if len(drone.instructions) > 300 else drone.instructions
-        instr_text = QLabel(instr_preview)
-        instr_text.setWordWrap(True)
-        instr_text.setStyleSheet(
-            f"font-size: 11px; color: {FG_MUTED}; background: transparent; font-style: italic;"
-        )
-        detail_layout.addWidget(instr_text)
+        if drone is not None:
+            instr_label = QLabel("Instructions:")
+            instr_label.setStyleSheet(
+                f"font-size: 11px; font-weight: 600; color: {FG}; background: transparent;"
+            )
+            detail_layout.addWidget(instr_label)
+            instr_preview = (
+                drone.instructions[:300] + "..."
+                if len(drone.instructions) > 300
+                else drone.instructions
+            )
+            instr_text = QLabel(instr_preview)
+            instr_text.setWordWrap(True)
+            instr_text.setStyleSheet(
+                f"font-size: 11px; color: {FG_MUTED}; background: transparent; font-style: italic;"
+            )
+            detail_layout.addWidget(instr_text)
 
         # c) Output contract
-        if drone.output_contract:
+        if drone is not None and drone.output_contract:
             oc_label = QLabel("Output contract:")
             oc_label.setStyleSheet(
                 f"font-size: 11px; font-weight: 600; color: {FG}; background: transparent;"
@@ -440,13 +499,14 @@ class DroneBayPane(QWidget):
             detail_layout.addWidget(oc_text)
 
         # f) Budget
-        budget_label = QLabel(
-            f"{drone.budget.timeout_seconds // 60} min timeout"
-        )
-        budget_label.setStyleSheet(
-            f"font-size: 11px; color: {FG_MUTED}; background: transparent;"
-        )
-        detail_layout.addWidget(budget_label)
+        if drone is not None:
+            budget_label = QLabel(
+                f"{drone.budget.timeout_seconds // 60} min timeout"
+            )
+            budget_label.setStyleSheet(
+                f"font-size: 11px; color: {FG_MUTED}; background: transparent;"
+            )
+            detail_layout.addWidget(budget_label)
 
         # g) Action buttons row
         action_row = QHBoxLayout()
@@ -460,7 +520,9 @@ class DroneBayPane(QWidget):
             f"padding: 3px 12px; font-size: 12px; }}"
             f"QPushButton:hover {{ background: {BG_RAISED}; border-color: {ACCENT}; }}"
         )
-        edit_btn.clicked.connect(lambda checked=False, did=drone.id: self.editDroneRequested.emit(did))
+        edit_btn.clicked.connect(
+            lambda checked=False, did=action_id: self.editDroneRequested.emit(did)
+        )
         action_row.addWidget(edit_btn)
 
         dup_btn = QPushButton("Duplicate")
@@ -470,7 +532,11 @@ class DroneBayPane(QWidget):
             f"padding: 3px 12px; font-size: 12px; }}"
             f"QPushButton:hover {{ background: {BG_RAISED}; border-color: {ACCENT}; }}"
         )
-        dup_btn.clicked.connect(lambda checked=False, did=drone.id: self.duplicateDroneRequested.emit(did))
+        dup_btn.setEnabled(entry.ready)
+        if entry.ready:
+            dup_btn.clicked.connect(
+                lambda checked=False, did=entry.id: self.duplicateDroneRequested.emit(did)
+            )
         action_row.addWidget(dup_btn)
 
         del_btn = QPushButton("Delete")
@@ -480,7 +546,9 @@ class DroneBayPane(QWidget):
             f"padding: 3px 12px; font-size: 12px; }}"
             f"QPushButton:hover {{ background: rgba(247, 118, 142, 0.10); }}"
         )
-        del_btn.clicked.connect(lambda checked=False, did=drone.id: self.deleteDroneRequested.emit(did))
+        del_btn.clicked.connect(
+            lambda checked=False, did=action_id: self.deleteDroneRequested.emit(did)
+        )
         action_row.addWidget(del_btn)
 
         action_row.addStretch(1)
@@ -494,12 +562,16 @@ class DroneBayPane(QWidget):
         detail_layout.addWidget(recent_label)
 
         # Query runs filtered to this drone
-        if self._workspace_root is not None:
+        if self._workspace_root is not None and entry.ready:
             if all_run_summaries is not None:
-                drone_runs = [r for r in all_run_summaries if r.get("drone_id") == drone.id][:5]
+                drone_runs = [
+                    r for r in all_run_summaries if r.get("drone_id") == entry.id
+                ][:5]
             else:
                 drone_runs = RunHistoryStore.list_run_summaries(self._workspace_root)
-                drone_runs = [r for r in drone_runs if r.get("drone_id") == drone.id][:5]
+                drone_runs = [
+                    r for r in drone_runs if r.get("drone_id") == entry.id
+                ][:5]
             filtered = drone_runs
         else:
             filtered = []

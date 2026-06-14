@@ -5,8 +5,9 @@ import logging
 import re
 import shutil
 import tempfile
-from dataclasses import asdict, fields
+from dataclasses import asdict, dataclass, fields
 from pathlib import Path
+from typing import Any
 
 from aura.drones.definition import DroneBudget, DroneDefinition, slugify
 from aura.drones.receipt import DroneReceipt
@@ -52,6 +53,22 @@ def _drone_from_dict(data: dict) -> DroneDefinition:
     return drone
 
 
+@dataclass(frozen=True)
+class DroneListEntry:
+    """UI-facing Drone row, including Drones currently in the Builder."""
+
+    id: str
+    name: str
+    description: str
+    write_policy: str
+    status: str
+    ready: bool
+    drone: DroneDefinition | None = None
+    workspace_id: str | None = None
+    last_error: str | None = None
+    updated_at: str = ""
+
+
 
 def _validate_entrypoint(entrypoint: dict) -> None:
     """Validate the command entrypoint structure."""
@@ -67,6 +84,42 @@ def _validate_entrypoint(entrypoint: dict) -> None:
             raise ValueError(f"Drone entrypoint command[{i}] must be a string")
     if not command[0].strip():
         raise ValueError("Drone entrypoint command[0] must be a non-empty string")
+
+
+def _builder_status_for_phase(phase: str) -> str:
+    """Map internal Builder phases to the user-facing Drone list statuses."""
+    phase = str(phase or "").lower()
+    if phase == "workshop":
+        return "Draft"
+    if phase in {"building", "iterating"}:
+        return "Building"
+    if phase in {"readiness_running", "proof_running", "installing", "awaiting_decision"}:
+        return "Testing"
+    if phase in {"readiness_failed", "proof_failed"}:
+        return "Needs Fix"
+    if phase == "installed":
+        return "Ready"
+    return "Draft"
+
+
+def _read_candidate_manifest_summary(folder: Path) -> dict[str, Any]:
+    """Read non-authoritative row metadata from a Builder candidate manifest."""
+    manifest = folder / "drone.json"
+    if not manifest.exists():
+        return {}
+    try:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+    except Exception:
+        logger.debug("Could not read Builder Drone manifest: %s", manifest, exc_info=True)
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {
+        "id": data.get("id"),
+        "name": data.get("name"),
+        "description": data.get("description"),
+        "write_policy": data.get("write_policy"),
+    }
 
 
 class DroneStore:
@@ -93,6 +146,88 @@ class DroneStore:
                     logger.warning("Skipping invalid Drone folder %s: %s", subdir, exc)
 
         return sorted(seen.values(), key=lambda d: d.name)
+
+    @staticmethod
+    def list_drone_entries(workspace_root: Path) -> list[DroneListEntry]:
+        """Return list rows for ready Drones plus Builder Drones in progress."""
+        installed = {drone.id: drone for drone in DroneStore.list_drones(workspace_root)}
+        rows: dict[str, DroneListEntry] = {
+            drone_id: DroneListEntry(
+                id=drone.id,
+                name=drone.name,
+                description=drone.description,
+                write_policy=drone.write_policy,
+                status="Ready",
+                ready=True,
+                drone=drone,
+            )
+            for drone_id, drone in installed.items()
+        }
+
+        try:
+            from aura.drones.workspaces.model import WorkspacePhase
+            from aura.drones.workspaces.paths import candidate_dir
+            from aura.drones.workspaces.store import DroneWorkspaceStore
+        except Exception:
+            logger.debug("Builder workspace modules unavailable", exc_info=True)
+            return sorted(rows.values(), key=lambda r: r.name.lower())
+
+        for workspace in DroneWorkspaceStore.list_workspaces(workspace_root):
+            phase = workspace.phase
+            if phase == WorkspacePhase.DISCARDED.value:
+                continue
+            if phase == WorkspacePhase.INSTALLED.value and workspace.installed_drone_id:
+                continue
+
+            candidate_folder = candidate_dir(Path(workspace.project_root), workspace.workspace_id)
+            candidate = _read_candidate_manifest_summary(candidate_folder)
+            installed_drone = (
+                installed.get(workspace.installed_drone_id)
+                if workspace.installed_drone_id
+                else None
+            )
+
+            drone_id = (
+                str(candidate.get("id") or "")
+                or workspace.candidate_drone_id
+                or workspace.installed_drone_id
+                or f"builder:{workspace.workspace_id}"
+            )
+            key = workspace.installed_drone_id or drone_id or f"builder:{workspace.workspace_id}"
+            name = (
+                str(candidate.get("name") or "").strip()
+                or (installed_drone.name if installed_drone else "")
+                or workspace.display_name
+                or "New Drone"
+            )
+            description = (
+                str(candidate.get("description") or "").strip()
+                or (installed_drone.description if installed_drone else "")
+                or workspace.build_brief
+                or "Being designed in the Drone Builder."
+            )
+            write_policy = (
+                str(candidate.get("write_policy") or "").strip()
+                or (installed_drone.write_policy if installed_drone else "")
+                or "read_only"
+            )
+            if write_policy not in _WRITE_POLICIES:
+                write_policy = "read_only"
+
+            rows[key] = DroneListEntry(
+                id=key if str(key).startswith("builder:") else str(drone_id or key),
+                name=name,
+                description=description,
+                write_policy=write_policy,
+                status=_builder_status_for_phase(phase),
+                ready=False,
+                drone=installed_drone,
+                workspace_id=workspace.workspace_id,
+                last_error=workspace.last_error,
+                updated_at=workspace.updated_at,
+            )
+
+        return sorted(rows.values(), key=lambda r: (r.ready, r.name.lower()))
 
     @staticmethod
     def load_drone(workspace_root: Path, drone_id: str) -> DroneDefinition | None:
@@ -183,7 +318,7 @@ class DroneStore:
         if readiness_result is None:
             from aura.drones.folder_runner import run_drone_readiness
 
-            readiness_result = run_drone_readiness(source_folder, drone)
+            readiness_result = run_drone_readiness(source_folder, drone, workspace_root)
         if not bool(readiness_result.get("ok")):
             raise ValueError(f"Drone readiness check failed: {readiness_result}")
 

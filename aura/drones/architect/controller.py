@@ -100,18 +100,21 @@ class DroneArchitectController:
             self._pending_dispatch_spec = None
 
     def enter_mode(self):
-        """Enter Drone mode. Try to load active workspace; return ModeEntered if none."""
+        """Enter Drone mode. Load the active Builder state or create a new Drone."""
         if self._workspace_root is None:
             return ModeEntered(workspace_id=None, display_name=None)
         ws = DroneWorkspaceStore.load_active_workspace(self._workspace_root)
-        if ws is not None:
-            self._active_workspace = ws
-            return WorkspaceLoaded(
-                workspace_id=ws.workspace_id,
-                display_name=ws.display_name,
-                phase=ws.phase,
+        if ws is None:
+            ws = DroneWorkspaceStore.create_workspace(
+                self._workspace_root, "New Drone"
             )
-        return ModeEntered(workspace_id=None, display_name=None)
+            DroneWorkspaceStore.set_active_workspace(self._workspace_root, ws)
+        self._active_workspace = ws
+        return WorkspaceLoaded(
+            workspace_id=ws.workspace_id,
+            display_name=ws.display_name,
+            phase=ws.phase,
+        )
 
     def exit_mode(self) -> None:
         """Reset internal state."""
@@ -124,10 +127,10 @@ class DroneArchitectController:
     def load_workspace(self, workspace_id: str):
         """Load a workspace by ID."""
         if self._workspace_root is None:
-            return ErrorResult(message="No workspace root set")
+            return ErrorResult(message="No project root set")
         ws = DroneWorkspaceStore.load_workspace(self._workspace_root, workspace_id)
         if ws is None:
-            return ErrorResult(message=f"Workspace not found: {workspace_id}")
+            return ErrorResult(message=f"Drone not found: {workspace_id}")
         self._active_workspace = ws
         DroneWorkspaceStore.set_active_workspace(self._workspace_root, ws)
         return WorkspaceLoaded(
@@ -139,7 +142,7 @@ class DroneArchitectController:
     def create_workspace(self, display_name: str = "New Drone"):
         """Create a new workspace in workshop phase."""
         if self._workspace_root is None:
-            return ErrorResult(message="No workspace root set")
+            return ErrorResult(message="No project root set")
         ws = DroneWorkspaceStore.create_workspace(
             self._workspace_root, display_name
         )
@@ -156,7 +159,7 @@ class DroneArchitectController:
     def load_drone_workspace(self, drone_id: str):
         """Load or create an edit workspace for an installed Drone."""
         if self._workspace_root is None:
-            return ErrorResult(message="No workspace root set")
+            return ErrorResult(message="No project root set")
 
         ws = DroneWorkspaceStore.load_or_create_workspace_for_drone(
             self._workspace_root, drone_id
@@ -202,6 +205,13 @@ class DroneArchitectController:
         if phase == WorkspacePhase.ITERATING.value:
             return self._handle_iterating_message(text)
 
+        if phase in (
+            WorkspacePhase.INSTALLED.value,
+            WorkspacePhase.DISCARDED.value,
+        ):
+            self.create_workspace("New Drone")
+            return self._handle_workshop_message(text)
+
         return ErrorResult(message=f"Unhandled phase: {phase}")
 
     def handle_workshop_response(
@@ -209,7 +219,7 @@ class DroneArchitectController:
     ):
         """Process parsed workshop response. Return next result."""
         if self._active_workspace is None:
-            return ErrorResult(message="No active workspace")
+            return ErrorResult(message="No active Drone")
 
         self._workshop_conversation.append(
             {"role": "assistant", "content": raw_text}
@@ -250,7 +260,7 @@ class DroneArchitectController:
     def on_build_completed(self, success: bool, error: str | None = None):
         """Called after Worker finishes building. Triggers readiness."""
         if self._active_workspace is None:
-            return ErrorResult(message="No active workspace")
+            return ErrorResult(message="No active Drone")
 
         if success:
             self._active_workspace.phase = WorkspacePhase.READINESS_RUNNING.value
@@ -268,6 +278,9 @@ class DroneArchitectController:
                 try:
                     drone = DroneStore.load_drone_from_folder(cand)
                     drone_id = drone.id
+                    self._active_workspace.candidate_drone_id = drone.id
+                    if self._active_workspace.mode != "edit":
+                        self._active_workspace.display_name = drone.name
                 except Exception:
                     logger.warning(
                         "Could not load drone.json from candidate %s", cand
@@ -275,6 +288,7 @@ class DroneArchitectController:
 
             self._last_candidate_path = candidate_path
             self._last_drone_id = drone_id
+            DroneWorkspaceStore.save_workspace(self._active_workspace)
 
             return BuildCompleted(
                 candidate_path=candidate_path, drone_id=drone_id
@@ -288,7 +302,7 @@ class DroneArchitectController:
     def on_readiness_completed(self, result: dict):
         """Called after readiness check. Triggers proof if passed."""
         if self._active_workspace is None:
-            return ErrorResult(message="No active workspace")
+            return ErrorResult(message="No active Drone")
 
         if result.get("ok"):
             self._active_workspace.phase = WorkspacePhase.PROOF_RUNNING.value
@@ -309,7 +323,7 @@ class DroneArchitectController:
     def on_proof_completed(self, proof_result: ProofResult):
         """Called after proof run. Transitions based on proof status."""
         if self._active_workspace is None:
-            return ErrorResult(message="No active workspace")
+            return ErrorResult(message="No active Drone")
 
         self._last_proof_result = proof_result
 
@@ -324,11 +338,11 @@ class DroneArchitectController:
     def finalize_proof(self):
         """Finalize proof — gate on failed, or build AwaitingDecision."""
         if self._active_workspace is None:
-            return ErrorResult(message="No active workspace")
+            return ErrorResult(message="No active Drone")
 
         if self._active_workspace.phase == WorkspacePhase.PROOF_FAILED.value:
             return ErrorResult(
-                message="Proof failed. Revise the Drone and rebuild before installing."
+                message="Test Run failed. Revise the Drone and rebuild."
             )
 
         pr = self._last_proof_result
@@ -352,31 +366,39 @@ class DroneArchitectController:
     # ------------------------------------------------------------------
 
     def install_candidate(self):
-        """Install candidate into global drone registry."""
+        """Make the current candidate ready for normal Drone launches."""
         if self._active_workspace is None or self._workspace_root is None:
-            return ErrorResult(message="No active workspace")
+            return ErrorResult(message="No active Drone")
 
         from aura.drones.architect.installer import install_or_reinstall
 
         result = install_or_reinstall(self._active_workspace, self._workspace_root)
 
         if result["ok"]:
-            self._active_workspace.phase = "installed"
+            self._active_workspace.phase = WorkspacePhase.INSTALLED.value
             DroneWorkspaceStore.save_workspace(self._active_workspace)
             return Installed(
                 drone_id=result["drone_id"], drone_name=result["drone_name"]
             )
         else:
             self._active_workspace.last_error = result.get("error", "")
+            self._active_workspace.phase = WorkspacePhase.READINESS_FAILED.value
             DroneWorkspaceStore.save_workspace(self._active_workspace)
             return ErrorResult(
-                message=f"Install failed: {result.get('error', '')}"
+                message=f"Could not make Drone Ready: {result.get('error', '')}"
             )
+
+    def mark_ready_step_started(self) -> None:
+        """Mark the active Drone as being finalized for the Ready state."""
+        if self._active_workspace is None:
+            return
+        self._active_workspace.phase = WorkspacePhase.INSTALLING.value
+        DroneWorkspaceStore.save_workspace(self._active_workspace)
 
     def discard_workspace(self):
         """Mark workspace as discarded."""
         if self._active_workspace is None:
-            return ErrorResult(message="No active workspace")
+            return ErrorResult(message="No active Drone")
 
         workspace_id = self._active_workspace.workspace_id
         DroneWorkspaceStore.discard_workspace(self._active_workspace)
@@ -390,7 +412,7 @@ class DroneArchitectController:
     def _ensure_active_workspace(self, text: str | None = None):
         """Auto-create or load a workspace if none is active."""
         if self._workspace_root is None:
-            return ErrorResult(message="No workspace root set")
+            return ErrorResult(message="No project root set")
         ws = DroneWorkspaceStore.load_active_workspace(self._workspace_root)
         if ws is not None:
             self._active_workspace = ws
@@ -433,7 +455,7 @@ class DroneArchitectController:
         if cmd == DroneCommand.LOAD:
             if arg:
                 return self.load_workspace(arg)
-            return ErrorResult(message="Load requires a workspace name")
+            return ErrorResult(message="Load requires a Drone name")
 
         if cmd == DroneCommand.HELP:
             return WorkshopQuestion(
@@ -442,7 +464,7 @@ class DroneArchitectController:
                     "it to do — for example: \"remind me when a CI build "
                     'fails" or "fetch the latest PRs and summarize them". '
                     "You can also say 'new' to start over, or 'load <name>' "
-                    "to switch to another workspace."
+                    "to switch to another Drone."
                 )
             )
 
@@ -461,15 +483,7 @@ class DroneArchitectController:
         if cmd == DroneCommand.LOAD:
             if arg:
                 return self.load_workspace(arg)
-            return ErrorResult(message="Load requires a workspace name")
-
-        if cmd == DroneCommand.INSTALL:
-            phase = self._active_workspace.phase
-            if phase == WorkspacePhase.PROOF_FAILED.value:
-                msg = "Cannot install. Proof failed. Revise first."
-            else:
-                msg = "Cannot install. Readiness failed. Revise first."
-            return ErrorResult(message=msg)
+            return ErrorResult(message="Load requires a Drone name")
 
         if cmd == DroneCommand.DISCARD:
             return self.discard_workspace()
@@ -490,9 +504,6 @@ class DroneArchitectController:
         """Handle messages in awaiting_decision phase."""
         cmd, arg = parse_drone_command(text, self._active_workspace.phase)
 
-        if cmd == DroneCommand.INSTALL:
-            return self.install_candidate()
-
         if cmd == DroneCommand.DISCARD:
             return self.discard_workspace()
 
@@ -502,7 +513,7 @@ class DroneArchitectController:
         if cmd == DroneCommand.LOAD:
             if arg:
                 return self.load_workspace(arg)
-            return ErrorResult(message="Load requires a workspace name")
+            return ErrorResult(message="Load requires a Drone name")
 
         # REVISE or UNKNOWN — implicit revision.
         revision_text = arg if cmd == DroneCommand.REVISE else text
@@ -529,7 +540,7 @@ class DroneArchitectController:
         if cmd == DroneCommand.LOAD:
             if arg:
                 return self.load_workspace(arg)
-            return ErrorResult(message="Load requires a workspace name")
+            return ErrorResult(message="Load requires a Drone name")
 
         if cmd == DroneCommand.DISCARD:
             return self.discard_workspace()

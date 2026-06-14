@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from aura.drones.workspaces.model import DroneWorkspace
+from aura.drones.workspaces.model import DroneWorkspace, WorkspacePhase
 from aura.drones.workspaces.store import DroneWorkspaceStore
 from aura.gui.theme import (
     BG_RAISED,
@@ -64,7 +64,7 @@ class _WorkspaceRow(QFrame):
         )
         text_col.addWidget(name_label)
 
-        phase_label = QLabel(workspace.phase)
+        phase_label = QLabel(_status_for_phase(workspace.phase))
         phase_label.setStyleSheet(
             f"color: {FG_MUTED}; font-size: 11px; background: transparent;"
         )
@@ -99,7 +99,7 @@ class _WorkspaceRow(QFrame):
 
 
 class DroneWorkspacePane(QFrame):
-    """Sidebar pane showing Drone Workspaces for the current project."""
+    """Sidebar pane showing Drones being built for the current project."""
 
     workspace_selected = Signal(str)  # workspace_id
     new_workspace_requested = Signal()
@@ -117,7 +117,7 @@ class DroneWorkspacePane(QFrame):
         layout.setSpacing(6)
 
         # Header
-        header = QLabel("DRONE WORKSPACES")
+        header = QLabel("DRONES")
         header.setObjectName("paneTitleProjects")
         layout.addWidget(header)
 
@@ -163,9 +163,14 @@ class DroneWorkspacePane(QFrame):
         except Exception:
             logger.exception("Failed to list workspaces")
             workspaces = []
+        workspaces = [
+            ws
+            for ws in workspaces
+            if ws.phase != WorkspacePhase.DISCARDED.value
+        ]
 
         if not workspaces:
-            hint = QLabel("No Drone workspaces yet.\nDescribe the Drone\nyou want to build.")
+            hint = QLabel("No Drones yet.\nDescribe the Drone\nyou want to build.")
             hint.setStyleSheet(
                 f"color: {FG_MUTED}; font-size: 12px; padding: 8px; background: transparent;"
             )
@@ -188,3 +193,25 @@ class DroneWorkspacePane(QFrame):
             item = self._rows_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
+
+
+def _status_for_phase(phase: str) -> str:
+    if phase == WorkspacePhase.WORKSHOP.value:
+        return "Draft"
+    if phase in (WorkspacePhase.BUILDING.value, WorkspacePhase.ITERATING.value):
+        return "Building"
+    if phase in (
+        WorkspacePhase.READINESS_RUNNING.value,
+        WorkspacePhase.PROOF_RUNNING.value,
+        WorkspacePhase.INSTALLING.value,
+        WorkspacePhase.AWAITING_DECISION.value,
+    ):
+        return "Testing"
+    if phase in (
+        WorkspacePhase.READINESS_FAILED.value,
+        WorkspacePhase.PROOF_FAILED.value,
+    ):
+        return "Needs Fix"
+    if phase == WorkspacePhase.INSTALLED.value:
+        return "Ready"
+    return "Draft"

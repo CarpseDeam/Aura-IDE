@@ -888,7 +888,13 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             self._refresh_drone_context()
 
     def _on_edit_drone(self, drone_id: str) -> None:
-        """Route to Drone mode for editing the installed Drone."""
+        """Route to Drone mode for editing a Ready or in-progress Drone."""
+        if drone_id.startswith("builder:"):
+            self._drone_coordinator.edit_builder_drone(
+                drone_id.removeprefix("builder:")
+            )
+            return
+
         drone = DroneStore.load_drone(self._workspace_root, drone_id)
         if drone is None:
             return
@@ -896,12 +902,15 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._drone_coordinator.edit_installed_drone(drone_id)
 
     def _on_drone_list_changed(self) -> None:
-        """Refresh drone bay after Drone install/discard from Drone mode."""
+        """Refresh Drone surfaces after Builder state changes."""
         self._refresh_drone_context()
         if self._drone_workbay_window is not None and self._drone_workbay_window.isVisible():
             self._drone_workbay_window.chain_editor.refresh_roster()
 
     def _on_duplicate_drone(self, drone_id: str) -> None:
+        if drone_id.startswith("builder:"):
+            return
+
         drone = DroneStore.load_drone(self._workspace_root, drone_id)
         if drone is None:
             return
@@ -918,7 +927,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         new_id = DroneStore.next_id(self._workspace_root, copy_name)
         source_folder = DroneStore.drone_folder(drone.id)
         if not source_folder.is_dir():
-            QMessageBox.warning(self, "Duplicate Drone", "Registered Drone folder not found.")
+            QMessageBox.warning(self, "Duplicate Drone", "Drone files not found.")
             return
 
         import datetime
@@ -947,6 +956,20 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._refresh_drone_context()
 
     def _on_delete_drone(self, drone_id: str) -> None:
+        if drone_id.startswith("builder:"):
+            reply = QMessageBox.question(
+                self,
+                "Delete Drone",
+                "Are you sure you want to delete this Drone?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply == QMessageBox.Yes:
+                self._drone_coordinator.discard_builder_drone(
+                    drone_id.removeprefix("builder:")
+                )
+            return
+
         reply = QMessageBox.question(
             self,
             "Delete Drone",
@@ -989,7 +1012,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             QMessageBox.warning(
                 self,
                 "Missing Drones",
-                f"The following drones are not installed for workflow "
+                f"The following Drones are not Ready for workflow "
                 f"'{chain.name}': {', '.join(missing)}",
             )
             return
@@ -1188,6 +1211,13 @@ class MainWindow(WindowChromeMixin, QMainWindow):
     def _on_launch_drone(self, drone_id: str) -> None:
         """Launch a Drone (read-only or write-capable)."""
         if self._workspace_root is None:
+            return
+        if drone_id.startswith("builder:"):
+            QMessageBox.information(
+                self,
+                "Drone List",
+                "This Drone is not Ready yet.",
+            )
             return
 
         drone = DroneStore.load_drone(self._workspace_root, drone_id)

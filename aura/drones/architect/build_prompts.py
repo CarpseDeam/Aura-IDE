@@ -48,11 +48,11 @@ BUILD BRIEF:
 """
 
     return {
-        "goal": f"Build Drone candidate: {workspace.display_name}",
+        "goal": f"Build Drone: {workspace.display_name}",
         "files": [str(cand)],
         "spec": spec,
         "acceptance": acceptance,
-        "summary": f"Build new Drone candidate from workshop brief:\n{brief.build_brief[:500]}",
+        "summary": f"Build new Drone from workshop brief:\n{brief.build_brief[:500]}",
     }
 
 
@@ -83,9 +83,9 @@ RULES:
 """
 
     return {
-        "goal": f"Repair Drone candidate: {workspace.display_name}",
+        "goal": f"Repair Drone: {workspace.display_name}",
         "files": [str(cand)],
         "spec": spec,
         "acceptance": acceptance,
-        "summary": f"Apply revision to Drone candidate:\n{user_revision[:500]}",
+        "summary": f"Apply revision to Drone:\n{user_revision[:500]}",
     }
