@@ -74,6 +74,13 @@ class DroneModeCoordinator(QObject):
         self._workspace_pane.discard_workspace_requested.connect(
             self._on_discard_workspace
         )
+        self._workspace_pane.planner_model_changed.connect(
+            lambda model: self._bridge.set_planner_model(model)
+            if hasattr(self._bridge, 'set_planner_model') else None
+        )
+        self._workspace_pane.worker_model_changed.connect(
+            self._bridge.set_worker_model
+        )
 
         self._drone_mode: bool = False
         self._workspace_root: Path | None = None
@@ -145,6 +152,16 @@ class DroneModeCoordinator(QObject):
         self._input.set_drone_architect_mode(True)
         self._status_bar.set_drone_architect_mode(True)
         self.drone_mode_changed.emit(True)
+
+        # Populate model combos from bridge providers and sync selections
+        planner_provider = getattr(self._bridge, '_planner_provider', None)
+        worker_provider = getattr(self._bridge, '_worker_provider', None)
+        if planner_provider is not None and worker_provider is not None:
+            self._workspace_pane.populate_models(planner_provider, worker_provider)
+            planner_model = self._left_pane.current_planner_model()
+            worker_model = self._left_pane.current_worker_model()
+            self._workspace_pane.set_planner_model(planner_model)
+            self._workspace_pane.set_worker_model(worker_model)
 
         if load_active:
             # Delegate to controller and render result.

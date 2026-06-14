@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QLabel, QStatusBar
 
-from aura.config import PROVIDERS, cost_usd, ThinkingMode
+from aura.config import PROVIDERS, ThinkingMode, cost_usd
 
 _THINKING_LABEL = {"off": "Off", "high": "High", "max": "Max"}
 
@@ -33,10 +32,10 @@ class AuraStatusBar(QStatusBar):
         self._status_cost.setFont(mono_font)
 
     def set_drone_architect_mode(self, active: bool) -> None:
-        """Show or hide the Drone Architect label in the status bar."""
+        """Show or hide the Drone Builder label in the status bar."""
         if active:
             if self._drone_label is None:
-                label = QLabel("Drone Architect")
+                label = QLabel("Drone Builder")
                 label.setStyleSheet(
                     "color: #9d7cd8; font-weight: 600; padding: 0 8px;"
                 )
