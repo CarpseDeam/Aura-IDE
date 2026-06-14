@@ -59,10 +59,6 @@ class DroneModeCoordinator(QObject):
         self._awaiting_build_result: bool = False
         self._pending_build_dispatch_spec: dict | None = None
 
-        # Saved bridge history for build dispatch isolation
-        self._saved_bridge_messages: list | None = None
-        self._saved_bridge_system: str | None = None
-
         # Background thread/worker references — retained to prevent Qt GC.
         self._background_threads: list[QThread] = []
         self._background_workers: list[QObject] = []
@@ -328,7 +324,12 @@ class DroneModeCoordinator(QObject):
     # ------------------------------------------------------------------
 
     def _dispatch_build(self, dispatch_spec, model, thinking):
-        """Send the build dispatch spec through the bridge for Worker execution."""
+        """Dispatch the build spec directly to the Worker via an isolated lane.
+
+        Uses the bridge's dispatch_drone_build() which creates a fresh
+        History and ConversationManager — the parent project conversation
+        history is never touched.
+        """
         if not model or not thinking:
             self._chat.add_error(
                 "Drone Architect",
@@ -341,34 +342,17 @@ class DroneModeCoordinator(QObject):
         self._awaiting_build_result = True
         self._pending_build_dispatch_spec = dispatch_spec
 
-        # Save project conversation history before the internal build dispatch
-        # overwrites it, so we can restore it afterward and prevent the build
-        # dispatch from leaking into the project chat history.
-        self._saved_bridge_messages = list(self._bridge.history.messages)
-        self._saved_bridge_system = self._bridge.history.system_prompt
-        self._bridge.suppress_auto_save = True
+        from aura.conversation.dispatch import WorkerDispatchRequest
 
-        # Format the dispatch spec as a user message for the Planner.
-        # The Planner, in drone_architect mode, will dispatch to Worker.
-        user_message = (
-            "Dispatch the following Drone candidate build to the Worker.\n\n"
-            f"Goal: {dispatch_spec.get('goal', 'Build Drone candidate')}\n\n"
-            f"Files: {dispatch_spec.get('files', [])}\n\n"
-            "Spec:\n"
-            f"{dispatch_spec.get('spec', '')}\n\n"
-            "Acceptance:\n"
-            f"{dispatch_spec.get('acceptance', '')}"
+        req = WorkerDispatchRequest(
+            goal=dispatch_spec.get("goal", "Build Drone candidate"),
+            files=list(dispatch_spec.get("files", [])),
+            spec=dispatch_spec.get("spec", ""),
+            acceptance=dispatch_spec.get("acceptance", ""),
+            summary=dispatch_spec.get("summary", ""),
         )
 
-        from aura.drones.build_prompt import build_drone_architect_prompt
-        self._bridge.set_system_prompt(build_drone_architect_prompt(for_candidate=True))
-
-        # Clear residual project messages so the Planner only sees the build dispatch.
-        self._bridge.history.messages.clear()
-
-        self._bridge.history.append_user_text(user_message)
-        self._chat.begin_assistant()
-        self._bridge.send(model=model, thinking=thinking)
+        self._bridge.dispatch_drone_build(req)
 
     @Slot()
     def _on_bridge_finished(self) -> None:
@@ -377,15 +361,6 @@ class DroneModeCoordinator(QObject):
             # result is handled in _on_worker_finished, which fires before
             # bridge.finished.  We use this only as a fallback detach.
             pass
-
-        # Restore project conversation history after internal build dispatch.
-        if self._saved_bridge_messages is not None:
-            self._bridge.history.messages = self._saved_bridge_messages
-            if self._saved_bridge_system is not None:
-                self._bridge.history.system_prompt = self._saved_bridge_system
-            self._saved_bridge_messages = None
-            self._saved_bridge_system = None
-        self._bridge.suppress_auto_save = False
 
     @Slot(str, bool, str, bool, str)
     def _on_worker_finished(

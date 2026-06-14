@@ -60,6 +60,7 @@ from aura.config import (
 from aura.conversation import (
     ConversationManager,
     History,
+    WorkerDispatchRequest,
 )
 from aura.conversation.tools import (
     ToolRegistry,
@@ -273,7 +274,6 @@ class ConversationBridge(QObject):
         self._planner_system_prompt: str = ""
         self._tier1_context: str = ""
         self._auto_dispatch: bool = False
-        self.suppress_auto_save: bool = False
         self._pre_worker_sha: str | None = None
         self._active_prompt_mode: str | None = None
 
@@ -491,6 +491,14 @@ class ConversationBridge(QObject):
 
     def user_cancelled_dispatch(self, tool_call_id: str) -> bool:
         return self._dispatch_proxy.user_cancelled(tool_call_id)
+
+    def dispatch_drone_build(self, req: WorkerDispatchRequest) -> str:
+        """Run a drone build Worker dispatch on a background thread.
+
+        The parent project conversation history is never touched.
+        Returns the tool_call_id for tracking.
+        """
+        return self._dispatch_proxy.start_drone_build(req)
 
     # ---- send / cancel ----------------------------------------------------
 
