@@ -243,7 +243,7 @@ def _execute_node(
                     if upstream_node
                     else None
                 )
-                if upstream_drone and upstream_drone.produces:
+                if upstream_drone and upstream_drone.cargo_contract.get("type"):
                     # Structured artifact
                     inbound_artifacts[edge.from_node] = data
                 else:
@@ -441,7 +441,7 @@ def _execute_node(
     node_dir.mkdir(parents=True, exist_ok=True)
     output_path = node_dir / "output.json"
 
-    if drone.produces and produced_artifact is not None:
+    if drone.cargo_contract.get("type") and produced_artifact is not None:
         output_data = produced_artifact
     else:
         # Free-form or unmet: save the full receipt dict

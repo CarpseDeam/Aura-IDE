@@ -19,9 +19,8 @@ class DroneRegistry:
                 "id": d.id,
                 "name": d.name,
                 "description": d.description,
-                "accepts": d.accepts,
-                "produces": d.produces,
-            }
+                "input_type": (d.input_contract or {}).get("type", ""),
+                "cargo_type": (d.cargo_contract or {}).get("type", ""),            }
             for d in drones
         ]
 
@@ -33,6 +32,5 @@ class DroneRegistry:
             "id": d.id,
             "name": d.name,
             "description": d.description,
-            "accepts": d.accepts,
-            "produces": d.produces,
-        }
+            "input_type": (d.input_contract or {}).get("type", ""),
+            "cargo_type": (d.cargo_contract or {}).get("type", ""),        }

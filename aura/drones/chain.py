@@ -160,8 +160,8 @@ def validate(
         if not producer_drone or not consumer_drone:
             continue
 
-        producer_type_name = producer_drone.produces
-        consumer_type_name = consumer_drone.accepts
+        producer_type_name = (producer_drone.cargo_contract or {}).get("type", "")
+        consumer_type_name = (consumer_drone.input_contract or {}).get("type", "")
 
         # Free-form consumer accepts anything
         if not consumer_type_name:

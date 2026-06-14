@@ -1318,8 +1318,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             capability_requirements=drone.capability_requirements,
             capability_bindings=drone.capability_bindings,
             setup_steps=drone.setup_steps,
-            accepts=drone.accepts,
-            produces=drone.produces,
             runtime=drone.runtime,
             entrypoint=drone.entrypoint,
             permissions=drone.permissions,
