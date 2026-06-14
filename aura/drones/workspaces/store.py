@@ -16,7 +16,6 @@ from aura.drones.workspaces.paths import (
     build_runs_dir,
     candidate_dir,
     chats_dir,
-    proof_runs_dir,
     repair_runs_dir,
     workspace_folder,
     workspace_manifest_path,
@@ -53,7 +52,6 @@ class DroneWorkspaceStore:
         chats_dir(project_root, wid).mkdir(parents=True, exist_ok=True)
         candidate_dir(project_root, wid).mkdir(parents=True, exist_ok=True)
         build_runs_dir(project_root, wid).mkdir(parents=True, exist_ok=True)
-        proof_runs_dir(project_root, wid).mkdir(parents=True, exist_ok=True)
         repair_runs_dir(project_root, wid).mkdir(parents=True, exist_ok=True)
         artifacts_dir(project_root, wid).mkdir(parents=True, exist_ok=True)
 
@@ -180,7 +178,6 @@ class DroneWorkspaceStore:
                 "discarded",
                 "installed",
                 "readiness_failed",
-                "proof_failed",
             }:
                 return None
             return ws
@@ -207,29 +204,10 @@ class DroneWorkspaceStore:
         DroneWorkspaceStore.save_workspace(workspace)
 
     @staticmethod
-    def append_proof_run(
-        workspace: DroneWorkspace, run_record: dict
-    ) -> None:
-        """Write a proof run record and update workspace.last_proof_run."""
-        timestamp = datetime.now(timezone.utc).isoformat()
-        project_root = Path(workspace.project_root)
-        dest = (
-            proof_runs_dir(project_root, workspace.workspace_id)
-            / f"proof_{_safe_run_timestamp()}.json"
-        )
-        dest.write_text(
-            json.dumps(run_record, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
-        workspace.last_proof_run = timestamp
-        DroneWorkspaceStore.save_workspace(workspace)
-
-    @staticmethod
     def append_repair_run(
         workspace: DroneWorkspace, run_record: dict
     ) -> None:
         """Write a repair run record and persist the workspace."""
-        timestamp = datetime.now(timezone.utc).isoformat()
         project_root = Path(workspace.project_root)
         dest = (
             repair_runs_dir(project_root, workspace.workspace_id)

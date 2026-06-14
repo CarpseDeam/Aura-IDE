@@ -35,10 +35,6 @@ def build_runs_dir(project_root: Path, workspace_id: str) -> Path:
     return workspace_folder(project_root, workspace_id) / "build-runs"
 
 
-def proof_runs_dir(project_root: Path, workspace_id: str) -> Path:
-    return workspace_folder(project_root, workspace_id) / "proof-runs"
-
-
 def repair_runs_dir(project_root: Path, workspace_id: str) -> Path:
     return workspace_folder(project_root, workspace_id) / "repair-runs"
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 
 
@@ -9,8 +9,6 @@ class WorkspacePhase(Enum):
     BUILDING = "building"
     READINESS_RUNNING = "readiness_running"
     READINESS_FAILED = "readiness_failed"
-    PROOF_RUNNING = "proof_running"
-    PROOF_FAILED = "proof_failed"
     AWAITING_DECISION = "awaiting_decision"
     ITERATING = "iterating"
     INSTALLING = "installing"
@@ -31,7 +29,6 @@ class DroneWorkspace:
     build_brief: str = ""
     last_build_run: str | None = None
     last_readiness_result: dict | None = None
-    last_proof_run: str | None = None
     last_error: str | None = None
     created_at: str = ""
     updated_at: str = ""

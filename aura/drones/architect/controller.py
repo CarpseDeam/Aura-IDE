@@ -11,7 +11,6 @@ from aura.drones.architect.build_prompts import (
 from aura.drones.architect.commands import DroneCommand, parse_drone_command
 from aura.drones.architect.failure_text import build_failure_error_text
 from aura.drones.architect.results import (
-    AwaitingDecision,
     BuildCompleted,
     BuildFailed,
     BuildStarted,
@@ -19,8 +18,6 @@ from aura.drones.architect.results import (
     ErrorResult,
     Installed,
     ModeEntered,
-    ProofCompleted,
-    ProofResult,
     ReadinessFailed,
     ReadinessPassed,
     WorkshopClarifying,
@@ -41,7 +38,6 @@ logger = logging.getLogger(__name__)
 
 _AUTO_RESUME_BLOCKED_PHASES = {
     WorkspacePhase.READINESS_FAILED.value,
-    WorkspacePhase.PROOF_FAILED.value,
     WorkspacePhase.INSTALLED.value,
     WorkspacePhase.DISCARDED.value,
 }
@@ -55,7 +51,6 @@ class DroneArchitectController:
         self._pending_dispatch_spec: dict | None = None
         self._last_candidate_path: str = ""
         self._last_drone_id: str = ""
-        self._last_proof_result: ProofResult | None = None
 
     # ------------------------------------------------------------------
     # Properties
@@ -230,10 +225,7 @@ class DroneArchitectController:
         if phase == WorkspacePhase.BUILDING.value:
             return ErrorResult(message="Build already in progress")
 
-        if phase in (
-            WorkspacePhase.READINESS_FAILED.value,
-            WorkspacePhase.PROOF_FAILED.value,
-        ):
+        if phase == WorkspacePhase.READINESS_FAILED.value:
             return self._handle_failed_phase_message(text)
 
         if phase == WorkspacePhase.AWAITING_DECISION.value:
@@ -347,12 +339,12 @@ class DroneArchitectController:
             return BuildFailed(error=failure_error)
 
     def on_readiness_completed(self, result: dict):
-        """Called after readiness check. Triggers proof if passed."""
+        """Called after readiness check. Moves to awaiting_decision on success."""
         if self._active_workspace is None:
             return ErrorResult(message="No active Drone")
 
         if result.get("ok"):
-            self._active_workspace.phase = WorkspacePhase.PROOF_RUNNING.value
+            self._active_workspace.phase = WorkspacePhase.AWAITING_DECISION.value
             self._active_workspace.last_readiness_result = result
             DroneWorkspaceStore.save_workspace(self._active_workspace)
             return ReadinessPassed(result=result)
@@ -366,47 +358,6 @@ class DroneArchitectController:
             return ReadinessFailed(
                 error=result.get("error", ""), detail=result
             )
-
-    def on_proof_completed(self, proof_result: ProofResult):
-        """Called after proof run. Transitions based on proof status."""
-        if self._active_workspace is None:
-            return ErrorResult(message="No active Drone")
-
-        self._last_proof_result = proof_result
-
-        if proof_result.proof_status == "failed":
-            self._active_workspace.phase = WorkspacePhase.PROOF_FAILED.value
-        else:
-            self._active_workspace.phase = WorkspacePhase.AWAITING_DECISION.value
-        DroneWorkspaceStore.save_workspace(self._active_workspace)
-
-        return ProofCompleted(proof_result=proof_result)
-
-    def finalize_proof(self):
-        """Finalize proof — gate on failed, or build AwaitingDecision."""
-        if self._active_workspace is None:
-            return ErrorResult(message="No active Drone")
-
-        if self._active_workspace.phase == WorkspacePhase.PROOF_FAILED.value:
-            return ErrorResult(
-                message="Test Run failed. Revise the Drone and rebuild."
-            )
-
-        pr = self._last_proof_result
-        proof_summary = (
-            f"Status: {pr.proof_status}\n"
-            f"Tried: {pr.what_tried}\n"
-        )
-        if pr.errors:
-            proof_summary += f"Errors: {', '.join(pr.errors)}\n"
-        if pr.warnings:
-            proof_summary += f"Warnings: {', '.join(pr.warnings)}\n"
-
-        return AwaitingDecision(
-            workspace_id=self._active_workspace.workspace_id,
-            drone_name=self._active_workspace.display_name,
-            proof_summary=proof_summary,
-        )
 
     # ------------------------------------------------------------------
     # Terminal actions

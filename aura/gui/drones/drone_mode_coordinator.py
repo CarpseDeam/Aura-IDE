@@ -13,14 +13,12 @@ from aura.drones.architect.results import (
     Discarded,
     ErrorResult,
     Installed,
-    ProofResult,
-    ProofRunning,
     ReadinessPassed,
     ReadinessRunning,
 )
+from aura.drones.workshop_runner import DroneWorkshopRunner
 from aura.drones.workspaces.model import WorkspacePhase
 from aura.drones.workspaces.store import DroneWorkspaceStore
-from aura.drones.workshop_runner import DroneWorkshopRunner
 from aura.gui.drones.drone_workspace_pane import DroneWorkspacePane
 
 logger = logging.getLogger(__name__)
@@ -249,16 +247,10 @@ class DroneModeCoordinator(QObject):
         elif kind == "readiness_failed":
             self._chat.add_error("Needs Fix", result.error)
             self.drone_list_changed.emit()
-        elif kind == "proof_running":
-            self._chat.add_info("Drone Builder", "Running Test Run...")
-            self.drone_list_changed.emit()
-        elif kind == "proof_completed":
-            self._render_proof_card(result.proof_result)
-            self.drone_list_changed.emit()
         elif kind == "awaiting_decision":
             self._chat.add_info(
                 "Drone Ready",
-                result.proof_summary
+                result.ready_message
                 + "\n\nTell me any changes you want, or say new to build another Drone.",
             )
         elif kind == "installed":
@@ -443,7 +435,7 @@ class DroneModeCoordinator(QObject):
         self._workspace_pane.refresh()
 
         if isinstance(result, BuildCompleted):
-            # Auto-chain: build → readiness → proof
+            # Auto-chain: build → readiness → ready
             self._run_readiness()
         elif isinstance(result, BuildFailed):
             # Stay in failed Builder state so user can revise.
@@ -492,53 +484,7 @@ class DroneModeCoordinator(QObject):
         self._workspace_pane.refresh()
 
         if isinstance(ctrl_result, ReadinessPassed):
-            self._run_proof()
-
-    # ------------------------------------------------------------------
-    # Proof
-    # ------------------------------------------------------------------
-
-    def _run_proof(self) -> None:
-        if self._controller.active_workspace is None:
-            return
-        if self._workspace_root is None:
-            return
-
-        self._render_result(ProofRunning())
-
-        ws = self._controller.active_workspace
-        workspace_root = self._workspace_root
-
-        def _do_proof():
-            from aura.drones.architect.proof import run_candidate_proof
-            return run_candidate_proof(workspace_root, ws)
-
-        self._run_in_thread(_do_proof, self._on_proof_done)
-
-    def _on_proof_done(self, proof_result) -> None:
-        # Handle thread error dict shape from _run_in_thread.
-        if isinstance(proof_result, dict) and not proof_result.get("ok", True):
-            error = proof_result.get("error", "Unknown Test Run error")
-            ws = self._controller.active_workspace
-            proof_result = ProofResult(
-                drone_name=ws.display_name if ws else "unknown",
-                proof_status="failed",
-                what_tried="Running Test Run",
-                route_used="",
-                output_sample="",
-                errors=[error],
-            )
-        ctrl_result = self._controller.on_proof_completed(proof_result)
-        self._render_result(ctrl_result)
-        self._workspace_pane.refresh()
-        if isinstance(ctrl_result, ErrorResult):
-            return
-        if proof_result.proof_status == "failed":
-            next_result = self._controller.finalize_proof()
-            self._render_result(next_result)
-            self._workspace_pane.refresh()
-            return
-        self._start_ready_step()
+            self._start_ready_step()
 
     def _start_ready_step(self) -> None:
         ws = self._controller.active_workspace
@@ -589,37 +535,6 @@ class DroneModeCoordinator(QObject):
         )
         self._workspace_pane.refresh()
 
-    # ------------------------------------------------------------------
-    # Proof result card
-    # ------------------------------------------------------------------
-
-    def _render_proof_card(self, proof_result) -> None:
-        """Render a rich proof result card in chat."""
-        pr = proof_result
-
-        if pr is None:
-            self._chat.add_info("Drone Test Run", "No Test Run result available.")
-            return
-
-        status_icon = "\u2713" if pr.proof_status == "passed" else "\u26a0" if pr.proof_status == "warnings" else "\u2717"
-
-        lines = [
-            f"{status_icon} Test Run: {pr.proof_status.upper()}",
-            f"Drone: {pr.drone_name}",
-            f"Tried: {pr.what_tried}",
-        ]
-        if pr.route_used:
-            lines.append(f"Route: {pr.route_used}")
-        if pr.output_sample:
-            sample = pr.output_sample[:300]
-            lines.append(f"Output sample: {sample}")
-        if pr.warnings:
-            lines.append(f"Warnings: {'; '.join(pr.warnings[:5])}")
-        if pr.errors:
-            lines.append(f"Errors: {'; '.join(pr.errors[:5])}")
-
-        self._chat.add_info("Drone Test Run", "\n".join(lines))
-
     @staticmethod
     def _status_for_phase(phase: str) -> str:
         if phase == WorkspacePhase.WORKSHOP.value:
@@ -628,15 +543,11 @@ class DroneModeCoordinator(QObject):
             return "Building"
         if phase in (
             WorkspacePhase.READINESS_RUNNING.value,
-            WorkspacePhase.PROOF_RUNNING.value,
             WorkspacePhase.INSTALLING.value,
             WorkspacePhase.AWAITING_DECISION.value,
         ):
             return "Testing"
-        if phase in (
-            WorkspacePhase.READINESS_FAILED.value,
-            WorkspacePhase.PROOF_FAILED.value,
-        ):
+        if phase == WorkspacePhase.READINESS_FAILED.value:
             return "Needs Fix"
         if phase == WorkspacePhase.INSTALLED.value:
             return "Ready"

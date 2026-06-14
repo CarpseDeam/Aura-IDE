@@ -75,22 +75,11 @@ class ReadinessFailed:
 
 
 @dataclass(frozen=True)
-class ProofRunning:
-    kind: str = "proof_running"
-
-
-@dataclass(frozen=True)
-class ProofCompleted:
-    kind: str = "proof_completed"
-    proof_result: ProofResult | None = None
-
-
-@dataclass(frozen=True)
 class AwaitingDecision:
     kind: str = "awaiting_decision"
     workspace_id: str = ""
     drone_name: str = ""
-    proof_summary: str = ""
+    ready_message: str = ""
 
 
 @dataclass(frozen=True)
@@ -112,16 +101,4 @@ class ErrorResult:
     message: str = ""
 
 
-# ProofResult is defined here (not in proof.py) so results.py can reference it
-# in the ProofCompleted dataclass.  proof.py re-exports it from this module.
-@dataclass
-class ProofResult:
-    drone_name: str
-    proof_status: str  # "passed", "failed", "warnings"
-    what_tried: str
-    route_used: str
-    output_sample: str
-    warnings: list[str] = field(default_factory=list)
-    errors: list[str] = field(default_factory=list)
-    raw_result: dict = field(default_factory=dict)
-    proof_run_path: str = ""
+

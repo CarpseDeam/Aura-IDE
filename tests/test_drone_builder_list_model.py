@@ -81,7 +81,6 @@ def test_first_real_description_creates_visible_builder_entry(tmp_path: Path) ->
     "phase",
     [
         WorkspacePhase.READINESS_FAILED.value,
-        WorkspacePhase.PROOF_FAILED.value,
         WorkspacePhase.INSTALLED.value,
         WorkspacePhase.DISCARDED.value,
     ],
@@ -113,7 +112,7 @@ def test_drone_enter_mode_ignores_stale_failed_or_terminal_active_workspace(
 
 @pytest.mark.parametrize(
     "phase",
-    [WorkspacePhase.READINESS_FAILED.value, WorkspacePhase.PROOF_FAILED.value],
+    [WorkspacePhase.READINESS_FAILED.value],
 )
 def test_explicitly_selected_failed_builder_drone_accepts_revision(
     tmp_path: Path,
@@ -138,7 +137,7 @@ def test_explicitly_selected_failed_builder_drone_accepts_revision(
 def test_builder_candidate_entry_is_visible_but_not_runnable(tmp_path: Path) -> None:
     workspace = DroneWorkspaceStore.create_workspace(tmp_path, "Repo Scout")
     _write_drone_folder(candidate_dir(tmp_path, workspace.workspace_id))
-    workspace.phase = WorkspacePhase.PROOF_RUNNING.value
+    workspace.phase = WorkspacePhase.AWAITING_DECISION.value
     workspace.candidate_drone_id = "repo-scout"
     DroneWorkspaceStore.save_workspace(workspace)
 

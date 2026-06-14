@@ -7,7 +7,6 @@ from aura.drones.architect.build_prompts import (
 from aura.drones.architect.commands import DroneCommand, parse_drone_command
 from aura.drones.architect.controller import DroneArchitectController
 from aura.drones.architect.installer import install_or_reinstall
-from aura.drones.architect.proof import run_candidate_proof
 from aura.drones.architect.results import (
     AwaitingDecision,
     BuildCompleted,
@@ -17,9 +16,6 @@ from aura.drones.architect.results import (
     ErrorResult,
     Installed,
     ModeEntered,
-    ProofCompleted,
-    ProofResult,
-    ProofRunning,
     ReadinessFailed,
     ReadinessPassed,
     ReadinessRunning,
@@ -47,8 +43,6 @@ __all__ = [
     "ReadinessRunning",
     "ReadinessPassed",
     "ReadinessFailed",
-    "ProofRunning",
-    "ProofCompleted",
     "AwaitingDecision",
     "Installed",
     "Discarded",
@@ -62,9 +56,6 @@ __all__ = [
     # Build
     "build_candidate_dispatch_prompt",
     "build_repair_dispatch_prompt",
-    # Proof
-    "ProofResult",
-    "run_candidate_proof",
     # Installer
     "install_or_reinstall",
 ]
