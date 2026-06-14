@@ -276,6 +276,8 @@ class TestGrepSearch:
             result = _handler("grep_search")(registry, {"pattern": "foo"}, approve_cb, False)
 
         assert result.ok is True
+        kwargs = mock_gf.call_args.kwargs
+        assert kwargs["regex_mode"] is True
 
     def test_valid_all_options(self, registry: ToolRegistry, approve_cb: MagicMock):
         with patch("aura.conversation.tools.registry.grep_files") as mock_gf:
@@ -346,6 +348,7 @@ class TestToolSchemaDocs:
         grep_tool = next(tool for tool in READ_TOOL_DEFS if tool["function"]["name"] == "grep_search")
         include_desc = grep_tool["function"]["parameters"]["properties"]["include_pattern"]["description"]
         assert "**/*.py" in include_desc
+        assert "exact file path" in include_desc
         assert "recursive" in include_desc.lower() or "anywhere in the repo" in include_desc.lower()
 
     def test_diagnostic_schema_prefers_rg_over_grep(self):

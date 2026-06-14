@@ -77,12 +77,12 @@ class TestGrepPython:
 
     # -- tests ---------------------------------------------------------
 
-    def test_literal_search_finds_exact_text(self, tmp_workspace: Path) -> None:
-        """Find 'hello' in scripts/smoke.py via substring matching."""
+    def test_default_regex_search_finds_plain_text(self, tmp_workspace: Path) -> None:
+        """Find 'hello' in scripts/smoke.py with regex mode enabled by default."""
         result = grep_files(tmp_workspace, "hello")
         assert result["ok"] is True
         assert result["engine"] == "python"
-        assert result["regex_mode"] is False
+        assert result["regex_mode"] is True
         assert result["auto_regex_retry"] is False
         assert len(result["matches"]) >= 1
         assert any("hello" in m["line"] for m in result["matches"])
@@ -101,14 +101,14 @@ class TestGrepPython:
         assert len(result["matches"]) == 1
         assert result["matches"][0]["path"] == "aura/config.py"
 
-    def test_regex_looking_pattern_reports_hint_without_retry(self, tmp_workspace: Path) -> None:
-        """Regex-looking patterns remain literal and report a passive hint."""
+    def test_regex_looking_pattern_uses_regex_by_default(self, tmp_workspace: Path) -> None:
+        """Regex-looking patterns use normal grep behavior by default."""
         result = grep_files(tmp_workspace, r"^VALUE = 42$")
         assert result["ok"] is True
         assert result["auto_regex_retry"] is False
-        assert result["regex_mode"] is False
-        assert result["matches"] == []
-        assert "regex_hint" in result
+        assert result["regex_mode"] is True
+        assert len(result["matches"]) == 1
+        assert "regex_hint" not in result
 
     def test_escaped_function_pattern_is_detected_as_regex(self, tmp_path: Path) -> None:
         file_path = tmp_path / "module.py"
@@ -119,9 +119,9 @@ class TestGrepPython:
         assert _looks_like_regex(r"def foo\(") is True
         assert result["ok"] is True
         assert result["auto_regex_retry"] is False
-        assert result["regex_mode"] is False
-        assert result["matches"] == []
-        assert "regex_hint" in result
+        assert result["regex_mode"] is True
+        assert len(result["matches"]) == 1
+        assert "regex_hint" not in result
 
     def test_invalid_regex(self, tmp_workspace: Path) -> None:
         """Malformed regex returns an error."""
@@ -149,6 +149,14 @@ class TestGrepPython:
         assert result["include_pattern"] == "**/*.py"
         for m in result["matches"]:
             assert m["path"].endswith(".py")
+
+    def test_include_pattern_exact_file_path(self, tmp_workspace: Path) -> None:
+        """include_pattern can scope the search to one exact workspace file."""
+        result = grep_files(tmp_workspace, "hello", include_pattern="scripts/smoke.py")
+        assert result["ok"] is True
+        assert result["searched_files"] == 1
+        assert len(result["matches"]) == 1
+        assert result["matches"][0]["path"] == "scripts/smoke.py"
 
     def test_skip_dirs_and_hidden(self, tmp_workspace: Path) -> None:
         """Hidden files and .git/ contents are not searched."""
@@ -354,10 +362,10 @@ class TestGrepRipgrep:
         assert result["searched_files"] == 2
         assert result["auto_regex_retry"] is False
 
-    def test_regex_hint_for_alternation_without_retry(
+    def test_alternation_uses_regex_by_default(
         self, monkeypatch: pytest.MonkeyPatch, tmp_workspace: Path
     ) -> None:
-        """An accidental alternation stays literal and reports a regex hint."""
+        """Alternation uses regex behavior by default."""
         captured: list[list[str]] = []
 
         def _capture_run(*args: object, **kwargs: object) -> MockResult:
@@ -371,11 +379,11 @@ class TestGrepRipgrep:
 
         assert result["ok"] is True
         assert result["auto_regex_retry"] is False
-        assert result["regex_mode"] is False
+        assert result["regex_mode"] is True
         assert result["matches"] == []
-        assert result["regex_hint"]
+        assert "regex_hint" not in result
         assert len(captured) == 1
-        assert "--fixed-strings" in captured[0]
+        assert "--fixed-strings" not in captured[0]
 
     def test_non_zero_returncode(self, monkeypatch: pytest.MonkeyPatch,
                                  tmp_workspace: Path) -> None:
@@ -458,15 +466,35 @@ class TestGrepRipgrep:
 
         monkeypatch.setattr(subprocess, "run", _capture_run)
 
-        # Default: regex_mode=False → --fixed-strings present
+        # Default: regex_mode=True -> --fixed-strings absent
         grep_files(tmp_workspace, "hello")
         cmd_default = captured[0]
-        assert "--fixed-strings" in cmd_default
+        assert "--fixed-strings" not in cmd_default
 
-        # Regex mode: regex_mode=True → --fixed-strings absent
-        grep_files(tmp_workspace, r"he[l]+o", regex_mode=True)
-        cmd_regex = captured[1]
-        assert "--fixed-strings" not in cmd_regex
+        # Literal mode: regex_mode=False -> --fixed-strings present
+        grep_files(tmp_workspace, r"he[l]+o", regex_mode=False)
+        cmd_literal = captured[1]
+        assert "--fixed-strings" in cmd_literal
+
+    def test_exact_include_path_is_ripgrep_target(self, monkeypatch: pytest.MonkeyPatch,
+                                                  tmp_workspace: Path) -> None:
+        """Exact include_pattern paths are passed as rg targets, not glob filters."""
+        captured: list[list[str]] = []
+
+        def _capture_run(*args: object, **kwargs: object) -> MockResult:
+            cmd = args[0] if args else kwargs.get("cmd", [])
+            captured.append(list(cmd))  # type: ignore[arg-type]
+            return MockResult(stdout="")
+
+        monkeypatch.setattr(subprocess, "run", _capture_run)
+
+        grep_files(tmp_workspace, "hello", include_pattern="scripts/smoke.py")
+
+        cmd = captured[0]
+        assert "--glob" not in cmd
+        idx_sep = cmd.index("--")
+        assert cmd[idx_sep + 1] == "hello"
+        assert Path(cmd[idx_sep + 2]) == tmp_workspace / "scripts" / "smoke.py"
 
     def test_ripgrep_flags_and_safety(self, monkeypatch: pytest.MonkeyPatch,
                                        tmp_workspace: Path) -> None:
