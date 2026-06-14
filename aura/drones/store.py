@@ -319,7 +319,6 @@ class RunHistoryStore:
                     "status": data.get("status", ""),
                     "started_at": data.get("started_at", ""),
                     "elapsed_seconds": data.get("elapsed_seconds", 0),
-                    "tool_calls_count": len(data.get("tool_calls", [])),
                 }
                 runs.append(summary)
             except Exception:
