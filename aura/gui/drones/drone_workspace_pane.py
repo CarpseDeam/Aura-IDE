@@ -164,6 +164,16 @@ class DroneWorkspacePane(QFrame):
             logger.exception("Failed to list workspaces")
             workspaces = []
 
+        if not workspaces:
+            hint = QLabel("No Drone workspaces yet.\nDescribe the Drone\nyou want to build.")
+            hint.setStyleSheet(
+                f"color: {FG_MUTED}; font-size: 12px; padding: 8px; background: transparent;"
+            )
+            hint.setWordWrap(True)
+            self._rows_layout.addWidget(hint)
+            self._rows_layout.addStretch(1)
+            return
+
         for ws in workspaces:
             row = _WorkspaceRow(ws)
             row.clicked.connect(self.workspace_selected.emit)

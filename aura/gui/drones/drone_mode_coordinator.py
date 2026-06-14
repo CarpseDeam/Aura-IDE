@@ -58,6 +58,10 @@ class DroneModeCoordinator(QObject):
         self._awaiting_build_result: bool = False
         self._pending_build_dispatch_spec: dict | None = None
 
+        # Background thread/worker references — retained to prevent Qt GC.
+        self._background_threads: list[QThread] = []
+        self._background_workers: list[QObject] = []
+
         # Workspace pane placed into the splitter during drone mode.
         self._workspace_pane = DroneWorkspacePane(parent=None)
         self._workspace_pane.hide()
@@ -153,6 +157,7 @@ class DroneModeCoordinator(QObject):
 
         result = self._controller.handle_user_message(text)
         self._render_result(result, model, thinking)
+        self._workspace_pane.refresh()
 
     # ------------------------------------------------------------------
     # Result rendering
@@ -162,10 +167,16 @@ class DroneModeCoordinator(QObject):
         kind = result.kind if hasattr(result, "kind") else "unknown"
 
         if kind == "mode_entered":
-            self._chat.add_info(
-                "Drone Workspaces",
-                "Drone mode active. Describe what you want to build.",
-            )
+            if result.workspace_id is None:
+                self._chat.add_info(
+                    "Drone Workspaces",
+                    "No Drone workspaces yet. Describe the Drone you want to build.",
+                )
+            else:
+                self._chat.add_info(
+                    "Drone Workspaces",
+                    "Drone mode active. Describe what you want to build.",
+                )
         elif kind == "workspace_loaded":
             if self._is_edit_workspace():
                 self._chat.add_info(
@@ -283,7 +294,12 @@ class DroneModeCoordinator(QObject):
         result = self._controller.handle_workshop_response(
             response, response.raw_text
         )
-        self._render_result(result)
+        self._render_result(
+            result,
+            self._pending_workshop_model,
+            self._pending_workshop_thinking,
+        )
+        self._workspace_pane.refresh()
 
     @Slot(int, str)
     def _on_workshop_error(self, status: int, message: str) -> None:
@@ -309,6 +325,15 @@ class DroneModeCoordinator(QObject):
 
     def _dispatch_build(self, dispatch_spec, model, thinking):
         """Send the build dispatch spec through the bridge for Worker execution."""
+        if not model or not thinking:
+            self._chat.add_error(
+                "Drone Architect",
+                "Cannot start build: model or thinking mode is not configured.",
+            )
+            self._awaiting_build_result = False
+            self._pending_build_dispatch_spec = None
+            return
+
         self._awaiting_build_result = True
         self._pending_build_dispatch_spec = dispatch_spec
 
@@ -350,6 +375,7 @@ class DroneModeCoordinator(QObject):
 
         result = self._controller.on_build_completed(ok)
         self._render_result(result)
+        self._workspace_pane.refresh()
 
         if isinstance(result, BuildCompleted):
             # Auto-chain: build → readiness → proof
@@ -391,6 +417,7 @@ class DroneModeCoordinator(QObject):
     def _on_readiness_done(self, result: dict) -> None:
         ctrl_result = self._controller.on_readiness_completed(result)
         self._render_result(ctrl_result)
+        self._workspace_pane.refresh()
 
         if isinstance(ctrl_result, ReadinessPassed):
             self._run_proof()
@@ -419,8 +446,10 @@ class DroneModeCoordinator(QObject):
     def _on_proof_done(self, proof_result) -> None:
         ctrl_result = self._controller.on_proof_completed(proof_result)
         self._render_result(ctrl_result)
+        self._workspace_pane.refresh()
         next_result = self._controller.finalize_proof()
         self._render_result(next_result)
+        self._workspace_pane.refresh()
 
     # ------------------------------------------------------------------
     # Proof result card
@@ -478,6 +507,19 @@ class DroneModeCoordinator(QObject):
         bg_worker.done.connect(bg_thread.quit)
         bg_worker.done.connect(bg_worker.deleteLater)
         bg_thread.finished.connect(bg_thread.deleteLater)
+
+        # Hold references so Qt doesn't destroy them mid-run.
+        self._background_threads.append(bg_thread)
+        self._background_workers.append(bg_worker)
+
+        def _remove_refs(t=bg_thread, w=bg_worker):
+            if t in self._background_threads:
+                self._background_threads.remove(t)
+            if w in self._background_workers:
+                self._background_workers.remove(w)
+
+        bg_worker.done.connect(_remove_refs)
+
         bg_thread.start()
 
     # ------------------------------------------------------------------
