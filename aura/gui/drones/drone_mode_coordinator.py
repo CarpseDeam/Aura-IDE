@@ -8,24 +8,12 @@ from PySide6.QtWidgets import QFrame, QSplitter
 
 from aura.drones.architect.controller import DroneArchitectController
 from aura.drones.architect.results import (
-    AwaitingDecision,
     BuildCompleted,
     BuildFailed,
-    BuildStarted,
     Discarded,
-    ErrorResult,
-    Installed,
-    ModeEntered,
-    ProofCompleted,
     ProofRunning,
-    ReadinessFailed,
     ReadinessPassed,
     ReadinessRunning,
-    WorkspaceLoaded,
-    WorkshopClarifying,
-    WorkshopQuestion,
-    WorkshopRequested,
-    ProofResult,
 )
 from aura.drones.workshop_runner import DroneWorkshopRunner
 from aura.gui.drones.drone_workspace_pane import DroneWorkspacePane
@@ -336,7 +324,7 @@ class DroneModeCoordinator(QObject):
         )
 
         from aura.drones.build_prompt import build_drone_architect_prompt
-        self._bridge.set_system_prompt(build_drone_architect_prompt())
+        self._bridge.set_system_prompt(build_drone_architect_prompt(for_candidate=True))
 
         self._bridge.history.append_user_text(user_message)
         self._chat.begin_assistant()
@@ -382,7 +370,6 @@ class DroneModeCoordinator(QObject):
         self._render_result(ReadinessRunning())
 
         ws = self._controller.active_workspace
-        workspace_root = self._workspace_root
 
         def _do_readiness():
             from aura.drones.folder_runner import run_drone_readiness
@@ -431,6 +418,8 @@ class DroneModeCoordinator(QObject):
     def _on_proof_done(self, proof_result) -> None:
         ctrl_result = self._controller.on_proof_completed(proof_result)
         self._render_result(ctrl_result)
+        next_result = self._controller.finalize_proof()
+        self._render_result(next_result)
 
     # ------------------------------------------------------------------
     # Proof result card

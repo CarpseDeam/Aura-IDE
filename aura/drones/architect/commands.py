@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from enum import Enum
 import re
+from enum import Enum
 
 
 class DroneCommand(Enum):
@@ -15,42 +15,42 @@ class DroneCommand(Enum):
 
 
 _INSTALL_PATTERNS = [
-    r"\binstall\b",
-    r"\binstall it\b",
-    r"\binstall the drone\b",
-    r"\bregister it\b",
-    r"\bregister the drone\b",
+    r"^install\s*$",
+    r"^install it\s*$",
+    r"^install the drone\s*$",
+    r"^register it\s*$",
+    r"^register the drone\s*$",
 ]
 
 _DISCARD_PATTERNS = [
-    r"\bdiscard\b",
-    r"\bdiscard it\b",
-    r"\bdiscard this drone\b",
-    r"\bthrow away\b",
-    r"\bdelete it\b",
-    r"\bdelete this drone\b",
+    r"^discard\s*$",
+    r"^discard it\s*$",
+    r"^discard this drone\s*$",
+    r"^throw away\s*$",
+    r"^delete it\s*$",
+    r"^delete this drone\s*$",
 ]
 
 _NEW_PATTERNS = [
-    r"\bnew\b",
-    r"\bnew drone\b",
-    r"\bstart over\b",
-    r"\bstart new\b",
-    r"\bcreate new\b",
-    r"\bdifferent drone\b",
-    r"\bscratch\b",
+    r"^new\s*$",
+    r"^new drone\s*$",
+    r"^start over\s*$",
+    r"^start new\s*$",
+    r"^create new\s*$",
+    r"^different drone\s*$",
+    r"^scratch\s*$",
 ]
 
 _LOAD_PATTERNS = [
-    r"\bload\s+(.+)",
-    r"\bswitch to\s+(.+)",
+    r"^load\s+(.+)$",
+    r"^switch to\s+(.+)$",
 ]
 
 _HELP_PATTERNS = [
-    r"\bhelp\b",
-    r"\bwhat can i say\b",
-    r"\bwhat can you do\b",
-    r"\bcommands?\b",
+    r"^help\s*$",
+    r"^what can i say\s*$",
+    r"^what can you do\s*$",
+    r"^commands\??\s*$",
 ]
 
 

@@ -6,7 +6,6 @@ execution. Delegates to the bridge, chat view, and input panel.
 
 from __future__ import annotations
 
-import re
 import threading
 from pathlib import Path
 
@@ -15,7 +14,6 @@ from PySide6.QtWidgets import QMessageBox
 
 from aura.config import PROVIDERS, AppSettings, ModelInfo, ThinkingMode
 from aura.conversation.task_router import TaskLane, classify_user_request
-from aura.gui.input_panel import SendPayload
 from aura.git_ops import (
     recent_commit_log,
     restore_to_snapshot,
@@ -23,6 +21,8 @@ from aura.git_ops import (
     working_tree_diff,
     working_tree_status,
 )
+from aura.gui.input_panel import SendPayload
+
 
 class SendHandler(QObject):
     """Handles send/stop/undo logic extracted from MainWindow.
@@ -115,8 +115,8 @@ class SendHandler(QObject):
                 return
 
         route = classify_user_request(payload.text)
-        if route.action == "drone_make":
-            self._handle_drone_make(payload, model, thinking)
+        if route.action == "drone_enter_mode":
+            self._handle_drone_enter_mode(payload)
             return
 
         if route.lane == TaskLane.built_in_action:
@@ -229,35 +229,11 @@ class SendHandler(QObject):
 
     # ---- drone architect --------------------------------------------------
 
-    def _handle_drone_make(
-        self, payload: SendPayload, model: str, thinking: ThinkingMode
-    ) -> None:
-        """Handle /drone and /drone make|create|build commands.
-
-        Delegates to the DroneModeCoordinator when available.
-        """
-        match = re.match(
-            r"/drone(?:\s+(?:make|create|build|fix|repair|improve|edit|update)\s+(.+))?$",
-            payload.text.strip(),
-            re.IGNORECASE,
-        )
-        if match is None:
-            return
-        brief = match.group(1).strip() if match.group(1) else ""
-
-        if not brief:
-            # /drone alone — enter mode
-            self._chat.add_user(payload.text)
-            if self._drone_coordinator:
-                self._drone_coordinator.enter_drone_mode()
-            return
-
-        # /drone make|create|build <brief> — route through coordinator
+    def _handle_drone_enter_mode(self, payload: SendPayload) -> None:
+        """Handle /drone command — enter Drone Architect mode."""
+        self._chat.add_user(payload.text)
         if self._drone_coordinator:
-            if not self._drone_coordinator.is_drone_mode():
-                self._drone_coordinator.enter_drone_mode()
-            self._drone_coordinator.handle_message(payload, model, thinking)
-            return
+            self._drone_coordinator.enter_drone_mode()
 
     # ---- undo --------------------------------------------------------------
     def _handle_built_in_action(self, action: str) -> None:
@@ -277,13 +253,6 @@ class SendHandler(QObject):
         if action == "git_log":
             self._handle_git_log()
             return
-        if action == "drone_help":
-            self._chat.add_info(
-                "Drone Command",
-                "Describe the Drone you want to build or improve.",
-            )
-            return
-
         self._chat.add_error("Built-in action", f"Unsupported action: {action}")
 
     def _handle_restore_snapshot(self) -> None:

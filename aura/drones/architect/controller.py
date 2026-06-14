@@ -10,16 +10,17 @@ from aura.drones.architect.build_prompts import (
 from aura.drones.architect.commands import DroneCommand, parse_drone_command
 from aura.drones.architect.results import (
     AwaitingDecision,
+    BuildCompleted,
     BuildFailed,
     BuildStarted,
     Discarded,
     ErrorResult,
     Installed,
     ModeEntered,
+    ProofCompleted,
     ProofResult,
     ReadinessFailed,
     ReadinessPassed,
-    ReadinessRunning,
     WorkshopClarifying,
     WorkshopQuestion,
     WorkshopRequested,
@@ -45,6 +46,7 @@ class DroneArchitectController:
         self._pending_dispatch_spec: dict | None = None
         self._last_candidate_path: str = ""
         self._last_drone_id: str = ""
+        self._last_proof_result: ProofResult | None = None
 
     # ------------------------------------------------------------------
     # Properties
@@ -274,7 +276,9 @@ class DroneArchitectController:
             self._last_candidate_path = candidate_path
             self._last_drone_id = drone_id
 
-            return ReadinessRunning()
+            return BuildCompleted(
+                candidate_path=candidate_path, drone_id=drone_id
+            )
         else:
             self._active_workspace.phase = WorkspacePhase.READINESS_FAILED.value
             self._active_workspace.last_error = error
@@ -303,25 +307,43 @@ class DroneArchitectController:
             )
 
     def on_proof_completed(self, proof_result: ProofResult):
-        """Called after proof run. Transitions to awaiting_decision."""
+        """Called after proof run. Transitions based on proof status."""
         if self._active_workspace is None:
             return ErrorResult(message="No active workspace")
 
-        self._active_workspace.phase = WorkspacePhase.AWAITING_DECISION.value
+        self._last_proof_result = proof_result
+
+        if proof_result.proof_status == "failed":
+            self._active_workspace.phase = WorkspacePhase.PROOF_FAILED.value
+        else:
+            self._active_workspace.phase = WorkspacePhase.AWAITING_DECISION.value
         DroneWorkspaceStore.save_workspace(self._active_workspace)
 
+        return ProofCompleted(proof_result=proof_result)
+
+    def finalize_proof(self):
+        """Finalize proof — gate on failed, or build AwaitingDecision."""
+        if self._active_workspace is None:
+            return ErrorResult(message="No active workspace")
+
+        if self._active_workspace.phase == WorkspacePhase.PROOF_FAILED.value:
+            return ErrorResult(
+                message="Proof failed. Revise the Drone and rebuild before installing."
+            )
+
+        pr = self._last_proof_result
         proof_summary = (
-            f"Status: {proof_result.proof_status}\n"
-            f"Tried: {proof_result.what_tried}\n"
+            f"Status: {pr.proof_status}\n"
+            f"Tried: {pr.what_tried}\n"
         )
-        if proof_result.errors:
-            proof_summary += f"Errors: {', '.join(proof_result.errors)}\n"
-        if proof_result.warnings:
-            proof_summary += f"Warnings: {', '.join(proof_result.warnings)}\n"
+        if pr.errors:
+            proof_summary += f"Errors: {', '.join(pr.errors)}\n"
+        if pr.warnings:
+            proof_summary += f"Warnings: {', '.join(pr.warnings)}\n"
 
         return AwaitingDecision(
             workspace_id=self._active_workspace.workspace_id,
-            drone_name=proof_result.drone_name,
+            drone_name=self._active_workspace.display_name,
             proof_summary=proof_summary,
         )
 
@@ -378,7 +400,12 @@ class DroneArchitectController:
                 display_name=ws.display_name,
                 phase=ws.phase,
             )
-        return self.create_workspace("New Drone")
+        result = self.create_workspace("New Drone")
+        if text:
+            self._workshop_conversation.append({"role": "user", "content": text})
+            messages = build_workshop_messages(text, self._workshop_conversation[:-1])
+            return WorkshopRequested(messages=messages)
+        return result
 
     def _handle_workshop_message(self, text: str):
         cmd, arg = parse_drone_command(text, self._active_workspace.phase)
@@ -421,7 +448,7 @@ class DroneArchitectController:
 
         if cmd == DroneCommand.INSTALL:
             return ErrorResult(
-                message="Cannot install — readiness check failed. Revise first."
+                message="Cannot install — proof failed. Revise first."
             )
 
         if cmd == DroneCommand.DISCARD:
