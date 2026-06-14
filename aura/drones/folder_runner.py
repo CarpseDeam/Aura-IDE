@@ -1,17 +1,12 @@
 from __future__ import annotations
 
 import datetime as dt
-import importlib.util
-import inspect
 import json
-import os
-import sys
+import subprocess
 import time
 import traceback
-import uuid
-from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from aura.drones.definition import DroneDefinition
 from aura.drones.receipt import DroneReceipt
@@ -20,7 +15,10 @@ from aura.drones.store import DroneStore, RunHistoryStore
 
 
 def is_folder_backed_drone(drone: DroneDefinition) -> bool:
-    return drone.runtime == "python" and bool(drone.entrypoint)
+    entrypoint = drone.entrypoint
+    if not isinstance(entrypoint, dict):
+        return False
+    return entrypoint.get("kind") == "command" and entrypoint.get("protocol") == "json-stdio"
 
 
 def run_drone_readiness(folder: Path, drone: DroneDefinition) -> dict[str, Any]:
@@ -29,7 +27,7 @@ def run_drone_readiness(folder: Path, drone: DroneDefinition) -> dict[str, Any]:
     Calls the entrypoint with a trial payload that should not mutate state,
     post data, push git, spend money, or call risky APIs.
     """
-    if not drone.entrypoint:
+    if not isinstance(drone.entrypoint, dict) or not drone.entrypoint:
         return {"ok": False, "error": "entrypoint is required"}
     try:
         payload = {
@@ -40,7 +38,7 @@ def run_drone_readiness(folder: Path, drone: DroneDefinition) -> dict[str, Any]:
             "trial_run": True,
             "readiness": True,
         }
-        result = _call_ref(folder, drone.entrypoint, payload)
+        result = _run_command_drone(folder, drone.entrypoint, payload, timeout_seconds=drone.budget.timeout_seconds)
         result = _normalize_result(result)
         # Verify the result is JSON-compatible
         json.dumps(result)
@@ -67,7 +65,7 @@ def run_folder_drone_sync(
     run.mark("running")
     folder = DroneStore.drone_folder(drone_id)
     if not is_folder_backed_drone(drone):
-        raise ValueError("Only folder-backed python Drones can be executed")
+        raise ValueError("Only folder-backed command Drones with json-stdio protocol can be executed")
     if not folder.is_dir():
         raise ValueError(f"Registered Drone folder not found: {drone_id}")
     DroneStore.load_drone_from_folder(folder)
@@ -84,7 +82,7 @@ def run_folder_drone_sync(
     }
 
     try:
-        result = _call_ref(folder, drone.entrypoint, payload)
+        result = _run_command_drone(folder, drone.entrypoint, payload, timeout_seconds=drone.budget.timeout_seconds)
         cargo = result
         run.mark("completed")
     except Exception as exc:
@@ -154,63 +152,47 @@ def _normalize_result(result: Any) -> dict[str, Any]:
     return {"ok": True, "result": result}
 
 
-def _call_ref(folder: Path, ref: str, payload: dict[str, Any]) -> Any:
-    module_name, function_name = _parse_ref(ref)
-    func = _load_function(folder, module_name, function_name)
-    with _execution_context(folder):
-        return _invoke(func, payload)
-
-
-def _parse_ref(ref: str) -> tuple[str, str]:
-    module_name, sep, function_name = str(ref or "").partition(":")
-    if not sep or not module_name.strip() or not function_name.strip():
-        raise ValueError(f"Invalid function reference: {ref!r}")
-    return module_name.strip(), function_name.strip()
-
-
-def _load_function(folder: Path, module_name: str, function_name: str) -> Callable[..., Any]:
-    module_path = folder / f"{module_name.replace('.', '/')}.py"
-    if not module_path.exists():
-        raise FileNotFoundError(f"Module not found: {module_path}")
-    unique_name = f"_aura_drone_{module_name.replace('.', '_')}_{uuid.uuid4().hex}"
-    spec = importlib.util.spec_from_file_location(unique_name, module_path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"Could not load module: {module_path}")
-    module = importlib.util.module_from_spec(spec)
-    with _execution_context(folder):
-        spec.loader.exec_module(module)
-    func = getattr(module, function_name, None)
-    if not callable(func):
-        raise AttributeError(f"{module_name}:{function_name} is not callable")
-    return func
-
-
-def _invoke(func: Callable[..., Any], payload: dict[str, Any]) -> Any:
-    signature = inspect.signature(func)
-    params = list(signature.parameters.values())
-    if not params:
-        return func()
-    if len(params) == 1:
-        return func(payload)
-    kwargs = {p.name: payload.get(p.name) for p in params if p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)}
-    return func(**kwargs)
-
-
-@contextmanager
-def _execution_context(folder: Path):
-    folder_str = str(folder)
-    old_cwd = Path.cwd()
-    inserted = False
-    if folder_str not in sys.path:
-        sys.path.insert(0, folder_str)
-        inserted = True
+def _run_command_drone(folder: Path, entrypoint: dict, payload: dict[str, Any], timeout_seconds: int) -> dict[str, Any]:
+    """Run a Drone command, send JSON payload on stdin, return parsed stdout JSON."""
+    command = entrypoint.get("command", [])
+    if not command:
+        return {"ok": False, "error": "entrypoint.command is empty"}
     try:
-        os.chdir(folder)
-        yield
-    finally:
-        os.chdir(old_cwd)
-        if inserted:
-            try:
-                sys.path.remove(folder_str)
-            except ValueError:
-                pass
+        proc = subprocess.run(
+            command,
+            cwd=str(folder),
+            input=json.dumps(payload),
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+        stdout_text = proc.stdout.strip()
+        stderr_text = proc.stderr.strip()
+        if not stdout_text:
+            return {
+                "ok": False,
+                "error": "Drone produced no stdout output",
+                "stderr": stderr_text,
+                "returncode": proc.returncode,
+            }
+        try:
+            result = json.loads(stdout_text)
+        except json.JSONDecodeError as e:
+            return {
+                "ok": False,
+                "error": f"Drone stdout is not valid JSON: {e}",
+                "stderr": stderr_text,
+                "stdout": stdout_text[:1000],
+                "returncode": proc.returncode,
+            }
+        result = _normalize_result(result)
+        if stderr_text:
+            result.setdefault("_stderr", stderr_text)
+        result.setdefault("_returncode", proc.returncode)
+        return result
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": f"Drone command timed out after {timeout_seconds}s"}
+    except FileNotFoundError:
+        return {"ok": False, "error": f"Command not found: {command[0]}"}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc), "traceback": traceback.format_exc()}

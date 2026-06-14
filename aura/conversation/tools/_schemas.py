@@ -1204,7 +1204,8 @@ REGISTER_DRONE_FOLDER_TOOL_DEF: dict[str, Any] = {
         "name": "register_drone_folder",
         "description": (
             "Validate and register a completed folder-backed Drone. "
-            "The folder must already contain drone.json and a runtime entrypoint. "
+            "The folder must already contain drone.json and an entrypoint program. "
+            "The manifest must declare a command entrypoint with json-stdio protocol. "
             "Aura runs a safe readiness launch before installing "
             "the Drone into Aura's global Drone directory."
         ),

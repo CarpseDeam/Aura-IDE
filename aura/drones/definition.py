@@ -44,8 +44,8 @@ class DroneDefinition:
     # {"type": "<name>", "description": "...", "schema": {...}}
     input_contract: dict[str, Any] = field(default_factory=dict)
     cargo_contract: dict[str, Any] = field(default_factory=dict)
-    runtime: str = ""  # Runtime adapter for this Drone, e.g. "python".
-    entrypoint: str = ""  # Entrypoint ref for the declared runtime, e.g. "main:run".
+    runtime: str = ""  # Informational metadata about the preferred runtime, e.g. "python". Not used for execution.
+    entrypoint: dict[str, Any] = field(default_factory=dict)  # Command entrypoint: {"kind": "command", "command": [...], "protocol": "json-stdio"}
     permissions: dict[str, Any] = field(default_factory=dict)
     secrets: tuple[str, ...] = ()
     dependencies: tuple[str, ...] = ()

@@ -17,9 +17,6 @@ logger = logging.getLogger(__name__)
 
 _DRONE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 _WRITE_POLICIES = {"read_only", "ask_before_writes", "normal_diff_approval"}
-_SUPPORTED_RUNTIMES = {"python"}
-
-
 def _is_safe_drone_id(drone_id: str) -> bool:
     return bool(_DRONE_ID_RE.fullmatch(str(drone_id or "")))
 
@@ -61,6 +58,12 @@ def _drone_from_dict(data: dict) -> DroneDefinition:
         data = {**data, "secrets": tuple(str(x) for x in data["secrets"])}
     if "dependencies" in data and isinstance(data["dependencies"], list):
         data = {**data, "dependencies": tuple(str(x) for x in data["dependencies"])}
+    # Detect legacy string entrypoint and fail early
+    if isinstance(data.get("entrypoint"), str):
+        raise ValueError(
+            "Legacy string entrypoint is no longer supported. "
+            "Drone must use command entrypoint: {'kind': 'command', ...}"
+        )
     if isinstance(data.get("accepts"), dict):
         accepts = data["accepts"]
         data = {**data, "accepts": str(accepts.get("type") or accepts.get("name") or "")}
@@ -97,14 +100,20 @@ def _apply_manifest_defaults(data: dict) -> dict:
     return data
 
 
-def _module_path_from_ref(ref: str) -> str:
-    return str(ref or "").split(":", 1)[0].strip()
-
-
-def _validate_ref_format(ref: str, label: str) -> None:
-    module_name, sep, function_name = str(ref or "").partition(":")
-    if not sep or not module_name.strip() or not function_name.strip():
-        raise ValueError(f"{label} must be formatted as module:function")
+def _validate_entrypoint(entrypoint: dict) -> None:
+    """Validate the command entrypoint structure."""
+    if entrypoint.get("kind") != "command":
+        raise ValueError("Drone entrypoint kind must be 'command'")
+    if entrypoint.get("protocol") != "json-stdio":
+        raise ValueError("Drone entrypoint protocol must be 'json-stdio'")
+    command = entrypoint.get("command")
+    if not isinstance(command, list) or len(command) == 0:
+        raise ValueError("Drone entrypoint command must be a non-empty list")
+    for i, part in enumerate(command):
+        if not isinstance(part, str):
+            raise ValueError(f"Drone entrypoint command[{i}] must be a string")
+    if not command[0].strip():
+        raise ValueError("Drone entrypoint command[0] must be a non-empty string")
 
 
 class DroneStore:
@@ -191,9 +200,20 @@ class DroneStore:
             raise ValueError(f"drone.json is not valid JSON: {exc}") from exc
 
         drone = _drone_from_dict(data)
-        entry_module = _module_path_from_ref(drone.entrypoint)
-        if not (folder / f"{entry_module.replace('.', '/')}.py").exists():
-            raise ValueError(f"entrypoint module does not exist: {entry_module}.py")
+        # Validate that the first command argument exists on PATH or in the folder
+        command_list = drone.entrypoint.get("command", [])
+        if command_list:
+            first_arg = command_list[0]
+            if first_arg.startswith("./"):
+                # Relative path — check it exists in the Drone folder
+                candidate = folder / first_arg
+                if not candidate.exists():
+                    raise ValueError(f"Entrypoint command '{first_arg}' not found in Drone folder")
+            else:
+                # Bare name — check on PATH
+                import shutil
+                if not shutil.which(first_arg):
+                    raise ValueError(f"Entrypoint command '{first_arg}' not found on PATH")
         return drone
 
     @staticmethod
@@ -287,11 +307,9 @@ class DroneStore:
             raise ValueError("Drone timeout_seconds must be at least 30")
         if drone.scope not in ("global", "project"):
             raise ValueError(f"Invalid Drone scope: {drone.scope}")
-        if drone.runtime not in _SUPPORTED_RUNTIMES:
-            raise ValueError("Drone runtime must be 'python'")
-        if not drone.entrypoint.strip():
+        if not isinstance(drone.entrypoint, dict) or not drone.entrypoint:
             raise ValueError("Drone entrypoint is required")
-        _validate_ref_format(drone.entrypoint, "Drone entrypoint")
+        _validate_entrypoint(drone.entrypoint)
 
 
 class RunHistoryStore:

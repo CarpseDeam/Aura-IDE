@@ -4,12 +4,13 @@ Drones are reusable folder-backed workers. A Drone is registered from a folder
 that contains:
 
 - `drone.json` (the manifest)
-- a runtime entrypoint file (e.g. `main.py` for the Python adapter)
+- an entrypoint program (e.g. `main.py`)
 - optional support files such as `requirements.txt` and `README.md`
 
-Drones declare a `runtime` and `entrypoint` in their manifest. Python is the
-current built-in runtime adapter, but the Drone product contract is runtime-
-backed and not Python-specific. `route`, `input_contract`, and
+Drones declare a command entrypoint in their manifest. Aura launches the
+command, sends JSON payload on stdin, and reads JSON cargo from stdout.
+Any language that accepts JSON on stdin and returns JSON on stdout works
+with a simple command change. `route`, `input_contract`, and
 `cargo_contract` are optional but recommended for new Drones. Existing Drones
 without them still work.
 
@@ -18,8 +19,11 @@ without them still work.
   "id": "source-scout",
   "name": "Source Scout",
   "description": "Collects source candidates.",
-  "runtime": "python",
-  "entrypoint": "main:run",
+  "entrypoint": {
+    "kind": "command",
+    "command": ["python", "main.py"],
+    "protocol": "json-stdio"
+  },
   "instructions": "Collect candidates and return cargo.",
   "write_policy": "read_only",
   "allowed_tools": [],

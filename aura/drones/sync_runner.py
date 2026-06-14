@@ -26,7 +26,7 @@ def _unsupported_non_folder_result(
     run = DroneRun(drone=drone)
     run.mark("failed")
     now = dt.datetime.now(dt.timezone.utc).isoformat()
-    error = "Only folder-backed Drones with a supported runtime and entrypoint are supported."
+    error = "Only folder-backed Drones with a command entrypoint and json-stdio protocol are supported."
     receipt = DroneReceipt(
         run_id=run.run_id,
         drone_id=drone.id,
