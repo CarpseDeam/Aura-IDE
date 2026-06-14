@@ -102,6 +102,10 @@ class WorkerEventHandler(QObject):
         self._bridge.workerAgentProcessFinished.connect(self._on_worker_agent_process_finished)
         self._bridge.terminalOutput.connect(self._on_terminal_output)
 
+    def _is_drone_build_tool(self, tool_call_id: str) -> bool:
+        """Return True when *tool_call_id* belongs to a drone build worker."""
+        return str(tool_call_id).startswith("drone_build_")
+
     # ---- dispatch slots --------------------------------------------------------
 
     def _on_worker_dispatch_requested(
@@ -114,6 +118,8 @@ class WorkerEventHandler(QObject):
         summary: str,
     ) -> None:
         """Always show the SpecCard; auto-dispatch or wait for card interaction."""
+        if self._is_drone_build_tool(tool_call_id):
+            return
         if self._active_mismatch_card_id is not None:
             self._chat.mark_mismatch_resolved(self._active_mismatch_card_id)
             self._active_mismatch_card_id = None
@@ -231,6 +237,8 @@ class WorkerEventHandler(QObject):
 
     def _on_worker_started(self, tool_call_id: str) -> None:
         """Stop the planner aura and start the playground's assistant aura."""
+        if self._is_drone_build_tool(tool_call_id):
+            return
         self._chat.stop_current_aura()
         self._playground.set_glow_state("coding")
         self._playground.begin_assistant()
@@ -254,6 +262,8 @@ class WorkerEventHandler(QObject):
         status: str | None = None,
     ) -> None:
         """Forward worker finished to playground and update spec card."""
+        if self._is_drone_build_tool(tool_call_id):
+            return
         metadata = self._worker_result_metadata(tool_call_id)
         suppress_main_summary = self._is_recoverable_internal_worker_result(
             ok=ok,
@@ -356,6 +366,8 @@ class WorkerEventHandler(QObject):
 
     def _on_worker_cancelled(self, tool_call_id: str) -> None:
         """Stop worker aura and forward cancel to playground/spec card."""
+        if self._is_drone_build_tool(tool_call_id):
+            return
         self._playground.stop_aura()
         self._playground.worker_cancelled()
 
@@ -373,10 +385,14 @@ class WorkerEventHandler(QObject):
 
     def _on_worker_reasoning(self, tool_call_id: str, text: str) -> None:
         """Forward reasoning delta to playground."""
+        if self._is_drone_build_tool(tool_call_id):
+            return
         self._playground.append_reasoning(text)
 
     def _on_worker_content(self, tool_call_id: str, text: str) -> None:
         """Forward content delta to playground."""
+        if self._is_drone_build_tool(tool_call_id):
+            return
         self._playground.append_content(text)
 
     # ---- worker tool call slots ------------------------------------------------
@@ -385,6 +401,8 @@ class WorkerEventHandler(QObject):
         self, tool_call_id: str, worker_tool_id: str, name: str
     ) -> None:
         """Forward tool call start to playground."""
+        if self._is_drone_build_tool(tool_call_id):
+            return
         self._playground.add_tool_call(worker_tool_id, name)
         write_tools = {
             "write_file",
@@ -411,6 +429,8 @@ class WorkerEventHandler(QObject):
         self, tool_call_id: str, worker_tool_id: str, fragment: str
     ) -> None:
         """Forward tool call args delta to playground."""
+        if self._is_drone_build_tool(tool_call_id):
+            return
         self._playground.append_tool_args(worker_tool_id, fragment)
 
     def _on_worker_tool_result(
@@ -423,6 +443,8 @@ class WorkerEventHandler(QObject):
         extras: dict,
     ) -> None:
         """Forward tool result to playground."""
+        if self._is_drone_build_tool(parent_tool_id):
+            return
         self._playground.set_tool_result(worker_tool_id, ok, result)
         if self._active_workflow is not None and self._active_workflow.tool_call_id == parent_tool_id:
             self._set_active_workflow(
@@ -440,6 +462,8 @@ class WorkerEventHandler(QObject):
         is_new_file: bool,
     ) -> None:
         """Forward diff decision to playground."""
+        if self._is_drone_build_tool(parent_tool_id):
+            return
         self._playground.show_code_diff(worker_tool_id, rel_path, old, new, decision)
         if (
             decision == "approve"
@@ -450,6 +474,8 @@ class WorkerEventHandler(QObject):
 
     def _on_worker_api_error(self, tool_call_id: str, status: int, message: str) -> None:
         """Forward API error to playground with a formatted title."""
+        if self._is_drone_build_tool(tool_call_id):
+            return
         title = f"API Error {status}" if status > 0 else "Worker Error"
         self._playground.add_error(f"{title}: {message}")
         self._transition_active_workflow(
@@ -507,6 +533,8 @@ class WorkerEventHandler(QObject):
         miss: int,
     ) -> None:
         """Accumulate per-model token usage and emit update signal."""
+        if self._is_drone_build_tool(_tool_call_id):
+            return
         if hit == 0 and miss == 0:
             miss = prompt
         bucket = self._session_usage.setdefault(
@@ -519,32 +547,44 @@ class WorkerEventHandler(QObject):
 
     def _on_worker_todo_list_updated(self, tool_call_id: str, tasks: list) -> None:
         """Route the worker's TODO list update to the playground."""
+        if self._is_drone_build_tool(tool_call_id):
+            return
         self._playground.update_todo_list(tasks)
 
     def _on_worker_terminal_output(
         self, parent_tool_id: str, worker_tool_id: str, text: str
     ) -> None:
         """Route terminal output (worker mode) to the playground."""
+        if self._is_drone_build_tool(parent_tool_id):
+            return
         self._playground.append_terminal_output(worker_tool_id, text)
 
     def _on_worker_agent_process_started(
         self, parent_tool_id: str, process_id: str, label: str, command: str
     ) -> None:
         """Route CLI backend process start to the playground terminal."""
+        if self._is_drone_build_tool(parent_tool_id):
+            return
         self._playground.start_terminal_process(process_id, command)
 
     def _on_worker_agent_process_output(
         self, parent_tool_id: str, process_id: str, text: str
     ) -> None:
         """Route CLI backend process output to the playground terminal."""
+        if self._is_drone_build_tool(parent_tool_id):
+            return
         self._playground.append_terminal_output(process_id, text)
 
     def _on_worker_agent_process_finished(
         self, parent_tool_id: str, process_id: str, exit_code: int
     ) -> None:
         """Route CLI backend process completion to the playground terminal."""
+        if self._is_drone_build_tool(parent_tool_id):
+            return
         self._playground.finish_terminal_process(process_id, exit_code)
 
     def _on_terminal_output(self, tool_call_id: str, text: str) -> None:
         """Route terminal output (single mode) to the chat view."""
+        if self._is_drone_build_tool(tool_call_id):
+            return
         self._chat.append_terminal_output(tool_call_id, text)
