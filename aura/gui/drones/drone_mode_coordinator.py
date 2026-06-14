@@ -263,8 +263,6 @@ class DroneModeCoordinator(QObject):
         self._workshop_runner.contentDelta.connect(self._on_workshop_delta)
         self._workshop_runner.responseReady.connect(self._on_workshop_response)
         self._workshop_runner.apiError.connect(self._on_workshop_error)
-        self._workshop_runner.finished.connect(self._on_workshop_finished)
-
         self._pending_workshop_model = model
         self._pending_workshop_thinking = thinking
 
@@ -282,6 +280,7 @@ class DroneModeCoordinator(QObject):
         self._workshop_runner.finished.connect(self._workshop_thread.quit)
         self._workshop_runner.finished.connect(self._workshop_runner.deleteLater)
         self._workshop_thread.finished.connect(self._workshop_thread.deleteLater)
+        self._workshop_thread.finished.connect(self._on_workshop_thread_finished)
 
         self._chat.begin_assistant()
         self._workshop_thread.start()
@@ -307,7 +306,7 @@ class DroneModeCoordinator(QObject):
         self._chat.add_error("Workshop Error", message)
 
     @Slot()
-    def _on_workshop_finished(self) -> None:
+    def _on_workshop_thread_finished(self) -> None:
         self._workshop_runner = None
         self._workshop_thread = None
 
