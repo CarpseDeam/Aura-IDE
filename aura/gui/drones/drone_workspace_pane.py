@@ -3,12 +3,14 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
+    QMenu,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -108,10 +110,12 @@ class _ThreadRow(QFrame):
     """A single clickable thread row in the sidebar pane."""
 
     clicked = Signal(str)  # thread_id
+    rename_requested = Signal(str, str)  # thread_id, new_title
 
     def __init__(self, thread: DroneThread, active: bool = False, parent=None) -> None:
         super().__init__(parent)
         self._thread_id = thread.id
+        self._inline_edit: QLineEdit | None = None
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         bg = BG_RAISED if active else "transparent"
         self.setStyleSheet(
@@ -132,15 +136,18 @@ class _ThreadRow(QFrame):
         layout.setContentsMargins(6, 2, 6, 2)
         layout.setSpacing(4)
 
-        title_label = QLabel(thread.title or "Untitled")
-        title_label.setStyleSheet(
+        self._title_label = QLabel(thread.title or "Untitled")
+        self._title_label.setStyleSheet(
             f"color: {FG}; font-size: 12px; background: transparent;"
         )
-        layout.addWidget(title_label, 1)
+        layout.addWidget(self._title_label, 1)
 
     def mousePressEvent(self, event) -> None:
-        super().mousePressEvent(event)
-        self.clicked.emit(self._thread_id)
+        if self._title_label.geometry().contains(event.pos()):
+            self._start_inline_edit()
+        else:
+            super().mousePressEvent(event)
+            self.clicked.emit(self._thread_id)
 
     def set_active(self, active: bool) -> None:
         bg = BG_RAISED if active else "transparent"
@@ -158,6 +165,70 @@ class _ThreadRow(QFrame):
             """
         )
 
+    def contextMenuEvent(self, event) -> None:
+        menu = QMenu(self)
+        rename_action = menu.addAction("Rename")
+        rename_action.triggered.connect(self._start_inline_edit)
+        menu.exec(event.globalPos())
+
+    def _start_inline_edit(self) -> None:
+        """Replace the title label with a QLineEdit for inline renaming."""
+        if self._inline_edit is not None:
+            return
+        self._title_label.hide()
+        edit = QLineEdit(self._title_label.text())
+        edit.selectAll()
+        edit.setStyleSheet(
+            f"color: {FG}; font-size: 12px; background: {BG_RAISED}; border: 1px solid {BORDER}; border-radius: 3px; padding: 1px 4px;"
+        )
+        layout = self.layout()
+        if layout:
+            layout.replaceWidget(self._title_label, edit)
+        edit.setFocus()
+        self._inline_edit = edit
+
+        edit.returnPressed.connect(self._finish_inline_edit)
+        edit.editingFinished.connect(self._finish_inline_edit)
+        edit.installEventFilter(self)
+
+    def _finish_inline_edit(self) -> None:
+        """Commit the rename from the active inline edit, restore the label."""
+        edit = self._inline_edit
+        if edit is None:
+            return
+        new_title = edit.text().strip()
+        layout = self.layout()
+        if layout:
+            layout.replaceWidget(edit, self._title_label)
+        edit.deleteLater()
+        self._inline_edit = None
+        self._title_label.show()
+        if new_title and new_title != self._title_label.text():
+            self._title_label.setText(new_title)
+            self.rename_requested.emit(self._thread_id, new_title)
+
+    def eventFilter(self, obj, event) -> bool:
+        if (
+            obj is self._inline_edit
+            and event.type() == QEvent.Type.KeyPress
+            and event.key() == Qt.Key.Key_Escape
+        ):
+            # Cancel: restore label without emitting rename_requested
+            edit = self._inline_edit
+            self._inline_edit = None
+            try:
+                edit.returnPressed.disconnect(self._finish_inline_edit)
+                edit.editingFinished.disconnect(self._finish_inline_edit)
+            except (TypeError, RuntimeError):
+                pass
+            layout = self.layout()
+            if layout:
+                layout.replaceWidget(edit, self._title_label)
+            edit.deleteLater()
+            self._title_label.show()
+            return True
+        return super().eventFilter(obj, event)
+
 
 class DroneWorkspacePane(QFrame):
     """Sidebar pane showing Drones being built for the current project."""
@@ -167,6 +238,7 @@ class DroneWorkspacePane(QFrame):
     discard_workspace_requested = Signal(str)  # workspace_id
     new_thread_requested = Signal()
     thread_selected = Signal(str)  # thread_id
+    thread_rename_requested = Signal(str, str)  # thread_id, new_title
     planner_model_changed = Signal(str)
     worker_model_changed = Signal(str)
 
@@ -357,6 +429,7 @@ class DroneWorkspacePane(QFrame):
             active = t.id == thread_id
             row = _ThreadRow(t, active=active)
             row.clicked.connect(self.thread_selected.emit)
+            row.rename_requested.connect(self.thread_rename_requested.emit)
             self._threads_rows_layout.addWidget(row)
 
     def populate_models(self, planner_provider: ProviderId, worker_provider: ProviderId) -> None:

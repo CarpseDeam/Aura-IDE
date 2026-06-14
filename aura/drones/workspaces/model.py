@@ -30,6 +30,7 @@ class DroneWorkspace:
     build_brief: str = ""
     last_build_run: str | None = None
     last_readiness_result: dict | None = None
+    active_thread_id: str | None = None
     last_error: str | None = None
     created_at: str = ""
     updated_at: str = ""

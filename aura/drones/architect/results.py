@@ -110,6 +110,13 @@ class ThreadSwitched:
 
 
 @dataclass(frozen=True)
+class ThreadRenamed:
+    kind: str = "thread_renamed"
+    thread_id: str = ""
+    title: str = ""
+
+
+@dataclass(frozen=True)
 class ErrorResult:
     kind: str = "error"
     message: str = ""

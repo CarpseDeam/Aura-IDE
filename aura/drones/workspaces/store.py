@@ -25,6 +25,8 @@ from aura.drones.workspaces.paths import (
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_THREAD_TITLE = "New thread"
+
 
 def _utc_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -286,7 +288,7 @@ class DroneWorkspaceStore:
 
     @staticmethod
     def create_thread(
-        project_root: Path, workspace_id: str, title: str = "New thread"
+        project_root: Path, workspace_id: str, title: str = DEFAULT_THREAD_TITLE
     ) -> DroneThread:
         """Create a new thread and persist it."""
         now = _utc_iso()

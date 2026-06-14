@@ -21,6 +21,7 @@ from aura.drones.architect.results import (
     ReadinessFailed,
     ReadinessPassed,
     ThreadCreated,
+    ThreadRenamed,
     ThreadSwitched,
     WorkshopClarifying,
     WorkshopQuestion,
@@ -31,7 +32,8 @@ from aura.drones.architect.workshop_prompt import build_workshop_messages
 from aura.drones.store import DroneStore
 from aura.drones.workspaces.model import DroneThread, DroneWorkspace, WorkspacePhase
 from aura.drones.workspaces.paths import candidate_dir
-from aura.drones.workspaces.store import DroneWorkspaceStore
+from aura.drones.workspaces.store import DEFAULT_THREAD_TITLE, DroneWorkspaceStore
+from aura.projects.store import _clean_thread_title
 
 if TYPE_CHECKING:
     from aura.drones.workshop_runner import DroneWorkshopResponse
@@ -125,7 +127,15 @@ class DroneArchitectController:
             phase=ws.phase,
         )
 
+    def _maybe_auto_title_thread(self, text: str) -> None:
+        """Auto-title a thread from the first user message if still the default."""
+        if self._active_thread is not None and self._active_thread.title == DEFAULT_THREAD_TITLE:
+            cleaned = _clean_thread_title(text)
+            if cleaned:
+                self._active_thread.title = cleaned
+
     def _start_workshop_from_text(self, text: str):
+        self._maybe_auto_title_thread(text)
         if self._active_thread is not None:
             self._active_thread.messages.append({"role": "user", "content": text})
             if self._workspace_root is not None and self._active_workspace is not None:
@@ -171,7 +181,7 @@ class DroneArchitectController:
         self._last_drone_id = ""
 
     def _load_or_create_active_thread(self) -> None:
-        """Load the most recent thread for the active workspace, or create one."""
+        """Load the saved active thread, or the most recent, or create one."""
         if self._workspace_root is None or self._active_workspace is None:
             self._active_thread = None
             return
@@ -180,11 +190,20 @@ class DroneArchitectController:
             self._workspace_root, ws.workspace_id
         )
         if threads:
+            # Prefer the saved active_thread_id if it still exists.
+            saved_id = ws.active_thread_id
+            if saved_id:
+                for t in threads:
+                    if t.id == saved_id:
+                        self._active_thread = t
+                        return
             self._active_thread = threads[0]
         else:
             self._active_thread = DroneWorkspaceStore.create_thread(
                 self._workspace_root, ws.workspace_id
             )
+            ws.active_thread_id = self._active_thread.id
+            DroneWorkspaceStore.save_workspace(ws)
 
     def _save_current_thread(self) -> None:
         """Persist the current active thread if one exists."""
@@ -198,6 +217,9 @@ class DroneArchitectController:
                 self._active_workspace.workspace_id,
                 self._active_thread,
             )
+            if self._active_workspace.active_thread_id != self._active_thread.id:
+                self._active_workspace.active_thread_id = self._active_thread.id
+                DroneWorkspaceStore.save_workspace(self._active_workspace)
 
     def create_new_thread(self):
         """Save current thread and create a new one for the active workspace."""
@@ -208,6 +230,9 @@ class DroneArchitectController:
             self._workspace_root, self._active_workspace.workspace_id
         )
         self._active_thread = thread
+        if self._active_workspace is not None:
+            self._active_workspace.active_thread_id = thread.id
+            DroneWorkspaceStore.save_workspace(self._active_workspace)
         return ThreadCreated(thread_id=thread.id, title=thread.title)
 
     def switch_thread(self, thread_id: str):
@@ -223,7 +248,40 @@ class DroneArchitectController:
         if thread is None:
             return ErrorResult(message=f"Thread not found: {thread_id}")
         self._active_thread = thread
+        if self._active_workspace is not None:
+            self._active_workspace.active_thread_id = thread.id
+            DroneWorkspaceStore.save_workspace(self._active_workspace)
         return ThreadSwitched(thread_id=thread.id, title=thread.title)
+
+    def rename_thread(self, thread_id: str, new_title: str):
+        """Rename a thread.  Returns ThreadRenamed or ErrorResult."""
+        if self._workspace_root is None or self._active_workspace is None:
+            return ErrorResult(message="No active workspace")
+        stripped = new_title.strip()
+        if not stripped:
+            return ErrorResult(message="Title cannot be empty")
+        if self._active_thread is not None and thread_id == self._active_thread.id:
+            self._active_thread.title = stripped
+            DroneWorkspaceStore.save_thread(
+                self._workspace_root,
+                self._active_workspace.workspace_id,
+                self._active_thread,
+            )
+            return ThreadRenamed(thread_id=thread_id, title=stripped)
+        thread = DroneWorkspaceStore.load_thread(
+            self._workspace_root,
+            self._active_workspace.workspace_id,
+            thread_id,
+        )
+        if thread is None:
+            return ErrorResult(message=f"Thread not found: {thread_id}")
+        thread.title = stripped
+        DroneWorkspaceStore.save_thread(
+            self._workspace_root,
+            self._active_workspace.workspace_id,
+            thread,
+        )
+        return ThreadRenamed(thread_id=thread.id, title=thread.title)
 
     def load_workspace(self, workspace_id: str):
         """Load a workspace by ID."""
@@ -543,6 +601,7 @@ class DroneArchitectController:
             )
 
         # UNKNOWN or any other text — treat as workshop conversation.
+        self._maybe_auto_title_thread(text)
         if self._active_thread is not None:
             self._active_thread.messages.append({"role": "user", "content": text})
             if self._workspace_root is not None and self._active_workspace is not None:

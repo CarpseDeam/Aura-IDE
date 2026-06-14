@@ -76,6 +76,7 @@ class DroneModeCoordinator(QObject):
         )
         self._workspace_pane.new_thread_requested.connect(self._on_new_thread)
         self._workspace_pane.thread_selected.connect(self._on_thread_selected)
+        self._workspace_pane.thread_rename_requested.connect(self._on_thread_rename)
         self._workspace_pane.planner_model_changed.connect(
             lambda model: self._bridge.set_planner_model(model)
             if hasattr(self._bridge, 'set_planner_model') else None
@@ -655,6 +656,15 @@ class DroneModeCoordinator(QObject):
         self._render_result(result)
         self._workspace_pane.refresh()
         self._refresh_thread_pane()
+
+    def _on_thread_rename(self, thread_id: str, new_title: str) -> None:
+        result = self._controller.rename_thread(thread_id, new_title)
+        self._workspace_pane.refresh()
+        self._refresh_thread_pane()
+        if result.kind == "thread_renamed":
+            pass  # silent success
+        elif result.kind == "error":
+            self._chat.add_error("Rename", result.message)
 
     def _on_thread_selected(self, thread_id: str) -> None:
         result = self._controller.switch_thread(thread_id)
