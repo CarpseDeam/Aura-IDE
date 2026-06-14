@@ -124,11 +124,6 @@ class SendHandler(QObject):
             self._handle_built_in_action(route.action)
             return
 
-        # Fallthrough — in drone mode, route through coordinator.
-        if self._drone_coordinator and self._drone_coordinator.is_drone_mode():
-            self._drone_coordinator.handle_message(payload, model, thinking)
-            return
-
         if self._bridge.is_running():
             self._message_queue.append(payload)
             self._input.set_queued_messages(len(self._message_queue))
@@ -385,6 +380,11 @@ class SendHandler(QObject):
             parts = []
             if text:
                 parts.append({"type": "text", "text": text})
+            # If drone mode is active, append drone context as an extra text part.
+            if self._drone_coordinator and self._drone_coordinator.is_drone_mode():
+                drone_ctx = self._drone_coordinator.active_drone_context()
+                if drone_ctx:
+                    parts.append({"type": "text", "text": drone_ctx})
             for a in image_atts:
                 parts.append({
                     "type": "image_url",
@@ -407,14 +407,24 @@ class SendHandler(QObject):
             # Final text for the model
             final_text = f"{vision_block}\n\n[User's question:]\n{text}" if text else vision_block
             display_text = final_text
-            self._bridge.history.append_user_text(final_text)
+            history_text = final_text
+            if self._drone_coordinator and self._drone_coordinator.is_drone_mode():
+                drone_ctx = self._drone_coordinator.active_drone_context()
+                if drone_ctx:
+                    history_text = f"{history_text}\n\n{drone_ctx}"
+            self._bridge.history.append_user_text(history_text)
         elif vision_error and not vision_descriptions and image_atts:
             self._chat.add_error("Vision fallback failed", vision_error)
             return
         elif vision_error and not vision_descriptions:
             final_text = f"{text}\n\n[Note: {vision_error}]" if text else f"[Vision error: {vision_error}]"
             display_text = final_text
-            self._bridge.history.append_user_text(final_text)
+            history_text = final_text
+            if self._drone_coordinator and self._drone_coordinator.is_drone_mode():
+                drone_ctx = self._drone_coordinator.active_drone_context()
+                if drone_ctx:
+                    history_text = f"{history_text}\n\n{drone_ctx}"
+            self._bridge.history.append_user_text(history_text)
         else:
             # No images or vision disabled
             if image_atts:
@@ -425,7 +435,12 @@ class SendHandler(QObject):
                 return
             else:
                 display_text = text
-                self._bridge.history.append_user_text(text)
+                history_text = text
+                if self._drone_coordinator and self._drone_coordinator.is_drone_mode():
+                    drone_ctx = self._drone_coordinator.active_drone_context()
+                    if drone_ctx:
+                        history_text = f"{history_text}\n\n{drone_ctx}"
+                self._bridge.history.append_user_text(history_text)
 
         self._chat.add_user(display_text, [a.b64 for a in image_atts] or None)
         self._chat.scroll_to_bottom(force=True)

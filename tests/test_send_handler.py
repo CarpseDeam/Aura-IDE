@@ -861,3 +861,168 @@ class TestConversationBridgeReadOnlyIndependence:
         tool_names = {t["function"]["name"] for t in bridge.registry.tool_defs()}
         assert "write_file" not in tool_names
         assert "dispatch_to_worker" not in tool_names
+
+
+class TestDroneModeRouting:
+    """Verify core Drone mode routing invariants."""
+
+    @pytest.fixture
+    def drone_coordinator(self) -> Mock:
+        c = Mock()
+        c.is_drone_mode.return_value = True
+        c.active_drone_context.return_value = (
+            "[Drone Mode Active]\nYou are building a Drone..."
+        )
+        c.enter_drone_mode = Mock()
+        c.exit_drone_mode = Mock()
+        c.handle_message = Mock()
+        return c
+
+    @pytest.fixture
+    def handler_with_drone(
+        self,
+        bridge: Mock,
+        chat: Mock,
+        input_panel: Mock,
+        settings: Mock,
+        workspace_root: Path,
+        drone_coordinator: Mock,
+    ) -> SendHandler:
+        h = SendHandler(
+            bridge=bridge,
+            chat=chat,
+            input_panel=input_panel,
+            settings=settings,
+            workspace_root=workspace_root,
+            drone_coordinator=drone_coordinator,
+            parent=None,
+        )
+        # Ensure _get_current_model_info doesn't crash — mock it
+        h._get_current_model_info = Mock(return_value=Mock(supports_vision=False))
+        return h
+
+    def test_normal_message_bypasses_coordinator_in_drone_mode(
+        self,
+        handler_with_drone: SendHandler,
+        bridge: Mock,
+        drone_coordinator: Mock,
+    ) -> None:
+        """When drone mode is active, normal text skips the coordinator."""
+        handler_with_drone.handle_send(
+            SendPayload(text="Build a git commit drone", attachments=[]),
+            "model",
+            "off",
+        )
+        drone_coordinator.handle_message.assert_not_called()
+        bridge.history.append_user_text.assert_called_once()
+
+    def test_normal_message_goes_to_bridge_in_drone_mode(
+        self,
+        handler_with_drone: SendHandler,
+        bridge: Mock,
+    ) -> None:
+        """When drone mode is active, normal text still goes through bridge.send."""
+        handler_with_drone.handle_send(
+            SendPayload(text="Build a git commit drone", attachments=[]),
+            "model",
+            "off",
+        )
+        bridge.send.assert_called_once()
+
+    def test_drone_context_is_injected_into_history(
+        self,
+        handler_with_drone: SendHandler,
+        bridge: Mock,
+    ) -> None:
+        """Drone context is appended to the history text when drone mode is active."""
+        handler_with_drone.handle_send(
+            SendPayload(text="Build me a Drone", attachments=[]),
+            "model",
+            "off",
+        )
+        call_args = bridge.history.append_user_text.call_args[0][0]
+        assert "[Drone Mode Active]" in call_args
+
+    def test_visible_bubble_does_not_contain_drone_context(
+        self,
+        handler_with_drone: SendHandler,
+        chat: Mock,
+    ) -> None:
+        """The visible bubble shows the original message, not the drone context."""
+        handler_with_drone.handle_send(
+            SendPayload(text="Build me a Drone", attachments=[]),
+            "model",
+            "off",
+        )
+        chat.add_user.assert_called_once()
+        first_arg = chat.add_user.call_args[0][0]
+        assert first_arg == "Build me a Drone"
+        assert "[Drone Mode Active]" not in first_arg
+
+    def test_slash_chat_exits_drone_mode(
+        self,
+        handler_with_drone: SendHandler,
+        bridge: Mock,
+        chat: Mock,
+        drone_coordinator: Mock,
+    ) -> None:
+        """/chat while in drone mode exits back to normal Aura."""
+        handler_with_drone.handle_send(
+            SendPayload(text="/chat", attachments=[]),
+            "model",
+            "off",
+        )
+        drone_coordinator.exit_drone_mode.assert_called_once()
+        bridge.send.assert_not_called()
+        chat.add_info.assert_called_once_with(
+            "Drone Builder", "Back to normal Aura."
+        )
+
+    def test_slash_drone_off_exits_drone_mode(
+        self,
+        handler_with_drone: SendHandler,
+        bridge: Mock,
+        chat: Mock,
+        drone_coordinator: Mock,
+    ) -> None:
+        """/drone off while in drone mode exits back to normal Aura."""
+        handler_with_drone.handle_send(
+            SendPayload(text="/drone off", attachments=[]),
+            "model",
+            "off",
+        )
+        drone_coordinator.exit_drone_mode.assert_called_once()
+        bridge.send.assert_not_called()
+        chat.add_info.assert_called_once_with(
+            "Drone Builder", "Back to normal Aura."
+        )
+
+    def test_slash_drone_enters_drone_mode(
+        self,
+        handler_with_drone: SendHandler,
+        bridge: Mock,
+        drone_coordinator: Mock,
+    ) -> None:
+        """/drone when not in drone mode enters Drone Architect mode."""
+        drone_coordinator.is_drone_mode.return_value = False
+        handler_with_drone.handle_send(
+            SendPayload(text="/drone", attachments=[]),
+            "model",
+            "off",
+        )
+        drone_coordinator.enter_drone_mode.assert_called_once()
+        bridge.send.assert_not_called()
+
+    def test_coordinator_not_called_when_no_coordinator(
+        self,
+        handler: SendHandler,
+        bridge: Mock,
+    ) -> None:
+        """Handler without drone_coordinator works normally (no AttributeError)."""
+        handler.handle_send(
+            SendPayload(text="hello", attachments=[]),
+            "model",
+            "off",
+        )
+        bridge.history.append_user_text.assert_called_once()
+        bridge.send.assert_called_once()
