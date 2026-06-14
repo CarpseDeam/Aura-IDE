@@ -399,20 +399,19 @@ class InputPanel(QFrame):
     # ---- slash hint -------------------------------------------------------
 
     def _update_slash_hint(self) -> None:
-        import re
-
         text = self._editor.toPlainText()
         if not text.startswith("/"):
             self._slash_hint.setVisible(False)
             return
 
-        if re.match(r"/drone\s+(make|create|build)\b", text, re.IGNORECASE):
-            self._slash_hint.setVisible(False)
-            return
-
-        if text.strip().lower().startswith("/drone"):
+        normalized = text.strip().lower()
+        if normalized == "/drone":
             self._slash_hint.setText(
                 "/drone opens Drone Builder. Describe the Drone you want to build."
+            )
+        elif normalized.startswith("/drone "):
+            self._slash_hint.setText(
+                "Use /drone by itself, then describe the Drone in the next message."
             )
         else:
             self._slash_hint.setText(

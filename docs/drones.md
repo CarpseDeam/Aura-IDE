@@ -76,7 +76,8 @@ without them still work.
 `allowed_tools` is a compatibility field for older UI surfaces. New Drones run
 through their folder entrypoint, not through an LLM tool menu.
 
-Use `/drone make <brief>` to enter Drone Architect mode. Aura may use the
-Planner/Worker harness to author the folder, but registration goes through
-`register_drone_folder`, which validates the manifest and runs a safe readiness
-launch (trial run) before installing the Drone globally.
+Use `/drone` to enter Drone Architect mode, then describe the Drone you want in
+the next normal chat message. Aura may use the Planner/Worker harness to author
+the folder, but registration goes through `register_drone_folder`, which
+validates the manifest and runs a safe readiness launch (trial run) before
+installing the Drone globally.

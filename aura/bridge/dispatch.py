@@ -286,7 +286,7 @@ class _DispatchProxy(QObject):
                     pending.cancel_event.set()
 
     def start_drone_build(self, req: WorkerDispatchRequest) -> str:
-        """Run a drone build Worker dispatch on a background QThread.
+        """Run a Builder Worker dispatch on a background QThread.
 
         The Worker runs with its own isolated History and ConversationManager
         (created inside _run_worker).  The parent ConversationBridge history is

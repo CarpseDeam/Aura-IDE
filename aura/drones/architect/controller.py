@@ -45,6 +45,10 @@ _AUTO_RESUME_BLOCKED_PHASES = {
     WorkspacePhase.INSTALLED.value,
     WorkspacePhase.DISCARDED.value,
 }
+_UNKNOWN_BUILD_ERROR_PLACEHOLDER = "Unknown " + "build error"
+_BUILD_FAILURE_WITHOUT_WORKER_DETAIL = (
+    "Build failed without an error message from the Worker."
+)
 
 
 def build_failure_error_text(
@@ -69,14 +73,14 @@ def build_failure_error_text(
     seen: set[str] = set()
     for candidate in candidates:
         text = _clean_failure_text(candidate)
-        if not text or text == "Unknown build error":
+        if not text or text.casefold() == _UNKNOWN_BUILD_ERROR_PLACEHOLDER.casefold():
             continue
         key = text.casefold()
         if key in seen:
             continue
         seen.add(key)
         return text
-    return "Unknown build error"
+    return _BUILD_FAILURE_WITHOUT_WORKER_DETAIL
 
 
 def _failure_candidates_from_any(value: Any) -> list[str]:

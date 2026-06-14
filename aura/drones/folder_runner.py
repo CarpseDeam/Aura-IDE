@@ -8,10 +8,14 @@ import traceback
 from pathlib import Path
 from typing import Any
 
+from aura.config import get_subprocess_kwargs
 from aura.drones.definition import DroneDefinition
 from aura.drones.receipt import DroneReceipt
 from aura.drones.run import DroneRun
 from aura.drones.store import DroneStore, RunHistoryStore
+
+_PROCESS_POLL_SECONDS = 0.05
+_CANCEL_GRACE_SECONDS = 2.0
 
 
 def is_folder_backed_drone(drone: DroneDefinition) -> bool:
@@ -43,7 +47,12 @@ def run_drone_readiness(folder: Path, drone: DroneDefinition, workspace_root: Pa
             "trial_run": True,
             "readiness": True,
         }
-        result = _run_command_drone(folder, drone.entrypoint, payload, timeout_seconds=drone.budget.timeout_seconds)
+        result = _run_command_drone(
+            folder,
+            drone.entrypoint,
+            payload,
+            timeout_seconds=drone.budget.timeout_seconds,
+        )
         result = _normalize_result(result)
         # Verify the result is JSON-compatible
         json.dumps(result)
@@ -87,13 +96,35 @@ def run_folder_drone_sync(
     }
 
     try:
-        result = _run_command_drone(folder, drone.entrypoint, payload, timeout_seconds=drone.budget.timeout_seconds)
+        result = _run_command_drone(
+            folder,
+            drone.entrypoint,
+            payload,
+            timeout_seconds=drone.budget.timeout_seconds,
+            cancel_event=run.cancel_event,
+        )
         cargo = result
-        run.mark("completed")
+        if isinstance(result, dict) and (
+            result.get("cancelled") or result.get("status") == "cancelled"
+        ):
+            run.mark("cancelled")
+        elif isinstance(result, dict) and (
+            result.get("timed_out") or result.get("status") == "timed_out"
+        ):
+            run.mark("timed_out")
+        elif isinstance(result, dict) and result.get("ok") is False:
+            run.mark("failed")
+        else:
+            run.mark("completed")
     except Exception as exc:
         run.mark("failed")
         errors.append(str(exc))
         errors.append(traceback.format_exc())
+
+    if run.status != "completed" and isinstance(cargo, dict):
+        error = cargo.get("error")
+        if error:
+            errors.append(str(error))
 
     ended_at = dt.datetime.now(dt.timezone.utc).isoformat()
     if isinstance(cargo, (dict, list)):
@@ -125,9 +156,15 @@ def run_folder_drone_sync(
         tool_calls=[],
         errors=errors,
         elapsed_seconds=run.elapsed_seconds,
-        produced_artifact=cargo if isinstance(cargo, dict) else {"result": cargo} if cargo is not None else None,
+        produced_artifact=(
+            cargo
+            if run.status == "completed" and isinstance(cargo, dict)
+            else {"result": cargo}
+            if run.status == "completed" and cargo is not None
+            else None
+        ),
         met=True if run.status == "completed" else False,
-        evidence="Folder-backed Drone returned cargo." if run.status == "completed" else "",
+        evidence=_evidence_for_status(run.status),
         route_used=route_used,
     )
     RunHistoryStore.save_run(workspace_root, receipt)
@@ -157,22 +194,52 @@ def _normalize_result(result: Any) -> dict[str, Any]:
     return {"ok": True, "result": result}
 
 
-def _run_command_drone(folder: Path, entrypoint: dict, payload: dict[str, Any], timeout_seconds: int) -> dict[str, Any]:
+def _evidence_for_status(status: str) -> str:
+    if status == "completed":
+        return "Folder-backed Drone returned cargo."
+    if status == "cancelled":
+        return "Folder-backed Drone run was cancelled."
+    if status == "timed_out":
+        return "Folder-backed Drone command timed out."
+    return ""
+
+
+def _run_command_drone(
+    folder: Path,
+    entrypoint: dict,
+    payload: dict[str, Any],
+    timeout_seconds: int,
+    cancel_event: Any = None,
+) -> dict[str, Any]:
     """Run a Drone command, send JSON payload on stdin, return parsed stdout JSON."""
     command = entrypoint.get("command", [])
     if not command:
         return {"ok": False, "error": "entrypoint.command is empty"}
+    if cancel_event is not None and cancel_event.is_set():
+        return _cancelled_result("", "")
+
+    proc: subprocess.Popen[str] | None = None
     try:
-        proc = subprocess.run(
+        proc = subprocess.Popen(
             command,
             cwd=str(folder),
-            input=json.dumps(payload),
-            capture_output=True,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=timeout_seconds,
+            **get_subprocess_kwargs(),
         )
-        stdout_text = proc.stdout.strip()
-        stderr_text = proc.stderr.strip()
+        stdout_text, stderr_text = _communicate_with_cancel(
+            proc,
+            json.dumps(payload),
+            timeout_seconds=timeout_seconds,
+            cancel_event=cancel_event,
+        )
+        stdout_text = stdout_text.strip()
+        stderr_text = stderr_text.strip()
+
+        if cancel_event is not None and cancel_event.is_set():
+            return _cancelled_result(stdout_text, stderr_text, proc.returncode)
 
         if proc.returncode != 0:
             error = f"Drone exited with non-zero return code ({proc.returncode})"
@@ -207,8 +274,105 @@ def _run_command_drone(folder: Path, entrypoint: dict, payload: dict[str, Any], 
         result.setdefault("_returncode", proc.returncode)
         return result
     except subprocess.TimeoutExpired:
-        return {"ok": False, "error": f"Drone command timed out after {timeout_seconds}s"}
+        stdout_text, stderr_text, returncode = _stop_process(
+            proc,
+            kill_after=_CANCEL_GRACE_SECONDS,
+        )
+        result = {
+            "ok": False,
+            "status": "timed_out",
+            "timed_out": True,
+            "error": f"Drone command timed out after {timeout_seconds}s",
+            "returncode": returncode,
+        }
+        if stdout_text:
+            result["stdout"] = stdout_text[:1000]
+        if stderr_text:
+            result["stderr"] = stderr_text[:1000]
+        return result
     except FileNotFoundError:
         return {"ok": False, "error": f"Command not found: {command[0]}"}
     except Exception as exc:
         return {"ok": False, "error": str(exc), "traceback": traceback.format_exc()}
+
+
+def _communicate_with_cancel(
+    proc: subprocess.Popen[str],
+    input_text: str,
+    *,
+    timeout_seconds: int,
+    cancel_event: Any = None,
+) -> tuple[str, str]:
+    deadline = time.monotonic() + max(0, timeout_seconds)
+    pending_input: str | None = input_text
+
+    while True:
+        if cancel_event is not None and cancel_event.is_set():
+            stdout_text, stderr_text, _returncode = _stop_process(
+                proc,
+                kill_after=_CANCEL_GRACE_SECONDS,
+            )
+            return stdout_text, stderr_text
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired(proc.args, timeout_seconds)
+
+        try:
+            stdout_text, stderr_text = proc.communicate(
+                input=pending_input,
+                timeout=min(_PROCESS_POLL_SECONDS, remaining),
+            )
+            return stdout_text or "", stderr_text or ""
+        except subprocess.TimeoutExpired:
+            pending_input = None
+
+
+def _stop_process(
+    proc: subprocess.Popen[str] | None,
+    *,
+    kill_after: float,
+) -> tuple[str, str, int | None]:
+    if proc is None:
+        return "", "", None
+
+    if proc.poll() is None:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+
+    try:
+        stdout_text, stderr_text = proc.communicate(timeout=kill_after)
+        return stdout_text or "", stderr_text or "", proc.returncode
+    except subprocess.TimeoutExpired:
+        if proc.poll() is None:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        try:
+            stdout_text, stderr_text = proc.communicate(timeout=kill_after)
+            return stdout_text or "", stderr_text or "", proc.returncode
+        except Exception as exc:
+            return "", str(exc), proc.returncode
+
+
+def _cancelled_result(
+    stdout_text: str,
+    stderr_text: str,
+    returncode: int | None = None,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "ok": False,
+        "status": "cancelled",
+        "cancelled": True,
+        "error": "Drone run cancelled.",
+    }
+    if returncode is not None:
+        result["returncode"] = returncode
+    if stdout_text:
+        result["stdout"] = stdout_text[:1000]
+    if stderr_text:
+        result["stderr"] = stderr_text[:1000]
+    return result

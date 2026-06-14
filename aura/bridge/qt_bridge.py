@@ -493,7 +493,7 @@ class ConversationBridge(QObject):
         return self._dispatch_proxy.user_cancelled(tool_call_id)
 
     def dispatch_drone_build(self, req: WorkerDispatchRequest) -> str:
-        """Run a drone build Worker dispatch on a background thread.
+        """Run a Builder Worker dispatch on a background thread.
 
         The parent project conversation history is never touched.
         Returns the tool_call_id for tracking.

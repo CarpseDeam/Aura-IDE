@@ -235,9 +235,7 @@ class DroneBayPane(QWidget):
                 item.widget().deleteLater()
 
         self._card_layout.addStretch(2)
-        empty = QLabel(
-            "Need a new drone? Ask Aura: /drone make a repo scout."
-        )
+        empty = QLabel("Need a new drone? Type /drone, then describe it in chat.")
         empty.setObjectName("droneBayEmpty")
         empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
         empty.setWordWrap(True)

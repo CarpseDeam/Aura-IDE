@@ -196,7 +196,6 @@ def test_build_failure_uses_dispatch_metadata_error(tmp_path: Path) -> None:
 
     assert result.kind == "build_failed"
     assert "py_compile main.py" in result.error
-    assert result.error != "Unknown build error"
 
 
 def test_build_failure_uses_status_before_unknown(tmp_path: Path) -> None:
@@ -212,3 +211,33 @@ def test_build_failure_uses_status_before_unknown(tmp_path: Path) -> None:
 
     assert result.kind == "build_failed"
     assert result.error == "Worker status: validation_failed"
+
+
+def test_build_failure_without_worker_detail_uses_explicit_fallback(
+    tmp_path: Path,
+) -> None:
+    controller = DroneArchitectController()
+    controller.set_workspace_root(tmp_path)
+    controller.create_workspace("Broken Drone")
+
+    result = controller.on_build_completed(False, error="", failure_detail={})
+
+    assert result.kind == "build_failed"
+    assert result.error == "Build failed without an error message from the Worker."
+
+
+def test_build_failure_ignores_old_placeholder_summary(tmp_path: Path) -> None:
+    controller = DroneArchitectController()
+    controller.set_workspace_root(tmp_path)
+    controller.create_workspace("Broken Drone")
+    old_placeholder = "Unknown " + "build error"
+
+    result = controller.on_build_completed(
+        False,
+        error=old_placeholder,
+        failure_detail={},
+    )
+
+    assert result.kind == "build_failed"
+    assert result.error == "Build failed without an error message from the Worker."
+    assert result.error != old_placeholder
