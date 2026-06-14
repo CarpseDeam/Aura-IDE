@@ -245,6 +245,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._drone_coordinator.drone_list_changed.connect(
             self._on_drone_list_changed
         )
+        self._drone_coordinator.set_workspace_root(self._workspace_root)
 
         # Send handler — owns message queue, vision routing, undo logic.
         self._send_handler = SendHandler(
@@ -595,6 +596,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._input.set_workspace_root(path)
         self._send_handler.set_workspace_root(path)
         self._playground.set_workspace_root(path)
+        self._drone_coordinator.set_workspace_root(path)
         self._companion.set_workspace_root(str(self._workspace_root))
         self._tree.set_root(path)
         save_workspace_root(path)
