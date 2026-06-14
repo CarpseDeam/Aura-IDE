@@ -61,6 +61,7 @@ from aura.gui.main_window_toolbar import MainWindowToolbar
 from aura.gui.onboarding_dialog import OnboardingDialog
 from aura.gui.playground import AuraPlayground
 from aura.gui.send_handler import SendHandler
+from aura.gui.drones.drone_mode_coordinator import DroneModeCoordinator
 from aura.gui.settings_dialog import SettingsDialog
 from aura.gui.status_bar import AuraStatusBar
 from aura.gui.update_dialog import UpdateDialog, UpdateWorker
@@ -228,6 +229,20 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
         self._input = InputPanel(self._workspace_root, parent=self)
 
+        # Drone mode coordinator — swaps sidebar, owns drone mode state.
+        self._drone_coordinator = DroneModeCoordinator(
+            main_splitter=self._main_splitter,
+            left_pane=self._left_pane,
+            bridge=self._bridge,
+            chat=self._chat,
+            input_panel=self._input,
+            status_bar=self._status_bar,
+            parent=self,
+        )
+        self._drone_coordinator.drone_mode_changed.connect(
+            self._on_drone_architect_mode_changed
+        )
+
         # Send handler — owns message queue, vision routing, undo logic.
         self._send_handler = SendHandler(
             bridge=self._bridge,
@@ -235,10 +250,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             input_panel=self._input,
             settings=self._settings,
             workspace_root=self._workspace_root,
+            drone_coordinator=self._drone_coordinator,
             parent=self,
-        )
-        self._send_handler.drone_architect_mode_changed.connect(
-            self._on_drone_architect_mode_changed
         )
 
         # Companion (mobile control plane)
@@ -702,6 +715,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._bridge.set_workspace_root(root_path)
         self._input.set_workspace_root(root_path)
         self._send_handler.set_workspace_root(root_path)
+        self._drone_coordinator.set_workspace_root(root_path)
         self._playground.set_workspace_root(root_path)
         self._companion.set_workspace_root(str(self._workspace_root))
         self._tree.set_root(root_path)

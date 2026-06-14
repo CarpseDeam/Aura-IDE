@@ -16,8 +16,6 @@ from PySide6.QtWidgets import QMessageBox
 from aura.config import PROVIDERS, AppSettings, ModelInfo, ThinkingMode
 from aura.conversation.task_router import TaskLane, classify_user_request
 from aura.gui.input_panel import SendPayload
-from aura.drones.build_spec import DroneBuildBrief
-from aura.drones.build_prompt import build_drone_architect_prompt
 from aura.git_ops import (
     recent_commit_log,
     restore_to_snapshot,
@@ -40,7 +38,6 @@ class SendHandler(QObject):
     """
 
     vision_done = Signal(object, list, object)  # SendPayload, list[str], str|None
-    drone_architect_mode_changed = Signal(bool)
 
     def __init__(
         self,
@@ -49,6 +46,7 @@ class SendHandler(QObject):
         input_panel,
         settings: AppSettings,
         workspace_root: Path | None,
+        drone_coordinator=None,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -57,6 +55,7 @@ class SendHandler(QObject):
         self._input = input_panel
         self._settings = settings
         self._workspace_root = workspace_root
+        self._drone_coordinator = drone_coordinator
 
         # Queued messages sent while worker is running.
         self._message_queue: list[SendPayload] = []
@@ -64,9 +63,6 @@ class SendHandler(QObject):
         # Pending model/thinking stored while vision thread is running.
         self._pending_model: str = ""
         self._pending_thinking: ThinkingMode = "off"
-
-        # Drone Architect mode flag (not persisted across sessions).
-        self._drone_architect_mode: bool = False
 
         # Wire our own signal so _on_vision_done runs on the GUI thread.
         self.vision_done.connect(self._on_vision_done)
@@ -91,13 +87,14 @@ class SendHandler(QObject):
         Used when the conversation is being reset (new conversation, open
         conversation, project switch, companion thread select).
         """
-        if self._drone_architect_mode:
-            self._drone_architect_mode = False
-            self.drone_architect_mode_changed.emit(False)
+        if self._drone_coordinator and self._drone_coordinator.is_drone_mode():
+            self._drone_coordinator.exit_drone_mode()
 
     def is_drone_architect_mode(self) -> bool:
         """Return whether Drone Architect mode is currently active."""
-        return self._drone_architect_mode
+        if self._drone_coordinator:
+            return self._drone_coordinator.is_drone_mode()
+        return False
 
     def process_message_queue(self, model: str, thinking: ThinkingMode) -> None:
         """Send the next queued message, if any."""
@@ -107,13 +104,14 @@ class SendHandler(QObject):
 
     def handle_send(self, payload: SendPayload, model: str, thinking: ThinkingMode) -> None:
         """Process a send payload: route built-ins, queue if busy, or send."""
-        # Early exit-check: exit drone architect mode on /drone (alone or off)
-        # or /chat while in mode.
-        if self._drone_architect_mode:
+        # Early exit-check: exit drone mode on /chat or /drone off while in mode.
+        if self._drone_coordinator and self._drone_coordinator.is_drone_mode():
             text = payload.text.strip()
             lower = text.lower()
             if lower == "/chat" or lower == "/drone" or lower.startswith("/drone off"):
-                self._exit_drone_architect_mode(payload)
+                self._chat.add_user(payload.text)
+                self._drone_coordinator.exit_drone_mode()
+                self._chat.add_info("Drone Workspaces", "Back to normal Aura.")
                 return
 
         route = classify_user_request(payload.text)
@@ -126,10 +124,9 @@ class SendHandler(QObject):
             self._handle_built_in_action(route.action)
             return
 
-        # Fallthrough wrap for drone architect mode — wrap normal messages
-        # as drone build briefs before sending.
-        if self._drone_architect_mode:
-            self._send_as_drone_build_brief(payload, model, thinking)
+        # Fallthrough — in drone mode, route through coordinator.
+        if self._drone_coordinator and self._drone_coordinator.is_drone_mode():
+            self._drone_coordinator.handle_message(payload, model, thinking)
             return
 
         if self._bridge.is_running():
@@ -237,9 +234,7 @@ class SendHandler(QObject):
     ) -> None:
         """Handle /drone and /drone make|create|build commands.
 
-        - /drone alone: toggle drone architect mode.
-        - /drone make|create|build <brief>: enter mode (if not already) and send
-          the brief as a drone build request.
+        Delegates to the DroneModeCoordinator when available.
         """
         match = re.match(
             r"/drone(?:\s+(?:make|create|build|fix|repair|improve|edit|update)\s+(.+))?$",
@@ -247,81 +242,22 @@ class SendHandler(QObject):
             re.IGNORECASE,
         )
         if match is None:
-            # Unrecognised /drone variant (e.g. /drone off outside mode) — ignore.
             return
         brief = match.group(1).strip() if match.group(1) else ""
 
         if not brief:
-            # Just /drone — toggle mode (always immediate, even if bridge busy)
-            if not self._drone_architect_mode:
-                self._chat.add_user(payload.text)
-                self._enter_drone_architect_mode()
-            else:
-                self._exit_drone_architect_mode(payload)
+            # /drone alone — enter mode
+            self._chat.add_user(payload.text)
+            if self._drone_coordinator:
+                self._drone_coordinator.enter_drone_mode()
             return
 
-        # /drone make|create|build <brief> — enter mode silently and send
-        if not self._drone_architect_mode:
-            self._drone_architect_mode = True
-            self.drone_architect_mode_changed.emit(True)
-
-        if self._bridge.is_running():
-            self._message_queue.append(payload)
-            self._input.set_queued_messages(len(self._message_queue))
+        # /drone make|create|build <brief> — route through coordinator
+        if self._drone_coordinator:
+            if not self._drone_coordinator.is_drone_mode():
+                self._drone_coordinator.enter_drone_mode()
+            self._drone_coordinator.handle_message(payload, model, thinking)
             return
-
-        self._send_as_drone_build_brief(payload, model, thinking)
-
-    def _enter_drone_architect_mode(self) -> None:
-        """Activate drone architect mode, emit signal, show info card."""
-        self._drone_architect_mode = True
-        self.drone_architect_mode_changed.emit(True)
-        self._chat.add_info(
-            "Drone Architect",
-            "Drone Architect mode active. Describe the Drone you want to build or improve.",
-        )
-
-    def _exit_drone_architect_mode(self, payload: SendPayload) -> None:
-        """Deactivate drone architect mode, add user msg + info card to chat."""
-        self._chat.add_user(payload.text)
-        self._drone_architect_mode = False
-        self.drone_architect_mode_changed.emit(False)
-        self._chat.add_info(
-            "Drone Architect",
-            "Drone Architect mode closed. Back to normal Aura.",
-        )
-
-    def _send_as_drone_build_brief(
-        self, payload: SendPayload, model: str, thinking: ThinkingMode
-    ) -> None:
-        """Wrap user text as a drone build brief and send to the model.
-
-        Adds the original user message to chat first, then compiles the
-        drone architect prompt with the user text as build_brief and sends
-        it to the bridge. Queues if the bridge is busy.
-        """
-        if self._bridge.is_running():
-            self._message_queue.append(payload)
-            self._input.set_queued_messages(len(self._message_queue))
-            return
-
-        brief_obj = DroneBuildBrief(
-            response_type="brief",
-            message="",
-            ready_to_build=True,
-            build_brief=payload.text,
-        )
-        compiled_prompt = build_drone_architect_prompt(brief_obj)
-
-        # Show the original user text in chat, send compiled prompt to model.
-        self._chat.add_user(payload.text)
-        self._bridge.history.append_user_text(compiled_prompt)
-        self._chat.begin_assistant()
-        self._bridge.send(
-            model=model,
-            thinking=thinking,
-            max_tool_rounds=self._settings.max_tool_rounds,
-        )
 
     # ---- undo --------------------------------------------------------------
     def _handle_built_in_action(self, action: str) -> None:
