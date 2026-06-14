@@ -424,7 +424,9 @@ class ConversationManager:
                         )
                         return
                     edit_recovery_pending = bool(
-                        edit_fallback_required or line_range_reread_required
+                        edit_fallback_required
+                        or line_range_reread_required
+                        or patch_failed_cycles
                     )
                     syntax_repair_pending = bool(
                         self._syntax_repair_paths(syntax_repair_required)
@@ -489,6 +491,7 @@ class ConversationManager:
                             details.update(self._edit_recovery_details(
                                 edit_fallback_required,
                                 line_range_reread_required,
+                                patch_failed_cycles,
                             ))
                         self._finish_worker_unrecoverable(
                             on_event,
@@ -1004,7 +1007,19 @@ class ConversationManager:
     def _edit_recovery_details(
         edit_fallback_required: dict[str, dict[str, Any]],
         line_range_reread_required: dict[str, dict[str, Any]],
+        patch_failed_cycles: dict[str, int] | None = None,
     ) -> dict[str, Any]:
+        if patch_failed_cycles:
+            shape = sorted(patch_failed_cycles)[0]
+            parsed_shape = ConversationManager._parse_patch_shape(shape)
+            return {
+                "path": str(parsed_shape.get("path") or ""),
+                "tool": "patch_file",
+                "failure_class": "patch_file_repeated_failure",
+                "error": "Patch recovery pending for a failed patch shape.",
+                "patch_shape": ConversationManager._shape_digest(shape),
+                "patch_failed_cycles": patch_failed_cycles[shape],
+            }
         pending = edit_fallback_required or line_range_reread_required
         if not pending:
             return {}
@@ -1232,53 +1247,6 @@ class ConversationManager:
             self._record_recovery_block(payload, f"line-range-reread:{path}", recovery_block_counts)
             return self._blocked_tool_result(tool_call_id, name, payload)
 
-        if name == "patch_file" and path and patch_failed_cycles.get(path, 0) >= 2:
-            payload = self._recovery_payload(
-                path=path,
-                failure_class="patch_file_repeated_failure",
-                error=(
-                    "patch_file failed twice on the same file after fresh reads. "
-                    "Stop editing this file and report the structured blocker instead of retrying."
-                ),
-                suggested_next_tool="read_file",
-                suggested_next_action=(
-                    "Do not retry patch_file for this path in this Worker run. "
-                    "Report the repeated patch blocker to the Planner."
-                ),
-                recoverable=False,
-            )
-            payload["applied"] = False
-            payload["write_outcome"] = "not_applied_edit_mechanics_blocked"
-            payload["patch_failed_cycles"] = patch_failed_cycles.get(path, 0)
-            return self._blocked_tool_result(tool_call_id, name, payload)
-
-        if name == "patch_file" and path in edit_fallback_required:
-            prior = edit_fallback_required[path]
-            failure_class = str(prior.get("failure_class") or "patch_hunk_not_found")
-            if failure_class == "patch_file_hash_mismatch":
-                suggested_next_action = (
-                    "Re-read the file with read_file or read_file_range, then retry patch_file once "
-                    "with expected_file_hash set to the new content_hash."
-                )
-            else:
-                suggested_next_action = "Re-read the file, then retry patch_file once with current exact text."
-            payload = self._recovery_payload(
-                path=path,
-                failure_class=failure_class,
-                error="Previous patch_file failed. Re-read the file before retrying the patch.",
-                suggested_next_tool="read_file",
-                suggested_next_action=suggested_next_action,
-            )
-            payload["previous_error"] = prior.get("error", "")
-            self._record_recovery_block(payload, f"patch-reread:{path}", recovery_block_counts)
-            if recovery_block_counts.get(f"patch-reread:{path}", 0) >= 2:
-                payload["recoverable"] = False
-                payload["error"] = (
-                    "patch_file failed repeatedly on the same file after re-reading. "
-                    "Stop editing this file and report the structured blocker instead of retrying."
-                )
-            return self._blocked_tool_result(tool_call_id, name, payload)
-
         if name == "patch_file" and path:
             blocked = self._worker_patch_file_state_block(
                 tool_call_id=tool_call_id,
@@ -1289,6 +1257,28 @@ class ConversationManager:
             )
             if blocked is not None:
                 return blocked
+            shape = self._edit_shape_signature(name, args)
+            if shape in patch_failed_cycles:
+                payload = self._recovery_payload(
+                    path=path,
+                    failure_class="patch_file_repeated_failure",
+                    error=(
+                        "Repeated patch shape failed. This exact patch_file shape is blocked; "
+                        "a different hunk shape for the same file is still valid."
+                    ),
+                    suggested_next_tool="patch_file",
+                    suggested_next_action=(
+                        "Change the patch shape by adding occurrence, using more surrounding context, "
+                        "changing the old block, or using a fresh expected_file_hash from a new read."
+                    ),
+                    recoverable=False,
+                )
+                payload["applied"] = False
+                payload["write_outcome"] = "not_applied_edit_mechanics_blocked"
+                payload["patch_failed_cycles"] = patch_failed_cycles.get(shape, 0)
+                payload["patch_shape"] = self._shape_digest(shape)
+                self._record_recovery_block(payload, f"patch-shape:{shape}", recovery_block_counts)
+                return self._blocked_tool_result(tool_call_id, name, payload)
 
         if name in ("edit_file", "edit_symbol") and path in edit_fallback_required:
             prior = edit_fallback_required[path]
@@ -1453,7 +1443,7 @@ class ConversationManager:
                 self._pop_normalized_recovery_key(edit_fallback_required, path)
                 self._pop_normalized_recovery_key(line_range_reread_required, path)
                 self._pop_normalized_key(worker_file_state, path)
-                self._pop_normalized_key(patch_failed_cycles, path)
+                self._clear_patch_failed_shapes_for_path(patch_failed_cycles, path)
                 if self._is_python_path(path) and not _is_validation_scratch_path(path):
                     syntax_validation_required.add(path)
                 state = self._syntax_repair_state_for_path(syntax_repair_required, path)
@@ -1516,9 +1506,11 @@ class ConversationManager:
             parsed.setdefault("applied", False)
             parsed.setdefault("write_outcome", "not_applied_edit_mechanics_blocked")
             parsed.setdefault("tool", name)
-            failed_cycles = patch_failed_cycles.get(path, 0) + 1
-            patch_failed_cycles[path] = failed_cycles
+            patch_shape = self._edit_shape_signature(name, args)
+            failed_cycles = patch_failed_cycles.get(patch_shape, 0) + 1
+            patch_failed_cycles[patch_shape] = failed_cycles
             parsed["patch_failed_cycles"] = failed_cycles
+            parsed["patch_shape"] = self._shape_digest(patch_shape)
             parsed["stale"] = True
             parsed["suggested_next_tool"] = "read_file"
             if failure_class == "patch_file_hash_mismatch":
@@ -1535,8 +1527,8 @@ class ConversationManager:
                 parsed["recoverable"] = False
                 parsed["failure_class"] = "patch_file_repeated_failure"
                 parsed["error"] = (
-                    "patch_file failed twice on the same file after a fresh read. "
-                    "Stop editing this file and report the structured blocker instead of retrying."
+                    "Repeated patch shape failed. This exact patch_file shape is blocked; "
+                    "a different hunk shape for the same file is still valid."
                 )
                 self._pop_normalized_recovery_key(edit_fallback_required, path)
             else:
@@ -1570,11 +1562,8 @@ class ConversationManager:
     def _is_py_compile_error(output: str) -> bool:
         """Check if output contains Python-level error markers (py_compile actually ran)."""
         return bool(
-            "SyntaxError" in output
-            or re.search(r'\bFile "', output)
-            or "NameError" in output
-            or "IndentationError" in output
-            or "TypeError:" in output
+            re.search(r'\bFile ".*", line \d+', output)
+            and re.search(r"\b(?:SyntaxError|IndentationError|TabError)\b", output)
         )
 
     @staticmethod
@@ -1635,10 +1624,9 @@ class ConversationManager:
                 self._pop_syntax_repair_state(syntax_repair_required, path)
                 self._discard_syntax_validation_path(syntax_validation_required, path)
             return
-        # Shell-level failures (cd prefix, command not found) should not trigger
-        # Python syntax repair — the command never reached py_compile.
+        # Only Python compiler syntax output should trigger syntax repair state.
         output = str(payload.get("output") or "")
-        if not self._is_py_compile_error(output) and self._is_shell_failure(output):
+        if not self._is_py_compile_error(output):
             return
         for path in targets:
             prior = self._syntax_repair_state_for_path(syntax_repair_required, path)
@@ -1769,6 +1757,18 @@ class ConversationManager:
                 state.pop(existing_path, None)
 
     @staticmethod
+    def _clear_patch_failed_shapes_for_path(
+        patch_failed_cycles: dict[str, int],
+        path: str,
+    ) -> None:
+        normalized = _normalize_worker_path(path)
+        for shape in list(patch_failed_cycles):
+            parsed = ConversationManager._parse_patch_shape(shape)
+            shape_path = _normalize_worker_path(str(parsed.get("path") or ""))
+            if shape_path == normalized:
+                patch_failed_cycles.pop(shape, None)
+
+    @staticmethod
     def _syntax_repair_tool_allowed(
         name: str,
         args: dict[str, Any],
@@ -1840,7 +1840,7 @@ class ConversationManager:
 
     @staticmethod
     def _edit_shape_signature(name: str, args: dict[str, Any]) -> str:
-        path = str(args.get("path", ""))
+        path = _normalize_worker_path(str(args.get("path", "")))
         if name == "edit_file":
             raw = str(args.get("old_str", ""))
             marker = hashlib.sha256(raw.encode("utf-8", errors="replace")).hexdigest()
@@ -1853,9 +1853,50 @@ class ConversationManager:
             marker = f"{args.get('start_line')}:{args.get('end_line')}"
         elif name == "apply_edit_transaction":
             marker = ConversationManager._transaction_shape_marker(args)
+        elif name == "patch_file":
+            marker = ConversationManager._patch_shape_marker(args)
         else:
             marker = json.dumps(args, sort_keys=True, ensure_ascii=False)
         return json.dumps({"tool": name, "path": path, "shape": marker}, sort_keys=True)
+
+    @staticmethod
+    def _patch_shape_marker(args: dict[str, Any]) -> dict[str, Any]:
+        edits = args.get("edits")
+        edit_markers: list[dict[str, Any]] = []
+        if isinstance(edits, list):
+            for edit in edits:
+                if not isinstance(edit, dict):
+                    edit_markers.append({"invalid": True})
+                    continue
+                marker: dict[str, Any] = {
+                    "allow_multiple": bool(edit.get("allow_multiple", False)),
+                    "has_occurrence": "occurrence" in edit,
+                }
+                if "occurrence" in edit:
+                    marker["occurrence"] = edit.get("occurrence")
+                for key in ("old", "new"):
+                    value = edit.get(key)
+                    if isinstance(value, str):
+                        marker[f"{key}_hash"] = hashlib.sha256(
+                            value.encode("utf-8", errors="replace")
+                        ).hexdigest()
+                edit_markers.append(marker)
+        return {
+            "expected_file_hash": args.get("expected_file_hash"),
+            "edits": edit_markers,
+        }
+
+    @staticmethod
+    def _parse_patch_shape(shape: str) -> dict[str, Any]:
+        try:
+            parsed = json.loads(shape)
+        except (TypeError, json.JSONDecodeError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+
+    @staticmethod
+    def _shape_digest(shape: str) -> str:
+        return hashlib.sha256(shape.encode("utf-8", errors="replace")).hexdigest()[:16]
 
     @staticmethod
     def _transaction_shape_marker(args: dict[str, Any]) -> list[dict[str, Any]]:

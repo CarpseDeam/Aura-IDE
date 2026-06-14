@@ -375,6 +375,7 @@ def test_repeated_recovery_blocks_remain_internal_steering(tmp_path):
 
 
 def test_py_compile_failure_blocks_unrelated_tool_until_syntax_repair(tmp_path):
+    (tmp_path / "a.py").write_text("invalid syntax here\n", encoding="utf-8")
     history = History()
     tools = MagicMock(spec=ToolRegistry)
     tools.tool_defs.return_value = []
@@ -396,7 +397,7 @@ def test_py_compile_failure_blocks_unrelated_tool_until_syntax_repair(tmp_path):
     sandbox = MagicMock()
     sandbox.run_terminal_command.return_value = SandboxResult(
         ok=False,
-        stdout="SyntaxError: invalid syntax in a.py",
+        stdout='File "a.py", line 1\n    invalid syntax here\n         ^^^^^\nSyntaxError: invalid syntax',
         stderr="",
         exit_code=1,
     )

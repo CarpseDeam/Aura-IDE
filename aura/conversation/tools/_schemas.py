@@ -698,6 +698,8 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
                 "For normal existing-file edits, read the file first and use patch_file instead. "
                 "For intentional whole-file replacement of an existing file, set full_replace_existing "
                 "to true and provide replacement_reason; these fields are not for patch_file failure recovery. "
+                "If a patch_file hunk is missing or ambiguous, recover with read_file/read_file_range and "
+                "a corrected patch_file hunk, not write_file. "
                 "The user MUST approve every write through a diff dialog before it is applied. "
                 "Existing files are backed up before being overwritten."
             ),
@@ -770,9 +772,11 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
                 "reading the file. In Worker mode, after reading an existing file, pass the "
                 "content_hash returned by read_file, read_files, or read_file_range as "
                 "expected_file_hash. Every hunk is applied to an in-memory copy first; "
-                "if any hunk is missing or ambiguous, nothing is written. Craft reviews the full proposed "
-                "file once and the user sees one approval diff. If a hash mismatch or hunk failure occurs, "
-                "re-read and retry patch_file once with the new expected_file_hash. Do not switch tools or improvise."
+                "if any hunk is missing or ambiguous, nothing is written. Use occurrence to disambiguate "
+                "repeated exact text, or add more surrounding context to the old block. Craft reviews the full "
+                "proposed file once and the user sees one approval diff. If a hash mismatch or hunk failure "
+                "occurs, re-read and retry patch_file once with a corrected hunk and the new expected_file_hash. "
+                "Do not switch to write_file unless the task intentionally requires whole-file replacement."
             ),
             "parameters": {
                 "type": "object",

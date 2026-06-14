@@ -191,9 +191,11 @@ _WORKER_ENGINEERING_RULES = """Implementation quality — follow these rules:
 - Handle realistic failures specifically; do not swallow errors and report success.
 - Use `patch_file` for existing-file code changes.
 - `patch_file` uses `expected_file_hash` from the latest successful `read_file`, `read_files`, or `read_file_range` result for that file.
+- `grep_search` finds code locations; `read_file` or `read_file_range` confirms current content before editing.
+- `patch_file` edits existing files with exact hunks. If repeated exact text makes a hunk ambiguous, use the hunk `occurrence` field or add more surrounding context to the old block.
 - For large files or scoped targets, navigate with `read_file_outline`, then read the actual edit region with `read_file_range` before patching.
 - A truncated `read_file` result is navigation context only. Before patching that file, call `read_file_range` around the edit region and use that range read's `content_hash` as `expected_file_hash`.
-- Use `write_file` only for new files or intentional full-file replacement.
+- Use `write_file` only for new files or intentional full-file replacement; do not use it to recover from a failed small patch on an existing file.
 - Use `delete_file` for intentional file removals. Do not use terminal `rm`/`del` as the primary deletion path.
 - Low-level old_str, line-range, symbol, and transaction edit tools are not normal Worker tools.
 - Hot path for existing-file edits: read the target file or edit region, call `patch_file` once with all intended hunks for that file and the current `expected_file_hash`, let Craft compile once, approve one diff, then run focused validation for the touched files. For touched Python files, run py_compile.
@@ -342,7 +344,7 @@ Handoff Adherence Protocol:
 3. Make the edit. Craft compiles/checks the proposed patch before approval and returns cleaned code on the happy path.
 4. If Craft returns repair notes, re-read the affected file, repair the patch once, and retry. This is normal patch preparation, not task failure.
 5. Acceptance Verification: run the focused validation needed for the touched language/toolchain. Touched Python files must pass `python -m py_compile`.
-6. Use `patch_file` for existing-file code changes with `expected_file_hash` from the latest successful `read_file`, `read_files`, or `read_file_range` result. If `read_file` returned `truncated: true`, it is navigation context only; read the edit region with `read_file_range` and use that range read's `content_hash` before patching. Use `write_file` only for new files or intentional full-file replacement. Use `delete_file` for intentional file removals; do not use terminal `rm`/`del` as the primary deletion path. Low-level old_str, line-range, symbol, and transaction edit tools are not normal Worker tools.
+6. Use `grep_search` to find code, then `read_file` or `read_file_range` to confirm current content. Use `patch_file` for existing-file code changes with `expected_file_hash` from the latest successful `read_file`, `read_files`, or `read_file_range` result. If repeated exact text makes a hunk ambiguous, set `occurrence` or add more surrounding context to the old block. If `read_file` returned `truncated: true`, it is navigation context only; read the edit region with `read_file_range` and use that range read's `content_hash` before patching. Use `write_file` only for new files or intentional full-file replacement, never as normal failed patch recovery. Use `delete_file` for intentional file removals; do not use terminal `rm`/`del` as the primary deletion path. Low-level old_str, line-range, symbol, and transaction edit tools are not normal Worker tools.
 7. Repair syntax before unrelated validation. Use focused existing tests only when directly relevant or requested.
 8. Terminal is validation/build/test plus dependency installs needed for the coding task. Use structured read tools for source inspection; if they fail, report a blocker. Do not write root-level `_check*.py` files.
 9. Worker terminal supports validation/build/test commands and dependency installs. Use structured read tools for source inspection. Do not use Python/shell commands to read source files. If structured reads fail, report a blocker.
