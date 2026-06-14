@@ -781,14 +781,14 @@ class MissionCoreItem(QGraphicsObject):
 
 
 PALETTES: dict[str, tuple[str, str, str]] = {
-    "pearl":       ("#e8e0f0", "#f5efff", "#7a6b8e"),
-    "aurora":      ("#a0e7e5", "#d4fafa", "#1a3a4a"),
-    "nebula":      ("#c4a1ff", "#e8d5ff", "#1e0c3a"),
-    "moon-glass":  ("#d4dce8", "#f0f4ff", "#2d3640"),
-    "deep-cyan":   ("#7fd4d4", "#c8f7f7", "#0a2828"),
-    "violet-blue": ("#b4c6ff", "#e0e8ff", "#1a2544"),
-    "opal":        ("#f0dce8", "#fff0f8", "#4a3050"),
-    "starlight":   ("#faf4ff", "#ffffff", "#2a2240"),
+    "dusty-teal":    ("#8eb8b0", "#c8e0da", "#3d5a54"),
+    "pale-lavender": ("#b4b0c8", "#dddae8", "#3d3a50"),
+    "muted-sky":     ("#8eaebb", "#c6d8de", "#3a5058"),
+    "dusty-rose":    ("#c0a8b0", "#e0d2d8", "#503a42"),
+    "slate":         ("#98a0b0", "#ced4de", "#343a48"),
+    "sage":          ("#9ab0a0", "#ceded0", "#38443a"),
+    "powder-blue":   ("#a8b8c8", "#d4dee8", "#30404c"),
+    "winter-mist":   ("#b8bcc8", "#e2e4ec", "#3c3e4c"),
 }
 
 
@@ -987,11 +987,12 @@ class GoalPlanetItem(QGraphicsObject):
         # 2. Ring BACK arc — behind the planet body
         ring_radius = None
         ring_rect = None
+        tilt = 0.4
         arc_start = 0
         arc_sweep = 0
-        if self._seed % 10 < 3:
+        if self._seed % 10 < 7:
             ring_radius = radius + rng.uniform(5, 9)
-            tilt = rng.uniform(0.35, 0.55)
+            tilt = rng.uniform(0.28, 0.48)
             ring_rect = QRectF(
                 center.x() - ring_radius,
                 center.y() - ring_radius * tilt,
@@ -1001,10 +1002,22 @@ class GoalPlanetItem(QGraphicsObject):
             arc_start = int(rng.uniform(0, 360) * 16)
             arc_sweep = int(rng.uniform(200, 280) * 16)
             back_arc_color = QColor(atmos)
-            back_arc_color.setAlpha(14)
+            back_arc_color.setAlpha(10)
             p.setBrush(Qt.BrushStyle.NoBrush)
-            p.setPen(QPen(back_arc_color, 1.2))
+            p.setPen(QPen(back_arc_color, 0.8))
             p.drawArc(ring_rect, arc_start, arc_sweep)
+            # Faint inner band
+            inner_back_color = QColor(atmos)
+            inner_back_color.setAlpha(6)
+            p.setPen(QPen(inner_back_color, 0.5))
+            inner_back_radius = ring_radius - 1.8
+            inner_back_rect = QRectF(
+                center.x() - inner_back_radius,
+                center.y() - inner_back_radius * tilt,
+                inner_back_radius * 2,
+                inner_back_radius * 2 * tilt,
+            )
+            p.drawArc(inner_back_rect, arc_start, arc_sweep)
 
         # 3. Planet body — 3D sphere with real lighting
         # 3a. Diffuse lighting gradient
@@ -1056,66 +1069,44 @@ class GoalPlanetItem(QGraphicsObject):
         p.setClipPath(clip_path)
 
         # 5. Surface details (all clipped to planet boundary)
-        # 5a. Cloud bands following latitude
-        num_bands = rng.randint(1, 3)
-        for _ in range(num_bands):
-            phi = rng.uniform(-0.55, 0.55)
+        # 5a. Soft latitude bands — filled, low alpha, whispering across the disk
+        num_bands = rng.randint(4, 7)
+        for i in range(num_bands):
+            phi = rng.uniform(-0.65, 0.65)
             y_center = center.y() + radius * math.sin(phi)
             half_w = radius * math.cos(phi)
-            bow = rng.uniform(1.5, 4.0)
+            top_bow = rng.uniform(1.0, 2.5)
+            bot_bow = rng.uniform(1.0, 2.5)
             band_path = QPainterPath()
-            band_path.moveTo(center.x() - half_w, y_center)
+            # Top edge
+            band_path.moveTo(center.x() - half_w, y_center - 1.2)
             band_path.cubicTo(
-                center.x() - half_w * 0.45, y_center + bow,
-                center.x() + half_w * 0.45, y_center + bow,
-                center.x() + half_w, y_center,
+                center.x() - half_w * 0.45, y_center - 1.2 + top_bow,
+                center.x() + half_w * 0.45, y_center - 1.2 + top_bow,
+                center.x() + half_w, y_center - 1.2,
             )
-            band_color = QColor(light)
-            band_color.setAlpha(rng.randint(28, 50))
-            p.setBrush(Qt.BrushStyle.NoBrush)
-            p.setPen(QPen(band_color, rng.uniform(1.8, 3.5)))
-            p.drawPath(band_path)
-
-        # 5b. Nebula surface patches — irregular dark blobs
-        num_patches = rng.randint(1, 3)
-        for _ in range(num_patches):
-            patch_color = QColor(dark)
-            patch_color.setAlpha(rng.randint(18, 30))
-            patch_path = QPainterPath()
-            segs = rng.randint(5, 7)
-            sx = center.x() + rng.uniform(-radius * 0.65, radius * 0.65)
-            sy = center.y() + rng.uniform(-radius * 0.65, radius * 0.65)
-            patch_path.moveTo(sx, sy)
-            px, py = sx, sy
-            for _ in range(segs):
-                cx1 = px + rng.uniform(-radius * 0.2, radius * 0.2)
-                cy1 = py + rng.uniform(-radius * 0.2, radius * 0.2)
-                cx2 = px + rng.uniform(-radius * 0.2, radius * 0.2)
-                cy2 = py + rng.uniform(-radius * 0.2, radius * 0.2)
-                ex = px + rng.uniform(-radius * 0.25, radius * 0.25)
-                ey = py + rng.uniform(-radius * 0.25, radius * 0.25)
-                if (ex - center.x()) ** 2 + (ey - center.y()) ** 2 > (radius - 2) ** 2:
-                    ex, ey = px, py
-                patch_path.cubicTo(cx1, cy1, cx2, cy2, ex, ey)
-                px, py = ex, ey
-            patch_path.closeSubpath()
-            p.setBrush(QBrush(patch_color))
+            # Bottom edge (reverse)
+            band_path.lineTo(center.x() + half_w, y_center + 1.2)
+            band_path.cubicTo(
+                center.x() + half_w * 0.45, y_center + 1.2 + bot_bow,
+                center.x() - half_w * 0.45, y_center + 1.2 + bot_bow,
+                center.x() - half_w, y_center + 1.2,
+            )
+            band_path.closeSubpath()
+            # Alternate slightly lighter and darker bands
+            if i % 2 == 0:
+                band_color = QColor(light)
+                band_color.setAlpha(rng.randint(12, 22))
+            else:
+                band_color = QColor(
+                    int(dark.red() * 0.65 + light.red() * 0.35),
+                    int(dark.green() * 0.65 + light.green() * 0.35),
+                    int(dark.blue() * 0.65 + light.blue() * 0.35),
+                )
+                band_color.setAlpha(rng.randint(8, 16))
+            p.setBrush(QBrush(band_color))
             p.setPen(Qt.PenStyle.NoPen)
-            p.drawPath(patch_path)
-
-        # 5c. Star motes — only on lit hemisphere
-        mote_color = QColor(light)
-        num_motes = rng.randint(4, 8)
-        for _ in range(num_motes):
-            mote_color.setAlpha(rng.randint(140, 210))
-            mx = center.x() + rng.uniform(-radius * 0.85, radius * 0.85)
-            my = center.y() + rng.uniform(-radius * 0.85, radius * 0.85)
-            mr = rng.uniform(0.3, 0.6)
-            if ((mx - center.x()) ** 2 + (my - center.y()) ** 2 < (radius - 2) ** 2
-                    and (mx - center.x()) * light_dir_x + (my - center.y()) * light_dir_y > 0):
-                p.setBrush(QBrush(mote_color))
-                p.setPen(Qt.PenStyle.NoPen)
-                p.drawEllipse(QPointF(mx, my), mr, mr)
+            p.drawPath(band_path)
 
         # 5d. Specular highlight — small bright spot near light center
         hl_r = rng.uniform(radius * 0.06, radius * 0.13)
@@ -1132,16 +1123,22 @@ class GoalPlanetItem(QGraphicsObject):
         p.setClipPath(QPainterPath(), Qt.ClipOperation.NoClip)
 
         # 7. Ring FRONT arc — overlays planet edges for orbital depth
-        if self._seed % 10 < 3:
+        if self._seed % 10 < 7:
             front_wide = QColor(atmos)
-            front_wide.setAlpha(22)
+            front_wide.setAlpha(16)
             p.setBrush(Qt.BrushStyle.NoBrush)
-            p.setPen(QPen(front_wide, 2.2))
+            p.setPen(QPen(front_wide, 1.2))
             p.drawArc(ring_rect, arc_start, arc_sweep)
             front_tight = QColor(atmos)
-            front_tight.setAlpha(68)
-            p.setPen(QPen(front_tight, 0.8))
+            front_tight.setAlpha(50)
+            p.setPen(QPen(front_tight, 0.5))
             p.drawArc(ring_rect, arc_start, arc_sweep)
+            # Faint inner band
+            inner_front_color = QColor(atmos)
+            inner_front_color.setAlpha(7)
+            p.setPen(QPen(inner_front_color, 0.5))
+            inner_front_rect = ring_rect.adjusted(1.8, 1.8 * 0.38, -1.8, -1.8 * 0.38)
+            p.drawArc(inner_front_rect, arc_start, arc_sweep)
 
         p.end()
         pix = pix.scaled(
