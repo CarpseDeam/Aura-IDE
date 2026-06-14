@@ -395,11 +395,28 @@ class DroneArchitectController:
         if ws is not None:
             self._active_workspace = ws
             self._workshop_conversation = []
-            return WorkspaceLoaded(
-                workspace_id=ws.workspace_id,
-                display_name=ws.display_name,
-                phase=ws.phase,
-            )
+            if not text:
+                return WorkspaceLoaded(
+                    workspace_id=ws.workspace_id,
+                    display_name=ws.display_name,
+                    phase=ws.phase,
+                )
+            # Text provided — route to phase handler.
+            phase = ws.phase
+            if phase == WorkspacePhase.WORKSHOP.value:
+                return self._handle_workshop_message(text)
+            if phase == WorkspacePhase.AWAITING_DECISION.value:
+                return self._handle_decision_message(text)
+            if phase in (
+                WorkspacePhase.READINESS_FAILED.value,
+                WorkspacePhase.PROOF_FAILED.value,
+            ):
+                return self._handle_failed_phase_message(text)
+            # Terminal/unusable phases — start fresh.
+            result = self.create_workspace("New Drone")
+            self._workshop_conversation.append({"role": "user", "content": text})
+            messages = build_workshop_messages(text, self._workshop_conversation[:-1])
+            return WorkshopRequested(messages=messages)
         result = self.create_workspace("New Drone")
         if text:
             self._workshop_conversation.append({"role": "user", "content": text})

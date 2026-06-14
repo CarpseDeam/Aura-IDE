@@ -21,11 +21,16 @@ def is_folder_backed_drone(drone: DroneDefinition) -> bool:
     return entrypoint.get("kind") == "command" and entrypoint.get("protocol") == "json-stdio"
 
 
-def run_drone_readiness(folder: Path, drone: DroneDefinition) -> dict[str, Any]:
+def run_drone_readiness(folder: Path, drone: DroneDefinition, workspace_root: Path) -> dict[str, Any]:
     """Run a safe readiness check for a folder-backed Drone.
 
     Calls the entrypoint with a trial payload that should not mutate state,
     post data, push git, spend money, or call risky APIs.
+
+    Args:
+        folder: Path to the candidate Drone folder being validated.
+        drone: The DroneDefinition to validate.
+        workspace_root: The real Aura project root.
     """
     if not isinstance(drone.entrypoint, dict) or not drone.entrypoint:
         return {"ok": False, "error": "entrypoint is required"}
@@ -33,7 +38,7 @@ def run_drone_readiness(folder: Path, drone: DroneDefinition) -> dict[str, Any]:
         payload = {
             "goal": "readiness",
             "input": {},
-            "workspace_root": str(folder.parent),
+            "workspace_root": str(workspace_root),
             "drone_id": drone.id,
             "trial_run": True,
             "readiness": True,

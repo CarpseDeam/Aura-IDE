@@ -168,7 +168,12 @@ class DroneWorkspaceStore:
             active_id = data.get("active_workspace_id")
             if not active_id:
                 return None
-            return DroneWorkspaceStore.load_workspace(project_root, active_id)
+            ws = DroneWorkspaceStore.load_workspace(project_root, active_id)
+            if ws is None:
+                return None
+            if ws.phase == "discarded":
+                return None
+            return ws
         except Exception:
             logger.warning("Failed to load active workspace")
             return None
@@ -265,3 +270,8 @@ class DroneWorkspaceStore:
         """Mark a workspace as discarded without deleting its files."""
         workspace.phase = "discarded"
         DroneWorkspaceStore.save_workspace(workspace)
+        # Clear _active.json so discarded workspace is not restored.
+        project_root = Path(workspace.project_root)
+        active_path = active_workspace_path(project_root)
+        if active_path.exists():
+            active_path.write_text(json.dumps({}), encoding="utf-8")

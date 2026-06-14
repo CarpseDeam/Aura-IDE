@@ -11,6 +11,7 @@ from aura.drones.architect.results import (
     BuildCompleted,
     BuildFailed,
     Discarded,
+    ProofResult,
     ProofRunning,
     ReadinessPassed,
     ReadinessRunning,
@@ -258,7 +259,7 @@ class DroneModeCoordinator(QObject):
         self._cancel_workshop()
 
         provider_id = getattr(self._bridge, "_provider", None) or "deepseek"
-        self._workshop_runner = DroneWorkshopRunner(parent=self)
+        self._workshop_runner = DroneWorkshopRunner()
         self._workshop_runner.contentDelta.connect(self._on_workshop_delta)
         self._workshop_runner.responseReady.connect(self._on_workshop_response)
         self._workshop_runner.apiError.connect(self._on_workshop_error)
@@ -410,7 +411,7 @@ class DroneModeCoordinator(QObject):
             except Exception as exc:
                 return {"ok": False, "error": str(exc)}
 
-            return run_drone_readiness(cand, drone)
+            return run_drone_readiness(cand, drone, self._workspace_root)
 
         self._run_in_thread(_do_readiness, self._on_readiness_done)
 
@@ -444,6 +445,18 @@ class DroneModeCoordinator(QObject):
         self._run_in_thread(_do_proof, self._on_proof_done)
 
     def _on_proof_done(self, proof_result) -> None:
+        # Handle thread error dict shape from _run_in_thread.
+        if isinstance(proof_result, dict) and not proof_result.get("ok", True):
+            error = proof_result.get("error", "Unknown proof thread error")
+            ws = self._controller.active_workspace
+            proof_result = ProofResult(
+                drone_name=ws.display_name if ws else "unknown",
+                proof_status="failed",
+                what_tried="Running proof",
+                route_used="",
+                output_sample="",
+                errors=[error],
+            )
         ctrl_result = self._controller.on_proof_completed(proof_result)
         self._render_result(ctrl_result)
         self._workspace_pane.refresh()
