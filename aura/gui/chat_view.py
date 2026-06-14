@@ -27,6 +27,7 @@ from aura.gui.cards.worker_summary_card import WorkerSummaryCard
 from aura.gui.controllers import ToolStreamController
 from aura.gui.theme import (
     ACCENT,
+    FG,
     FG_ITALIC,
 )
 
@@ -652,6 +653,35 @@ class ChatView(QScrollArea):
         # Append as a footer under the assistant card.
         ac.add_footer_widget(card)
         self._scroll_to_bottom()
+
+    def add_info(self, title: str, message: str) -> None:
+        """Add a neutral informational card to the chat."""
+        from PySide6.QtWidgets import QFrame, QLabel, QVBoxLayout
+
+        card = QFrame(self)
+        card.setObjectName("infoCard")
+        card.setStyleSheet(
+            f"QFrame#infoCard {{"
+            f"  background: rgba(157, 124, 216, 0.08);"
+            f"  border: 1px solid rgba(157, 124, 216, 0.35);"
+            f"  border-radius: 10px;"
+            f"}}"
+        )
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(4)
+        head = QLabel(title, card)
+        head.setStyleSheet(f"color: #9d7cd8; font-weight: 600;")
+        layout.addWidget(head)
+        body = QLabel(message, card)
+        body.setWordWrap(True)
+        body.setTextInteractionFlags(
+            body.textInteractionFlags()
+            | Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        body.setStyleSheet(f"color: {FG};")
+        layout.addWidget(body)
+        self._add_card(card)
 
     def add_error(self, title: str, message: str, show_retry: bool = False) -> None:
         card = ErrorCard(title, message, show_retry=show_retry, parent=self)

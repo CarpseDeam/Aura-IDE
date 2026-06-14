@@ -40,6 +40,7 @@ class SendHandler(QObject):
     """
 
     vision_done = Signal(object, list, object)  # SendPayload, list[str], str|None
+    drone_architect_mode_changed = Signal(bool)
 
     def __init__(
         self,
@@ -64,6 +65,9 @@ class SendHandler(QObject):
         self._pending_model: str = ""
         self._pending_thinking: ThinkingMode = "off"
 
+        # Drone Architect mode flag (not persisted across sessions).
+        self._drone_architect_mode: bool = False
+
         # Wire our own signal so _on_vision_done runs on the GUI thread.
         self.vision_done.connect(self._on_vision_done)
 
@@ -81,6 +85,20 @@ class SendHandler(QObject):
         """Clear any queued messages (called on new/open conversation)."""
         self._message_queue.clear()
 
+    def clear_drone_architect_mode(self) -> None:
+        """Exit drone architect mode without adding chat messages.
+
+        Used when the conversation is being reset (new conversation, open
+        conversation, project switch, companion thread select).
+        """
+        if self._drone_architect_mode:
+            self._drone_architect_mode = False
+            self.drone_architect_mode_changed.emit(False)
+
+    def is_drone_architect_mode(self) -> bool:
+        """Return whether Drone Architect mode is currently active."""
+        return self._drone_architect_mode
+
     def process_message_queue(self, model: str, thinking: ThinkingMode) -> None:
         """Send the next queued message, if any."""
         self._process_message_queue(model, thinking)
@@ -89,6 +107,15 @@ class SendHandler(QObject):
 
     def handle_send(self, payload: SendPayload, model: str, thinking: ThinkingMode) -> None:
         """Process a send payload: route built-ins, queue if busy, or send."""
+        # Early exit-check: exit drone architect mode on /drone (alone or off)
+        # or /chat while in mode.
+        if self._drone_architect_mode:
+            text = payload.text.strip()
+            lower = text.lower()
+            if lower == "/chat" or lower == "/drone" or lower.startswith("/drone off"):
+                self._exit_drone_architect_mode(payload)
+                return
+
         route = classify_user_request(payload.text)
         if route.action == "drone_make":
             self._handle_drone_make(payload, model, thinking)
@@ -97,6 +124,12 @@ class SendHandler(QObject):
         if route.lane == TaskLane.built_in_action:
             self._chat.add_user(payload.text)
             self._handle_built_in_action(route.action)
+            return
+
+        # Fallthrough wrap for drone architect mode — wrap normal messages
+        # as drone build briefs before sending.
+        if self._drone_architect_mode:
+            self._send_as_drone_build_brief(payload, model, thinking)
             return
 
         if self._bridge.is_running():
@@ -202,28 +235,87 @@ class SendHandler(QObject):
     def _handle_drone_make(
         self, payload: SendPayload, model: str, thinking: ThinkingMode
     ) -> None:
-        """Handle /drone and /drone make|create|build commands."""
-        if self._bridge.is_running():
-            self._message_queue.append(payload)
-            self._input.set_queued_messages(len(self._message_queue))
-            return
+        """Handle /drone and /drone make|create|build commands.
 
+        - /drone alone: toggle drone architect mode.
+        - /drone make|create|build <brief>: enter mode (if not already) and send
+          the brief as a drone build request.
+        """
         match = re.match(
             r"/drone(?:\s+(?:make|create|build)\s+(.+))?$",
             payload.text.strip(),
             re.IGNORECASE,
         )
-        brief = match.group(1).strip() if match else ""
+        if match is None:
+            # Unrecognised /drone variant (e.g. /drone off outside mode) — ignore.
+            return
+        brief = match.group(1).strip() if match.group(1) else ""
+
+        if not brief:
+            # Just /drone — toggle mode (always immediate, even if bridge busy)
+            if not self._drone_architect_mode:
+                self._chat.add_user(payload.text)
+                self._enter_drone_architect_mode()
+            else:
+                self._exit_drone_architect_mode(payload)
+            return
+
+        # /drone make|create|build <brief> — enter mode silently and send
+        if not self._drone_architect_mode:
+            self._drone_architect_mode = True
+            self.drone_architect_mode_changed.emit(True)
+
+        if self._bridge.is_running():
+            self._message_queue.append(payload)
+            self._input.set_queued_messages(len(self._message_queue))
+            return
+
+        self._send_as_drone_build_brief(payload, model, thinking)
+
+    def _enter_drone_architect_mode(self) -> None:
+        """Activate drone architect mode, emit signal, show info card."""
+        self._drone_architect_mode = True
+        self.drone_architect_mode_changed.emit(True)
+        self._chat.add_info(
+            "Drone Architect",
+            "Drone Architect mode active. Describe the Drone you want to build.",
+        )
+
+    def _exit_drone_architect_mode(self, payload: SendPayload) -> None:
+        """Deactivate drone architect mode, add user msg + info card to chat."""
+        self._chat.add_user(payload.text)
+        self._drone_architect_mode = False
+        self.drone_architect_mode_changed.emit(False)
+        self._chat.add_info(
+            "Drone Architect",
+            "Drone Architect mode closed. Back to normal Aura.",
+        )
+
+    def _send_as_drone_build_brief(
+        self, payload: SendPayload, model: str, thinking: ThinkingMode
+    ) -> None:
+        """Wrap user text as a drone build brief and send to the model.
+
+        Adds the original user message to chat first, then compiles the
+        drone architect prompt with the user text as build_brief and sends
+        it to the bridge. Queues if the bridge is busy.
+        """
+        if self._bridge.is_running():
+            self._message_queue.append(payload)
+            self._input.set_queued_messages(len(self._message_queue))
+            return
 
         brief_obj = DroneBuildBrief(
             response_type="brief",
             message="",
-            ready_to_build=bool(brief),
-            build_brief=brief,
+            ready_to_build=True,
+            build_brief=payload.text,
         )
         compiled_prompt = build_drone_architect_prompt(brief_obj)
-        self._bridge.history.append_user_text(compiled_prompt)
+
+        # Show the original user text in chat, send compiled prompt to model.
         self._chat.add_user(payload.text)
+        self._bridge.history.append_user_text(compiled_prompt)
         self._chat.begin_assistant()
         self._bridge.send(
             model=model,

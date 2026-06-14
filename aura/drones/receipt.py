@@ -23,6 +23,7 @@ class DroneReceipt:
     produced_artifact: dict | None = None
     met: bool | None = None
     evidence: str = ""
+    route_used: dict | None = None  # Which route the Drone actually used, if available
 
     def to_dict(self) -> dict:
         """Serializable dict for JSON persistence."""

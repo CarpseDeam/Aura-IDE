@@ -184,24 +184,6 @@ class InfoHubPane(QWidget):
         btn.clicked.connect(lambda checked, b=btn, r=receipt_text: self._on_copy_summary(b, r))
         self._cards_layout.addWidget(btn)
 
-        # Save as Drone button
-        save_drone_btn = QPushButton("🤖 Save as Drone", self._log_tab)
-        save_drone_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        save_drone_btn.setFlat(True)
-        save_drone_btn.setStyleSheet(f"""
-            QPushButton {{
-                color: {FG_MUTED};
-                font-size: 11px;
-                border: none;
-                padding: 2px 0;
-                text-decoration: none;
-            }}
-            QPushButton:hover {{
-                color: {ACCENT};
-            }}
-        """)
-        save_drone_btn.clicked.connect(lambda checked, s=summary: self.saveAsDroneRequested.emit(s))
-        self._cards_layout.addWidget(save_drone_btn)
 
     def _on_copy_summary(self, btn: QPushButton, receipt_text: str) -> None:
         """Copy summary to clipboard and briefly show 'Copied!'."""

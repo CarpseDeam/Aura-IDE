@@ -26,7 +26,7 @@ from aura.gui.theme import ACCENT, BG, BG_ALT, BG_RAISED, BORDER, FG, FG_DIM
 
 
 class DroneEditorDialog(QDialog):
-    """Modal dialog for creating or editing a Drone."""
+    """Modal dialog for editing an installed Drone manifest."""
 
     def __init__(
         self,
@@ -43,7 +43,7 @@ class DroneEditorDialog(QDialog):
         self._workspace_root = workspace_root
         self._drone = drone
 
-        self.setWindowTitle("Edit Drone" if drone else "New Drone")
+        self.setWindowTitle("Drone Manifest")
         self.setMinimumWidth(480)
         self.setModal(True)
         self.setStyleSheet(

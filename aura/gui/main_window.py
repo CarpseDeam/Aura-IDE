@@ -238,6 +238,9 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             workspace_root=self._workspace_root,
             parent=self,
         )
+        self._send_handler.drone_architect_mode_changed.connect(
+            self._on_drone_architect_mode_changed
+        )
 
         # Companion (mobile control plane)
         self._companion = CompanionManager(self._settings)
@@ -693,6 +696,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         if self._workspace_root is not None and self._workspace_root.resolve() != root_path.resolve():
             # Fully reset conversation state before switching
             self._persistence.new_conversation()
+            self._send_handler.clear_drone_architect_mode()
 
         self._workspace_root = root_path
         self._checkpoint_dialog = None
@@ -1624,6 +1628,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             return
         self._persistence.new_conversation()
         self._send_handler.clear_queue()
+        self._send_handler.clear_drone_architect_mode()
         self._input.set_text("")
         self._input.set_attachments([])
         self._input.set_queued_messages(0)
@@ -1639,6 +1644,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         loaded = self._persistence.open_conversation(self._workspace_root, self)
         if loaded is not None:
             self._send_handler.clear_queue()
+            self._send_handler.clear_drone_architect_mode()
             self._input.set_queued_messages(0)
             self._reset_session_usage()
 
@@ -1730,6 +1736,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         try:
             self._persistence.load_and_apply(conversation_path)
             self._send_handler.clear_queue()
+            self._send_handler.clear_drone_architect_mode()
             self._input.set_queued_messages(0)
             self._reset_session_usage()
             self._companion.complete_conversation_select(True)
@@ -1794,6 +1801,11 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._bridge.set_system_prompt(prompt)
         if hasattr(self, "_chat"):
             self._chat.set_compact_tools(effective_enabled)
+
+    def _on_drone_architect_mode_changed(self, active: bool) -> None:
+        """Update UI when drone architect mode is toggled."""
+        self._input.set_drone_architect_mode(active)
+        self._status_bar.set_drone_architect_mode(active)
 
     def _on_started(self) -> None:
         self._input.set_streaming(True)
@@ -1889,7 +1901,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         # Normal Drone Bay refresh for successful folder registrations.
         if ok and name == "register_drone_folder" and extras.get("drone_saved"):
             self._refresh_drone_context()
-
+            if self._drone_workbay_window is not None and self._drone_workbay_window.isVisible():
+                self._drone_workbay_window.chain_editor.refresh_roster()
         if ok and name in ("read_file", "read_files"):
             try:
                 import json

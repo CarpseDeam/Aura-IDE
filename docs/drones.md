@@ -8,7 +8,9 @@ that contains:
 - the smoke check, usually `smoke.py`
 - optional support files such as `requirements.txt` and `README.md`
 
-The manifest must identify a Python runtime:
+The manifest must identify a Python runtime. `route`, `input_contract`, and
+`cargo_contract` are optional but recommended for new Drones. Existing Drones
+without them still work.
 
 ```json
 {
@@ -21,7 +23,49 @@ The manifest must identify a Python runtime:
   "instructions": "Collect candidates and return cargo.",
   "write_policy": "read_only",
   "allowed_tools": [],
-  "output_contract": "Return candidate cargo."
+  "output_contract": "Return candidate cargo.",
+  "route": {
+    "type": "feed",
+    "targets": ["https://www.reddit.com/r/.../.rss", "https://hn.algolia.com/api/v1/search"],
+    "auth": "none",
+    "reason": "Reddit RSS and HN Algolia provide public, machine-readable sources.",
+    "fallback": "HN Algolia if Reddit RSS is rate-limited"
+  },
+  "cargo_contract": {
+    "type": "candidate_list",
+    "description": "List of source candidates matching the query",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "candidates": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "title": {"type": "string"},
+              "source": {"type": "string"},
+              "url": {"type": "string"},
+              "snippet": {"type": "string"},
+              "timestamp": {"type": "string"},
+              "matched_topic": {"type": "string"},
+              "reason": {"type": "string"}
+            }
+          }
+        }
+      }
+    }
+  },
+  "input_contract": {
+    "type": "search_query",
+    "description": "Topic or keywords to search for",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "query": {"type": "string"},
+        "max_results": {"type": "integer", "default": 20}
+      }
+    }
+  }
 }
 ```
 

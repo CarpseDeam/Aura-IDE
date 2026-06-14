@@ -34,6 +34,16 @@ class DroneDefinition:
     first_run_test: str = ""
     accepts: str = ""  # name of ArtifactType this drone consumes; empty = free-form goal
     produces: str = ""  # name of ArtifactType this drone emits; empty = unstructured summary
+    # Route decision committed at build time — not a rule table, not capability resolution.
+    # Shape: {"type": "api"|"feed"|"endpoint"|"mcp"|"browser"|"local",
+    #         "targets": [...], "auth": "none"|"api_key"|"oauth"|"basic",
+    #         "reason": "...", "fallback": "..."}
+    route: dict[str, Any] = field(default_factory=dict)
+    # Structured input and output contracts. Prefer these over the flat string
+    # accepts/produces fields for new Drones. Schema is a JSON Schema fragment.
+    # {"type": "<name>", "description": "...", "schema": {...}}
+    input_contract: dict[str, Any] = field(default_factory=dict)
+    cargo_contract: dict[str, Any] = field(default_factory=dict)
     runtime: str = ""  # python = folder-backed Drone
     entrypoint: str = ""  # e.g. "main:run" for folder-backed Drones
     smoke: str = ""  # e.g. "smoke:run"

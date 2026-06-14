@@ -11,11 +11,12 @@ _THINKING_LABEL = {"off": "Off", "high": "High", "max": "Max"}
 class AuraStatusBar(QStatusBar):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        
+
+        self._drone_label: QLabel | None = None
+
         # Left side: workspace, model, thinking
         self._status_left = QLabel("")
-        self.addWidget(self._status_left, 1)
-        
+        self.addWidget(self._status_left, 1)        
         # Right side: tokens, cost
         self._status_tokens = QLabel("0 hit · 0 miss · 0 out")
         self.addPermanentWidget(self._status_tokens)
@@ -30,6 +31,22 @@ class AuraStatusBar(QStatusBar):
         mono_font.setPointSize(11)
         self._status_tokens.setFont(mono_font)
         self._status_cost.setFont(mono_font)
+
+    def set_drone_architect_mode(self, active: bool) -> None:
+        """Show or hide the Drone Architect label in the status bar."""
+        if active:
+            if self._drone_label is None:
+                label = QLabel("Drone Architect")
+                label.setStyleSheet(
+                    "color: #9d7cd8; font-weight: 600; padding: 0 8px;"
+                )
+                self.insertWidget(0, label)
+                self._drone_label = label
+            else:
+                self._drone_label.show()
+        else:
+            if self._drone_label is not None:
+                self._drone_label.hide()
 
     def refresh(
         self, 

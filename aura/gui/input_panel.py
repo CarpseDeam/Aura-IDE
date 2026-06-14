@@ -264,6 +264,12 @@ class InputPanel(QFrame):
 
         self._attachments: list[Attachment] = []
 
+        # Saved originals for drone architect mode restoration
+        self._original_placeholder = self._editor.placeholderText()
+        self._original_send_text = self._send_btn.text()
+        self._original_send_tooltip = self._send_btn.toolTip()
+        self._original_frame_style = self.styleSheet()
+
     # ---- public state -----------------------------------------------------
 
     def set_workspace_root(self, root: Path | None) -> None:
@@ -276,6 +282,31 @@ class InputPanel(QFrame):
         self._handoff_btn.setEnabled(not streaming)
         self._retry_btn.setEnabled(not streaming)
         self._editor.setEnabled(not streaming)
+
+    def set_placeholder(self, text: str) -> None:
+        """Set the editor placeholder text."""
+        self._editor.setPlaceholderText(text)
+
+    def set_drone_architect_mode(self, active: bool) -> None:
+        """Toggle the drone architect visual state on the input panel."""
+        if active:
+            self._editor.setPlaceholderText(
+                "Describe the Drone you want to build..."
+            )
+            self._send_btn.setText("Forge")
+            self._send_btn.setToolTip("Forge Drone")
+            self.setStyleSheet(
+                "QFrame {"
+                "  background: rgba(34, 34, 40, 0.85);"
+                "  border: 1px solid rgba(157, 124, 216, 0.5);"
+                "  border-radius: 18px;"
+                "}"
+            )
+        else:
+            self._editor.setPlaceholderText(self._original_placeholder)
+            self._send_btn.setText(self._original_send_text)
+            self._send_btn.setToolTip(self._original_send_tooltip)
+            self.setStyleSheet(self._original_frame_style)
 
     def set_queued_messages(self, count: int) -> None:
         """Update the send button to show how many messages are queued."""

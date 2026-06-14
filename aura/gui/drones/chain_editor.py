@@ -338,7 +338,7 @@ class _DroneRosterWidget(QScrollArea):
                 item.widget().deleteLater()
         drones = DroneStore.list_drones(self._workspace_root)
         if not drones:
-            empty = QLabel("No drones saved yet. Ask Aura: /drone make a repo scout.")
+            empty = QLabel("No Drones installed. Type /drone in chat to open Drone Architect.")
             empty.setWordWrap(True)
             empty.setStyleSheet(f"color: {_qss_color(FG_MUTED)}; font-size: 11px; padding: 8px;")
             self._layout.insertWidget(self._layout.count() - 1, empty)
