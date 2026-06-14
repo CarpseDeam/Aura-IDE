@@ -32,6 +32,11 @@ def _slugify(name: str) -> str:
     return slug if slug else "workspace"
 
 
+def _safe_run_timestamp() -> str:
+    """Return a Windows-safe UTC timestamp for run-record filenames."""
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S_%fZ")
+
+
 class DroneWorkspaceStore:
     """Persistent store for DroneWorkspace state and folders.
 
@@ -187,7 +192,7 @@ class DroneWorkspaceStore:
         project_root = Path(workspace.project_root)
         dest = (
             build_runs_dir(project_root, workspace.workspace_id)
-            / f"build_{timestamp}.json"
+            / f"build_{_safe_run_timestamp()}.json"
         )
         dest.write_text(
             json.dumps(run_record, indent=2, ensure_ascii=False),
@@ -205,7 +210,7 @@ class DroneWorkspaceStore:
         project_root = Path(workspace.project_root)
         dest = (
             proof_runs_dir(project_root, workspace.workspace_id)
-            / f"proof_{timestamp}.json"
+            / f"proof_{_safe_run_timestamp()}.json"
         )
         dest.write_text(
             json.dumps(run_record, indent=2, ensure_ascii=False),
@@ -223,7 +228,7 @@ class DroneWorkspaceStore:
         project_root = Path(workspace.project_root)
         dest = (
             repair_runs_dir(project_root, workspace.workspace_id)
-            / f"repair_{timestamp}.json"
+            / f"repair_{_safe_run_timestamp()}.json"
         )
         dest.write_text(
             json.dumps(run_record, indent=2, ensure_ascii=False),
