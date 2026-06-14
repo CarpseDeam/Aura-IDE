@@ -128,12 +128,10 @@ def _read_cargo_for_chain(workspace_root: Path, chain_id: str) -> tuple[list[dic
 class _DroneCard(QFrame):
     """A single drone card in the roster with drag initiation."""
 
-    def __init__(self, drone_id: str, name: str, description: str, accepts: str, produces: str, write_policy: str = "read_only", parent: QWidget | None = None) -> None:
+    def __init__(self, drone_id: str, name: str, description: str, write_policy: str = "read_only", parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.drone_id = drone_id
         self.drone_name = name
-        self.accepts = accepts
-        self.produces = produces
         self._write_policy = write_policy
         self.setObjectName("drone_card")
         self.setStyleSheet(
@@ -343,7 +341,7 @@ class _DroneRosterWidget(QScrollArea):
             empty.setStyleSheet(f"color: {_qss_color(FG_MUTED)}; font-size: 11px; padding: 8px;")
             self._layout.insertWidget(self._layout.count() - 1, empty)
         for d in drones:
-            card = _DroneCard(d.id, d.name, d.description, d.accepts or "any", d.produces or "any", d.write_policy)
+            card = _DroneCard(d.id, d.name, d.description, d.write_policy)
             card._on_run = lambda did=d.id: self._editor.runDroneRequested.emit(did)
             card._on_edit = lambda did=d.id: self._editor.editDroneRequested.emit(did)
             card._on_delete = lambda did=d.id: self._editor.deleteDroneRequested.emit(did)
@@ -676,11 +674,13 @@ class _PropertyPanel(QScrollArea):
         if node.drone and node.drone.description:
             self._add_label(node.drone.description, color=FG_MUTED)
 
-        accepts = node.drone.accepts if node.drone and node.drone.accepts else "any"
-        self._add_label(f"Takes: {accepts}", color=FG_DIM)
-
-        produces = node.drone.produces if node.drone and node.drone.produces else "Summary"
-        self._add_label(f"Brings back: {produces}", color=FG_DIM)
+        if node.drone:
+            input_type = (node.drone.input_contract or {}).get("type", "")
+            if input_type:
+                self._add_label(f"Input: {input_type}", color=FG_DIM)
+            cargo_type = (node.drone.cargo_contract or {}).get("type", "")
+            if cargo_type:
+                self._add_label(f"Output: {cargo_type}", color=FG_DIM)
 
         policy = node.drone.write_policy if node.drone else "read_only"
         if policy == "read_only":
@@ -862,7 +862,10 @@ class _PropertyPanel(QScrollArea):
             desc = node.drone.description
             if desc:
                 self._add_label(str(desc), color=FG_MUTED)
-            self._add_label(f"In: {node.drone.accepts}  ·  Out: {node.drone.produces}", color=FG_DIM)
+            input_type = (node.drone.input_contract or {}).get("type", "")
+            cargo_type = (node.drone.cargo_contract or {}).get("type", "")
+            if input_type or cargo_type:
+                self._add_label(f"In: {input_type or 'any'}  ·  Out: {cargo_type or 'any'}", color=FG_DIM)
 
         if node.goal_template:
             self._add_label("Goal Template", color=FG_MUTED)

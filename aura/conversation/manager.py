@@ -426,7 +426,6 @@ class ConversationManager:
                     edit_recovery_pending = bool(
                         edit_fallback_required
                         or line_range_reread_required
-                        or patch_failed_cycles
                     )
                     syntax_repair_pending = bool(
                         self._syntax_repair_paths(syntax_repair_required)
@@ -491,7 +490,6 @@ class ConversationManager:
                             details.update(self._edit_recovery_details(
                                 edit_fallback_required,
                                 line_range_reread_required,
-                                patch_failed_cycles,
                             ))
                         self._finish_worker_unrecoverable(
                             on_event,
@@ -1007,19 +1005,7 @@ class ConversationManager:
     def _edit_recovery_details(
         edit_fallback_required: dict[str, dict[str, Any]],
         line_range_reread_required: dict[str, dict[str, Any]],
-        patch_failed_cycles: dict[str, int] | None = None,
     ) -> dict[str, Any]:
-        if patch_failed_cycles:
-            shape = sorted(patch_failed_cycles)[0]
-            parsed_shape = ConversationManager._parse_patch_shape(shape)
-            return {
-                "path": str(parsed_shape.get("path") or ""),
-                "tool": "patch_file",
-                "failure_class": "patch_file_repeated_failure",
-                "error": "Patch recovery pending for a failed patch shape.",
-                "patch_shape": ConversationManager._shape_digest(shape),
-                "patch_failed_cycles": patch_failed_cycles[shape],
-            }
         pending = edit_fallback_required or line_range_reread_required
         if not pending:
             return {}
@@ -1258,7 +1244,8 @@ class ConversationManager:
             if blocked is not None:
                 return blocked
             shape = self._edit_shape_signature(name, args)
-            if shape in patch_failed_cycles:
+            failed_cycles = patch_failed_cycles.get(shape, 0)
+            if failed_cycles >= 2:
                 payload = self._recovery_payload(
                     path=path,
                     failure_class="patch_file_repeated_failure",
@@ -1275,7 +1262,7 @@ class ConversationManager:
                 )
                 payload["applied"] = False
                 payload["write_outcome"] = "not_applied_edit_mechanics_blocked"
-                payload["patch_failed_cycles"] = patch_failed_cycles.get(shape, 0)
+                payload["patch_failed_cycles"] = failed_cycles
                 payload["patch_shape"] = self._shape_digest(shape)
                 self._record_recovery_block(payload, f"patch-shape:{shape}", recovery_block_counts)
                 return self._blocked_tool_result(tool_call_id, name, payload)
