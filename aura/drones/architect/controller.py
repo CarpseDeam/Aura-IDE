@@ -447,9 +447,12 @@ class DroneArchitectController:
             return ErrorResult(message="Load requires a workspace name")
 
         if cmd == DroneCommand.INSTALL:
-            return ErrorResult(
-                message="Cannot install — proof failed. Revise first."
-            )
+            phase = self._active_workspace.phase
+            if phase == WorkspacePhase.PROOF_FAILED.value:
+                msg = "Cannot install. Proof failed. Revise first."
+            else:
+                msg = "Cannot install. Readiness failed. Revise first."
+            return ErrorResult(message=msg)
 
         if cmd == DroneCommand.DISCARD:
             return self.discard_workspace()

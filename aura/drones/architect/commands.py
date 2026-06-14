@@ -53,6 +53,8 @@ _HELP_PATTERNS = [
     r"^commands\??\s*$",
 ]
 
+_DECISION_COMMAND_PHASES = {"awaiting_decision", "readiness_failed", "proof_failed"}
+
 
 def parse_drone_command(text: str, phase: str) -> tuple[DroneCommand, str | None]:
     """Parse user text into a command and optional argument.
@@ -79,7 +81,7 @@ def parse_drone_command(text: str, phase: str) -> tuple[DroneCommand, str | None
             return DroneCommand.HELP, None
 
     # Phase-specific commands.
-    if phase == "awaiting_decision":
+    if phase in _DECISION_COMMAND_PHASES:
         for pattern in _INSTALL_PATTERNS:
             if re.search(pattern, lowered):
                 return DroneCommand.INSTALL, None
@@ -89,8 +91,12 @@ def parse_drone_command(text: str, phase: str) -> tuple[DroneCommand, str | None
                 return DroneCommand.DISCARD, None
 
         # In awaiting_decision, any non-command text is a revision.
-        return DroneCommand.REVISE, text.strip()
+        if phase == "awaiting_decision":
+            return DroneCommand.REVISE, text.strip()
 
-    # In workshop, building, readiness_failed, proof_failed, iterating:
+        # For readiness_failed / proof_failed, non-command text is unknown.
+        return DroneCommand.UNKNOWN, None
+
+    # In workshop, building, iterating:
     # No phase-specific commands beyond global ones.
     return DroneCommand.UNKNOWN, None
