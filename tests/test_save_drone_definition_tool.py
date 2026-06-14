@@ -25,13 +25,13 @@ def _write_folder(workspace: Path) -> Path:
     folder = workspace / ".aura" / "drone-build" / "test-drone"
     folder.mkdir(parents=True)
     (folder / "main.py").write_text(
+        "import json, sys\n"
         "def run(payload):\n"
-        "    return {'ok': True, 'goal': payload.get('goal')}\n",
-        encoding="utf-8",
-    )
-    (folder / "smoke.py").write_text(
-        "def run(payload):\n"
-        "    return {'ok': True}\n",
+        "    return {'ok': True, 'goal': payload.get('goal')}\n"
+        "if __name__ == '__main__':\n"
+        "    payload = json.loads(sys.stdin.read())\n"
+        "    result = run(payload)\n"
+        "    print(json.dumps(result))\n",
         encoding="utf-8",
     )
     (folder / "drone.json").write_text(
@@ -40,9 +40,7 @@ def _write_folder(workspace: Path) -> Path:
                 "id": "test-drone",
                 "name": "Test Drone",
                 "description": "A folder-backed Drone.",
-                "runtime": "python",
-                "entrypoint": "main:run",
-                "smoke": "smoke:run",
+                "entrypoint": {"kind": "command", "command": ["python", "main.py"], "protocol": "json-stdio"},
                 "instructions": "Run the entrypoint.",
                 "write_policy": "read_only",
                 "allowed_tools": [],
@@ -67,8 +65,8 @@ def test_register_drone_folder_creates_and_loads_drone(tmp_path: Path) -> None:
     assert result.ok is True, result.payload
     assert result.extras.get("drone_saved") is True
     assert result.payload["id"] == "test-drone"
-    assert result.payload["runtime"] == "python"
-    assert result.payload["entrypoint"] == "main:run"
+    assert isinstance(result.payload["entrypoint"], dict)
+    assert result.payload["entrypoint"]["kind"] == "command"
 
     loaded = DroneStore.load_drone(tmp_path, "test-drone")
     assert loaded is not None
@@ -77,11 +75,13 @@ def test_register_drone_folder_creates_and_loads_drone(tmp_path: Path) -> None:
     assert folder.exists()
 
 
-def test_register_drone_folder_rejects_smoke_failure(tmp_path: Path) -> None:
+def test_register_drone_folder_rejects_broken_entrypoint(tmp_path: Path) -> None:
     folder = _write_folder(tmp_path)
-    (folder / "smoke.py").write_text(
-        "def run(payload):\n"
-        "    return {'ok': False, 'error': 'nope'}\n",
+    # Overwrite main.py so it returns invalid JSON (crashes readiness)
+    (folder / "main.py").write_text(
+        "import sys\n"
+        "sys.stderr.write('boom')\n"
+        "sys.exit(1)\n",
         encoding="utf-8",
     )
     registry = ToolRegistry(workspace_root=tmp_path, mode="worker")
@@ -93,7 +93,6 @@ def test_register_drone_folder_rejects_smoke_failure(tmp_path: Path) -> None:
     )
 
     assert result.ok is False
-    assert "smoke" in result.payload["error"].lower()
     assert DroneStore.load_drone(tmp_path, "test-drone") is None
 
 

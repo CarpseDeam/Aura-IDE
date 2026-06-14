@@ -30,13 +30,13 @@ def _register_drone(workspace: Path, *, write_policy: str = "read_only") -> str:
     folder = workspace / "build" / drone_id
     folder.mkdir(parents=True)
     (folder / "main.py").write_text(
+        "import json, sys\n"
         "def run(payload):\n"
-        "    return {'summary': payload.get('goal')}\n",
-        encoding="utf-8",
-    )
-    (folder / "smoke.py").write_text(
-        "def run(payload):\n"
-        "    return {'ok': True}\n",
+        "    return {'ok': True, 'summary': payload.get('goal')}\n"
+        "if __name__ == '__main__':\n"
+        "    payload = json.loads(sys.stdin.read())\n"
+        "    result = run(payload)\n"
+        "    print(json.dumps(result))\n",
         encoding="utf-8",
     )
     (folder / "drone.json").write_text(
@@ -45,9 +45,7 @@ def _register_drone(workspace: Path, *, write_policy: str = "read_only") -> str:
                 "id": drone_id,
                 "name": "Bug Scout" if write_policy == "read_only" else "Writer Drone",
                 "description": "Investigates bugs.",
-                "runtime": "python",
-                "entrypoint": "main:run",
-                "smoke": "smoke:run",
+                "entrypoint": {"kind": "command", "command": ["python", "main.py"], "protocol": "json-stdio"},
                 "instructions": "Run the entrypoint.",
                 "write_policy": write_policy,
                 "output_contract": "Return cargo.",

@@ -62,7 +62,7 @@ class DroneRunner(QObject):
         self.statusChanged.emit("running")
         try:
             if not is_folder_backed_drone(self._drone):
-                raise ValueError("Only folder-backed python Drones can be executed")
+                raise ValueError("Only folder-backed command Drones with json-stdio protocol can be executed")
 
             goal = self._drone.description or self._drone.instructions
             result = run_folder_drone_sync(

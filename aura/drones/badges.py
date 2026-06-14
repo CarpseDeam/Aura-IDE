@@ -6,14 +6,13 @@ from aura.drones.definition import DroneDefinition
 def compute_capability_badges(drone: DroneDefinition) -> list[str]:
     """Return short badge labels for a drone's capability state.
 
-    Returns empty list when no capability bindings or first_run_test exist.
+    Returns empty list when no capability bindings exist.
     """
     badges: list[str] = []
     bindings = drone.capability_bindings
 
-    if not bindings and not drone.first_run_test:
+    if not bindings:
         return []
-
     pending = False
     has_mcp = False
     has_generated = False
@@ -33,8 +32,5 @@ def compute_capability_badges(drone: DroneDefinition) -> list[str]:
         badges.append("Uses MCP")
     if has_generated:
         badges.append("Generated tool")
-
-    if drone.first_run_test:
-        badges.append("First-run test available")
 
     return badges

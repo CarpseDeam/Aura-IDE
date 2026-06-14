@@ -22,13 +22,13 @@ def _register_folder_drone(workspace: Path) -> DroneDefinition:
     folder = workspace / "build" / "runner-drone"
     folder.mkdir(parents=True)
     (folder / "main.py").write_text(
+        "import json, sys\n"
         "def run(payload):\n"
-        "    return {'message': 'ran', 'goal': payload.get('goal')}\n",
-        encoding="utf-8",
-    )
-    (folder / "smoke.py").write_text(
-        "def run(payload):\n"
-        "    return {'ok': True}\n",
+        "    return {'ok': True, 'goal': payload.get('goal'), 'message': 'ran'}\n"
+        "if __name__ == '__main__':\n"
+        "    payload = json.loads(sys.stdin.read())\n"
+        "    result = run(payload)\n"
+        "    print(json.dumps(result))\n",
         encoding="utf-8",
     )
     (folder / "drone.json").write_text(
@@ -37,9 +37,7 @@ def _register_folder_drone(workspace: Path) -> DroneDefinition:
                 "id": "runner-drone",
                 "name": "Runner Drone",
                 "description": "Run this goal.",
-                "runtime": "python",
-                "entrypoint": "main:run",
-                "smoke": "smoke:run",
+                "entrypoint": {"kind": "command", "command": ["python", "main.py"], "protocol": "json-stdio"},
                 "instructions": "Run.",
                 "write_policy": "read_only",
                 "output_contract": "Return cargo.",

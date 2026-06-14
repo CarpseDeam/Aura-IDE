@@ -43,7 +43,6 @@ from aura.drones.definition import DroneDefinition
 from aura.drones.receipt import DroneReceipt
 from aura.drones.runner import DroneRunner
 from aura.drones.store import DroneStore, RunHistoryStore
-from aura.drones.tool_scaffold import scaffold_dynamic_tool
 from aura.git_ops import git_init, is_git_repo
 from aura.gui.chat_view import ChatView
 from aura.gui.checkpoint_dialog import CheckpointDialog
@@ -947,26 +946,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         if callable(refresher):
             refresher()
 
-    def _on_make_drone_tool(self, drone_id: str) -> None:
-        if self._workspace_root is None:
-            return
-        drone = DroneStore.load_drone(self._workspace_root, drone_id)
-        if drone is None:
-            return
-        try:
-            path = scaffold_dynamic_tool(self._workspace_root, drone)
-        except OSError as exc:
-            QMessageBox.warning(self, "Make Tool", f"Could not create dynamic tool scaffold:\n{exc}")
-            return
-        self._playground.switch_to_workspace()
-        self._sync_drone_tab_checked()
-        self._playground.open_file(path)
-        QMessageBox.information(
-            self,
-            "Make Tool",
-            f"Created or opened dynamic tool scaffold:\n{path.relative_to(self._workspace_root)}",
-        )
-
     # ----- Workflow handlers -----------------------------------------------
 
     def _on_run_workflow(self, chain_id: str) -> None:
@@ -1339,7 +1318,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             capability_requirements=drone.capability_requirements,
             capability_bindings=drone.capability_bindings,
             setup_steps=drone.setup_steps,
-            first_run_test=drone.first_run_test,
             accepts=drone.accepts,
             produces=drone.produces,
             runtime=drone.runtime,

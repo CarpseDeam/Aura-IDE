@@ -20,13 +20,13 @@ def _register_drone(tmp_path) -> None:
     folder = tmp_path / "build" / "test-scout"
     folder.mkdir(parents=True)
     (folder / "main.py").write_text(
+        "import json, sys\n"
         "def run(payload):\n"
-        "    return {'ok': True}\n",
-        encoding="utf-8",
-    )
-    (folder / "smoke.py").write_text(
-        "def run(payload):\n"
-        "    return {'ok': True}\n",
+        "    return {'ok': True}\n"
+        "if __name__ == '__main__':\n"
+        "    payload = json.loads(sys.stdin.read())\n"
+        "    result = run(payload)\n"
+        "    print(json.dumps(result))\n",
         encoding="utf-8",
     )
     (folder / "drone.json").write_text(
@@ -35,9 +35,7 @@ def _register_drone(tmp_path) -> None:
                 "id": "test-scout",
                 "name": "Test Scout",
                 "description": "Find tests.",
-                "runtime": "python",
-                "entrypoint": "main:run",
-                "smoke": "smoke:run",
+                "entrypoint": {"kind": "command", "command": ["python", "main.py"], "protocol": "json-stdio"},
                 "instructions": "Find relevant tests for the current change.",
                 "write_policy": "read_only",
                 "output_contract": "Test list and rationale.",

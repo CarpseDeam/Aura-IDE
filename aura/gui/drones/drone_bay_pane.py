@@ -41,7 +41,6 @@ class DroneBayPane(QWidget):
     duplicateDroneRequested = Signal(str)
     deleteDroneRequested = Signal(str)
     launchDroneRequested = Signal(str)  # drone_id
-    makeToolRequested = Signal(str)
     activeRunFocusRequested = Signal()
     viewRunReceiptRequested = Signal(str)  # run_id
 
@@ -442,28 +441,6 @@ class DroneBayPane(QWidget):
             )
             detail_layout.addWidget(oc_text)
 
-        # d) First-run test
-        if drone.first_run_test:
-            frt_card = QFrame()
-            frt_card.setStyleSheet(
-                "background: rgba(255,255,255,0.03); border-radius: 4px; padding: 6px;"
-            )
-            frt_card_layout = QVBoxLayout(frt_card)
-            frt_card_layout.setContentsMargins(8, 6, 8, 6)
-            frt_card_layout.setSpacing(2)
-            frt_label_title = QLabel("First-run test:")
-            frt_label_title.setStyleSheet(
-                f"font-size: 11px; font-weight: 600; color: {FG}; background: transparent;"
-            )
-            frt_card_layout.addWidget(frt_label_title)
-            frt_text = QLabel(drone.first_run_test)
-            frt_text.setWordWrap(True)
-            frt_text.setStyleSheet(
-                f"font-size: 11px; color: {FG_MUTED}; background: transparent; font-style: italic;"
-            )
-            frt_card_layout.addWidget(frt_text)
-            detail_layout.addWidget(frt_card)
-
         # e) Capability badges
         cap_badges = compute_capability_badges(drone)
         if cap_badges:
@@ -477,8 +454,6 @@ class DroneBayPane(QWidget):
                     f"padding: 1px 6px; border: 1px solid rgba(255,255,255,0.08); "
                     f"border-radius: 4px;"
                 )
-                if badge_text == "First-run test available" and drone.first_run_test:
-                    cap_label.setToolTip(drone.first_run_test)
                 cap_row.addWidget(cap_label)
             cap_row.addStretch(1)
             detail_layout.addLayout(cap_row)
@@ -517,17 +492,6 @@ class DroneBayPane(QWidget):
         )
         dup_btn.clicked.connect(lambda checked=False, did=drone.id: self.duplicateDroneRequested.emit(did))
         action_row.addWidget(dup_btn)
-
-        tool_btn = QPushButton("Make Tool")
-        tool_btn.setToolTip("Create a .aura/tools scaffold for this Drone")
-        tool_btn.setStyleSheet(
-            f"QPushButton {{ background: transparent; color: {ACCENT}; "
-            f"border: 1px solid {BORDER}; border-radius: 4px; "
-            f"padding: 3px 12px; font-size: 12px; }}"
-            f"QPushButton:hover {{ background: {BG_RAISED}; border-color: {ACCENT}; }}"
-        )
-        tool_btn.clicked.connect(lambda checked=False, did=drone.id: self.makeToolRequested.emit(did))
-        action_row.addWidget(tool_btn)
 
         del_btn = QPushButton("Delete")
         del_btn.setStyleSheet(

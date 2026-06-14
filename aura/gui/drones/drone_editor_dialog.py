@@ -231,23 +231,6 @@ class DroneEditorDialog(QDialog):
 
         layout.addLayout(budget_row)
 
-        # First Run Test
-        frt_label = QLabel("First Run Test (optional)")
-        frt_label.setStyleSheet(
-            f"color: {FG_DIM}; font-weight: 700; font-size: 12px; "
-            f"text-transform: uppercase; letter-spacing: 0.04em; "
-            f"padding: 8px 0 0 0;"
-        )
-        layout.addWidget(frt_label)
-
-        self._first_run_test_edit = QLineEdit()
-        self._first_run_test_edit.setPlaceholderText("e.g. run_diagnostic_command echo hello")
-        self._first_run_test_edit.setStyleSheet(
-            f"background: {BG_RAISED}; border: 1px solid {BORDER}; "
-            f"border-radius: 5px; padding: 6px 8px; color: {FG};"
-        )
-        layout.addWidget(self._first_run_test_edit)
-
         # Buttons
         btn_box = QDialogButtonBox()
         save_btn = QPushButton("Save Drone")
@@ -281,7 +264,6 @@ class DroneEditorDialog(QDialog):
 
         self._rounds_spin.setValue(drone.budget.max_tool_rounds)
         self._timeout_spin.setValue(drone.budget.timeout_seconds)
-        self._first_run_test_edit.setText(drone.first_run_test)
         self._set_accepts_produces(drone)
 
     @staticmethod
@@ -299,8 +281,6 @@ class DroneEditorDialog(QDialog):
         instructions = self._instructions_edit.toPlainText().strip()
         output_contract = self._output_contract_edit.toPlainText().strip()
         write_policy = self._policy_combo.currentData()
-        first_run_test = self._first_run_test_edit.text().strip()
-
         if not name:
             QMessageBox.warning(self, "Validation", "Name is required.")
             self._name_edit.setFocus()
@@ -338,7 +318,6 @@ class DroneEditorDialog(QDialog):
             instructions=instructions,
             write_policy=write_policy,
             output_contract=output_contract,
-            first_run_test=first_run_test,
             budget=budget,
             updated_at=now,
             accepts=self._combo_value(self._accepts_combo),

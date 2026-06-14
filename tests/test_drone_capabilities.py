@@ -564,7 +564,7 @@ class TestCapabilityResolutionRoundtrip:
 class TestComputeCapabilityBadges:
     """Tests for aura.drones.badges.compute_capability_badges."""
 
-    def test_empty_bindings_and_no_test_returns_empty(self) -> None:
+    def test_empty_bindings_returns_empty(self) -> None:
         drone = DroneDefinition(
             id="test",
             name="Test",
@@ -574,10 +574,8 @@ class TestComputeCapabilityBadges:
             allowed_tools=(),
             output_contract="",
             capability_bindings=(),
-            first_run_test="",
         )
         assert compute_capability_badges(drone) == []
-
     def test_pending_setup_returns_needs_setup(self) -> None:
         bindings = (
             CapabilityBinding(
@@ -673,7 +671,6 @@ class TestComputeCapabilityBadges:
             allowed_tools=(),
             output_contract="",
             capability_bindings=bindings,
-            first_run_test="echo hello",
         )
         badges = compute_capability_badges(drone)
-        assert badges == ["Needs setup", "Uses MCP", "Generated tool", "First-run test available"]
+        assert badges == ["Needs setup", "Uses MCP", "Generated tool"]

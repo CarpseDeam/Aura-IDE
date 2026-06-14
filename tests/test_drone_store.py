@@ -20,23 +20,22 @@ def _write_drone_folder(
     root: Path,
     *,
     drone_id: str = "folder-drone",
-    smoke_ok: bool = True,
 ) -> Path:
     folder = root / drone_id
     folder.mkdir(parents=True)
     (folder / "main.py").write_text(
+        "import json, sys\n"
         "def run(payload):\n"
         "    return {\n"
         "        'ok': True,\n"
         "        'goal': payload.get('goal'),\n"
         "        'workspace_root': payload.get('workspace_root'),\n"
         "        'drone_id': payload.get('drone_id'),\n"
-        "    }\n",
-        encoding="utf-8",
-    )
-    (folder / "smoke.py").write_text(
-        "def run(payload):\n"
-        f"    return {{'ok': {str(smoke_ok)}}}\n",
+        "    }\n"
+        "if __name__ == '__main__':\n"
+        "    payload = json.loads(sys.stdin.read())\n"
+        "    result = run(payload)\n"
+        "    print(json.dumps(result))\n",
         encoding="utf-8",
     )
     (folder / "drone.json").write_text(
@@ -45,9 +44,7 @@ def _write_drone_folder(
                 "id": drone_id,
                 "name": "Folder Drone",
                 "description": "Runs from a folder.",
-                "runtime": "python",
-                "entrypoint": "main:run",
-                "smoke": "smoke:run",
+                "entrypoint": {"kind": "command", "command": ["python", "main.py"], "protocol": "json-stdio"},
                 "instructions": "Run the folder entrypoint.",
                 "write_policy": "read_only",
                 "output_contract": "Return cargo.",
@@ -70,11 +67,8 @@ def test_register_load_and_list_folder_drone(tmp_path: Path) -> None:
     drone = DroneStore.register_drone_folder(tmp_path, source)
 
     assert drone.id == "folder-drone"
-    assert drone.runtime == "python"
-    assert drone.entrypoint == "main:run"
-    assert drone.smoke == "smoke:run"
-    assert (_global_drones_root() / "folder-drone" / "main.py").exists()
-
+    assert drone.entrypoint == {"kind": "command", "command": ["python", "main.py"], "protocol": "json-stdio"}
+    assert drone.allowed_tools == ("read_file",)
     loaded = DroneStore.load_drone(tmp_path, "folder-drone")
     assert loaded == drone
     assert [d.id for d in DroneStore.list_drones(tmp_path)] == ["folder-drone"]
@@ -91,14 +85,12 @@ def test_allowed_tools_defaults_empty_and_does_not_make_valid_drone() -> None:
         "allowed_tools": ["read_file"],
     }
 
-    with pytest.raises(ValueError, match="runtime"):
+    with pytest.raises(ValueError, match="entrypoint is required"):
         _drone_from_dict(prompt_only)
 
     valid = {
         **prompt_only,
-        "runtime": "python",
-        "entrypoint": "main:run",
-        "smoke": "smoke:run",
+        "entrypoint": {"kind": "command", "command": ["python", "main.py"], "protocol": "json-stdio"},
     }
     drone = _drone_from_dict(valid)
     assert drone.allowed_tools == ("read_file",)
@@ -111,14 +103,22 @@ def test_register_requires_entrypoint_module(tmp_path: Path) -> None:
     source = _write_drone_folder(tmp_path / "build")
     (source / "main.py").unlink()
 
-    with pytest.raises(ValueError, match="entrypoint module"):
+    with pytest.raises(ValueError, match="readiness"):
         DroneStore.register_drone_folder(tmp_path, source)
 
 
-def test_register_runs_smoke(tmp_path: Path) -> None:
-    source = _write_drone_folder(tmp_path / "build", smoke_ok=False)
+def test_register_rejects_broken_readiness(tmp_path: Path) -> None:
+    source = _write_drone_folder(tmp_path / "build")
+    # Corrupt main.py so readiness fails
+    (source / "main.py").write_text(
+        "import json, sys\n"
+        "payload = json.loads(sys.stdin.read())\n"
+        "result = {'ok': False, 'error': 'not ready'}\n"
+        "print(json.dumps(result))\n",
+        encoding="utf-8",
+    )
 
-    with pytest.raises(ValueError, match="smoke check failed"):
+    with pytest.raises(ValueError, match="readiness"):
         DroneStore.register_drone_folder(tmp_path, source)
 
 
@@ -168,9 +168,7 @@ def test_save_drone_does_not_create_manifest_only_drone(tmp_path: Path) -> None:
         instructions="Run",
         write_policy="read_only",
         output_contract="Output",
-        runtime="python",
-        entrypoint="main:run",
-        smoke="smoke:run",
+        entrypoint={"kind": "command", "command": ["python", "main.py"], "protocol": "json-stdio"},
     )
 
     with pytest.raises(ValueError, match="register_drone_folder"):

@@ -31,7 +31,6 @@ class DroneDefinition:
     capability_requirements: tuple[CapabilityRequirement, ...] = ()
     capability_bindings: tuple[CapabilityBinding, ...] = ()
     setup_steps: tuple[str, ...] = ()
-    first_run_test: str = ""
     accepts: str = ""  # name of ArtifactType this drone consumes; empty = free-form goal
     produces: str = ""  # name of ArtifactType this drone emits; empty = unstructured summary
     # Route decision committed at build time — not a rule table, not capability resolution.
