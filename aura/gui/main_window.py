@@ -1835,16 +1835,17 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             # No tool calls — this is the final turn.
             self._chat.assistant_done()
         # Auto-save after each assistant turn — including partial tool-call rounds.
-        self._persistence.auto_save(
-            workspace_root=self._workspace_root,
-            model=self.current_model(),
-            thinking=self.current_thinking(),
-            worker_model=self.current_worker_model(),
-            worker_thinking=self.current_worker_thinking(),
-            provider=self._settings.provider,
-            planner_provider=self._settings.planner_provider,
-            worker_provider=self._settings.worker_provider,
-        )
+        if not self._bridge.suppress_auto_save:
+            self._persistence.auto_save(
+                workspace_root=self._workspace_root,
+                model=self.current_model(),
+                thinking=self.current_thinking(),
+                worker_model=self.current_worker_model(),
+                worker_thinking=self.current_worker_thinking(),
+                provider=self._settings.provider,
+                planner_provider=self._settings.planner_provider,
+                worker_provider=self._settings.worker_provider,
+            )
 
         # Check for pending handoff after the response completes (no tool calls)
         if self._pending_handoff and not tool_calls:
@@ -1912,16 +1913,17 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         # Terminal dispatches don't trigger _on_stream_done, so we must auto-save here
         # to ensure the worker's result is persisted before the app is closed.
         if name in ("dispatch_to_worker", "run_research"):
-            self._persistence.auto_save(
-                workspace_root=self._workspace_root,
-                model=self.current_model(),
-                thinking=self.current_thinking(),
-                worker_model=self.current_worker_model(),
-                worker_thinking=self.current_worker_thinking(),
-                provider=self._settings.provider,
-                planner_provider=self._settings.planner_provider,
-                worker_provider=self._settings.worker_provider,
-            )
+            if not self._bridge.suppress_auto_save:
+                self._persistence.auto_save(
+                    workspace_root=self._workspace_root,
+                    model=self.current_model(),
+                    thinking=self.current_thinking(),
+                    worker_model=self.current_worker_model(),
+                    worker_thinking=self.current_worker_thinking(),
+                    provider=self._settings.provider,
+                    planner_provider=self._settings.planner_provider,
+                    worker_provider=self._settings.worker_provider,
+                )
             self._refresh_drone_context()
 
     def _on_diff_decided(

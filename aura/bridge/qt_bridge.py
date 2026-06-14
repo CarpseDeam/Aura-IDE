@@ -273,6 +273,7 @@ class ConversationBridge(QObject):
         self._planner_system_prompt: str = ""
         self._tier1_context: str = ""
         self._auto_dispatch: bool = False
+        self.suppress_auto_save: bool = False
         self._pre_worker_sha: str | None = None
         self._active_prompt_mode: str | None = None
 
