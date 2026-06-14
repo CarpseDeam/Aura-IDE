@@ -198,10 +198,11 @@ READ_TOOL_DEFS: list[dict[str, Any]] = [
                             "include_pattern": {
                                 "type": "string",
                                 "description": (
-                                    "Optional glob pattern restricting which files are searched. "
-                                    "This uses workspace-relative glob matching; use patterns such as "
-                                    "'**/*.py' to search Python files anywhere in the repo. "
-                                    "Prefer '**/*.py' over '*.py' when you want recursive Python-only search."
+                                    "Optional workspace-relative exact file path or glob pattern restricting "
+                                    "which files are searched. Exact paths such as 'aura/gui/main_window.py' "
+                                    "search only that file. Glob patterns such as '**/*.py' search matching "
+                                    "files anywhere in the repo. Prefer '**/*.py' over '*.py' when you want "
+                                    "recursive Python-only search."
                                 ),
                             },
                         },

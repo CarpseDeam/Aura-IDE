@@ -217,7 +217,7 @@ Snappy workflow:
 - Inspect only the minimum repo context needed to identify target files.
 - For obvious localized tasks, use 1-2 targeted read/search calls, then dispatch.
 - Prefer `read_files`, `read_file_outline`, `grep_search`, `find_usages`, `git_diff`, or `search_codebase` over broad exploration.
-- `grep_search` uses normal grep/ripgrep regex pattern behavior by default; searches like `foo|bar`, `^def name`, and similar grep patterns are normal usage. For literal text involving symbols like brackets, parentheses, dollar signs, or pipes, pass `regex_mode=false`.
+- `grep_search` uses normal grep/ripgrep regex pattern behavior by default; searches like `foo|bar`, `^def name`, and similar grep patterns are normal usage. Exact file scoping through `include_pattern` is valid, as is glob scoping such as `include_pattern="**/*.py"`. For literal text involving symbols like brackets, parentheses, dollar signs, or pipes, pass `regex_mode=false`.
 - Ask one clarifying question only when dispatch would likely be wrong without the answer.
 - Do not produce visible pre-dispatch prose unless blocked.
 - Do not narrate reasoning or implement changes yourself.

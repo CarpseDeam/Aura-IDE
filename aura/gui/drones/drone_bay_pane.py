@@ -20,7 +20,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from aura.drones.badges import compute_capability_badges
 from aura.drones.definition import DroneDefinition
 from aura.drones.run import DroneRun
 from aura.drones.store import DroneStore, RunHistoryStore
@@ -441,26 +440,8 @@ class DroneBayPane(QWidget):
             )
             detail_layout.addWidget(oc_text)
 
-        # e) Capability badges
-        cap_badges = compute_capability_badges(drone)
-        if cap_badges:
-            cap_row = QHBoxLayout()
-            cap_row.setContentsMargins(0, 2, 0, 2)
-            cap_row.setSpacing(6)
-            for badge_text in cap_badges:
-                cap_label = QLabel(badge_text)
-                cap_label.setStyleSheet(
-                    f"font-size: 10px; color: {FG_MUTED}; background: transparent; "
-                    f"padding: 1px 6px; border: 1px solid rgba(255,255,255,0.08); "
-                    f"border-radius: 4px;"
-                )
-                cap_row.addWidget(cap_label)
-            cap_row.addStretch(1)
-            detail_layout.addLayout(cap_row)
-
         # f) Budget
         budget_label = QLabel(
-            f"{drone.budget.max_tool_rounds} max tool rounds \u00b7 "
             f"{drone.budget.timeout_seconds // 60} min timeout"
         )
         budget_label.setStyleSheet(

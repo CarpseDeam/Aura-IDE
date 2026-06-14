@@ -80,10 +80,9 @@ def run_read_only_drone_sync(
     drone: DroneDefinition,
     goal: str,
     timeout_seconds: int = 120,
-    max_tool_rounds: int = 8,
 ) -> dict[str, Any]:
     """Run a registered folder-backed Drone synchronously."""
-    _ = (timeout_seconds, max_tool_rounds)
+    _ = timeout_seconds
     if not is_folder_backed_drone(drone):
         return _run_drone_sync_impl(
             workspace_root,
@@ -92,7 +91,6 @@ def run_read_only_drone_sync(
             goal,
             write_enabled=False,
             timeout_seconds=timeout_seconds,
-            max_tool_rounds=max_tool_rounds,
         )
     return run_folder_drone_sync(workspace_root, drone_id, drone, goal)
 
@@ -105,14 +103,13 @@ def run_write_capable_drone_sync(
     *,
     approval_callback: Callable[[ApprovalRequest], ApprovalDecision] | None = None,
     timeout_seconds: int = 120,
-    max_tool_rounds: int = 8,
 ) -> dict[str, Any]:
     """Run a registered folder-backed Drone synchronously.
 
     Folder-backed Drones run their own entrypoint. Aura no longer exposes a
     write-capable LLM tool menu for Drone execution.
     """
-    _ = (approval_callback, timeout_seconds, max_tool_rounds)
+    _ = (approval_callback, timeout_seconds)
     if not is_folder_backed_drone(drone):
         return _run_drone_sync_impl(
             workspace_root,
@@ -122,6 +119,5 @@ def run_write_capable_drone_sync(
             write_enabled=True,
             approval_callback=approval_callback,
             timeout_seconds=timeout_seconds,
-            max_tool_rounds=max_tool_rounds,
         )
     return run_folder_drone_sync(workspace_root, drone_id, drone, goal)

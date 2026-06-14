@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from aura.drones.capabilities import CapabilityBinding  # noqa: F401
 from aura.drones.definition import DroneDefinition
 
 

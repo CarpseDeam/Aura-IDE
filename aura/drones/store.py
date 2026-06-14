@@ -8,7 +8,6 @@ import tempfile
 from dataclasses import asdict, fields
 from pathlib import Path
 
-from aura.drones.capabilities import CapabilityBinding, CapabilityRequirement
 from aura.drones.definition import DroneBudget, DroneDefinition, slugify
 from aura.drones.receipt import DroneReceipt
 from aura.paths import data_dir
@@ -32,28 +31,10 @@ def _drone_from_dict(data: dict) -> DroneDefinition:
     asdict() converts nested dataclasses and tuples to plain dicts/lists
     during serialization; restore them to their proper types.
     """
-    if "allowed_tools" in data and isinstance(data["allowed_tools"], list):
-        data = {**data, "allowed_tools": tuple(data["allowed_tools"])}
     if "budget" in data and isinstance(data["budget"], dict):
         known_budget_fields = {f.name for f in fields(DroneBudget)}
         budget_filtered = {k: v for k, v in data["budget"].items() if k in known_budget_fields}
         data = {**data, "budget": DroneBudget(**budget_filtered)}
-    if "capability_requirements" in data and isinstance(data["capability_requirements"], list):
-        data = {
-            **data,
-            "capability_requirements": tuple(
-                CapabilityRequirement.from_dict(d) for d in data["capability_requirements"]
-            ),
-        }
-    if "capability_bindings" in data and isinstance(data["capability_bindings"], list):
-        data = {
-            **data,
-            "capability_bindings": tuple(
-                CapabilityBinding.from_dict(d) for d in data["capability_bindings"]
-            ),
-        }
-    if "setup_steps" in data and isinstance(data["setup_steps"], list):
-        data = {**data, "setup_steps": tuple(str(x) for x in data["setup_steps"])}
     if "secrets" in data and isinstance(data["secrets"], list):
         data = {**data, "secrets": tuple(str(x) for x in data["secrets"])}
     if "dependencies" in data and isinstance(data["dependencies"], list):
@@ -64,15 +45,7 @@ def _drone_from_dict(data: dict) -> DroneDefinition:
             "Legacy string entrypoint is no longer supported. "
             "Drone must use command entrypoint: {'kind': 'command', ...}"
         )
-    if isinstance(data.get("accepts"), dict):
-        accepts = data["accepts"]
-        data = {**data, "accepts": str(accepts.get("type") or accepts.get("name") or "")}
-    if isinstance(data.get("produces"), dict):
-        produces = data["produces"]
-        data = {**data, "produces": str(produces.get("type") or produces.get("name") or "")}
     data = _apply_manifest_defaults(data)
-    if "allowed_tools" in data and isinstance(data["allowed_tools"], list):
-        data = {**data, "allowed_tools": tuple(data["allowed_tools"])}
     known_fields = {f.name for f in fields(DroneDefinition)}
     filtered = {k: v for k, v in data.items() if k in known_fields}
     drone = DroneDefinition(**filtered)
@@ -86,15 +59,8 @@ def _apply_manifest_defaults(data: dict) -> dict:
         data = {**data, "instructions": str(data.get("description") or data.get("name") or "")}
     if not data.get("write_policy"):
         data = {**data, "write_policy": "read_only"}
-    if "allowed_tools" not in data:
-        data = {**data, "allowed_tools": []}
     if not data.get("output_contract"):
-        produces = data.get("produces")
-        if isinstance(produces, str) and produces:
-            output_contract = f"Return {produces} cargo."
-        else:
-            output_contract = "Return JSON-serializable cargo or a concise text summary."
-        data = {**data, "output_contract": output_contract}
+        data = {**data, "output_contract": "Return JSON-serializable cargo or a concise text summary."}
     if not data.get("scope"):
         data = {**data, "scope": "global"}
     return data
@@ -301,8 +267,6 @@ class DroneStore:
             raise ValueError("Drone output contract is required")
         if drone.write_policy not in _WRITE_POLICIES:
             raise ValueError(f"Invalid Drone write policy: {drone.write_policy}")
-        if drone.budget.max_tool_rounds < 1:
-            raise ValueError("Drone max_tool_rounds must be at least 1")
         if drone.budget.timeout_seconds < 30:
             raise ValueError("Drone timeout_seconds must be at least 30")
         if drone.scope not in ("global", "project"):

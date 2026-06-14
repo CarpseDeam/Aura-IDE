@@ -64,7 +64,6 @@ class PlannerHandlersMixin:
             "goal": goal,
             "reason": reason,
             "write_policy": drone.write_policy,
-            "max_tool_rounds": drone.budget.max_tool_rounds,
             "timeout_seconds": drone.budget.timeout_seconds,
         }
         return ToolExecResult(

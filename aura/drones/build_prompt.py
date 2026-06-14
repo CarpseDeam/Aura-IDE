@@ -5,8 +5,6 @@ from aura.drones.build_spec import DroneBuildBrief
 
 def build_drone_architect_prompt(
     brief: DroneBuildBrief | None = None,
-    accepts: str = "",
-    produces: str = "",
 ) -> str:
     """Return the mode prompt for folder-backed Drone Architect builds."""
     build_brief = (brief.build_brief if brief else "").strip()
@@ -52,7 +50,7 @@ def build_drone_architect_prompt(
     lines.append("- Reads a JSON payload from stdin via `json.loads(sys.stdin.read())`")
     lines.append("- Calls an internal `run(payload)` function")
     lines.append("- Prints the result to stdout via `json.dumps()`")
-    lines.append("- Reads input from `payload[\"input\"]` first (a dict), with flat payload fallback for backward compatibility")
+    lines.append("- Reads input from `payload[\"input\"]` (a dict)")
     lines.append("- Returns stable JSON-compatible cargo (dict or list)")
     lines.append("- Includes route/source errors in cargo instead of crashing")
     lines.append("- Avoids dependency confetti — only import what you use")
@@ -74,7 +72,7 @@ def build_drone_architect_prompt(
     lines.append("  \"targets\": [\"https://example.com/api\"],")
     lines.append("  \"auth\": \"none|api_key|oauth|basic\",")
     lines.append("  \"reason\": \"why this route was chosen\",")
-    lines.append("  \"fallback\": \"what to try if the primary route fails\"")
+    lines.append("  \"fallback\": \"optional — only include if the entrypoint implements fallback and returns route_used plus attempted route details in cargo\"")
     lines.append("}")
     lines.append("```")
     lines.append("")
@@ -84,9 +82,12 @@ def build_drone_architect_prompt(
     lines.append("- Browser automation (Playwright) is the fallback for targets that only work through a real UI.")
     lines.append("- Aura currently supports Python as a convenient default for generated Drones, but the Drone product contract is runtime-neutral.")
     lines.append("- If using Playwright MCP, the Drone's code must call the MCP server — it does not become an MCP config.")
+    lines.append("- If a manifest has a fallback field, the entrypoint MUST implement fallback and return `route_used`")
+    lines.append("  plus attempted route details in cargo. If the entrypoint does not implement fallback, leave the")
+    lines.append("  fallback field out.")
     lines.append("")
     lines.append("## Cargo Contract")
-    lines.append("Define what the Drone consumes and produces using structured contracts in `drone.json`:")
+    lines.append("Define what the Drone consumes and outputs using structured contracts in `drone.json`:")
     lines.append("")
     lines.append("`input_contract` — what the Drone consumes:")
     lines.append("```json")
@@ -107,8 +108,6 @@ def build_drone_architect_prompt(
     lines.append("```")
     lines.append("")
     lines.append("The `schema` field is a JSON Schema fragment describing the fields.")
-    lines.append("Also populate `accepts` and `produces` as flat string labels for UI backward compatibility,")
-    lines.append("but treat `input_contract` and `cargo_contract` as the authoritative structured form.")
     lines.append("")
     lines.append("## Source Scout Acceptance")
     lines.append("When the user asks for a Source Scout that watches Reddit and Hacker News for posts about AI coding agents:")

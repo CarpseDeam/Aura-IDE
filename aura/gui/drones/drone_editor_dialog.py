@@ -19,7 +19,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from aura.drones.contracts import TYPE_NAMES
 from aura.drones.definition import DroneBudget, DroneDefinition
 from aura.drones.store import DroneStore
 from aura.gui.theme import ACCENT, BG, BG_ALT, BG_RAISED, BORDER, FG, FG_DIM
@@ -65,23 +64,6 @@ class DroneEditorDialog(QDialog):
             idx = self._policy_combo.findData(initial_write_policy)
             if idx >= 0:
                 self._policy_combo.setCurrentIndex(idx)
-
-        if drone is not None:
-            self._set_accepts_produces(drone)
-
-    def _set_accepts_produces(self, drone: DroneDefinition) -> None:
-        if drone.accepts:
-            idx = self._accepts_combo.findText(drone.accepts)
-            if idx >= 0:
-                self._accepts_combo.setCurrentIndex(idx)
-            else:
-                self._accepts_combo.setCurrentText(drone.accepts)
-        if drone.produces:
-            idx = self._produces_combo.findText(drone.produces)
-            if idx >= 0:
-                self._produces_combo.setCurrentIndex(idx)
-            else:
-                self._produces_combo.setCurrentText(drone.produces)
 
     # -- Public API --
 
@@ -137,42 +119,6 @@ class DroneEditorDialog(QDialog):
         )
         layout.addWidget(self._policy_combo)
 
-        # Accepts (input contract)
-        accepts_label = QLabel("Accepts (input contract)")
-        accepts_label.setStyleSheet(
-            f"color: {FG}; font-weight: 600; font-size: 13px;"
-        )
-        layout.addWidget(accepts_label)
-        self._accepts_combo = QComboBox()
-        self._accepts_combo.setEditable(True)
-        self._accepts_combo.addItem("(any)", "")
-        for t in TYPE_NAMES:
-            self._accepts_combo.addItem(t, t)
-        self._accepts_combo.setCurrentIndex(0)
-        self._accepts_combo.setStyleSheet(
-            f"QComboBox {{ background: {BG_RAISED}; border: 1px solid {BORDER}; "
-            f"border-radius: 5px; padding: 5px 8px; color: {FG}; }}"
-        )
-        layout.addWidget(self._accepts_combo)
-
-        # Produces (output contract)
-        produces_label = QLabel("Produces (output contract)")
-        produces_label.setStyleSheet(
-            f"color: {FG}; font-weight: 600; font-size: 13px;"
-        )
-        layout.addWidget(produces_label)
-        self._produces_combo = QComboBox()
-        self._produces_combo.setEditable(True)
-        self._produces_combo.addItem("(any)", "")
-        for t in TYPE_NAMES:
-            self._produces_combo.addItem(t, t)
-        self._produces_combo.setCurrentIndex(0)
-        self._produces_combo.setStyleSheet(
-            f"QComboBox {{ background: {BG_RAISED}; border: 1px solid {BORDER}; "
-            f"border-radius: 5px; padding: 5px 8px; color: {FG}; }}"
-        )
-        layout.addWidget(self._produces_combo)
-
         # Output contract
         ocontract_label = QLabel("What should it bring back?")
         ocontract_label.setStyleSheet(
@@ -201,19 +147,6 @@ class DroneEditorDialog(QDialog):
 
         budget_row = QHBoxLayout()
         budget_row.setSpacing(16)
-
-        # Max tool rounds
-        rounds_label = QLabel("Max tool rounds:")
-        rounds_label.setStyleSheet(f"color: {FG}; font-size: 12px;")
-        budget_row.addWidget(rounds_label)
-        self._rounds_spin = QSpinBox()
-        self._rounds_spin.setRange(1, 50)
-        self._rounds_spin.setValue(8)
-        self._rounds_spin.setStyleSheet(
-            f"QSpinBox {{ background: {BG_RAISED}; border: 1px solid {BORDER}; "
-            f"border-radius: 4px; padding: 4px; color: {FG}; }}"
-        )
-        budget_row.addWidget(self._rounds_spin)
 
         # Timeout
         timeout_label = QLabel("Timeout seconds:")
@@ -262,17 +195,7 @@ class DroneEditorDialog(QDialog):
         if idx >= 0:
             self._policy_combo.setCurrentIndex(idx)
 
-        self._rounds_spin.setValue(drone.budget.max_tool_rounds)
         self._timeout_spin.setValue(drone.budget.timeout_seconds)
-        self._set_accepts_produces(drone)
-
-    @staticmethod
-    def _combo_value(combo: QComboBox) -> str:
-        data = combo.currentData()
-        if data is not None:
-            return data
-        text = combo.currentText().strip()
-        return "" if text == "(any)" else text
 
     # -- Save logic --
 
@@ -298,7 +221,6 @@ class DroneEditorDialog(QDialog):
         description = self._derive_description(instructions)
 
         budget = DroneBudget(
-            max_tool_rounds=self._rounds_spin.value(),
             timeout_seconds=self._timeout_spin.value(),
         )
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -320,8 +242,6 @@ class DroneEditorDialog(QDialog):
             output_contract=output_contract,
             budget=budget,
             updated_at=now,
-            accepts=self._combo_value(self._accepts_combo),
-            produces=self._combo_value(self._produces_combo),
         )
 
         DroneStore.save_drone(self._workspace_root, self._drone)

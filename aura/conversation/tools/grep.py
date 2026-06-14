@@ -27,6 +27,17 @@ def _safe_relative_to(path: Path, root: Path) -> Path:
     return safe_relative_to(path, root)
 
 
+def _resolve_include_scope(root: Path, include_pattern: str | None) -> tuple[list[Path] | None, str | None]:
+    if not include_pattern:
+        return None, None
+
+    exact = root / include_pattern
+    if exact.is_file():
+        return [exact], None
+
+    return None, include_pattern
+
+
 def grep_files(
     workspace_root: Path,
     pattern: str,
@@ -148,18 +159,21 @@ def _grep_ripgrep(
     exe = rg_path or shutil.which("rg") or "rg"
 
     cmd = [exe, "--json", "--column", "--hidden", "--no-ignore"]
+    exact_files, glob = _resolve_include_scope(root, include)
     if not regex:
         cmd.append("--fixed-strings")
     if not case_sensitive:
         cmd.append("--ignore-case")
-    if include:
-        cmd.extend(["--glob", include])
-    for skip in sorted(SKIP_DIRS):
-        cmd.extend(["--glob", f"!{skip}/"])
-        cmd.extend(["--glob", f"!{skip}/*"])
-    for suffix in sorted(SKIP_FILE_SUFFIXES):
-        cmd.extend(["--glob", f"!*{suffix}"])
-    cmd.extend(["--", pattern, str(root)])
+    if glob:
+        cmd.extend(["--glob", glob])
+    if exact_files is None:
+        for skip in sorted(SKIP_DIRS):
+            cmd.extend(["--glob", f"!{skip}/"])
+            cmd.extend(["--glob", f"!{skip}/*"])
+        for suffix in sorted(SKIP_FILE_SUFFIXES):
+            cmd.extend(["--glob", f"!*{suffix}"])
+    targets = exact_files if exact_files is not None else [root]
+    cmd.extend(["--", pattern, *[str(path) for path in targets]])
 
     try:
         proc = subprocess.run(
@@ -260,9 +274,12 @@ def _grep_python(
     skipped_files = 0
     skipped_details: list[dict[str, Any]] = []
     candidates: list[Path] = []
+    exact_files, glob = _resolve_include_scope(workspace_root, include_pattern)
 
-    if include_pattern:
-        for file_path in workspace_root.rglob(include_pattern):
+    if exact_files is not None:
+        candidates = exact_files
+    elif glob:
+        for file_path in workspace_root.rglob(glob):
             if not file_path.is_file():
                 continue
             rel_path = _safe_relative_to(file_path, workspace_root)

@@ -60,8 +60,7 @@ class DroneSummonCard(QFrame):
         budget_min = max(1, self._drone.budget.timeout_seconds // 60)
         meta = QLabel(
             f"Scope: {self._policy_label(self._drone.write_policy)}. "
-            f"Budget: {self._drone.budget.max_tool_rounds} tool rounds, {budget_min} min."
-        )
+            f"Timeout: {budget_min} min."        )
         meta.setStyleSheet(f"color: {SUCCESS}; font-size: 11px; background: transparent;")
         meta.setWordWrap(True)
         layout.addWidget(meta)
