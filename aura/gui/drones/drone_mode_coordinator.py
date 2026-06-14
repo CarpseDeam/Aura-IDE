@@ -59,7 +59,8 @@ class DroneModeCoordinator(QObject):
         self._pending_build_dispatch_spec: dict | None = None
 
         # Workspace pane placed into the splitter during drone mode.
-        self._workspace_pane = DroneWorkspacePane(parent=parent)
+        self._workspace_pane = DroneWorkspacePane(parent=None)
+        self._workspace_pane.hide()
         self._workspace_pane.workspace_selected.connect(self._on_workspace_selected)
         self._workspace_pane.new_workspace_requested.connect(self._on_new_workspace)
         self._workspace_pane.discard_workspace_requested.connect(
