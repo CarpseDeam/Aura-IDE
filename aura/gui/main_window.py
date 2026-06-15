@@ -939,8 +939,12 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self._refresh_drone_context()
 
-    def _on_edit_drone(self, drone_id: str) -> None:
+    def _on_edit_drone(self, drone_id: str, folder: str = "") -> None:
         """Route to Drone mode for editing a Ready or in-progress Drone."""
+        if folder and Path(folder).is_dir():
+            # Canonical folder provided — use it directly, bypassing global rediscovery.
+            self._drone_coordinator.edit_ready_drone_by_folder(drone_id, Path(folder))
+            return
         if drone_id.startswith("builder:"):
             self._drone_coordinator.edit_builder_drone(
                 drone_id.removeprefix("builder:")
@@ -1265,7 +1269,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
     # ----- Drone Run lifecycle (Phase 2) --------------------------------
 
-    def _on_launch_drone(self, drone_id: str) -> None:
+    def _on_launch_drone(self, drone_id: str, folder: str = "") -> None:
         """Launch a Drone (read-only or write-capable)."""
         if self._workspace_root is None:
             return
@@ -1277,7 +1281,10 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             )
             return
 
-        drone = DroneStore.load_drone(self._workspace_root, drone_id)
+        if folder and Path(folder).is_dir():
+            drone = DroneStore.load_drone_from_folder(Path(folder))
+        else:
+            drone = DroneStore.load_drone(self._workspace_root, drone_id)
         if drone is None:
             return
         self._start_drone_run(drone)

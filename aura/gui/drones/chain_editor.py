@@ -371,6 +371,9 @@ class _DroneRosterWidget(QScrollArea):
                 if entry.workspace_id and not entry.ready
                 else entry.id
             )
+            # For ready drones, pass the canonical folder. For builder, pass empty string.
+            run_folder = entry.folder if entry.ready else ""
+            edit_folder = entry.folder if entry.ready else action_id  # builder:xxx for builder
             card = _DroneCard(
                 entry.id,
                 entry.name,
@@ -378,10 +381,10 @@ class _DroneRosterWidget(QScrollArea):
                 entry.write_policy,
                 entry.status,
                 entry.ready,
-                folder=entry.folder,
+                folder=entry.folder if entry.ready else "",
             )
-            card._on_run = lambda did=entry.id: self._editor.runDroneRequested.emit(did)
-            card._on_edit = lambda did=action_id: self._editor.editDroneRequested.emit(did)
+            card._on_run = lambda did=entry.id, fld=run_folder: self._editor.runDroneRequested.emit(did, fld)
+            card._on_edit = lambda did=action_id, fld=edit_folder: self._editor.editDroneRequested.emit(did, fld)
             card._on_delete = lambda did=action_id: self._editor.deleteDroneRequested.emit(did)
             self._layout.insertWidget(self._layout.count() - 1, card)
 
@@ -408,8 +411,8 @@ class ChainEditor(QWidget):
     closeRequested = Signal()
     runChainRequested = Signal(str)
     goBackRequested = Signal()
-    runDroneRequested = Signal(str)
-    editDroneRequested = Signal(str)
+    runDroneRequested = Signal(str, str)  # drone_id, folder
+    editDroneRequested = Signal(str, str)  # action_id, folder
     deleteDroneRequested = Signal(str)
 
     _AUTO_SAVE_MS = 1200

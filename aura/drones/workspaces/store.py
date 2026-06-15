@@ -336,6 +336,40 @@ class DroneWorkspaceStore:
         return DroneWorkspaceStore.create_workspace_for_drone(project_root, drone_id)
 
     @staticmethod
+    def load_or_create_workspace_for_drone_folder(
+        project_root: Path, drone_id: str, drone_folder: Path
+    ) -> DroneWorkspace | None:
+        """Load or create an edit workspace for a known canonical drone folder.
+
+        Reads drone.json directly from the folder to get the drone name,
+        bypassing DroneStore.load_drone (global rediscovery).
+        """
+        # Try to find existing edit workspace
+        ws = DroneWorkspaceStore.find_workspace_for_drone(project_root, drone_id)
+        if ws is not None:
+            ws.edit_source_folder = str(drone_folder)
+            ws.phase = "ready"
+            DroneWorkspaceStore.save_workspace(ws)
+            return ws
+
+        # Read drone name from folder's drone.json
+        drone_json = drone_folder / "drone.json"
+        if not drone_json.exists():
+            return None
+        try:
+            data = json.loads(drone_json.read_text(encoding="utf-8"))
+            name = str(data.get("name", "")).strip() or drone_id
+        except Exception:
+            name = drone_id
+
+        workspace = DroneWorkspaceStore.create_workspace(
+            project_root, display_name=name, mode="edit", installed_drone_id=drone_id
+        )
+        workspace.edit_source_folder = str(drone_folder)
+        workspace.phase = "ready"
+        DroneWorkspaceStore.save_workspace(workspace)
+        return workspace
+
     @staticmethod
     def list_threads(
         project_root: Path, workspace_id: str, include_archived: bool = False

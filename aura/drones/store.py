@@ -66,6 +66,8 @@ class DroneListEntry:
     drone: DroneDefinition | None = None
     workspace_id: str | None = None
     folder: str = ""
+    run_target: str = ""
+    edit_target: str = ""
     last_error: str | None = None
     updated_at: str = ""
 
@@ -164,6 +166,8 @@ class DroneStore:
                 ready=True,
                 drone=drone,
                 folder=str(DroneStore.drone_folder(drone.id)),
+                run_target=str(DroneStore.drone_folder(drone.id)),
+                edit_target=str(DroneStore.drone_folder(drone.id)),
             )
             for drone_id, drone in installed.items()
         }
@@ -233,6 +237,8 @@ class DroneStore:
                 ready=False,
                 drone=installed_drone,
                 workspace_id=workspace.workspace_id,
+                run_target="",
+                edit_target=f"builder:{workspace.workspace_id}",
                 last_error=last_error,
                 updated_at=workspace.updated_at,
             )

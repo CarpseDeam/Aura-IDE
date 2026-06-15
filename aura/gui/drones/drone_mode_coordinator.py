@@ -93,6 +93,21 @@ class DroneModeCoordinator(QObject):
                 self._load_thread_into_ui(ws.workspace_id, thread.id)
         self.enter_drone_mode(load_active=False)
 
+    def edit_ready_drone_by_folder(self, drone_id: str, folder: Path) -> None:
+        """Open a Drone in the architect using the canonical folder directly, bypassing global rediscovery."""
+        result = self._controller.load_drone_workspace_by_folder(drone_id, folder)
+        self._workspace_pane.refresh()
+        if isinstance(result, ErrorResult):
+            self._chat.add_error("Drone Builder", f"Could not load Drone: {result.message}")
+            return
+        ws = self._controller.active_workspace
+        if ws is not None:
+            thread = self._ensure_thread_for_workspace(ws.workspace_id)
+            if thread is not None:
+                self._active_thread_id = thread.id
+                self._load_thread_into_ui(ws.workspace_id, thread.id)
+        self.enter_drone_mode(load_active=False)
+
     def edit_builder_drone(self, workspace_id: str) -> None:
         """Open a builder workspace for the user to continue working."""
         result = self._controller.load_workspace(workspace_id)

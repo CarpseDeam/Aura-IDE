@@ -349,6 +349,27 @@ class DroneArchitectController:
             phase=ws.phase,
         )
 
+    def load_drone_workspace_by_folder(self, drone_id: str, folder: Path):
+        """Load or create an edit workspace for a Drone using its canonical folder directly."""
+        if self._workspace_root is None:
+            return ErrorResult(message="No project root set")
+
+        ws = DroneWorkspaceStore.load_or_create_workspace_for_drone_folder(
+            self._workspace_root, drone_id, folder
+        )
+        if ws is None:
+            return ErrorResult(message=f"Drone not found: {drone_id}")
+
+        self._save_current_thread()
+        self._active_workspace = ws
+        self._load_or_create_active_thread()
+        DroneWorkspaceStore.set_active_workspace(self._workspace_root, ws)
+        return WorkspaceLoaded(
+            workspace_id=ws.workspace_id,
+            display_name=ws.display_name,
+            phase=ws.phase,
+        )
+
     # ------------------------------------------------------------------
     # Message routing
     # ------------------------------------------------------------------
