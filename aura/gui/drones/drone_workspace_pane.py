@@ -322,14 +322,7 @@ class DroneWorkspacePane(QFrame):
             expanded = ws.workspace_id in self._expanded_workspace_ids
             row = _WorkspaceRow(ws, display_name, expanded=expanded)
 
-            if ws.phase == WorkspacePhase.READY.value and ws.installed_drone_id:
-                row.clicked.connect(
-                    lambda _workspace_id, drone_id=ws.installed_drone_id: self.edit_ready.emit(
-                        drone_id
-                    )
-                )
-            else:
-                row.clicked.connect(self.workspace_selected.emit)
+            row.clicked.connect(self.workspace_selected.emit)
             row.discard_clicked.connect(self.discard_workspace_requested.emit)
             row.toggled.connect(self._on_workspace_toggled)
 

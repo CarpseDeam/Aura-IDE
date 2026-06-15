@@ -88,7 +88,7 @@ class SendHandler(QObject):
         conversation, project switch, companion thread select).
         """
         if self._drone_coordinator and self._drone_coordinator.is_drone_mode():
-            self._drone_coordinator.exit_drone_mode()
+            self._drone_coordinator.exit_drone_mode(restore_project_chat=False)
 
     def is_drone_architect_mode(self) -> bool:
         """Return whether Drone Architect mode is currently active."""
@@ -109,7 +109,6 @@ class SendHandler(QObject):
             text = payload.text.strip()
             lower = text.lower()
             if lower == "/chat" or lower.startswith("/drone off"):
-                self._chat.add_user(payload.text)
                 self._drone_coordinator.exit_drone_mode()
                 self._chat.add_info("Drone Builder", "Back to normal Aura.")
                 return
@@ -226,7 +225,6 @@ class SendHandler(QObject):
 
     def _handle_drone_enter_mode(self, payload: SendPayload) -> None:
         """Handle /drone command — enter Drone Architect mode or start fresh session."""
-        self._chat.add_user(payload.text)
         if self._drone_coordinator:
             if self._drone_coordinator.is_drone_mode():
                 self._drone_coordinator.start_fresh_drone_session()
