@@ -6,8 +6,12 @@ from pathlib import Path
 import pytest
 
 from aura import paths as aura_paths
+from aura.drones.architect.installer import install_candidate
 from aura.drones.definition import DroneDefinition, slugify
 from aura.drones.store import DroneStore, _drone_from_dict, _global_drones_root
+from aura.drones.workspaces.model import WorkspacePhase
+from aura.drones.workspaces.paths import candidate_dir
+from aura.drones.workspaces.store import DroneWorkspaceStore
 
 
 @pytest.fixture(autouse=True)
@@ -48,7 +52,6 @@ def _write_drone_folder(
                 "instructions": "Run the folder entrypoint.",
                 "write_policy": "read_only",
                 "output_contract": "Return cargo.",
-                "allowed_tools": ["read_file"],
             }
         ),
         encoding="utf-8",
@@ -68,13 +71,13 @@ def test_register_load_and_list_folder_drone(tmp_path: Path) -> None:
 
     assert drone.id == "folder-drone"
     assert drone.entrypoint == {"kind": "command", "command": ["python", "main.py"], "protocol": "json-stdio"}
-    assert drone.allowed_tools == ("read_file",)
     loaded = DroneStore.load_drone(tmp_path, "folder-drone")
     assert loaded == drone
     assert [d.id for d in DroneStore.list_drones(tmp_path)] == ["folder-drone"]
 
 
-def test_allowed_tools_defaults_empty_and_does_not_make_valid_drone() -> None:
+def test_unknown_fields_dropped_by_drone_from_dict() -> None:
+    """Unknown fields in JSON dict are silently dropped by _drone_from_dict."""
     prompt_only = {
         "id": "prompt-only",
         "name": "Prompt Only",
@@ -82,7 +85,7 @@ def test_allowed_tools_defaults_empty_and_does_not_make_valid_drone() -> None:
         "instructions": "Use tools.",
         "write_policy": "read_only",
         "output_contract": "Summary.",
-        "allowed_tools": ["read_file"],
+        "unknown_field": "should be dropped",
     }
 
     with pytest.raises(ValueError, match="entrypoint is required"):
@@ -93,10 +96,8 @@ def test_allowed_tools_defaults_empty_and_does_not_make_valid_drone() -> None:
         "entrypoint": {"kind": "command", "command": ["python", "main.py"], "protocol": "json-stdio"},
     }
     drone = _drone_from_dict(valid)
-    assert drone.allowed_tools == ("read_file",)
-
-    valid_without_tools = {k: v for k, v in valid.items() if k != "allowed_tools"}
-    assert _drone_from_dict(valid_without_tools).allowed_tools == ()
+    assert drone.id == "prompt-only"
+    assert drone.entrypoint["command"] == ["python", "main.py"]
 
 
 def test_register_requires_entrypoint_module(tmp_path: Path) -> None:
@@ -123,7 +124,6 @@ def test_workspace_json_drones_are_not_loaded(tmp_path: Path) -> None:
                 "description": "Old manifest-only Drone.",
                 "instructions": "Use tools.",
                 "write_policy": "read_only",
-                "allowed_tools": ["read_file"],
                 "output_contract": "Summary.",
             }
         ),
@@ -142,7 +142,6 @@ def test_save_drone_updates_registered_manifest_only(tmp_path: Path) -> None:
         **{
             **drone.__dict__,
             "name": "Updated Folder Drone",
-            "allowed_tools": (),
         }
     )
     DroneStore.save_drone(tmp_path, updated)
@@ -178,3 +177,68 @@ def test_slugify() -> None:
     assert slugify("Release Check") == "release-check"
     assert slugify("Hello World!") == "hello-world"
     assert slugify("---") == ""
+
+
+def test_list_drone_entries_ready_appears_once(tmp_path: Path) -> None:
+    """A registered drone shows exactly one entry with status Ready."""
+    source = _write_drone_folder(tmp_path / "build", drone_id="ready-test")
+    DroneStore.register_drone_folder(tmp_path, source)
+
+    entries = DroneStore.list_drone_entries(tmp_path)
+    ready = [e for e in entries if e.status == "Ready" and e.ready]
+    assert len(ready) == 1
+    assert ready[0].id == "ready-test"
+    assert ready[0].name == "Folder Drone"
+
+
+def test_list_drone_entries_missing_global_drone_shows_as_not_ready(tmp_path: Path) -> None:
+    """A workspace in installed phase with no matching global drone shows Needs Fix."""
+    ws = DroneWorkspaceStore.create_workspace(tmp_path, "Missing Drone")
+    ws.phase = WorkspacePhase.INSTALLED.value
+    ws.installed_drone_id = "nonexistent-drone"
+    DroneWorkspaceStore.save_workspace(ws)
+
+    entries = DroneStore.list_drone_entries(tmp_path)
+    row = next((e for e in entries if e.workspace_id == ws.workspace_id), None)
+    assert row is not None, "Expected a Builder row for the installed workspace"
+    assert row.ready is False
+    assert row.status == "Needs Fix"
+    assert row.workspace_id == ws.workspace_id
+
+
+def test_install_candidate_does_not_mark_installed_without_readback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """install_candidate returns ok=False and sets build_failed when read-back fails."""
+    ws = DroneWorkspaceStore.create_workspace(tmp_path, "Readback Test")
+    cand = candidate_dir(tmp_path, ws.workspace_id)
+    cand.mkdir(parents=True, exist_ok=True)
+    (cand / "drone.json").write_text(
+        json.dumps(
+            {
+                "id": "readback-test",
+                "name": "Readback Test",
+                "description": "Test readback failure.",
+                "entrypoint": {
+                    "kind": "command",
+                    "command": ["python", "-c", "pass"],
+                    "protocol": "json-stdio",
+                },
+                "instructions": "Test instructions.",
+                "write_policy": "read_only",
+                "output_contract": "Test output.",
+                "allowed_tools": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    # Simulate read-back failure by making load_drone return None
+    monkeypatch.setattr(DroneStore, "load_drone", lambda *a, **kw: None)
+
+    result = install_candidate(ws, tmp_path)
+
+    assert result.get("ok") is False
+    reloaded = DroneWorkspaceStore.load_workspace(tmp_path, ws.workspace_id)
+    assert reloaded is not None
+    assert reloaded.phase == "build_failed"

@@ -150,7 +150,11 @@ class DroneStore:
     @staticmethod
     def list_drone_entries(workspace_root: Path) -> list[DroneListEntry]:
         """Return list rows for ready Drones plus Builder Drones in progress."""
-        installed = {drone.id: drone for drone in DroneStore.list_drones(workspace_root)}
+        try:
+            installed = {drone.id: drone for drone in DroneStore.list_drones(workspace_root)}
+        except Exception:
+            logger.warning("Failed to list global drones", exc_info=True)
+            installed = {}
         rows: dict[str, DroneListEntry] = {
             drone_id: DroneListEntry(
                 id=drone.id,
@@ -215,8 +219,11 @@ class DroneStore:
                 write_policy = "read_only"
 
             status = _builder_status_for_phase(phase)
-            if phase == WorkspacePhase.INSTALLED.value and workspace.installed_drone_id and not installed_drone:
+            if phase == WorkspacePhase.INSTALLED.value and not installed_drone:
                 status = "Needs Fix"
+            last_error = workspace.last_error
+            if workspace.installed_drone_id and not installed_drone and not last_error:
+                last_error = "Installed Drone folder is missing or unreadable. Rebuild or reinstall to fix."
             rows[key] = DroneListEntry(
                 id=key if str(key).startswith("builder:") else str(drone_id or key),
                 name=name,
@@ -226,7 +233,7 @@ class DroneStore:
                 ready=False,
                 drone=installed_drone,
                 workspace_id=workspace.workspace_id,
-                last_error=workspace.last_error,
+                last_error=last_error,
                 updated_at=workspace.updated_at,
             )
 
