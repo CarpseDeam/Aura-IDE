@@ -388,10 +388,12 @@ def _resolve_workspace_name(
     Priority: candidate drone.json name -> installed Drone name -> display_name -> workspace_id.
     """
     wid = workspace_id or workspace.workspace_id
-    # 1. Candidate drone.json
+    # 1. Candidate drone.json — use edit_source_folder if set
     try:
-        cand = candidate_dir(project_root, wid)
-        drone_json = cand / "drone.json"
+        if workspace.edit_source_folder:
+            drone_json = Path(workspace.edit_source_folder) / "drone.json"
+        else:
+            drone_json = candidate_dir(project_root, wid) / "drone.json"
         if drone_json.exists():
             data = json.loads(drone_json.read_text(encoding="utf-8"))
             name = data.get("name")

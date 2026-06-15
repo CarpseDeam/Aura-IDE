@@ -4,15 +4,14 @@ from pathlib import Path
 
 from aura.drones.build_spec import DroneBuildBrief
 from aura.drones.workspaces.model import DroneWorkspace
-from aura.drones.workspaces.paths import candidate_dir
+from aura.drones.workspaces.paths import edit_candidate_dir
 
 
 def build_candidate_dispatch_prompt(
     workspace: DroneWorkspace, brief: DroneBuildBrief
 ) -> dict:
     """Return a dispatch spec dict for the Worker to build a new Drone candidate."""
-    project_root = Path(workspace.project_root)
-    cand = candidate_dir(project_root, workspace.workspace_id)
+    cand = edit_candidate_dir(workspace)
 
     spec = f"""Write a complete folder-backed Drone in the candidate directory.
 
@@ -59,8 +58,7 @@ def build_repair_dispatch_prompt(
     workspace: DroneWorkspace, user_revision: str
 ) -> dict:
     """Return a dispatch spec dict for the Worker to repair the existing candidate."""
-    project_root = Path(workspace.project_root)
-    cand = candidate_dir(project_root, workspace.workspace_id)
+    cand = edit_candidate_dir(workspace)
 
     spec = f"""Read the existing Drone candidate in {cand} and apply the revision feedback below.
 

@@ -85,10 +85,13 @@ class DroneWorkspaceStore:
         project_root = Path(workspace.project_root)
         wid = workspace.workspace_id
         chats_dir(project_root, wid).mkdir(parents=True, exist_ok=True)
-        candidate_dir(project_root, wid).mkdir(parents=True, exist_ok=True)
         build_runs_dir(project_root, wid).mkdir(parents=True, exist_ok=True)
         repair_runs_dir(project_root, wid).mkdir(parents=True, exist_ok=True)
         artifacts_dir(project_root, wid).mkdir(parents=True, exist_ok=True)
+        # For edit-mode workspaces the drone folder already exists; skip creating candidate.
+        # For builder workspaces, create candidate dir.
+        if not workspace.edit_source_folder:
+            candidate_dir(project_root, wid).mkdir(parents=True, exist_ok=True)
 
     @staticmethod
     def list_workspaces(project_root: Path) -> list[DroneWorkspace]:
@@ -164,12 +167,16 @@ class DroneWorkspaceStore:
     ) -> bool:
         """Sync workspace.display_name from candidate/drone.json if it has a different name.
 
-        Reads candidate_dir(project_root, workspace.workspace_id) / "drone.json".
+        Reads the drone.json from the edit_source_folder (for edit-mode workspaces)
+        or candidate_dir(project_root, workspace.workspace_id).
         If the file exists and contains a non-empty "name" field that differs
         from workspace.display_name, updates it, saves, and returns True.
         Otherwise returns False.
         """
-        drone_file = candidate_dir(project_root, workspace.workspace_id) / "drone.json"
+        if workspace.edit_source_folder:
+            drone_file = Path(workspace.edit_source_folder) / "drone.json"
+        else:
+            drone_file = candidate_dir(project_root, workspace.workspace_id) / "drone.json"
         if not drone_file.exists():
             return False
         try:
@@ -309,12 +316,8 @@ class DroneWorkspaceStore:
         )
 
         source_folder = DroneStore.drone_folder(drone_id)
-        target_folder = candidate_dir(project_root, workspace.workspace_id)
-        shutil.copytree(source_folder, target_folder, dirs_exist_ok=True)
-
-        workspace.phase = "building"
-        workspace.build_brief = drone.description or ""
-        workspace.candidate_drone_id = drone_id
+        workspace.edit_source_folder = str(source_folder)
+        workspace.phase = "ready"
         DroneWorkspaceStore.save_workspace(workspace)
         return workspace
 

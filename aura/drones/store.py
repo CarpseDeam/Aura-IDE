@@ -65,6 +65,7 @@ class DroneListEntry:
     ready: bool
     drone: DroneDefinition | None = None
     workspace_id: str | None = None
+    folder: str = ""
     last_error: str | None = None
     updated_at: str = ""
 
@@ -162,6 +163,7 @@ class DroneStore:
                 status="Ready",
                 ready=True,
                 drone=drone,
+                folder=str(DroneStore.drone_folder(drone.id)),
             )
             for drone_id, drone in installed.items()
         }
@@ -396,6 +398,33 @@ class DroneStore:
         if not isinstance(drone.entrypoint, dict) or not drone.entrypoint:
             raise ValueError("Drone entrypoint is required")
         _validate_entrypoint(drone.entrypoint)
+
+
+    @staticmethod
+    def print_entries(workspace_root: Path) -> str:
+        """Return a formatted text table of all Drone entries.
+
+        Columns: name, id, workspace_id, canonical_folder, run_target, edit_target.
+        """
+        entries = DroneStore.list_drone_entries(workspace_root)
+        lines = []
+        lines.append(f"{'Name':<30} {'Id':<30} {'WorkspaceId':<20} {'CanonicalFolder':<60} {'RunTarget':<40} {'EditTarget':<40}")
+        lines.append("-" * 220)
+        for e in entries:
+            run_target: str
+            edit_target: str
+            canonical_folder: str = e.folder or ""
+            if e.ready:
+                # Ready drone: run and edit both point to the canonical folder
+                run_target = e.folder or ""
+                edit_target = e.folder or ""
+            else:
+                # Builder drone: run is N/A, edit is workspace_id-based
+                run_target = "N/A"
+                edit_target = str(e.workspace_id or "")
+            wids = str(e.workspace_id or "")
+            lines.append(f"{e.name:<30} {e.id:<30} {wids:<20} {canonical_folder:<60} {run_target:<40} {edit_target:<40}")
+        return "\n".join(lines)
 
 
 class RunHistoryStore:

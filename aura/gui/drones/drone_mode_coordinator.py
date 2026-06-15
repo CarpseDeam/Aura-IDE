@@ -17,7 +17,7 @@ from aura.drones.architect.results import (
 )
 from aura.drones.store import DroneStore
 from aura.drones.workspaces.model import DroneThread, DroneWorkspace, WorkspacePhase
-from aura.drones.workspaces.paths import candidate_dir, workspace_folder
+from aura.drones.workspaces.paths import candidate_dir, edit_candidate_dir, workspace_folder
 from aura.drones.workspaces.store import DroneWorkspaceStore
 from aura.gui.drones.drone_workspace_pane import DroneWorkspacePane
 
@@ -125,7 +125,7 @@ class DroneModeCoordinator(QObject):
         ws = self._controller.active_workspace
         if ws is None:
             return ""
-        cand = candidate_dir(Path(ws.project_root), ws.workspace_id)
+        cand = edit_candidate_dir(ws)
         ws_dir = workspace_folder(Path(ws.project_root), ws.workspace_id)
         drone_name = self._resolve_drone_name(ws)
         return (
@@ -390,14 +390,18 @@ class DroneModeCoordinator(QObject):
     def _resolve_drone_name(self, ws: DroneWorkspace) -> str:
         """Resolve the best display name for a workspace context.
 
-        Priority: candidate drone.json name -> installed Drone name -> display_name -> workspace_id.
+        Priority: candidate drone.json name (from edit_source_folder or candidate dir)
+                  -> installed Drone name -> display_name -> workspace_id.
         """
         wid = ws.workspace_id
         project_root = Path(ws.project_root)
-        # 1. Candidate drone.json
+        # 1. Candidate drone.json — use edit_source_folder if set
         try:
-            cand = candidate_dir(project_root, wid)
-            drone_json = cand / "drone.json"
+            if ws.edit_source_folder:
+                cand_folder = Path(ws.edit_source_folder)
+            else:
+                cand_folder = candidate_dir(project_root, wid)
+            drone_json = cand_folder / "drone.json"
             if drone_json.exists():
                 data = json.loads(drone_json.read_text(encoding="utf-8"))
                 name = data.get("name")

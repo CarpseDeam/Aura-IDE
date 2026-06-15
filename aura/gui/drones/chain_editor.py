@@ -121,11 +121,13 @@ class _DroneCard(QFrame):
         write_policy: str = "read_only",
         status: str = "Ready",
         ready: bool = True,
+        folder: str = "",
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.drone_id = drone_id
         self.drone_name = name
+        self.folder = folder
         self._write_policy = write_policy
         self._ready = ready
         self.setObjectName("drone_card")
@@ -376,6 +378,7 @@ class _DroneRosterWidget(QScrollArea):
                 entry.write_policy,
                 entry.status,
                 entry.ready,
+                folder=entry.folder,
             )
             card._on_run = lambda did=entry.id: self._editor.runDroneRequested.emit(did)
             card._on_edit = lambda did=action_id: self._editor.editDroneRequested.emit(did)

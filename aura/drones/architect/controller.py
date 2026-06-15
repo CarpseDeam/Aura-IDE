@@ -28,7 +28,7 @@ from aura.drones.architect.results import (
 from aura.drones.architect.workshop_prompt import build_workshop_messages
 from aura.drones.store import DroneStore
 from aura.drones.workspaces.model import DroneThread, DroneWorkspace, WorkspacePhase
-from aura.drones.workspaces.paths import candidate_dir
+from aura.drones.workspaces.paths import candidate_dir, edit_candidate_dir
 from aura.drones.workspaces.store import DEFAULT_THREAD_TITLE, DroneWorkspaceStore
 from aura.projects.store import _clean_thread_title
 
@@ -92,6 +92,13 @@ class DroneArchitectController:
     def has_installed_drone(self) -> bool:
         ws = self._active_workspace
         return ws is not None and bool(ws.installed_drone_id)
+
+    @property
+    def resolved_candidate_path(self) -> Path | None:
+        """Return the canonical candidate folder for the active workspace."""
+        if self._active_workspace is None:
+            return None
+        return edit_candidate_dir(self._active_workspace)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -443,10 +450,12 @@ class DroneArchitectController:
             drone_id = ""
             candidate_path = ""
             if self._workspace_root is not None:
-                project_root = Path(self._active_workspace.project_root)
-                cand = candidate_dir(
-                    project_root, self._active_workspace.workspace_id
-                )
+                cand = self.resolved_candidate_path
+                if cand is None:
+                    project_root = Path(self._active_workspace.project_root)
+                    cand = candidate_dir(
+                        project_root, self._active_workspace.workspace_id
+                    )
                 candidate_path = str(cand)
                 try:
                     drone = DroneStore.load_drone_from_folder(cand)

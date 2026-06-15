@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from aura.drones.workspaces.model import DroneWorkspace
 
 
 def workspaces_dir(project_root: Path) -> Path:
@@ -41,3 +45,15 @@ def repair_runs_dir(project_root: Path, workspace_id: str) -> Path:
 
 def artifacts_dir(project_root: Path, workspace_id: str) -> Path:
     return workspace_folder(project_root, workspace_id) / "artifacts"
+
+
+def edit_candidate_dir(workspace: DroneWorkspace) -> Path:
+    """Return the canonical source folder for an edit-mode workspace.
+
+    If edit_source_folder is set (edit-mode workspace), returns that folder.
+    Otherwise falls back to candidate_dir(project_root, workspace_id).
+    """
+    if workspace.edit_source_folder:
+        return Path(workspace.edit_source_folder)
+    project_root = Path(workspace.project_root)
+    return candidate_dir(project_root, workspace.workspace_id)

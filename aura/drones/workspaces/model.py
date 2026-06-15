@@ -28,6 +28,7 @@ class DroneWorkspace:
     last_build_run: str | None = None
     active_thread_id: str | None = None
     last_error: str | None = None
+    edit_source_folder: str = ""
     created_at: str = ""
     updated_at: str = ""
 
