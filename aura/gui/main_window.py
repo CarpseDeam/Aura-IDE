@@ -592,6 +592,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             "chain_id": chain_id,
             "name": name,
             "description": description,
+            "auto_route": editor._auto_route,
             "dirty": editor._dirty,
             "nodes": nodes,
             "edges": edges,
@@ -845,6 +846,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         editor.editDroneRequested.connect(self._on_edit_drone)
         editor.deleteDroneRequested.connect(self._on_delete_drone)
         workbay.geometry_saved.connect(self._on_drone_workbay_geometry_saved)
+        if hooks.is_registered('query_mission_workbay_state'):
+            hooks.unregister('query_mission_workbay_state')
         hooks.register('query_mission_workbay_state', self._query_workbay_state)
         workbay.show_and_raise()
 
@@ -1229,6 +1232,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
     def _open_chain_editor(self, chain_id: str | None) -> None:
         """Create and show the chain editor in a standalone window."""
         if self._drone_workbay_window is not None and self._drone_workbay_window.is_open():
+            if hooks.is_registered('query_mission_workbay_state'):
+                hooks.unregister('query_mission_workbay_state')
             self._drone_workbay_window.hide()
 
         self._drone_workbay_window = DroneWorkbayWindow(
@@ -1253,6 +1258,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             self._on_run_workflow(cid)
         editor.runChainRequested.connect(on_run)
         workbay.geometry_saved.connect(self._on_drone_workbay_geometry_saved)
+        if hooks.is_registered('query_mission_workbay_state'):
+            hooks.unregister('query_mission_workbay_state')
         hooks.register('query_mission_workbay_state', self._query_workbay_state)
         workbay.show_and_raise()
 
