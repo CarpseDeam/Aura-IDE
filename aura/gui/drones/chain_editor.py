@@ -760,10 +760,9 @@ class ChainEditor(QWidget):
         # If closing a tab different from the current one, switch to it first
         # so the canvas shows its content and _prompt_save_changes sees the right chain.
         if index != self._current_tab_index:
-            self._tab_bar.blockSignals(True)
             self._tab_bar.setCurrentIndex(index)
-            self._tab_bar.blockSignals(False)
-            # _on_tab_changed was triggered above, so the tab is now current
+            if self._current_tab_index != index:
+                return
 
         # Snapshot current canvas state into the tab dict
         self._tabs[index]["canvas_data"] = self._snapshot_chain()
