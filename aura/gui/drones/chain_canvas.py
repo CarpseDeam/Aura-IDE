@@ -887,11 +887,11 @@ class GoalPlanetItem(QGraphicsObject):
         self._invalidate_cache()
 
     def boundingRect(self) -> QRectF:
-        return QRectF(-52, -52, 104, 136)
+        return QRectF(-44, -44, 88, 88)
 
     def paint(self, painter: QPainter, option, widget=None) -> None:
         center = QPointF(0, 0)
-        radius = 38
+        radius = 24
 
         # Cache check
         is_sel = int(self.isSelected())
@@ -924,23 +924,7 @@ class GoalPlanetItem(QGraphicsObject):
                 painter.setPen(QPen(sc, w))
                 painter.drawEllipse(center, radius + 1, radius + 1)
 
-        # Goal text below
-        font = QFont()
-        font.setPixelSize(10)
-        painter.setFont(font)
-        text_rect = QRectF(-44, 44, 88, 40)
-        if self._objective:
-            display = self._title if self._title else self._objective
-            elided = display[:40]
-            if len(display) > 40:
-                elided += "\u2026"
-            painter.setPen(QPen(QColor("#eaecef")))
-            painter.drawText(text_rect, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop, elided)
-        else:
-            font.setItalic(True)
-            painter.setFont(font)
-            painter.setPen(QPen(_qt_color(FG_MUTED)))
-            painter.drawText(text_rect, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop, "Uncharted goal")
+
 
     def _render_planet(self, radius: int) -> QPixmap:
         import random as _random
@@ -990,7 +974,7 @@ class GoalPlanetItem(QGraphicsObject):
         tilt = 0.4
         arc_start = 0
         arc_sweep = 0
-        if self._seed % 10 < 7:
+        if self._seed % 10 < 2:
             ring_radius = radius + rng.uniform(5, 9)
             tilt = rng.uniform(0.28, 0.48)
             ring_rect = QRectF(
@@ -1002,14 +986,14 @@ class GoalPlanetItem(QGraphicsObject):
             arc_start = int(rng.uniform(0, 360) * 16)
             arc_sweep = int(rng.uniform(200, 280) * 16)
             back_arc_color = QColor(atmos)
-            back_arc_color.setAlpha(10)
+            back_arc_color.setAlpha(30)
             p.setBrush(Qt.BrushStyle.NoBrush)
-            p.setPen(QPen(back_arc_color, 0.8))
+            p.setPen(QPen(back_arc_color, 1.5))
             p.drawArc(ring_rect, arc_start, arc_sweep)
             # Faint inner band
             inner_back_color = QColor(atmos)
-            inner_back_color.setAlpha(6)
-            p.setPen(QPen(inner_back_color, 0.5))
+            inner_back_color.setAlpha(18)
+            p.setPen(QPen(inner_back_color, 1.0))
             inner_back_radius = ring_radius - 1.8
             inner_back_rect = QRectF(
                 center.x() - inner_back_radius,
@@ -1025,9 +1009,9 @@ class GoalPlanetItem(QGraphicsObject):
         light_cy = center.y() + light_dir_y * radius * 0.38
         g_body = QRadialGradient(QPointF(light_cx, light_cy), radius * 1.35)
         highlight = QColor(
-            int(light.red() * 0.35 + 255 * 0.65),
-            int(light.green() * 0.35 + 255 * 0.65),
-            int(light.blue() * 0.35 + 255 * 0.65),
+            int(light.red() * 0.75 + 255 * 0.25),
+            int(light.green() * 0.75 + 255 * 0.25),
+            int(light.blue() * 0.75 + 255 * 0.25),
         )
         g_body.setColorAt(0.00, highlight)
         g_body.setColorAt(0.22, light)
@@ -1108,34 +1092,25 @@ class GoalPlanetItem(QGraphicsObject):
             p.setPen(Qt.PenStyle.NoPen)
             p.drawPath(band_path)
 
-        # 5d. Specular highlight — small bright spot near light center
-        hl_r = rng.uniform(radius * 0.06, radius * 0.13)
-        hl_x = light_cx + rng.uniform(-3, 3)
-        hl_y = light_cy + rng.uniform(-2, 2)
-        g_hl = QRadialGradient(QPointF(hl_x, hl_y), hl_r)
-        g_hl.setColorAt(0.0, QColor(255, 255, 255, 85))
-        g_hl.setColorAt(1.0, QColor(255, 255, 255, 0))
-        p.setBrush(QBrush(g_hl))
-        p.setPen(Qt.PenStyle.NoPen)
-        p.drawEllipse(QPointF(hl_x, hl_y), hl_r, hl_r)
+
 
         # 6. Un-clip
         p.setClipPath(QPainterPath(), Qt.ClipOperation.NoClip)
 
         # 7. Ring FRONT arc — overlays planet edges for orbital depth
-        if self._seed % 10 < 7:
+        if self._seed % 10 < 2:
             front_wide = QColor(atmos)
-            front_wide.setAlpha(16)
+            front_wide.setAlpha(40)
             p.setBrush(Qt.BrushStyle.NoBrush)
-            p.setPen(QPen(front_wide, 1.2))
+            p.setPen(QPen(front_wide, 2.0))
             p.drawArc(ring_rect, arc_start, arc_sweep)
             front_tight = QColor(atmos)
-            front_tight.setAlpha(50)
+            front_tight.setAlpha(70)
             p.setPen(QPen(front_tight, 0.5))
             p.drawArc(ring_rect, arc_start, arc_sweep)
             # Faint inner band
             inner_front_color = QColor(atmos)
-            inner_front_color.setAlpha(7)
+            inner_front_color.setAlpha(20)
             p.setPen(QPen(inner_front_color, 0.5))
             inner_front_rect = ring_rect.adjusted(1.8, 1.8 * 0.38, -1.8, -1.8 * 0.38)
             p.drawArc(inner_front_rect, arc_start, arc_sweep)
@@ -1467,10 +1442,9 @@ class ChainCanvas(QGraphicsView):
 
         self._update_empty_text()
 
-        # Auto-create default mission core + goal planet for empty chains
+        # Auto-create default mission core for empty chains
         if self._mission_core is None and not self._goal_planets and not self._nodes:
             self._canvas_add_mission_core(QPointF(-160, 0))
-            self._canvas_add_goal_planet(QPointF(160, 0))
 
         # Auto-fit after a short delay
         QTimer.singleShot(100, self._fit_view)
