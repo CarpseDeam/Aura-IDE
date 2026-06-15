@@ -187,6 +187,56 @@ class DroneStore:
             if phase == WorkspacePhase.READY.value and workspace.installed_drone_id and workspace.installed_drone_id in installed:
                 continue
 
+            # ── Ready Builder workspace — check for actual drone.json ──
+            if phase == WorkspacePhase.READY.value:
+                if workspace.edit_source_folder:
+                    drone_folder_path = Path(workspace.edit_source_folder)
+                else:
+                    drone_folder_path = candidate_dir(Path(workspace.project_root), workspace.workspace_id)
+                drone_json_path = drone_folder_path / "drone.json"
+
+                if drone_json_path.is_file():
+                    try:
+                        drone_data = json.loads(drone_json_path.read_text(encoding="utf-8"))
+                        if isinstance(drone_data, dict) and drone_data.get("id"):
+                            drone_id = str(drone_data["id"])
+                            name = str(drone_data.get("name", "")).strip() or workspace.display_name or "New Drone"
+                            description = str(drone_data.get("description", "")).strip() or workspace.build_brief or "Being designed in the Drone Builder."
+                            write_policy = str(drone_data.get("write_policy", "")).strip() or "read_only"
+                            if write_policy not in _WRITE_POLICIES:
+                                write_policy = "read_only"
+                            rows[drone_id] = DroneListEntry(
+                                id=drone_id,
+                                name=name,
+                                description=description,
+                                write_policy=write_policy,
+                                status="Ready",
+                                ready=True,
+                                workspace_id=workspace.workspace_id,
+                                folder=str(drone_folder_path),
+                                run_target=str(drone_folder_path),
+                                edit_target=str(drone_folder_path),
+                                updated_at=workspace.updated_at,
+                            )
+                            continue
+                    except Exception:
+                        logger.debug("Ready workspace drone.json read failed: %s", drone_json_path, exc_info=True)
+
+                # drone.json missing or invalid — non-ready row
+                rows[f"builder:{workspace.workspace_id}"] = DroneListEntry(
+                    id=f"builder:{workspace.workspace_id}",
+                    name=workspace.display_name or "New Drone",
+                    description=workspace.build_brief or "Being designed in the Drone Builder.",
+                    write_policy="read_only",
+                    status="Ready",
+                    ready=False,
+                    workspace_id=workspace.workspace_id,
+                    edit_target=f"builder:{workspace.workspace_id}",
+                    last_error="Drone folder is missing or unreadable. Rebuild this Drone to fix.",
+                    updated_at=workspace.updated_at,
+                )
+                continue
+
             candidate_folder = candidate_dir(Path(workspace.project_root), workspace.workspace_id)
             candidate = _read_candidate_manifest_summary(candidate_folder)
             installed_drone = (
@@ -223,11 +273,9 @@ class DroneStore:
                 write_policy = "read_only"
 
             status = _builder_status_for_phase(phase)
-            if phase == WorkspacePhase.READY.value and not installed_drone:
-                status = "Needs Fix"
             last_error = workspace.last_error
             if workspace.installed_drone_id and not installed_drone and not last_error:
-                last_error = "Installed Drone folder is missing or unreadable. Rebuild or reinstall to fix."
+                last_error = "Installed Drone folder is missing or unreadable. Rebuild this Drone to fix."
             rows[key] = DroneListEntry(
                 id=key if str(key).startswith("builder:") else str(drone_id or key),
                 name=name,

@@ -393,10 +393,10 @@ class DroneArchitectController:
         if phase == WorkspacePhase.ITERATING.value:
             return self._handle_iterating_message(text)
 
-        if phase in (
-            WorkspacePhase.READY.value,
-            WorkspacePhase.DISCARDED.value,
-        ):
+        if phase == WorkspacePhase.READY.value:
+            return self._handle_ready_message(text)
+
+        if phase == WorkspacePhase.DISCARDED.value:
             self.create_workspace("New Drone")
             return self._handle_workshop_message(text)
 
@@ -549,7 +549,9 @@ class DroneArchitectController:
                     )
                 # Text provided — route to phase handler.
                 phase = ws.phase
-                if phase in {WorkspacePhase.WORKSHOP.value, WorkspacePhase.BUILDING.value, WorkspacePhase.ITERATING.value, WorkspacePhase.READY.value}:
+                if phase == WorkspacePhase.READY.value:
+                    return self._handle_ready_message(text)
+                if phase in {WorkspacePhase.WORKSHOP.value, WorkspacePhase.BUILDING.value, WorkspacePhase.ITERATING.value}:
                     return self._handle_workshop_message(text)
                 # Terminal/unusable phases (discarded, build_failed) — start fresh.
                 result = self.create_workspace("New Drone")
@@ -595,6 +597,33 @@ class DroneArchitectController:
         history = self._active_thread.messages[:-1] if self._active_thread else []
         messages = build_workshop_messages(text, history)
         return WorkshopRequested(messages=messages)
+
+    def _handle_ready_message(self, text: str):
+        """Handle messages in ready phase — treat as improvement revision for the same Drone."""
+        cmd, arg = parse_drone_command(text, self._active_workspace.phase)
+
+        if cmd == DroneCommand.NEW:
+            return self.create_workspace(arg or "New Drone")
+
+        if cmd == DroneCommand.LOAD:
+            if arg:
+                return self.load_workspace(arg)
+            return ErrorResult(message="Load requires a Drone name")
+
+        if cmd == DroneCommand.DISCARD:
+            return self.discard_workspace()
+
+        # Any other text — revision feedback for the ready Drone.
+        self._active_workspace.phase = WorkspacePhase.ITERATING.value
+        DroneWorkspaceStore.save_workspace(self._active_workspace)
+
+        repair_spec = build_repair_dispatch_prompt(self._active_workspace, text)
+        self._pending_dispatch_spec = repair_spec
+
+        return BuildStarted(
+            build_brief=self._active_workspace.build_brief,
+            dispatch_spec=repair_spec,
+        )
 
     def _handle_failed_phase_message(self, text: str):
         """Handle messages in build_failed phase."""
