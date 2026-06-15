@@ -70,6 +70,7 @@ class DroneModeCoordinator(QObject):
     def set_workspace_root(self, root: Path | None) -> None:
         self._workspace_root = root
         self._controller.set_workspace_root(root)
+        self._workspace_pane.set_project_root(root)
 
     def edit_installed_drone(self, drone_id: str) -> None:
         """Open a Drone in the architect for editing."""
