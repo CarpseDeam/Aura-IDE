@@ -1,21 +1,22 @@
 from __future__ import annotations
 
+import copy
+import json
 import logging
 from pathlib import Path
+from typing import Any
 
-from PySide6.QtCore import QObject, QThread, Signal, Slot, QTimer
+from PySide6.QtCore import QObject, QThread, QTimer, Signal
 from PySide6.QtWidgets import QFrame, QSplitter
 
 from aura.drones.architect.controller import DroneArchitectController
 from aura.drones.architect.results import (
     BuildCompleted,
     BuildFailed,
-    Discarded,
     ErrorResult,
-    Installed,
-    WorkspaceLoaded,
 )
-from aura.drones.workspaces.model import WorkspacePhase
+from aura.drones.store import DroneStore
+from aura.drones.workspaces.model import DroneThread, DroneWorkspace, WorkspacePhase
 from aura.drones.workspaces.paths import candidate_dir, workspace_folder
 from aura.drones.workspaces.store import DroneWorkspaceStore
 from aura.gui.drones.drone_workspace_pane import DroneWorkspacePane
@@ -62,9 +63,11 @@ class DroneModeCoordinator(QObject):
         self._workspace_pane.new_workspace_requested.connect(self._on_new_workspace)
         self._workspace_pane.discard_workspace_requested.connect(self._on_discard_workspace)
         self._workspace_pane.edit_installed.connect(self.edit_installed_drone)
+        self._workspace_pane.thread_selected.connect(self._on_thread_selected)
 
         # Active build tool state for cancellation after drone mode exit.
         self._active_drone_build_tool_id: str | None = None
+        self._active_thread_id: str | None = None
         self._workspace_root: Path | None = None
         self._drone_mode: bool = False
 
@@ -82,6 +85,12 @@ class DroneModeCoordinator(QObject):
         if isinstance(result, ErrorResult):
             self._chat.add_error("Drone Builder", f"Could not load Drone: {result.message}")
             return
+        ws = self._controller.active_workspace
+        if ws is not None:
+            thread = self._ensure_thread_for_workspace(ws.workspace_id)
+            if thread is not None:
+                self._active_thread_id = thread.id
+                self._load_thread_into_ui(ws.workspace_id, thread.id)
         self.enter_drone_mode(load_active=False)
 
     def edit_builder_drone(self, workspace_id: str) -> None:
@@ -91,6 +100,10 @@ class DroneModeCoordinator(QObject):
         if isinstance(result, ErrorResult):
             self._chat.add_error("Drone Builder", f"Could not load workspace: {result.message}")
             return
+        thread = self._ensure_thread_for_workspace(workspace_id)
+        if thread is not None:
+            self._active_thread_id = thread.id
+            self._load_thread_into_ui(workspace_id, thread.id)
         self.enter_drone_mode(load_active=False)
 
     def discard_builder_drone(self, workspace_id: str) -> None:
@@ -114,10 +127,11 @@ class DroneModeCoordinator(QObject):
             return ""
         cand = candidate_dir(Path(ws.project_root), ws.workspace_id)
         ws_dir = workspace_folder(Path(ws.project_root), ws.workspace_id)
+        drone_name = self._resolve_drone_name(ws)
         return (
             f"[Drone Mode Active]\n"
             f"You are building or editing a folder-backed Drone: "
-            f'"{ws.display_name}" (workspace: {ws.workspace_id}).\n'
+            f'"{drone_name}" (workspace: {ws.workspace_id}).\n'
             f"The Drone's candidate source folder is: {cand}\n"
             f"The Drone workspace is: {ws_dir}/\n"
             f"\n"
@@ -143,8 +157,18 @@ class DroneModeCoordinator(QObject):
         if load_active:
             self._controller.enter_mode()
         ws = self._controller.active_workspace
-        self._workspace_pane.set_active_workspace_id(ws.workspace_id if ws else None)
-        self._workspace_pane.refresh()
+
+        # Load thread for active workspace if not already loaded
+        if ws is not None and self._active_thread_id is None:
+            thread = self._ensure_thread_for_workspace(ws.workspace_id)
+            if thread is not None:
+                self._active_thread_id = thread.id
+                self._load_thread_into_ui(ws.workspace_id, thread.id)
+
+        self._workspace_pane.set_active(
+            ws.workspace_id if ws else None,
+            self._active_thread_id,
+        )
 
         # Swap left pane for workspace pane in the splitter
         idx = self._main_splitter.indexOf(self._left_pane)
@@ -160,6 +184,8 @@ class DroneModeCoordinator(QObject):
     def exit_drone_mode(self) -> None:
         if not self._drone_mode:
             return
+        self._save_current_thread()
+        self._active_thread_id = None
         self._drone_mode = False
 
         # Swap workspace pane back to left pane
@@ -361,17 +387,107 @@ class DroneModeCoordinator(QObject):
         thread.finished.connect(_cleanup)
 
     # ------------------------------------------------------------------
-    # Workspace pane callbacks
+    # Thread lifecycle
     # ------------------------------------------------------------------
 
-    def _on_workspace_selected(self, workspace_id: str) -> None:
+    def _ensure_thread_for_workspace(self, workspace_id: str) -> DroneThread | None:
+        """Get the active or most recent thread for a workspace, creating one if needed."""
+        ws = self._controller.active_workspace
+        if ws is None:
+            return None
+        project_root = Path(ws.project_root)
+        threads = DroneWorkspaceStore.list_threads(project_root, workspace_id)
+        if threads:
+            return threads[0]
+        return DroneWorkspaceStore.create_thread(project_root, workspace_id)
+
+    def _save_current_thread(self) -> None:
+        """Persist the current conversation into the active thread."""
+        if self._active_thread_id is None:
+            return
+        ws = self._controller.active_workspace
+        if ws is None:
+            return
+        project_root = Path(ws.project_root)
+        messages = copy.deepcopy(self._bridge.history().messages)
+        thread = DroneWorkspaceStore.load_thread(
+            project_root, ws.workspace_id, self._active_thread_id
+        )
+        if thread is not None:
+            thread.messages = messages
+            DroneWorkspaceStore.save_thread(project_root, ws.workspace_id, thread)
+
+    def _load_thread_into_ui(self, workspace_id: str, thread_id: str) -> None:
+        """Clear the UI and replay messages from the given thread."""
+        ws = self._controller.active_workspace
+        if ws is None:
+            return
+        project_root = Path(ws.project_root)
+        thread = DroneWorkspaceStore.load_thread(project_root, workspace_id, thread_id)
+        if thread is None:
+            return
+        self._bridge.reset_history()
+        self._bridge.history().messages = copy.deepcopy(thread.messages)
+        self._chat.reset()
+        self._chat.replay_messages(thread.messages)
+
+    def _on_thread_selected(self, workspace_id: str, thread_id: str) -> None:
+        """Switch to a different thread in the current or a different workspace."""
+        self._save_current_thread()
         result = self._controller.load_workspace(workspace_id)
         if isinstance(result, ErrorResult):
             self._chat.add_error("Drone Builder", f"Could not load workspace: {result.message}")
             return
+        self._load_thread_into_ui(workspace_id, thread_id)
+        self._active_thread_id = thread_id
+        self._workspace_pane.set_active(workspace_id, thread_id)
+
+    def _resolve_drone_name(self, ws: DroneWorkspace) -> str:
+        """Resolve the best display name for a workspace context.
+
+        Priority: candidate drone.json name -> installed Drone name -> display_name -> workspace_id.
+        """
+        wid = ws.workspace_id
+        project_root = Path(ws.project_root)
+        # 1. Candidate drone.json
+        try:
+            cand = candidate_dir(project_root, wid)
+            drone_json = cand / "drone.json"
+            if drone_json.exists():
+                data = json.loads(drone_json.read_text(encoding="utf-8"))
+                name = data.get("name")
+                if name:
+                    return str(name)
+        except Exception as exc:
+            logger.debug("Failed to read candidate drone.json for %s: %s", wid, exc)
+        # 2. Installed Drone name
+        if ws.installed_drone_id:
+            try:
+                drone = DroneStore.load_drone(project_root, ws.installed_drone_id)
+                if drone and drone.name:
+                    return drone.name
+            except Exception as exc:
+                logger.debug("Failed to load installed Drone %s: %s", ws.installed_drone_id, exc)
+        # 3. Fallback
+        return ws.display_name or wid
+
+    # ------------------------------------------------------------------
+    # Workspace pane callbacks
+    # ------------------------------------------------------------------
+
+    def _on_workspace_selected(self, workspace_id: str) -> None:
+        self._save_current_thread()
+        result = self._controller.load_workspace(workspace_id)
+        if isinstance(result, ErrorResult):
+            self._chat.add_error("Drone Builder", f"Could not load workspace: {result.message}")
+            return
+        thread = self._ensure_thread_for_workspace(workspace_id)
+        thread_id = thread.id if thread else None
+        self._active_thread_id = thread_id
+        if thread_id:
+            self._load_thread_into_ui(workspace_id, thread_id)
         if self._drone_mode:
-            self._workspace_pane.set_active_workspace_id(workspace_id)
-            self._workspace_pane.refresh()
+            self._workspace_pane.set_active(workspace_id, thread_id)
             self._input.focus_editor()
         else:
             self.enter_drone_mode(load_active=False)
@@ -380,10 +496,16 @@ class DroneModeCoordinator(QObject):
         """Create a new workspace and reset the Builder session without exiting Drone mode."""
         self._controller.create_workspace("New Drone")
         ws = self._controller.active_workspace
-        self._workspace_pane.refresh()
-        self._workspace_pane.set_active_workspace_id(ws.workspace_id if ws else None)
-        self._chat.reset()
-        self._bridge.reset_history()
+        if ws is not None:
+            thread = DroneWorkspaceStore.create_thread(
+                Path(ws.project_root), ws.workspace_id
+            )
+            self._active_thread_id = thread.id
+            self._load_thread_into_ui(ws.workspace_id, thread.id)
+        self._workspace_pane.set_active(
+            ws.workspace_id if ws else None,
+            self._active_thread_id,
+        )
         self.fresh_session_requested.emit()
         self._input.focus_editor()
 

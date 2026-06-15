@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Self
+from typing import Any, Self
 
 
 class WorkspacePhase(Enum):
@@ -55,7 +55,7 @@ class DroneThread:
     id: str
     workspace_id: str
     title: str
-    messages: list[dict[str, str]] = field(default_factory=list)
+    messages: list[dict[str, Any]] = field(default_factory=list)
     created_at: str = ""
     updated_at: str = ""
     summary: str = ""

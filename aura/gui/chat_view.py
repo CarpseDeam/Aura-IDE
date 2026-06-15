@@ -12,17 +12,16 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from aura.gui.widgets.aura_glow import AuraWidget
 from aura.gui.cards._helpers import _fade_in_widget
 from aura.gui.cards.assistant_card import AssistantCard
 from aura.gui.cards.code_writer_card import CodeWriterCard
 from aura.gui.cards.diff_card import DiffCard
 from aura.gui.cards.error_card import ErrorCard
+from aura.gui.cards.mismatch_resolution_card import MismatchResolutionCard
 from aura.gui.cards.plan_writer_card import PlanWriterCard
 from aura.gui.cards.spec_card import SpecCard
 from aura.gui.cards.terminal_card import TerminalCard
 from aura.gui.cards.user_card import UserCard
-from aura.gui.cards.mismatch_resolution_card import MismatchResolutionCard
 from aura.gui.cards.worker_summary_card import WorkerSummaryCard
 from aura.gui.controllers import ToolStreamController
 from aura.gui.theme import (
@@ -30,6 +29,8 @@ from aura.gui.theme import (
     FG,
     FG_ITALIC,
 )
+from aura.gui.widgets.aura_glow import AuraWidget
+
 
 class ChatView(QScrollArea):
     """Vertical, scrollable column of cards."""
@@ -231,6 +232,68 @@ class ChatView(QScrollArea):
         self._last_scroll_max = 0
         self._empty_hint = None
         self._show_empty_hint()
+
+    def replay_messages(self, messages: list[dict]) -> None:
+        """Replay saved messages into the chat view.
+
+        The caller is responsible for calling reset() first.
+        Messages are full API-format dicts: user, assistant, tool.
+        """
+        for msg in messages:
+            role = msg.get("role", "")
+            if role == "user":
+                content = msg.get("content", "")
+                if isinstance(content, str):
+                    self.add_user(content)
+            elif role == "assistant":
+                card = self.begin_assistant()
+                reasoning = msg.get("reasoning_content")
+                if reasoning:
+                    card.append_reasoning(reasoning)
+                content = msg.get("content", "")
+                if isinstance(content, str) and content:
+                    card.append_content(content)
+                elif isinstance(content, list):
+                    # Multi-modal content: extract text parts
+                    for part in content:
+                        if isinstance(part, dict) and part.get("type") == "text":
+                            card.append_content(part["text"])
+                self.assistant_done()
+            elif role == "tool":
+                content = msg.get("content", "")
+                if isinstance(content, str) and content:
+                    self._add_tool_result_card(
+                        msg.get("tool_call_id", ""), content[:2000]
+                    )
+
+    def _add_tool_result_card(self, tool_call_id: str, content: str) -> None:
+        """Add a compact card showing a tool result during history replay."""
+        from PySide6.QtWidgets import QFrame, QLabel, QVBoxLayout
+
+        card = QFrame(self)
+        card.setObjectName("toolResultCard")
+        card.setStyleSheet(
+            "QFrame#toolResultCard {"
+            "  background: rgba(82, 148, 226, 0.06);"
+            "  border: 1px solid rgba(82, 148, 226, 0.2);"
+            "  border-radius: 6px;"
+            "}"
+        )
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(10, 6, 10, 6)
+        layout.setSpacing(2)
+        heading = QLabel("\U0001f50c Tool result")
+        heading.setStyleSheet("color: #5294E2; font-size: 11px; font-weight: 600;")
+        layout.addWidget(heading)
+        body = QLabel(content[:500])
+        body.setWordWrap(True)
+        body.setStyleSheet("color: #ccc; font-size: 11px;")
+        body.setTextInteractionFlags(
+            body.textInteractionFlags()
+            | Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        layout.addWidget(body)
+        self._add_card(card)
 
     def add_user(self, text: str, image_b64s: list[str] | None = None) -> None:
         # Slight right inset on user cards so the conversation rhythm is visible at a glance —
@@ -661,17 +724,17 @@ class ChatView(QScrollArea):
         card = QFrame(self)
         card.setObjectName("infoCard")
         card.setStyleSheet(
-            f"QFrame#infoCard {{"
-            f"  background: rgba(157, 124, 216, 0.08);"
-            f"  border: 1px solid rgba(157, 124, 216, 0.35);"
-            f"  border-radius: 10px;"
-            f"}}"
+            "QFrame#infoCard {"
+            "  background: rgba(157, 124, 216, 0.08);"
+            "  border: 1px solid rgba(157, 124, 216, 0.35);"
+            "  border-radius: 10px;"
+            "}"
         )
         layout = QVBoxLayout(card)
         layout.setContentsMargins(14, 12, 14, 12)
         layout.setSpacing(4)
         head = QLabel(title, card)
-        head.setStyleSheet(f"color: #9d7cd8; font-weight: 600;")
+        head.setStyleSheet("color: #9d7cd8; font-weight: 600;")
         layout.addWidget(head)
         body = QLabel(message, card)
         body.setWordWrap(True)
