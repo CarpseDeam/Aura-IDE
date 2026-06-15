@@ -459,6 +459,14 @@ class DroneArchitectController:
             self._last_drone_id = drone_id
             DroneWorkspaceStore.save_workspace(self._active_workspace)
 
+            # Rename workspace to match the built drone's ID.
+            if drone_id and drone_id != self._active_workspace.workspace_id and self._active_workspace.mode != "edit":
+                self._active_workspace = DroneWorkspaceStore.rename_workspace(
+                    Path(self._active_workspace.project_root),
+                    self._active_workspace,
+                    drone_id,
+                )
+
             return BuildCompleted(
                 candidate_path=candidate_path, drone_id=drone_id
             )

@@ -344,3 +344,108 @@ class DroneWorkspaceStore:
         active_path = active_workspace_path(project_root)
         if active_path.exists():
             active_path.write_text(json.dumps({}), encoding="utf-8")
+
+    @staticmethod
+    def rename_workspace(
+        project_root: Path, workspace: DroneWorkspace, new_id: str
+    ) -> DroneWorkspace:
+        """Rename a workspace folder and update its manifest.
+
+        If new_id already exists on disk, appends a -N suffix until unique.
+        Also updates _active.json if it points at the old id.
+        """
+        if workspace.workspace_id == new_id:
+            return workspace
+
+        old_id = workspace.workspace_id
+        old_folder = workspace_folder(project_root, old_id)
+        new_folder = workspace_folder(project_root, new_id)
+
+        if new_folder.exists():
+            counter = 2
+            while workspace_folder(project_root, f"{new_id}-{counter}").exists():
+                counter += 1
+            new_id = f"{new_id}-{counter}"
+            new_folder = workspace_folder(project_root, new_id)
+
+        if old_folder.exists():
+            shutil.move(str(old_folder), str(new_folder))
+
+        workspace.workspace_id = new_id
+        workspace.workspace_root = str(new_folder)
+
+        # Update _active.json if it points at old_id.
+        active_path = active_workspace_path(project_root)
+        if active_path.exists():
+            try:
+                data = json.loads(active_path.read_text(encoding="utf-8"))
+                if data.get("active_workspace_id") == old_id:
+                    data["active_workspace_id"] = new_id
+                    active_path.write_text(
+                        json.dumps(data, indent=2), encoding="utf-8"
+                    )
+            except Exception:
+                logger.warning("Failed to update _active.json during rename")
+
+        DroneWorkspaceStore.save_workspace(workspace)
+        return workspace
+
+    @staticmethod
+    def migrate_stale_folders(project_root: Path) -> None:
+        """Migrate old workspace/build folders to canonical locations.
+
+        Moves subdirectories from .aura/drones/workspaces/ into
+        .aura/drone-workspaces/ (canonical).  If a target already exists
+        in canonical, moves to .aura/backups/stale_workspaces/ instead.
+        Removes the stale directory if empty afterwards.
+
+        Also moves .aura/drone-build/ to .aura/backups/stale_drone_build/.
+        """
+        stale_workspaces = project_root / ".aura" / "drones" / "workspaces"
+        if stale_workspaces.is_dir():
+            canonical = workspaces_dir(project_root)
+            backup_base = project_root / ".aura" / "backups" / "stale_workspaces"
+            for entry in sorted(stale_workspaces.iterdir()):
+                if not entry.is_dir():
+                    continue
+                try:
+                    target = canonical / entry.name
+                    if target.exists():
+                        backup_target = backup_base / entry.name
+                        backup_target.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.move(str(entry), str(backup_target))
+                        logger.info(
+                            "Moved stale workspace %s -> %s", entry, backup_target
+                        )
+                    else:
+                        shutil.move(str(entry), str(target))
+                        logger.info(
+                            "Migrated workspace %s -> %s", entry, target
+                        )
+                except Exception as exc:
+                    logger.warning("Failed to migrate %s: %s", entry, exc)
+            try:
+                remaining = list(stale_workspaces.iterdir())
+                if not remaining:
+                    stale_workspaces.rmdir()
+                    logger.info("Removed empty stale directory: %s", stale_workspaces)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to remove stale directory %s: %s", stale_workspaces, exc
+                )
+
+        stale_build = project_root / ".aura" / "drone-build"
+        if stale_build.is_dir():
+            backup_dir = project_root / ".aura" / "backups" / "stale_drone_build"
+            try:
+                backup_dir.parent.mkdir(parents=True, exist_ok=True)
+                if backup_dir.exists():
+                    shutil.rmtree(str(backup_dir))
+                shutil.move(str(stale_build), str(backup_dir))
+                logger.info(
+                    "Migrated stale build dir %s -> %s", stale_build, backup_dir
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to migrate stale build dir %s: %s", stale_build, exc
+                )

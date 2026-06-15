@@ -16,6 +16,7 @@ from aura.drones.architect.results import (
     WorkspaceLoaded,
 )
 from aura.drones.workspaces.model import WorkspacePhase
+from aura.drones.workspaces.paths import candidate_dir, workspace_folder
 from aura.drones.workspaces.store import DroneWorkspaceStore
 from aura.gui.drones.drone_workspace_pane import DroneWorkspacePane
 
@@ -71,6 +72,8 @@ class DroneModeCoordinator(QObject):
         self._workspace_root = root
         self._controller.set_workspace_root(root)
         self._workspace_pane.set_project_root(root)
+        if root is not None:
+            DroneWorkspaceStore.migrate_stale_folders(root)
 
     def edit_installed_drone(self, drone_id: str) -> None:
         """Open a Drone in the architect for editing."""
@@ -109,8 +112,8 @@ class DroneModeCoordinator(QObject):
         ws = self._controller.active_workspace
         if ws is None:
             return ""
-        cand = Path(ws.project_root) / ".aura" / "drones" / "workspaces" / ws.workspace_id / "candidate"
-        ws_dir = Path(ws.project_root) / ".aura" / "drones" / "workspaces" / ws.workspace_id
+        cand = candidate_dir(Path(ws.project_root), ws.workspace_id)
+        ws_dir = workspace_folder(Path(ws.project_root), ws.workspace_id)
         return (
             f"[Drone Mode Active]\n"
             f"You are building or editing a folder-backed Drone: "
