@@ -66,9 +66,12 @@ class DroneModeCoordinator(QObject):
 
         self._drone_mode: bool = False
         self._workspace_root: Path | None = None
+        self._active_drone_build_tool_id: str | None = None
 
-        # Bridge auto-chain signal.
+        # Bridge signals for auto-chain tracking.
         self._bridge.workerFinished.connect(self._on_worker_finished)
+        self._bridge.workerDispatchRequested.connect(self._on_drone_dispatch_requested)
+        self._bridge.workerCancelled.connect(self._on_drone_worker_cancelled)
 
     # ------------------------------------------------------------------
     # Public API
@@ -188,11 +191,59 @@ class DroneModeCoordinator(QObject):
         self._controller.exit_mode()
         self.drone_mode_changed.emit(False)
 
+    # ------------------------------------------------------------------
+    # Worker dispatch tracking
+    # ------------------------------------------------------------------
 
+    @Slot(str, str, list, str, str, str)
+    def _on_drone_dispatch_requested(
+        self, tool_call_id: str, goal: str, files: list[str], spec: str, acceptance: str, summary: str
+    ) -> None:
+        if not self._drone_mode:
+            return
+        if self._controller.active_workspace is None or self._workspace_root is None:
+            return
 
+        ws = self._controller.active_workspace
+        from aura.drones.workspaces.paths import candidate_dir, workspace_folder
 
+        cand = candidate_dir(self._workspace_root, ws.workspace_id)
+        ws_dir = workspace_folder(self._workspace_root, ws.workspace_id)
 
+        rel_cand = str(cand.relative_to(self._workspace_root)).replace("\\", "/")
+        rel_ws = str(ws_dir.relative_to(self._workspace_root)).replace("\\", "/")
 
+        cand_str = str(cand)
+        ws_dir_str = str(ws_dir)
+
+        targets_drone = False
+        for f in files:
+            f_norm = f.replace("\\", "/")
+            if f_norm.startswith(rel_cand) or f_norm.startswith(rel_ws):
+                targets_drone = True
+                break
+        if not targets_drone:
+            combined = f"{goal} {spec} {acceptance} {summary}"
+            if cand_str in combined or ws_dir_str in combined:
+                targets_drone = True
+        if not targets_drone:
+            return
+
+        self._active_drone_build_tool_id = tool_call_id
+
+        new_phase = (
+            WorkspacePhase.BUILDING.value
+            if ws.phase == WorkspacePhase.WORKSHOP.value
+            else WorkspacePhase.ITERATING.value
+        )
+        ws.phase = new_phase
+        DroneWorkspaceStore.save_workspace(ws)
+        self._workspace_pane.refresh()
+
+    @Slot(str)
+    def _on_drone_worker_cancelled(self, tool_call_id: str) -> None:
+        if tool_call_id == self._active_drone_build_tool_id:
+            self._active_drone_build_tool_id = None
 
     @Slot(str, bool, str, bool, str)
     def _on_worker_finished(
@@ -203,8 +254,8 @@ class DroneModeCoordinator(QObject):
         ws = self._controller.active_workspace
         if ws is None or self._workspace_root is None:
             return
-        # Only auto-chain when the workspace is in a build phase.
-        if ws.phase not in (WorkspacePhase.BUILDING.value, WorkspacePhase.ITERATING.value):
+        # Only auto-chain when this is the tracked drone dispatch.
+        if tool_id != self._active_drone_build_tool_id:
             return
 
         failure_detail = None
@@ -228,6 +279,8 @@ class DroneModeCoordinator(QObject):
             self._run_readiness()
         elif isinstance(result, BuildFailed):
             self._chat.add_error("Build Failed", summary)
+
+        self._active_drone_build_tool_id = None
 
     def _worker_result_metadata(self, tool_id: str) -> dict:
         getter = getattr(self._bridge, "worker_result_metadata", None)
