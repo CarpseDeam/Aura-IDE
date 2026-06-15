@@ -6,14 +6,12 @@ from aura.drones.architect.build_prompts import (
 )
 from aura.drones.architect.commands import DroneCommand, parse_drone_command
 from aura.drones.architect.controller import DroneArchitectController
-from aura.drones.architect.installer import install_or_reinstall
 from aura.drones.architect.results import (
     BuildCompleted,
     BuildFailed,
     BuildStarted,
     Discarded,
     ErrorResult,
-    Installed,
     ModeEntered,
     ThreadCreated,
     ThreadSwitched,
@@ -40,7 +38,6 @@ __all__ = [
     "BuildStarted",
     "BuildCompleted",
     "BuildFailed",
-    "Installed",
     "Discarded",
     "ErrorResult",
     # Commands
@@ -52,6 +49,4 @@ __all__ = [
     # Build
     "build_candidate_dispatch_prompt",
     "build_repair_dispatch_prompt",
-    # Installer
-    "install_or_reinstall",
 ]

@@ -217,7 +217,7 @@ class DroneWorkspacePane(QFrame):
 
     workspace_selected = Signal(str)  # workspace_id
     thread_selected = Signal(str, str)  # workspace_id, thread_id
-    edit_installed = Signal(str)  # drone_id
+    edit_ready = Signal(str)  # drone_id
     new_workspace_requested = Signal()
     discard_workspace_requested = Signal(str)  # workspace_id
 
@@ -322,9 +322,9 @@ class DroneWorkspacePane(QFrame):
             expanded = ws.workspace_id in self._expanded_workspace_ids
             row = _WorkspaceRow(ws, display_name, expanded=expanded)
 
-            if ws.phase == WorkspacePhase.INSTALLED.value and ws.installed_drone_id:
+            if ws.phase == WorkspacePhase.READY.value and ws.installed_drone_id:
                 row.clicked.connect(
-                    lambda _workspace_id, drone_id=ws.installed_drone_id: self.edit_installed.emit(
+                    lambda _workspace_id, drone_id=ws.installed_drone_id: self.edit_ready.emit(
                         drone_id
                     )
                 )
@@ -399,15 +399,7 @@ def _resolve_workspace_name(
                 return str(name)
     except Exception as exc:
         logger.debug("Failed to read candidate drone.json for %s: %s", wid, exc)
-    # 2. Installed Drone name
-    if workspace.installed_drone_id:
-        try:
-            drone = DroneStore.load_drone(project_root, workspace.installed_drone_id)
-            if drone and drone.name:
-                return drone.name
-        except Exception as exc:
-            logger.debug("Failed to load installed Drone %s: %s", workspace.installed_drone_id, exc)
-    # 3. Fallback
+    # 2. Fallback
     return workspace.display_name or wid
 
 
@@ -416,10 +408,8 @@ def _status_for_phase(phase: str) -> str:
         return "Draft"
     if phase in (WorkspacePhase.BUILDING.value, WorkspacePhase.ITERATING.value):
         return "Building"
-    if phase == WorkspacePhase.INSTALLING.value:
-        return "Installing"
     if phase == WorkspacePhase.BUILD_FAILED.value:
         return "Needs Fix"
-    if phase == WorkspacePhase.INSTALLED.value:
+    if phase == WorkspacePhase.READY.value:
         return "Ready"
     return "Draft"

@@ -57,13 +57,6 @@ class BuildFailed:
 
 
 @dataclass(frozen=True)
-class Installed:
-    kind: str = "installed"
-    drone_id: str = ""
-    drone_name: str = ""
-
-
-@dataclass(frozen=True)
 class Discarded:
     kind: str = "discarded"
     workspace_id: str = ""

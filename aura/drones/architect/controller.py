@@ -16,7 +16,6 @@ from aura.drones.architect.results import (
     BuildStarted,
     Discarded,
     ErrorResult,
-    Installed,
     ModeEntered,
     ThreadCreated,
     ThreadRenamed,
@@ -40,7 +39,6 @@ logger = logging.getLogger(__name__)
 
 _AUTO_RESUME_BLOCKED_PHASES = {
     WorkspacePhase.BUILD_FAILED.value,
-    WorkspacePhase.INSTALLED.value,
     WorkspacePhase.DISCARDED.value,
 }
 class DroneArchitectController:
@@ -368,7 +366,7 @@ class DroneArchitectController:
             return self._handle_iterating_message(text)
 
         if phase in (
-            WorkspacePhase.INSTALLED.value,
+            WorkspacePhase.READY.value,
             WorkspacePhase.DISCARDED.value,
         ):
             self.create_workspace("New Drone")
@@ -438,7 +436,7 @@ class DroneArchitectController:
             return ErrorResult(message="No active Drone")
 
         if success:
-            self._active_workspace.phase = WorkspacePhase.INSTALLING.value
+            self._active_workspace.phase = WorkspacePhase.READY.value
             DroneWorkspaceStore.save_workspace(self._active_workspace)
 
             # Extract drone_id from candidate drone.json.
@@ -487,40 +485,6 @@ class DroneArchitectController:
             return BuildFailed(error=failure_error)
 
 
-
-    # ------------------------------------------------------------------
-    # Terminal actions
-    # ------------------------------------------------------------------
-
-    def install_candidate(self):
-        """Make the current candidate ready for normal Drone launches."""
-        if self._active_workspace is None or self._workspace_root is None:
-            return ErrorResult(message="No active Drone")
-
-        from aura.drones.architect.installer import install_or_reinstall
-
-        result = install_or_reinstall(self._active_workspace, self._workspace_root)
-
-        if result["ok"]:
-            self._active_workspace.phase = WorkspacePhase.INSTALLED.value
-            DroneWorkspaceStore.save_workspace(self._active_workspace)
-            return Installed(
-                drone_id=result["drone_id"], drone_name=result["drone_name"]
-            )
-        else:
-            self._active_workspace.last_error = result.get("error", "")
-            self._active_workspace.phase = WorkspacePhase.BUILD_FAILED.value
-            DroneWorkspaceStore.save_workspace(self._active_workspace)
-            return ErrorResult(
-                message=f"Could not install Drone: {result.get('error', '')}"
-            )
-
-    def mark_ready_step_started(self) -> None:
-        """Mark the active Drone as being finalized for the Ready state."""
-        if self._active_workspace is None:
-            return
-        self._active_workspace.phase = WorkspacePhase.INSTALLING.value
-        DroneWorkspaceStore.save_workspace(self._active_workspace)
 
     def discard_workspace(self):
         """Mark workspace as discarded."""

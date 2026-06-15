@@ -951,7 +951,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         if drone is None:
             return
 
-        self._drone_coordinator.edit_installed_drone(drone_id)
+        self._drone_coordinator.edit_ready_drone(drone_id)
 
     def _on_drone_list_changed(self) -> None:
         """Refresh Drone surfaces after Builder state changes."""

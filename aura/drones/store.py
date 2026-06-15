@@ -93,11 +93,9 @@ def _builder_status_for_phase(phase: str) -> str:
         return "Draft"
     if phase in {"building", "iterating"}:
         return "Building"
-    if phase in {"installing"}:
-        return "Installing"
     if phase == "build_failed":
         return "Needs Fix"
-    if phase == "installed":
+    if phase == "ready":
         return "Ready"
     return "Draft"
 
@@ -180,7 +178,7 @@ class DroneStore:
             phase = workspace.phase
             if phase == WorkspacePhase.DISCARDED.value:
                 continue
-            if phase == WorkspacePhase.INSTALLED.value and workspace.installed_drone_id and workspace.installed_drone_id in installed:
+            if phase == WorkspacePhase.READY.value and workspace.installed_drone_id and workspace.installed_drone_id in installed:
                 continue
 
             candidate_folder = candidate_dir(Path(workspace.project_root), workspace.workspace_id)
@@ -219,7 +217,7 @@ class DroneStore:
                 write_policy = "read_only"
 
             status = _builder_status_for_phase(phase)
-            if phase == WorkspacePhase.INSTALLED.value and not installed_drone:
+            if phase == WorkspacePhase.READY.value and not installed_drone:
                 status = "Needs Fix"
             last_error = workspace.last_error
             if workspace.installed_drone_id and not installed_drone and not last_error:

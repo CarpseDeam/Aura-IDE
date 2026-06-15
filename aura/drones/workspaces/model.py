@@ -9,8 +9,7 @@ class WorkspacePhase(Enum):
     WORKSHOP = "workshop"
     BUILDING = "building"
     ITERATING = "iterating"
-    INSTALLING = "installing"
-    INSTALLED = "installed"
+    READY = "ready"
     DISCARDED = "discarded"
     BUILD_FAILED = "build_failed"
 
@@ -43,6 +42,8 @@ class DroneWorkspace:
             data["phase"] = "building"
         elif phase == "readiness_failed":
             data["phase"] = "build_failed"
+        elif phase in ("installing", "installed"):
+            data["phase"] = "ready"
         elif phase == "awaiting_decision":
             data["phase"] = "building"
         return cls(

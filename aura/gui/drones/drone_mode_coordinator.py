@@ -62,7 +62,7 @@ class DroneModeCoordinator(QObject):
         self._workspace_pane.workspace_selected.connect(self._on_workspace_selected)
         self._workspace_pane.new_workspace_requested.connect(self._on_new_workspace)
         self._workspace_pane.discard_workspace_requested.connect(self._on_discard_workspace)
-        self._workspace_pane.edit_installed.connect(self.edit_installed_drone)
+        self._workspace_pane.edit_ready.connect(self.edit_ready_drone)
         self._workspace_pane.thread_selected.connect(self._on_thread_selected)
 
         # Active build tool state for cancellation after drone mode exit.
@@ -78,7 +78,7 @@ class DroneModeCoordinator(QObject):
         if root is not None:
             DroneWorkspaceStore.migrate_stale_folders(root)
 
-    def edit_installed_drone(self, drone_id: str) -> None:
+    def edit_ready_drone(self, drone_id: str) -> None:
         """Open a Drone in the architect for editing."""
         result = self._controller.load_drone_workspace(drone_id)
         self._workspace_pane.refresh()
@@ -142,11 +142,9 @@ class DroneModeCoordinator(QObject):
             f"file, usually main.py. Add a requirements.txt only if the Drone has Python\n"
             f"dependencies beyond the standard library.\n"
             f"\n"
-            f"The Worker must NOT register or install the Drone — DroneModeCoordinator handles\n"
-            f"installation after Worker success.\n"
+            f"The Drone folder itself is the runnable Drone — no separate install step.\n"
             f"The Worker must NOT write files outside the candidate folder, unless the user\n"
-            f"explicitly asks for a project code change (not a Drone change).\n"
-            f"After the Worker finishes, the system automatically installs the Drone."
+            f"explicitly asks for a project code change (not a Drone change)."
         )
 
     def enter_drone_mode(self, *, load_active: bool = True) -> None:
@@ -271,8 +269,7 @@ class DroneModeCoordinator(QObject):
         self._workspace_pane.refresh()
 
         if isinstance(result, BuildCompleted):
-            self._chat.add_info("Drone Builder", "Build complete. Installing Drone...")
-            QTimer.singleShot(0, self._start_ready_step)
+            self._chat.add_info("Drone Builder", "Build complete — Drone ready.")
         elif isinstance(result, BuildFailed):
             self._chat.add_error("Build Failed", summary)
 
@@ -285,67 +282,15 @@ class DroneModeCoordinator(QObject):
         metadata = getter(tool_id)
         return metadata if isinstance(metadata, dict) else {}
 
-    # ------------------------------------------------------------------
-    # Ready step (install)
-    # ------------------------------------------------------------------
-
-    def _start_ready_step(self) -> None:
-        ws = self._controller.active_workspace
-        workspace_root = self._workspace_root
-        if ws is None or workspace_root is None:
-            return
-
-        self._controller.mark_ready_step_started()
-        self._workspace_pane.refresh()
-        self.drone_list_changed.emit()
-        workspace_id = ws.workspace_id
-
-        def _do_ready():
-            try:
-                from aura.drones.architect.installer import install_or_reinstall
-
-                return install_or_reinstall(ws, workspace_root)
-            except Exception as exc:
-                logger.exception("Failed to install Drone")
-                return {"ok": False, "error": str(exc)}
-
-        self._run_in_thread(
-            _do_ready,
-            lambda result, wid=workspace_id: self._on_ready_step_done(wid, result),
-        )
-
-    def _on_ready_step_done(self, workspace_id: str, result: dict) -> None:
-        ws = self._controller.active_workspace
-        if ws is None or ws.workspace_id != workspace_id:
-            self.drone_list_changed.emit()
-            return
-
-        if result.get("ok"):
-            drone_name = result.get("drone_name", "Drone")
-            self._chat.add_info("Drone Ready", f"{drone_name} is Ready in the Drone list.")
-            self.drone_list_changed.emit()
-            self._workspace_pane.refresh()
-            self.exit_drone_mode()
-            return
-
-        ws.phase = WorkspacePhase.BUILD_FAILED.value
-        ws.last_error = result.get("error", "Unknown install error")
-        DroneWorkspaceStore.save_workspace(ws)
-        self._chat.add_error("Drone Builder", f"{ws.display_name} needs a fix: {ws.last_error}")
-        self.drone_list_changed.emit()
-        self._workspace_pane.refresh()
-
     @staticmethod
     def _status_for_phase(phase: str) -> str:
         if phase == WorkspacePhase.WORKSHOP.value:
             return "Draft"
         if phase in (WorkspacePhase.BUILDING.value, WorkspacePhase.ITERATING.value):
             return "Building"
-        if phase == WorkspacePhase.INSTALLING.value:
-            return "Installing"
         if phase == WorkspacePhase.BUILD_FAILED.value:
             return "Needs Fix"
-        if phase == WorkspacePhase.INSTALLED.value:
+        if phase == WorkspacePhase.READY.value:
             return "Ready"
         return "Draft"
 
