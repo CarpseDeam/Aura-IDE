@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 
 from PySide6.QtCore import QMimeData, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QDrag, QFont, QMouseEvent, QPixmap
+from PySide6.QtGui import QColor, QDrag, QFont, QIcon, QMouseEvent, QPixmap
 from PySide6.QtWidgets import (
     QDialog,
     QFrame,
@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from aura.config import media_path
 from aura.drones.chain import ChainDefinition
 from aura.drones.chain_runner import get_last_chain_run
 from aura.drones.chain_store import _chain_from_dict, list_chains, load_chain, save_chain
@@ -509,13 +510,25 @@ class ChainEditor(QWidget):
             f"QTabBar::tab:hover:!selected {{"
             f"  background: rgba(255, 255, 255, 0.03);"
             f"}}"
+            f"QTabBar::close-button {{"
+            f"  image: none;"
+            f"  background: rgba(255, 255, 255, 0.08);"
+            f"  border-radius: 3px;"
+            f"  width: 10px;"
+            f"  height: 10px;"
+            f"  subcontrol-position: right;"
+            f"}}"
+            f"QTabBar::close-button:hover {{"
+            f"  background: rgba(255, 255, 255, 0.18);"
+            f"}}"
         )
         # Add the "+" tab (always last)
         self._tab_bar.addTab("+")
         tab_row.addWidget(self._tab_bar, 1)
 
         # Save button
-        self._save_btn = QPushButton("\U0001f4be Save")
+        self._save_btn = QPushButton("Save")
+        self._save_btn.setIcon(QIcon(str(media_path("file_24.svg"))))
         self._save_btn.clicked.connect(self._save_chain)
         self._save_btn.setStyleSheet(
             f"QPushButton {{"
@@ -534,7 +547,8 @@ class ChainEditor(QWidget):
         tab_row.addWidget(self._save_btn)
 
         # Load button
-        self._load_btn = QPushButton("\U0001f4c2 Load")
+        self._load_btn = QPushButton("Load")
+        self._load_btn.setIcon(QIcon(str(media_path("folder_24.svg"))))
         self._load_btn.clicked.connect(self._on_load_clicked)
         self._load_btn.setStyleSheet(
             f"QPushButton {{"
