@@ -18,10 +18,8 @@ from aura.drones.workspaces.model import DroneWorkspace, WorkspacePhase
 from aura.drones.workspaces.store import DroneWorkspaceStore
 from aura.gui.theme import (
     BG_RAISED,
-    BORDER,
     DANGER,
     FG,
-    FG_DIM,
     FG_MUTED,
 )
 
@@ -135,6 +133,7 @@ class DroneWorkspacePane(QFrame):
     """Sidebar pane showing Drones being built for the current project."""
 
     workspace_selected = Signal(str)  # workspace_id
+    edit_installed = Signal(str)  # drone_id
     new_workspace_requested = Signal()
     discard_workspace_requested = Signal(str)  # workspace_id
 
@@ -216,7 +215,14 @@ class DroneWorkspacePane(QFrame):
         rows: list[_WorkspaceRow] = []
         for ws in workspaces:
             row = _WorkspaceRow(ws)
-            row.clicked.connect(self.workspace_selected.emit)
+            if ws.phase == WorkspacePhase.INSTALLED.value and ws.installed_drone_id:
+                row.clicked.connect(
+                    lambda _workspace_id, drone_id=ws.installed_drone_id: self.edit_installed.emit(
+                        drone_id
+                    )
+                )
+            else:
+                row.clicked.connect(self.workspace_selected.emit)
             row.discard_clicked.connect(self.discard_workspace_requested.emit)
             self._rows_layout.addWidget(row)
             rows.append(row)

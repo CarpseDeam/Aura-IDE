@@ -7,20 +7,15 @@ from pathlib import Path
 from PySide6.QtCore import QMimeData, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QDrag, QFont, QMouseEvent, QPixmap
 from PySide6.QtWidgets import (
-    QCheckBox,
-    QComboBox,
-    QDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QMessageBox,
     QPushButton,
     QScrollArea,
     QSizePolicy,
     QSplitter,
-    QStackedWidget,
-    QTextEdit,
+    QTabBar,
     QVBoxLayout,
     QWidget,
 )
@@ -37,7 +32,6 @@ from aura.gui.drones.chain_canvas import (
     GoalPlanetItem,
     MissionCoreItem,
 )
-from aura.gui.drones.workflow_list_pane import WorkflowListPane
 
 logger = logging.getLogger(__name__)
 
@@ -243,7 +237,7 @@ class _DroneCard(QFrame):
         btn_layout.setSpacing(4)
 
         # Run
-        btn_run = QPushButton("▶ Run")
+        btn_run = QPushButton("\u25b6 Run")
         btn_run.setEnabled(ready)
         btn_run.setStyleSheet(
             f"QPushButton {{"
@@ -271,7 +265,7 @@ class _DroneCard(QFrame):
         btn_layout.addWidget(btn_run)
 
         # Edit
-        btn_edit = QPushButton("✎ Edit")
+        btn_edit = QPushButton("\u270e Edit")
         btn_edit.setStyleSheet(
             f"QPushButton {{"
             f"  background: transparent;"
@@ -291,7 +285,7 @@ class _DroneCard(QFrame):
         btn_layout.addWidget(btn_edit)
 
         # Delete
-        btn_delete = QPushButton("✕ Delete")
+        btn_delete = QPushButton("\u2715 Delete")
         btn_delete.setStyleSheet(
             f"QPushButton {{"
             f"  background: transparent;"
@@ -399,555 +393,11 @@ class _DroneRosterWidget(QScrollArea):
 
 
 # ---------------------------------------------------------------------------
-# _PropertyPanel – shows chain/node/edge properties when selected
-# ---------------------------------------------------------------------------
-class _PropertyPanel(QScrollArea):
-    """Scrollable form showing chain-level, node, or edge properties."""
-
-    def __init__(self, editor: ChainEditor, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self._editor = editor
-        self._chain_name_input: QLineEdit | None = None
-        self._chain_desc_input: QTextEdit | None = None
-        self._auto_route_cb: QCheckBox | None = None
-        self._current_mission_item: MissionCoreItem | None = None
-
-        self.setWidgetResizable(True)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.setStyleSheet(
-            f"QScrollArea {{ background: transparent; border: none; }}"
-            f"QScrollBar:vertical {{ background: {_qss_color(BG)}; width: 6px; border-radius: 3px; }}"
-            f"QScrollBar::handle:vertical {{ background: {_qss_color(BORDER)}; border-radius: 3px; min-height: 20px; }}"
-        )
-        self._content = QWidget()
-        self._content.setStyleSheet("background: transparent;")
-        self._layout = QVBoxLayout(self._content)
-        self._layout.setContentsMargins(8, 4, 8, 4)
-        self._layout.setSpacing(6)
-        self._layout.addStretch()
-        self.setWidget(self._content)
-
-    # -- helpers ----------------------------------------------------------
-    def _clear(self) -> None:
-        while self._layout.count() > 1:
-            item = self._layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-        self._chain_name_input = None
-        self._chain_desc_input = None
-        self._auto_route_cb = None
-
-    def _add_label(self, text: str, bold: bool = False, color: str = FG) -> QLabel:
-        lbl = QLabel(text)
-        lbl.setWordWrap(True)
-        f = QFont()
-        f.setPixelSize(12)
-        if bold:
-            f.setBold(True)
-        lbl.setFont(f)
-        lbl.setStyleSheet(f"color: {_qss_color(color)}; background: transparent; border: none;")
-        self._layout.insertWidget(self._layout.count() - 1, lbl)
-        return lbl
-
-    def _add_separator(self) -> None:
-        sep = QFrame()
-        sep.setFrameShape(QFrame.HLine)
-        sep.setStyleSheet(f"background: {_qss_color(SEPARATOR)}; border: none; max-height: 1px;")
-        self._layout.insertWidget(self._layout.count() - 1, sep)
-
-    def _add_text_input(self, label: str, value: str, placeholder: str = "", changed_slot=None) -> QLineEdit:
-        self._add_label(label, bold=False, color=FG_MUTED)
-        inp = QLineEdit(value)
-        inp.setPlaceholderText(placeholder)
-        inp.setStyleSheet(
-            f"QLineEdit {{"
-            f"  background: {_qss_color(SURFACE)};"
-            f"  border: 1px solid {_qss_color(BORDER)};"
-            f"  border-radius: 4px;"
-            f"  padding: 4px 6px;"
-            f"  color: {_qss_color(FG)};"
-            f"}}"
-            f"QLineEdit:focus {{ border-color: {_qss_color(ACCENT_DIM)}; }}"
-        )
-        if changed_slot:
-            inp.textChanged.connect(changed_slot)
-        self._layout.insertWidget(self._layout.count() - 1, inp)
-        return inp
-
-    def _add_text_edit(self, label: str, value: str, placeholder: str = "", changed_slot=None) -> QTextEdit:
-        self._add_label(label, bold=False, color=FG_MUTED)
-        te = QTextEdit(value)
-        te.setPlaceholderText(placeholder)
-        te.setMaximumHeight(80)
-        te.setStyleSheet(
-            f"QTextEdit {{"
-            f"  background: {_qss_color(SURFACE)};"
-            f"  border: 1px solid {_qss_color(BORDER)};"
-            f"  border-radius: 4px;"
-            f"  padding: 4px 6px;"
-            f"  color: {_qss_color(FG)};"
-            f"}}"
-            f"QTextEdit:focus {{ border-color: {_qss_color(ACCENT_DIM)}; }}"
-        )
-        if changed_slot:
-            te.textChanged.connect(changed_slot)
-        self._layout.insertWidget(self._layout.count() - 1, te)
-        return te
-
-    def _add_checkbox(self, label: str, checked: bool, toggled_slot=None) -> QCheckBox:
-        cb = QCheckBox(label)
-        cb.setChecked(checked)
-        cb.setStyleSheet(
-            f"QCheckBox {{ color: {_qss_color(FG)}; spacing: 6px; }}"
-            f"QCheckBox::indicator {{ width: 14px; height: 14px; }}"
-        )
-        if toggled_slot:
-            cb.toggled.connect(toggled_slot)
-        self._layout.insertWidget(self._layout.count() - 1, cb)
-        return cb
-
-    def _rebuild_mission_core_form(self, mission_item: MissionCoreItem) -> None:
-        self._current_mission_item = mission_item
-        self._add_label("Mission Core", bold=True)
-        self._add_separator()
-
-        name_input = self._add_text_input("Name", mission_item.title, "Mission Core name")
-        name_input.textChanged.connect(
-            lambda text, item=mission_item: self._on_mission_core_name_changed(item, text)
-        )
-
-        self._add_label(f"Launch Queue: {len(mission_item.assigned_drone_ids)} drones", color=FG_DIM)
-
-        cargo_items, run_status = _read_cargo_for_chain(
-            self._editor._workspace_root, self._editor._current_chain_id or ""
-        )
-        mission_item._cargo_count = len(cargo_items)
-        mission_item._output_status = run_status
-        mission_item.update()
-
-        self._add_label(f"Cargo Bay: {len(cargo_items)} items", color=FG_DIM)
-        _status_icons = {"completed": "\u2713", "running": "\u25ce", "failed": "\u2717", "idle": "\u25cb"}
-        status_icon = _status_icons.get(run_status, "\u25cb")
-        self._add_label(f"Status: {status_icon} {run_status}", color=FG_DIM)
-
-        self._add_separator()
-        self._add_label("Cargo Bay", bold=True)
-
-        if not cargo_items:
-            self._add_label("No cargo yet. Run the mission to collect output.", color=FG_MUTED)
-        else:
-            for cargo_item in cargo_items:
-                self._add_cargo_row(cargo_item)
-
-    def _on_mission_core_name_changed(self, item: MissionCoreItem, text: str) -> None:
-        item.title = text
-        self._editor._dirty = True
-        self._editor._auto_save_timer.start()
-
-    def _on_mission_core_goal_changed(self, item: MissionCoreItem, edit: QTextEdit) -> None:
-        item.goal = edit.toPlainText()
-        self._editor._dirty = True
-        self._editor._auto_save_timer.start()
-
-    def _rebuild_goal_planet_form(self, planet: GoalPlanetItem) -> None:
-        heading = f"Goal Planet \u2014 {planet.title}" if planet.title else "Goal Planet"
-        self._add_label(heading, bold=True)
-        self._add_separator()
-
-        self._add_label("Title", color=FG_MUTED)
-        title_input = QLineEdit(planet.title)
-        title_input.setPlaceholderText("Short title for this goal")
-        title_input.setStyleSheet(
-            f"QLineEdit {{"
-            f"  background: {_qss_color(SURFACE)};"
-            f"  border: 1px solid {_qss_color(BORDER)};"
-            f"  border-radius: 4px;"
-            f"  color: {_qss_color(FG)};"
-            f"  font-size: 11px;"
-            f"  padding: 4px;"
-            f"}}"
-        )
-        title_input.textChanged.connect(
-            lambda text, p=planet, inp=title_input: self._on_goal_planet_title_changed(p, inp)
-        )
-        self._layout.insertWidget(self._layout.count() - 1, title_input)
-
-        self._add_label("Mission Objective", color=FG_MUTED)
-        goal_edit = QTextEdit()
-        goal_edit.setPlainText(planet.objective)
-        goal_edit.setPlaceholderText("Describe the mission goal\u2026")
-        goal_edit.setMaximumHeight(120)
-        goal_edit.setStyleSheet(
-            f"QTextEdit {{"
-            f"  background: {_qss_color(SURFACE)};"
-            f"  border: 1px solid {_qss_color(BORDER)};"
-            f"  border-radius: 4px;"
-            f"  color: {_qss_color(FG)};"
-            f"  font-size: 11px;"
-            f"  padding: 4px;"
-            f"}}"
-        )
-        goal_edit.textChanged.connect(
-            lambda: self._on_goal_planet_goal_changed(planet, goal_edit)
-        )
-        self._layout.insertWidget(self._layout.count() - 1, goal_edit)
-        self._add_label("This is the mission objective.", color=FG_MUTED)
-
-        btn_new_look = QPushButton("New Look")
-        btn_new_look.setStyleSheet(
-            f"QPushButton {{"
-            f"  background: {_qss_color(SURFACE)};"
-            f"  border: 1px solid {_qss_color(BORDER)};"
-            f"  color: {_qss_color(ACCENT)};"
-            f"  padding: 4px 8px;"
-            f"  border-radius: 3px;"
-            f"  font-size: 11px;"
-            f"}}"
-            f"QPushButton:hover {{"
-            f"  border-color: {_qss_color(ACCENT)};"
-            f"}}"
-        )
-        btn_new_look.clicked.connect(
-            lambda checked=False, p=planet: self._on_new_planet_look(p)
-        )
-        self._layout.insertWidget(self._layout.count() - 1, btn_new_look)
-
-    def _on_goal_planet_goal_changed(self, planet: GoalPlanetItem, edit: QTextEdit) -> None:
-        planet.objective = edit.toPlainText()
-        self._editor._dirty = True
-        self._editor._auto_save_timer.start()
-
-    def _on_goal_planet_title_changed(self, planet: GoalPlanetItem, edit: QLineEdit) -> None:
-        planet.title = edit.text()
-        self._editor._dirty = True
-        self._editor._auto_save_timer.start()
-
-    def _on_new_planet_look(self, planet: GoalPlanetItem) -> None:
-        planet.reroll_seed()
-        self._editor._dirty = True
-        self._editor._auto_save_timer.start()
-
-    def _add_cargo_row(self, cargo_item: dict) -> None:
-        label = cargo_item.get("label", f"Output from {cargo_item.get('drone_id', '?')}")
-        elided = label[:40] + "\u2026" if len(label) > 40 else label
-        drone_id = cargo_item.get("drone_id", "?")
-        status = cargo_item.get("status", "unknown")
-        status_dot = "\u25cf"
-        text = f"{elided}  {status_dot}  {drone_id}"
-
-        btn = QPushButton(text)
-        btn.setFlat(True)
-        btn.setCursor(Qt.PointingHandCursor)
-        btn.setStyleSheet(
-            f"QPushButton {{"
-            f"  text-align: left;"
-            f"  color: {_qss_color(FG)};"
-            f"  font-size: 10px;"
-            f"  padding: 4px 6px;"
-            f"  border: 1px solid rgba(255,255,255,0.06);"
-            f"  border-radius: 4px;"
-            f"  background: rgba(255,255,255,0.03);"
-            f"}}"
-            f"QPushButton:hover {{"
-            f"  background: rgba(255,255,255,0.06);"
-            f"  border-color: rgba(196, 181, 253, 0.25);"
-            f"}}"
-        )
-        btn.clicked.connect(lambda checked, item=cargo_item: self._show_cargo_detail(item))
-        self._layout.insertWidget(self._layout.count() - 1, btn)
-
-    def _show_cargo_detail(self, cargo_item: dict) -> None:
-        self._clear()
-
-        self._add_label("Cargo Detail", bold=True)
-        self._add_separator()
-        self._add_label(f"Source: {cargo_item.get('drone_id', '?')}")
-        self._add_label(f"Status: {cargo_item.get('status', 'unknown')}")
-
-        error = cargo_item.get("error", "")
-        if error:
-            self._add_label(f"Error: {error}", color="#f7768e")
-
-        self._add_separator()
-
-        artifact_path = cargo_item.get("artifact_path", "")
-        if artifact_path:
-            path = self._editor._workspace_root / artifact_path
-            content = path.read_text(encoding="utf-8") if path.exists() else "(file missing)"
-        else:
-            content = "(no artifact path)"
-
-        try:
-            parsed = json.loads(content)
-            content = json.dumps(parsed, indent=2)
-        except (json.JSONDecodeError, TypeError):
-            pass
-
-        text_edit = QTextEdit(content)
-        text_edit.setReadOnly(True)
-        text_edit.setMaximumHeight(300)
-        mono_font = QFont("Courier New")
-        mono_font.setStyleHint(QFont.Monospace)
-        mono_font.setPixelSize(11)
-        text_edit.setFont(mono_font)
-        text_edit.setStyleSheet(
-            f"QTextEdit {{"
-            f"  background: {_qss_color(SURFACE)};"
-            f"  border: 1px solid {_qss_color(BORDER)};"
-            f"  border-radius: 4px;"
-            f"  padding: 4px;"
-            f"  color: {_qss_color(FG)};"
-            f"}}"
-        )
-        self._layout.insertWidget(self._layout.count() - 1, text_edit)
-
-        back_btn = QPushButton("\u2190 Back to Cargo Bay")
-        back_btn.setFlat(True)
-        back_btn.setCursor(Qt.PointingHandCursor)
-        back_btn.setStyleSheet(
-            f"QPushButton {{ color: {_qss_color(ACCENT)}; font-size: 11px; padding: 4px 6px; text-align: left; border: none; }}"
-            f"QPushButton:hover {{ color: {_qss_color(FG)}; }}"
-        )
-        back_btn.clicked.connect(
-            lambda: self._rebuild_mission_core_form(self._current_mission_item)
-        )
-        self._layout.insertWidget(self._layout.count() - 1, back_btn)
-
-    # -- assignment form --------------------------------------------------
-    def _rebuild_assignment_form(self, node: ChainNodeItem) -> None:
-        self._add_label("Assignment", bold=True)
-        self._add_separator()
-
-        drone_name = node.drone.name if node.drone else "Unknown Drone"
-        self._add_label(drone_name, bold=True)
-
-        if node.drone and node.drone.description:
-            self._add_label(node.drone.description, color=FG_MUTED)
-
-        if node.drone:
-            input_type = (node.drone.input_contract or {}).get("type", "")
-            if input_type:
-                self._add_label(f"Input: {input_type}", color=FG_DIM)
-            cargo_type = (node.drone.cargo_contract or {}).get("type", "")
-            if cargo_type:
-                self._add_label(f"Output: {cargo_type}", color=FG_DIM)
-
-        policy = node.drone.write_policy if node.drone else "read_only"
-        if policy == "read_only":
-            self._add_label("Read Only", color="#7dcfff")
-        else:
-            self._add_label("Can Write", color="#e0af68")
-
-        self._add_separator()
-
-        # Target Goal Planet
-        canvas = self._editor._canvas
-        goals = canvas._goal_planets
-        if node.goal_id and node.goal_id in goals:
-            gp = goals[node.goal_id]
-            display_title = gp.title or "Goal"
-            snippet = gp.objective[:80] + "\u2026" if len(gp.objective) > 80 else gp.objective
-            self._add_label(f"Target: {display_title}", bold=True)
-            self._add_label(snippet, color=FG_MUTED)
-            if len(goals) > 1:
-                self._add_label("Change target:", color=FG_DIM)
-                combo = QComboBox()
-                ordered = list(goals.values())
-                for gp_item in ordered:
-                    label = gp_item.title or gp_item.goal_id or "Goal"
-                    combo.addItem(label, gp_item.goal_id)
-                current_idx = next((i for i, g in enumerate(ordered) if g.goal_id == node.goal_id), 0)
-                combo.setCurrentIndex(current_idx)
-                combo.currentIndexChanged.connect(
-                    lambda idx, n=node, gps=ordered: self._on_assignment_goal_changed(n, gps[idx].goal_id)
-                )
-                combo.setStyleSheet(
-                    f"QComboBox {{"
-                    f"  background: {_qss_color(SURFACE)};"
-                    f"  border: 1px solid {_qss_color(BORDER)};"
-                    f"  border-radius: 4px;"
-                    f"  color: {_qss_color(FG)};"
-                    f"  padding: 3px 6px;"
-                    f"  font-size: 10px;"
-                    f"}}"
-                )
-                self._layout.insertWidget(self._layout.count() - 1, combo)
-        elif not node.goal_id:
-            self._add_label("Target: (not set)", bold=True, color="#e0af68")
-            if goals:
-                self._add_label("Change target:", color=FG_DIM)
-                combo = QComboBox()
-                combo.addItem("(none)", "")
-                ordered = list(goals.values())
-                for gp_item in ordered:
-                    label = gp_item.title or gp_item.goal_id or "Goal"
-                    combo.addItem(label, gp_item.goal_id)
-                combo.currentIndexChanged.connect(
-                    lambda idx, n=node, gps=[None] + ordered: self._on_assignment_goal_changed(
-                        n, gps[idx].goal_id if gps[idx] else ""
-                    )
-                )
-                combo.setStyleSheet(
-                    f"QComboBox {{"
-                    f"  background: {_qss_color(SURFACE)};"
-                    f"  border: 1px solid {_qss_color(BORDER)};"
-                    f"  border-radius: 4px;"
-                    f"  color: {_qss_color(FG)};"
-                    f"  padding: 3px 6px;"
-                    f"  font-size: 10px;"
-                    f"}}"
-                )
-                self._layout.insertWidget(self._layout.count() - 1, combo)
-
-        self._add_separator()
-
-        self._add_label("Task", color=FG_MUTED)
-        task_edit = QTextEdit(node.goal_template)
-        task_edit.setPlaceholderText("What should this drone do for this mission?")
-        task_edit.setMaximumHeight(80)
-        task_edit.setStyleSheet(
-            f"QTextEdit {{"
-            f"  background: {_qss_color(SURFACE)};"
-            f"  border: 1px solid {_qss_color(BORDER)};"
-            f"  border-radius: 4px;"
-            f"  padding: 4px 6px;"
-            f"  color: {_qss_color(FG)};"
-            f"}}"
-            f"QTextEdit:focus {{ border-color: {_qss_color(ACCENT_DIM)}; }}"
-        )
-        task_edit.textChanged.connect(
-            lambda: self._on_assignment_task_changed(node, task_edit)
-        )
-        self._layout.insertWidget(self._layout.count() - 1, task_edit)
-
-        self._add_separator()
-        delete_btn = QPushButton("Delete Assignment")
-        delete_btn.setStyleSheet(
-            f"QPushButton {{"
-            f"  background: transparent;"
-            f"  border: 1px solid {_qss_color('#f7768e')};"
-            f"  border-radius: 4px;"
-            f"  color: {_qss_color('#f7768e')};"
-            f"  padding: 4px 10px;"
-            f"}}"
-            f"QPushButton:hover {{"
-            f"  background: rgba(247, 118, 142, 0.10);"
-            f"}}"
-        )
-        delete_btn.clicked.connect(lambda: self._on_delete_assignment(node))
-        self._layout.insertWidget(self._layout.count() - 1, delete_btn)
-
-    def _on_assignment_task_changed(self, node: ChainNodeItem, edit: QTextEdit) -> None:
-        node.goal_template = edit.toPlainText()
-        self._editor._dirty = True
-        self._editor._auto_save_timer.start()
-
-    def _on_assignment_goal_changed(self, node: ChainNodeItem, goal_id: str) -> None:
-        node.goal_id = goal_id
-        self._editor._dirty = True
-        self._editor._auto_save_timer.start()
-        # Refresh the panel to show updated target
-        self._editor._property_panel.rebuild()
-
-    def _on_delete_assignment(self, node: ChainNodeItem) -> None:
-        self._editor._canvas._remove_node(node)
-        self._editor._canvas._scene.clearSelection()
-        self.rebuild()
-
-    # -- rebuild ----------------------------------------------------------
-    def rebuild(self) -> None:
-        self._clear()
-        items = self._editor._canvas._scene.selectedItems()
-        mission_items = [i for i in items if isinstance(i, MissionCoreItem)]
-        goal_planet_items = [i for i in items if isinstance(i, GoalPlanetItem)]
-        nodes = [i for i in items if isinstance(i, ChainNodeItem)]
-        edges = [i for i in items if isinstance(i, ChainEdgeItem)]
-
-        if mission_items:
-            self._rebuild_mission_core_form(mission_items[0])
-        elif goal_planet_items:
-            self._rebuild_goal_planet_form(goal_planet_items[0])
-        elif nodes:
-            node = nodes[0]
-            if node.is_assignment:
-                self._rebuild_assignment_form(node)
-            else:
-                self._rebuild_node_form(node)
-        elif edges:
-            self._rebuild_edge_form(edges[0])
-        else:
-            self._rebuild_chain_form()
-
-    def _rebuild_chain_form(self) -> None:
-        self._add_label("Workflow Properties", bold=True)
-        self._add_separator()
-
-        self._chain_name_input = self._add_text_input(
-            "Name", self._editor._chain_name, "Workflow name",
-            changed_slot=self._editor._on_chain_property_changed,
-        )
-        self._chain_desc_input = self._add_text_edit(
-            "Description", self._editor._chain_desc, "Describe the workflow\u2026",
-            changed_slot=self._editor._on_chain_property_changed,
-        )
-        self._auto_route_cb = self._add_checkbox(
-            "Let the AI route between steps (auto-route)",
-            getattr(self._editor, '_auto_route', False),
-            toggled_slot=self._editor._on_chain_property_changed,
-        )
-        self._add_label(f"Chain ID: {self._editor._current_chain_id or '(unsaved)'}", color=FG_DIM)
-
-    def _rebuild_node_form(self, node: ChainNodeItem) -> None:
-        if node.is_assignment:
-            self._rebuild_assignment_form(node)
-            return
-        self._add_label("Node Properties", bold=True)
-        self._add_separator()
-        name = node.drone.name if node.drone else "(missing)"
-        if node.missing:
-            name += " (missing)"
-        self._add_label(name, bold=True)
-
-        if node.drone:
-            desc = node.drone.description
-            if desc:
-                self._add_label(str(desc), color=FG_MUTED)
-            input_type = (node.drone.input_contract or {}).get("type", "")
-            cargo_type = (node.drone.cargo_contract or {}).get("type", "")
-            if input_type or cargo_type:
-                self._add_label(f"In: {input_type or 'any'}  ·  Out: {cargo_type or 'any'}", color=FG_DIM)
-
-        if node.goal_template:
-            self._add_label("Goal Template", color=FG_MUTED)
-            gt = QTextEdit(node.goal_template)
-            gt.setReadOnly(True)
-            gt.setMaximumHeight(60)
-            gt.setStyleSheet(
-                f"QTextEdit {{"
-                f"  background: {_qss_color(SURFACE)};"
-                f"  border: 1px solid {_qss_color(BORDER)};"
-                f"  border-radius: 4px;"
-                f"  padding: 4px;"
-                f"  color: {_qss_color(FG)};"
-                f"}}"
-            )
-            self._layout.insertWidget(self._layout.count() - 1, gt)
-
-    def _rebuild_edge_form(self, edge: ChainEdgeItem) -> None:
-        self._add_label("Connection", bold=True)
-        self._add_separator()
-        src_name = edge.source_node.drone.name if edge.source_node and edge.source_node.drone else "(unknown)"
-        dst_name = edge.dest_node.drone.name if edge.dest_node and edge.dest_node.drone else "(unknown)"
-        self._add_label(f"{src_name}  \u2192  {dst_name}", color=FG)
-
-
-# ---------------------------------------------------------------------------
-# ChainEditor – central workbay canvas + drone roster + contextual panel
+# ChainEditor – central workbay: tabbed workflows + drone roster + canvas
 # ---------------------------------------------------------------------------
 class ChainEditor(QWidget):
-    """Permanent 3-pane workbay: drone roster (left) | canvas (center) | details/workshop (right)."""
+    """Workbay with tabbed workflows: drone roster (left) | canvas (center)."""
 
-    titleChanged = Signal(str)
     closeRequested = Signal()
     runChainRequested = Signal(str)
     goBackRequested = Signal()
@@ -980,11 +430,30 @@ class ChainEditor(QWidget):
         self._auto_route = False
         self._dirty = False
         self._roster: _DroneRosterWidget | None = None
-        self._property_panel: _PropertyPanel | None = None
-        self._right_stack: QStackedWidget | None = None
+
+        # Tab state
+        self._tabs: list[dict] = []
+        self._current_tab_index: int | None = None
 
         self._build_layout()
         self._load_or_create_chain(chain_id)
+
+        # Add the initial tab for the loaded chain
+        self._tab_bar.blockSignals(True)
+        tab_data = {
+            "chain_id": self._chain_id,
+            "name": self._chain_name or "Untitled",
+            "description": self._chain_desc,
+            "auto_route": self._auto_route,
+            "dirty": False,
+            "canvas_data": None,
+        }
+        self._tabs.append(tab_data)
+        self._tab_bar.insertTab(0, tab_data["name"])
+        self._tab_bar.setCurrentIndex(0)
+        self._current_tab_index = 0
+        self._tab_bar.blockSignals(False)
+
         self._roster.populate()
 
         self._auto_save_timer = QTimer(self)
@@ -1000,10 +469,39 @@ class ChainEditor(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # --- Toolbar (permanent workflow bar) -------------------------
-        self._build_toolbar(root)
+        # --- Tab bar --------------------------------------------------
+        self._tab_bar = QTabBar()
+        self._tab_bar.setExpanding(False)
+        self._tab_bar.setDrawBase(True)
+        self._tab_bar.currentChanged.connect(self._on_tab_changed)
+        self._tab_bar.setStyleSheet(
+            f"QTabBar {{"
+            f"  background: {_qss_color(SURFACE)};"
+            f"  border-bottom: 1px solid {_qss_color(BORDER)};"
+            f"}}"
+            f"QTabBar::tab {{"
+            f"  background: {_qss_color(SURFACE)};"
+            f"  color: {_qss_color(FG_MUTED)};"
+            f"  padding: 6px 14px;"
+            f"  height: 20px;"
+            f"  border: none;"
+            f"  border-bottom: 2px solid transparent;"
+            f"  font-size: 12px;"
+            f"}}"
+            f"QTabBar::tab:selected {{"
+            f"  background: {_qss_color(SURFACE_RAISED)};"
+            f"  color: {_qss_color(FG)};"
+            f"  border-bottom: 2px solid {_qss_color(ACCENT)};"
+            f"}}"
+            f"QTabBar::tab:hover:!selected {{"
+            f"  background: rgba(255, 255, 255, 0.03);"
+            f"}}"
+        )
+        # Add the "+" tab (always last)
+        self._tab_bar.addTab("+")
+        root.addWidget(self._tab_bar)
 
-        # --- 3-pane splitter ------------------------------------------
+        # --- 2-pane splitter (roster | canvas) ------------------------
         self._splitter = QSplitter(Qt.Horizontal)
         self._splitter.setHandleWidth(2)
         self._splitter.setStyleSheet(
@@ -1011,7 +509,7 @@ class ChainEditor(QWidget):
         )
         root.addWidget(self._splitter, 1)
 
-        # Left panel – always drone roster
+        # Left panel – drone roster
         self._build_left_panel()
 
         # Center – canvas
@@ -1020,13 +518,9 @@ class ChainEditor(QWidget):
         self._canvas.canvasChanged.connect(self._on_canvas_changed)
         self._canvas.runMissionRequested.connect(self._on_run_clicked)
         self._canvas.statusMessage.connect(self.set_status)
-        self._canvas._scene.selectionChanged.connect(self._on_selection_changed)
         self._splitter.addWidget(self._canvas)
 
-        # Right panel – contextual (details / workshop)
-        self._build_right_panel()
-
-        self._splitter.setSizes([220, 580, 0])
+        self._splitter.setSizes([220, 580])
 
     def _build_left_panel(self) -> None:
         container = QWidget()
@@ -1050,171 +544,79 @@ class ChainEditor(QWidget):
 
         self._splitter.addWidget(container)
 
-    def _build_right_panel(self) -> None:
-        self._right_stack = QStackedWidget()
-        self._right_stack.setStyleSheet(f"background: {_qss_color(SURFACE)}; border-left: 1px solid {_qss_color(BORDER)};")
+    # ------------------------------------------------------------------
+    # Tab management
+    # ------------------------------------------------------------------
+    def _on_tab_changed(self, index: int) -> None:
+        num_tabs = len(self._tabs)
 
-        # --- Page 0: Property Panel (Details) -------------------------
-        details_container = QWidget()
-        details_layout = QVBoxLayout(details_container)
-        details_layout.setContentsMargins(0, 4, 0, 0)
-        details_layout.setSpacing(4)
+        # "+" tab clicked — create a new one
+        if index == num_tabs:
+            self._add_new_tab()
+            return
 
-        details_header_row = QHBoxLayout()
-        details_header_row.setContentsMargins(8, 2, 8, 4)
-        details_header = QLabel("Properties")
-        details_header.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {_qss_color(FG_MUTED)}; padding: 0;")
-        details_header_row.addWidget(details_header)
-        details_header_row.addStretch()
-        clear_btn = QPushButton("Clear")
-        clear_btn.setFlat(True)
-        clear_btn.setCursor(Qt.PointingHandCursor)
-        clear_btn.setStyleSheet(
-            f"QPushButton {{ color: {_qss_color(FG_MUTED)}; font-size: 11px; padding: 2px 6px; border: none; }}"
-            f"QPushButton:hover {{ color: {_qss_color(ACCENT)}; }}"
-        )
-        clear_btn.clicked.connect(self._on_clear_selection)
-        details_header_row.addWidget(clear_btn)
-        details_layout.addLayout(details_header_row)
+        if index < 0 or index >= num_tabs:
+            return
 
-        self._property_panel = _PropertyPanel(self)
-        details_layout.addWidget(self._property_panel, 1)
-        self._right_stack.addWidget(details_container)  # page 0
+        # Save current tab state before switching
+        if self._current_tab_index is not None and self._current_tab_index < num_tabs:
+            self._tabs[self._current_tab_index]["canvas_data"] = self._snapshot_chain()
+            self._tabs[self._current_tab_index]["dirty"] = self._dirty
+            self._tabs[self._current_tab_index]["name"] = self._chain_name
+            self._tabs[self._current_tab_index]["description"] = self._chain_desc
+            self._tabs[self._current_tab_index]["auto_route"] = self._auto_route
 
-        self._splitter.addWidget(self._right_stack)
+        # Switch to target tab
+        self._current_tab_index = index
+        tab = self._tabs[index]
 
-    def _build_toolbar(self, root_layout: QVBoxLayout) -> None:
-        toolbar = QWidget()
-        toolbar.setFixedHeight(36)
-        toolbar.setStyleSheet(
-            f"background: {_qss_color(SURFACE)};"
-            f"border-bottom: 1px solid {_qss_color(BORDER)};"
-        )
-        tb_layout = QHBoxLayout(toolbar)
-        tb_layout.setContentsMargins(8, 2, 8, 2)
-        tb_layout.setSpacing(6)
+        if tab["chain_id"]:
+            self._load_or_create_chain(tab["chain_id"])
+        else:
+            self._load_or_create_chain(None, canvas_data=tab.get("canvas_data"))
 
-        # Title label
-        self._title_label = QLabel("Untitled Mission")
-        self._title_label.setStyleSheet(
-            f"font-size: 13px; font-weight: bold; color: {_qss_color(FG)}; padding-right: 10px; background: transparent; border: none;"
-        )
-        tb_layout.addWidget(self._title_label)
-        tb_layout.addStretch()
+        # Sync tab label with current name
+        name = self._chain_name or "Untitled"
+        suffix = " *" if self._dirty else ""
+        self._tab_bar.setTabText(index, f"{name}{suffix}")
 
-        btn_style = (
-            f"QPushButton {{"
-            f"  background: {_qss_color(SURFACE_RAISED)};"
-            f"  border: 1px solid {_qss_color(BORDER)};"
-            f"  border-radius: 4px;"
-            f"  color: {_qss_color(FG)};"
-            f"  padding: 2px 10px;"
-            f"  font-size: 11px;"
-            f"}}"
-            f"QPushButton:hover {{"
-            f"  border-color: {_qss_color(ACCENT_DIM)};"
-            f"  color: {_qss_color(ACCENT)};"
-            f"}}"
-        )
+    def _add_new_tab(self) -> None:
+        choice = self._prompt_save_changes()
+        if choice == "cancel":
+            # Reset the tab bar selection back to the current tab
+            if self._current_tab_index is not None:
+                self._tab_bar.blockSignals(True)
+                self._tab_bar.setCurrentIndex(self._current_tab_index)
+                self._tab_bar.blockSignals(False)
+            return
+        # choice == "save" → _prompt_save_changes already saved
 
-        # New
-        new_btn = QPushButton("New")
-        new_btn.setStyleSheet(btn_style)
-        new_btn.setCursor(Qt.PointingHandCursor)
-        new_btn.clicked.connect(self._on_new_workflow_from_list)
-        tb_layout.addWidget(new_btn)
+        # Save current tab state
+        if self._current_tab_index is not None and self._current_tab_index < len(self._tabs):
+            self._tabs[self._current_tab_index]["canvas_data"] = self._snapshot_chain()
+            self._tabs[self._current_tab_index]["dirty"] = self._dirty
 
-        # Load
-        load_btn = QPushButton("Load")
-        load_btn.setStyleSheet(btn_style)
-        load_btn.setCursor(Qt.PointingHandCursor)
-        load_btn.clicked.connect(self._on_load_dialog)
-        tb_layout.addWidget(load_btn)
+        tab_data = {
+            "chain_id": None,
+            "name": "",
+            "description": "",
+            "auto_route": False,
+            "dirty": False,
+            "canvas_data": None,
+        }
+        self._tabs.append(tab_data)
+        idx = len(self._tabs) - 1
 
-        # Save
-        save_btn = QPushButton("Save")
-        save_btn.setStyleSheet(btn_style)
-        save_btn.setCursor(Qt.PointingHandCursor)
-        save_btn.clicked.connect(self._save_chain)
-        tb_layout.addWidget(save_btn)
-
-        # Save As
-        save_as_btn = QPushButton("Save As")
-        save_as_btn.setStyleSheet(btn_style)
-        save_as_btn.setCursor(Qt.PointingHandCursor)
-        save_as_btn.clicked.connect(self._save_chain_as)
-        tb_layout.addWidget(save_as_btn)
-
-        # Validate
-        validate_btn = QPushButton("Validate")
-        validate_btn.setStyleSheet(btn_style)
-        validate_btn.setCursor(Qt.PointingHandCursor)
-        validate_btn.clicked.connect(self._validate_chain)
-        tb_layout.addWidget(validate_btn)
-
-        # Run
-        self._run_btn = QPushButton("Run")
-        self._run_btn.setStyleSheet(
-            f"QPushButton {{"
-            f"  background: {_qss_color(ACCENT_DIM)};"
-            f"  border: 1px solid {_qss_color(ACCENT_DIM)};"
-            f"  border-radius: 4px;"
-            f"  color: {_qss_color(FG)};"
-            f"  padding: 2px 10px;"
-            f"  font-size: 11px;"
-            f"}}"
-            f"QPushButton:hover {{"
-            f"  background: {_qss_color(ACCENT)};"
-            f"}}"
-        )
-        self._run_btn.setCursor(Qt.PointingHandCursor)
-        self._run_btn.clicked.connect(self._on_run_clicked)
-        tb_layout.addWidget(self._run_btn)
-
-        # Delete
-        delete_btn = QPushButton("Delete")
-        delete_btn.setStyleSheet(
-            f"QPushButton {{"
-            f"  background: transparent;"
-            f"  border: 1px solid transparent;"
-            f"  border-radius: 4px;"
-            f"  color: {_qss_color(FG_MUTED)};"
-            f"  padding: 2px 8px;"
-            f"  font-size: 11px;"
-            f"}}"
-            f"QPushButton:hover {{"
-            f"  color: #f87171;"
-            f"}}"
-        )
-        delete_btn.setCursor(Qt.PointingHandCursor)
-        delete_btn.clicked.connect(self._on_delete_clicked)
-        tb_layout.addWidget(delete_btn)
-
-        # Close
-        close_btn = QPushButton("Close")
-        close_btn.setStyleSheet(
-            f"QPushButton {{"
-            f"  background: transparent;"
-            f"  border: 1px solid transparent;"
-            f"  border-radius: 4px;"
-            f"  color: {_qss_color(FG_MUTED)};"
-            f"  padding: 2px 8px;"
-            f"  font-size: 11px;"
-            f"}}"
-            f"QPushButton:hover {{"
-            f"  color: #f87171;"
-            f"}}"
-        )
-        close_btn.setCursor(Qt.PointingHandCursor)
-        close_btn.clicked.connect(self.closeRequested.emit)
-        tb_layout.addWidget(close_btn)
-
-        root_layout.addWidget(toolbar)
+        # Insert tab before the "+" tab
+        self._tab_bar.insertTab(idx, "Untitled")
+        self._tab_bar.setCurrentIndex(idx)
+        self._current_tab_index = idx
+        self._load_or_create_chain(None)
 
     # ------------------------------------------------------------------
     # Chain loading / saving
     # ------------------------------------------------------------------
-    def _load_or_create_chain(self, chain_id: str | None) -> None:
+    def _load_or_create_chain(self, chain_id: str | None, canvas_data: dict | None = None) -> None:
         self._current_chain_id = chain_id
         if chain_id:
             data = load_chain(self._workspace_root, chain_id)
@@ -1229,11 +631,21 @@ class ChainEditor(QWidget):
                 goal_planets_data = data.get("goals", [])
                 self._canvas.load_chain(chain_def, drone_lookup, mission_core_data, goal_planets_data)
                 self._dirty = False
-                self._update_title_label()
-                self._property_panel.rebuild()
-                self._update_context_panel()
                 return
-        # New chain
+        if canvas_data:
+            # Restore an unsaved tab from in-memory state
+            self._chain_id = None
+            self._chain_name = canvas_data.get("name", "")
+            self._chain_desc = canvas_data.get("description", "")
+            self._auto_route = canvas_data.get("auto_route", False)
+            chain_def = _chain_from_dict(canvas_data)
+            drone_lookup = self._build_drone_lookup()
+            mission_core_data = canvas_data.get("mission_core")
+            goal_planets_data = canvas_data.get("goals", [])
+            self._canvas.load_chain(chain_def, drone_lookup, mission_core_data, goal_planets_data)
+            self._dirty = canvas_data.get("dirty", False)
+            return
+        # New blank chain
         self._chain_id = None
         self._chain_name = ""
         self._chain_desc = ""
@@ -1242,38 +654,11 @@ class ChainEditor(QWidget):
         self._canvas.load_chain(chain_def, self._build_drone_lookup())
         self._dirty = False
         self._current_chain_id = None
-        self._update_title_label()
-        self._property_panel.rebuild()
 
     def _build_drone_lookup(self) -> dict[str, DroneDefinition]:
         return {d.id: d for d in DroneStore.list_drones(self._workspace_root)}
 
-    def _sync_form_from_chain(self) -> None:
-        if self._property_panel is None:
-            return
-        pp = self._property_panel
-        if not _widget_valid(pp):
-            return
-        if pp._chain_name_input and _widget_valid(pp._chain_name_input):
-            pp._chain_name_input.setText(self._chain_name)
-        if pp._chain_desc_input and _widget_valid(pp._chain_desc_input):
-            pp._chain_desc_input.setText(self._chain_desc)
-        if pp._auto_route_cb and _widget_valid(pp._auto_route_cb):
-            pp._auto_route_cb.setChecked(self._auto_route)
-
-    def _sync_chain_from_form(self) -> None:
-        pp = self._property_panel
-        if pp is None or not _widget_valid(pp):
-            return
-        if pp._chain_name_input and _widget_valid(pp._chain_name_input):
-            self._chain_name = pp._chain_name_input.text().strip()
-        if pp._chain_desc_input and _widget_valid(pp._chain_desc_input):
-            self._chain_desc = pp._chain_desc_input.toPlainText().strip()
-        if pp._auto_route_cb and _widget_valid(pp._auto_route_cb):
-            self._auto_route = pp._auto_route_cb.isChecked()
-
     def _snapshot_chain(self) -> dict:
-        self._sync_chain_from_form()
         nodes, edges, mission_core, goals = self._canvas.to_chain_nodes_and_edges()
         result = {
             "nodes": nodes,
@@ -1288,7 +673,6 @@ class ChainEditor(QWidget):
         return result
 
     def _save_chain(self) -> None:
-        self._sync_chain_from_form()
         data = self._snapshot_chain()
 
         if self._chain_id:
@@ -1299,21 +683,30 @@ class ChainEditor(QWidget):
             self._chain_id = chain_id
             self._current_chain_id = chain_id
         self._dirty = False
-        self._update_title_label()
+        self._update_tab_label()
         self.set_status("Workflow saved.", "ok")
 
     def _save_chain_as(self) -> None:
-        self._sync_chain_from_form()
         data = self._snapshot_chain()
         chain_id = save_chain(self._workspace_root, None, data)
         self._chain_id = chain_id
         self._current_chain_id = chain_id
         self._dirty = False
-        self._update_title_label()
+        self._update_tab_label()
         self.set_status(f"Saved as {self._chain_name or chain_id}", "ok")
 
+    def _update_tab_label(self) -> None:
+        if self._current_tab_index is None or self._current_tab_index >= len(self._tabs):
+            return
+        name = self._chain_name or "Untitled"
+        suffix = " *" if self._dirty else ""
+        full = f"{name}{suffix}"
+        self._tab_bar.setTabText(self._current_tab_index, full)
+        if self._current_tab_index < len(self._tabs):
+            self._tabs[self._current_tab_index]["name"] = self._chain_name
+            self._tabs[self._current_tab_index]["chain_id"] = self._chain_id
+
     def _validate_chain(self) -> None:
-        self._sync_chain_from_form()
         nodes, edges, _mission_core, _goals = self._canvas.to_chain_nodes_and_edges()
         issues: list[str] = []
 
@@ -1376,15 +769,15 @@ class ChainEditor(QWidget):
             issues.append(err)
 
         if issues:
-            msg = "\n".join(f"• {i}" for i in issues)
+            msg = "\n".join(f"\u2022 {i}" for i in issues)
             QMessageBox.warning(self, "Validation", f"Issues found:\n\n{msg}")
             self.set_status("Validation failed.", "error")
         else:
             QMessageBox.information(self, "Validation", "Workflow looks valid.")
             self.set_status("Validation passed.", "ok")
 
-    def _prompt_save_changes(self) -> str | None:
-        """Ask user whether to Save, Discard, or Cancel. Returns 'save', 'discard', or None (cancel)."""
+    def _prompt_save_changes(self) -> str:
+        """Ask user whether to Save, Discard, or Cancel. Returns 'save', 'discard', or 'cancel'."""
         result = QMessageBox.question(
             self,
             "Unsaved Changes",
@@ -1398,11 +791,6 @@ class ChainEditor(QWidget):
         elif result == QMessageBox.Discard:
             return "discard"
         return "cancel"
-
-    def _update_title_label(self) -> None:
-        name = self._chain_name or "Untitled Mission"
-        suffix = " *" if self._dirty else ""
-        self._title_label.setText(f"\u25c6 {name}{suffix}")
 
     def set_status(self, text: str, level: str = "info") -> None:
         """Display a status message (can be connected to main window status bar)."""
@@ -1426,116 +814,7 @@ class ChainEditor(QWidget):
     def _on_canvas_changed(self) -> None:
         self._dirty = True
         self._auto_save_timer.start()
-        self._property_panel.rebuild()
-        self._update_context_panel()
-        self._update_title_label()
-        if self._canvas._nodes:
-            self._run_btn.setText("Run Mission")
-        else:
-            self._run_btn.setText("Run")
-
-    def _on_chain_property_changed(self) -> None:
-        self._dirty = True
-        self._auto_save_timer.start()
-        self._update_title_label()
-
-    def _on_selection_changed(self) -> None:
-        self._update_context_panel()
-
-    # ------------------------------------------------------------------
-    # Contextual right panel
-    # ------------------------------------------------------------------
-    def _update_context_panel(self) -> None:
-        """Show/hide right panel based on canvas selection."""
-        selection = self._canvas._scene.selectedItems()
-        node_items = [i for i in selection if isinstance(i, ChainNodeItem)]
-        edge_items = [i for i in selection if isinstance(i, ChainEdgeItem)]
-        mission_items = [i for i in selection if isinstance(i, MissionCoreItem)]
-        goal_planet_items = [i for i in selection if isinstance(i, GoalPlanetItem)]
-
-        if not node_items and not edge_items and not mission_items and not goal_planet_items:
-            # Nothing selected: hide right panel
-            sizes = self._splitter.sizes()
-            if len(sizes) >= 3:
-                self._splitter.setSizes([sizes[0], sizes[0] + sizes[1] + sizes[2], 0])
-            return
-
-        if goal_planet_items:
-            # Show property panel for goal planet
-            self._right_stack.setCurrentIndex(0)
-            self._property_panel.rebuild()
-            w = max(300, self.width() - 500)
-            self._splitter.setSizes([220, w, 280])
-            return
-
-        if mission_items:
-            # Show property panel for mission core
-            self._right_stack.setCurrentIndex(0)
-            self._property_panel.rebuild()
-            w = max(300, self.width() - 500)
-            self._splitter.setSizes([220, w, 280])
-            return
-
-        # Node or edge: show property panel
-        self._right_stack.setCurrentIndex(0)
-        self._property_panel.rebuild()
-        w = max(300, self.width() - 500)
-        self._splitter.setSizes([220, w, 280])
-
-    def _on_clear_selection(self) -> None:
-        """Clear canvas selection and hide right panel."""
-        self._canvas._scene.clearSelection()
-        sizes = self._splitter.sizes()
-        if len(sizes) >= 3:
-            self._splitter.setSizes([sizes[0], sizes[0] + sizes[1] + sizes[2], 0])
-
-    def _on_new_workflow_from_list(self) -> None:
-        choice = self._prompt_save_changes()
-        if choice == "cancel":
-            return
-        if choice == "save":
-            self._save_chain()
-        self._load_or_create_chain(None)
-
-    def _on_load_existing_workflow(self, chain_id: str) -> None:
-        choice = self._prompt_save_changes()
-        if choice == "cancel":
-            return
-        if choice == "save":
-            self._save_chain()
-        self._load_or_create_chain(chain_id)
-
-    def _on_delete_workflow_from_list(self, chain_id: str) -> None:
-        delete_chain(self._workspace_root, chain_id)
-        if self._current_chain_id == chain_id:
-            self._load_or_create_chain(None)
-
-    def _on_run_workflow_from_list(self, chain_id: str) -> None:
-        self._load_or_create_chain(chain_id)
-        self._on_run_clicked()
-
-    # ------------------------------------------------------------------
-    # Load dialog
-    # ------------------------------------------------------------------
-    def _on_load_dialog(self) -> None:
-        if self._dirty and not self._prompt_save_changes():
-            return
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Load Workflow")
-        dlg.resize(480, 400)
-        layout = QVBoxLayout(dlg)
-        wf_list = WorkflowListPane(self._workspace_root, dlg)
-        layout.addWidget(wf_list)
-        wf_list.set_workspace_root(self._workspace_root)
-
-        result_chain_id: list[str | None] = [None]
-        wf_list.editWorkflowRequested.connect(lambda cid: (result_chain_id.__setitem__(0, cid), dlg.accept()))  # type: ignore[func-returns-value]
-        wf_list.newWorkflowRequested.connect(lambda: (self._on_new_workflow_from_list(), dlg.accept()))
-        wf_list.deleteWorkflowRequested.connect(self._on_delete_workflow_from_list)
-        wf_list.runWorkflowRequested.connect(lambda cid: (self._on_run_workflow_from_list(cid), dlg.accept()))
-
-        if dlg.exec() == QDialog.DialogCode.Accepted and result_chain_id[0]:
-            self._load_or_create_chain(result_chain_id[0])
+        self._update_tab_label()
 
     # ------------------------------------------------------------------
     # Run / Delete
@@ -1551,21 +830,6 @@ class ChainEditor(QWidget):
             QMessageBox.warning(self, "Cannot Run", "Workflow data not found.")
             return
         self.runChainRequested.emit(self._current_chain_id)
-
-    def _on_delete_clicked(self) -> None:
-        if self._current_chain_id is None:
-            QMessageBox.information(self, "Nothing to Delete", "No workflow is loaded.")
-            return
-        result = QMessageBox.question(
-            self,
-            "Delete Workflow",
-            f"Permanently delete '{self._chain_name or self._current_chain_id}'?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
-        )
-        if result == QMessageBox.Yes:
-            delete_chain(self._workspace_root, self._current_chain_id)
-            self._load_or_create_chain(None)
 
     # ------------------------------------------------------------------
     # Public helpers
@@ -1607,9 +871,6 @@ class ChainEditor(QWidget):
                     continue
                 nr = node_runs.get(node.node_id)
                 node.run_status = nr.get("status", "idle") if nr else "idle"
-
-        # Refresh the property panel if mission core or assignment is selected
-        self._property_panel.rebuild()
 
     def chain_editor(self) -> ChainEditor:
         """Return self for compatibility with popout window accessor."""
