@@ -142,10 +142,19 @@ class DroneModeCoordinator(QObject):
             f'"{ws.display_name}" (workspace: {ws.workspace_id}).\n'
             f"The Drone's candidate source folder is: {cand}\n"
             f"The Drone workspace is: {ws_dir}/\n"
-            f"When you dispatch a Worker to build or update this Drone, "
-            f"it should output files into the candidate folder above. "
-            f"After the Worker finishes, the system will automatically "
-            f"run readiness checks and install the Drone."
+            f"\n"
+            f"--- Folder-backed Drone Build Contract ---\n"
+            f"The user's current message is the Drone brief — treat it as the build or edit specification.\n"
+            f"Build or edit the Drone entirely inside the candidate source folder ({cand}).\n"
+            f"A valid Drone folder needs at minimum: drone.json (the manifest) and an entrypoint\n"
+            f"file, usually main.py. Add a requirements.txt only if the Drone has Python\n"
+            f"dependencies beyond the standard library.\n"
+            f"\n"
+            f"The Worker must NOT register or install the Drone — DroneModeCoordinator handles\n"
+            f"readiness checks and installation after Worker success.\n"
+            f"The Worker must NOT write files outside the candidate folder, unless the user\n"
+            f"explicitly asks for a project code change (not a Drone change).\n"
+            f"After the Worker finishes, the system automatically runs readiness checks and installs."
         )
 
     def enter_drone_mode(self, *, load_active: bool = True) -> None:
