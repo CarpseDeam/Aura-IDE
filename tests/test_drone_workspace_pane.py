@@ -24,9 +24,7 @@ def test_workspace_pane_emits_workspace_id_for_builder_row(
     workspace = DroneWorkspaceStore.create_workspace(tmp_path, "Draft Drone")
     pane = DroneWorkspacePane(tmp_path)
     selected: list[str] = []
-    edit_installed: list[str] = []
     pane.workspace_selected.connect(selected.append)
-    pane.edit_installed.connect(edit_installed.append)
 
     pane.refresh()
     row = pane.findChild(_WorkspaceRow)
@@ -35,10 +33,9 @@ def test_workspace_pane_emits_workspace_id_for_builder_row(
     row.clicked.emit(workspace.workspace_id)
 
     assert selected == [workspace.workspace_id]
-    assert edit_installed == []
 
 
-def test_workspace_pane_emits_drone_id_for_installed_row(
+def test_workspace_pane_emits_workspace_id_for_installed_row(
     qapp: QApplication, tmp_path: Path
 ) -> None:
     workspace = DroneWorkspaceStore.create_workspace(
@@ -47,13 +44,11 @@ def test_workspace_pane_emits_drone_id_for_installed_row(
         mode="edit",
         installed_drone_id="ready-drone",
     )
-    workspace.phase = WorkspacePhase.INSTALLED.value
+    workspace.phase = WorkspacePhase.READY.value
     DroneWorkspaceStore.save_workspace(workspace)
     pane = DroneWorkspacePane(tmp_path)
     selected: list[str] = []
-    edit_installed: list[str] = []
     pane.workspace_selected.connect(selected.append)
-    pane.edit_installed.connect(edit_installed.append)
 
     pane.refresh()
     row = pane.findChild(_WorkspaceRow)
@@ -61,5 +56,4 @@ def test_workspace_pane_emits_drone_id_for_installed_row(
 
     row.clicked.emit(workspace.workspace_id)
 
-    assert selected == []
-    assert edit_installed == ["ready-drone"]
+    assert selected == [workspace.workspace_id]

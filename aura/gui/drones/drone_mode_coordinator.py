@@ -64,6 +64,7 @@ class DroneModeCoordinator(QObject):
         self._workspace_pane.discard_workspace_requested.connect(self._on_discard_workspace)
         self._workspace_pane.edit_ready.connect(self.edit_ready_drone)
         self._workspace_pane.thread_selected.connect(self._on_thread_selected)
+        self._workspace_pane.back_to_project_requested.connect(self.exit_drone_mode)
 
         # Active build tool state for cancellation after drone mode exit.
         self._active_drone_build_tool_id: str | None = None
@@ -209,6 +210,7 @@ class DroneModeCoordinator(QObject):
 
         self._input.set_drone_architect_mode(False)
         self._status_bar.set_drone_architect_mode(False)
+        self.drone_mode_changed.emit(False)
 
         pass  # workshop runner removed
 

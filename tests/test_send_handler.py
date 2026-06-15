@@ -963,7 +963,6 @@ class TestDroneModeRouting:
         self,
         handler_with_drone: SendHandler,
         bridge: Mock,
-        chat: Mock,
         drone_coordinator: Mock,
     ) -> None:
         """/chat while in drone mode exits back to normal Aura."""
@@ -974,15 +973,11 @@ class TestDroneModeRouting:
         )
         drone_coordinator.exit_drone_mode.assert_called_once()
         bridge.send.assert_not_called()
-        chat.add_info.assert_called_once_with(
-            "Drone Builder", "Back to normal Aura."
-        )
 
     def test_slash_drone_off_exits_drone_mode(
         self,
         handler_with_drone: SendHandler,
         bridge: Mock,
-        chat: Mock,
         drone_coordinator: Mock,
     ) -> None:
         """/drone off while in drone mode exits back to normal Aura."""
@@ -993,9 +988,6 @@ class TestDroneModeRouting:
         )
         drone_coordinator.exit_drone_mode.assert_called_once()
         bridge.send.assert_not_called()
-        chat.add_info.assert_called_once_with(
-            "Drone Builder", "Back to normal Aura."
-        )
 
     def test_slash_drone_enters_drone_mode(
         self,
@@ -1011,6 +1003,23 @@ class TestDroneModeRouting:
             "off",
         )
         drone_coordinator.enter_drone_mode.assert_called_once()
+        bridge.send.assert_not_called()
+
+    def test_slash_drone_toggles_off_when_already_in_mode(
+        self,
+        handler_with_drone: SendHandler,
+        bridge: Mock,
+        drone_coordinator: Mock,
+    ) -> None:
+        """/drone when already in drone mode exits back to project chat."""
+        drone_coordinator.is_drone_mode.return_value = True
+        handler_with_drone.handle_send(
+            SendPayload(text="/drone", attachments=[]),
+            "model",
+            "off",
+        )
+        drone_coordinator.exit_drone_mode.assert_called_once()
+        drone_coordinator.enter_drone_mode.assert_not_called()
         bridge.send.assert_not_called()
 
     def test_coordinator_not_called_when_no_coordinator(

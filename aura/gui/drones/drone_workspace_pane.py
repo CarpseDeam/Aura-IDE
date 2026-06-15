@@ -217,6 +217,7 @@ class DroneWorkspacePane(QFrame):
 
     workspace_selected = Signal(str)  # workspace_id
     thread_selected = Signal(str, str)  # workspace_id, thread_id
+    back_to_project_requested = Signal()
     edit_ready = Signal(str)  # drone_id
     new_workspace_requested = Signal()
     discard_workspace_requested = Signal(str)  # workspace_id
@@ -245,6 +246,17 @@ class DroneWorkspacePane(QFrame):
         new_btn.setObjectName("primary")
         new_btn.clicked.connect(self.new_workspace_requested.emit)
         layout.addWidget(new_btn)
+
+        # Back to Project button
+        back_btn = QPushButton("← Back to Project")
+        back_btn.setFlat(True)
+        back_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        back_btn.setStyleSheet(
+            f"QPushButton {{ color: {FG}; background: transparent; border: none; font-size: 12px; text-align: left; padding: 2px 0; }}"
+            f"QPushButton:hover {{ color: #5294E2; }}"
+        )
+        back_btn.clicked.connect(self.back_to_project_requested.emit)
+        layout.addWidget(back_btn)
 
         # Scroll area for workspace rows
         scroll = QScrollArea()
