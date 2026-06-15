@@ -44,9 +44,6 @@ _HELP_PATTERNS = [
     r"^commands\??\s*$",
 ]
 
-_DECISION_COMMAND_PHASES = {"build_failed"}
-
-
 def parse_drone_command(text: str, phase: str) -> tuple[DroneCommand, str | None]:
     """Parse user text into a command and optional argument.
 
@@ -71,13 +68,5 @@ def parse_drone_command(text: str, phase: str) -> tuple[DroneCommand, str | None
         if re.search(pattern, lowered):
             return DroneCommand.HELP, None
 
-    # Phase-specific commands.
-    if phase in _DECISION_COMMAND_PHASES:
-        for pattern in _DISCARD_PATTERNS:
-            if re.search(pattern, lowered):
-                return DroneCommand.DISCARD, None
-        return DroneCommand.UNKNOWN, None
-
-    # In workshop, building, iterating:
     # No phase-specific commands beyond global ones.
     return DroneCommand.UNKNOWN, None

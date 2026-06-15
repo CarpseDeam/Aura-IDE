@@ -415,8 +415,6 @@ def _status_for_phase(phase: str) -> str:
         return "Draft"
     if phase in (WorkspacePhase.BUILDING.value, WorkspacePhase.ITERATING.value):
         return "Building"
-    if phase == WorkspacePhase.BUILD_FAILED.value:
-        return "Needs Fix"
     if phase == WorkspacePhase.READY.value:
         return "Ready"
     return "Draft"

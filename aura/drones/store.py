@@ -96,8 +96,6 @@ def _builder_status_for_phase(phase: str) -> str:
         return "Draft"
     if phase in {"building", "iterating"}:
         return "Building"
-    if phase == "build_failed":
-        return "Needs Fix"
     if phase == "ready":
         return "Ready"
     return "Draft"
@@ -236,6 +234,8 @@ class DroneStore:
                     updated_at=workspace.updated_at,
                 )
                 continue
+
+            # ── No valid drone.json — fall through to phase-based draft row ──
 
             candidate_folder = candidate_dir(Path(workspace.project_root), workspace.workspace_id)
             candidate = _read_candidate_manifest_summary(candidate_folder)

@@ -38,7 +38,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _AUTO_RESUME_BLOCKED_PHASES = {
-    WorkspacePhase.BUILD_FAILED.value,
     WorkspacePhase.DISCARDED.value,
 }
 class DroneArchitectController:
@@ -387,9 +386,6 @@ class DroneArchitectController:
         if phase == WorkspacePhase.BUILDING.value:
             return ErrorResult(message="Build already in progress")
 
-        if phase == WorkspacePhase.BUILD_FAILED.value:
-            return self._handle_failed_phase_message(text)
-
         if phase == WorkspacePhase.ITERATING.value:
             return self._handle_iterating_message(text)
 
@@ -509,7 +505,7 @@ class DroneArchitectController:
                 summary=error,
                 metadata=failure_detail,
             )
-            self._active_workspace.phase = WorkspacePhase.BUILD_FAILED.value
+            self._active_workspace.phase = WorkspacePhase.ITERATING.value
             self._active_workspace.last_error = failure_error
             DroneWorkspaceStore.save_workspace(self._active_workspace)
             return BuildFailed(error=failure_error)
@@ -553,7 +549,7 @@ class DroneArchitectController:
                     return self._handle_ready_message(text)
                 if phase in {WorkspacePhase.WORKSHOP.value, WorkspacePhase.BUILDING.value, WorkspacePhase.ITERATING.value}:
                     return self._handle_workshop_message(text)
-                # Terminal/unusable phases (discarded, build_failed) — start fresh.
+                # Unknown/unexpected phases — start fresh.
                 result = self.create_workspace("New Drone")
                 if result.kind == "error":
                     return result
@@ -614,33 +610,6 @@ class DroneArchitectController:
             return self.discard_workspace()
 
         # Any other text — revision feedback for the ready Drone.
-        self._active_workspace.phase = WorkspacePhase.ITERATING.value
-        DroneWorkspaceStore.save_workspace(self._active_workspace)
-
-        repair_spec = build_repair_dispatch_prompt(self._active_workspace, text)
-        self._pending_dispatch_spec = repair_spec
-
-        return BuildStarted(
-            build_brief=self._active_workspace.build_brief,
-            dispatch_spec=repair_spec,
-        )
-
-    def _handle_failed_phase_message(self, text: str):
-        """Handle messages in build_failed phase."""
-        cmd, arg = parse_drone_command(text, self._active_workspace.phase)
-
-        if cmd == DroneCommand.NEW:
-            return self.create_workspace(arg or "New Drone")
-
-        if cmd == DroneCommand.LOAD:
-            if arg:
-                return self.load_workspace(arg)
-            return ErrorResult(message="Load requires a Drone name")
-
-        if cmd == DroneCommand.DISCARD:
-            return self.discard_workspace()
-
-        # Any other text — treat as revision feedback.
         self._active_workspace.phase = WorkspacePhase.ITERATING.value
         DroneWorkspaceStore.save_workspace(self._active_workspace)
 

@@ -11,7 +11,6 @@ class WorkspacePhase(Enum):
     ITERATING = "iterating"
     READY = "ready"
     DISCARDED = "discarded"
-    BUILD_FAILED = "build_failed"
 
 
 @dataclass
@@ -42,7 +41,7 @@ class DroneWorkspace:
         if phase == "readiness_running":
             data["phase"] = "building"
         elif phase == "readiness_failed":
-            data["phase"] = "build_failed"
+            data["phase"] = "iterating"
         elif phase in ("installing", "installed"):
             data["phase"] = "ready"
         elif phase == "awaiting_decision":

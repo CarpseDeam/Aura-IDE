@@ -60,7 +60,7 @@ def _recover_workspace_from_candidate(
         project_root=str(project_root),
         workspace_root=str(folder),
         mode="new",
-        phase="build_failed",
+        phase="iterating",
         candidate_drone_id=data.get("id"),
         last_error="Workspace manifest was missing or invalid. Recovered from candidate folder.",
         created_at=now,
@@ -262,8 +262,6 @@ class DroneWorkspaceStore:
                 return None
             if ws.phase in {
                 "discarded",
-                "installed",
-                "build_failed",
             }:
                 return None
             return ws
