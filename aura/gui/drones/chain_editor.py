@@ -661,7 +661,7 @@ class ChainEditor(QWidget):
         )
         self._new_drone_btn.setCursor(Qt.PointingHandCursor)
         self._new_drone_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self._new_drone_btn.clicked.connect(lambda checked: self.newDroneRequested.emit())
+        self._new_drone_btn.clicked.connect(lambda *_: self.newDroneRequested.emit())
         layout.addWidget(self._new_drone_btn)
 
         self._splitter.addWidget(container)

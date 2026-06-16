@@ -841,7 +841,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
                 thinking=self.current_thinking(),
                 temperature=self._settings.temperature,
                 initial_geometry=self._settings.drone_workbay_window_geometry,
-                parent=self,
+                parent=None,
             )
             print("[DRONE] window constructed OK")
         except Exception:
@@ -961,10 +961,10 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         if not folder.is_dir():
             logger.warning("Edit drone %s: folder %s not found", drone_id, folder)
             return
-        win = DroneBuildWindow(self._workspace_root, parent=self)
+        win = DroneBuildWindow(self._workspace_root, parent=None)
         win.bind(drone_id, folder)
         self._drone_build_windows[drone_id] = win
-        win.show()
+        win.show_and_raise()
 
     def _on_new_drone(self) -> None:
         """Open the New Drone build window or raise it if already open."""
@@ -972,10 +972,10 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             win = self._drone_build_windows["__new__"]
             win.show_and_raise()
             return
-        win = DroneBuildWindow(self._workspace_root, parent=self)
+        win = DroneBuildWindow(self._workspace_root, parent=None)
         win.drone_built.connect(self._on_new_drone_bound)
         self._drone_build_windows["__new__"] = win
-        win.show()
+        win.show_and_raise()
 
     def _on_new_drone_bound(self, drone_id: str) -> None:
         """Move window from '__new__' key to its real drone_id."""
