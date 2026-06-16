@@ -413,7 +413,7 @@ class ChainEditor(QWidget):
     goBackRequested = Signal()
     runDroneRequested = Signal(str, str)  # drone_id, folder
     editDroneRequested = Signal(str, str)  # action_id, folder
-    deleteDroneRequested = Signal()
+    deleteDroneRequested = Signal(str)
     newDroneRequested = Signal()
 
     _AUTO_SAVE_MS = 1200
