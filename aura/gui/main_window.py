@@ -210,6 +210,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._left_pane.planner_thinking_changed.connect(lambda: self._refresh_status_bar())
         self._left_pane.worker_model_changed.connect(self._on_sidebar_worker_model_changed)
         self._left_pane.worker_thinking_changed.connect(self._on_sidebar_worker_thinking_changed)
+        self._left_pane.drone_selected.connect(self._on_drone_folder_selected)
+        self._left_pane.new_drone_requested.connect(self._on_create_drone)
         self._main_splitter.addWidget(self._left_pane)
 
         # Middle pane: chat + input
@@ -410,6 +412,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._persistence.current_context_changed.connect(self._on_current_context_changed)
 
         self._left_pane.refresh_projects(self._workspace_root)
+        self._left_pane.refresh_drones(self._workspace_root)
 
         self._refresh_status_bar()
         self._position_edge_tabs()
@@ -632,6 +635,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._companion.set_current_project(_project.id, _project.name)
         self._update_workspace_label()
         self._left_pane.refresh_projects(path)
+        self._left_pane.refresh_drones(path)
         # Close chain editor when workspace root changes
         if self._drone_workbay_window is not None:
             hooks.unregister('query_mission_workbay_state')
@@ -733,13 +737,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
                         self, "Git Init Failed", msg
                     )
 
-    def _on_project_selected(self, root_path: Path, *, restore_last: bool = True) -> None:
-        from aura.projects.store import ProjectStore
-        project = ProjectStore().create_or_update_project(root_path)
-        self._companion.set_current_project(project.id, project.name)
-
+    def _retarget_workspace(self, root_path: Path, *, restore_last: bool = True) -> None:
         if self._workspace_root is not None and self._workspace_root.resolve() != root_path.resolve():
-            # Fully reset conversation state before switching
             self._persistence.new_conversation()
 
         self._workspace_root = root_path
@@ -750,17 +749,49 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._playground.set_workspace_root(root_path)
         self._companion.set_workspace_root(str(self._workspace_root))
         self._tree.set_root(root_path)
-        save_workspace_root(root_path)
-        # new_conversation() above already sets _current_conversation_path = None
-        # and clears chat, playground, bridge history
 
         self._update_workspace_label()
-        self._left_pane.refresh_projects(self._workspace_root)
         self._refresh_status_bar()
 
-        # Optionally restore last conversation from the new workspace
         if self._settings.restore_last_conversation and restore_last:
             QTimer.singleShot(0, lambda: self._persistence.restore_last(root_path))
+
+    def _on_project_selected(self, root_path: Path, *, restore_last: bool = True) -> None:
+        from aura.projects.store import ProjectStore
+        project = ProjectStore().create_or_update_project(root_path)
+        self._companion.set_current_project(project.id, project.name)
+        save_workspace_root(root_path)
+
+        self._retarget_workspace(root_path, restore_last=restore_last)
+        self._left_pane.refresh_projects(self._workspace_root)
+        self._left_pane.refresh_drones(self._workspace_root)
+
+    def _on_drone_folder_selected(self, folder: Path) -> None:
+        self._retarget_workspace(folder, restore_last=False)
+        self._left_pane.refresh_drones(folder)
+        # Deliberately does NOT touch ProjectStore and does NOT call save_workspace_root,
+        # so a drone is never registered as a project and Aura never boots into one.
+
+    def _on_create_drone(self) -> None:
+        from aura.drones.store import _global_drones_root
+        import json
+        from uuid import uuid4
+
+        drone_id = f"drone-{uuid4().hex[:8]}"
+        drone_dir = _global_drones_root() / drone_id
+        drone_dir.mkdir(parents=True, exist_ok=True)
+
+        manifest = {
+            "id": drone_id,
+            "name": "New Drone",
+            "description": "",
+        }
+        (drone_dir / "drone.json").write_text(
+            json.dumps(manifest, indent=2), encoding="utf-8"
+        )
+
+        self._left_pane.refresh_drones(drone_dir)
+        self._on_drone_folder_selected(drone_dir)
 
     def _on_new_project(self) -> None:
         start = str(self._workspace_root) if self._workspace_root else str(Path.home())

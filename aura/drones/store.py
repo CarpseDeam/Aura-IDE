@@ -124,6 +124,38 @@ class DroneStore:
         return sorted(rows.values(), key=lambda r: r.name.lower())
 
     @staticmethod
+    def list_drone_folders() -> list[DroneListEntry]:
+        """Return list of folder-backed Drones — including non-ready/dev ones."""
+        rows: list[DroneListEntry] = []
+        global_root = _global_drones_root()
+        if not global_root.exists():
+            return rows
+        for subdir in sorted(global_root.iterdir()):
+            if not subdir.is_dir():
+                continue
+            drone_file = subdir / "drone.json"
+            if not drone_file.exists():
+                continue
+            try:
+                data = json.loads(drone_file.read_text(encoding="utf-8"))
+                drone_id = data.get("id", subdir.name) or subdir.name
+                name = data.get("name", subdir.name) or subdir.name
+                description = data.get("description", "") or ""
+                write_policy = data.get("write_policy", "read_only") or "read_only"
+                rows.append(DroneListEntry(
+                    id=drone_id,
+                    name=name,
+                    description=description,
+                    write_policy=write_policy,
+                    status="Development",
+                    ready=False,
+                ))
+            except Exception as exc:
+                logger.warning("Skipping invalid Drone folder %s: %s", subdir, exc)
+                continue
+        return rows
+
+    @staticmethod
     def load_drone(workspace_root: Path, drone_id: str) -> DroneDefinition | None:
         _ = workspace_root
         if not _is_safe_drone_id(drone_id):

@@ -158,6 +158,46 @@ class _ShowMoreRow(QFrame):
         else:
             super().mousePressEvent(event)
 
+class _DroneRow(QFrame):
+    clicked = Signal(Path)
+
+    def __init__(self, folder: Path, name: str, is_active: bool, parent=None) -> None:
+        super().__init__(parent)
+        self.folder = folder
+        self.is_active = is_active
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFixedHeight(32)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 0, 8, 0)
+        layout.setSpacing(4)
+
+        self.name_label = QLabel(name)
+        self.name_label.setStyleSheet(
+            f"color: {LABEL_PROJECTS if is_active else FG_DIM}; "
+            f"font-weight: {'bold' if is_active else 'normal'};"
+        )
+        layout.addWidget(self.name_label, 1)
+
+        border_left_style = f"3px solid {ACCENT}" if is_active else "3px solid transparent"
+        bg_style = BG_ALT if is_active else "transparent"
+        self.setStyleSheet(f"""
+            QFrame {{
+                background-color: {bg_style};
+                border-left: {border_left_style};
+            }}
+            QFrame:hover {{
+                background-color: {BG_RAISED};
+            }}
+        """)
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit(self.folder)
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
 class LeftPane(QFrame):
     change_root_requested = Signal()
     project_selected = Signal(Path)
@@ -167,6 +207,8 @@ class LeftPane(QFrame):
     planner_thinking_changed = Signal(str)
     worker_model_changed = Signal(str)
     worker_thinking_changed = Signal(str)
+    drone_selected = Signal(Path)
+    new_drone_requested = Signal()
 
     def __init__(self, workspace_root: Path | None, parent=None) -> None:
         super().__init__(parent)
@@ -227,6 +269,37 @@ class LeftPane(QFrame):
 
         self._projects_scroll.setWidget(self._projects_container)
         layout.addWidget(self._projects_scroll, 1)
+
+        # --- Drones section ---
+        drones_sep = QFrame()
+        drones_sep.setFrameShape(QFrame.Shape.HLine)
+        drones_sep.setStyleSheet(f"QFrame {{ color: {BORDER}; }}")
+        layout.addWidget(drones_sep)
+
+        drones_title = QLabel("Drones")
+        drones_title.setObjectName("paneTitleDrones")
+        layout.addWidget(drones_title)
+
+        new_drone_row = QHBoxLayout()
+        new_drone_row.setContentsMargins(8, 0, 8, 6)
+        self._new_drone_btn = QPushButton("＋ New Drone")
+        self._new_drone_btn.clicked.connect(self.new_drone_requested.emit)
+        new_drone_row.addWidget(self._new_drone_btn)
+        layout.addLayout(new_drone_row)
+
+        self._drones_scroll = QScrollArea()
+        self._drones_scroll.setWidgetResizable(True)
+        self._drones_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._drones_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._drones_scroll.setStyleSheet("QScrollArea {{ background: transparent; border: none; }}")
+
+        self._drones_container = QWidget()
+        self._drones_layout = QVBoxLayout(self._drones_container)
+        self._drones_layout.setContentsMargins(0, 0, 0, 0)
+        self._drones_layout.setSpacing(2)
+
+        self._drones_scroll.setWidget(self._drones_container)
+        layout.addWidget(self._drones_scroll)  # no stretch — drones section gets space below projects
 
         # --- Model Config section ---
         self._model_config_footer = QFrame()
@@ -451,6 +524,33 @@ class LeftPane(QFrame):
     def _on_project_collapse_toggled(self, project_id: str) -> None:
         self._project_collapsed[project_id] = not self._project_collapsed.get(project_id, False)
         self.refresh_projects(self._last_workspace_root)
+
+    def refresh_drones(self, active_root: Path | None) -> None:
+        from aura.drones.store import DroneStore, _global_drones_root
+
+        while self._drones_layout.count():
+            item = self._drones_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        try:
+            entries = DroneStore.list_drone_folders()
+        except Exception:
+            logging.warning("Failed to list drone folders")
+            self._drones_layout.addStretch(1)
+            return
+
+        global_root = _global_drones_root()
+        active_resolved = active_root.resolve() if active_root is not None else None
+
+        for entry in entries:
+            folder = global_root / entry.id
+            is_active = (active_resolved is not None and folder.resolve() == active_resolved)
+            row = _DroneRow(folder, entry.name, is_active, parent=self._drones_container)
+            row.clicked.connect(self.drone_selected.emit)
+            self._drones_layout.addWidget(row)
+
+        self._drones_layout.addStretch(1)
 
 def _models_with_default(provider: ProviderId) -> dict[str, ModelInfo]:
     spec = provider_registry.get(provider)
