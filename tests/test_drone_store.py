@@ -6,12 +6,8 @@ from pathlib import Path
 import pytest
 
 from aura import paths as aura_paths
-from aura.drones.architect.installer import install_candidate
 from aura.drones.definition import DroneDefinition, slugify
 from aura.drones.store import DroneStore, _drone_from_dict, _global_drones_root
-from aura.drones.workspaces.model import WorkspacePhase
-from aura.drones.workspaces.paths import candidate_dir
-from aura.drones.workspaces.store import DroneWorkspaceStore
 
 
 @pytest.fixture(autouse=True)
@@ -191,54 +187,4 @@ def test_list_drone_entries_ready_appears_once(tmp_path: Path) -> None:
     assert ready[0].name == "Folder Drone"
 
 
-def test_list_drone_entries_missing_global_drone_shows_as_not_ready(tmp_path: Path) -> None:
-    """A workspace in installed phase with no matching global drone shows Needs Fix."""
-    ws = DroneWorkspaceStore.create_workspace(tmp_path, "Missing Drone")
-    ws.phase = WorkspacePhase.INSTALLED.value
-    ws.installed_drone_id = "nonexistent-drone"
-    DroneWorkspaceStore.save_workspace(ws)
 
-    entries = DroneStore.list_drone_entries(tmp_path)
-    row = next((e for e in entries if e.workspace_id == ws.workspace_id), None)
-    assert row is not None, "Expected a Builder row for the installed workspace"
-    assert row.ready is False
-    assert row.status == "Needs Fix"
-    assert row.workspace_id == ws.workspace_id
-
-
-def test_install_candidate_does_not_mark_installed_without_readback(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """install_candidate returns ok=False and sets build_failed when read-back fails."""
-    ws = DroneWorkspaceStore.create_workspace(tmp_path, "Readback Test")
-    cand = candidate_dir(tmp_path, ws.workspace_id)
-    cand.mkdir(parents=True, exist_ok=True)
-    (cand / "drone.json").write_text(
-        json.dumps(
-            {
-                "id": "readback-test",
-                "name": "Readback Test",
-                "description": "Test readback failure.",
-                "entrypoint": {
-                    "kind": "command",
-                    "command": ["python", "-c", "pass"],
-                    "protocol": "json-stdio",
-                },
-                "instructions": "Test instructions.",
-                "write_policy": "read_only",
-                "output_contract": "Test output.",
-                "allowed_tools": [],
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    # Simulate read-back failure by making load_drone return None
-    monkeypatch.setattr(DroneStore, "load_drone", lambda *a, **kw: None)
-
-    result = install_candidate(ws, tmp_path)
-
-    assert result.get("ok") is False
-    reloaded = DroneWorkspaceStore.load_workspace(tmp_path, ws.workspace_id)
-    assert reloaded is not None
-    assert reloaded.phase == "build_failed"

@@ -264,12 +264,6 @@ class InputPanel(QFrame):
 
         self._attachments: list[Attachment] = []
 
-        # Saved originals for drone architect mode restoration
-        self._original_placeholder = self._editor.placeholderText()
-        self._original_send_text = self._send_btn.text()
-        self._original_send_tooltip = self._send_btn.toolTip()
-        self._original_frame_style = self.styleSheet()
-        self._drone_architect_active = False
 
     # ---- public state -----------------------------------------------------
 
@@ -287,9 +281,6 @@ class InputPanel(QFrame):
     def set_placeholder(self, text: str) -> None:
         """Set the editor placeholder text."""
         self._editor.setPlaceholderText(text)
-
-    def set_drone_architect_mode(self, active: bool) -> None:
-        """No-op: drone architect mode removed."""
 
     def set_queued_messages(self, count: int) -> None:
         """Update the send button to show how many messages are queued."""

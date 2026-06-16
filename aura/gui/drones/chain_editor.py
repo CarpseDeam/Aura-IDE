@@ -121,13 +121,11 @@ class _DroneCard(QFrame):
         write_policy: str = "read_only",
         status: str = "Ready",
         ready: bool = True,
-        folder: str = "",
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.drone_id = drone_id
         self.drone_name = name
-        self.folder = folder
         self._write_policy = write_policy
         self._ready = ready
         self.setObjectName("drone_card")
@@ -341,18 +339,16 @@ class _DroneRosterWidget(QScrollArea):
                 item.widget().deleteLater()
         entries = DroneStore.list_drone_entries(self._workspace_root)
         if not entries:
-            empty = QLabel("No Drones yet. Use the +New Drone button above.")
+            empty = QLabel(
+                "No drones installed. Create a Drone folder under "
+                "<code>data_dir()/drones/&lt;id&gt;/</code> "
+                "with a <code>drone.json</code> manifest."
+            )
             empty.setWordWrap(True)
             empty.setStyleSheet(f"color: {_qss_color(FG_MUTED)}; font-size: 11px; padding: 8px;")
             self._layout.insertWidget(self._layout.count() - 1, empty)
         for entry in entries:
-            action_id = (
-                f"builder:{entry.workspace_id}"
-                if entry.workspace_id and not entry.ready
-                else entry.id
-            )
-            # For ready drones, pass the canonical folder. For builder, pass empty string.
-            run_folder = entry.folder if entry.ready else ""
+            action_id = entry.id
             card = _DroneCard(
                 entry.id,
                 entry.name,
@@ -360,9 +356,8 @@ class _DroneRosterWidget(QScrollArea):
                 entry.write_policy,
                 entry.status,
                 entry.ready,
-                folder=entry.folder if entry.ready else "",
             )
-            card._on_run = lambda did=entry.id, fld=run_folder: self._editor.runDroneRequested.emit(did, fld)
+            card._on_run = lambda did=entry.id: self._editor.runDroneRequested.emit(did, "")
             card._on_delete = lambda did=action_id: self._editor.deleteDroneRequested.emit(did)
             self._layout.insertWidget(self._layout.count() - 1, card)
 

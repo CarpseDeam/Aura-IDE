@@ -741,7 +741,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         if self._workspace_root is not None and self._workspace_root.resolve() != root_path.resolve():
             # Fully reset conversation state before switching
             self._persistence.new_conversation()
-            self._send_handler.clear_drone_architect_mode()
 
         self._workspace_root = root_path
         self._checkpoint_dialog = None
@@ -843,53 +842,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
 
 
-    def _on_duplicate_drone(self, drone_id: str) -> None:
-        if drone_id.startswith("builder:"):
-            return
-
-        drone = DroneStore.load_drone(self._workspace_root, drone_id)
-        if drone is None:
-            return
-
-        # Determine a distinct name: "Release Check" → "Release Check Copy"
-        existing_names = {d.name for d in DroneStore.list_drones(self._workspace_root)}
-        copy_name = f"{drone.name} Copy"
-        if copy_name in existing_names:
-            counter = 2
-            while f"{drone.name} Copy {counter}" in existing_names:
-                counter += 1
-            copy_name = f"{drone.name} Copy {counter}"
-
-        new_id = DroneStore.next_id(self._workspace_root, copy_name)
-        source_folder = DroneStore.drone_folder(drone.id)
-        if not source_folder.is_dir():
-            QMessageBox.warning(self, "Duplicate Drone", "Drone files not found.")
-            return
-
-        import datetime
-        import json
-        import shutil
-        import tempfile
-        from dataclasses import asdict, replace
-
-        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        dup = replace(
-            drone,
-            id=new_id,
-            name=copy_name,
-            enabled=True,
-            created_at=now,
-            updated_at=now,
-        )
-        with tempfile.TemporaryDirectory(prefix=f"{new_id}-") as tmp:
-            build_folder = Path(tmp) / new_id
-            shutil.copytree(source_folder, build_folder)
-            (build_folder / "drone.json").write_text(
-                json.dumps(asdict(dup), indent=2),
-                encoding="utf-8",
-            )
-            DroneStore.register_drone_folder(self._workspace_root, build_folder)
-        self._refresh_drone_context()
 
     def _on_delete_drone(self, drone_id: str) -> None:
         reply = QMessageBox.question(
@@ -1546,7 +1498,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             return
         self._persistence.new_conversation()
         self._send_handler.clear_queue()
-        self._send_handler.clear_drone_architect_mode()
         self._input.set_text("")
         self._input.set_attachments([])
         self._input.set_queued_messages(0)
@@ -1562,7 +1513,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         loaded = self._persistence.open_conversation(self._workspace_root, self)
         if loaded is not None:
             self._send_handler.clear_queue()
-            self._send_handler.clear_drone_architect_mode()
             self._input.set_queued_messages(0)
             self._reset_session_usage()
 
@@ -1654,7 +1604,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         try:
             self._persistence.load_and_apply(conversation_path)
             self._send_handler.clear_queue()
-            self._send_handler.clear_drone_architect_mode()
             self._input.set_queued_messages(0)
             self._reset_session_usage()
             self._companion.complete_conversation_select(True)
@@ -1720,8 +1669,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         if hasattr(self, "_chat"):
             self._chat.set_compact_tools(effective_enabled)
 
-    def _on_drone_architect_mode_changed(self, active: bool) -> None:
-        """No-op: drone architect mode removed."""
 
     def _on_started(self) -> None:
         self._input.set_streaming(True)

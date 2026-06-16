@@ -54,7 +54,7 @@ def _drone_from_dict(data: dict) -> DroneDefinition:
 
 @dataclass(frozen=True)
 class DroneListEntry:
-    """UI-facing Drone row, including Drones currently in the Builder."""
+    """UI-facing row for installed folder-backed Drones."""
 
     id: str
     name: str
@@ -62,13 +62,6 @@ class DroneListEntry:
     write_policy: str
     status: str
     ready: bool
-    drone: DroneDefinition | None = None
-    workspace_id: str | None = None
-    folder: str = ""
-    run_target: str = ""
-    edit_target: str = ""
-    last_error: str | None = None
-    updated_at: str = ""
 
 
 
@@ -126,7 +119,6 @@ class DroneStore:
                 write_policy=drone.write_policy,
                 status="Ready",
                 ready=True,
-                folder=str(DroneStore.drone_folder(drone.id)),
             )
 
         return sorted(rows.values(), key=lambda r: r.name.lower())
@@ -294,28 +286,13 @@ class DroneStore:
 
     @staticmethod
     def print_entries(workspace_root: Path) -> str:
-        """Return a formatted text table of all Drone entries.
-
-        Columns: name, id, workspace_id, canonical_folder, run_target, edit_target.
-        """
+        """Return a simple text summary of all Drone entries (debug logging)."""
         entries = DroneStore.list_drone_entries(workspace_root)
         lines = []
-        lines.append(f"{'Name':<30} {'Id':<30} {'WorkspaceId':<20} {'CanonicalFolder':<60} {'RunTarget':<40} {'EditTarget':<40}")
-        lines.append("-" * 220)
+        lines.append(f"{'Name':<30} {'Id':<30} {'Status':<10} {'WritePolicy':<20}")
+        lines.append("-" * 90)
         for e in entries:
-            run_target: str
-            edit_target: str
-            canonical_folder: str = e.folder or ""
-            if e.ready:
-                # Ready drone: run and edit both point to the canonical folder
-                run_target = e.folder or ""
-                edit_target = e.folder or ""
-            else:
-                # Builder drone: run is N/A, edit is workspace_id-based
-                run_target = "N/A"
-                edit_target = str(e.workspace_id or "")
-            wids = str(e.workspace_id or "")
-            lines.append(f"{e.name:<30} {e.id:<30} {wids:<20} {canonical_folder:<60} {run_target:<40} {edit_target:<40}")
+            lines.append(f"{e.name:<30} {e.id:<30} {e.status:<10} {e.write_policy:<20}")
         return "\n".join(lines)
 
 

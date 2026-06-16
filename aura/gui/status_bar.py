@@ -31,9 +31,6 @@ class AuraStatusBar(QStatusBar):
         self._status_tokens.setFont(mono_font)
         self._status_cost.setFont(mono_font)
 
-    def set_drone_architect_mode(self, active: bool) -> None:
-        """No-op: drone architect mode removed."""
-
     def refresh(
         self, 
         workspace_root: str, 

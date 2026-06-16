@@ -80,13 +80,6 @@ class SendHandler(QObject):
         """Clear any queued messages (called on new/open conversation)."""
         self._message_queue.clear()
 
-    def clear_drone_architect_mode(self) -> None:
-        """No-op: drone architect mode removed."""
-
-    def is_drone_architect_mode(self) -> bool:
-        """Drone architect mode removed; always returns False."""
-        return False
-
     def process_message_queue(self, model: str, thinking: ThinkingMode) -> None:
         """Send the next queued message, if any."""
         self._process_message_queue(model, thinking)
