@@ -781,14 +781,12 @@ class MissionCoreItem(QGraphicsObject):
 
 
 PALETTES: dict[str, tuple[str, str, str]] = {
-    "dusty-teal":    ("#8eb8b0", "#c8e0da", "#3d5a54"),
-    "pale-lavender": ("#b4b0c8", "#dddae8", "#3d3a50"),
-    "muted-sky":     ("#8eaebb", "#c6d8de", "#3a5058"),
-    "dusty-rose":    ("#c0a8b0", "#e0d2d8", "#503a42"),
-    "slate":         ("#98a0b0", "#ced4de", "#343a48"),
-    "sage":          ("#9ab0a0", "#ceded0", "#38443a"),
-    "powder-blue":   ("#a8b8c8", "#d4dee8", "#30404c"),
-    "winter-mist":   ("#b8bcc8", "#e2e4ec", "#3c3e4c"),
+    "smoky-teal":    ("#6fa8a8", "#b8f3ee", "#172426"),
+    "dusk-purple":   ("#8c7bc8", "#d8ccff", "#1d1828"),
+    "icy-blue":      ("#7ea5c8", "#d4edff", "#14202b"),
+    "sage-glass":    ("#8aa89a", "#d6f0df", "#18231d"),
+    "violet-mist":   ("#a09ac8", "#ece8ff", "#1c1a28"),
+    "slate-ice":     ("#9aa8b8", "#e4f0ff", "#171d26"),
 }
 
 
@@ -886,6 +884,58 @@ class GoalPlanetItem(QGraphicsObject):
         self._seed = _random.randint(1, 2**31 - 1)
         self._invalidate_cache()
 
+    def _draw_soft_halo(self, p, center, radius, base):
+        g = QRadialGradient(center, radius * 2.0)
+        g.setColorAt(0.0, QColor(base.red(), base.green(), base.blue(), 0))
+        g.setColorAt(0.45, QColor(base.red(), base.green(), base.blue(), 10))
+        g.setColorAt(1.0, QColor(base.red(), base.green(), base.blue(), 0))
+        p.setBrush(QBrush(g))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.drawEllipse(center, radius * 1.9, radius * 1.9)
+
+    def _draw_body(self, p, center, radius, base, rim, shadow, lx, ly):
+        focal = QPointF(lx, ly)
+        g_body = QRadialGradient(focal, radius * 1.4)
+        g_body.setColorAt(0.00, QColor(shadow.red(), shadow.green(), shadow.blue(), 95))
+        g_body.setColorAt(0.45, QColor(base.red(), base.green(), base.blue(), 105))
+        g_body.setColorAt(0.75, QColor(base.red(), base.green(), base.blue(), 70))
+        g_body.setColorAt(1.00, QColor(shadow.red(), shadow.green(), shadow.blue(), 35))
+        p.setBrush(QBrush(g_body))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.drawEllipse(center, radius, radius)
+
+    def _draw_gas_bands(self, p, center, radius, rng, base, rim, shadow):
+        num_bands = rng.randint(2, 4)
+        for i in range(num_bands):
+            phi = rng.uniform(-0.65, 0.65)
+            y_center = center.y() + radius * math.sin(phi)
+            half_w = radius * math.cos(phi)
+            top_bow = rng.uniform(1.0, 2.5)
+            bot_bow = rng.uniform(1.0, 2.5)
+            band_path = QPainterPath()
+            band_path.moveTo(center.x() - half_w, y_center - 1.2)
+            band_path.cubicTo(
+                center.x() - half_w * 0.45, y_center - 1.2 + top_bow,
+                center.x() + half_w * 0.45, y_center - 1.2 + top_bow,
+                center.x() + half_w, y_center - 1.2,
+            )
+            band_path.lineTo(center.x() + half_w, y_center + 1.2)
+            band_path.cubicTo(
+                center.x() + half_w * 0.45, y_center + 1.2 + bot_bow,
+                center.x() - half_w * 0.45, y_center + 1.2 + bot_bow,
+                center.x() - half_w, y_center + 1.2,
+            )
+            band_path.closeSubpath()
+            if i % 2 == 0:
+                band_color = QColor(rim)
+                band_color.setAlpha(rng.randint(10, 22))
+            else:
+                band_color = QColor(shadow)
+                band_color.setAlpha(rng.randint(8, 18))
+            p.setBrush(QBrush(band_color))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.drawPath(band_path)
+
     def boundingRect(self) -> QRectF:
         return QRectF(-44, -44, 88, 88)
 
@@ -905,24 +955,31 @@ class GoalPlanetItem(QGraphicsObject):
         offset = QPointF(-pm.width() / 2, -pm.height() / 2)
         painter.drawPixmap(offset, pm)
 
-        # Pulsing atmosphere glow (not cached, animates)
-        atmos_str, _, _ = self._palette_for_seed()
-        atmos_color = QColor(atmos_str)
-        glow_alpha = int(20 + math.sin(self._glow_phase) * 10)
-        atmos_color.setAlpha(max(0, min(255, glow_alpha)))
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.setPen(QPen(atmos_color, 5))
-        painter.drawEllipse(center, radius + 4, radius + 4)
-
-        # Selected — sacred halo glow
+        # Subtle receiver pulse ring (animates)
+        _, rim_str, _ = self._palette_for_seed()
+        rim_color = QColor(rim_str)
+        pulse_norm = (math.sin(self._glow_phase) + 1.0) / 2.0
         if self.isSelected():
-            sel_base = _qt_color(ACCENT)
-            for w, alpha in [(2, 55), (5, 22), (9, 8)]:
-                sc = QColor(sel_base)
-                sc.setAlpha(alpha)
-                painter.setBrush(Qt.BrushStyle.NoBrush)
-                painter.setPen(QPen(sc, w))
-                painter.drawEllipse(center, radius + 1, radius + 1)
+            pulse_alpha = int(35 + pulse_norm * 30)
+        else:
+            pulse_alpha = int(8 + pulse_norm * 8)
+        rim_color.setAlpha(max(0, min(255, pulse_alpha)))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QPen(rim_color, 1.25))
+        painter.drawEllipse(center, radius + 9, radius + 9)
+
+        # Selected — orbit/receiver ring and faint outer glow
+        if self.isSelected():
+            # Thin orbit ring
+            orbit_color = QColor(rim_str)
+            orbit_color.setAlpha(60)
+            painter.setPen(QPen(orbit_color, 1.0))
+            painter.drawEllipse(center, radius + 3, radius + 3)
+            # Faint outer glow
+            glow_color = QColor(rim_str)
+            glow_color.setAlpha(18)
+            painter.setPen(QPen(glow_color, 4.0))
+            painter.drawEllipse(center, radius + 4, radius + 4)
 
 
 
@@ -941,179 +998,107 @@ class GoalPlanetItem(QGraphicsObject):
         p.scale(scale, scale)
         center = QPointF(logical_size / 2, logical_size / 2)
 
-        atmos_str, light_str, dark_str = self._palette_for_seed()
-        atmos = QColor(atmos_str)
-        light = QColor(light_str)
-        dark = QColor(dark_str)
+        base_str, rim_str, shadow_str = self._palette_for_seed()
+        base = QColor(base_str)
+        rim = QColor(rim_str)
+        shadow = QColor(shadow_str)
 
-        # Light direction — hardcoded upper-left with per-planet personality
-        light_dir_x = -0.50 + rng.uniform(-0.06, 0.06)
-        light_dir_y = -0.42 + rng.uniform(-0.06, 0.06)
+        # Light from upper-left; shadow lower-right
+        focal_x = center.x() + 0.25 * radius
+        focal_y = center.y() + 0.25 * radius
 
-        # 1. Atmosphere bloom — drawn first, behind everything
-        # Tight inner glow
-        g_tight = QRadialGradient(center, radius + 7)
-        g_tight.setColorAt(0.0, QColor(atmos.red(), atmos.green(), atmos.blue(), 0))
-        g_tight.setColorAt(0.50, QColor(atmos.red(), atmos.green(), atmos.blue(), 22))
-        g_tight.setColorAt(1.0, QColor(atmos.red(), atmos.green(), atmos.blue(), 0))
-        p.setBrush(QBrush(g_tight))
-        p.setPen(Qt.PenStyle.NoPen)
-        p.drawEllipse(center, radius + 7, radius + 7)
+        # a) Soft tactical halo (behind body)
+        self._draw_soft_halo(p, center, radius, base)
 
-        # Wide outer bloom
-        g_wide = QRadialGradient(center, radius + 14)
-        g_wide.setColorAt(0.0, QColor(atmos.red(), atmos.green(), atmos.blue(), 0))
-        g_wide.setColorAt(0.45, QColor(atmos.red(), atmos.green(), atmos.blue(), 10))
-        g_wide.setColorAt(1.0, QColor(atmos.red(), atmos.green(), atmos.blue(), 0))
-        p.setBrush(QBrush(g_wide))
-        p.drawEllipse(center, radius + 14, radius + 14)
-
-        # 2. Ring BACK arc — behind the planet body
-        ring_radius = None
-        ring_rect = None
+        # b) Ring BACK arc (optional)
+        has_ring = (self._seed % 12) < 2
+        ring_radius_val = 0.0
         tilt = 0.4
+        rect_ring = QRectF()
         arc_start = 0
         arc_sweep = 0
-        if self._seed % 10 < 2:
-            ring_radius = radius + rng.uniform(5, 9)
+        if has_ring:
+            ring_radius_val = radius + rng.uniform(5, 9)
             tilt = rng.uniform(0.28, 0.48)
-            ring_rect = QRectF(
-                center.x() - ring_radius,
-                center.y() - ring_radius * tilt,
-                ring_radius * 2,
-                ring_radius * 2 * tilt,
+            rect_ring = QRectF(
+                center.x() - ring_radius_val,
+                center.y() - ring_radius_val * tilt,
+                ring_radius_val * 2,
+                ring_radius_val * 2 * tilt,
             )
             arc_start = int(rng.uniform(0, 360) * 16)
             arc_sweep = int(rng.uniform(200, 280) * 16)
-            back_arc_color = QColor(atmos)
-            back_arc_color.setAlpha(30)
+            back_arc = QColor(rim)
+            back_arc.setAlpha(rng.randint(16, 26))
             p.setBrush(Qt.BrushStyle.NoBrush)
-            p.setPen(QPen(back_arc_color, 1.5))
-            p.drawArc(ring_rect, arc_start, arc_sweep)
-            # Faint inner band
-            inner_back_color = QColor(atmos)
-            inner_back_color.setAlpha(18)
-            p.setPen(QPen(inner_back_color, 1.0))
-            inner_back_radius = ring_radius - 1.8
-            inner_back_rect = QRectF(
-                center.x() - inner_back_radius,
-                center.y() - inner_back_radius * tilt,
-                inner_back_radius * 2,
-                inner_back_radius * 2 * tilt,
-            )
-            p.drawArc(inner_back_rect, arc_start, arc_sweep)
+            p.setPen(QPen(back_arc, 1.0))
+            p.drawArc(rect_ring, arc_start, arc_sweep)
 
-        # 3. Planet body — 3D sphere with real lighting
-        # 3a. Diffuse lighting gradient
-        light_cx = center.x() + light_dir_x * radius * 0.38
-        light_cy = center.y() + light_dir_y * radius * 0.38
-        g_body = QRadialGradient(QPointF(light_cx, light_cy), radius * 1.35)
-        highlight = QColor(
-            int(light.red() * 0.75 + 255 * 0.25),
-            int(light.green() * 0.75 + 255 * 0.25),
-            int(light.blue() * 0.75 + 255 * 0.25),
-        )
-        g_body.setColorAt(0.00, highlight)
-        g_body.setColorAt(0.22, light)
-        mid_blend = QColor(
-            int(light.red() * 0.5 + dark.red() * 0.5),
-            int(light.green() * 0.5 + dark.green() * 0.5),
-            int(light.blue() * 0.5 + dark.blue() * 0.5),
-        )
-        g_body.setColorAt(0.50, mid_blend)
-        dark_75 = QColor(
-            int(dark.red() * 0.75),
-            int(dark.green() * 0.75),
-            int(dark.blue() * 0.75),
-        )
-        g_body.setColorAt(0.78, dark_75)
-        dark_45 = QColor(
-            int(dark.red() * 0.45),
-            int(dark.green() * 0.45),
-            int(dark.blue() * 0.45),
-        )
-        g_body.setColorAt(1.00, dark_45)
-        p.setBrush(QBrush(g_body))
-        p.setPen(Qt.PenStyle.NoPen)
-        p.drawEllipse(center, radius, radius)
+        # c) Planet body — translucent glass
+        self._draw_body(p, center, radius, base, rim, shadow, focal_x, focal_y)
 
-        # 3b. Limb darkening overlay — darkens all edges for 3D rim
-        g_limb = QRadialGradient(center, radius)
-        g_limb.setColorAt(0.00, QColor(0, 0, 0, 0))
-        g_limb.setColorAt(0.60, QColor(0, 0, 0, 0))
-        g_limb.setColorAt(0.82, QColor(0, 0, 0, 45))
-        g_limb.setColorAt(1.00, QColor(0, 0, 0, 110))
-        p.setBrush(QBrush(g_limb))
-        p.setPen(Qt.PenStyle.NoPen)
-        p.drawEllipse(center, radius, radius)
-
-        # 4. Clip to planet circle
+        # d) Subtle inner depth (clipped to body)
         clip_path = QPainterPath()
         clip_path.addEllipse(center, radius, radius)
         p.setClipPath(clip_path)
 
-        # 5. Surface details (all clipped to planet boundary)
-        # 5a. Soft latitude bands — filled, low alpha, whispering across the disk
-        num_bands = rng.randint(4, 7)
-        for i in range(num_bands):
-            phi = rng.uniform(-0.65, 0.65)
-            y_center = center.y() + radius * math.sin(phi)
-            half_w = radius * math.cos(phi)
-            top_bow = rng.uniform(1.0, 2.5)
-            bot_bow = rng.uniform(1.0, 2.5)
-            band_path = QPainterPath()
-            # Top edge
-            band_path.moveTo(center.x() - half_w, y_center - 1.2)
-            band_path.cubicTo(
-                center.x() - half_w * 0.45, y_center - 1.2 + top_bow,
-                center.x() + half_w * 0.45, y_center - 1.2 + top_bow,
-                center.x() + half_w, y_center - 1.2,
-            )
-            # Bottom edge (reverse)
-            band_path.lineTo(center.x() + half_w, y_center + 1.2)
-            band_path.cubicTo(
-                center.x() + half_w * 0.45, y_center + 1.2 + bot_bow,
-                center.x() - half_w * 0.45, y_center + 1.2 + bot_bow,
-                center.x() - half_w, y_center + 1.2,
-            )
-            band_path.closeSubpath()
-            # Alternate slightly lighter and darker bands
-            if i % 2 == 0:
-                band_color = QColor(light)
-                band_color.setAlpha(rng.randint(12, 22))
-            else:
-                band_color = QColor(
-                    int(dark.red() * 0.65 + light.red() * 0.35),
-                    int(dark.green() * 0.65 + light.green() * 0.35),
-                    int(dark.blue() * 0.65 + light.blue() * 0.35),
-                )
-                band_color.setAlpha(rng.randint(8, 16))
-            p.setBrush(QBrush(band_color))
-            p.setPen(Qt.PenStyle.NoPen)
-            p.drawPath(band_path)
+        depth_center = QPointF(center.x() + 0.35 * radius, center.y() + 0.35 * radius)
+        g_depth = QRadialGradient(depth_center, radius * 0.7)
+        g_depth.setColorAt(0.0, QColor(0, 0, 0, 0))
+        g_depth.setColorAt(1.0, QColor(0, 0, 0, rng.randint(35, 55)))
+        p.setBrush(QBrush(g_depth))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.drawEllipse(center, radius, radius)
 
+        # e) Gas bands (2-4, clipped)
+        self._draw_gas_bands(p, center, radius, rng, base, rim, shadow)
 
-
-        # 6. Un-clip
+        # Un-clip
         p.setClipPath(QPainterPath(), Qt.ClipOperation.NoClip)
 
-        # 7. Ring FRONT arc — overlays planet edges for orbital depth
-        if self._seed % 10 < 2:
-            front_wide = QColor(atmos)
-            front_wide.setAlpha(40)
+        # f) Directional crescent highlight (not clipped)
+        if rng.random() < 0.5:
+            crescent_start = rng.uniform(35, 70)
+        else:
+            crescent_start = rng.uniform(115, 155)
+        crescent_sweep = rng.uniform(55, 95)
+        crescent_start_16 = int(crescent_start * 16)
+        crescent_sweep_16 = int(crescent_sweep * 16)
+
+        planet_rect = QRectF(
+            center.x() - radius,
+            center.y() - radius,
+            radius * 2,
+            radius * 2,
+        )
+
+        # Soft bloom arc behind highlight
+        bloom = QColor(rim)
+        bloom.setAlpha(rng.randint(18, 28))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.setPen(QPen(bloom, 3.0))
+        p.drawArc(planet_rect, crescent_start_16, crescent_sweep_16)
+
+        # Sharp crescent
+        crescent = QColor(rim)
+        crescent.setAlpha(rng.randint(70, 110))
+        p.setPen(QPen(crescent, rng.uniform(1.0, 1.25)))
+        p.drawArc(planet_rect, crescent_start_16, crescent_sweep_16)
+
+        # g) Thin tactical rim (full ellipse)
+        rim_line = QColor(rim)
+        rim_line.setAlpha(rng.randint(28, 45))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.setPen(QPen(rim_line, 1.0))
+        p.drawEllipse(center, radius, radius)
+
+        # h) Ring FRONT arc (optional)
+        if has_ring:
+            front_arc = QColor(rim)
+            front_arc.setAlpha(rng.randint(30, 52))
             p.setBrush(Qt.BrushStyle.NoBrush)
-            p.setPen(QPen(front_wide, 2.0))
-            p.drawArc(ring_rect, arc_start, arc_sweep)
-            front_tight = QColor(atmos)
-            front_tight.setAlpha(70)
-            p.setPen(QPen(front_tight, 0.5))
-            p.drawArc(ring_rect, arc_start, arc_sweep)
-            # Faint inner band
-            inner_front_color = QColor(atmos)
-            inner_front_color.setAlpha(20)
-            p.setPen(QPen(inner_front_color, 0.5))
-            inner_front_rect = ring_rect.adjusted(1.8, 1.8 * 0.38, -1.8, -1.8 * 0.38)
-            p.drawArc(inner_front_rect, arc_start, arc_sweep)
+            p.setPen(QPen(front_arc, rng.uniform(1.0, 1.4)))
+            p.drawArc(rect_ring, arc_start, arc_sweep)
 
         p.end()
         pix = pix.scaled(
