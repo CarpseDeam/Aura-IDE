@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QVBoxLayout,
     QScrollArea,
+    QSplitter,
     QWidget,
     QToolButton,
 )
@@ -240,21 +241,22 @@ class LeftPane(QFrame):
         layout.addLayout(change_row)
 
         # --- Projects section ---
-        projects_sep = QFrame()
-        projects_sep.setFrameShape(QFrame.Shape.HLine)
-        projects_sep.setStyleSheet(f"QFrame {{ color: {BORDER}; }}")
-        layout.addWidget(projects_sep)
+        _projects_block = QWidget()
+        _projects_block.setMinimumHeight(100)
+        _projects_block_layout = QVBoxLayout(_projects_block)
+        _projects_block_layout.setContentsMargins(0, 0, 0, 0)
+        _projects_block_layout.setSpacing(4)
 
         projects_title = QLabel("Projects")
         projects_title.setObjectName("paneTitleProjects")
-        layout.addWidget(projects_title)
+        _projects_block_layout.addWidget(projects_title)
 
         new_project_row = QHBoxLayout()
         new_project_row.setContentsMargins(8, 0, 8, 6)
         self._new_project_btn = QPushButton("＋ New Project")
         self._new_project_btn.clicked.connect(self.new_project_requested.emit)
         new_project_row.addWidget(self._new_project_btn)
-        layout.addLayout(new_project_row)
+        _projects_block_layout.addLayout(new_project_row)
 
         self._projects_scroll = QScrollArea()
         self._projects_scroll.setWidgetResizable(True)
@@ -268,30 +270,31 @@ class LeftPane(QFrame):
         self._projects_layout.setSpacing(2)
 
         self._projects_scroll.setWidget(self._projects_container)
-        layout.addWidget(self._projects_scroll, 1)
+        _projects_block_layout.addWidget(self._projects_scroll, 1)
 
         # --- Drones section ---
-        drones_sep = QFrame()
-        drones_sep.setFrameShape(QFrame.Shape.HLine)
-        drones_sep.setStyleSheet(f"QFrame {{ color: {BORDER}; }}")
-        layout.addWidget(drones_sep)
+        _drones_block = QWidget()
+        _drones_block.setMinimumHeight(100)
+        _drones_block_layout = QVBoxLayout(_drones_block)
+        _drones_block_layout.setContentsMargins(0, 0, 0, 0)
+        _drones_block_layout.setSpacing(4)
 
         drones_title = QLabel("Drones")
         drones_title.setObjectName("paneTitleDrones")
-        layout.addWidget(drones_title)
+        _drones_block_layout.addWidget(drones_title)
 
         new_drone_row = QHBoxLayout()
         new_drone_row.setContentsMargins(8, 0, 8, 6)
         self._new_drone_btn = QPushButton("＋ New Drone")
         self._new_drone_btn.clicked.connect(self.new_drone_requested.emit)
         new_drone_row.addWidget(self._new_drone_btn)
-        layout.addLayout(new_drone_row)
+        _drones_block_layout.addLayout(new_drone_row)
 
         self._drones_scroll = QScrollArea()
         self._drones_scroll.setWidgetResizable(True)
         self._drones_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._drones_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self._drones_scroll.setStyleSheet("QScrollArea {{ background: transparent; border: none; }}")
+        self._drones_scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
 
         self._drones_container = QWidget()
         self._drones_layout = QVBoxLayout(self._drones_container)
@@ -299,7 +302,16 @@ class LeftPane(QFrame):
         self._drones_layout.setSpacing(2)
 
         self._drones_scroll.setWidget(self._drones_container)
-        layout.addWidget(self._drones_scroll)  # no stretch — drones section gets space below projects
+        _drones_block_layout.addWidget(self._drones_scroll, 1)
+
+        # --- Splitter ---
+        self._section_splitter = QSplitter(Qt.Orientation.Vertical)
+        self._section_splitter.addWidget(_projects_block)
+        self._section_splitter.addWidget(_drones_block)
+        self._section_splitter.setCollapsible(0, False)
+        self._section_splitter.setCollapsible(1, False)
+        self._section_splitter.setSizes([300, 200])
+        layout.addWidget(self._section_splitter, 1)
 
         # --- Model Config section ---
         self._model_config_footer = QFrame()
