@@ -2038,3 +2038,95 @@ class TestToolLimitIntegration:
             msg.get("tool_call_id") for msg in history.messages if msg.get("role") == "tool"
         ]
         assert set(assistant_tool_calls).issubset(set(tool_result_ids))
+
+
+class TestDeleteFileRecovery:
+    """Tests for delete_file recovery state handling in _update_worker_recovery_state."""
+
+    def test_delete_file_does_not_add_to_syntax_validation(self, manager):
+        """delete_file should not add path to syntax_validation_required."""
+        edit_fallback_required: dict = {}
+        line_range_reread_required: dict = {}
+        syntax_repair_required: dict = {}
+        syntax_validation_required: set[str] = set()
+        write_attempts_by_path: dict = {}
+        worker_file_state: dict = {}
+        patch_failed_cycles: dict = {}
+        edit_failed_shapes: set[str] = set()
+
+        manager._update_worker_recovery_state(
+            name="delete_file",
+            args={"path": "old.py"},
+            ok=True,
+            content='{"ok": true, "deleted": true, "path": "old.py"}',
+            edit_failed_shapes=edit_failed_shapes,
+            edit_fallback_required=edit_fallback_required,
+            line_range_reread_required=line_range_reread_required,
+            syntax_repair_required=syntax_repair_required,
+            syntax_validation_required=syntax_validation_required,
+            write_attempts_by_path=write_attempts_by_path,
+            worker_file_state=worker_file_state,
+            patch_failed_cycles=patch_failed_cycles,
+        )
+
+        assert "old.py" not in syntax_validation_required
+        assert len(syntax_validation_required) == 0
+
+    def test_delete_file_clears_existing_syntax_state(self, manager):
+        """delete_file should clear pre-existing syntax state for the path."""
+        edit_fallback_required: dict = {}
+        line_range_reread_required: dict = {}
+        syntax_repair_required: dict = {
+            "old.py": {"repair_attempted": True, "awaiting_validation": True},
+        }
+        syntax_validation_required: set[str] = {"old.py"}
+        write_attempts_by_path: dict = {}
+        worker_file_state: dict = {}
+        patch_failed_cycles: dict = {}
+        edit_failed_shapes: set[str] = set()
+
+        manager._update_worker_recovery_state(
+            name="delete_file",
+            args={"path": "old.py"},
+            ok=True,
+            content='{"ok": true, "deleted": true, "path": "old.py"}',
+            edit_failed_shapes=edit_failed_shapes,
+            edit_fallback_required=edit_fallback_required,
+            line_range_reread_required=line_range_reread_required,
+            syntax_repair_required=syntax_repair_required,
+            syntax_validation_required=syntax_validation_required,
+            write_attempts_by_path=write_attempts_by_path,
+            worker_file_state=worker_file_state,
+            patch_failed_cycles=patch_failed_cycles,
+        )
+
+        assert "old.py" not in syntax_validation_required
+        assert len(syntax_repair_required) == 0
+
+    def test_write_file_still_schedules_validation(self, manager):
+        """write_file on a .py path should still add to syntax_validation_required."""
+        edit_fallback_required: dict = {}
+        line_range_reread_required: dict = {}
+        syntax_repair_required: dict = {}
+        syntax_validation_required: set[str] = set()
+        write_attempts_by_path: dict = {}
+        worker_file_state: dict = {}
+        patch_failed_cycles: dict = {}
+        edit_failed_shapes: set[str] = set()
+
+        manager._update_worker_recovery_state(
+            name="write_file",
+            args={"path": "new.py"},
+            ok=True,
+            content='{"ok": true, "path": "new.py"}',
+            edit_failed_shapes=edit_failed_shapes,
+            edit_fallback_required=edit_fallback_required,
+            line_range_reread_required=line_range_reread_required,
+            syntax_repair_required=syntax_repair_required,
+            syntax_validation_required=syntax_validation_required,
+            write_attempts_by_path=write_attempts_by_path,
+            worker_file_state=worker_file_state,
+            patch_failed_cycles=patch_failed_cycles,
+        )
+
+        assert "new.py" in syntax_validation_required

@@ -1427,6 +1427,19 @@ class ConversationManager:
 
         if ok:
             if name in WRITE_TOOLS and path:
+                is_deletion = (
+                    name == "delete_file"
+                    or (isinstance(parsed, dict) and parsed.get("deleted") is True)
+                )
+                if is_deletion:
+                    self._pop_normalized_recovery_key(edit_fallback_required, path)
+                    self._pop_normalized_recovery_key(line_range_reread_required, path)
+                    self._pop_normalized_key(worker_file_state, path)
+                    self._clear_patch_failed_shapes_for_path(patch_failed_cycles, path)
+                    self._pop_syntax_repair_state(syntax_repair_required, path)
+                    self._discard_syntax_validation_path(syntax_validation_required, path)
+                    return content
+
                 self._pop_normalized_recovery_key(edit_fallback_required, path)
                 self._pop_normalized_recovery_key(line_range_reread_required, path)
                 self._pop_normalized_key(worker_file_state, path)

@@ -184,7 +184,7 @@ class WorkerEventRelay(QObject):
                     self.touched_files.add(path)
                     if parsed.get("is_new_file"):
                         self.wrote_new_files.append(path)
-                    else:
+                    elif not parsed.get("deleted"):
                         self.edited_existing_files.append(path)
             elif ev.name in WRITE_TOOLS and isinstance(parsed, dict):
                 if parsed.get("applied") is False or str(parsed.get("write_outcome") or "").startswith("not_applied_"):

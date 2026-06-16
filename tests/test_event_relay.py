@@ -186,7 +186,7 @@ def test_delete_file_success_is_tracked_as_applied_write() -> None:
         }
     ]
     assert relay.touched_files == {"old.py"}
-    assert relay.edited_existing_files == ["old.py"]
+    assert relay.edited_existing_files == []
 
 
 def test_terminal_results_include_capped_output_and_preview() -> None:
