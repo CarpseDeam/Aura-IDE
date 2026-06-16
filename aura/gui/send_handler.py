@@ -82,18 +82,10 @@ class SendHandler(QObject):
         self._message_queue.clear()
 
     def clear_drone_architect_mode(self) -> None:
-        """Exit drone architect mode without adding chat messages.
-
-        Used when the conversation is being reset (new conversation, open
-        conversation, project switch, companion thread select).
-        """
-        if self._drone_coordinator and self._drone_coordinator.is_drone_mode():
-            self._drone_coordinator.exit_drone_mode(restore_project_chat=False)
+        """No-op: drone architect mode removed."""
 
     def is_drone_architect_mode(self) -> bool:
-        """Return whether Drone Architect mode is currently active."""
-        if self._drone_coordinator:
-            return self._drone_coordinator.is_drone_mode()
+        """Drone architect mode removed; always returns False."""
         return False
 
     def process_message_queue(self, model: str, thinking: ThinkingMode) -> None:
@@ -104,25 +96,9 @@ class SendHandler(QObject):
 
     def handle_send(self, payload: SendPayload, model: str, thinking: ThinkingMode) -> None:
         """Process a send payload: route built-ins, queue if busy, or send."""
-        # Early exit-check: exit drone mode on /chat or /drone off while in mode.
-        if self._drone_coordinator and self._drone_coordinator.is_drone_mode():
-            text = payload.text.strip()
-            lower = text.lower()
-            if lower == "/chat" or lower.startswith("/drone off"):
-                self._drone_coordinator.exit_drone_mode()
-                return
-
-        # Handle /drone directly before generic route classification
-        if payload.text.strip().lower() == "/drone":
-            if self._drone_coordinator:
-                self._drone_coordinator.handle_drone_toggle()
-            return
+        # Drone mode checks removed — drone lifecycle removed.
 
         route = classify_user_request(payload.text)
-        if route.action == "drone_enter_mode":
-            self._handle_drone_enter_mode(payload)
-            return
-
         if route.lane == TaskLane.built_in_action:
             self._chat.add_user(payload.text)
             self._handle_built_in_action(route.action)
@@ -227,11 +203,6 @@ class SendHandler(QObject):
         return True
 
     # ---- drone architect --------------------------------------------------
-
-    def _handle_drone_enter_mode(self, payload: SendPayload) -> None:
-        """Handle /drone command — toggle Drone mode on/off."""
-        if self._drone_coordinator:
-            self._drone_coordinator.handle_drone_toggle()
 
     # ---- undo --------------------------------------------------------------
     def _handle_built_in_action(self, action: str) -> None:
@@ -383,11 +354,6 @@ class SendHandler(QObject):
             parts = []
             if text:
                 parts.append({"type": "text", "text": text})
-            # If drone mode is active, append drone context as an extra text part.
-            if self._drone_coordinator and self._drone_coordinator.is_drone_mode():
-                drone_ctx = self._drone_coordinator.active_drone_context()
-                if drone_ctx:
-                    parts.append({"type": "text", "text": drone_ctx})
             for a in image_atts:
                 parts.append({
                     "type": "image_url",

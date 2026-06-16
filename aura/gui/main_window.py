@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFileDialog,
+    QInputDialog,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -238,9 +239,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             status_bar=self._status_bar,
             parent=self,
         )
-        self._drone_coordinator.drone_mode_changed.connect(
-            self._on_drone_architect_mode_changed
-        )
+        # drone_mode_changed is no-op — drone mode lifecycle removed.
+        self._drone_coordinator.drone_mode_changed.connect(lambda active: None)
         self._drone_coordinator.drone_list_changed.connect(
             self._on_drone_list_changed
         )
@@ -948,22 +948,33 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             self._refresh_drone_context()
 
     def _on_edit_drone(self, drone_id: str, folder: str = "") -> None:
-        """Route to Drone mode for editing a Ready or in-progress Drone."""
+        """Show feedback dialog and pass to coordinator."""
+        text, ok = QInputDialog.getMultiLineText(
+            self,
+            "Edit Drone",
+            "What changes do you want to make to this drone?",
+        )
+        if not ok or not text.strip():
+            return
+
         if folder and Path(folder).is_dir():
-            # Canonical folder provided — use it directly, bypassing global rediscovery.
-            self._drone_coordinator.edit_ready_drone_by_folder(drone_id, Path(folder))
-            return
-        if drone_id.startswith("builder:"):
-            self._drone_coordinator.edit_builder_drone(
-                drone_id.removeprefix("builder:")
+            self._drone_coordinator.edit_ready_drone_by_folder(
+                drone_id, Path(folder), feedback=text.strip()
             )
-            return
+        else:
+            self._drone_coordinator.edit_ready_drone(
+                drone_id, feedback=text.strip()
+            )
 
-        drone = DroneStore.load_drone(self._workspace_root, drone_id)
-        if drone is None:
+    def _on_new_drone(self) -> None:
+        """Ask for a description and dispatch a new drone build."""
+        if self._workspace_root is None:
             return
-
-        self._drone_coordinator.edit_ready_drone(drone_id)
+        text, ok = QInputDialog.getMultiLineText(
+            self, "New Drone", "Describe the Drone you want to build:"
+        )
+        if ok and text.strip():
+            self._drone_coordinator.create_new_drone(text.strip())
 
     def _on_drone_list_changed(self) -> None:
         """Refresh Drone surfaces after Builder state changes."""
@@ -1020,20 +1031,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._refresh_drone_context()
 
     def _on_delete_drone(self, drone_id: str) -> None:
-        if drone_id.startswith("builder:"):
-            reply = QMessageBox.question(
-                self,
-                "Delete Drone",
-                "Are you sure you want to delete this Drone?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
-            )
-            if reply == QMessageBox.Yes:
-                self._drone_coordinator.discard_builder_drone(
-                    drone_id.removeprefix("builder:")
-                )
-            return
-
         reply = QMessageBox.question(
             self,
             "Delete Drone",
@@ -1253,13 +1250,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
     def _on_launch_drone(self, drone_id: str, folder: str = "") -> None:
         """Launch a Drone (read-only or write-capable)."""
         if self._workspace_root is None:
-            return
-        if drone_id.startswith("builder:"):
-            QMessageBox.information(
-                self,
-                "Drone List",
-                "This Drone is not Ready yet.",
-            )
             return
 
         if folder and Path(folder).is_dir():
@@ -1870,9 +1860,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             self._chat.set_compact_tools(effective_enabled)
 
     def _on_drone_architect_mode_changed(self, active: bool) -> None:
-        """Update UI when drone architect mode is toggled."""
-        self._input.set_drone_architect_mode(active)
-        self._status_bar.set_drone_architect_mode(active)
+        """No-op: drone architect mode removed."""
 
     def _on_started(self) -> None:
         self._input.set_streaming(True)

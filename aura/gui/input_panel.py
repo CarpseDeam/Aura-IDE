@@ -289,37 +289,14 @@ class InputPanel(QFrame):
         self._editor.setPlaceholderText(text)
 
     def set_drone_architect_mode(self, active: bool) -> None:
-        """Toggle the drone architect visual state on the input panel."""
-        self._drone_architect_active = active
-        if active:
-            self._editor.setPlaceholderText(
-                "Describe the Drone you want to build..."
-            )
-            self._send_btn.setText("Forge")
-            self._send_btn.setToolTip("Forge Drone")
-            self.setStyleSheet(
-                "QFrame {"
-                "  background: rgba(34, 34, 40, 0.85);"
-                "  border: 1px solid rgba(157, 124, 216, 0.5);"
-                "  border-radius: 18px;"
-                "}"
-            )
-        else:
-            self._editor.setPlaceholderText(self._original_placeholder)
-            self._send_btn.setText(self._original_send_text)
-            self._send_btn.setToolTip(self._original_send_tooltip)
-            self.setStyleSheet(self._original_frame_style)
+        """No-op: drone architect mode removed."""
 
     def set_queued_messages(self, count: int) -> None:
         """Update the send button to show how many messages are queued."""
         if count > 0:
-            self._send_btn.setText(f"→  [{count} queued]")
+            self._send_btn.setText(f"\u2192  [{count} queued]")
         else:
-            if self._drone_architect_active:
-                self._send_btn.setText("Forge")
-            else:
-                self._send_btn.setText("→")
-
+            self._send_btn.setText("\u2192")
     # ---- attachments ------------------------------------------------------
 
     def _on_image_pasted(self, qimg: QImage) -> None:

@@ -35,6 +35,7 @@ class DroneBayPane(QWidget):
     """
 
     newWorkflowRequested = Signal()
+    newDroneRequested = Signal()
     editDroneRequested = Signal(str)
     duplicateDroneRequested = Signal(str)
     deleteDroneRequested = Signal(str)
@@ -93,6 +94,19 @@ class DroneBayPane(QWidget):
         self._new_workflow_btn.clicked.connect(self.newWorkflowRequested.emit)
         self._new_workflow_btn.hide()
         header_layout.addWidget(self._new_workflow_btn)
+
+        self._new_drone_btn = QPushButton("New Drone")
+        self._new_drone_btn.setObjectName("primary")
+        self._new_drone_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._new_drone_btn.setStyleSheet(
+            f"QPushButton#primary {{ background: {ACCENT}; color: {BG}; "
+            f"border: 1px solid {ACCENT}; border-radius: 6px; "
+            f"padding: 6px 16px; font-weight: 600; font-size: 13px; }}"
+            f"QPushButton#primary:hover {{ background: #94b6ff; }}"
+        )
+        self._new_drone_btn.clicked.connect(self.newDroneRequested.emit)
+        self._new_drone_btn.hide()
+        header_layout.addWidget(self._new_drone_btn)
 
         layout.addWidget(header)
 
@@ -217,12 +231,14 @@ class DroneBayPane(QWidget):
                 "Small focused workers Aura can save and launch for repeatable tasks."
             )
             self._new_workflow_btn.hide()
+            self._new_drone_btn.show()
         else:
             self._header_title.setText("Workflows")
             self._header_subtitle.setText(
                 "Connect saved Drones into reusable automation pipelines."
             )
             self._new_workflow_btn.show()
+            self._new_drone_btn.hide()
             self._workflow_list.refresh()
 
     # -- Internal helpers --
