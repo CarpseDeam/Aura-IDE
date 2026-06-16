@@ -303,12 +303,12 @@ class EdgeTabRail(QFrame):
         )
 
     def _drone_tab_style(self) -> str:
-        cyan = "#7dcfff"
+        gold = "#ffcc4d"
         return (
             "QToolButton#edgeDroneTab {"
-            "  background: #0b202b;"
-            f"  color: {cyan};"
-            f"  border: 1px solid {cyan};"
+            "  background: #2b220b;"
+            f"  color: {gold};"
+            f"  border: 1px solid {gold};"
             "  border-right: none;"
             "  border-top-left-radius: 8px;"
             "  border-bottom-left-radius: 8px;"
@@ -317,7 +317,7 @@ class EdgeTabRail(QFrame):
             "  padding: 0px;"
             "}"
             "QToolButton#edgeDroneTab:hover {"
-            "  background: #123344;"
+            "  background: #3d3312;"
             f"  color: {FG};"
             "}"
         )

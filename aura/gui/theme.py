@@ -44,7 +44,7 @@ LABEL_FILES = "#7dcfff"         # cyan-blue — files header
 LABEL_MODEL = "#a8aebb"         # muted silver — model config header (same as FG_DIM, keep subtle)
 LABEL_DISPATCH = "#7aa2f7"      # blue — dispatch toggle label
 LABEL_APPROVE = "#9ece6a"       # green — approve toggle label
-LABEL_DRONES = "#7dcfff"        # cyan — drone summon toggle label
+LABEL_DRONES = "#ffcc4d"        # gold — drone summon toggle label
 LABEL_READ_ONLY = "#e0af68"     # amber/warm — read-only badge
 LABEL_THREAD = "#a8aebb"        # dim gray — thread titles (same as FG_DIM)
 LABEL_THREAD_HOVER = "#eaecef"  # bright — thread title on hover (same as FG)
@@ -279,8 +279,8 @@ QLabel#paneTitleWorkspace {{ color: {LABEL_WORKSPACE}; font-size: 11px; font-wei
 QLabel#paneTitleFiles {{ color: {LABEL_FILES}; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; padding: 4px 8px; }}
 QLabel#paneTitleProjects {{ color: {LABEL_PROJECTS}; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; padding: 4px 8px; }}
 QLabel#paneTitleModel {{ color: {LABEL_MODEL}; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; padding: 4px 8px; }}
+QLabel#paneTitleDrones {{ color: {LABEL_DRONES}; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; padding: 4px 8px; }}
 QLabel#paneTitleTodo {{ color: {LABEL_TODO}; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; padding: 0 0 4px 0; }}
-
 QLabel#threadTitle {{ color: {LABEL_THREAD}; font-size: 12px; }}
 QLabel#threadTitle:hover {{ color: {LABEL_THREAD_HOVER}; }}
 
