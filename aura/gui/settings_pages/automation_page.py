@@ -59,12 +59,6 @@ class AutomationPage(QWidget):
         )
         form.addRow("", self._auto_summon_drones_chk)
 
-        self._show_reasoning_chk = GlassSwitch(
-            "Show Planner reasoning in the UI",
-            self._settings.show_planner_reasoning,
-        )
-        form.addRow("", self._show_reasoning_chk)
-
         self._max_rounds_spin = QSpinBox()
         self._max_rounds_spin.setRange(1, 500)
         self._max_rounds_spin.setToolTip(
@@ -81,5 +75,4 @@ class AutomationPage(QWidget):
         settings.auto_dispatch = self._auto_dispatch_chk.isChecked()
         settings.auto_approve = self._auto_approve_chk.isChecked()
         settings.auto_summon_drones = self._auto_summon_drones_chk.isChecked()
-        settings.show_planner_reasoning = self._show_reasoning_chk.isChecked()
         settings.max_tool_rounds = self._max_rounds_spin.value()

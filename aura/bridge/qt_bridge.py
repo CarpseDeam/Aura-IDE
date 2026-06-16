@@ -270,7 +270,6 @@ class ConversationBridge(QObject):
         self._active_model: str = ""
 
         self._planner_worker_mode: bool = False  # configured by main_window
-        self._show_planner_reasoning: bool = False
         self._temperature: float = 0.7
         self._single_system_prompt: str = ""
         self._planner_system_prompt: str = ""
@@ -376,9 +375,6 @@ class ConversationBridge(QObject):
             sys_prompt = self._single_system_prompt if self._single_system_prompt else SINGLE_SYSTEM_PROMPT
         self._history.set_system(inject_tier1_context(sys_prompt, self._tier1_context))
         self._active_prompt_mode = mode_key
-
-    def set_show_planner_reasoning(self, enabled: bool) -> None:
-        self._show_planner_reasoning = enabled
 
     def set_temperature(self, temperature: float) -> None:
         self._temperature = temperature
@@ -524,8 +520,7 @@ class ConversationBridge(QObject):
         )
         self._worker.moveToThread(self._thread)
 
-        if (not self._planner_worker_mode) or self._show_planner_reasoning:
-            self._worker.reasoningDelta.connect(self.reasoningDelta)
+        self._worker.reasoningDelta.connect(self.reasoningDelta)
         self._worker.contentDelta.connect(self.contentDelta)
         self._worker.toolCallStart.connect(self._on_tool_call_start)
         self._worker.toolCallArgs.connect(self._on_tool_call_args)

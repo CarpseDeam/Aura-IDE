@@ -63,7 +63,6 @@ class AppSettings:
     default_thinking: ThinkingMode = DEFAULT_THINKING
     restore_last_conversation: bool = True
     planner_worker_mode: bool = True
-    show_planner_reasoning: bool = False
     default_planner_model: str = DEFAULT_PLANNER_MODEL
     default_worker_model: str = DEFAULT_WORKER_MODEL
     default_planner_thinking: ThinkingMode = DEFAULT_PLANNER_THINKING
@@ -164,8 +163,6 @@ class AppSettings:
             s.restore_last_conversation = data["restore_last_conversation"]
         if isinstance(data.get("planner_worker_mode"), bool):
             s.planner_worker_mode = data["planner_worker_mode"]
-        if isinstance(data.get("show_planner_reasoning"), bool):
-            s.show_planner_reasoning = data["show_planner_reasoning"]
         s.default_planner_model = _model_from_data(
             data, "default_planner_model", s.planner_provider
         )

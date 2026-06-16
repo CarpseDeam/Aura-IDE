@@ -135,7 +135,7 @@ class AssistantCard(QFrame):
             scroll_area.setStyleSheet("QScrollArea { border: none; background: transparent; }")
             self._reasoning_scroll_area = scroll_area
             section = _CollapsibleSection(
-                "Thinking…", scroll_area, start_open=True, prominent=True
+                "Thinking…", scroll_area, start_open=False, prominent=True
             )
             self._reasoning_section = section
             # Insert reasoning at the top, after header (index 1).

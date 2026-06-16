@@ -132,7 +132,6 @@ class SettingsDialog(QDialog):
             provider=self._settings.provider,
             default_model=self._settings.default_model,
             default_thinking=self._settings.default_thinking,
-            show_planner_reasoning=self._settings.show_planner_reasoning,
             terminal_window_geometry=self._settings.terminal_window_geometry,
             drone_reports_window_geometry=self._settings.drone_reports_window_geometry,
             first_launch_done=self._settings.first_launch_done,
