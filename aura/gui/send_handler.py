@@ -38,6 +38,7 @@ class SendHandler(QObject):
     """
 
     vision_done = Signal(object, list, object)  # SendPayload, list[str], str|None
+    drone_bay_requested = Signal()  # /drone command → open/toggle Drone Workbay
 
     def __init__(
         self,
@@ -221,6 +222,9 @@ class SendHandler(QObject):
             return
         if action == "git_log":
             self._handle_git_log()
+            return
+        if action == "drone_enter_mode":
+            self.drone_bay_requested.emit()
             return
         self._chat.add_error("Built-in action", f"Unsupported action: {action}")
 

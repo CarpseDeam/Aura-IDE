@@ -105,8 +105,6 @@ class DroneBayPane(QWidget):
             f"QPushButton#primary:hover {{ background: #94b6ff; }}"
         )
         self._new_drone_btn.clicked.connect(self.newDroneRequested.emit)
-        self._new_drone_btn.hide()
-        header_layout.addWidget(self._new_drone_btn)
 
         layout.addWidget(header)
 
@@ -158,6 +156,11 @@ class DroneBayPane(QWidget):
         self._stack.addWidget(self._workflow_list)  # index 1
 
         layout.addWidget(self._stack, 1)
+
+        self._new_drone_btn.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+        )
+        layout.addWidget(self._new_drone_btn)
 
         self.refresh()
 
@@ -231,14 +234,12 @@ class DroneBayPane(QWidget):
                 "Small focused workers Aura can save and launch for repeatable tasks."
             )
             self._new_workflow_btn.hide()
-            self._new_drone_btn.show()
         else:
             self._header_title.setText("Workflows")
             self._header_subtitle.setText(
                 "Connect saved Drones into reusable automation pipelines."
             )
             self._new_workflow_btn.show()
-            self._new_drone_btn.hide()
             self._workflow_list.refresh()
 
     # -- Internal helpers --

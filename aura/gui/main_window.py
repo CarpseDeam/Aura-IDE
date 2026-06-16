@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFileDialog,
-    QInputDialog,
+    # QInputDialog removed — DroneBuildWindow replaces inline dialogs
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -48,6 +48,7 @@ from aura.git_ops import git_init, is_git_repo
 from aura.gui.chat_view import ChatView
 from aura.gui.checkpoint_dialog import CheckpointDialog
 from aura.gui.conv_persistence import ConversationPersistence
+from aura.gui.drones.drone_build_window import DroneBuildWindow
 from aura.gui.drones.drone_editor_dialog import DroneEditorDialog
 from aura.gui.drones.drone_mode_coordinator import DroneModeCoordinator
 from aura.gui.drones.drone_reports_window import DroneReportsWindow
@@ -259,6 +260,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._drone_coordinator.fresh_session_requested.connect(
             self._send_handler.clear_queue
         )
+        self._send_handler.drone_bay_requested.connect(self._on_drone_bay_requested)
 
         # Companion (mobile control plane)
         self._companion = CompanionManager(self._settings)
@@ -283,6 +285,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
 
         self._drone_workbay_window: DroneWorkbayWindow | None = None
+        self._drone_build_windows: dict[str, DroneBuildWindow] = {}
 
         # Floating Drone Reports window. Active run cards live here instead of
         # consuming space in the Worker/workspace area.
@@ -947,34 +950,39 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self._refresh_drone_context()
 
-    def _on_edit_drone(self, drone_id: str, folder: str = "") -> None:
-        """Show feedback dialog and pass to coordinator."""
-        text, ok = QInputDialog.getMultiLineText(
-            self,
-            "Edit Drone",
-            "What changes do you want to make to this drone?",
-        )
-        if not ok or not text.strip():
+    def _on_edit_drone(self, drone_id: str) -> None:
+        """Open DroneBuildWindow for editing, or raise if already open."""
+        if drone_id in self._drone_build_windows:
+            win = self._drone_build_windows[drone_id]
+            win.show_and_raise()
             return
-
-        if folder and Path(folder).is_dir():
-            self._drone_coordinator.edit_ready_drone_by_folder(
-                drone_id, Path(folder), feedback=text.strip()
-            )
-        else:
-            self._drone_coordinator.edit_ready_drone(
-                drone_id, feedback=text.strip()
-            )
+        folder = DroneStore.drone_folder(drone_id)
+        if not folder.is_dir():
+            logger.warning("Edit drone %s: folder %s not found", drone_id, folder)
+            return
+        win = DroneBuildWindow(self._workspace_root, parent=self)
+        win.bind(drone_id, folder)
+        self._drone_build_windows[drone_id] = win
+        win.show()
 
     def _on_new_drone(self) -> None:
-        """Ask for a description and dispatch a new drone build."""
-        if self._workspace_root is None:
+        """Open the New Drone build window or raise it if already open."""
+        if "__new__" in self._drone_build_windows:
+            win = self._drone_build_windows["__new__"]
+            win.show_and_raise()
             return
-        text, ok = QInputDialog.getMultiLineText(
-            self, "New Drone", "Describe the Drone you want to build:"
-        )
-        if ok and text.strip():
-            self._drone_coordinator.create_new_drone(text.strip())
+        win = DroneBuildWindow(self._workspace_root, parent=self)
+        win.drone_built.connect(self._on_new_drone_bound)
+        self._drone_build_windows["__new__"] = win
+        win.show()
+
+    def _on_new_drone_bound(self, drone_id: str) -> None:
+        """Move window from '__new__' key to its real drone_id."""
+        if "__new__" in self._drone_build_windows:
+            win = self._drone_build_windows.pop("__new__")
+            self._drone_build_windows[drone_id] = win
+        if hasattr(self, '_drone_coordinator'):
+            self._drone_coordinator.drone_list_changed.emit()
 
     def _on_drone_list_changed(self) -> None:
         """Refresh Drone surfaces after Builder state changes."""
