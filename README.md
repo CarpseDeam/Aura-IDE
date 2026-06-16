@@ -13,7 +13,7 @@
 
 **The AI workflow IDE where the model is the fuel and the harness is the engine.**
 
-Aura is a native desktop IDE that runs your prompt through a real engineering loop — repo analysis, spec writing, safe execution, diff approval, and validation recovery — before anything touches your project. It works across DeepSeek, OpenAI, Anthropic, Gemini, and OpenRouter. You bring the API key. You keep control of every change.
+Aura is a native desktop IDE that runs your prompt through a real engineering loop...repo analysis, spec writing, safe execution, diff approval, and validation recovery, before anything touches your project. It works across DeepSeek, OpenAI, Anthropic, Gemini, and OpenRouter. You bring the API key. You keep control of every change.
 
 <p align="center">
   <img src="media/plan_and_code.gif" alt="Aura planning and coding workflow demo" width="900">
@@ -41,7 +41,7 @@ The harness produces the quality, not the model. Swap models, swap providers, ch
 
 **Your agents, your workflows.**
 
-Aura turns useful agent work into visible, reusable machinery. Drones are reusable workers you build from natural language. They show up in the main UI, run with one click, and can be dragged into Workbay — a visual canvas where you chain them into automations. Read-only drones run in parallel for safe background investigations. Write-capable drones follow the same diff-approval cycle as any Worker. Every drone is project-local, version-controlled, and ready to reuse.
+Aura turns useful agent work into visible, reusable machinery. Drones are reusable workers you build from natural language. They show up in the main UI, run with one click, and can be dragged into Workbay. A visual canvas where you chain them into automations. Read-only drones run in parallel for safe background investigations. Write-capable drones follow the same diff-approval cycle as any Worker. Every drone is project-local, version-controlled, and ready to reuse.
 
 <p align="center">
   <img src="media/drone-workbay.png" alt="Drones and Workbay" width="900">
