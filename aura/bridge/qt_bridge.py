@@ -241,7 +241,9 @@ class ConversationBridge(QObject):
         self._worker_backend = APIAgentBackend(provider=provider)
         
         # Register the backends for planner and worker
+        hooks.unregister('generate_planner_code')
         hooks.register('generate_planner_code', self._planner_backend.stream)
+        hooks.unregister('generate_worker_code')
         hooks.register('generate_worker_code', self._worker_backend.stream)
         
         self._history = History()
@@ -491,14 +493,6 @@ class ConversationBridge(QObject):
 
     def user_cancelled_dispatch(self, tool_call_id: str) -> bool:
         return self._dispatch_proxy.user_cancelled(tool_call_id)
-
-    def dispatch_drone_build(self, req: WorkerDispatchRequest) -> str:
-        """Run a Builder Worker dispatch on a background thread.
-
-        The parent project conversation history is never touched.
-        Returns the tool_call_id for tracking.
-        """
-        return self._dispatch_proxy.start_drone_build(req)
 
     # ---- send / cancel ----------------------------------------------------
 

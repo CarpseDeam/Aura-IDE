@@ -5,12 +5,6 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal
 
-from aura.conversation.dispatch import WorkerDispatchRequest
-from aura.drones.build_spec_prompt import build_dispatch, revise_dispatch
-from aura.drones.definition import slugify
-from aura.drones.store import DroneStore
-from aura.paths import data_dir
-
 logger = logging.getLogger(__name__)
 
 
@@ -55,49 +49,4 @@ class DroneModeCoordinator(QObject):
     def handle_drone_toggle(self) -> None:
         """No-op: drone mode no longer exists."""
 
-    def create_new_drone(self, description: str) -> None:
-        """Create a new Drone from a natural-language description.
 
-        Slugifies the description to an id, calls build_dispatch to
-        produce a Worker dispatch dict, then dispatches to the Worker.
-        The Worker writes drone.json + entrypoint directly into the folder.
-        """
-        if not description.strip():
-            return
-        if self._bridge is None:
-            logger.error("Cannot create drone: no bridge available")
-            return
-        slug = slugify(description)
-        target_folder = data_dir() / "drones" / slug
-        dispatch_dict = build_dispatch(description, target_folder)
-        req = WorkerDispatchRequest(
-            goal=dispatch_dict["goal"],
-            files=dispatch_dict["files"],
-            spec=dispatch_dict["spec"],
-            acceptance=dispatch_dict["acceptance"],
-            summary=dispatch_dict["summary"],
-        )
-        self._bridge.dispatch_drone_build(req)
-
-    def edit_ready_drone_by_folder(self, drone_id: str, folder: Path, feedback: str = "") -> None:
-        """Edit a Drone by folder path with natural-language feedback.
-
-        Calls revise_dispatch to produce a Worker dispatch dict,
-        then dispatches to the Worker.
-        """
-        if not feedback.strip() or self._bridge is None:
-            return
-        dispatch_dict = revise_dispatch(folder, feedback)
-        req = WorkerDispatchRequest(
-            goal=dispatch_dict["goal"],
-            files=dispatch_dict["files"],
-            spec=dispatch_dict["spec"],
-            acceptance=dispatch_dict["acceptance"],
-            summary=dispatch_dict["summary"],
-        )
-        self._bridge.dispatch_drone_build(req)
-
-    def edit_ready_drone(self, drone_id: str, feedback: str = "") -> None:
-        """Edit a Drone by id with natural-language feedback."""
-        folder = DroneStore.drone_folder(drone_id)
-        self.edit_ready_drone_by_folder(drone_id, folder, feedback)

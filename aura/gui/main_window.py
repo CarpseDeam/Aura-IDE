@@ -13,7 +13,6 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFileDialog,
-    # QInputDialog removed — DroneBuildWindow replaces inline dialogs
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -48,7 +47,6 @@ from aura.git_ops import git_init, is_git_repo
 from aura.gui.chat_view import ChatView
 from aura.gui.checkpoint_dialog import CheckpointDialog
 from aura.gui.conv_persistence import ConversationPersistence
-from aura.gui.drones.drone_build_window import DroneBuildWindow
 from aura.gui.drones.drone_editor_dialog import DroneEditorDialog
 from aura.gui.drones.drone_mode_coordinator import DroneModeCoordinator
 from aura.gui.drones.drone_reports_window import DroneReportsWindow
@@ -285,7 +283,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
 
         self._drone_workbay_window: DroneWorkbayWindow | None = None
-        self._drone_build_windows: dict[str, DroneBuildWindow] = {}
 
         # Floating Drone Reports window. Active run cards live here instead of
         # consuming space in the Worker/workspace area.
@@ -854,9 +851,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         editor.closeRequested.connect(workbay.hide)
         editor.runChainRequested.connect(lambda cid: self._on_run_workflow(cid))
         editor.runDroneRequested.connect(self._on_launch_drone)
-        editor.editDroneRequested.connect(self._on_edit_drone)
         editor.deleteDroneRequested.connect(self._on_delete_drone)
-        editor.newDroneRequested.connect(self._on_new_drone)
         workbay.geometry_saved.connect(self._on_drone_workbay_geometry_saved)
         if hooks.is_registered('query_mission_workbay_state'):
             hooks.unregister('query_mission_workbay_state')
@@ -950,40 +945,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         )
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self._refresh_drone_context()
-
-    def _on_edit_drone(self, drone_id: str) -> None:
-        """Open DroneBuildWindow for editing, or raise if already open."""
-        if drone_id in self._drone_build_windows:
-            win = self._drone_build_windows[drone_id]
-            win.show_and_raise()
-            return
-        folder = DroneStore.drone_folder(drone_id)
-        if not folder.is_dir():
-            logger.warning("Edit drone %s: folder %s not found", drone_id, folder)
-            return
-        win = DroneBuildWindow(self._workspace_root, parent=None)
-        win.bind(drone_id, folder)
-        self._drone_build_windows[drone_id] = win
-        win.show_and_raise()
-
-    def _on_new_drone(self) -> None:
-        """Open the New Drone build window or raise it if already open."""
-        if "__new__" in self._drone_build_windows:
-            win = self._drone_build_windows["__new__"]
-            win.show_and_raise()
-            return
-        win = DroneBuildWindow(self._workspace_root, parent=None)
-        win.drone_built.connect(self._on_new_drone_bound)
-        self._drone_build_windows["__new__"] = win
-        win.show_and_raise()
-
-    def _on_new_drone_bound(self, drone_id: str) -> None:
-        """Move window from '__new__' key to its real drone_id."""
-        if "__new__" in self._drone_build_windows:
-            win = self._drone_build_windows.pop("__new__")
-            self._drone_build_windows[drone_id] = win
-        if hasattr(self, '_drone_coordinator'):
-            self._drone_coordinator.drone_list_changed.emit()
 
     def _on_drone_list_changed(self) -> None:
         """Refresh Drone surfaces after Builder state changes."""

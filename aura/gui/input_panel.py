@@ -384,15 +384,15 @@ class InputPanel(QFrame):
         normalized = text.strip().lower()
         if normalized == "/drone":
             self._slash_hint.setText(
-                "/drone opens Drone Builder. Describe the Drone you want to build."
+                "/drone opens the Drone Workbay."
             )
         elif normalized.startswith("/drone "):
             self._slash_hint.setText(
-                "Use /drone by itself, then describe the Drone in the next message."
+                "Use /drone by itself to open the Drone Workbay."
             )
         else:
             self._slash_hint.setText(
-                "/drone  —  Open Drone Builder."
+                "/drone  —  Open the Drone Workbay."
             )
         self._slash_hint.setVisible(True)
 

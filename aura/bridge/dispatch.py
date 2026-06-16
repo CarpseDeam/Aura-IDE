@@ -141,7 +141,6 @@ class _DispatchProxy(QObject):
         # shouldn't happen, but be safe) don't trample each other.
         self._lock = threading.Lock()
         self._pending: dict[str, _DispatchPending] = {}
-        self._active_builds: dict[str, tuple[QThread, QObject]] = {}
         # Records of each completed dispatch for persistence.
         self._records: list[WorkerDispatchRecord] = []
         self._result_metadata: dict[str, dict[str, Any]] = {}
@@ -285,65 +284,9 @@ class _DispatchProxy(QObject):
                 if pending.cancel_event is not None:
                     pending.cancel_event.set()
 
-    def start_drone_build(self, req: WorkerDispatchRequest) -> str:
-        """Run a Builder Worker dispatch on a background QThread.
+    # ---- worker run ------
 
-        The Worker runs with its own isolated History and ConversationManager
-        (created inside _run_worker).  The parent ConversationBridge history is
-        never touched.
-
-        Emits the usual workerStarted / workerFinished signals so existing
-        listeners (DroneModeCoordinator._on_worker_finished) still work.
-        Returns the tool_call_id.
-        """
-        tool_call_id = f"drone_build_{uuid.uuid4().hex[:8]}"
-
-        pending = _DispatchPending(request=req)
-        pending.cancel_event = threading.Event()
-
-        with self._lock:
-            self._pending[tool_call_id] = pending
-
-        thread = QThread()
-
-        class _BuildRunner(QObject):
-            finished = Signal()
-
-            def run(self) -> None:
-                try:
-                    self._dp._run_worker(self._tool_call_id, self._req, self._pending)
-                finally:
-                    with self._dp._lock:
-                        self._dp._pending.pop(self._tool_call_id, None)
-                    self.finished.emit()
-
-        runner = _BuildRunner()
-        runner._dp = self
-        runner._tool_call_id = tool_call_id
-        runner._req = req
-        runner._pending = pending
-        runner.moveToThread(thread)
-
-        with self._lock:
-            self._active_builds[tool_call_id] = (thread, runner)
-
-        def _remove_build_ref(tool_id: str = tool_call_id) -> None:
-            with self._lock:
-                self._active_builds.pop(tool_id, None)
-
-        thread.started.connect(runner.run)
-        runner.finished.connect(thread.quit)
-        runner.finished.connect(runner.deleteLater)
-        thread.finished.connect(_remove_build_ref)
-        thread.finished.connect(thread.deleteLater)
-        thread.start()
-
-        return tool_call_id
-
-    # ---- worker run -------------------------------------------------------
-
-    def _run_worker(
-        self,
+    def _run_worker(        self,
         tool_call_id: str,
         req: WorkerDispatchRequest,
         pending: "_DispatchPending",
