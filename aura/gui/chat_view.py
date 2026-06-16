@@ -38,6 +38,8 @@ class ChatView(QScrollArea):
     retry_requested = Signal()
     mermaid_detected = Signal(str)  # emits the raw mermaid code
     _CODE_TOOL_NAMES = {"write_file", "apply_edit_transaction", "edit_file", "edit_symbol", "edit_line_range", "patch_file"}
+    # Internal execution tools that always use compact badge (never create cards)
+    _INTERNAL_TOOLS = {"run_terminal_command", "run_diagnostic_command"}
     _BOTTOM_THRESHOLD_PX = 64
     _BOTTOM_SAFE_MARGIN_PX = 44
 
@@ -501,6 +503,14 @@ class ChatView(QScrollArea):
             "run_research",
         )
 
+        # Internal execution tools always use compact badge, never create cards
+        if name in self._INTERNAL_TOOLS:
+            ac = self.current_assistant()
+            ac.notify_compact_tool_start(name)
+            self._compact_tool_names[tool_call_id] = name
+            self._scroll_to_bottom()
+            return
+
         if self._compact_tools and not is_heavy:
             ac = self.current_assistant()
             ac.notify_compact_tool_start(name)
@@ -550,21 +560,6 @@ class ChatView(QScrollArea):
                 lambda text, c=controller, card=card: card.set_result(c._state == "done", text)
             )
 
-        elif name == "run_terminal_command":
-            card = TerminalCard(command="...", parent=self, start_collapsed=False)
-            self._terminal_cards[tool_call_id] = card
-            if not ac._tool_cluster.isVisible():
-                ac._tool_cluster.setVisible(True)
-            ac._tool_cluster_layout.addWidget(card)
-            self._tool_owner[tool_call_id] = ac
-
-            controller.command_resolved.connect(card.set_command)
-            controller.result_finalized.connect(
-                lambda data, c=card: c.set_result(
-                    int(data.get("exit_code", -1)) if isinstance(data, dict) else -1
-                )
-            )
-
         else:
             card = ac.add_tool_card(tool_call_id, name)
             self._tool_owner[tool_call_id] = ac
@@ -576,7 +571,7 @@ class ChatView(QScrollArea):
         self._scroll_to_bottom()
 
     def append_tool_args(self, tool_call_id: str, fragment: str) -> None:
-        if self._compact_tools and tool_call_id in self._compact_tool_names:
+        if tool_call_id in self._compact_tool_names:
             return
         controller = self._controllers.get(tool_call_id)
         if controller:
@@ -584,7 +579,7 @@ class ChatView(QScrollArea):
             self._scroll_to_bottom()
 
     def set_tool_result(self, tool_call_id: str, ok: bool, result_text: str) -> None:
-        if self._compact_tools and tool_call_id in self._compact_tool_names:
+        if tool_call_id in self._compact_tool_names:
             name = self._compact_tool_names.pop(tool_call_id, "tool")
             ac = self.current_assistant()
             ac.notify_compact_tool_done(name)
