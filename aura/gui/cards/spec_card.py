@@ -8,7 +8,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
-from aura.conversation.workflow_state import ValidationStatus, WorkflowState, WorkflowStatus
+from aura.conversation.workflow_state import WorkflowState, WorkflowStatus
 from aura.gui.cards._collapsible import _CollapsibleSection
 from aura.gui.cards._helpers import _MarkdownTextBlock
 from aura.gui.markdown_renderer import _render_markdown_with_code
@@ -112,12 +112,7 @@ class SpecCard(QFrame):
         # ---- Status section ----
         self._status_label = self._build_status_section()
         outer.addWidget(self._status_label)
-        self._workflow_details_label = QLabel("", parent=self)
-        self._workflow_details_label.setWordWrap(True)
-        self._workflow_details_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self._workflow_details_label.setStyleSheet(f"color: {FG_DIM}; font-size: 11px;")
-        self._workflow_details_label.setVisible(False)
-        outer.addWidget(self._workflow_details_label)
+
 
         if not self._dispatched:
             self._status_label.setText("Plan ready — waiting for dispatch approval.")
@@ -532,8 +527,7 @@ class SpecCard(QFrame):
         }:
             self._buttons_row.setVisible(False)
 
-        self._workflow_details_label.setText(self._format_workflow_details(state))
-        self._workflow_details_label.setVisible(True)
+
 
     @staticmethod
     def _workflow_status_label(status: WorkflowStatus) -> tuple[str, str]:
@@ -552,53 +546,9 @@ class SpecCard(QFrame):
         }
         return mapping[status]
 
-    @staticmethod
-    def _format_workflow_details(state: WorkflowState) -> str:
-        lines = [
-            f"Task: {state.task_title}",
-            f"Validation: {SpecCard._validation_status_text(state.validation_status)}",
-        ]
-        if state.changed_files:
-            lines.append("Changed files: " + ", ".join(state.changed_files[:6]))
-        else:
-            lines.append("Changed files: none yet")
-        if state.validation_commands_run:
-            commands = []
-            for run in state.validation_commands_run[-3:]:
-                suffix = ""
-                if run.ok is not None:
-                    suffix = " passed" if run.ok else " failed"
-                if run.exit_code is not None:
-                    suffix += f" ({run.exit_code})"
-                commands.append(f"{run.command}{suffix}")
-            lines.append("Validation commands: " + " | ".join(commands))
-        if state.write_outcome:
-            lines.append(f"Write outcome: {state.write_outcome}")
-        if state.caveats:
-            lines.append("Caveats: " + " | ".join(state.caveats[-3:]))
-        if state.blockers:
-            lines.append("Blockers: " + " | ".join(state.blockers[-3:]))
-        if state.blocker_reason:
-            lines.append(f"Blocker: {state.blocker_reason}")
-        if state.failure_reason and state.failure_reason != state.blocker_reason:
-            lines.append(f"Failure: {state.failure_reason}")
-        if state.pending_user_action:
-            lines.append(f"Action needed: {state.pending_user_action}")
-        elif state.follow_up_required:
-            lines.append("Action needed: follow-up required")
-        else:
-            lines.append("Action needed: none")
-        return "\n".join(lines)
 
-    @staticmethod
-    def _validation_status_text(status: ValidationStatus) -> str:
-        return {
-            ValidationStatus.not_run: "not run",
-            ValidationStatus.running: "running",
-            ValidationStatus.passed: "passed",
-            ValidationStatus.failed: "failed",
-            ValidationStatus.mixed: "mixed",
-        }[status]
+
+
 
     def set_dispatched_and_finished(self, ok: bool) -> None:
         """Force the card into a read-only finished state (for history replay)."""
