@@ -32,10 +32,6 @@ from aura.drones.definition import DroneDefinition
 from aura.drones.store import DroneStore
 from aura.gui.drones.chain_canvas import (
     ChainCanvas,
-    ChainEdgeItem,
-    ChainNodeItem,
-    GoalPlanetItem,
-    MissionCoreItem,
 )
 
 logger = logging.getLogger(__name__)
@@ -341,7 +337,7 @@ class _DroneRosterWidget(QScrollArea):
         if not entries:
             empty = QLabel(
                 "No drones installed. Create a Drone folder under "
-                "<code>data_dir()/drones/&lt;id&gt;/</code> "
+                "<code>.aura/drones/&lt;id&gt;/</code> "
                 "with a <code>drone.json</code> manifest."
             )
             empty.setWordWrap(True)

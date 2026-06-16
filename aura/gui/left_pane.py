@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+
 from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtWidgets import (
     QComboBox,
@@ -9,12 +10,12 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QSizePolicy,
-    QVBoxLayout,
     QScrollArea,
+    QSizePolicy,
     QSplitter,
-    QWidget,
     QToolButton,
+    QVBoxLayout,
+    QWidget,
 )
 
 from aura.config import (
@@ -24,9 +25,10 @@ from aura.config import (
     ProviderId,
     ThinkingMode,
 )
-from aura.providers.registry import provider_registry
-from aura.gui.theme import BG, BG_ALT, BG_RAISED, BORDER, FG, FG_DIM, FG_MUTED, ACCENT, LABEL_PROJECTS, LABEL_THREAD
+from aura.gui.theme import ACCENT, BG_ALT, BG_RAISED, BORDER, FG_DIM, FG_MUTED, LABEL_PROJECTS, LABEL_THREAD
 from aura.projects.store import ProjectStore
+from aura.providers.registry import provider_registry
+
 
 class _ToggleToolButton(QToolButton):
     def mousePressEvent(self, event) -> None:
@@ -538,21 +540,25 @@ class LeftPane(QFrame):
         self.refresh_projects(self._last_workspace_root)
 
     def refresh_drones(self, active_root: Path | None) -> None:
-        from aura.drones.store import DroneStore, _global_drones_root
+        from aura.drones.store import DroneStore
 
         while self._drones_layout.count():
             item = self._drones_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
 
+        ws_root = self._last_workspace_root
+        if ws_root is None:
+            return
+
         try:
-            entries = DroneStore.list_drone_folders()
+            entries = DroneStore.list_drone_folders(ws_root)
         except Exception:
             logging.warning("Failed to list drone folders")
             self._drones_layout.addStretch(1)
             return
 
-        global_root = _global_drones_root()
+        global_root = ws_root / ".aura" / "drones"
         active_resolved = active_root.resolve() if active_root is not None else None
 
         for entry in entries:

@@ -47,7 +47,6 @@ from aura.git_ops import git_init, is_git_repo
 from aura.gui.chat_view import ChatView
 from aura.gui.checkpoint_dialog import CheckpointDialog
 from aura.gui.conv_persistence import ConversationPersistence
-
 from aura.gui.drones.drone_reports_window import DroneReportsWindow
 from aura.gui.drones.drone_run_card import DroneRunCard
 from aura.gui.drones.drone_summon_card import DroneSummonCard
@@ -773,12 +772,13 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         # so a drone is never registered as a project and Aura never boots into one.
 
     def _on_create_drone(self) -> None:
-        from aura.drones.store import _global_drones_root
         import json
         from uuid import uuid4
 
+        from aura.drones.store import _global_drones_root
+
         drone_id = f"drone-{uuid4().hex[:8]}"
-        drone_dir = _global_drones_root() / drone_id
+        drone_dir = _global_drones_root(self._workspace_root) / drone_id
         drone_dir.mkdir(parents=True, exist_ok=True)
 
         manifest = {

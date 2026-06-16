@@ -10,7 +10,6 @@ from pathlib import Path
 
 from aura.drones.definition import DroneBudget, DroneDefinition, slugify
 from aura.drones.receipt import DroneReceipt
-from aura.paths import aura_root
 
 logger = logging.getLogger(__name__)
 
@@ -20,9 +19,9 @@ def _is_safe_drone_id(drone_id: str) -> bool:
     return bool(_DRONE_ID_RE.fullmatch(str(drone_id or "")))
 
 
-def _global_drones_root() -> Path:
-    """Return the global drones storage directory — the repo-root/drones/ folder."""
-    return aura_root() / "drones"
+def _global_drones_root(workspace_root: Path) -> Path:
+    """Return the workspace-relative drones storage directory."""
+    return workspace_root / ".aura" / "drones"
 
 
 def _drone_from_dict(data: dict) -> DroneDefinition:
@@ -85,10 +84,9 @@ class DroneStore:
 
     @staticmethod
     def list_drones(workspace_root: Path) -> list[DroneDefinition]:
-        _ = workspace_root
         seen: dict[str, DroneDefinition] = {}
 
-        global_root = _global_drones_root()
+        global_root = _global_drones_root(workspace_root)
         if global_root.exists():
             for subdir in sorted(global_root.iterdir()):
                 if not subdir.is_dir():
@@ -124,10 +122,10 @@ class DroneStore:
         return sorted(rows.values(), key=lambda r: r.name.lower())
 
     @staticmethod
-    def list_drone_folders() -> list[DroneListEntry]:
+    def list_drone_folders(workspace_root: Path) -> list[DroneListEntry]:
         """Return list of folder-backed Drones — including non-ready/dev ones."""
         rows: list[DroneListEntry] = []
-        global_root = _global_drones_root()
+        global_root = _global_drones_root(workspace_root)
         if not global_root.exists():
             return rows
         for subdir in sorted(global_root.iterdir()):
@@ -157,11 +155,10 @@ class DroneStore:
 
     @staticmethod
     def load_drone(workspace_root: Path, drone_id: str) -> DroneDefinition | None:
-        _ = workspace_root
         if not _is_safe_drone_id(drone_id):
             return None
 
-        global_file = _global_drones_root() / drone_id / "drone.json"
+        global_file = _global_drones_root(workspace_root) / drone_id / "drone.json"
         if global_file.exists():
             try:
                 data = json.loads(global_file.read_text(encoding="utf-8"))
@@ -179,17 +176,16 @@ class DroneStore:
         This is not a creation endpoint. New Drones must be installed with
         register_drone_folder so their code is present.
         """
-        _ = workspace_root
         DroneStore.validate_drone(drone)
-        drone_dir = _global_drones_root() / drone.id
+        drone_dir = _global_drones_root(workspace_root) / drone.id
         if not (drone_dir / "drone.json").exists():
             raise ValueError("register_drone_folder is required before a Drone manifest can be updated")
         DroneStore._write_manifest(drone_dir, drone)
 
     @staticmethod
-    def drone_folder(drone_id: str) -> Path:
-        """Return the global folder for a registered Drone id."""
-        return _global_drones_root() / drone_id
+    def drone_folder(workspace_root: Path, drone_id: str) -> Path:
+        """Return the folder for a registered Drone id under the given workspace."""
+        return _global_drones_root(workspace_root) / drone_id
 
     @staticmethod
     def _write_manifest(drone_dir: Path, drone: DroneDefinition) -> None:
@@ -236,11 +232,10 @@ class DroneStore:
         source_folder: Path,
     ) -> DroneDefinition:
         """Validate and install a folder-backed Drone into global storage."""
-        _ = workspace_root
         source_folder = source_folder.resolve()
         drone = DroneStore.load_drone_from_folder(source_folder)
 
-        target_folder = _global_drones_root() / drone.id
+        target_folder = _global_drones_root(workspace_root) / drone.id
         target_folder.parent.mkdir(parents=True, exist_ok=True)
 
         tmp_name = tempfile.mkdtemp(
@@ -263,13 +258,12 @@ class DroneStore:
     @staticmethod
     def delete_drone(workspace_root: Path, drone_id: str) -> bool:
         """Remove a drone definition. Returns True if anything was deleted."""
-        _ = workspace_root
         if not _is_safe_drone_id(drone_id):
             return False
 
         deleted = False
 
-        global_dir = _global_drones_root() / drone_id
+        global_dir = _global_drones_root(workspace_root) / drone_id
         global_file = global_dir / "drone.json"
         if global_file.exists():
             shutil.rmtree(global_dir, ignore_errors=True)
@@ -279,7 +273,6 @@ class DroneStore:
 
     @staticmethod
     def next_id(workspace_root: Path, name: str) -> str:
-        _ = workspace_root
         base = slugify(name)
         if not base:
             base = "drone"
@@ -288,7 +281,7 @@ class DroneStore:
         counter = 0
 
         while True:
-            global_exists = (_global_drones_root() / candidate / "drone.json").exists()
+            global_exists = (_global_drones_root(workspace_root) / candidate / "drone.json").exists()
             if not global_exists:
                 return candidate
             counter += 1

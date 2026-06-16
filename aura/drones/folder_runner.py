@@ -37,7 +37,7 @@ def run_folder_drone_sync(
     """Execute a registered folder-backed Drone and persist a receipt."""
     run = run or DroneRun(drone=drone)
     run.mark("running")
-    folder = DroneStore.drone_folder(drone_id)
+    folder = DroneStore.drone_folder(workspace_root, drone_id)
     if not is_folder_backed_drone(drone):
         raise ValueError("Only folder-backed command Drones with json-stdio protocol can be executed")
     if not folder.is_dir():

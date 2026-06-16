@@ -13,7 +13,6 @@ from aura.drones.store import DroneStore, _drone_from_dict, _global_drones_root
 @pytest.fixture(autouse=True)
 def _patch_drones_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(aura_paths, "aura_root", lambda: tmp_path / "aura_root")
-    monkeypatch.setattr("aura.drones.store.aura_root", lambda: tmp_path / "aura_root")
 
 
 def _write_drone_folder(
@@ -57,7 +56,7 @@ def _write_drone_folder(
 
 def test_list_drones_empty(tmp_path: Path) -> None:
     assert DroneStore.list_drones(tmp_path) == []
-    assert not _global_drones_root().exists()
+    assert not _global_drones_root(tmp_path).exists()
 
 
 def test_register_load_and_list_folder_drone(tmp_path: Path) -> None:

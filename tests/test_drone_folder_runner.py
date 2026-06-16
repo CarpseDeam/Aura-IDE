@@ -17,7 +17,6 @@ from aura.drones.store import DroneStore, RunHistoryStore
 @pytest.fixture(autouse=True)
 def _patch_data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(aura_paths, "data_dir", lambda: tmp_path / "data")
-    monkeypatch.setattr("aura.drones.store.data_dir", lambda: tmp_path / "data")
 
 
 def _register_cancellable_drone(workspace: Path):
