@@ -223,7 +223,6 @@ class _DroneCard(QFrame):
 
         # -- action buttons ------------------------------------------------
         self._on_run = lambda: None
-        self._on_edit = lambda: None
         self._on_delete = lambda: None
 
         btn_layout = QHBoxLayout()
@@ -257,25 +256,6 @@ class _DroneCard(QFrame):
             btn_run.clicked.connect(lambda checked, cb="_on_run": (getattr(self, cb, None) or (lambda: None))())
         btn_layout.addWidget(btn_run)
 
-        # Edit
-        btn_edit = QPushButton("\u270e Edit")
-        btn_edit.setStyleSheet(
-            f"QPushButton {{"
-            f"  background: transparent;"
-            f"  border: 1px solid rgba(255, 255, 255, 0.05);"
-            f"  border-radius: 4px;"
-            f"  color: {_qss_color(FG_MUTED)};"
-            f"  padding: 2px 8px;"
-            f"  font-size: 10px;"
-            f"}}"
-            f"QPushButton:hover {{"
-            f"  border-color: rgba(255, 255, 255, 0.15);"
-            f"  color: {_qss_color(FG)};"
-            f"}}"
-        )
-        btn_edit.setCursor(Qt.PointingHandCursor)
-        btn_edit.clicked.connect(lambda checked, cb="_on_edit": (getattr(self, cb, None) or (lambda: None))())
-        btn_layout.addWidget(btn_edit)
 
         # Delete
         btn_delete = QPushButton("\u2715 Delete")
@@ -361,7 +341,7 @@ class _DroneRosterWidget(QScrollArea):
                 item.widget().deleteLater()
         entries = DroneStore.list_drone_entries(self._workspace_root)
         if not entries:
-            empty = QLabel("No Drones yet. Type /drone in chat to open Drone Builder.")
+            empty = QLabel("No Drones yet. Use the +New Drone button above.")
             empty.setWordWrap(True)
             empty.setStyleSheet(f"color: {_qss_color(FG_MUTED)}; font-size: 11px; padding: 8px;")
             self._layout.insertWidget(self._layout.count() - 1, empty)
@@ -373,7 +353,6 @@ class _DroneRosterWidget(QScrollArea):
             )
             # For ready drones, pass the canonical folder. For builder, pass empty string.
             run_folder = entry.folder if entry.ready else ""
-            edit_folder = entry.folder if entry.ready else action_id  # builder:xxx for builder
             card = _DroneCard(
                 entry.id,
                 entry.name,
@@ -384,7 +363,6 @@ class _DroneRosterWidget(QScrollArea):
                 folder=entry.folder if entry.ready else "",
             )
             card._on_run = lambda did=entry.id, fld=run_folder: self._editor.runDroneRequested.emit(did, fld)
-            card._on_edit = lambda did=action_id, fld=edit_folder: self._editor.editDroneRequested.emit(did, fld)
             card._on_delete = lambda did=action_id: self._editor.deleteDroneRequested.emit(did)
             self._layout.insertWidget(self._layout.count() - 1, card)
 
@@ -412,7 +390,6 @@ class ChainEditor(QWidget):
     runChainRequested = Signal(str)
     goBackRequested = Signal()
     runDroneRequested = Signal(str, str)  # drone_id, folder
-    editDroneRequested = Signal(str, str)  # action_id, folder
     deleteDroneRequested = Signal(str)
 
     _AUTO_SAVE_MS = 1200

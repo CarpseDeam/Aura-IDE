@@ -47,8 +47,7 @@ from aura.git_ops import git_init, is_git_repo
 from aura.gui.chat_view import ChatView
 from aura.gui.checkpoint_dialog import CheckpointDialog
 from aura.gui.conv_persistence import ConversationPersistence
-from aura.gui.drones.drone_editor_dialog import DroneEditorDialog
-from aura.gui.drones.drone_mode_coordinator import DroneModeCoordinator
+
 from aura.gui.drones.drone_reports_window import DroneReportsWindow
 from aura.gui.drones.drone_run_card import DroneRunCard
 from aura.gui.drones.drone_summon_card import DroneSummonCard
@@ -228,22 +227,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
         self._input = InputPanel(self._workspace_root, parent=self)
 
-        # Drone mode coordinator — swaps sidebar, owns drone mode state.
-        self._drone_coordinator = DroneModeCoordinator(
-            main_splitter=self._main_splitter,
-            left_pane=self._left_pane,
-            bridge=self._bridge,
-            chat=self._chat,
-            input_panel=self._input,
-            status_bar=self._status_bar,
-            parent=self,
-        )
-        # drone_mode_changed is no-op — drone mode lifecycle removed.
-        self._drone_coordinator.drone_mode_changed.connect(lambda active: None)
-        self._drone_coordinator.drone_list_changed.connect(
-            self._on_drone_list_changed
-        )
-        self._drone_coordinator.set_workspace_root(self._workspace_root)
+
 
         # Send handler — owns message queue, vision routing, undo logic.
         self._send_handler = SendHandler(
@@ -252,11 +236,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             input_panel=self._input,
             settings=self._settings,
             workspace_root=self._workspace_root,
-            drone_coordinator=self._drone_coordinator,
             parent=self,
-        )
-        self._drone_coordinator.fresh_session_requested.connect(
-            self._send_handler.clear_queue
         )
         self._send_handler.drone_bay_requested.connect(self._on_drone_bay_requested)
 
@@ -294,8 +274,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             self._on_drone_reports_geometry_saved
         )
 
-        # Connect Save as Drone
-        self._playground._info_hub.saveAsDroneRequested.connect(self._on_save_as_drone)
+
 
         # Worker event handler — owns session usage, forwards bridge signals
         # to chat / playground UI components.
@@ -645,7 +624,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._input.set_workspace_root(path)
         self._send_handler.set_workspace_root(path)
         self._playground.set_workspace_root(path)
-        self._drone_coordinator.set_workspace_root(path)
         self._companion.set_workspace_root(str(self._workspace_root))
         self._tree.set_root(path)
         save_workspace_root(path)
@@ -770,7 +748,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._bridge.set_workspace_root(root_path)
         self._input.set_workspace_root(root_path)
         self._send_handler.set_workspace_root(root_path)
-        self._drone_coordinator.set_workspace_root(root_path)
         self._playground.set_workspace_root(root_path)
         self._companion.set_workspace_root(str(self._workspace_root))
         self._tree.set_root(root_path)
@@ -865,92 +842,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             self._edge_rail.drone_tab.setChecked(is_open)
 
 
-    def _on_save_as_drone(self, summary: str) -> None:
-        """Open the Drone editor pre-filled from the last Worker run."""
-        from PySide6.QtWidgets import QDialog
-
-
-        workspace_root = self._workspace_root
-        if not workspace_root:
-            return
-
-        # Gather context from the last dispatch
-        goal = ""
-        spec_text = ""
-        result_summary = summary
-
-        if hasattr(self, '_bridge') and self._bridge is not None:
-            records = self._bridge.dispatch_records
-            if records:
-                last = records[-1]
-                goal = last.spec.get("goal", "") or ""
-                spec_text = last.spec.get("spec", "") or ""
-                result_summary = last.result_summary or summary
-
-        # Detect write policy from the last Worker run outcome.
-        write_policy = "read_only"
-        if hasattr(self, '_bridge') and self._bridge is not None:
-            records = self._bridge.dispatch_records
-            if records:
-                last = records[-1]
-                metadata = (
-                    self._bridge.worker_result_metadata(last.tool_call_id)
-                    if last.tool_call_id
-                    else {}
-                )
-                extras = metadata.get("extras") if isinstance(metadata.get("extras"), dict) else {}
-                has_write_metadata = bool(
-                    extras.get("writes")
-                    or extras.get("not_applied_writes")
-                    or extras.get("unrecovered_not_applied_writes")
-                    or extras.get("failed_write_tools")
-                )
-                write_tools = {
-                    "write_file",
-                    "delete_file",
-                    "apply_edit_transaction",
-                    "edit_file",
-                    "edit_symbol",
-                    "edit_line_range",
-                    "patch_file",
-                }
-                has_write_call = any(
-                    (
-                        call.get("function", {}).get("name") in write_tools
-                        if isinstance(call, dict)
-                        else False
-                    )
-                    for message in last.worker_history
-                    for call in (message.get("tool_calls") or [])
-                )
-                if has_write_metadata or has_write_call:
-                    write_policy = "normal_diff_approval"
-
-        # Suggest a name
-        suggested_name = ""
-        if goal:
-            suggested_name = goal[:50]
-        elif summary:
-            # Use first sentence or first 50 chars
-            first_dot = summary.find(". ")
-            suggested_name = summary[:first_dot] if first_dot > 0 else summary[:50]
-
-        dialog = DroneEditorDialog(
-            workspace_root=workspace_root,
-            parent=self,
-            initial_name=suggested_name,
-            initial_instructions=spec_text or summary,
-            initial_output_contract=result_summary,
-            initial_write_policy=write_policy,
-        )
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            self._refresh_drone_context()
-
-    def _on_drone_list_changed(self) -> None:
-        """Refresh Drone surfaces after Builder state changes."""
-        self._refresh_drone_context()
-        if self._drone_workbay_window is not None and self._drone_workbay_window.isVisible():
-            self._drone_workbay_window.chain_editor.refresh_roster()
 
     def _on_duplicate_drone(self, drone_id: str) -> None:
         if drone_id.startswith("builder:"):

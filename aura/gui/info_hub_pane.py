@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QPlainTextEdit,
@@ -32,8 +32,6 @@ class InfoHubPane(QWidget):
         show_final_summary(ok, summary) -> None
         clear() -> None
     """
-
-    saveAsDroneRequested = Signal(str)  # emits the summary text
 
     _LOG_REVEAL_CHARS_PER_TICK = 16
 

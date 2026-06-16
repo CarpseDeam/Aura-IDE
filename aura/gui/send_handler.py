@@ -47,7 +47,6 @@ class SendHandler(QObject):
         input_panel,
         settings: AppSettings,
         workspace_root: Path | None,
-        drone_coordinator=None,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -56,7 +55,6 @@ class SendHandler(QObject):
         self._input = input_panel
         self._settings = settings
         self._workspace_root = workspace_root
-        self._drone_coordinator = drone_coordinator
 
         # Queued messages sent while worker is running.
         self._message_queue: list[SendPayload] = []
@@ -381,10 +379,6 @@ class SendHandler(QObject):
             final_text = f"{vision_block}\n\n[User's question:]\n{text}" if text else vision_block
             display_text = final_text
             history_text = final_text
-            if self._drone_coordinator and self._drone_coordinator.is_drone_mode():
-                drone_ctx = self._drone_coordinator.active_drone_context()
-                if drone_ctx:
-                    history_text = f"{history_text}\n\n{drone_ctx}"
             self._bridge.history.append_user_text(history_text)
         elif vision_error and not vision_descriptions and image_atts:
             self._chat.add_error("Vision fallback failed", vision_error)
@@ -393,10 +387,6 @@ class SendHandler(QObject):
             final_text = f"{text}\n\n[Note: {vision_error}]" if text else f"[Vision error: {vision_error}]"
             display_text = final_text
             history_text = final_text
-            if self._drone_coordinator and self._drone_coordinator.is_drone_mode():
-                drone_ctx = self._drone_coordinator.active_drone_context()
-                if drone_ctx:
-                    history_text = f"{history_text}\n\n{drone_ctx}"
             self._bridge.history.append_user_text(history_text)
         else:
             # No images or vision disabled
@@ -409,10 +399,6 @@ class SendHandler(QObject):
             else:
                 display_text = text
                 history_text = text
-                if self._drone_coordinator and self._drone_coordinator.is_drone_mode():
-                    drone_ctx = self._drone_coordinator.active_drone_context()
-                    if drone_ctx:
-                        history_text = f"{history_text}\n\n{drone_ctx}"
                 self._bridge.history.append_user_text(history_text)
 
         self._chat.add_user(display_text, [a.b64 for a in image_atts] or None)
