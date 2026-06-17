@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from pathlib import Path
 
@@ -10,6 +11,8 @@ from aura.drones.definition import DroneDefinition
 from aura.gui.drones.chain_node_item import ChainNodeItem, NODE_WIDTH, NODE_HEIGHT
 from aura.gui.drones.mission_core_item import MissionCoreItem
 
+
+logger = logging.getLogger(__name__)
 
 MISSION_CORE_WIDTH = 240
 MISSION_CORE_HEIGHT = 120
@@ -46,6 +49,7 @@ class ChainCanvasMissionMixin:
         from aura.drones.store import DroneStore
         drone = DroneStore.load_drone(self._get_workspace_root(), drone_id)
         if drone is None:
+            logger.warning("Drop failed: could not load drone with id '%s'", drone_id)
             return
         self._append_drone_to_chain(drone)
 

@@ -130,6 +130,7 @@ class DroneStore:
                     continue
                 try:
                     data = json.loads(drone_file.read_text(encoding="utf-8"))
+                    data["id"] = subdir.name
                     drone = _drone_from_dict(data)
                     seen[drone.id] = drone
                 except Exception as exc:
@@ -161,6 +162,7 @@ class DroneStore:
             # Try to load, parse, and validate the drone
             try:
                 data = json.loads(drone_file.read_text(encoding="utf-8"))
+                data["id"] = subdir.name
                 drone = _drone_from_dict(data)  # also validates
                 rows.append(DroneListEntry(
                     id=drone.id,
@@ -177,7 +179,7 @@ class DroneStore:
                     raw = json.loads(drone_file.read_text(encoding="utf-8")) if drone_file.exists() else {}
                 except Exception:
                     raw = {}
-                drone_id = raw.get("id", folder_name) or folder_name
+                drone_id = folder_name
                 name = raw.get("name", folder_name) or folder_name
                 write_policy = raw.get("write_policy", "read_only") or "read_only"
                 rows.append(DroneListEntry(
@@ -206,7 +208,7 @@ class DroneStore:
                 continue
             try:
                 data = json.loads(drone_file.read_text(encoding="utf-8"))
-                drone_id = data.get("id", subdir.name) or subdir.name
+                drone_id = subdir.name
                 name = data.get("name", subdir.name) or subdir.name
                 description = data.get("description", "") or ""
                 write_policy = data.get("write_policy", "read_only") or "read_only"
@@ -228,14 +230,34 @@ class DroneStore:
         if not _is_safe_drone_id(drone_id):
             return None
 
+        # Fast path: try .aura/drones/<drone_id>/drone.json first
         global_file = _global_drones_root(workspace_root) / drone_id / "drone.json"
         if global_file.exists():
             try:
                 data = json.loads(global_file.read_text(encoding="utf-8"))
+                data["id"] = drone_id
                 return _drone_from_dict(data)
             except Exception as exc:
                 logger.warning("Failed to load Drone %s: %s", drone_id, exc)
                 return None
+
+        # Fallback: scan all drone folders and match by declared id
+        global_root = _global_drones_root(workspace_root)
+        if global_root.exists():
+            for subdir in sorted(global_root.iterdir()):
+                if not subdir.is_dir():
+                    continue
+                manifest = subdir / "drone.json"
+                if not manifest.exists():
+                    continue
+                try:
+                    data = json.loads(manifest.read_text(encoding="utf-8"))
+                    data["id"] = subdir.name
+                    if subdir.name == drone_id:
+                        return _drone_from_dict(data)
+                except Exception as exc:
+                    logger.warning("Failed to load Drone from folder %s: %s", subdir.name, exc)
+                    continue
 
         return None
 
@@ -279,6 +301,7 @@ class DroneStore:
         except json.JSONDecodeError as exc:
             raise ValueError(f"drone.json is not valid JSON: {exc}") from exc
 
+        data["id"] = folder.name
         drone = _drone_from_dict(data)
         # Validate that the first command argument exists on PATH or in the folder
         command_list = drone.entrypoint.get("command", [])
@@ -315,7 +338,9 @@ class DroneStore:
         tmp_folder = Path(tmp_name)
         try:
             shutil.copytree(source_folder, tmp_folder, dirs_exist_ok=True)
-            DroneStore.load_drone_from_folder(tmp_folder)
+            # Validate the copy — parse drone.json directly to avoid
+            # the id-override in load_drone_from_folder for temp folders
+            _drone_from_dict(json.loads((tmp_folder / "drone.json").read_text(encoding="utf-8")))
             if target_folder.exists():
                 shutil.rmtree(target_folder)
             tmp_folder.replace(target_folder)
