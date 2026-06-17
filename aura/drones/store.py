@@ -141,21 +141,57 @@ class DroneStore:
 
     @staticmethod
     def list_drone_entries(workspace_root: Path) -> list[DroneListEntry]:
-        """Return list of folder-backed Drones — all Ready."""
-        installed = DroneStore.list_drones(workspace_root)
+        """Return list of ALL folder-backed Drones found on disk.
 
-        rows: dict[str, DroneListEntry] = {}
-        for drone in installed:
-            rows[drone.id] = DroneListEntry(
-                id=drone.id,
-                name=drone.name,
-                description=drone.description or "",
-                write_policy=drone.write_policy,
-                status="Ready",
-                ready=True,
-            )
+        Every drone folder under .aura/drones/ produces an entry.
+        Drones that parse and validate successfully are marked Ready.
+        Drones with parse or validation errors are marked Needs Fix with
+        the error message shown as the description.
+        """
+        rows: list[DroneListEntry] = []
+        global_root = _global_drones_root(workspace_root)
+        if not global_root.exists():
+            return rows
 
-        return sorted(rows.values(), key=lambda r: r.name.lower())
+        for subdir in sorted(global_root.iterdir()):
+            if not subdir.is_dir():
+                continue
+            drone_file = subdir / "drone.json"
+            if not drone_file.exists():
+                continue
+
+            # Try to load, parse, and validate the drone
+            try:
+                data = json.loads(drone_file.read_text(encoding="utf-8"))
+                drone = _drone_from_dict(data)  # also validates
+                rows.append(DroneListEntry(
+                    id=drone.id,
+                    name=drone.name,
+                    description=drone.description or "",
+                    write_policy=drone.write_policy,
+                    status="Ready",
+                    ready=True,
+                ))
+            except Exception as exc:
+                # Still include an entry — marked broken
+                folder_name = subdir.name
+                try:
+                    raw = json.loads(drone_file.read_text(encoding="utf-8")) if drone_file.exists() else {}
+                except Exception:
+                    raw = {}
+                drone_id = raw.get("id", folder_name) or folder_name
+                name = raw.get("name", folder_name) or folder_name
+                write_policy = raw.get("write_policy", "read_only") or "read_only"
+                rows.append(DroneListEntry(
+                    id=drone_id,
+                    name=name,
+                    description=str(exc),
+                    write_policy=write_policy,
+                    status="Needs Fix",
+                    ready=False,
+                ))
+
+        return sorted(rows, key=lambda r: r.name.lower())
 
     @staticmethod
     def list_drone_folders(workspace_root: Path) -> list[DroneListEntry]:
@@ -336,16 +372,15 @@ class DroneStore:
             raise ValueError("Drone input_contract must be a dict")
         if not isinstance(drone.cargo_contract, dict):
             raise ValueError("Drone cargo_contract must be a dict")
-        for label, contract in (("input_contract", drone.input_contract),
-                                ("cargo_contract", drone.cargo_contract)):
-            schema = (contract or {}).get("schema") or {}
-            clash = _RESERVED_RUNTIME_FIELDS & set(schema)
-            if clash:
-                raise ValueError(
-                    f"Drone {label} declares runtime-injected field(s) {sorted(clash)}; "
-                    f"the runner always provides these and they must not appear in a "
-                    f"contract. Contracts describe cargo only."
-                )
+        input_schema = (drone.input_contract or {}).get("schema") or {}
+        clash = _RESERVED_RUNTIME_FIELDS & set(input_schema)
+        if clash:
+            raise ValueError(
+                f"Drone input_contract declares runtime-injected field(s) {sorted(clash)}; "
+                f"the runner always provides these and they must not appear in "
+                f"input_contract. input_contract describes cargo received from an "
+                f"upstream drone only."
+            )
         if not isinstance(drone.output_contract, dict) or not drone.output_contract:
             raise ValueError("Drone output_contract must be a non-empty dict (JSON Schema)")
         # Sanity check: output_contract must describe ok and summary fields
