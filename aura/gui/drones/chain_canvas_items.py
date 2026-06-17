@@ -20,7 +20,8 @@ from PySide6.QtWidgets import (
 from aura.gui.theme import ACCENT
 
 if TYPE_CHECKING:
-    from aura.gui.drones.chain_canvas import ChainCanvas, ChainNodeItem
+    from aura.gui.drones.chain_canvas import ChainCanvas
+    from aura.gui.drones.chain_node_item import ChainNodeItem
 
 
 PORT_RADIUS = 3
