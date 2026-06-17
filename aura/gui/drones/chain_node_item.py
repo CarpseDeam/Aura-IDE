@@ -31,9 +31,9 @@ if TYPE_CHECKING:
     from aura.gui.drones.chain_canvas import ChainCanvas
 
 
-NODE_WIDTH = 252
-NODE_HEIGHT = 52
-NODE_RADIUS = 15
+NODE_WIDTH = 180
+NODE_HEIGHT = 40
+NODE_RADIUS = 12
 
 def _qt_color(value, fallback="#ffffff"):
     """Return a QColor from a string token or QColor, falling back on invalid."""
@@ -93,6 +93,7 @@ class ChainNodeItem(QGraphicsObject):
         self._shadow.setOffset(0)
         self.setGraphicsEffect(self._shadow)
         self._update_shadow()
+        self.setZValue(1)
 
     @property
     def node_id(self) -> str:
@@ -188,7 +189,7 @@ class ChainNodeItem(QGraphicsObject):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         # Glass body fill — translucent dark
-        painter.setBrush(QBrush(QColor(22, 24, 32, 150)))
+        painter.setBrush(QBrush(QColor(22, 24, 32, 230)))
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawRoundedRect(rect, NODE_RADIUS, NODE_RADIUS)
 
