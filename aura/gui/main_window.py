@@ -834,13 +834,13 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             manifest_version="1",
             input_contract={
                 "type": "object",
-                "description": "Standard drone input",
-                "properties": {},
+                "description": "Standard drone input: goal plus workspace context",
+                "schema": {"goal": "string", "workspace_root": "string"},
             },
             cargo_contract={
                 "type": "object",
-                "description": "Standard drone cargo",
-                "properties": {},
+                "description": "Standard drone cargo: structured result data",
+                "schema": {"drone_id": "string", "ready": "bool"},
             },
             output_contract={
                 "description": "Standard drone output",
@@ -929,8 +929,13 @@ class MainWindow(WindowChromeMixin, QMainWindow):
                         continue
                     target = drones_root / real_id
                     if target.exists():
-                        shutil.rmtree(target, ignore_errors=True)
+                        logger.warning(
+                            "Skipping nested drone promotion: target %s already exists",
+                            target,
+                        )
+                        continue
                     shutil.copytree(nested, target, dirs_exist_ok=True)
+                    shutil.rmtree(nested, ignore_errors=True)
                     logger.info("Promoted nested drone %s -> %s", nested, target)
                     promoted = True
                 except Exception as exc:
