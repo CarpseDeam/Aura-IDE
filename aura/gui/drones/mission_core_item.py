@@ -43,6 +43,7 @@ class MissionCoreItem(QGraphicsObject):
 
     missionCoreChanged = Signal()
     runRequested = Signal()
+    loopToggled = Signal(bool)
 
     def __init__(self, node_id: str, canvas: ChainCanvas):
         super().__init__()
@@ -56,6 +57,8 @@ class MissionCoreItem(QGraphicsObject):
         self._run_btn_rect = QRectF()
         self._run_btn_hovered = False
         self._drag_hovered = False
+        self._loop_enabled: bool = False
+        self._loop_toggle_rect: QRectF = QRectF()
 
         self._pulse_timer = QTimer(self)
         self._pulse_timer.setInterval(900)
@@ -103,6 +106,24 @@ class MissionCoreItem(QGraphicsObject):
     @assigned_drone_ids.setter
     def assigned_drone_ids(self, value: list[str]) -> None:
         self._assigned_drone_ids = list(value)
+        self.missionCoreChanged.emit()
+        self.update()
+
+    @property
+    def border_color(self) -> QColor:
+        return QColor("#8b9eeb")
+
+    @property
+    def is_draft(self) -> bool:
+        return False
+
+    @property
+    def loop_enabled(self) -> bool:
+        return self._loop_enabled
+
+    @loop_enabled.setter
+    def loop_enabled(self, value: bool) -> None:
+        self._loop_enabled = value
         self.missionCoreChanged.emit()
         self.update()
 
@@ -237,6 +258,37 @@ class MissionCoreItem(QGraphicsObject):
             metrics_text,
         )
 
+        # Loop toggle pill (left side, below cargo bay)
+        loop_btn_w = 60
+        loop_btn_h = 20
+        loop_btn_x = -w / 2 + 12
+        loop_btn_y = h / 2 - 34
+        self._loop_toggle_rect = QRectF(loop_btn_x, loop_btn_y, loop_btn_w, loop_btn_h)
+
+        # Toggle background
+        if self._loop_enabled:
+            toggle_bg = QColor("#9ece6a")
+            toggle_bg.setAlpha(200)
+        else:
+            toggle_bg = QColor("#3a3a4a")
+            toggle_bg.setAlpha(120)
+        painter.setBrush(QBrush(toggle_bg))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawRoundedRect(self._loop_toggle_rect, 4, 4)
+
+        # Toggle label
+        font_toggle = QFont()
+        font_toggle.setPixelSize(9)
+        font_toggle.setBold(True)
+        painter.setFont(font_toggle)
+        toggle_label_color = QColor("#ffffff") if self._loop_enabled else QColor("#a8aebb")
+        painter.setPen(QPen(toggle_label_color))
+        painter.drawText(
+            self._loop_toggle_rect,
+            Qt.AlignmentFlag.AlignCenter,
+            "Loop",
+        )
+
         # "Run Mission" button (bottom-right)
         btn_w = 100
         btn_h = 22
@@ -290,6 +342,12 @@ class MissionCoreItem(QGraphicsObject):
         super().dragLeaveEvent(event)
 
     def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton and self._loop_toggle_rect.contains(event.pos()):
+            self._loop_enabled = not self._loop_enabled
+            self.loopToggled.emit(self._loop_enabled)
+            self.update()
+            event.accept()
+            return
         if event.button() == Qt.MouseButton.LeftButton and self._run_btn_rect.contains(event.pos()):
             self.runRequested.emit()
             event.accept()
@@ -322,6 +380,7 @@ class MissionCoreItem(QGraphicsObject):
             "goal": self._goal,
             "position": [self.pos().x(), self.pos().y()],
             "assigned_drone_ids": list(self._assigned_drone_ids),
+            "loop_enabled": self._loop_enabled,
         }
 
     def from_dict(self, data: dict) -> None:
@@ -331,6 +390,7 @@ class MissionCoreItem(QGraphicsObject):
         if pos and len(pos) == 2:
             self.setPos(pos[0], pos[1])
         self._assigned_drone_ids = list(data.get("assigned_drone_ids", []))
+        self._loop_enabled = bool(data.get("loop_enabled", False))
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:

@@ -7,7 +7,7 @@ import tempfile
 from dataclasses import asdict, fields
 from pathlib import Path
 
-from aura.drones.chain import ChainDefinition, ChainEdge, ChainGoal, ChainNode
+from aura.drones.chain import ChainDefinition, ChainEdge, ChainNode
 from aura.drones.definition import slugify
 from aura.paths import data_dir
 
@@ -19,65 +19,6 @@ _CHAIN_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 def _is_safe_chain_id(chain_id: str) -> bool:
     return bool(_CHAIN_ID_RE.fullmatch(str(chain_id or "")))
 
-
-def _normalize_chain_data(data: dict) -> dict:
-    """Normalize chain JSON dict to canonical form.
-
-    Handles legacy key migration (goal_id→id, goal→objective,
-    mission_goal/goal_planet→goals), auto-assigns goal ids for
-    single-goal legacy workflows, and strips deprecated keys.
-    """
-    # --- Goal entries normalization ---
-    goals = data.get("goals", [])
-    for i, g in enumerate(goals):
-        # Canonical wins: only fall back from legacy if canonical is absent
-        if "id" not in g and "goal_id" in g:
-            g["id"] = g.pop("goal_id")
-        if "objective" not in g and "goal" in g:
-            g["objective"] = g.pop("goal")
-        # Remove any remaining legacy keys
-        g.pop("goal_id", None)
-        g.pop("goal", None)
-        # Ensure every goal has an id
-        if "id" not in g or not g["id"]:
-            g["id"] = f"goal-{i}"
-
-    had_goals = "goals" in data
-
-    # --- Legacy migration (mission_goal → goals) ---
-    if (not goals or not data.get("goals")) and data.get("mission_goal"):
-        chain_id = data.get("id", "unknown")
-        data["goals"] = [{
-            "id": f"{chain_id}-goal-default",
-            "title": "Goal 1",
-            "objective": data["mission_goal"],
-            "position": [160, 0],
-        }]
-
-    # --- Legacy migration (goal_planet → goals) ---
-    if (not data.get("goals")) and isinstance(data.get("goal_planet"), dict):
-        planet_data = data["goal_planet"]
-        if planet_data.get("goal"):
-            chain_id = data.get("id", "unknown")
-            data["goals"] = [{
-                "id": f"{chain_id}-goal-default",
-                "title": "Goal 1",
-                "objective": planet_data["goal"],
-                "position": planet_data.get("position", [160, 0]),
-            }]
-
-    # --- Auto-assign goal_id for legacy single-goal ---
-    if data.get("goals") and len(data["goals"]) == 1 and not had_goals:
-        first_goal_id = data["goals"][0]["id"]
-        for node in data.get("nodes", []):
-            if node.get("is_assignment") and not node.get("goal_id", "").strip():
-                node["goal_id"] = first_goal_id
-
-    # --- Strip deprecated keys ---
-    data.pop("mission_goal", None)
-    data.pop("goal_planet", None)
-
-    return data
 
 
 def _chain_from_dict(data: dict) -> ChainDefinition:
@@ -107,8 +48,6 @@ def _chain_from_dict(data: dict) -> ChainDefinition:
                 draft_accepts=filtered_n.get("draft_accepts", ""),
                 draft_produces=filtered_n.get("draft_produces", ""),
                 draft_brief=filtered_n.get("draft_brief", ""),
-                is_assignment=filtered_n.get("is_assignment", False),
-                goal_id=filtered_n.get("goal_id", ""),
             )
         )
 
@@ -117,32 +56,10 @@ def _chain_from_dict(data: dict) -> ChainDefinition:
         for e in data.get("edges", [])
     ]
 
-    goals_list: list[ChainGoal] = []
-    known_goal_fields = {f.name for f in fields(ChainGoal)}
-    for g in data.get("goals", []):
-        gpos = g.get("position", [0.0, 0.0])
-        if isinstance(gpos, list):
-            gpos = tuple(gpos)
-        filtered_g = {k: v for k, v in g.items() if k in known_goal_fields}
-        # Accept legacy goal_id/goal keys (canonical wins when both shapes exist)
-        if "id" not in filtered_g and "goal_id" in g:
-            filtered_g["id"] = g["goal_id"]
-        if "objective" not in filtered_g and "goal" in g:
-            filtered_g["objective"] = g["goal"]
-        goals_list.append(
-            ChainGoal(
-                id=filtered_g.get("id", f"goal-{len(goals_list)}"),
-                title=filtered_g.get("title", ""),
-                objective=filtered_g.get("objective", ""),
-                position=gpos,
-            )
-        )
-
     known_fields = {f.name for f in fields(ChainDefinition)}
     filtered = {k: v for k, v in data.items() if k in known_fields}
     filtered["nodes"] = tuple(nodes_list)
     filtered["edges"] = tuple(edges_list)
-    filtered["goals"] = tuple(goals_list)
     return ChainDefinition(**filtered)
 
 
@@ -178,9 +95,6 @@ class ChainStore:
         chain_dir.mkdir(parents=True, exist_ok=True)
         p = chain_dir / "chain.json"
         data = asdict(chain)
-        # Strip deprecated keys before writing
-        data.pop("mission_goal", None)
-        data.pop("goal_planet", None)
         fd, tmp_path = tempfile.mkstemp(dir=str(chain_dir), suffix=".json")
         with open(fd, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
@@ -196,7 +110,6 @@ class ChainStore:
             return None
         try:
             data = json.loads(chain_file.read_text(encoding="utf-8"))
-            data = _normalize_chain_data(data)
             return _chain_from_dict(data)
         except Exception:
             logger.warning("Failed to load chain %s", chain_id)
@@ -217,7 +130,6 @@ class ChainStore:
                 continue
             try:
                 data = json.loads(chain_file.read_text(encoding="utf-8"))
-                data = _normalize_chain_data(data)
                 chain = _chain_from_dict(data)
                 result.append(chain)
             except Exception:
@@ -291,7 +203,7 @@ def load_chain(workspace_root: Path, chain_id: str) -> dict | None:
         logger.warning("Failed to load chain %s", chain_id)
         return None
 
-    return _normalize_chain_data(data)
+    return data
 
 
 def save_chain(workspace_root: Path, chain_id: str | None, data: dict) -> str:
@@ -306,19 +218,6 @@ def save_chain(workspace_root: Path, chain_id: str | None, data: dict) -> str:
         raise ValueError(f"Invalid chain id: {chain_id!r}")
     data = dict(data)
     data["id"] = chain_id
-
-    # Ensure goals list is present
-    goals = data.get("goals", [])
-    if not isinstance(goals, list):
-        goals = []
-        data["goals"] = goals
-
-    # Normalize goal entries to canonical shape before writing
-    data = _normalize_chain_data(data)
-
-    # Strip deprecated keys after normalization
-    data.pop("mission_goal", None)
-    data.pop("goal_planet", None)
 
     chains_dir = ChainStore._ensure_chains_dir()
     chain_dir = chains_dir / chain_id
@@ -350,7 +249,6 @@ def list_chains(workspace_root: Path) -> list[dict]:
             continue
         try:
             data = json.loads(chain_file.read_text(encoding="utf-8"))
-            data = _normalize_chain_data(data)
             result.append(data)
         except Exception:
             logger.warning("Skipping invalid chain: %s", subdir.name)

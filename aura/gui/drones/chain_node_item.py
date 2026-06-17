@@ -8,10 +8,13 @@ from PySide6.QtGui import (
     QColor,
     QFont,
     QFontMetrics,
+    QLinearGradient,
     QPainter,
+    QPainterPath,
     QPen,
 )
 from PySide6.QtWidgets import (
+    QGraphicsDropShadowEffect,
     QGraphicsItem,
     QGraphicsObject,
 )
@@ -29,11 +32,8 @@ if TYPE_CHECKING:
 
 
 NODE_WIDTH = 252
-NODE_HEIGHT = 76
-NODE_RADIUS = 12
-ASSIGNMENT_WIDTH = 60
-ASSIGNMENT_HEIGHT = 24
-
+NODE_HEIGHT = 52
+NODE_RADIUS = 15
 
 def _qt_color(value, fallback="#ffffff"):
     """Return a QColor from a string token or QColor, falling back on invalid."""
@@ -59,8 +59,6 @@ class ChainNodeItem(QGraphicsObject):
         draft_accepts: str = "",
         draft_produces: str = "",
         draft_brief: str = "",
-        is_assignment: bool = False,
-        goal_id: str = "",
     ):
         super().__init__()
         self._node_id = node_id
@@ -73,18 +71,12 @@ class ChainNodeItem(QGraphicsObject):
         self._draft_accepts = draft_accepts
         self._draft_produces = draft_produces
         self._draft_brief = draft_brief
-        self._is_assignment = is_assignment
-        self._goal_id = goal_id
         self._run_status = "idle"
 
-        # Ports — assignments have no ports
-        if not is_assignment:
-            self.input_port = PortItem(self, is_input=True)
-            self.output_port = PortItem(self, is_input=False)
-            self._position_ports()
-        else:
-            self.input_port = None
-            self.output_port = None
+        # Ports
+        self.input_port = PortItem(self, is_input=True)
+        self.output_port = PortItem(self, is_input=False)
+        self._position_ports()
 
         self.setFlags(
             QGraphicsItem.GraphicsItemFlag.ItemIsMovable
@@ -94,6 +86,13 @@ class ChainNodeItem(QGraphicsObject):
         self.setAcceptHoverEvents(True)
         self.setCursor(Qt.CursorShape.OpenHandCursor)
         self._hovered = False
+
+        # Shadow glow (updated in _update_shadow)
+        self._shadow = QGraphicsDropShadowEffect()
+        self._shadow.setBlurRadius(22)
+        self._shadow.setOffset(0)
+        self.setGraphicsEffect(self._shadow)
+        self._update_shadow()
 
     @property
     def node_id(self) -> str:
@@ -118,19 +117,6 @@ class ChainNodeItem(QGraphicsObject):
     @property
     def is_draft(self) -> bool:
         return self._is_draft
-
-    @property
-    def is_assignment(self) -> bool:
-        return self._is_assignment
-
-    @property
-    def goal_id(self) -> str:
-        return self._goal_id
-
-    @goal_id.setter
-    def goal_id(self, value: str) -> None:
-        self._goal_id = value
-        self.update()
 
     @property
     def draft_name(self) -> str:
@@ -185,104 +171,66 @@ class ChainNodeItem(QGraphicsObject):
         self.input_port.setPos(0, NODE_HEIGHT / 2)
         self.output_port.setPos(NODE_WIDTH, NODE_HEIGHT / 2)
 
+    def _update_shadow(self) -> None:
+        cap_color = self.border_color
+        alpha = 0.30 if self._hovered else 0.18
+        c = QColor(cap_color)
+        c.setAlphaF(alpha)
+        self._shadow.setColor(c)
+
     def boundingRect(self) -> QRectF:
-        if self._is_assignment:
-            return QRectF(0, 0, ASSIGNMENT_WIDTH, ASSIGNMENT_HEIGHT)
         return QRectF(0, 0, NODE_WIDTH, NODE_HEIGHT)
 
     def paint(self, painter: QPainter, option, widget=None) -> None:
         rect = self.boundingRect()
 
-        # --- Assignment compact token (60x24) ---
-        if self._is_assignment:
-            # Background
-            painter.setBrush(QBrush(QColor("#1a1a24")))
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawRoundedRect(rect, 6, 6)
+        # --- Normal card: glass card with capability dot + name ---
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-            # Border
-            border_color = QColor("#3a3a4a")
-            if self.isSelected():
-                border_color = _qt_color(ACCENT)
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.setPen(QPen(border_color, 1))
-            painter.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), 6, 6)
-
-            # Status dot (left) — 3px radius at (8, 12)
-            _run_color_map = {
-                "idle": QColor("#6e7382"),
-                "pending": QColor("#e0af68"),
-                "running": QColor("#7dcfff"),
-                "completed": QColor("#9ece6a"),
-                "failed": QColor("#f7768e"),
-            }
-            if self._is_draft:
-                dot_color = QColor("#9d7cd8")
-            else:
-                dot_color = _run_color_map.get(self._run_status, _run_color_map["idle"])
-            painter.setBrush(QBrush(dot_color))
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawEllipse(QPointF(8, 12), 3, 3)
-
-            # Drone name — elided, at x=16, width=36
-            if self._is_draft:
-                name_text = self._draft_name or "Untitled Drone"
-            elif self._drone:
-                name_text = self._drone.name
-            else:
-                name_text = "Missing Drone"
-
-            font_name = QFont()
-            font_name.setPixelSize(10)
-            painter.setFont(font_name)
-            painter.setPen(QPen(QColor("#eaecef")))
-            fm_name = QFontMetrics(font_name)
-            name_avail = 36
-            name_text = fm_name.elidedText(name_text, Qt.TextElideMode.ElideRight, name_avail)
-            painter.drawText(QRectF(16, 6, name_avail, 12),
-                             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, name_text)
-            return
-
-        # --- Normal card body: flat dark glass fill ---
-        painter.setBrush(QBrush(QColor(18, 20, 28, 230)))
+        # Glass body fill — translucent dark
+        painter.setBrush(QBrush(QColor(22, 24, 32, 150)))
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawRoundedRect(rect, NODE_RADIUS, NODE_RADIUS)
 
-        # --- Border / glow (single stroke) ---
-        border_color = self.border_color
-        if self.isSelected():
-            border_color = _qt_color(ACCENT)
+        # Top inner sheen — subtle vertical gradient overlay
+        sheen_rect = QRectF(rect)
+        sheen = QLinearGradient(0, 0, 0, rect.height() * 0.38)
+        sheen.setColorAt(0.0, QColor(255, 255, 255, 12))
+        sheen.setColorAt(1.0, QColor(255, 255, 255, 0))
+        clip_path = QPainterPath()
+        clip_path.addRoundedRect(rect, NODE_RADIUS, NODE_RADIUS)
+        painter.setClipPath(clip_path)
+        painter.fillRect(sheen_rect, sheen)
+        painter.setClipping(False)
 
-        base_alpha = 90
-        if self._hovered:
-            base_alpha = min(base_alpha + 30, 255)
-        if self.isSelected():
-            base_alpha = 170
-
-        adjusted = rect.adjusted(1, 1, -1, -1)
-        adj_radius = NODE_RADIUS - 1
+        # Border — hairline
+        border_color = self.border_color if not self.isSelected() else _qt_color(ACCENT)
+        border_alpha = 90 if not self.isSelected() else 170
+        bc = QColor(border_color)
+        bc.setAlpha(border_alpha)
         border_style = Qt.PenStyle.DashLine if self._is_draft else Qt.PenStyle.SolidLine
-        pen_w = 2 if self.isSelected() else 1.5
-
-        glow = QColor(border_color)
-        glow.setAlpha(base_alpha)
+        pen_w = 2 if self.isSelected() else 1
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.setPen(QPen(glow, pen_w, border_style))
-        painter.drawRoundedRect(adjusted, adj_radius, adj_radius)
+        painter.setPen(QPen(bc, pen_w, border_style))
+        painter.drawRoundedRect(rect.adjusted(1, 1, -1, -1), NODE_RADIUS - 1, NODE_RADIUS - 1)
 
-        # --- Row 1: status dot + title ---
-        dot_color = QColor(border_color)
-        dot_color.setAlpha(220)
-        painter.setBrush(QBrush(dot_color))
+        # Capability dot (left) — 9px diameter (radius 4.5)
+        dot_center = QPointF(20, NODE_HEIGHT / 2)
+        dot_radius = 4.5
+        cap_color = self.border_color
+
+        # Soft glow disc behind dot (3x radius, ~25% alpha)
+        glow_c = QColor(cap_color)
+        glow_c.setAlphaF(0.25)
+        painter.setBrush(QBrush(glow_c))
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawEllipse(QPointF(18, 22), 5, 5)
+        painter.drawEllipse(dot_center, dot_radius * 3, dot_radius * 3)
 
-        painter.setPen(QPen(QColor("#eaecef")))
-        font = QFont()
-        font.setPixelSize(13)
-        font.setBold(True)
-        painter.setFont(font)
+        # Dot fill
+        painter.setBrush(QBrush(cap_color))
+        painter.drawEllipse(dot_center, dot_radius, dot_radius)
 
+        # Name — 14px, weight ~650, #eaecef, vertically centered next to dot
         if self._is_draft:
             name = self._draft_name or "Untitled Drone"
         elif self._drone:
@@ -292,79 +240,30 @@ class ChainNodeItem(QGraphicsObject):
         else:
             name = "Missing Drone"
 
-        fm = QFontMetrics(font)
-        avail_w = NODE_WIDTH - 34 - 14
-        name = fm.elidedText(name, Qt.TextElideMode.ElideRight, avail_w)
-        painter.drawText(QRectF(34, 11, avail_w, 20),
-                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, name)
-
-        # --- Row 2: status pill + preview ---
-        pill_x = 34
-        pill_y = 42
-        pill_h = 14
-
-        if self._is_draft:
-            pill_text = "draft"
-            pill_color = QColor("#9d7cd8")
-        elif self._missing:
-            pill_text = "missing"
-            pill_color = _qt_color(DANGER)
-        else:
-            policy = getattr(self._drone, "write_policy", "read_only")
-            if policy == "read_only":
-                pill_text = "read-only"
-                pill_color = QColor("#7dcfff")
-            else:
-                pill_text = "writes"
-                pill_color = QColor("#e0af68")
-
-        font_pill = QFont()
-        font_pill.setPixelSize(10)
-        painter.setFont(font_pill)
-        fm_pill = QFontMetrics(font_pill)
-        pill_text_w = fm_pill.horizontalAdvance(pill_text) + 10
-        pill_w = max(pill_text_w, 40)
-
-        pill_bg = QColor(255, 255, 255, 13)
-        painter.setBrush(QBrush(pill_bg))
-        painter.setPen(QPen(QColor(255, 255, 255, 20), 1))
-        pill_rect = QRectF(pill_x, pill_y, pill_w, pill_h)
-        painter.drawRoundedRect(pill_rect, 3, 3)
-
-        painter.setPen(QPen(pill_color))
-        painter.drawText(pill_rect.adjusted(4, 0, -4, 0),
-                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, pill_text)
-
-        # Preview text
-        if self._is_draft:
-            preview = self._draft_brief or ""
-        elif self._goal_template:
-            preview = self._goal_template
-        elif self._drone:
-            preview = self._drone.description or ""
-        else:
-            preview = ""
-
-        if preview:
-            preview_x = pill_x + pill_w + 6
-            preview_w_avail = NODE_WIDTH - preview_x - 14
-            if preview_w_avail > 20:
-                font_pv = QFont()
-                font_pv.setPixelSize(11)
-                painter.setFont(font_pv)
-                fm_pv = QFontMetrics(font_pv)
-                preview = fm_pv.elidedText(preview, Qt.TextElideMode.ElideRight, int(preview_w_avail))
-                painter.setPen(QPen(_qt_color(FG_MUTED)))
-                painter.drawText(QRectF(preview_x, pill_y, preview_w_avail, pill_h),
-                                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, preview)
+        font_name = QFont()
+        font_name.setPixelSize(14)
+        font_name.setWeight(65)  # ~ demi-bold
+        painter.setFont(font_name)
+        fm = QFontMetrics(font_name)
+        name_x = 34
+        name_avail = NODE_WIDTH - name_x - 14
+        name_elided = fm.elidedText(name, Qt.TextElideMode.ElideRight, name_avail)
+        painter.setPen(QPen(QColor("#eaecef")))
+        painter.drawText(
+            QRectF(name_x, 0, name_avail, NODE_HEIGHT),
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            name_elided,
+        )
 
     def hoverEnterEvent(self, event) -> None:
         self._hovered = True
+        self._update_shadow()
         self.update()
         super().hoverEnterEvent(event)
 
     def hoverLeaveEvent(self, event) -> None:
         self._hovered = False
+        self._update_shadow()
         self.update()
         super().hoverLeaveEvent(event)
 

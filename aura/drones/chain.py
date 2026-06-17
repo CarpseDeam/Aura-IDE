@@ -7,14 +7,6 @@ from aura.drones.definition import DroneDefinition
 
 
 @dataclass(frozen=True)
-class ChainGoal:
-    id: str
-    title: str = ""
-    objective: str = ""
-    position: tuple[float, float] = (0.0, 0.0)
-
-
-@dataclass(frozen=True)
 class ChainNode:
     id: str
     drone_id: str
@@ -25,8 +17,6 @@ class ChainNode:
     draft_accepts: str = ""
     draft_produces: str = ""
     draft_brief: str = ""
-    is_assignment: bool = False
-    goal_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -47,7 +37,7 @@ class ChainDefinition:
     enabled: bool = True
     schedule: str = ""
     mission_goal: str = ""
-    goals: tuple[ChainGoal, ...] = ()
+    loop: bool = False
 
 
 @dataclass
@@ -90,6 +80,11 @@ def topological_order(chain: ChainDefinition) -> list[str]:
         )
 
     return result
+
+
+def linear_order(chain: ChainDefinition) -> list[str]:
+    """Run order IS the stored node order — no topological sort."""
+    return [n.id for n in chain.nodes]
 
 
 def validate(
@@ -204,23 +199,4 @@ def validate(
                 f"type mismatch \u2014 '{producer_type.name}' is not compatible "
                 f"with '{consumer_type.name}'."
             )
-    # 7 + 8. Multi-goal goal_id checks
-    if len(chain.goals) > 1:
-        goal_ids = {g.id for g in chain.goals}
-        for node in chain.nodes:
-            if not node.is_assignment:
-                continue
-            # Blank goal_id when multiple goals exist
-            if not node.goal_id.strip():
-                errors.append(
-                    f"Assignment node '{node.id}' has no goal_id but the "
-                    f"workflow defines multiple goals. Target a specific goal."
-                )
-            # Unknown goal_id
-            elif node.goal_id.strip() not in goal_ids:
-                errors.append(
-                    f"Assignment node '{node.id}' targets unknown "
-                    f"goal_id '{node.goal_id}'."
-                )
-
     return ChainValidation(ok=len(errors) == 0, errors=errors)

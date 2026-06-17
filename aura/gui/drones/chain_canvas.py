@@ -32,7 +32,6 @@ from aura.gui.theme import (
 from aura.gui.drones.chain_canvas_items import PortItem, ChainEdgeItem
 from aura.gui.drones.chain_node_item import ChainNodeItem
 from aura.gui.drones.mission_core_item import MissionCoreItem
-from aura.gui.drones.goal_planet_item import GoalPlanetItem
 from aura.gui.drones.chain_canvas_background import build_space_cache
 from aura.gui.drones.chain_canvas_mission import ChainCanvasMissionMixin
 
@@ -76,6 +75,7 @@ class ChainCanvas(ChainCanvasMissionMixin, QGraphicsView):
     runMissionRequested = Signal()
     statusMessage = Signal(str, str)  # (text, level)
     renameWorkflowRequested = Signal()
+    loopToggled = Signal(bool)
 
     def __init__(self, parent=None):
         # Set all attributes before super().__init__() because Qt paint events
@@ -88,7 +88,6 @@ class ChainCanvas(ChainCanvasMissionMixin, QGraphicsView):
         self._drawing_cancelled = False
         self._empty_text: QGraphicsTextItem | None = None
         self._mission_core: MissionCoreItem | None = None
-        self._goal_planets: dict[str, GoalPlanetItem] = {}
         self._space_bg_cache: QPixmap | None = None
         self._last_click_time: float = 0.0
         self._last_click_pos: QPointF = QPointF()
@@ -115,9 +114,9 @@ class ChainCanvas(ChainCanvasMissionMixin, QGraphicsView):
                 pass  # C++ object already deleted
             self._empty_text = None
 
-        if not self._nodes and self._mission_core is None and not self._goal_planets:
+        if not self._nodes and self._mission_core is None:
             text = QGraphicsTextItem(
-                "Right-click to add a Mission Core and Goal Planets."
+                "Right-click to add a Mission Core."
             )
             font = QFont()
             font.setPixelSize(11)
@@ -128,7 +127,7 @@ class ChainCanvas(ChainCanvasMissionMixin, QGraphicsView):
             self._empty_text = text
 
 
-    def load_chain(self, chain: ChainDefinition, drone_lookup: dict[str, DroneDefinition], mission_core_data: dict | None = None, goal_planets_data: list[dict] | None = None) -> None:
+    def load_chain(self, chain: ChainDefinition, drone_lookup: dict[str, DroneDefinition], mission_core_data: dict | None = None) -> None:
         """Populate canvas from a ChainDefinition."""
         self._scene.clear()
         self._empty_text = None  # scene.clear() deleted the C++ object
@@ -137,7 +136,6 @@ class ChainCanvas(ChainCanvasMissionMixin, QGraphicsView):
         self._drawing_source_port = None
         self._rubber_band = None
         self._mission_core = None
-        self._goal_planets.clear()
 
         for node_data in chain.nodes:
             drone_id = node_data.drone_id
@@ -152,8 +150,6 @@ class ChainCanvas(ChainCanvasMissionMixin, QGraphicsView):
                 draft_accepts=node_data.draft_accepts,
                 draft_produces=node_data.draft_produces,
                 draft_brief=node_data.draft_brief,
-                is_assignment=node_data.is_assignment,
-                goal_id=node_data.goal_id,
             )
             if drone is None and not node_data.is_draft:
                 item.missing = True
@@ -185,37 +181,12 @@ class ChainCanvas(ChainCanvasMissionMixin, QGraphicsView):
             self._scene.addItem(mission_item)
             self._mission_core = mission_item
             mission_item.runRequested.connect(self.runMissionRequested.emit)
-
-        # Goal planets — iterate chain.goals, apply matching data from goal_planets_data
-        goals_data_by_id: dict[str, dict] = {}
-        if goal_planets_data:
-            for gd in goal_planets_data:
-                gid = gd.get("id", gd.get("goal_id", ""))
-                if gid:
-                    goals_data_by_id[gid] = gd
-
-        for goal in chain.goals:
-            gp_item = GoalPlanetItem(
-                node_id=f"goal-planet-{uuid.uuid4().hex[:4]}",
-                canvas=self,
-                goal_id=goal.id,
-            )
-            if goal.position and len(goal.position) == 2:
-                gp_item.setPos(goal.position[0], goal.position[1])
-            gp_item.objective = goal.objective
-            gp_item.title = goal.title
-
-            # Apply any saved canvas data for this goal (e.g. seed, style, position override)
-            match_data = goals_data_by_id.get(goal.id)
-            if match_data:
-                gp_item.from_dict(match_data)
-            self._scene.addItem(gp_item)
-            self._goal_planets[goal.id] = gp_item
+            mission_item.loopToggled.connect(self.loopToggled.emit)
 
         self._update_empty_text()
 
         # Auto-create default mission core for empty chains
-        if self._mission_core is None and not self._goal_planets and not self._nodes:
+        if self._mission_core is None and not self._nodes:
             self._canvas_add_mission_core(QPointF(-160, 0))
 
         # Auto-fit after a short delay
@@ -223,20 +194,16 @@ class ChainCanvas(ChainCanvasMissionMixin, QGraphicsView):
 
     def _fit_view(self) -> None:
         node_count = len(self._nodes)
-        if node_count == 0 and self._mission_core is None and not self._goal_planets:
+        if node_count == 0 and self._mission_core is None:
             self.resetTransform()
             self.centerOn(0, 0)
-        elif node_count == 1 and self._mission_core is None and not self._goal_planets:
+        elif node_count == 1 and self._mission_core is None:
             self.resetTransform()
             node = next(iter(self._nodes.values()))
             self.centerOn(node.sceneBoundingRect().center())
         elif node_count == 0 and self._mission_core is not None:
             self.resetTransform()
             self.centerOn(self._mission_core.sceneBoundingRect().center())
-        elif node_count == 0 and self._mission_core is None and self._goal_planets:
-            first_planet = next(iter(self._goal_planets.values()))
-            self.resetTransform()
-            self.centerOn(first_planet.sceneBoundingRect().center())
         else:
             items_rect = self._scene.itemsBoundingRect()
             self.fitInView(items_rect.adjusted(-40, -40, 40, 40), Qt.AspectRatioMode.KeepAspectRatio)
@@ -247,16 +214,12 @@ class ChainCanvas(ChainCanvasMissionMixin, QGraphicsView):
             factor = 0.35 / current_scale
             self.scale(factor, factor)
 
-    def to_chain_nodes_and_edges(self) -> tuple[list[dict], list[dict], dict | None, list[dict]]:
-        """Snapshot current canvas state to serializable dicts.
-
-        Returns (nodes, edges, mission_core_dict, goals_list).
-        """
+    def to_chain_nodes_and_edges(self) -> tuple[list[dict], list[dict], dict | None]:
         nodes = []
-        for node_id, item in self._nodes.items():
+        for item in self._nodes.values():
             pos = item.pos()
             nodes.append({
-                "id": node_id,
+                "id": item.node_id,
                 "drone_id": item.drone_id,
                 "goal_template": item.goal_template,
                 "position": [pos.x(), pos.y()],
@@ -265,8 +228,6 @@ class ChainCanvas(ChainCanvasMissionMixin, QGraphicsView):
                 "draft_accepts": item.draft_accepts,
                 "draft_produces": item.draft_produces,
                 "draft_brief": item.draft_brief,
-                "is_assignment": item.is_assignment,
-                "goal_id": item.goal_id,
             })
 
         edges = []
@@ -278,16 +239,7 @@ class ChainCanvas(ChainCanvasMissionMixin, QGraphicsView):
 
         mission_dict = self._mission_core.to_dict() if self._mission_core else None
 
-        goals = []
-        for gp in self._goal_planets.values():
-            goals.append(gp.to_dict())
-
-        return nodes, edges, mission_dict, goals
-
-    @property
-    def goal_planets_data(self) -> list[dict]:
-        return [gp.to_dict() for gp in self._goal_planets.values()]
-
+        return nodes, edges, mission_dict
     # ---- Edge drawing ----
 
     def _start_edge_draw(self, port: PortItem) -> None:
@@ -465,21 +417,9 @@ class ChainCanvas(ChainCanvasMissionMixin, QGraphicsView):
 
     def _delete_selected(self) -> None:
         to_remove = [item for item in self._scene.selectedItems()
-                     if isinstance(item, (ChainNodeItem, ChainEdgeItem, MissionCoreItem, GoalPlanetItem))]
+                     if isinstance(item, (ChainNodeItem, ChainEdgeItem, MissionCoreItem))]
         for item in to_remove:
-            if isinstance(item, GoalPlanetItem):
-                removed_id = item.goal_id
-                if removed_id in self._goal_planets:
-                    del self._goal_planets[removed_id]
-                # Reassign any assignment nodes targeting this goal
-                remaining_goals = list(self._goal_planets.keys())
-                for node in self._nodes.values():
-                    if node.is_assignment and node.goal_id == removed_id:
-                        node.goal_id = remaining_goals[0] if remaining_goals else ""
-                self._scene.removeItem(item)
-                self._update_empty_text()
-                self.canvasChanged.emit()
-            elif isinstance(item, MissionCoreItem):
+            if isinstance(item, MissionCoreItem):
                 self._mission_core = None
                 self._scene.removeItem(item)
                 self._update_empty_text()
@@ -532,14 +472,10 @@ class ChainCanvas(ChainCanvasMissionMixin, QGraphicsView):
             add_mission_action = menu.addAction("Add Mission Core")
             if self._mission_core is not None:
                 add_mission_action.setEnabled(False)
-            add_goal_action = menu.addAction("Add Goal Planet")
-            menu.addSeparator()
             rename_action = menu.addAction("Rename Workflow")
             action = menu.exec(event.globalPos())
             if action == add_mission_action:
                 self._canvas_add_mission_core(scene_pos)
-            elif action == add_goal_action:
-                self._canvas_add_goal_planet(scene_pos)
             elif action == rename_action:
                 self.renameWorkflowRequested.emit()
             return
@@ -563,60 +499,5 @@ class ChainCanvas(ChainCanvasMissionMixin, QGraphicsView):
         painter.drawPixmap(viewport_rect.topLeft(), cache)
         painter.restore()
 
-    def drawForeground(self, painter: QPainter, rect: QRectF) -> None:
-        """Draw assignment connection lines from Goal Planets to their assignments."""
-        try:
-            line_color = _qt_color(ACCENT)
-            line_color.setAlpha(25)
-            pen = QPen(line_color)
-            pen.setWidthF(0.5)
-            pen.setStyle(Qt.PenStyle.DashLine)
-            painter.setPen(pen)
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-
-            for gp in list(self._goal_planets.values()):
-                if not _is_valid_item(gp):
-                    continue
-                if gp.scene() is None:
-                    continue
-                gp_rect = gp.sceneBoundingRect()
-                source_pt = QPointF(gp_rect.right(), gp_rect.center().y())
-
-                for node in list(self._nodes.values()):
-                    if not _is_valid_item(node):
-                        continue
-                    if node.scene() is None:
-                        continue
-                    if not node.is_assignment:
-                        continue
-                    if node.goal_id != gp.goal_id:
-                        continue
-                    node_rect = node.sceneBoundingRect()
-                    target_pt = QPointF(node_rect.left(), node_rect.center().y())
-                    painter.drawLine(source_pt, target_pt)
-
-            # Fallback: assignments with no goal get a faint line from Mothership
-            mc = self._mission_core
-            if mc and _is_valid_item(mc) and mc.scene() is not None:
-                mc_rect = mc.sceneBoundingRect()
-                fallback_color = _qt_color(FG_MUTED)
-                fallback_color.setAlpha(15)
-                fallback_pen = QPen(fallback_color)
-                fallback_pen.setWidthF(0.3)
-                fallback_pen.setStyle(Qt.PenStyle.DashLine)
-                painter.setPen(fallback_pen)
-                for node in list(self._nodes.values()):
-                    if not _is_valid_item(node) or node.scene() is None:
-                        continue
-                    if not node.is_assignment:
-                        continue
-                    if node.goal_id:
-                        continue
-                    source_pt = QPointF(mc_rect.right(), mc_rect.center().y())
-                    node_rect = node.sceneBoundingRect()
-                    target_pt = QPointF(node_rect.left(), node_rect.center().y())
-                    painter.drawLine(source_pt, target_pt)
-        except Exception:
-            logger.exception("drawForeground error — suppressed to protect Qt paint cycle")
 
 

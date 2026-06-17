@@ -101,6 +101,7 @@ class ChainEdgeItem(QGraphicsPathItem):
         self._hovered = False
         self._bezier_curve: QPainterPath | None = None
         self._glow_color = QColor("#8b9eeb")
+        self._loop_return = False
         self._pen_style = Qt.PenStyle.SolidLine
         self._adjust()
 
@@ -112,55 +113,79 @@ class ChainEdgeItem(QGraphicsPathItem):
     def to_node_id(self) -> str:
         return self._to_node_id
 
-    def paint(self, painter: QPainter, option, widget=None) -> None:
-        # Draw glow strokes behind the main path
+    def paint(self, painter, option, widget=None) -> None:
         if self._bezier_curve is not None:
-            for w, alpha in [(4, 8), (2, 18)]:
-                c = QColor(self._glow_color)
-                c.setAlpha(alpha)
+            # Determine if loop return is dimmed
+            loop_dim = False
+            if self._loop_return:
+                mc = getattr(self._canvas, '_mission_core', None)
+                if mc is not None and not mc.loop_enabled:
+                    loop_dim = True
+
+            # Glow underlay
+            glow_base = QColor("#6e7382") if loop_dim else QColor("#7aa2f7")
+            for w, alpha in [(6, 10), (3, 22)]:
+                c = QColor(glow_base)
+                if loop_dim:
+                    c.setAlpha(int(alpha * 0.5))
+                else:
+                    c.setAlpha(alpha)
                 painter.setPen(QPen(c, w, self._pen_style))
                 painter.setBrush(Qt.BrushStyle.NoBrush)
                 painter.drawPath(self._bezier_curve)
+
+            # Main gradient stroke
+            p1 = self._source_port.center_scene()
+            p4 = self._target_port.center_scene()
+            if loop_dim:
+                grad = QLinearGradient(p1, p4)
+                grad.setColorAt(0.0, QColor("#6e7382"))
+                grad.setColorAt(1.0, QColor("#6e7382"))
+                main_pen = QPen(QBrush(grad), 2, Qt.PenStyle.DashLine)
+            else:
+                grad = QLinearGradient(p1, p4)
+                grad.setColorAt(0.0, QColor("#7aa2f7"))
+                grad.setColorAt(1.0, QColor("#9d7cd8"))
+                main_pen = QPen(QBrush(grad), 2, self._pen_style)
+            main_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+
+            painter.setPen(main_pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawPath(self._bezier_curve)
+
+        # Call super to draw any path additions (the arrow segments)
         super().paint(painter, option, widget)
 
     def _adjust(self) -> None:
-        """Recalculate the bezier path to follow port positions."""
         if not self._source_port or not self._target_port:
             return
         p1 = self._source_port.center_scene()
         p4 = self._target_port.center_scene()
         dx = abs(p4.x() - p1.x())
-        control_offset = max(50, dx * 0.5)
+        control_offset = max(40, dx * 0.5)
         p2 = QPointF(p1.x() + control_offset, p1.y())
         p3 = QPointF(p4.x() - control_offset, p4.y())
 
         path = self._build_bezier_path(p1, p2, p3, p4)
         self.setPath(path)
 
-        # Store bezier-only curve for glow painting
+        # Bezier-only curve for glow painting
         self._bezier_curve = self._build_bezier_curve(p1, p2, p3, p4)
 
-        # Determine lane color and style
+        # Determine draft styling
         src_draft = self._source_port.parent_node.is_draft
         tgt_draft = self._target_port.parent_node.is_draft
         is_draft_edge = src_draft or tgt_draft
-
         if is_draft_edge:
-            self._glow_color = QColor("#9d7cd8")
             self._pen_style = Qt.PenStyle.DashLine
         else:
-            self._glow_color = QColor("#8b9eeb")
             self._pen_style = Qt.PenStyle.SolidLine
 
-        if self.isSelected():
-            self._glow_color = _qt_color(ACCENT)
-        if self._hovered:
-            self._glow_color = _qt_color(ACCENT)
-
-        # Main pen
-        main_color = self._glow_color
-        main_width = 1.2 if not self.isSelected() else 2.0
-        self.setPen(QPen(main_color, main_width, self._pen_style))
+        # Detect loop-return edge (targeting Mission Control input)
+        self._loop_return = False
+        mc = getattr(self._canvas, '_mission_core', None)
+        if mc is not None and self._to_node_id == mc.node_id:
+            self._loop_return = True
 
     def _build_bezier_curve(self, p1, p2, p3, p4) -> QPainterPath:
         path = QPainterPath()

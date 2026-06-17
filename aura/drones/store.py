@@ -18,6 +18,8 @@ _WRITE_POLICIES = {"read_only", "ask_before_writes", "normal_diff_approval"}
 def _is_safe_drone_id(drone_id: str) -> bool:
     return bool(_DRONE_ID_RE.fullmatch(str(drone_id or "")))
 
+_RESERVED_RUNTIME_FIELDS = {"goal", "workspace_root", "drone_id", "upstream"}
+
 
 def _project_root_for_drone_storage(workspace_root: Path | None = None) -> Path:
     """Walk up from the given path to find the project root (the .aura/drones parent).
@@ -334,6 +336,16 @@ class DroneStore:
             raise ValueError("Drone input_contract must be a dict")
         if not isinstance(drone.cargo_contract, dict):
             raise ValueError("Drone cargo_contract must be a dict")
+        for label, contract in (("input_contract", drone.input_contract),
+                                ("cargo_contract", drone.cargo_contract)):
+            schema = (contract or {}).get("schema") or {}
+            clash = _RESERVED_RUNTIME_FIELDS & set(schema)
+            if clash:
+                raise ValueError(
+                    f"Drone {label} declares runtime-injected field(s) {sorted(clash)}; "
+                    f"the runner always provides these and they must not appear in a "
+                    f"contract. Contracts describe cargo only."
+                )
         if not isinstance(drone.output_contract, dict) or not drone.output_contract:
             raise ValueError("Drone output_contract must be a non-empty dict (JSON Schema)")
         # Sanity check: output_contract must describe ok and summary fields

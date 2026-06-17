@@ -77,8 +77,6 @@ def resolve_mission_snapshot(workspace_root: Path, chain_id: str) -> dict[str, A
             "goal_template": n.goal_template,
             "is_draft": n.is_draft,
             "draft_name": n.draft_name,
-            "is_assignment": n.is_assignment,
-            "goal_id": n.goal_id,
         })
 
     edge_list: list[dict[str, Any]] = []
@@ -86,14 +84,6 @@ def resolve_mission_snapshot(workspace_root: Path, chain_id: str) -> dict[str, A
         edge_list.append({
             "from_node": e.from_node,
             "to_node": e.to_node,
-        })
-
-    goal_list: list[dict[str, Any]] = []
-    for g in chain.goals:
-        goal_list.append({
-            "id": g.id,
-            "title": g.title,
-            "objective": g.objective,
         })
 
     last_run_summary: dict[str, Any] | None = None
@@ -122,14 +112,12 @@ def resolve_mission_snapshot(workspace_root: Path, chain_id: str) -> dict[str, A
             "name": chain.name,
             "description": chain.description,
             "mission_goal": chain.mission_goal,
-            "goals": goal_list,
             "nodes": node_list,
             "edges": edge_list,
             "node_count": len(chain.nodes),
             "edge_count": len(chain.edges),
             "mission_core": {
                 "mission_goal": chain.mission_goal,
-                "goals": goal_list,
             },
         },
         "last_run": last_run_summary,

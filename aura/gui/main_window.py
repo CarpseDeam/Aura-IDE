@@ -52,6 +52,7 @@ from aura.gui.drones.drone_reports_window import DroneReportsWindow
 from aura.gui.drones.drone_run_card import DroneRunCard
 from aura.gui.drones.drone_summon_card import DroneSummonCard
 from aura.gui.drones.drone_workbay_window import DroneWorkbayWindow
+from aura.gui.drones.chain_loop_controller import ChainLoopController
 from aura.gui.edge_rails import EdgeTabRail
 from aura.gui.input_panel import InputPanel, SendPayload
 from aura.gui.left_pane import LeftPane
@@ -73,69 +74,7 @@ from aura.updater import UpdateStatus
 MAX_PARALLEL_READ_ONLY_DRONES = 3
 
 
-class _ChainRunWorker(QObject):
-    """Background worker that executes a chain run in a separate thread."""
 
-    run_started = Signal()
-    run_finished = Signal(dict)
-    run_error = Signal(str)
-
-    def __init__(
-        self,
-        workspace_root: Path,
-        chain,
-        drone_lookup: dict[str, object],
-        parent: QObject | None = None,
-    ) -> None:
-        super().__init__(parent)
-        self._workspace_root = workspace_root
-        self._chain = chain
-        self._drone_lookup = drone_lookup
-
-    def do_run(self) -> None:
-        """Execute the chain — called from the worker thread."""
-        try:
-            self.run_started.emit()
-            from dataclasses import asdict
-
-            result = run_chain(
-                self._workspace_root,
-                self._chain,
-                drone_lookup=self._drone_lookup,
-                approval_callback=lambda nodes: True,
-            )
-
-            # Convert ChainRun to a dict enriched with chain_name and elapsed.
-            d = asdict(result)
-            d["chain_name"] = self._chain.name
-
-            # Compute elapsed.
-            started = result.started_at
-            ended = result.ended_at
-            if started and ended:
-                try:
-                    import datetime as dt
-                    s = dt.datetime.fromisoformat(started)
-                    e = dt.datetime.fromisoformat(ended)
-                    delta = (e - s).total_seconds()
-                    d["elapsed"] = f"{delta:.1f}s"
-                except Exception:
-                    d["elapsed"] = ""
-            else:
-                d["elapsed"] = ""
-
-            # Find the failed node if applicable.
-            failed_at = ""
-            nodes = d.get("node_runs", {})
-            for node_id, nr in nodes.items():
-                if nr.get("status") == "failed":
-                    failed_at = node_id
-                    break
-            d["failed_at"] = failed_at
-
-            self.run_finished.emit(d)
-        except Exception as exc:
-            self.run_error.emit(str(exc))
 
 
 class MainWindow(WindowChromeMixin, QMainWindow):
@@ -275,6 +214,14 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             self._on_drone_reports_geometry_saved
         )
 
+        # Chain execution loop controller
+        self._chain_controller = ChainLoopController(
+            chain_provider=self._resolve_current_chain,
+            parent=self,
+        )
+        self._chain_controller.lap_finished.connect(self._on_lap_finished)
+        self._chain_controller.lap_error.connect(self._on_lap_error)
+        self._chain_controller.loop_finished.connect(self._on_loop_finished)
 
 
         # Worker event handler — owns session usage, forwards bridge signals
@@ -549,7 +496,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         name = editor._chain_name
         description = editor._chain_desc
 
-        nodes, edges, mission_core, goals = editor._canvas.to_chain_nodes_and_edges()
+        nodes, edges, mission_core = editor._canvas.to_chain_nodes_and_edges()
 
         # Build drone lookup from canvas nodes
         drone_lookup: dict[str, dict] = {}
@@ -578,7 +525,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             "nodes": nodes,
             "edges": edges,
             "mission_core": mission_core or {},
-            "goals": goals,
             "drone_lookup": drone_lookup,
         }
 
@@ -1019,6 +965,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         editor.runChainRequested.connect(lambda cid: self._on_run_workflow(cid))
         editor.runDroneRequested.connect(self._on_launch_drone)
         editor.deleteDroneRequested.connect(self._on_delete_drone)
+        editor.loopToggled.connect(self._on_loop_toggled)
         workbay.geometry_saved.connect(self._on_drone_workbay_geometry_saved)
         if hooks.is_registered('query_mission_workbay_state'):
             hooks.unregister('query_mission_workbay_state')
@@ -1115,34 +1062,11 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             if answer != QMessageBox.Yes:
                 return
 
-        # ── Run in background ──
-        worker = _ChainRunWorker(
-            self._workspace_root, chain, drone_lookup
-        )
-        thread = QThread(self)
-        worker.moveToThread(thread)
+        # ── Run via controller ──
+        self._chain_controller.start()
 
-        worker.run_finished.connect(
-            lambda result: self._on_chain_run_finished(result, thread)
-        )
-        worker.run_error.connect(
-            lambda msg: self._on_chain_run_error(msg, thread)
-        )
-        thread.started.connect(worker.do_run)
-
-        # Keep references to prevent GC.
-        self._chain_thread = thread
-        self._chain_worker = worker
-
-        thread.start()
-
-    def _on_chain_run_finished(self, result: dict, thread: QThread) -> None:
-        """Post the chain run report and refresh the workflow list."""
-        thread.quit()
-        thread.wait()
-        self._chain_thread = None
-        self._chain_worker = None
-
+    def _on_lap_finished(self, result: dict) -> None:
+        """Post one lap's run report to the chat."""
         chain_name = result.get("chain_name", "Unknown")
         nodes_data = result.get("node_runs", {})
         status = result.get("status", "unknown")
@@ -1212,17 +1136,50 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             self._drone_workbay_window.chain_editor.refresh_run_state()
 
 
-    def _on_chain_run_error(self, msg: str, thread: QThread) -> None:
-        """Handle chain run exception."""
-        thread.quit()
-        thread.wait()
-        self._chain_thread = None
-        self._chain_worker = None
+    def _on_lap_error(self, msg: str) -> None:
+        """Handle a lap-level error — post to chat if chat is available."""
+        logger.error("Chain lap error: %s", msg)
+        try:
+            self._chat.begin_assistant()
+            self._chat.append_content(f"\u26a0 Lap error: {msg}")
+            self._chat.assistant_done()
+        except Exception as exc:
+            logger.warning("Failed to report lap error to chat: %s", exc)
 
-        QMessageBox.critical(
-            self, "Workflow Run Error",
-            f"Chain run failed: {msg}"
-        )
+    def _on_loop_finished(self) -> None:
+        """Loop fully stopped (no more laps to run)."""
+
+    def _resolve_current_chain(self) -> tuple:
+        """Return (workspace_root, chain, drone_lookup) for the current editor."""
+        ws = self._workspace_root
+        if ws is None:
+            return None, None, None
+        if self._drone_workbay_window is None:
+            return None, None, None
+        editor = self._drone_workbay_window.chain_editor
+        chain_id = editor._current_chain_id
+        if not chain_id:
+            return None, None, None
+        chain = ChainStore.load_chain(ws, chain_id)
+        if chain is None:
+            return None, None, None
+        drones = DroneStore.list_drones(ws)
+        drone_lookup = {d.id: d for d in drones}
+        return ws, chain, drone_lookup
+
+    def _on_loop_toggled(self, enabled: bool) -> None:
+        """Handle loop toggle from Mission Control."""
+        ws, chain, _ = self._resolve_current_chain()
+        if ws is None or chain is None:
+            return
+        from dataclasses import replace
+        updated = replace(chain, loop=enabled)
+        ChainStore.save_chain(ws, updated)
+
+        if enabled:
+            self._chain_controller.start()
+        else:
+            self._chain_controller.stop()
 
     def _on_edit_workflow(self, chain_id: str) -> None:
         """Open the chain editor for an existing workflow."""

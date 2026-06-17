@@ -382,6 +382,7 @@ class ChainEditor(QWidget):
     goBackRequested = Signal()
     runDroneRequested = Signal(str, str)  # drone_id, folder
     deleteDroneRequested = Signal(str)
+    loopToggled = Signal(bool)
 
     _AUTO_SAVE_MS = 1200
     def __init__(
@@ -579,6 +580,7 @@ class ChainEditor(QWidget):
         self._canvas.setStyleSheet(f"background: {_qss_color(BG)}; border: none;")
         self._canvas.canvasChanged.connect(self._on_canvas_changed)
         self._canvas.runMissionRequested.connect(self._on_run_clicked)
+        self._canvas.loopToggled.connect(self.loopToggled.emit)
         self._canvas.statusMessage.connect(self.set_status)
         self._canvas.renameWorkflowRequested.connect(self._rename_current_workflow)
         right_layout.addWidget(self._canvas, 1)
@@ -747,8 +749,7 @@ class ChainEditor(QWidget):
                 chain_def = _chain_from_dict(data)
                 drone_lookup = self._build_drone_lookup()
                 mission_core_data = data.get("mission_core")
-                goal_planets_data = data.get("goals", [])
-                self._canvas.load_chain(chain_def, drone_lookup, mission_core_data, goal_planets_data)
+                self._canvas.load_chain(chain_def, drone_lookup, mission_core_data)
                 self._dirty = False
                 return
         if canvas_data:
@@ -760,8 +761,7 @@ class ChainEditor(QWidget):
             chain_def = _chain_from_dict(canvas_data)
             drone_lookup = self._build_drone_lookup()
             mission_core_data = canvas_data.get("mission_core")
-            goal_planets_data = canvas_data.get("goals", [])
-            self._canvas.load_chain(chain_def, drone_lookup, mission_core_data, goal_planets_data)
+            self._canvas.load_chain(chain_def, drone_lookup, mission_core_data)
             self._dirty = canvas_data.get("dirty", False)
             return
         # New blank chain
@@ -778,14 +778,13 @@ class ChainEditor(QWidget):
         return {d.id: d for d in DroneStore.list_drones(self._workspace_root)}
 
     def _snapshot_chain(self) -> dict:
-        nodes, edges, mission_core, goals = self._canvas.to_chain_nodes_and_edges()
+        nodes, edges, mission_core = self._canvas.to_chain_nodes_and_edges()
         result = {
             "nodes": nodes,
             "edges": edges,
             "name": self._chain_name,
             "description": self._chain_desc,
             "auto_route": self._auto_route,
-            "goals": goals,
         }
         if mission_core:
             result["mission_core"] = mission_core
@@ -1041,13 +1040,12 @@ class ChainEditor(QWidget):
         if self._roster is not None:
             self._roster.set_workspace_root(self._workspace_root)
             self._roster.populate()
-        if self._canvas._nodes or self._canvas._mission_core is not None or self._canvas._goal_planets:
+        if self._canvas._nodes or self._canvas._mission_core is not None:
             data = self._snapshot_chain()
             chain_def = _chain_from_dict(data)
             drone_lookup = self._build_drone_lookup()
             mission_core_data = data.get("mission_core")
-            goal_planet_data = data.get("goals", [])
-            self._canvas.load_chain(chain_def, drone_lookup, mission_core_data, goal_planet_data)
+            self._canvas.load_chain(chain_def, drone_lookup, mission_core_data)
 
     def refresh_run_state(self) -> None:
         """Refresh mission core stats and assignment run status after a chain run."""
@@ -1064,13 +1062,11 @@ class ChainEditor(QWidget):
             mc._output_status = run_status
             mc.update()
 
-        # Update assignment node run status from the latest ChainRun
+        # Update node run status from the latest ChainRun
         chain_run = get_last_chain_run(self._workspace_root, chain_id)
         if chain_run is not None:
             node_runs = chain_run.node_runs
             for node in self._canvas._nodes.values():
-                if not node.is_assignment:
-                    continue
                 nr = node_runs.get(node.node_id)
                 node.run_status = nr.get("status", "idle") if nr else "idle"
 

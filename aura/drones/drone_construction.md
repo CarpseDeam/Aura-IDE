@@ -42,14 +42,21 @@ Every manifest MUST include these fields:
 }
 ```
 
-### Field rules
+### Runtime payload vs. contracts
 
+Two different things flow into a Drone. Don't weld them.
+
+**Runtime payload (always injected, never declared).** The runner hands every Drone a stdin object with `goal`, `workspace_root`, `drone_id`, and `upstream`. Read them with `.get()`. They are guaranteed plumbing — never list them in any contract.
+
+**Cargo (the chain data).** `upstream` holds the `cargo` emitted by the Drones feeding this one, keyed by node id. `input_contract` is the cargo you need from upstream; `cargo_contract` is the cargo you emit. These two — and only these — are what the chain validator type-checks against each other.
+
+### Field rules
 - **id**: lowercase slug, hyphens only. Must match the folder name.
 - **name**: human-readable, title case.
 - **description**: one sentence. What it does, not how.
 - **instructions**: operational detail. What the goal string should contain, what formats it accepts, what the output shape means. The runner and the planner both read this to know how to invoke the Drone.
 - **write_policy**: `read_only` for pure reads/analysis. `normal_diff_approval` for anything that modifies files, pushes, or has side effects. `ask_before_writes` for sensitive writes that need per-action confirmation.
-- **input_contract**: JSON Schema fragment describing what the Drone expects on stdin. Always include `goal` (string) and `workspace_root` (string) at minimum.
+- **input_contract**: JSON Schema fragment describing ONLY the cargo this Drone consumes from upstream — the fields it expects to find in `upstream`. Same vocabulary as a producer's `cargo_contract`, viewed from the receiving end. Do NOT include runtime fields (`goal`, `workspace_root`, `drone_id`, `upstream`) — the runner always injects those; they are never part of a contract. A chain-head Drone that consumes no upstream cargo leaves this `{}`.
 - **cargo_contract**: JSON Schema fragment describing the structured output the Drone produces. This is what downstream Drones in a chain consume. Be precise — typed fields, required arrays, enums where values are known.
 - **output_contract**: JSON Schema fragment describing the full stdout output shape, including ok/error envelopes. Use `oneOf` for success vs failure shapes.
 

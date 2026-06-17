@@ -7,39 +7,13 @@ from PySide6.QtCore import QPointF
 from PySide6.QtWidgets import QGraphicsItem
 
 from aura.drones.definition import DroneDefinition
-from aura.gui.drones.chain_node_item import ChainNodeItem
+from aura.gui.drones.chain_canvas_items import PortItem, ChainEdgeItem
+from aura.gui.drones.chain_node_item import ChainNodeItem, NODE_WIDTH, NODE_HEIGHT
 from aura.gui.drones.mission_core_item import MissionCoreItem
-from aura.gui.drones.goal_planet_item import GoalPlanetItem
 
 
 MISSION_CORE_WIDTH = 240
 MISSION_CORE_HEIGHT = 120
-ASSIGNMENT_HEIGHT = 24
-
-
-def _populate_planet_from_drone(drone: DroneDefinition) -> tuple[str, str]:
-    """Derive a deterministic (title, objective) pair from a DroneDefinition."""
-    if drone.name:
-        title = f"{drone.name} Target"
-    else:
-        desc_words = (drone.description or "").split()
-        if desc_words:
-            title = " ".join(desc_words[:5])
-        else:
-            title = "Mission Goal"
-
-    if drone.description:
-        objective = drone.description
-    elif drone.output_contract and drone.output_contract.get("description"):
-        objective = drone.output_contract["description"]
-    elif drone.instructions:
-        objective = drone.instructions
-    elif drone.name:
-        objective = f"Complete the mission for {drone.name}"
-    else:
-        objective = "Complete the assigned task"
-
-    return title, objective
 
 
 class ChainCanvasMissionMixin:
@@ -67,87 +41,99 @@ class ChainCanvasMissionMixin:
         self._update_empty_text()
         self.canvasChanged.emit()
 
-    def _canvas_add_goal_planet(self, scene_pos: QPointF) -> None:
-        self._canvas_add_goal_planet_with_data(scene_pos)
+    def _handle_mission_core_drop(self, mission_item: MissionCoreItem, drone_id: str) -> None:
+        from aura.drones.store import DroneStore
+        drone = DroneStore.load_drone(self._get_workspace_root(), drone_id)
+        if drone is None:
+            return
+        self._append_drone_to_chain(drone)
 
-    def _canvas_add_goal_planet_with_data(self, scene_pos: QPointF, title: str = "", objective: str = "") -> GoalPlanetItem:
-        goal_id = f"goal-{uuid.uuid4().hex[:6]}"
-        gp_item = GoalPlanetItem(
-            node_id=f"goal-planet-{uuid.uuid4().hex[:4]}",
-            canvas=self,
-            goal_id=goal_id,
-        )
-        gp_item.setPos(scene_pos)
-        if title:
-            gp_item.title = title
-        if objective:
-            gp_item.objective = objective
-        self._scene.addItem(gp_item)
-        self._goal_planets[goal_id] = gp_item
-        self._update_empty_text()
-        self.canvasChanged.emit()
-        return gp_item
-
-    def _create_goal_planet_for_drone(self, drone: DroneDefinition) -> GoalPlanetItem:
-        title, objective = _populate_planet_from_drone(drone)
-        if self._mission_core is not None:
-            mc_pos = self._mission_core.pos()
-            base_x = mc_pos.x() + 200
-            base_y = mc_pos.y() - 40
-        else:
-            base_x = 160
-            base_y = 0
-        scene_pos = QPointF(base_x, base_y + len(self._goal_planets) * 100)
-        return self._canvas_add_goal_planet_with_data(scene_pos, title, objective)
-
-    def _ensure_goal_for_drone(self, drone: DroneDefinition, preferred_goal_id: str = "") -> str:
-        if preferred_goal_id and preferred_goal_id in self._goal_planets:
-            return preferred_goal_id
-        selected = [gp for gp in self._goal_planets.values() if gp.isSelected()]
-        if len(selected) == 1:
-            return selected[0].goal_id
-        if len(self._goal_planets) == 1:
-            return next(iter(self._goal_planets))
-        return self._create_goal_planet_for_drone(drone).goal_id
-
-    def _create_drone_assignment(self, drone: DroneDefinition, goal_id: str) -> ChainNodeItem:
+    def _append_drone_to_chain(self, drone: DroneDefinition) -> ChainNodeItem:
         if self._mission_core is None:
             self._canvas_add_mission_core(QPointF(-160, 0))
+        mc = self._mission_core
         node_id = f"{drone.id}-{uuid.uuid4().hex[:4]}"
+
         item = ChainNodeItem(
             node_id=node_id,
             drone=drone,
             goal_template="",
             canvas=self,
-            is_assignment=True,
-            goal_id=goal_id,
         )
-        mc = self._mission_core
+
+        # Position to the right of tail node (or right of MC if first)
         mc_pos = mc.pos()
-        assignment_index = sum(1 for n in self._nodes.values() if n.is_assignment)
-        x = mc_pos.x() + MISSION_CORE_WIDTH / 2 + 4
-        y = mc_pos.y() - MISSION_CORE_HEIGHT / 2 + 6 + assignment_index * (ASSIGNMENT_HEIGHT + 4)
+        if self._nodes:
+            tail = list(self._nodes.values())[-1]
+            tail_pos = tail.pos()
+            x = tail_pos.x() + NODE_WIDTH + 80
+        else:
+            x = mc_pos.x() + MISSION_CORE_WIDTH / 2 + 80
+        y = mc_pos.y() - NODE_HEIGHT / 2
+
         item.setPos(x, y)
         self._scene.addItem(item)
         self._nodes[node_id] = item
         mc.add_assigned_drone(drone.id)
+        self._rewire_linear_ring()
         self._scene.clearSelection()
         item.setSelected(True)
         self._update_empty_text()
         self.canvasChanged.emit()
         return item
 
-    def _handle_mission_core_drop(self, mission_item: MissionCoreItem, drone_id: str) -> None:
-        from aura.drones.store import DroneStore
-        drone = DroneStore.load_drone(self._get_workspace_root(), drone_id)
-        if drone is None:
+    def _rewire_linear_ring(self) -> None:
+        """Remove all edges and rebuild a linear ring:
+        MC.output -> n0.input -> n0.output -> n1.input ... -> nN.output -> MC.input
+        """
+        mc = self._mission_core
+        if mc is None:
             return
-        goal_id = self._ensure_goal_for_drone(drone, "")
-        self._create_drone_assignment(drone, goal_id)
 
-    def _handle_goal_planet_drop(self, planet_item: GoalPlanetItem, drone_id: str) -> None:
-        from aura.drones.store import DroneStore
-        drone = DroneStore.load_drone(self._get_workspace_root(), drone_id)
-        if drone is None:
+        # Remove all existing edges
+        for edge in list(self._edges):
+            self._scene.removeItem(edge)
+        self._edges.clear()
+
+        order = list(self._nodes.values())  # insertion order = run order
+        if not order:
             return
-        self._create_drone_assignment(drone, planet_item.goal_id)
+
+        from aura.gui.drones.chain_canvas_items import PortItem, ChainEdgeItem
+
+        # Give MC output and input ports if it doesn't have them yet
+        if not hasattr(mc, 'output_port') or mc.output_port is None:
+            mc.output_port = PortItem(mc, is_input=False)
+            mc.output_port.setPos(MISSION_CORE_WIDTH / 2, 0)
+        if not hasattr(mc, 'input_port') or mc.input_port is None:
+            mc.input_port = PortItem(mc, is_input=True)
+            mc.input_port.setPos(-MISSION_CORE_WIDTH / 2, 0)
+
+        # MC.output -> order[0].input
+        if order[0].input_port:
+            e = ChainEdgeItem(
+                source_port=mc.output_port,
+                target_port=order[0].input_port,
+                canvas=self,
+            )
+            self._scene.addItem(e)
+            self._edges.append(e)
+
+        # order[i].output -> order[i+1].input
+        for i in range(len(order) - 1):
+            src = order[i].output_port
+            tgt = order[i + 1].input_port
+            if src and tgt:
+                e = ChainEdgeItem(source_port=src, target_port=tgt, canvas=self)
+                self._scene.addItem(e)
+                self._edges.append(e)
+
+        # order[-1].output -> MC.input (loop-back)
+        if order[-1].output_port and mc.input_port:
+            e = ChainEdgeItem(
+                source_port=order[-1].output_port,
+                target_port=mc.input_port,
+                canvas=self,
+            )
+            self._scene.addItem(e)
+            self._edges.append(e)

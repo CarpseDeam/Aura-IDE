@@ -16,6 +16,7 @@ from aura.conversation.tools.consequential import is_consequential
 from aura.drones.chain import (
     ChainDefinition,
     ChainNode,
+    linear_order,
     topological_order,
     validate,
 )
@@ -215,135 +216,39 @@ def _execute_node(
     normalizes results, persists output.json, and returns the node_run dict.
     Does NOT set chain_run.status/ended_at or call _save_run_state.
     """
-    # ── Build goal lookup map ───────────────────────────
-    goal_map = {g.id: g for g in chain.goals}
-
-    # ── Resolve upstream cargo ───────────────────────────
+    # ── Resolve upstream cargo (linear predecessor) ──
     upstream: dict[str, Any] = {}
-    for edge in chain.edges:
-        if edge.to_node == node_id:
-            upstream_output = (
-                _node_output_dir(
-                    workspace_root, chain_run.run_id, edge.from_node
+    order = linear_order(chain)
+    try:
+        idx = order.index(node_id)
+    except ValueError:
+        idx = -1
+    if idx > 0:
+        prev_id = order[idx - 1]
+        prev_output = (
+            _node_output_dir(workspace_root, chain_run.run_id, prev_id)
+            / "output.json"
+        )
+        if prev_output.exists():
+            try:
+                data = json.loads(prev_output.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    upstream[prev_id] = data.get("cargo", {})
+            except Exception as exc:
+                logger.warning(
+                    "Failed to read upstream cargo from %s: %s",
+                    prev_output,
+                    exc,
                 )
-                / "output.json"
-            )
-            if upstream_output.exists():
-                try:
-                    data = json.loads(
-                        upstream_output.read_text(encoding="utf-8")
-                    )
-                    if isinstance(data, dict):
-                        upstream[edge.from_node] = data.get("cargo", {})
-                except Exception as exc:
-                    logger.warning(
-                        "Failed to read upstream cargo from %s: %s",
-                        upstream_output,
-                        exc,
-                    )
 
     # ── Build goal text ────────────────────────────────
     goal_text = node.goal_template.strip()
     if not goal_text:
         goal_text = f"Execute the {drone.name} step."
 
-    # ── Mission Objective (Goal Planet) ────────────────
-    if node.is_assignment:
-        goal = goal_map.get(node.goal_id)
-        if goal and goal.objective:
-            goal_text = (
-                f"## Mission Objective\n{goal.objective}\n\n"
-                f"## Assignment\n{goal_text}"
-            )
-        elif chain.mission_goal and len(chain.goals) <= 1:
-            goal_text = (
-                f"## Mission Objective\n{chain.mission_goal}\n\n"
-                f"## Assignment\n{goal_text}"
-            )
-
-    # ── Warehouse cargo for assignment nodes ────────────
-    if node.is_assignment:
-        warehouse_cargo: list[dict[str, Any]] = []
-        for completed_nid, nr in chain_run.node_runs.items():
-            if completed_nid == node_id:
-                continue
-            if nr.get("status") != "completed":
-                continue
-            artifact_path = nr.get("artifact_path", "")
-            if not artifact_path:
-                continue
-            output_path = workspace_root / artifact_path
-            if not output_path.exists():
-                continue
-
-            # Resolve goal info for the completed node
-            completed_node = node_map.get(completed_nid)
-            goal_id_str = ""
-            goal_title_str = ""
-            if completed_node and completed_node.goal_id:
-                g = goal_map.get(completed_node.goal_id)
-                if g:
-                    goal_id_str = g.id
-                    goal_title_str = g.title or "Goal"
-
-            try:
-                data = json.loads(output_path.read_text(encoding="utf-8"))
-            except Exception:
-                continue
-            if not isinstance(data, dict):
-                data = {"artifact": data}
-            cargo_entry: dict[str, Any] = {
-                "node_id": completed_nid,
-                "drone_id": nr.get("drone_id", "?"),
-                "source_goal_id": goal_id_str,
-                "source_goal_title": goal_title_str,
-                "source_assignment_id": completed_nid,
-            }
-            summary = data.get("summary", "")
-            evidence = data.get("evidence", "")
-            if summary:
-                cargo_entry["summary"] = summary
-            if evidence:
-                cargo_entry["evidence"] = evidence
-            for k in ("result", "output", "findings", "data", "artifact"):
-                if k in data:
-                    cargo_entry[k] = data[k]
-            warehouse_cargo.append(cargo_entry)
-
-        if warehouse_cargo:
-            goal_text += (
-                "\n\n## Mission Warehouse Cargo\n"
-                "The following cargo was returned by previously completed "
-                "drones in this mission. "
-                "Use this information in your work.\n\n"
-            )
-            for entry in warehouse_cargo:
-                src_goal = entry.get("source_goal_title", "")
-                if src_goal:
-                    goal_text += (
-                        f"From {src_goal}: "
-                        f"- **{entry['drone_id']}** ({entry['node_id']}):"
-                    )
-                else:
-                    goal_text += (
-                        f"- **{entry['drone_id']}** ({entry['node_id']}):"
-                    )
-                if "summary" in entry:
-                    goal_text += f" {entry['summary']}"
-                goal_text += "\n"
-                extras = {
-                    k: v
-                    for k, v in entry.items()
-                    if k not in ("node_id", "drone_id", "summary", "evidence")
-                }
-                if extras:
-                    goal_text += (
-                        "  ```json\n  "
-                        + json.dumps(extras, indent=2).replace(
-                            "\n", "\n  "
-                        )
-                        + "\n  ```\n"
-                    )
+    # ── Mission goal context ──────────────────────────
+    if chain.mission_goal:
+        goal_text = f"## Mission\n{chain.mission_goal}\n\n## Step\n{goal_text}"
 
     # ── Execute ────────────────────────────────────────
     try:
@@ -526,7 +431,7 @@ def run_chain(
 
     # ── Step 4 — Resolve node order ────────────────────────────
     node_map = {n.id: n for n in chain.nodes}
-    order = topological_order(chain)
+    order = linear_order(chain)
     if start_node:
         try:
             start_idx = order.index(start_node)
@@ -536,7 +441,7 @@ def run_chain(
             )
         order = order[start_idx:]
         # Warn about missing output from previously-completed nodes
-        for nid in topological_order(chain)[:start_idx]:
+        for nid in linear_order(chain)[:start_idx]:
             if nid in chain_run.node_runs:
                 expected = (
                     _node_output_dir(workspace_root, chain_run.run_id, nid)
