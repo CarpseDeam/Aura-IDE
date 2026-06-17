@@ -243,7 +243,7 @@ class ChainNodeItem(QGraphicsObject):
 
         font_name = QFont()
         font_name.setPixelSize(14)
-        font_name.setWeight(65)  # ~ demi-bold
+        font_name.setWeight(QFont.Weight.DemiBold)
         painter.setFont(font_name)
         fm = QFontMetrics(font_name)
         name_x = 34
