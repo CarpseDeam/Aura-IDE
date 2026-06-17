@@ -35,16 +35,76 @@ class _WorkflowLineSegment(QGraphicsPathItem):
         self._build_bezier()
 
     def _build_bezier(self) -> None:
-        dx = self._end_pos.x() - self._start_pos.x()
-        offset = max(40.0, dx * 0.5)
+        sx = self._start_pos.x()
+        sy = self._start_pos.y()
+        ex = self._end_pos.x()
+        ey = self._end_pos.y()
+        dy = ey - sy
+
+        # Same-row fallback: gentle horizontal cubic
+        if abs(dy) < 20.0:
+            dx = ex - sx
+            offset = max(40.0, dx * 0.5)
+            path = QPainterPath()
+            path.moveTo(self._start_pos)
+            path.cubicTo(
+                QPointF(sx + offset, sy),
+                QPointF(ex - offset, ey),
+                self._end_pos,
+            )
+            self.setPath(path)
+            return
+
+        # Routed lane geometry constants
+        h_offset = 60.0
+        r = 20.0
+        k = 0.448
+        cx = sx + h_offset  # vertical trunk x position
 
         path = QPainterPath()
         path.moveTo(self._start_pos)
-        path.cubicTo(
-            QPointF(self._start_pos.x() + offset, self._start_pos.y()),
-            QPointF(self._end_pos.x() - offset, self._end_pos.y()),
-            self._end_pos,
-        )
+
+        # 1. Horizontal exit (rightward, stop before corner 1)
+        path.lineTo(cx - r, sy)
+
+        if dy > 0:  # Forward segment: going down
+            # Corner 1: right -> down
+            # P0=(cx-r, sy), P3=(cx, sy+r)
+            path.cubicTo(
+                QPointF(cx - r * k, sy),
+                QPointF(cx, sy + r * k),
+                QPointF(cx, sy + r),
+            )
+            # Vertical trunk
+            path.lineTo(cx, ey - r)
+            # Corner 2: down -> left
+            # P0=(cx, ey-r), P3=(cx-r, ey)
+            path.cubicTo(
+                QPointF(cx, ey - r * k),
+                QPointF(cx - r * k, ey),
+                QPointF(cx - r, ey),
+            )
+        else:  # Return segment: going up
+            # Corner 1: right -> up
+            # P0=(cx-r, sy), P3=(cx, sy-r)
+            path.cubicTo(
+                QPointF(cx - r * k, sy),
+                QPointF(cx, sy - r * k),
+                QPointF(cx, sy - r),
+            )
+            # Vertical trunk
+            path.lineTo(cx, ey + r)
+            # Corner 2: up -> left
+            # P0=(cx, ey+r), P3=(cx-r, ey)
+            path.cubicTo(
+                QPointF(cx, ey + r * k),
+                QPointF(cx - r * k, ey),
+                QPointF(cx - r, ey),
+            )
+
+        # 5. Final horizontal entry into target edge
+        path.lineTo(self._end_pos)
+
         self.setPath(path)
 
     def paint(
@@ -63,14 +123,18 @@ class _WorkflowLineSegment(QGraphicsPathItem):
         # Glow underlay — two passes
         glow_color = QColor("#7aa2f7") if is_bright else QColor("#6e7382")
 
-        glow1_color = QColor(glow_color)
-        glow1_color.setAlpha(10 if is_bright else 6)
-        painter.setPen(QPen(glow1_color, 6))
+        glow1_pen = QPen(glow_color, 6)
+        glow1_pen.setAlpha(10 if is_bright else 6)
+        glow1_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        glow1_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(glow1_pen)
         painter.drawPath(self.path())
 
-        glow2_color = QColor(glow_color)
-        glow2_color.setAlpha(22 if is_bright else 12)
-        painter.setPen(QPen(glow2_color, 3))
+        glow2_pen = QPen(glow_color, 3)
+        glow2_pen.setAlpha(22 if is_bright else 12)
+        glow2_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        glow2_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(glow2_pen)
         painter.drawPath(self.path())
 
         # Main stroke
@@ -83,10 +147,12 @@ class _WorkflowLineSegment(QGraphicsPathItem):
             pen.setWidthF(2.0)
             pen.setStyle(Qt.PenStyle.SolidLine)
             pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
         else:
             pen = QPen(QColor("#6e7382"), 2.0)
             pen.setStyle(Qt.PenStyle.DashLine)
             pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
 
         painter.setPen(pen)
         painter.drawPath(self.path())
