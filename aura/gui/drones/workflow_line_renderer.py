@@ -45,6 +45,63 @@ class _WorkflowLineSegment(QGraphicsPathItem):
         ey = self._end_pos.y()
         dy = ey - sy
 
+        # Return segment: routed outer lane above all cards
+        if self._is_return:
+            r = 18.0
+            k = 0.448
+            exit_x = sx + 60.0
+            entry_x = ex - 60.0
+            route_y = min(sy, ey) - 90.0
+
+            path = QPainterPath()
+            path.moveTo(self._start_pos)
+
+            # Horizontal exit rightward
+            path.lineTo(exit_x - r, sy)
+
+            # Corner 1: right → up
+            path.cubicTo(
+                QPointF(exit_x - r * k, sy),
+                QPointF(exit_x, sy - r * k),
+                QPointF(exit_x, sy - r),
+            )
+
+            # Vertical up
+            path.lineTo(exit_x, route_y + r)
+
+            # Corner 2: up → left
+            path.cubicTo(
+                QPointF(exit_x, route_y + r * k),
+                QPointF(exit_x - r * k, route_y),
+                QPointF(exit_x - r, route_y),
+            )
+
+            # Horizontal left along route_y
+            path.lineTo(entry_x + r, route_y)
+
+            # Corner 3: left → down
+            path.cubicTo(
+                QPointF(entry_x + r * k, route_y),
+                QPointF(entry_x, route_y + r * k),
+                QPointF(entry_x, route_y + r),
+            )
+
+            # Vertical down toward MC
+            path.lineTo(entry_x, ey - r)
+
+            # Corner 4: down → right
+            path.cubicTo(
+                QPointF(entry_x, ey - r * k),
+                QPointF(entry_x + r * k, ey),
+                QPointF(entry_x + r, ey),
+            )
+
+            # Horizontal entry into MC
+            path.lineTo(self._end_pos)
+
+            self.setPath(path)
+            return
+
         # Same-row fallback: gentle horizontal cubic
         if abs(dy) < 20.0:
             dx = ex - sx
@@ -219,8 +276,6 @@ class WorkflowLineRenderer:
             self._segments.append(seg)
             self._scene.addItem(seg)
 
-        logger.debug("WorkflowLineRenderer rebuilt %s segments", len(self._segments))
-
         # Return segment: last node output → MC left edge center
         last = nodes[-1]
         ret_start = last.pos() + QPointF(NODE_WIDTH, NODE_HEIGHT / 2)
@@ -229,6 +284,8 @@ class WorkflowLineRenderer:
         ret_seg.set_loop_enabled(self._loop_enabled)
         self._segments.append(ret_seg)
         self._scene.addItem(ret_seg)
+
+        logger.debug("WorkflowLineRenderer rebuilt %s segments", len(self._segments))
 
     def clear(self) -> None:
         """Remove all segments from the scene and clear the list."""
