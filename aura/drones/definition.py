@@ -17,7 +17,7 @@ class DroneDefinition:
     description: str
     instructions: str
     write_policy: str  # "read_only" | "ask_before_writes" | "normal_diff_approval"
-    output_contract: str
+    output_contract: dict[str, Any] = field(default_factory=dict)
     budget: DroneBudget = field(default_factory=DroneBudget)
     scope: str = "global"
     enabled: bool = True

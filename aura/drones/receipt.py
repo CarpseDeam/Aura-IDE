@@ -16,7 +16,7 @@ class DroneReceipt:
     tool_calls_made: int = 0
     tool_errors: int = 0
     summary: str = ""
-    output_contract: str = ""
+    output_contract: dict | None = None
     tool_calls: list[dict] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     elapsed_seconds: float = 0.0

@@ -43,6 +43,7 @@ from aura.drones.definition import DroneDefinition
 from aura.drones.receipt import DroneReceipt
 from aura.drones.runner import DroneRunner
 from aura.drones.store import DroneStore, RunHistoryStore
+from aura.drones.construction_context import enter_drone_construction, clear_drone_construction
 from aura.git_ops import git_init, is_git_repo
 from aura.gui.chat_view import ChatView
 from aura.gui.checkpoint_dialog import CheckpointDialog
@@ -640,6 +641,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             self._drone_workbay_window.hide()
             self._drone_workbay_window.deleteLater()
             self._drone_workbay_window = None
+        clear_drone_construction()
         self._refresh_status_bar()
         return str(path)
 
@@ -736,6 +738,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
                     )
 
     def _retarget_workspace(self, root_path: Path, *, restore_last: bool = True) -> None:
+        clear_drone_construction()
         if self._workspace_root is not None and self._workspace_root.resolve() != root_path.resolve():
             self._persistence.new_conversation()
 
@@ -767,6 +770,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
     def _on_drone_folder_selected(self, folder: Path) -> None:
         self._retarget_workspace(folder, restore_last=False)
         self._left_pane.refresh_drones(folder)
+        enter_drone_construction("existing", folder.name)
         # Deliberately does NOT touch ProjectStore and does NOT call save_workspace_root,
         # so a drone is never registered as a project and Aura never boots into one.
 
@@ -791,6 +795,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
         self._left_pane.refresh_drones(drone_dir)
         self._on_drone_folder_selected(drone_dir)
+        enter_drone_construction("new", drone_id)
 
     def _on_new_project(self) -> None:
         start = str(self._workspace_root) if self._workspace_root else str(Path.home())

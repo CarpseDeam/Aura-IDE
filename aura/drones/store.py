@@ -46,6 +46,20 @@ def _drone_from_dict(data: dict) -> DroneDefinition:
             "Legacy string entrypoint is no longer supported. "
             "Drone must use command entrypoint: {'kind': 'command', ...}"
         )
+    # Migrate legacy string output_contract to dict
+    if isinstance(data.get("output_contract"), str):
+        text = data["output_contract"].strip()
+        data = {
+            **data,
+            "output_contract": {
+                "description": text,
+                "properties": {
+                    "ok": {"type": "boolean"},
+                    "summary": {"type": "string"},
+                },
+                "required": ["ok", "summary"],
+            },
+        }
     known_fields = {f.name for f in fields(DroneDefinition)}
     filtered = {k: v for k, v in data.items() if k in known_fields}
     drone = DroneDefinition(**filtered)
@@ -298,8 +312,18 @@ class DroneStore:
             raise ValueError("Drone name is required")
         if not drone.instructions.strip():
             raise ValueError("Drone instructions are required")
-        if not drone.output_contract.strip():
-            raise ValueError("Drone output contract is required")
+        if not isinstance(drone.input_contract, dict):
+            raise ValueError("Drone input_contract must be a dict")
+        if not isinstance(drone.cargo_contract, dict):
+            raise ValueError("Drone cargo_contract must be a dict")
+        if not isinstance(drone.output_contract, dict) or not drone.output_contract:
+            raise ValueError("Drone output_contract must be a non-empty dict (JSON Schema)")
+        # Sanity check: output_contract must describe ok and summary fields
+        contract_str = json.dumps(drone.output_contract)
+        if '"ok"' not in contract_str or '"summary"' not in contract_str:
+            raise ValueError(
+                "Drone output_contract must describe 'ok' (boolean) and 'summary' (string) fields"
+            )
         if drone.write_policy not in _WRITE_POLICIES:
             raise ValueError(f"Invalid Drone write policy: {drone.write_policy}")
         if drone.budget.timeout_seconds < 30:

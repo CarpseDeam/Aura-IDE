@@ -52,7 +52,7 @@ def _write_drone_folder(
                 "entrypoint": {"kind": "command", "command": ["python", "main.py"], "protocol": "json-stdio"},
                 "instructions": "Run the folder entrypoint.",
                 "write_policy": "read_only",
-                "output_contract": "Return cargo.",
+                "output_contract": {"description": "Return cargo.", "properties": {"ok": {"type": "boolean"}, "summary": {"type": "string"}}, "required": ["ok", "summary"]},
             }
         ),
         encoding="utf-8",
@@ -84,7 +84,7 @@ def test_unknown_fields_dropped_by_drone_from_dict() -> None:
         "description": "Old shape.",
         "instructions": "Use tools.",
         "write_policy": "read_only",
-        "output_contract": "Summary.",
+        "output_contract": {"description": "Summary.", "properties": {"ok": {"type": "boolean"}, "summary": {"type": "string"}}, "required": ["ok", "summary"]},
         "unknown_field": "should be dropped",
     }
 
@@ -124,7 +124,7 @@ def test_workspace_json_drones_are_not_loaded(tmp_path: Path) -> None:
                 "description": "Old manifest-only Drone.",
                 "instructions": "Use tools.",
                 "write_policy": "read_only",
-                "output_contract": "Summary.",
+                "output_contract": {"description": "Summary.", "properties": {"ok": {"type": "boolean"}, "summary": {"type": "string"}}, "required": ["ok", "summary"]},
             }
         ),
         encoding="utf-8",
@@ -156,7 +156,7 @@ def test_save_drone_does_not_create_manifest_only_drone(tmp_path: Path) -> None:
         description="New",
         instructions="Run",
         write_policy="read_only",
-        output_contract="Output",
+        output_contract={"properties": {"ok": {"type": "boolean"}, "summary": {"type": "string"}}, "required": ["ok", "summary"]},
         entrypoint={"kind": "command", "command": ["python", "main.py"], "protocol": "json-stdio"},
     )
 
@@ -191,4 +191,31 @@ def test_list_drone_entries_ready_appears_once(tmp_path: Path) -> None:
     assert ready[0].name == "Folder Drone"
 
 
+def test_output_contract_string_migration(tmp_path: Path) -> None:
+    """Legacy string output_contract is migrated to dict on load."""
+    source = _write_drone_folder(tmp_path / "build")
+    # Overwrite drone.json with a string output_contract (legacy format)
+    drone_json_path = source / "drone.json"
+    data = json.loads(drone_json_path.read_text(encoding="utf-8"))
+    data["output_contract"] = "Return cargo."
+    drone_json_path.write_text(json.dumps(data), encoding="utf-8")
 
+    drone = DroneStore.register_drone_folder(tmp_path, source)
+    assert isinstance(drone.output_contract, dict)
+    assert drone.output_contract["description"] == "Return cargo."
+    assert "ok" in json.dumps(drone.output_contract)
+    assert "summary" in json.dumps(drone.output_contract)
+
+    # Also test _drone_from_dict directly with string output_contract
+    payload = {
+        "id": "migrated",
+        "name": "Migrated",
+        "description": "Migrated from string.",
+        "instructions": "Do something.",
+        "write_policy": "read_only",
+        "output_contract": "Old-style string contract.",
+        "entrypoint": {"kind": "command", "command": ["python", "main.py"], "protocol": "json-stdio"},
+    }
+    drone2 = _drone_from_dict(payload)
+    assert isinstance(drone2.output_contract, dict)
+    assert drone2.output_contract["description"] == "Old-style string contract."

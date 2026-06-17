@@ -7,9 +7,9 @@ user-visible — they are behavioral rules for the model.
 """
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
-
 from aura.repo_map import generate_repo_map
 
 
@@ -558,6 +558,15 @@ def build_tier1_context(workspace_root: Path, force: bool = False) -> str:
     except Exception:
         logger.debug("Drone context unavailable", exc_info=True)
 
+    # 5. Drone Construction context (only active during Drone build/edit)
+    try:
+        from aura.drones.construction_context import build_construction_guide
+        guide = build_construction_guide()
+        if guide:
+            parts.append(guide)
+    except Exception:
+        logger.debug("Drone construction context unavailable", exc_info=True)
+
     return "\n\n".join(parts)
 
 
@@ -581,14 +590,20 @@ def _build_drone_context(workspace_root: Path, store_cls) -> str:
     ]
     for d in drones:
         instr = (d.instructions or "").strip()
-        output_contract = (d.output_contract or "").strip()
         desc = (d.description or "").strip()
+
+        output_contract_str = ""
+        if isinstance(d.output_contract, dict) and d.output_contract:
+            try:
+                output_contract_str = json.dumps(d.output_contract, indent=0)[:200].replace("\n", " ").strip()
+            except Exception:
+                output_contract_str = str(d.output_contract)[:200]
 
         instr_short = instr[:150].replace("\n", " ").strip()
         if len(instr) > 150:
             instr_short += "..."
-        contract_short = output_contract[:100].replace("\n", " ").strip()
-        if len(output_contract) > 100:
+        contract_short = output_contract_str[:100].replace("\n", " ").strip()
+        if len(output_contract_str) > 100:
             contract_short += "..."
         desc_short = desc[:120].replace("\n", " ").strip()
         if len(desc) > 120:
