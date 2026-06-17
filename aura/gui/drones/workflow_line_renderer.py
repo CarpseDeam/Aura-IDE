@@ -138,12 +138,12 @@ class _WorkflowLineSegment(QGraphicsPathItem):
             )
             # Vertical trunk
             path.lineTo(cx, ey - r)
-            # Corner 2: down -> left
-            # P0=(cx, ey-r), P3=(cx-r, ey)
+            # Corner 2: down -> right
+            # P0=(cx, ey-r), P3=(cx+r, ey)
             path.cubicTo(
                 QPointF(cx, ey - r * k),
-                QPointF(cx - r * k, ey),
-                QPointF(cx - r, ey),
+                QPointF(cx + r * k, ey),
+                QPointF(cx + r, ey),
             )
         else:  # Return segment: going up
             # Corner 1: right -> up
@@ -155,12 +155,12 @@ class _WorkflowLineSegment(QGraphicsPathItem):
             )
             # Vertical trunk
             path.lineTo(cx, ey + r)
-            # Corner 2: up -> left
-            # P0=(cx, ey+r), P3=(cx-r, ey)
+            # Corner 2: up -> right
+            # P0=(cx, ey+r), P3=(cx+r, ey)
             path.cubicTo(
                 QPointF(cx, ey + r * k),
-                QPointF(cx - r * k, ey),
-                QPointF(cx - r, ey),
+                QPointF(cx + r * k, ey),
+                QPointF(cx + r, ey),
             )
 
         # 5. Final horizontal entry into target edge
