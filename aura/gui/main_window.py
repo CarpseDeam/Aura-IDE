@@ -211,7 +211,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             self._on_drone_reports_geometry_saved
         )
 
-        self.droneRunFinishedOnUiThread.connect(self._on_drone_finished)
+        self.droneRunFinishedOnUiThread.connect(self._on_drone_finished, Qt.ConnectionType.QueuedConnection)
 
         # Worker event handler — owns session usage, forwards bridge signals
         # to chat / playground UI components.
@@ -1251,7 +1251,10 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             # Show the completion/failure summary for 3 seconds, then switch to waiting countdown
             QTimer.singleShot(
                 3000,
-                lambda lid=loop_drone_id, iv=interval: self._update_workbay_card_run_state(lid, "waiting_for_loop", str(iv)),
+                lambda lid=loop_drone_id, iv=interval: (
+                    self._update_workbay_card_run_state(lid, "waiting_for_loop", str(iv))
+                    if lid in self._looping_drones else None
+                ),
             )
 
     def _on_drone_receipt(self, receipt: object, run_id: str = "") -> None:

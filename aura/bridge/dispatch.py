@@ -11,14 +11,12 @@ import json
 import re
 import shlex
 import threading
-import uuid
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import (
     QObject,
-    QThread,
     Signal,
 )
 
