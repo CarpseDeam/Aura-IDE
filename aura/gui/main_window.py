@@ -623,27 +623,23 @@ class MainWindow(WindowChromeMixin, QMainWindow):
                     )
 
     def _retarget_workspace(self, root_path: Path, *, restore_last: bool = True) -> None:
+        from aura.drones.store import _project_root_for_drone_storage
+        storage_root = _project_root_for_drone_storage(root_path).resolve()
         clear_drone_construction()
-        if self._workspace_root is not None and self._workspace_root.resolve() != root_path.resolve():
+        if self._workspace_root is not None and self._workspace_root.resolve() != storage_root:
             self._persistence.new_conversation()
-
-        self._workspace_root = root_path
+        self._workspace_root = storage_root
         self._checkpoint_dialog = None
-        self._bridge.set_workspace_root(root_path)
-        self._input.set_workspace_root(root_path)
-        self._send_handler.set_workspace_root(root_path)
-        self._playground.set_workspace_root(root_path)
+        self._bridge.set_workspace_root(storage_root)
+        self._input.set_workspace_root(storage_root)
+        self._send_handler.set_workspace_root(storage_root)
+        self._playground.set_workspace_root(storage_root)
         self._companion.set_workspace_root(str(self._workspace_root))
-        self._tree.set_root(root_path)
-
+        self._tree.set_root(storage_root)
         self._update_workspace_label()
         self._refresh_status_bar()
-
         if self._settings.restore_last_conversation and restore_last:
-            QTimer.singleShot(0, lambda: self._persistence.restore_last(root_path))
-
-        # One-time recovery for broken nested drone folders
-        self._recover_nested_drone_folders()
+            QTimer.singleShot(0, lambda: self._persistence.restore_last(storage_root))
 
     def _on_project_selected(self, root_path: Path, *, restore_last: bool = True) -> None:
         from aura.projects.store import ProjectStore
@@ -656,10 +652,14 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._left_pane.refresh_drones(self._workspace_root)
 
     def _on_drone_folder_selected(self, folder: Path) -> None:
-        # Root workspace at the drone's own folder — scoping its conversation thread.
-        target = folder
-        if self._workspace_root is None or self._workspace_root.resolve() != target.resolve():
-            self._retarget_workspace(target, restore_last=True)
+        # Ensure workspace root is always the project root, never a drone folder.
+        from aura.drones.store import _project_root_for_drone_storage
+        project_root = _project_root_for_drone_storage(self._workspace_root)
+        if self._workspace_root is None or self._workspace_root.resolve() != project_root.resolve():
+            self._retarget_workspace(project_root)
+
+        # Only the tree view focuses on the drone folder.
+        self._tree.set_root(folder)
 
         # Refresh drone sidebar (pass the drone folder for highlight)
         self._left_pane.refresh_drones(folder)
@@ -679,9 +679,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             _project_root_for_drone_storage,
             DroneStore,
         )
-
-        # One-time recovery: promote nested drone folders from a previous broken state
-        self._recover_nested_drone_folders()
 
         # Ensure workspace is rooted at the project root
         project_root = _project_root_for_drone_storage(self._workspace_root)
@@ -759,8 +756,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         )
         (drone_dir / "main.py").write_text(main_py, encoding="utf-8")
 
-        # Retarget to the drone directory so the new drone opens its own scope.
-        self._retarget_workspace(drone_dir, restore_last=True)
+        # Focus the tree view on the new drone folder without moving the workspace root.
+        self._tree.set_root(drone_dir)
         self._left_pane.refresh_drones(drone_dir)
 
         # Enter Drone construction mode
@@ -770,67 +767,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         if self._drone_workbay_window is not None and self._drone_workbay_window.is_open():
             self._drone_workbay_window.chain_editor.refresh_roster()
 
-    def _recover_nested_drone_folders(self) -> None:
-        """One-time recovery: promote nested drone folders from a previous broken state.
 
-        If a valid Drone folder exists nested under .aura/drones/<temp>/<real>/,
-        promote <real> to .aura/drones/<real>/. After promotion, refresh the
-        left sidebar and Workbay roster.
-        """
-        if getattr(self, "_drone_recovery_done", False):
-            return
-        self._drone_recovery_done = True
-
-        import json
-        import shutil
-
-        from aura.drones.store import _global_drones_root, _is_safe_drone_id
-
-        drones_root = _global_drones_root(self._workspace_root)
-        if not drones_root.exists():
-            return
-
-        promoted = False
-        for subdir in list(drones_root.iterdir()):
-            if not subdir.is_dir():
-                continue
-            # Check for nested drone folders one level deep
-            for nested in list(subdir.iterdir()):
-                if not nested.is_dir():
-                    continue
-                drone_json = nested / "drone.json"
-                if not drone_json.exists():
-                    continue
-                try:
-                    data = json.loads(drone_json.read_text(encoding="utf-8"))
-                    real_id = data.get("id", nested.name)
-                    if not _is_safe_drone_id(real_id):
-                        continue
-                    target = drones_root / real_id
-                    if target.exists():
-                        logger.warning(
-                            "Skipping nested drone promotion: target %s already exists",
-                            target,
-                        )
-                        continue
-                    shutil.copytree(nested, target, dirs_exist_ok=True)
-                    shutil.rmtree(nested, ignore_errors=True)
-                    logger.info("Promoted nested drone %s -> %s", nested, target)
-                    promoted = True
-                except Exception as exc:
-                    logger.warning("Failed to promote nested drone %s: %s", nested, exc)
-                    continue
-            # Remove the now-empty temporary parent folder
-            try:
-                if subdir.exists() and not any(subdir.iterdir()):
-                    shutil.rmtree(subdir, ignore_errors=True)
-            except Exception:
-                logger.warning("Failed to remove empty temp folder %s", subdir)
-
-        if promoted:
-            self._left_pane.refresh_drones(self._workspace_root)
-            if self._drone_workbay_window is not None and self._drone_workbay_window.is_open():
-                self._drone_workbay_window.chain_editor.refresh_roster()
 
     def _on_new_project(self) -> None:
         start = str(self._workspace_root) if self._workspace_root else str(Path.home())
