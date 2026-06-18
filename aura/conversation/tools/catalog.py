@@ -9,15 +9,10 @@ from aura.conversation.tools._schemas import (
     DIAGNOSTIC_TOOL_DEF,
     DISPATCH_TOOL_DEF,
     GIT_TOOL_DEFS,
-    INSPECT_MISSION_TOOL_DEF,
     LAUNCH_READ_ONLY_DRONE_TOOL_DEF,
-    LIST_MISSIONS_TOOL_DEF,
-    MISSION_CONTROL_STATE_TOOL_DEF,
     READ_TOOL_DEFS,
     REGISTER_DRONE_FOLDER_TOOL_DEF,
-    RENAME_MISSION_TOOL_DEF,
     RESEARCH_TOOL_DEFS,
-    RUN_MISSION_TOOL_DEF,
     RUN_READ_ONLY_DRONE_TOOL_DEF,
     SUMMON_DRONE_TOOL_DEF,
     TERMINAL_TOOL_DEF,
@@ -43,11 +38,6 @@ PLANNER_TOOL_NAMES = {
     "git_log",
     "git_show",
     "git_log_file",
-    "list_missions",
-    "inspect_mission",
-    "mission_control_state",
-    "rename_mission",
-    "run_mission",
 }
 
 NORMAL_WORKER_WRITE_TOOL_NAMES = {"write_file", "patch_file", "delete_file"}
@@ -108,11 +98,7 @@ class ToolCatalog:
                 + list(RESEARCH_TOOL_DEFS)
                 + [dict(DIAGNOSTIC_TOOL_DEF)]
                 + [dict(WORKSPACE_SNAPSHOT_TOOL_DEF)]
-                + [dict(LIST_MISSIONS_TOOL_DEF)]
-                + [dict(INSPECT_MISSION_TOOL_DEF)]
-                + [dict(MISSION_CONTROL_STATE_TOOL_DEF)]
-                + [dict(RENAME_MISSION_TOOL_DEF)]
-                + [dict(RUN_MISSION_TOOL_DEF)]
+
             )
         elif mode == "worker":
             worker_write_tools = [

@@ -22,7 +22,7 @@ from aura.codebase_index.tool import search_codebase as _search_codebase  # noqa
 from aura.conversation.tools._diagnostic_mixin import DiagnosticHandlersMixin
 from aura.conversation.tools._git_mixin import GitHandlersMixin
 from aura.conversation.tools._memory_mixin import MemoryHandlersMixin
-from aura.conversation.tools._mission_mixin import MissionHandlersMixin
+
 from aura.conversation.tools._planner_mixin import PlannerHandlersMixin
 from aura.conversation.tools._read_mixin import ReadHandlersMixin
 from aura.conversation.tools._search_mixin import SearchHandlersMixin
@@ -75,7 +75,6 @@ class ToolRegistry(
     MemoryHandlersMixin,
     DiagnosticHandlersMixin,
     PlannerHandlersMixin,
-    MissionHandlersMixin,
 ):
     """Workspace-jailed tool dispatcher.
 
@@ -251,8 +250,4 @@ TOOL_HANDLERS["launch_read_only_drone"] = ToolRegistry._handle_launch_read_only_
 TOOL_HANDLERS["run_read_only_drone"] = ToolRegistry._handle_run_read_only_drone
 TOOL_HANDLERS["check_drone_run"] = ToolRegistry._handle_check_drone_run
 TOOL_HANDLERS["register_drone_folder"] = ToolRegistry._handle_register_drone_folder
-TOOL_HANDLERS["list_missions"] = ToolRegistry._handle_list_missions
-TOOL_HANDLERS["inspect_mission"] = ToolRegistry._handle_inspect_mission
-TOOL_HANDLERS["mission_control_state"] = ToolRegistry._handle_mission_control_state
-TOOL_HANDLERS["rename_mission"] = ToolRegistry._handle_rename_mission
-TOOL_HANDLERS["run_mission"] = ToolRegistry._handle_run_mission
+

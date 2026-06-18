@@ -37,8 +37,6 @@ from aura.config import (
     save_workspace_root,
 )
 from aura.conversation.tools._types import ApprovalDecision, ApprovalRequest
-from aura.drones.chain_runner import classify_consequential_nodes, run_chain
-from aura.drones.chain_store import ChainStore
 from aura.drones.definition import DroneDefinition
 from aura.drones.receipt import DroneReceipt
 from aura.drones.runner import DroneRunner
@@ -52,7 +50,6 @@ from aura.gui.drones.drone_reports_window import DroneReportsWindow
 from aura.gui.drones.drone_run_card import DroneRunCard
 from aura.gui.drones.drone_summon_card import DroneSummonCard
 from aura.gui.drones.drone_workbay_window import DroneWorkbayWindow
-from aura.gui.drones.chain_loop_controller import ChainLoopController
 from aura.gui.edge_rails import EdgeTabRail
 from aura.gui.input_panel import InputPanel, SendPayload
 from aura.gui.left_pane import LeftPane
@@ -214,16 +211,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             self._on_drone_reports_geometry_saved
         )
 
-        # Chain execution loop controller
-        self._chain_controller = ChainLoopController(
-            chain_provider=self._resolve_current_chain,
-            parent=self,
-        )
-        self._chain_controller.lap_finished.connect(self._on_lap_finished)
-        self._chain_controller.lap_error.connect(self._on_lap_error)
-        self._chain_controller.loop_finished.connect(self._on_loop_finished)
-
-
         # Worker event handler — owns session usage, forwards bridge signals
         # to chat / playground UI components.
         self._worker_handler = WorkerEventHandler(
@@ -332,6 +319,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._write_drone_run_id: str | None = None
         self._drone_receipt: DroneReceipt | None = None
         self._pending_drone_summons: dict[str, dict[str, str]] = {}
+        self._looping_drones: set[str] = set()  # drone_ids whose loop is active
 
         self._pending_handoff: bool = False
         self._tree = self._playground.file_tree()
@@ -482,52 +470,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._settings.drone_workbay_window_geometry = geometry
         save_settings(self._settings)
 
-    def _query_workbay_state(self) -> dict | None:
-        """Hook handler: return the active Workbay tab's canvas state as plain dict."""
-        workbay = self._drone_workbay_window
-        if workbay is None or not workbay.is_open():
-            return None
-        editor = workbay.chain_editor
-        if not editor:
-            return None
-        chain_id = editor._current_chain_id
-        if not chain_id:
-            return None
-        name = editor._chain_name
-        description = editor._chain_desc
-
-        nodes, edges, mission_core = editor._canvas.to_chain_nodes_and_edges()
-
-        # Build drone lookup from canvas nodes
-        drone_lookup: dict[str, dict] = {}
-        for node_dict in nodes:
-            drone_id = node_dict.get("drone_id", "")
-            if not drone_id:
-                continue
-            # Find the ChainNodeItem with this drone_id to access its .drone attribute
-            for node_item in editor._canvas._nodes.values():
-                if node_item.drone_id == drone_id:
-                    drone_def = node_item.drone
-                    if drone_def is not None:
-                        drone_lookup[drone_id] = {
-                            "id": drone_def.id,
-                            "name": drone_def.name,
-                            "write_policy": drone_def.write_policy,
-                        }
-                    break
-
-        return {
-            "chain_id": chain_id,
-            "name": name,
-            "description": description,
-            "auto_route": editor._auto_route,
-            "dirty": editor._dirty,
-            "nodes": nodes,
-            "edges": edges,
-            "mission_core": mission_core or {},
-            "drone_lookup": drone_lookup,
-        }
-
     def _dim_terminal_tab_after_success(self) -> None:
         if self._edge_rail.state == "success":
             self._edge_rail.set_state("dim")
@@ -581,12 +523,9 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._update_workspace_label()
         self._left_pane.refresh_projects(path)
         self._left_pane.refresh_drones(path)
-        # Close chain editor when workspace root changes
+        # Close drone workbay when workspace root changes
         if self._drone_workbay_window is not None:
-            hooks.unregister('query_mission_workbay_state')
             self._drone_workbay_window.hide()
-            self._drone_workbay_window.deleteLater()
-            self._drone_workbay_window = None
         clear_drone_construction()
         self._refresh_status_bar()
         return str(path)
@@ -924,51 +863,31 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
     def _open_or_toggle_drone_workbay(self) -> None:
         """Open the Drone Workbay as a standalone window or focus it."""
-        print(f"[DRONE] clicked. workspace_root={self._workspace_root!r} existing_window={self._drone_workbay_window!r}")
         if self._workspace_root is None:
-            print("[DRONE] BAILING — workspace_root is None")
             return
         if self._drone_workbay_window is not None:
-            if self._drone_workbay_window.is_open():
+            if self._drone_workbay_window.isVisible():
                 self._drone_workbay_window.raise_()
                 self._drone_workbay_window.activateWindow()
             else:
                 self._drone_workbay_window.show_and_raise()
             return
 
-        try:
-            self._drone_workbay_window = DroneWorkbayWindow(
-                workspace_root=self._workspace_root,
-                chain_id=None,
-                provider_id=self._settings.planner_provider,
-                model=self.current_model(),
-                thinking=self.current_thinking(),
-                temperature=self._settings.temperature,
-                initial_geometry=self._settings.drone_workbay_window_geometry,
-                parent=None,
-            )
-            print("[DRONE] window constructed OK")
-        except Exception:
-            import traceback
-            traceback.print_exc()
-            raise
+        self._drone_workbay_window = DroneWorkbayWindow(
+            workspace_root=self._workspace_root,
+            initial_geometry=self._settings.drone_workbay_window_geometry,
+            parent=None,
+        )
         workbay = self._drone_workbay_window
-        editor = workbay.chain_editor
-        editor.goBackRequested.connect(workbay.hide)
-        editor.closeRequested.connect(workbay.hide)
-        editor.runChainRequested.connect(lambda cid: self._on_run_workflow(cid))
-        editor.runDroneRequested.connect(self._on_launch_drone)
-        editor.deleteDroneRequested.connect(self._on_delete_drone)
-        editor.loopToggled.connect(self._on_loop_toggled)
+        workbay.runDroneRequested.connect(self._on_launch_drone)
+        workbay.deleteDroneRequested.connect(self._on_delete_drone)
+        workbay.loopDroneRequested.connect(self._on_loop_drone_toggled)
         workbay.geometry_saved.connect(self._on_drone_workbay_geometry_saved)
-        if hooks.is_registered('query_mission_workbay_state'):
-            hooks.unregister('query_mission_workbay_state')
-        hooks.register('query_mission_workbay_state', self._query_workbay_state)
         workbay.show_and_raise()
 
     def _sync_drone_tab_checked(self) -> None:
         if self._edge_rail.drone_tab is not None:
-            workbay_open = self._drone_workbay_window.is_open() if self._drone_workbay_window else False
+            workbay_open = self._drone_workbay_window.isVisible() if self._drone_workbay_window else False
             is_open = workbay_open or self._drone_reports_window.is_open()
             self._edge_rail.drone_tab.setChecked(is_open)
 
@@ -986,220 +905,11 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         if reply == QMessageBox.Yes:
             DroneStore.delete_drone(self._workspace_root, drone_id)
             self._refresh_drone_context()
-            if self._drone_workbay_window is not None and self._drone_workbay_window.isVisible():
-                self._drone_workbay_window.chain_editor.refresh_roster()
 
     def _refresh_drone_context(self) -> None:
         refresher = getattr(self._bridge, "refresh_tier1_context", None)
         if callable(refresher):
             refresher()
-
-    # ----- Workflow handlers -----------------------------------------------
-
-    def _on_run_workflow(self, chain_id: str) -> None:
-        """Run a workflow chain with upfront approval and background execution."""
-        # ── Load and validate ──
-        chain = ChainStore.load_chain(self._workspace_root, chain_id)
-        if chain is None:
-            QMessageBox.warning(
-                self, "Workflow Not Found",
-                f"Chain '{chain_id}' could not be loaded."
-            )
-            return
-
-        drones = DroneStore.list_drones(self._workspace_root)
-        drone_lookup: dict[str, object] = {d.id: d for d in drones}
-
-        missing = [
-            n.drone_id for n in chain.nodes
-            if n.drone_id not in drone_lookup
-        ]
-        if missing:
-            QMessageBox.warning(
-                self,
-                "Missing Drones",
-                f"The following Drones are not Ready for workflow "
-                f"'{chain.name}': {', '.join(missing)}",
-            )
-            return
-
-        # ── Classify and approve (if needed) ──
-        consequential = classify_consequential_nodes(chain, drone_lookup)
-        if consequential:
-            lines = [
-                f"<b>{chain.name}</b> contains write-capable nodes:",
-                "<br>",
-            ]
-            for cn in consequential:
-                tools = cn["consequential_tools"][:5]
-                tool_list = ", ".join(tools) if tools else "all tools"
-                drone_def = drone_lookup.get(cn["drone_id"])
-                drone_name = (
-                    drone_def.name
-                    if drone_def
-                    else cn["drone_id"]
-                )
-                lines.append(
-                    f"• <b>{drone_name}</b> ({cn['drone_id']})"
-                    f" — {cn['write_policy']}: {tool_list}"
-                )
-            lines.append("<br>Run anyway?")
-            msg = "<br>".join(lines)
-
-            answer = QMessageBox.question(
-                self,
-                "Confirm Workflow Run",
-                msg,
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
-            )
-            if answer != QMessageBox.Yes:
-                return
-
-        # ── Run via controller ──
-        self._chain_controller.start()
-
-    def _on_lap_finished(self, result: dict) -> None:
-        """Post one lap's run report to the chat."""
-        chain_name = result.get("chain_name", "Unknown")
-        nodes_data = result.get("node_runs", {})
-        status = result.get("status", "unknown")
-        elapsed = result.get("elapsed", "")
-        failed_at = result.get("failed_at", "")
-
-        # Build the run report.
-        lines = [
-            f"━━━ Workflow Complete: {chain_name} ━━━",
-            "",
-        ]
-        for node_id, nr in nodes_data.items():
-            node_status = nr.get("status", "unknown")
-            drone_id = nr.get("drone_id", node_id)
-            met = nr.get("met", "")
-            evidence = nr.get("evidence")
-
-            if node_status == "completed":
-                icon = "✓"
-                ev_type = "result"
-                if isinstance(evidence, dict):
-                    ev_type = evidence.get("type", "result")
-                lines.append(
-                    f"  {icon} {node_id} ({drone_id}) "
-                    f"— Produced valid {ev_type}"
-                )
-            elif node_status == "failed":
-                icon = "✗"
-                evidence_str = ""
-                if isinstance(evidence, dict):
-                    evidence_str = evidence.get("error", "")
-                elif isinstance(evidence, str):
-                    evidence_str = evidence
-                lines.append(
-                    f"  {icon} {node_id} ({drone_id}) "
-                    f"— Failed: {evidence_str}"
-                )
-            elif node_status == "skipped":
-                icon = "○"
-                reason = met or "upstream failed"
-                lines.append(
-                    f"  {icon} {node_id} ({drone_id}) "
-                    f"— Skipped ({reason})"
-                )
-            else:
-                icon = "·"
-                lines.append(
-                    f"  {icon} {node_id} ({drone_id}) "
-                    f"— {node_status}"
-                )
-
-        lines.append("")
-        if failed_at:
-            lines.append(f'Status: Failed at node "{failed_at}"')
-        else:
-            lines.append(f"Status: {status.capitalize()}")
-        if elapsed:
-            lines.append(f"Time: {elapsed}")
-
-        report = "\n".join(lines)
-        self._chat.begin_assistant()
-        self._chat.append_content(report)
-        self._chat.assistant_done()
-
-        # Refresh chain editor run state (post-run stats, status dots)
-        if self._drone_workbay_window and self._drone_workbay_window.is_open():
-            self._drone_workbay_window.chain_editor.refresh_run_state()
-
-
-    def _on_lap_error(self, msg: str) -> None:
-        """Handle a lap-level error — post to chat if chat is available."""
-        logger.error("Chain lap error: %s", msg)
-        try:
-            self._chat.begin_assistant()
-            self._chat.append_content(f"\u26a0 Lap error: {msg}")
-            self._chat.assistant_done()
-        except Exception as exc:
-            logger.warning("Failed to report lap error to chat: %s", exc)
-
-    def _on_loop_finished(self) -> None:
-        """Loop fully stopped (no more laps to run)."""
-
-    def _resolve_current_chain(self) -> tuple:
-        """Return (workspace_root, chain, drone_lookup) for the current editor."""
-        ws = self._workspace_root
-        if ws is None:
-            return None, None, None
-        if self._drone_workbay_window is None:
-            return None, None, None
-        editor = self._drone_workbay_window.chain_editor
-        chain_id = editor._current_chain_id
-        if not chain_id:
-            return None, None, None
-        chain = ChainStore.load_chain(ws, chain_id)
-        if chain is None:
-            return None, None, None
-        drones = DroneStore.list_drones(ws)
-        drone_lookup = {d.id: d for d in drones}
-        return ws, chain, drone_lookup
-
-    def _on_loop_toggled(self, enabled: bool) -> None:
-        """Handle loop toggle from Mission Control."""
-        ws, chain, _ = self._resolve_current_chain()
-        if ws is None or chain is None:
-            return
-        from dataclasses import replace
-        updated = replace(chain, loop=enabled)
-        ChainStore.save_chain(ws, updated)
-
-        if enabled:
-            self._chain_controller.start()
-        else:
-            self._chain_controller.stop()
-
-    def _on_edit_workflow(self, chain_id: str) -> None:
-        """Open the chain editor for an existing workflow."""
-        if self._workspace_root is None:
-            return
-        self._open_chain_editor(chain_id=chain_id)
-
-    def _on_delete_workflow(self, chain_id: str) -> None:
-        """Delete a workflow chain."""
-        
-        ChainStore.delete_chain(self._workspace_root, chain_id)
-        logger.info("Deleted workflow: %s", chain_id)
-
-    def _on_new_workflow(self) -> None:
-        """Create a new workflow and open the chain editor."""
-        if self._workspace_root is None:
-            return
-        self._open_chain_editor(chain_id=None)
-
-    def _open_chain_editor(self, chain_id: str | None) -> None:
-        """Open the workbay (creating/toggling as needed) and open a chain in it."""
-        if self._workspace_root is None:
-            return
-        self._open_or_toggle_drone_workbay()
-        if self._drone_workbay_window is not None:
-            self._drone_workbay_window.chain_editor.open_chain(chain_id)
     # ----- Drone Run lifecycle (Phase 2) --------------------------------
 
     def _on_launch_drone(self, drone_id: str, folder: str = "") -> None:
@@ -1215,7 +925,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             return
         self._start_drone_run(drone)
 
-    def _start_drone_run(self, drone: DroneDefinition, summon_goal: str = "") -> None:
+    def _start_drone_run(self, drone: DroneDefinition, summon_goal: str = "", loop_drone_id: str = "") -> None:
         """Start a Drone run from a saved Drone or an Aura-summoned goal."""
         if self._workspace_root is None:
             return
@@ -1240,6 +950,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             "thread": thread,
             "card": run_card,
             "drone": run_drone,
+            "loop_drone_id": loop_drone_id,
         }
         if run_drone.write_policy != "read_only":
             self._write_drone_run_id = run_id
@@ -1431,6 +1142,13 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         record = self._drone_runs.get(run_id)
         if record is None:
             return
+        # If this was a looped run, disable the loop
+        loop_id = record.get("loop_drone_id", "")
+        if loop_id:
+            self._looping_drones.discard(loop_id)
+            # Update the workbay card loop state if the window is open
+            if self._drone_workbay_window is not None and self._drone_workbay_window.isVisible():
+                self._drone_workbay_window.set_card_loop_state(loop_id, False)
         record["runner"].cancel()
         self._drone_reports_window.mark_cancelling(run_id)
 
@@ -1441,6 +1159,24 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         logger.debug("[DroneRun] remove_drone_run_pip run_id=%s", run_id)
         self._edge_rail.remove_drone_run_pip(run_id)
         self._position_edge_tabs()
+
+    def _on_loop_drone_toggled(self, drone_id: str, enabled: bool) -> None:
+        """Enable or disable looping for a single drone."""
+        if enabled:
+            self._looping_drones.add(drone_id)
+            logger.info("[DroneLoop] loop enabled for drone=%s", drone_id)
+            # If the drone isn't currently running, start it
+            already_running = any(
+                r.get("loop_drone_id") == drone_id or r["drone"].id == drone_id
+                for r in self._drone_runs.values()
+            )
+            if not already_running:
+                drone = DroneStore.load_drone(self._workspace_root, drone_id)
+                if drone is not None:
+                    self._start_drone_run(drone, loop_drone_id=drone_id)
+        else:
+            self._looping_drones.discard(drone_id)
+            logger.info("[DroneLoop] loop disabled for drone=%s", drone_id)
 
     def _on_drone_finished(self, run_id: str) -> None:
         """UI/bookkeeping cleanup after a drone run.
@@ -1470,6 +1206,14 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             self._companion.set_drone_runner(None)
             self._drone_runner_thread = None
         logger.debug("[DroneRun] _on_drone_finished end run_id=%s", run_id)
+
+        loop_drone_id = record.get("loop_drone_id", "")
+        if loop_drone_id and loop_drone_id in self._looping_drones:
+            logger.debug("[DroneRun] loop active for drone=%s, scheduling next run in 2s", loop_drone_id)
+            # Re-read the drone definition in case it changed
+            drone_def = DroneStore.load_drone(self._workspace_root, loop_drone_id)
+            if drone_def is not None:
+                QTimer.singleShot(2000, lambda d=drone_def, lid=loop_drone_id: self._start_drone_run(d, loop_drone_id=lid))
 
     def _on_drone_receipt(self, receipt: object) -> None:
         """Handle completed drone receipt — save to disk."""
