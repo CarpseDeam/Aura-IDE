@@ -7,7 +7,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-from PySide6.QtCore import QByteArray, Qt, QThread, QTimer
+from PySide6.QtCore import QByteArray, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QDialog,
@@ -74,6 +74,7 @@ MAX_PARALLEL_READ_ONLY_DRONES = 3
 
 
 class MainWindow(WindowChromeMixin, QMainWindow):
+    droneRunFinishedOnUiThread = Signal(str)
 
     def __init__(self) -> None:
         super().__init__()
@@ -209,6 +210,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._drone_reports_window.geometry_saved.connect(
             self._on_drone_reports_geometry_saved
         )
+
+        self.droneRunFinishedOnUiThread.connect(self._on_drone_finished)
 
         # Worker event handler — owns session usage, forwards bridge signals
         # to chat / playground UI components.
@@ -674,7 +677,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         from aura.drones.definition import DroneBudget, DroneDefinition
         from aura.drones.store import (
             _global_drones_root,
-            _is_safe_drone_id,
             _project_root_for_drone_storage,
             DroneStore,
         )
@@ -913,7 +915,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         runner.apiError.connect(run_card.on_api_error)
         runner.receiptReady.connect(run_card.on_receipt_ready)
         runner.receiptReady.connect(lambda receipt, rid=run_id: self._on_drone_receipt(receipt, rid))
-        runner.finished.connect(lambda rid=run_id: self._on_drone_finished(rid))
+        runner.finished.connect(lambda rid=run_id: self.droneRunFinishedOnUiThread.emit(rid))
 
         # Standard Qt worker lifetime cleanup — no blocking wait on GUI thread.
         # runner.finished fires from the worker thread:
