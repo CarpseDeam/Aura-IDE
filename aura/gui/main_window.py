@@ -1103,6 +1103,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         # Also update the workbay card run state
         record = self._drone_runs.get(run_id)
         if record is not None:
+            record["last_status"] = status  # store for _on_drone_finished
             card_id = record.get("loop_drone_id", "") or record["drone"].id
             if status == "running":
                 self._update_workbay_card_run_state(card_id, "running")
@@ -1232,12 +1233,9 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             else:
                 self._update_workbay_card_run_state(card_id, "idle")
         else:
-            # No receipt - infer from what we know
-            runner_status = ""
-            try:
-                runner_status = runner.run_state.status
-            except RuntimeError:
-                pass
+            # No receipt - infer from last_status saved in _on_drone_status_changed.
+            # Do NOT touch runner.run_state — the runner C++ object may already be deleted.
+            runner_status = record.get("last_status", "")
             if runner_status in ("failed", "timed_out"):
                 self._update_workbay_card_run_state(card_id, "failed", "Unknown error")
             elif runner_status == "cancelled":
