@@ -59,7 +59,7 @@ class CreditsClaimWorker(QObject):
                 data = resp.json()
                 account_id = str(data.get("account_id", ""))
                 balance_micros = int(data.get("balance_micros", 0))
-                token = str(data.get("token", ""))
+                token = data.get("token") or ""
                 token_required = bool(data.get("token_required", False))
                 self.finished.emit(account_id, balance_micros, token, "", token_required)
             elif resp.status_code == 409:
