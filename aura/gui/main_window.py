@@ -1531,6 +1531,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._toolbar.set_auto_approve(settings.auto_approve)
         self._toolbar.set_auto_summon_drones(settings.auto_summon_drones)
         self._refresh_status_bar()
+        self._refresh_aura_balance()
 
     def _on_open_settings(self) -> None:
         dlg = SettingsDialog(

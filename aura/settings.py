@@ -80,6 +80,8 @@ class AppSettings:
     auto_summon_drones: bool = False
     sandbox_mode: str = DEFAULT_SANDBOX_MODE
     max_tool_rounds: int = 50
+    aura_pending_session_id: str = ""
+    aura_pending_claim_secret: str = ""
     tavily_api_key: str = ""
     terminal_window_geometry: str = ""
     drone_reports_window_geometry: str = ""
@@ -130,6 +132,10 @@ class AppSettings:
             s.first_launch_done = data["first_launch_done"]
         if isinstance(data.get("tavily_api_key"), str):
             s.tavily_api_key = data["tavily_api_key"]
+        if isinstance(data.get("aura_pending_session_id"), str):
+            s.aura_pending_session_id = data["aura_pending_session_id"]
+        if isinstance(data.get("aura_pending_claim_secret"), str):
+            s.aura_pending_claim_secret = data["aura_pending_claim_secret"]
         if isinstance(data.get("terminal_window_geometry"), str):
             s.terminal_window_geometry = data["terminal_window_geometry"]
         if isinstance(data.get("drone_reports_window_geometry"), str):

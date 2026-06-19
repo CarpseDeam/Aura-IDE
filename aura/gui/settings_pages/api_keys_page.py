@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import os
+import logging
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QFormLayout,
     QHBoxLayout,
@@ -18,15 +21,21 @@ from aura.config import (
     APP_NAME,
     AppSettings,
     get_api_key,
+    get_provider,
     get_provider_kind,
     is_external_cli_available,
+    save_settings,
     set_api_key,
 )
 from aura.providers.registry import provider_registry
 from aura.gui.theme import FG_DIM, FG_MUTED, SUCCESS, WARN
 
+logger = logging.getLogger(__name__)
+
 
 class ApiKeysPage(QWidget):
+    credits_claimed = Signal()
+
     def __init__(self, settings: AppSettings, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._settings = settings
@@ -56,6 +65,7 @@ class ApiKeysPage(QWidget):
         form.addRow("", sub_label)
 
         self._provider_rows: dict[str, dict[str, object]] = {}
+        self._credit_threads: list[QThread] = []
 
         for pid in provider_registry.ids():
             spec = provider_registry.get(pid)
@@ -94,6 +104,51 @@ class ApiKeysPage(QWidget):
                 }
 
                 self._refresh_key_status(pid)
+
+                # Aura Credits purchase UI
+                if pid == "aura":
+                    sep = QLabel("Buy Aura Credits")
+                    sep.setStyleSheet(f"color: {FG_DIM}; font-weight: 600; font-size: 11px; letter-spacing: 0.04em;")
+                    form.addRow("", sep)
+
+                    email_input = QLineEdit()
+                    email_input.setPlaceholderText("Your email address...")
+                    form.addRow("Email:", email_input)
+
+                    btn_row = QHBoxLayout()
+                    btn_row.setSpacing(6)
+                    buy5 = QPushButton("Buy $5 Credits")
+                    buy10 = QPushButton("Buy $10 Credits")
+                    btn_row.addWidget(buy5)
+                    btn_row.addWidget(buy10)
+                    buy_widget = QWidget()
+                    buy_widget.setLayout(btn_row)
+                    form.addRow("", buy_widget)
+
+                    purchase_status = QLabel("")
+                    purchase_status.setWordWrap(True)
+                    form.addRow("", purchase_status)
+
+                    check_btn = QPushButton("Check Purchase")
+                    check_btn.setVisible(False)
+                    form.addRow("", check_btn)
+
+                    self._provider_rows[pid].update({
+                        "email": email_input,
+                        "buy5": buy5,
+                        "buy10": buy10,
+                        "purchase_status": purchase_status,
+                        "check_btn": check_btn,
+                    })
+
+                    if self._settings.aura_pending_session_id and self._settings.aura_pending_claim_secret:
+                        check_btn.setVisible(True)
+                        purchase_status.setText("You have a pending purchase. Complete payment in the browser, then click Check Purchase.")
+                        purchase_status.setStyleSheet(f"color: {WARN};")
+
+                    buy5.clicked.connect(lambda: self._on_buy_credits("5"))
+                    buy10.clicked.connect(lambda: self._on_buy_credits("10"))
+                    check_btn.clicked.connect(self._on_check_purchase)
 
             elif kind == "external_cli":
                 status_row = QHBoxLayout()
@@ -237,7 +292,166 @@ class ApiKeysPage(QWidget):
         self._settings.tavily_api_key = ""
         self._refresh_tavily_status()
 
+    # --- Credit checkout / claim ---
+
+    def _on_buy_credits(self, pack_id: str) -> None:
+        row = self._provider_rows.get("aura")
+        if not row:
+            return
+        email_input: QLineEdit = row["email"]
+        purchase_status: QLabel = row["purchase_status"]
+        buy5: QPushButton = row["buy5"]
+        buy10: QPushButton = row["buy10"]
+
+        email = email_input.text().strip()
+        if not email:
+            purchase_status.setText("Enter your email address to buy credits.")
+            purchase_status.setStyleSheet(f"color: {WARN};")
+            return
+
+        buy5.setEnabled(False)
+        buy10.setEnabled(False)
+        purchase_status.setText("Starting checkout...")
+        purchase_status.setStyleSheet(f"color: {FG_MUTED};")
+
+        base_url = get_provider("aura").base_url
+
+        thread = QThread(self)
+        worker = CreditsCheckoutWorker(base_url=base_url, email=email, pack_id=pack_id)
+        worker.moveToThread(thread)
+
+        thread.started.connect(worker.run)
+        worker.finished.connect(lambda url, sid, secret, err: self._on_checkout_completed(url, sid, secret, err, pack_id))
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        self._credit_threads.append(thread)
+        thread.start()
+
+    def _on_checkout_completed(self, checkout_url: str, session_id: str, claim_secret: str, error: str, pack_id: str) -> None:
+        row = self._provider_rows.get("aura")
+        if not row:
+            return
+        purchase_status: QLabel = row["purchase_status"]
+        buy5: QPushButton = row["buy5"]
+        buy10: QPushButton = row["buy10"]
+        check_btn: QPushButton = row["check_btn"]
+
+        buy5.setEnabled(True)
+        buy10.setEnabled(True)
+
+        if error:
+            purchase_status.setText(f"Checkout failed: {error}")
+            purchase_status.setStyleSheet(f"color: {WARN};")
+            return
+
+        if not checkout_url or not session_id or not claim_secret:
+            purchase_status.setText("Checkout response was incomplete. Try again.")
+            purchase_status.setStyleSheet(f"color: {WARN};")
+            return
+
+        self._settings.aura_pending_session_id = session_id
+        self._settings.aura_pending_claim_secret = claim_secret
+        save_settings(self._settings)
+
+        check_btn.setVisible(True)
+        purchase_status.setText("Opening checkout in your browser... Complete payment, then click Check Purchase.")
+        purchase_status.setStyleSheet(f"color: {FG_DIM};")
+
+        QDesktopServices.openUrl(QUrl(checkout_url))
+
+    def _on_check_purchase(self) -> None:
+        row = self._provider_rows.get("aura")
+        if not row:
+            return
+        purchase_status: QLabel = row["purchase_status"]
+        check_btn: QPushButton = row["check_btn"]
+        buy5: QPushButton = row["buy5"]
+        buy10: QPushButton = row["buy10"]
+
+        session_id = self._settings.aura_pending_session_id
+        claim_secret = self._settings.aura_pending_claim_secret
+
+        if not session_id or not claim_secret:
+            purchase_status.setText("No pending purchase found.")
+            purchase_status.setStyleSheet(f"color: {WARN};")
+            check_btn.setVisible(False)
+            return
+
+        check_btn.setEnabled(False)
+        buy5.setEnabled(False)
+        buy10.setEnabled(False)
+        purchase_status.setText("Checking payment status...")
+        purchase_status.setStyleSheet(f"color: {FG_MUTED};")
+
+        base_url = get_provider("aura").base_url
+
+        thread = QThread(self)
+        worker = CreditsClaimWorker(base_url=base_url, session_id=session_id, claim_secret=claim_secret)
+        worker.moveToThread(thread)
+
+        thread.started.connect(worker.run)
+        worker.finished.connect(lambda aid, bal, tok, err, tok_req: self._on_claim_completed(aid, bal, tok, err, tok_req))
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        self._credit_threads.append(thread)
+        thread.start()
+
+    def _on_claim_completed(self, account_id: str, balance_micros: int, token: str, error: str, token_required: bool) -> None:
+        row = self._provider_rows.get("aura")
+        if not row:
+            return
+        purchase_status: QLabel = row["purchase_status"]
+        check_btn: QPushButton = row["check_btn"]
+        buy5: QPushButton = row["buy5"]
+        buy10: QPushButton = row["buy10"]
+
+        check_btn.setEnabled(True)
+        buy5.setEnabled(True)
+        buy10.setEnabled(True)
+
+        if error:
+            purchase_status.setText(error)
+            purchase_status.setStyleSheet(f"color: {WARN};")
+            return
+
+        if token and token_required:
+            set_api_key("aura", token)
+            self._settings.aura_pending_session_id = ""
+            self._settings.aura_pending_claim_secret = ""
+            save_settings(self._settings)
+            check_btn.setVisible(False)
+            self._refresh_key_status("aura")
+            purchase_status.setText("Credits claimed! Aura key has been saved. Balance will refresh.")
+            purchase_status.setStyleSheet(f"color: {SUCCESS};")
+            self.credits_claimed.emit()
+        elif token_required and not token:
+            purchase_status.setText("This account already has an Aura key. Use the saved key above.")
+            purchase_status.setStyleSheet(f"color: {WARN};")
+        else:
+            self._settings.aura_pending_session_id = ""
+            self._settings.aura_pending_claim_secret = ""
+            save_settings(self._settings)
+            check_btn.setVisible(False)
+            purchase_status.setText("Credits claimed successfully!")
+            purchase_status.setStyleSheet(f"color: {SUCCESS};")
+            self.credits_claimed.emit()
+
+    def cleanup_threads(self) -> None:
+        for thread in list(self._credit_threads):
+            try:
+                if thread.isRunning():
+                    thread.quit()
+                    if not thread.wait(5000):
+                        logger.warning("Credit thread did not stop cleanly")
+            except RuntimeError:
+                pass
+        self._credit_threads.clear()
+
     # --- Collect ---
 
     def collect_settings(self, settings: AppSettings) -> None:
         settings.tavily_api_key = self._settings.tavily_api_key
+        settings.aura_pending_session_id = self._settings.aura_pending_session_id
+        settings.aura_pending_claim_secret = self._settings.aura_pending_claim_secret
