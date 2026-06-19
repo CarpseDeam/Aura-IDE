@@ -207,9 +207,40 @@ GOOGLE_CLOUD_PRICING: dict[str, dict[str, float]] = {
     "gemini-1.5-flash": {"in_miss": 0.075, "in_hit": 0.01875, "out": 0.30},
 }
 
+AURA_MODELS: dict[str, ModelInfo] = {
+    "aura-fast": ModelInfo(
+        id="aura-fast",
+        label="Aura Fast",
+        input_per_m_usd=0.28,
+        output_per_m_usd=0.56,
+        cache_hit_per_m_usd=0.0056,
+    ),
+    "aura-pro": ModelInfo(
+        id="aura-pro",
+        label="Aura Pro",
+        input_per_m_usd=0.87,
+        output_per_m_usd=1.74,
+        cache_hit_per_m_usd=0.00725,
+    ),
+}
+AURA_PRICING: dict[str, dict[str, float]] = {
+    "aura-fast": {"in_miss": 0.28, "in_hit": 0.0056, "out": 0.56},
+    "aura-pro": {"in_miss": 0.87, "in_hit": 0.00725, "out": 1.74},
+}
+
 # Provider catalogue — raw dict form consumed by ProviderRegistry
 
 PROVIDER_CATALOG: dict[str, dict] = {
+    "aura": {
+        "label": "Aura Credits",
+        "base_url": "https://sweet-manifestation-production-785b.up.railway.app/v1",
+        "env_key": "AURA_API_KEY",
+        "default_model": "aura-fast",
+        "default_thinking": "high",
+        "models": AURA_MODELS,
+        "pricing": AURA_PRICING,
+        "kind": "api_key",
+    },
     "deepseek": {
         "label": "DeepSeek",
         "base_url": "https://api.deepseek.com",
