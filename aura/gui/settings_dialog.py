@@ -6,6 +6,7 @@ import logging
 from pathlib import Path
 from typing import Callable
 
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -26,6 +27,8 @@ class SettingsDialog(QDialog):
     workspace label so the host (MainWindow) can run the same picker it uses
     elsewhere; we don't fork that logic here.
     """
+
+    credits_claimed = Signal()
 
     def __init__(
         self,
@@ -60,6 +63,7 @@ class SettingsDialog(QDialog):
 
         self._models_page = ModelsPage(self._settings)
         self._api_keys_page = ApiKeysPage(self._settings)
+        self._api_keys_page.credits_claimed.connect(self.credits_claimed)
         self._automation_page = AutomationPage(self._settings)
         self._companion_page = CompanionPage(self._settings)
         self._vision_page = VisionPage(self._settings)

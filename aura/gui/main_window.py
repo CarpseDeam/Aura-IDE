@@ -1542,6 +1542,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             on_live_settings_applied=self._apply_settings,
         )
         dlg.set_companion_manager(self._companion)
+        dlg.credits_claimed.connect(self._refresh_aura_balance)
+        dlg.credits_claimed.connect(self._refresh_status_bar)
         if dlg.exec() == SettingsDialog.DialogCode.Accepted:
             self._apply_settings(dlg.result_settings())
 
@@ -1556,6 +1558,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             on_live_settings_applied=self._apply_settings,
         )
         dlg.set_companion_manager(self._companion)
+        dlg.credits_claimed.connect(self._refresh_aura_balance)
+        dlg.credits_claimed.connect(self._refresh_status_bar)
         if dlg.exec() == SettingsDialog.DialogCode.Accepted:
             self._apply_settings(dlg.result_settings())
 

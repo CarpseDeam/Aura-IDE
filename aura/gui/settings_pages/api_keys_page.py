@@ -27,6 +27,7 @@ from aura.config import (
     save_settings,
     set_api_key,
 )
+from aura.gui.credits_worker import CreditsCheckoutWorker, CreditsClaimWorker
 from aura.providers.registry import provider_registry
 from aura.gui.theme import FG_DIM, FG_MUTED, SUCCESS, WARN
 
@@ -416,7 +417,9 @@ class ApiKeysPage(QWidget):
             purchase_status.setStyleSheet(f"color: {WARN};")
             return
 
-        if token and token_required:
+        if token:
+            # Save the aura key regardless of token_required flag.
+            # Normal first claim returns token with token_required=false.
             set_api_key("aura", token)
             self._settings.aura_pending_session_id = ""
             self._settings.aura_pending_claim_secret = ""
@@ -426,10 +429,12 @@ class ApiKeysPage(QWidget):
             purchase_status.setText("Credits claimed! Aura key has been saved. Balance will refresh.")
             purchase_status.setStyleSheet(f"color: {SUCCESS};")
             self.credits_claimed.emit()
-        elif token_required and not token:
+        elif token_required:
+            # Backend says this account needs a token but cannot return the old raw key.
             purchase_status.setText("This account already has an Aura key. Use the saved key above.")
             purchase_status.setStyleSheet(f"color: {WARN};")
         else:
+            # Successful claim but no token delivered (rare edge case).
             self._settings.aura_pending_session_id = ""
             self._settings.aura_pending_claim_secret = ""
             save_settings(self._settings)
