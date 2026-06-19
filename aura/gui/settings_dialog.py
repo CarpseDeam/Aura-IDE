@@ -131,23 +131,14 @@ class SettingsDialog(QDialog):
     # --- Result ---
 
     def result_settings(self) -> AppSettings:
-        """Read the current widget values and return a fresh AppSettings."""
-        result = AppSettings(
-            provider=self._settings.provider,
-            default_model=self._settings.default_model,
-            default_thinking=self._settings.default_thinking,
-            terminal_window_geometry=self._settings.terminal_window_geometry,
-            drone_reports_window_geometry=self._settings.drone_reports_window_geometry,
-            first_launch_done=self._settings.first_launch_done,
-            onboarding_checklist=dict(self._settings.onboarding_checklist),
-            onboarding_version=self._settings.onboarding_version,
-            humanizer_enabled=self._settings.humanizer_enabled,
-            humanizer_gate_enabled=self._settings.humanizer_gate_enabled,
-            humanizer_gate_min_severity=self._settings.humanizer_gate_min_severity,
-            humanizer_feature_log=self._settings.humanizer_feature_log,
-            humanizer_observe=self._settings.humanizer_observe,
-        )
+        """Read the current widget values and return a fresh AppSettings.
 
+        Uses a deep copy of the working settings as the base so that any
+        field not managed by a settings page (e.g. aura_pending_*,
+        main_window_geometry, main_window_state, main_splitter_sizes) is
+        preserved rather than silently reset to its default value.
+        """
+        result = copy.deepcopy(self._settings)
         self._models_page.collect_settings(result)
         self._api_keys_page.collect_settings(result)
         self._automation_page.collect_settings(result)
@@ -155,7 +146,6 @@ class SettingsDialog(QDialog):
         self._vision_page.collect_settings(result)
         self._sandbox_page.collect_settings(result)
         self._prompts_page.collect_settings(result)
-
         return result
 
     def accept(self) -> None:  # type: ignore[override]
