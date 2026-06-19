@@ -59,8 +59,8 @@ from aura.gui.main_window_toolbar import MainWindowToolbar
 from aura.gui.onboarding_dialog import OnboardingDialog
 from aura.gui.playground import AuraPlayground
 from aura.gui.send_handler import SendHandler
-from aura.gui.settings_dialog import SettingsDialog
 from aura.gui.main_window_balance import MainWindowBalanceController
+from aura.gui.main_window_settings import MainWindowSettingsController
 from aura.gui.status_bar import AuraStatusBar
 from aura.gui.update_dialog import UpdateDialog, UpdateWorker
 from aura.gui.widgets.aura_glow import AuraWidget
@@ -120,14 +120,15 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         # ----- toolbar ----
         self._toolbar = MainWindowToolbar(self._settings, self)
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self._toolbar)
+        self._settings_controller = MainWindowSettingsController(self)
         self._toolbar.new_conversation_requested.connect(self._on_new_conversation)
         self._toolbar.open_conversation_requested.connect(self._on_open_conversation)
         self._toolbar.read_only_toggled.connect(self._on_read_only_toggled)
-        self._toolbar.auto_dispatch_toggled.connect(self._on_auto_dispatch_toggled)
-        self._toolbar.auto_approve_toggled.connect(self._on_auto_approve_toggled)
-        self._toolbar.auto_summon_drones_toggled.connect(self._on_auto_summon_drones_toggled)
+        self._toolbar.auto_dispatch_toggled.connect(self._settings_controller.on_auto_dispatch_toggled)
+        self._toolbar.auto_approve_toggled.connect(self._settings_controller.on_auto_approve_toggled)
+        self._toolbar.auto_summon_drones_toggled.connect(self._settings_controller.on_auto_summon_drones_toggled)
         self._toolbar.update_requested.connect(self._on_open_update)
-        self._toolbar.settings_requested.connect(self._on_open_settings)
+        self._toolbar.settings_requested.connect(self._settings_controller.open_settings)
         self._toolbar.minimize_requested.connect(self.showMinimized)
         self._toolbar.maximize_requested.connect(self._toggle_maximize)
         self._toolbar.close_requested.connect(self.close)
@@ -507,7 +508,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             self._settings.first_launch_done = True
             from aura.config import save_settings
             save_settings(self._settings)
-            self._on_open_settings()
+            self._settings_controller.open_settings()
             return
         if result == QDialog.DialogCode.Accepted:
             self._settings.first_launch_done = True
@@ -1413,27 +1414,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         runner.set_approval_result(decision, approval_id=approval_id)
         dialog.accept()
 
-    def _on_auto_dispatch_toggled(self, checked: bool) -> None:
-        self._settings.auto_dispatch = checked
-        self._bridge.set_auto_dispatch(checked)
-        self._toolbar.refresh_auto_toggle_tooltips()
-        from aura.config import save_settings
-        save_settings(self._settings)
-
-    def _on_auto_approve_toggled(self, checked: bool) -> None:
-        self._settings.auto_approve = checked
-        self._bridge.set_auto_approve(checked)
-        self._toolbar.refresh_auto_toggle_tooltips()
-        from aura.config import save_settings
-        save_settings(self._settings)
-
-    def _on_auto_summon_drones_toggled(self, checked: bool) -> None:
-        self._settings.auto_summon_drones = checked
-        self._toolbar.set_auto_summon_drones(checked)
-        self._toolbar.refresh_auto_toggle_tooltips()
-        from aura.config import save_settings
-        save_settings(self._settings)
-
     def _on_new_conversation(self) -> None:
         if self._bridge.is_running():
             QMessageBox.information(
@@ -1460,77 +1440,9 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             self._input.set_queued_messages(0)
             self._reset_session_usage()
 
-    def _apply_settings(self, settings: AppSettings) -> None:
-        self._settings = settings
-        self._send_handler.update_settings(settings)
-        self._companion.update_settings(settings)
-        self._persistence.update_settings(settings)
-        self._worker_handler.update_settings(settings)
-        self._toolbar.update_settings(settings)
-
-        self._left_pane.populate_models(
-            settings.planner_provider,
-            settings.worker_provider,
-        )
-        self._bridge.set_planner_provider(settings.planner_provider)
-        self._bridge.set_worker_provider(settings.worker_provider)
-
-        if settings.planner_worker_mode:
-            self.set_model(settings.default_planner_model)
-            self.set_thinking(settings.default_planner_thinking)
-        else:
-            self.set_model(settings.default_model)
-            self.set_thinking(settings.default_thinking)
-        self.set_worker_model(settings.default_worker_model)
-        self.set_worker_thinking(settings.default_worker_thinking)
-        self._set_sidebar_planner_worker_mode(settings.planner_worker_mode)
-        self._apply_planner_worker_mode_to_bridge(settings.planner_worker_mode)
-        self._bridge.set_worker_model(settings.default_worker_model)
-        self._bridge.set_worker_thinking(settings.default_worker_thinking)
-        self._bridge.set_temperature(settings.temperature)
-        self._bridge.set_worker_temperature(settings.worker_temperature)
-        self._bridge.set_custom_system_prompts(
-            settings.system_prompt,
-            settings.planner_system_prompt,
-            settings.worker_system_prompt,
-        )
-        self._bridge.set_auto_dispatch(settings.auto_dispatch)
-        self._bridge.set_auto_approve(settings.auto_approve)
-        self._toolbar.set_auto_dispatch(settings.auto_dispatch)
-        self._toolbar.set_auto_approve(settings.auto_approve)
-        self._toolbar.set_auto_summon_drones(settings.auto_summon_drones)
-        self._refresh_status_bar()
-        self._balance_controller.refresh(self._settings)
-
-    def _on_open_settings(self) -> None:
-        dlg = SettingsDialog(
-            settings=self._settings,
-            workspace_root=self._workspace_root,
-            on_change_root=self._on_change_root,
-            parent=self,
-            on_live_settings_applied=self._apply_settings,
-        )
-        dlg.set_companion_manager(self._companion)
-        dlg.credits_claimed.connect(lambda: self._balance_controller.refresh(self._settings))
-        dlg.credits_claimed.connect(self._refresh_status_bar)
-        if dlg.exec() == SettingsDialog.DialogCode.Accepted:
-            self._apply_settings(dlg.result_settings())
-
     def open_api_settings(self) -> None:
         """Open settings dialog directly to the API Keys tab."""
-        dlg = SettingsDialog(
-            settings=self._settings,
-            workspace_root=self._workspace_root,
-            on_change_root=self._on_change_root,
-            parent=self,
-            open_api_keys_tab=True,
-            on_live_settings_applied=self._apply_settings,
-        )
-        dlg.set_companion_manager(self._companion)
-        dlg.credits_claimed.connect(lambda: self._balance_controller.refresh(self._settings))
-        dlg.credits_claimed.connect(self._refresh_status_bar)
-        if dlg.exec() == SettingsDialog.DialogCode.Accepted:
-            self._apply_settings(dlg.result_settings())
+        self._settings_controller.open_api_settings()
 
     def _on_companion_status(self, status: str) -> None:
         """Handle companion connection status changes."""
