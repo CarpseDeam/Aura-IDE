@@ -60,7 +60,7 @@ from aura.gui.onboarding_dialog import OnboardingDialog
 from aura.gui.playground import AuraPlayground
 from aura.gui.send_handler import SendHandler
 from aura.gui.settings_dialog import SettingsDialog
-from aura.gui.balance_fetcher import BalanceWorker
+from aura.gui.main_window_balance import MainWindowBalanceController
 from aura.gui.status_bar import AuraStatusBar
 from aura.gui.update_dialog import UpdateDialog, UpdateWorker
 from aura.gui.widgets.aura_glow import AuraWidget
@@ -136,10 +136,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._status_bar = AuraStatusBar(self)
         self.setStatusBar(self._status_bar)
 
-        self._aura_balance_micros: int | None = None
-        self._balance_fetch_inflight: bool = False
-        self._balance_thread: QThread | None = None
-        self._balance_worker: BalanceWorker | None = None
+        self._balance_controller = MainWindowBalanceController(self)
+        self._balance_controller.balance_changed.connect(self._refresh_status_bar)
 
         # ----- splitter ----
         self._main_splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -235,7 +233,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             parent=self,
         )
         self._worker_handler.usage_updated.connect(self._refresh_status_bar)
-        self._worker_handler.usage_updated.connect(self._refresh_aura_balance)
+        self._worker_handler.usage_updated.connect(lambda: self._balance_controller.refresh(self._settings))
         self._worker_handler.worker_started.connect(lambda: self._input.set_streaming(False))
 
         # Conversation persistence (auto-save, load, restore, replay).
@@ -364,7 +362,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._left_pane.refresh_drones(self._workspace_root)
 
         self._refresh_status_bar()
-        self._refresh_aura_balance()
+        self._balance_controller.refresh(self._settings)
         self._position_edge_tabs()
 
         # Restore most recent conversation if enabled.
@@ -603,58 +601,11 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             thinking=self.current_thinking(),
             session_usage=self._worker_handler.session_usage,
             show_balance=show_balance,
-            balance_micros=self._aura_balance_micros,
+            balance_micros=self._balance_controller.balance_micros,
         )
 
     def _reset_session_usage(self) -> None:
         self._worker_handler.reset_session_usage()
-
-    def _refresh_aura_balance(self) -> None:
-        if self._balance_fetch_inflight:
-            return
-        # Only fetch if Aura Credits is selected as planner or worker
-        if self._settings.planner_provider != "aura" and self._settings.worker_provider != "aura":
-            self._aura_balance_micros = None
-            self._refresh_status_bar()
-            return
-        api_key = get_api_key("aura")
-        if not api_key:
-            self._aura_balance_micros = None
-            self._refresh_status_bar()
-            return
-        self._balance_fetch_inflight = True
-        provider = get_provider("aura")
-        base_url = provider.base_url
-
-        thread = QThread(self)
-        worker = BalanceWorker(base_url=base_url, api_key=api_key)
-        self._balance_thread = thread
-        self._balance_worker = worker
-        worker.moveToThread(thread)
-        thread.started.connect(worker.run)
-        worker.finished.connect(self._on_balance_fetched)
-        worker.finished.connect(thread.quit)
-        worker.finished.connect(worker.deleteLater)
-
-        def _cleanup_balance():
-            if self._balance_thread is thread:
-                self._balance_thread = None
-            if self._balance_worker is worker:
-                self._balance_worker = None
-            self._balance_fetch_inflight = False
-
-        thread.finished.connect(_cleanup_balance)
-        thread.finished.connect(thread.deleteLater)
-        thread.start()
-
-    def _on_balance_fetched(self, balance_micros: int, error: str) -> None:
-        self._balance_fetch_inflight = False
-        if balance_micros >= 0:
-            self._aura_balance_micros = balance_micros
-            self._refresh_status_bar()
-        if error:
-            logger.warning("Balance fetch error: %s", error)
-            self._refresh_status_bar()
 
     # ----- handlers -------------------------------------------------------
 
@@ -1549,7 +1500,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._toolbar.set_auto_approve(settings.auto_approve)
         self._toolbar.set_auto_summon_drones(settings.auto_summon_drones)
         self._refresh_status_bar()
-        self._refresh_aura_balance()
+        self._balance_controller.refresh(self._settings)
 
     def _on_open_settings(self) -> None:
         dlg = SettingsDialog(
@@ -1560,7 +1511,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             on_live_settings_applied=self._apply_settings,
         )
         dlg.set_companion_manager(self._companion)
-        dlg.credits_claimed.connect(self._refresh_aura_balance)
+        dlg.credits_claimed.connect(lambda: self._balance_controller.refresh(self._settings))
         dlg.credits_claimed.connect(self._refresh_status_bar)
         if dlg.exec() == SettingsDialog.DialogCode.Accepted:
             self._apply_settings(dlg.result_settings())
@@ -1576,7 +1527,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             on_live_settings_applied=self._apply_settings,
         )
         dlg.set_companion_manager(self._companion)
-        dlg.credits_claimed.connect(self._refresh_aura_balance)
+        dlg.credits_claimed.connect(lambda: self._balance_controller.refresh(self._settings))
         dlg.credits_claimed.connect(self._refresh_status_bar)
         if dlg.exec() == SettingsDialog.DialogCode.Accepted:
             self._apply_settings(dlg.result_settings())
