@@ -99,8 +99,11 @@ class AuraStatusBar(QStatusBar):
         if show_balance:
             if balance_micros is not None:
                 self._status_balance.setText(f"Credits: ${balance_micros / 1_000_000:.2f}")
+                self._status_balance.setToolTip("")
             else:
                 self._status_balance.setText("Credits: $—")
+                self._status_balance.setToolTip("Balance not loaded yet.")
             self._status_balance.setVisible(True)
         else:
             self._status_balance.setVisible(False)
+            self._status_balance.setToolTip("")

@@ -138,6 +138,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
         self._aura_balance_micros: int | None = None
         self._balance_fetch_inflight: bool = False
+        self._balance_thread: QThread | None = None
+        self._balance_worker: BalanceWorker | None = None
 
         # ----- splitter ----
         self._main_splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -612,9 +614,13 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             return
         # Only fetch if Aura Credits is selected as planner or worker
         if self._settings.planner_provider != "aura" and self._settings.worker_provider != "aura":
+            self._aura_balance_micros = None
+            self._refresh_status_bar()
             return
         api_key = get_api_key("aura")
         if not api_key:
+            self._aura_balance_micros = None
+            self._refresh_status_bar()
             return
         self._balance_fetch_inflight = True
         provider = get_provider("aura")
@@ -622,11 +628,22 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
         thread = QThread(self)
         worker = BalanceWorker(base_url=base_url, api_key=api_key)
+        self._balance_thread = thread
+        self._balance_worker = worker
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.finished.connect(self._on_balance_fetched)
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
+
+        def _cleanup_balance():
+            if self._balance_thread is thread:
+                self._balance_thread = None
+            if self._balance_worker is worker:
+                self._balance_worker = None
+            self._balance_fetch_inflight = False
+
+        thread.finished.connect(_cleanup_balance)
         thread.finished.connect(thread.deleteLater)
         thread.start()
 
@@ -635,8 +652,9 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         if balance_micros >= 0:
             self._aura_balance_micros = balance_micros
             self._refresh_status_bar()
-        elif error:
+        if error:
             logger.warning("Balance fetch error: %s", error)
+            self._refresh_status_bar()
 
     # ----- handlers -------------------------------------------------------
 
