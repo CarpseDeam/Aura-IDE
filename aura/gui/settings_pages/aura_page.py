@@ -513,10 +513,18 @@ class AuraPage(QWidget):
             self._refresh_balance()
             self._update_balance_status_text()
         elif token_required:
+            self._settings.aura_pending_session_id = ""
+            self._settings.aura_pending_claim_secret = ""
+            save_settings(self._settings)
+            self._check_btn.setVisible(False)
+            self._refresh_key_status()
             self._purchase_status.setText(
-                "This account already has an Aura key. Use the saved key above."
+                "Credits claimed! Your existing Aura key is still valid. Balance will refresh."
             )
-            self._purchase_status.setStyleSheet(f"color: {WARN};")
+            self._purchase_status.setStyleSheet(f"color: {SUCCESS};")
+            self.credits_claimed.emit()
+            self._refresh_balance()
+            self._update_balance_status_text()
         else:
             self._settings.aura_pending_session_id = ""
             self._settings.aura_pending_claim_secret = ""
