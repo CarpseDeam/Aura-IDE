@@ -4,7 +4,9 @@ import logging
 from pathlib import Path
 
 
-def compute_dependents(workspace_root: Path, files: list[str]) -> list[str]:
+def compute_dependents(
+    workspace_root: Path, files: list[str], force_graph: bool = False
+) -> list[str]:
     """Return sorted list of files that depend on the given files, or [] on failure."""
     if not files:
         return []
@@ -12,7 +14,7 @@ def compute_dependents(workspace_root: Path, files: list[str]) -> list[str]:
     try:
         from aura.dep_graph import build_graph
 
-        graph = build_graph(workspace_root)
+        graph = build_graph(workspace_root, force=force_graph)
         dependents: set[str] = set()
 
         for path_str in files:
@@ -81,9 +83,11 @@ def build_dependency_stanza(workspace_root: Path, files: list[str]) -> str:
     return stanza
 
 
-def build_dependent_planner_notice(workspace_root: Path, files: list[str]) -> str:
+def build_dependent_planner_notice(
+    workspace_root: Path, files: list[str], force_graph: bool = False
+) -> str:
     """Return a planner notice about downstream dependents, or ``""``."""
-    sorted_deps = compute_dependents(workspace_root, files)
+    sorted_deps = compute_dependents(workspace_root, files, force_graph=force_graph)
     if not sorted_deps:
         return ""
 

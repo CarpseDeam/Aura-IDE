@@ -61,7 +61,8 @@ from aura.conversation.tools._types import (
     ApprovalRequest,
 )
 from aura.conversation.tools.registry import ToolRegistry
-from aura.dependency_context import build_dependent_planner_notice, compute_dependents
+from aura.conversation.planner_refresh import PlannerRefreshState, stale_read_notice
+from aura.dependency_context import compute_dependents
 from aura.hooks import hooks
 from aura.project_env import preferred_python_for_compile, quote_command_arg
 from aura.verify import run_focused_import_check, run_dependent_import_check
@@ -184,21 +185,6 @@ def _unique_worker_paths(paths: list[str]) -> list[str]:
     return unique
 
 
-def _planner_stale_read_notice(modified_files: list[str]) -> str:
-    files = _unique_worker_paths(modified_files)
-    bullet_list = "\n".join(f"- {path}" for path in files)
-    return (
-        "Planner stale-read invalidation:\n"
-        "The Worker modified these files:\n"
-        f"{bullet_list}\n\n"
-        "Any prior Planner reads of those paths are stale. "
-        "Re-read the modified files before planning, dispatching, or reasoning "
-        "about further edits involving them. "
-        "If the Worker completed successfully, summarize or finish normally; "
-        "do not redispatch because of this notice unless the user asks for more."
-    )
-
-
 def _is_validation_scratch_path(path: str) -> bool:
     normalized = _normalize_worker_path(path)
     name = normalized.rsplit("/", 1)[-1]
@@ -235,6 +221,7 @@ class ConversationManager:
             workspace_root=self._tools.workspace_root,
             loop_detector=self._loop_detector,
         )
+        self._planner_refresh = PlannerRefreshState()
 
     @property
     def history(self) -> History:
@@ -247,31 +234,9 @@ class ConversationManager:
     def set_workspace_root(self, root: Path) -> None:
         self._tool_runner.set_workspace_root(root)
 
-    _planner_base_system_prompt: str | None = None
-    _workspace_root_for_refresh: Path | None = None
-
     def configure_for_planner(self, base_prompt: str, workspace_root: Path) -> None:
         """Store the base system prompt template and workspace root for mid-turn refresh."""
-        self._planner_base_system_prompt = base_prompt
-        self._workspace_root_for_refresh = workspace_root
-
-    def _refresh_tier1_after_writes(self) -> None:
-        """Rebuild Tier 1 context with force-refreshed repo map and update system prompt.
-
-        Called after a worker dispatch completes with file writes. Forces repo map
-        regeneration so the planner's next LLM round sees updated code structure.
-        Does nothing if configure_for_planner was not called.
-        """
-        if self._planner_base_system_prompt is None or self._workspace_root_for_refresh is None:
-            return
-        from aura.prompts import build_tier1_context, inject_tier1_context
-        try:
-            tier1_text = build_tier1_context(self._workspace_root_for_refresh, force=True)
-            enriched = inject_tier1_context(self._planner_base_system_prompt, tier1_text)
-            self._history.set_system(enriched)
-        except Exception:
-            logger = logging.getLogger(__name__)
-            logger.warning("Failed to refresh Tier 1 context after worker writes", exc_info=True)
+        self._planner_refresh.configure(base_prompt, workspace_root)
 
     def send(        self,
         on_event: EventCallback,
@@ -921,11 +886,9 @@ class ConversationManager:
                     str(path) for path in res.get("planner_stale_read_files", [])
                 )
                 if res.get("blocker"):
-                    if planner_stale_read_files:
-                        self._history.append_user_text(
-                            _planner_stale_read_notice(planner_stale_read_files)
-                        )
-                        self._refresh_tier1_after_writes()
+                    self._planner_refresh.handle_post_write_notices(
+                        self._history, planner_stale_read_files
+                    )
                     self._append_dispatch_blocker_message(
                         res["result"], str(res.get("blocker_reason", "")), on_event
                     )
@@ -941,19 +904,9 @@ class ConversationManager:
                     self._history.append_tool_result(task["id"], res["result_payload"])
                     on_event(res["event"])
 
-            if planner_stale_read_files:
-                self._history.append_user_text(
-                    _planner_stale_read_notice(planner_stale_read_files)
-                )
-                self._refresh_tier1_after_writes()
-
-            if planner_stale_read_files and self._workspace_root_for_refresh is not None:
-                notice = build_dependent_planner_notice(
-                    self._workspace_root_for_refresh,
-                    planner_stale_read_files,
-                )
-                if notice:
-                    self._history.append_user_text(notice)
+            self._planner_refresh.handle_post_write_notices(
+                self._history, planner_stale_read_files
+            )
 
             if _worker_phase_boundary_info is not None:
                 worker_phase_boundary_info = _worker_phase_boundary_info
