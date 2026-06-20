@@ -45,6 +45,13 @@ from aura.conversation.dispatch import (
     WorkerDispatchResult,
 )
 from aura.conversation.dispatch_failure import classify_failed_worker_dispatch
+from aura.conversation.worker_recovery_payload import (
+    blocked_tool_result,
+    is_recoverable_phase_boundary,
+    parse_tool_payload,
+    record_recovery_block,
+    recovery_payload,
+)
 from aura.conversation.history import History
 from aura.conversation.loop_detection import LoopDetector
 from aura.conversation.tool_limits import (
@@ -610,7 +617,7 @@ class ConversationManager:
                 allowed, limit_info = limits.check(name)
                 if not allowed:
                     self._append_limit_tool_result(tool_call_id, name, limit_info, on_event)
-                    if self._is_recoverable_phase_boundary(limit_info):
+                    if is_recoverable_phase_boundary(limit_info):
                         _worker_phase_boundary_info = limit_info
                     continue
                 limits.record(name)
@@ -642,8 +649,8 @@ class ConversationManager:
                         write_attempts_by_path=write_attempts_by_path,
                     )
                     if blocked is not None:
-                        blocked_payload = self._parse_tool_payload(str(blocked.get("result_payload", "")))
-                        if self._is_recoverable_phase_boundary(blocked_payload):
+                        blocked_payload = parse_tool_payload(str(blocked.get("result_payload", "")))
+                        if is_recoverable_phase_boundary(blocked_payload):
                             _worker_phase_boundary_info = blocked_payload
                         return blocked
 
@@ -718,7 +725,7 @@ class ConversationManager:
                             syntax_validation_required=syntax_validation_required,
                             stale_validation_notes=stale_validation_notes,
                         )
-                    if self._is_recoverable_phase_boundary(loop_info):
+                    if is_recoverable_phase_boundary(loop_info):
                         _worker_phase_boundary_info = loop_info
                     return {
                         "id": tool_call_id,
@@ -786,7 +793,7 @@ class ConversationManager:
                 tool_msg_content = loop_result["content"]
                 loop_info = loop_result["info"]
 
-                if self._is_recoverable_phase_boundary(loop_info):
+                if is_recoverable_phase_boundary(loop_info):
                     _worker_phase_boundary_info = loop_info
 
                 return {
@@ -989,7 +996,7 @@ class ConversationManager:
             diagnostic = state.get("error", "")
             if diagnostic:
                 error_msg += f"\n\nDiagnostic output:\n{diagnostic}"
-            payload = self._recovery_payload(
+            payload = recovery_payload(
                 path=target,
                 failure_class="syntax_invalid",
                 error=error_msg,
@@ -1001,15 +1008,15 @@ class ConversationManager:
                 ),
                 recoverable=not repair_failed,
             )
-            self._record_recovery_block(payload, f"syntax:{target}:{name}", recovery_block_counts)
-            return self._blocked_tool_result(tool_call_id, name, payload)
+            record_recovery_block(payload, f"syntax:{target}:{name}", recovery_block_counts)
+            return blocked_tool_result(tool_call_id, name, payload)
 
         if (
             path
             and name in {"edit_file", "edit_line_range"}
             and write_attempts_by_path.get(path, 0) > 3
         ):
-            payload = self._recovery_payload(
+            payload = recovery_payload(
                 path=path,
                 failure_class="edit_mechanics_multi_edit_spin",
                 error=(
@@ -1021,14 +1028,14 @@ class ConversationManager:
                     "Re-read the file, then submit one patch_file containing all intended hunks."
                 ),
             )
-            self._record_recovery_block(payload, f"multi-edit-spin:{path}:{name}", recovery_block_counts)
-            return self._blocked_tool_result(tool_call_id, name, payload)
+            record_recovery_block(payload, f"multi-edit-spin:{path}:{name}", recovery_block_counts)
+            return blocked_tool_result(tool_call_id, name, payload)
 
         if name == "apply_edit_transaction" and path:
             shape = self._edit_shape_signature(name, args)
             if shape in edit_failed_shapes:
                 if f"ambiguous-replace-text:{shape}" in edit_failed_shapes:
-                    payload = self._recovery_payload(
+                    payload = recovery_payload(
                         path=path,
                         failure_class="edit_transaction_ambiguous_symbol",
                         error=(
@@ -1041,9 +1048,9 @@ class ConversationManager:
                         ),
                         recoverable=False,
                     )
-                    self._record_recovery_block(payload, shape, recovery_block_counts)
-                    return self._blocked_tool_result(tool_call_id, name, payload)
-                payload = self._recovery_payload(
+                    record_recovery_block(payload, shape, recovery_block_counts)
+                    return blocked_tool_result(tool_call_id, name, payload)
+                payload = recovery_payload(
                     path=path,
                     failure_class="edit_mechanics_blocked",
                     error="Repeated apply_edit_transaction failure. Re-read the file and return a concise blocker instead of switching between edit tools.",
@@ -1051,19 +1058,19 @@ class ConversationManager:
                     suggested_next_action="Re-read the file, then report the typed transaction blocker if the structured operation still cannot be applied safely.",
                     recoverable=False,
                 )
-                self._record_recovery_block(payload, shape, recovery_block_counts)
-                return self._blocked_tool_result(tool_call_id, name, payload)
+                record_recovery_block(payload, shape, recovery_block_counts)
+                return blocked_tool_result(tool_call_id, name, payload)
 
         if name == "edit_line_range" and path in line_range_reread_required:
-            payload = self._recovery_payload(
+            payload = recovery_payload(
                 path=path,
                 failure_class="edit_mechanics_stale_line_range",
                 error="Stale line range after a failed edit_line_range. Re-read the file before retrying line-range editing.",
                 suggested_next_tool="read_file",
                 suggested_next_action="Re-read the file before retrying an edit.",
             )
-            self._record_recovery_block(payload, f"line-range-reread:{path}", recovery_block_counts)
-            return self._blocked_tool_result(tool_call_id, name, payload)
+            record_recovery_block(payload, f"line-range-reread:{path}", recovery_block_counts)
+            return blocked_tool_result(tool_call_id, name, payload)
 
         if name == "patch_file" and path:
             blocked = self._worker_patch_file_state_block(
@@ -1078,7 +1085,7 @@ class ConversationManager:
             shape = self._edit_shape_signature(name, args)
             failed_cycles = patch_failed_cycles.get(shape, 0)
             if failed_cycles >= 2:
-                payload = self._recovery_payload(
+                payload = recovery_payload(
                     path=path,
                     failure_class="patch_file_repeated_failure",
                     error=(
@@ -1096,13 +1103,13 @@ class ConversationManager:
                 payload["write_outcome"] = "not_applied_edit_mechanics_blocked"
                 payload["patch_failed_cycles"] = failed_cycles
                 payload["patch_shape"] = self._shape_digest(shape)
-                self._record_recovery_block(payload, f"patch-shape:{shape}", recovery_block_counts)
-                return self._blocked_tool_result(tool_call_id, name, payload)
+                record_recovery_block(payload, f"patch-shape:{shape}", recovery_block_counts)
+                return blocked_tool_result(tool_call_id, name, payload)
 
         if name in ("edit_file", "edit_symbol") and path in edit_fallback_required:
             prior = edit_fallback_required[path]
             block_key = self._edit_shape_signature(name, args)
-            payload = self._recovery_payload(
+            payload = recovery_payload(
                 path=path,
                 failure_class=str(prior.get("failure_class") or self._default_edit_failure_class(name)),
                 error="Repeated failed edit tactic. Do not retry this edit shape. Re-read the file and use patch_file for existing-file code changes.",
@@ -1110,21 +1117,21 @@ class ConversationManager:
                 suggested_next_action="Use read_file/read_file_outline, then submit one patch_file with exact hunks.",
             )
             payload["previous_error"] = prior.get("error", "")
-            self._record_recovery_block(payload, block_key, recovery_block_counts)
-            return self._blocked_tool_result(tool_call_id, name, payload)
+            record_recovery_block(payload, block_key, recovery_block_counts)
+            return blocked_tool_result(tool_call_id, name, payload)
 
         if name in ("edit_file", "edit_symbol", "edit_line_range"):
             shape = self._edit_shape_signature(name, args)
             if shape in edit_failed_shapes:
-                payload = self._recovery_payload(
+                payload = recovery_payload(
                     path=path,
                     failure_class=self._default_edit_failure_class(name),
                     error="Repeated failed edit tactic. Do not retry this edit shape. Re-read the file and use patch_file for existing-file code changes.",
                     suggested_next_tool="patch_file",
                     suggested_next_action="Use read_file/read_file_outline, then submit one patch_file with exact hunks.",
                 )
-                self._record_recovery_block(payload, shape, recovery_block_counts)
-                return self._blocked_tool_result(tool_call_id, name, payload)
+                record_recovery_block(payload, shape, recovery_block_counts)
+                return blocked_tool_result(tool_call_id, name, payload)
 
         return None
 
@@ -1142,7 +1149,7 @@ class ConversationManager:
 
         expected_hash = args.get("expected_file_hash")
         if not isinstance(expected_hash, str) or not expected_hash:
-            payload = self._recovery_payload(
+            payload = recovery_payload(
                 path=path,
                 failure_class="patch_file_missing_expected_hash",
                 error=(
@@ -1157,12 +1164,12 @@ class ConversationManager:
             )
             payload["applied"] = False
             payload["write_outcome"] = "not_applied_edit_mechanics_blocked"
-            return self._blocked_tool_result(tool_call_id, name, payload)
+            return blocked_tool_result(tool_call_id, name, payload)
 
         state = self._worker_file_state_for_path(worker_file_state, path)
         known_hash = str(state.get("content_hash") or "") if state else ""
         if not state or known_hash != expected_hash or not state.get("fresh_for_patch"):
-            payload = self._recovery_payload(
+            payload = recovery_payload(
                 path=path,
                 failure_class="patch_file_hash_mismatch",
                 error=(
@@ -1184,7 +1191,7 @@ class ConversationManager:
                 payload["latest_read_content_hash"] = known_hash
             if state and state.get("last_read_tool"):
                 payload["last_read_tool"] = state.get("last_read_tool")
-            return self._blocked_tool_result(tool_call_id, name, payload)
+            return blocked_tool_result(tool_call_id, name, payload)
 
         return None
 
@@ -1236,7 +1243,7 @@ class ConversationManager:
     ) -> str:
         worker_file_state = worker_file_state if worker_file_state is not None else {}
         patch_failed_cycles = patch_failed_cycles if patch_failed_cycles is not None else {}
-        parsed = self._parse_tool_payload(content)
+        parsed = parse_tool_payload(content)
         self._record_reads_for_recovery(
             name,
             args,
@@ -1783,60 +1790,6 @@ class ConversationManager:
             return "edit_mechanics_stale_line_range"
         return "edit_mechanics_old_str_not_found"
 
-    @staticmethod
-    def _parse_tool_payload(content: str) -> Any:
-        try:
-            return json.loads(content)
-        except (TypeError, json.JSONDecodeError):
-            return None
-
-    @staticmethod
-    def _recovery_payload(
-        *,
-        path: str,
-        failure_class: str,
-        error: str,
-        suggested_next_tool: str,
-        suggested_next_action: str,
-        recoverable: bool = True,
-    ) -> dict[str, Any]:
-        return {
-            "ok": False,
-            "path": path,
-            "rel_path": path,
-            "error": error,
-            "failure_class": failure_class,
-            "recoverable": recoverable,
-            "internal_recovery_steer": True,
-            "suggested_tool": suggested_next_tool,
-            "suggested_next_tool": suggested_next_tool,
-            "suggested_next_action": suggested_next_action,
-        }
-
-    @staticmethod
-    def _record_recovery_block(
-        payload: dict[str, Any],
-        key: str,
-        recovery_block_counts: dict[str, int],
-    ) -> None:
-        count = recovery_block_counts.get(key, 0) + 1
-        recovery_block_counts[key] = count
-        payload["repeated_blocks"] = count
-
-    @staticmethod
-    def _blocked_tool_result(tool_call_id: str, name: str, payload: dict[str, Any]) -> dict[str, Any]:
-        content = json.dumps(payload, ensure_ascii=False)
-        return {
-            "id": tool_call_id,
-            "result_payload": content,
-            "event": ToolResult(
-                tool_call_id=tool_call_id,
-                name=name,
-                ok=False,
-                result=content,
-            ),
-        }
-
     def _append_limit_tool_result(
         self,
         tool_call_id: str,
@@ -1860,12 +1813,6 @@ class ConversationManager:
                 },
             )
         )
-
-
-
-    @staticmethod
-    def _is_recoverable_phase_boundary(info: dict[str, Any] | None) -> bool:
-        return bool(info and info.get("recoverable") and info.get("phase_boundary"))
 
     def _append_dispatch_blocker_message(
         self,
