@@ -61,10 +61,10 @@ from aura.conversation.tools._types import (
     ApprovalRequest,
 )
 from aura.conversation.tools.registry import ToolRegistry
-from aura.dependency_context import build_dependent_planner_notice
+from aura.dependency_context import build_dependent_planner_notice, compute_dependents
 from aura.hooks import hooks
 from aura.project_env import preferred_python_for_compile, quote_command_arg
-from aura.verify import run_focused_import_check
+from aura.verify import run_focused_import_check, run_dependent_import_check
 
 EventCallback = Callable[[Event], None]
 
@@ -150,6 +150,16 @@ WORKER_IMPORT_FAILURE_INSTRUCTION = (
     "The module(s) raised an exception on import, which means a symbol, import, "
     "or dependency is missing or broken. Re-read and repair the file(s), "
     "then finish again.\n\n"
+    "Diagnostic output:\n{diagnostics}"
+)
+
+WORKER_DEPENDENT_CONTRACT_INSTRUCTION = (
+    "Import check failed on downstream dependent(s) because of a contract change "
+    "in the edited file(s). The edit changed a symbol, name, or signature that "
+    "the following dependent(s) import. Either restore that contract in the "
+    "edited file(s) or update the dependent(s) to match, then finish again.\n\n"
+    "Edited: {edited_files}\n"
+    "Broken dependents: {dependent_files}\n\n"
     "Diagnostic output:\n{diagnostics}"
 )
 
@@ -579,6 +589,45 @@ class ConversationManager:
                                 else:
                                     for path in product_paths:
                                         import_verification_required.discard(path)
+                                    # --- Dependent import verification rung ---
+                                    try:
+                                        deps = compute_dependents(
+                                            Path(self._tools.workspace_root),
+                                            product_paths,
+                                        )
+                                        deps = deps[:15]
+                                        if deps:
+                                            gating_paths, gating_diag, info_diag = run_dependent_import_check(
+                                                Path(self._tools.workspace_root),
+                                                product_paths,
+                                                deps,
+                                            )
+                                            if info_diag:
+                                                self._emit_auto_dependent_import_info(
+                                                    paths=deps,
+                                                    diagnostics=info_diag,
+                                                    on_event=on_event,
+                                                )
+                                            if gating_paths:
+                                                for path in product_paths:
+                                                    import_verification_required.add(path)
+                                                self._emit_auto_import_result(
+                                                    paths=gating_paths,
+                                                    diagnostics=gating_diag,
+                                                    on_event=on_event,
+                                                )
+                                                instruction = WORKER_DEPENDENT_CONTRACT_INSTRUCTION.format(
+                                                    edited_files=", ".join(product_paths),
+                                                    dependent_files=", ".join(gating_paths),
+                                                    diagnostics=gating_diag,
+                                                )
+                                                self._history.append_user_text(instruction)
+                                                continue
+                                    except Exception:
+                                        logging.getLogger(__name__).warning(
+                                            "Dependent import check failed non-fatally",
+                                            exc_info=True,
+                                        )
                             else:
                                 # Auto-py_compile failed — feed diagnostics back for repair
                                 for path in product_paths:
@@ -1221,6 +1270,40 @@ class ConversationManager:
                 tool_call_id="auto_import_check",
                 name="run_terminal_command",
                 ok=False,
+                result=content,
+            )
+        )
+
+    def _emit_auto_dependent_import_info(
+        self,
+        *,
+        paths: list[str],
+        diagnostics: str,
+        on_event: EventCallback,
+    ) -> None:
+        product_paths = [
+            _normalize_worker_path(path)
+            for path in paths
+            if not _is_validation_scratch_path(path)
+        ]
+        if not product_paths:
+            return
+        python_exe = quote_command_arg(preferred_python_for_compile(Path(self._tools.workspace_root)))
+        command = python_exe + " -c \"import <module>\"  # import verification"
+        payload = {
+            "ok": True,
+            "command": command,
+            "exit_code": 0,
+            "output": diagnostics,
+            "auto_validation": True,
+            "verification_rung": "dependent_import_info",
+        }
+        content = json.dumps(payload, ensure_ascii=False)
+        on_event(
+            ToolResult(
+                tool_call_id="auto_dependent_import_info",
+                name="run_terminal_command",
+                ok=True,
                 result=content,
             )
         )
