@@ -78,6 +78,7 @@ class WorkerDispatchRequest:
     spec: str
     acceptance: str
     summary: str = ""
+    run_command: str = ""
     target_regions: list[dict[str, Any]] = field(default_factory=list)
     allowed_responsibilities: list[str] = field(default_factory=list)
     forbidden_responsibilities: list[str] = field(default_factory=list)
@@ -100,8 +101,8 @@ class WorkerDispatchRequest:
             "spec": self.spec,
             "acceptance": self.acceptance,
             "summary": self.summary,
-            "allowed_responsibilities": list(self.allowed_responsibilities),
-            "forbidden_responsibilities": list(self.forbidden_responsibilities),
+            "run_command": self.run_command,
+            "allowed_responsibilities": list(self.allowed_responsibilities),            "forbidden_responsibilities": list(self.forbidden_responsibilities),
             "required_outputs": list(self.required_outputs),
             "validation_commands": list(self.validation_commands),
             "risk_notes": list(self.risk_notes),
@@ -133,8 +134,8 @@ class WorkerDispatchRequest:
             spec=str(data.get("spec", "")),
             acceptance=str(data.get("acceptance", "")),
             summary=str(data.get("summary", "")),
-            allowed_responsibilities=_string_list(data.get("allowed_responsibilities")),
-            forbidden_responsibilities=_string_list(data.get("forbidden_responsibilities")),
+            run_command=str(data.get("run_command", "")),
+            allowed_responsibilities=_string_list(data.get("allowed_responsibilities")),            forbidden_responsibilities=_string_list(data.get("forbidden_responsibilities")),
             required_outputs=_string_list(data.get("required_outputs")),
             validation_commands=_string_list(data.get("validation_commands")),
             risk_notes=_string_list(data.get("risk_notes")),
@@ -342,6 +343,7 @@ class WorkerTaskSpec:
     summary: str = ""
     builder_note: str = ""
     acceptance: str = ""
+    run_command: str = ""
     allowed_responsibilities: list[str] = field(default_factory=list)
     forbidden_responsibilities: list[str] = field(default_factory=list)
     required_outputs: list[str] = field(default_factory=list)
@@ -360,6 +362,7 @@ class WorkerTaskSpec:
             "summary": self.summary,
             "builder_note": self.builder_note,
             "acceptance": self.acceptance,
+            "run_command": self.run_command,
             "allowed_responsibilities": list(self.allowed_responsibilities),
             "forbidden_responsibilities": list(self.forbidden_responsibilities),
             "required_outputs": list(self.required_outputs),
@@ -421,6 +424,7 @@ class WorkerTaskSpec:
             summary=str(data.get("summary", "")),
             builder_note=str(data.get("builder_note", "")),
             acceptance=str(data.get("acceptance", "")),
+            run_command=str(data.get("run_command", "")),
             allowed_responsibilities=_str_list("allowed_responsibilities"),
             forbidden_responsibilities=_str_list("forbidden_responsibilities"),
             required_outputs=_str_list("required_outputs"),
@@ -628,6 +632,7 @@ def normalize_worker_task(req: WorkerDispatchRequest) -> WorkerTaskSpec:
         forbidden_responsibilities=list(req.forbidden_responsibilities),
         required_outputs=list(req.required_outputs),
         risk_notes=list(req.risk_notes),
+        run_command=req.run_command,
         contract=contract,
         project_profile=None,
         task_shape=task_shape,

@@ -413,6 +413,12 @@ class WorkerEventHandler(QObject):
                 WorkflowStatus.validating,
                 pending_user_action="",
             )
+        elif name == "run_and_watch":
+            self._transition_active_workflow(
+                tool_call_id,
+                WorkflowStatus.validating,
+                pending_user_action="",
+            )
 
     def _on_worker_tool_args(
         self, tool_call_id: str, worker_tool_id: str, fragment: str

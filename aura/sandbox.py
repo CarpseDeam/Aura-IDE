@@ -41,6 +41,58 @@ class SandboxResult:
     exit_code: int
 
 
+@dataclass(frozen=True)
+class WatchResult:
+    """Result of a run-and-watch cycle."""
+    ok: bool
+    survived_window: bool
+    exited_early: bool
+    error_detected: bool
+    exit_code: int | None
+    output: str
+
+
+def _has_traceback(output: str) -> bool:
+    return "Traceback (most recent call last):" in output
+
+
+def classify_watch_outcome(
+    still_running: bool,
+    exit_code: int | None,
+    output: str,
+    window_seconds: int,
+) -> WatchResult:
+    error_detected = _has_traceback(output)
+
+    if still_running:
+        if error_detected:
+            return WatchResult(
+                ok=False, survived_window=True, exited_early=False,
+                error_detected=True, exit_code=None, output=output,
+            )
+        return WatchResult(
+            ok=True, survived_window=True, exited_early=False,
+            error_detected=False, exit_code=None, output=output,
+        )
+
+    if error_detected:
+        return WatchResult(
+            ok=False, survived_window=False, exited_early=True,
+            error_detected=True, exit_code=exit_code, output=output,
+        )
+
+    if exit_code == 0:
+        return WatchResult(
+            ok=True, survived_window=False, exited_early=True,
+            error_detected=False, exit_code=exit_code, output=output,
+        )
+
+    return WatchResult(
+        ok=False, survived_window=False, exited_early=True,
+        error_detected=False, exit_code=exit_code, output=output,
+    )
+
+
 class SandboxExecutor:
     """Executes code/commands in a configurable sandbox.
 
@@ -50,8 +102,7 @@ class SandboxExecutor:
         "wasm" — stub (NotImplementedError).
     """
 
-    def __init__(
-        self,
+    def __init__(        self,
         mode: SandboxMode = "host",
         workspace_root: Path | None = None,
         network_enabled: bool = True,
@@ -151,6 +202,75 @@ class SandboxExecutor:
                 stdout="",
                 stderr="WASM sandbox is not yet implemented. Use 'docker' or 'host' mode.",
                 exit_code=-1,
+            )
+
+    def run_and_watch(
+        self,
+        command: str,
+        window_seconds: int = 10,
+        cancel_event: Any = None,
+        on_output: Any = None,
+    ) -> WatchResult:
+        """Run a command in host mode and watch it for a time window.
+
+        The process is allowed to run for up to window_seconds. If it is
+        still running after the window, it is killed and the result reports
+        survived_window=True. If it exits early, the result reports
+        exited_early=True with the exit code.
+        """
+        from aura.config import get_subprocess_kwargs
+
+        popen_kwargs: dict[str, Any] = {
+            "shell": True,
+            "cwd": str(self._workspace_root),
+            "stdin": None,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.STDOUT,
+            "text": True,
+            "encoding": "utf-8",
+            "bufsize": 1,
+        }
+        extra = get_subprocess_kwargs()
+        popen_kwargs.update(extra)
+
+        try:
+            proc = subprocess.Popen(command, **popen_kwargs)
+            # Close stdin immediately — safe no-op when stdin is None
+            if proc.stdin:
+                proc.stdin.close()
+
+            result = self._stream_subprocess_output(
+                proc,
+                timeout=window_seconds,
+                cancel_event=cancel_event,
+                on_output=on_output,
+                timeout_is_success=True,
+            )
+
+            if result.ok and result.exit_code == -1:
+                return classify_watch_outcome(
+                    still_running=True,
+                    exit_code=None,
+                    output=result.stdout,
+                    window_seconds=window_seconds,
+                )
+
+            return classify_watch_outcome(
+                still_running=False,
+                exit_code=result.exit_code,
+                output=result.stdout,
+                window_seconds=window_seconds,
+            )
+
+        except Exception as exc:
+            output = f"\n[ERROR: {type(exc).__name__}: {exc}]\n"
+            if on_output is not None:
+                on_output(output)
+            return classify_watch_outcome(
+                still_running=False,
+                exit_code=-1,
+                output=output,
+                window_seconds=window_seconds,
             )
 
     @staticmethod
@@ -502,6 +622,8 @@ class SandboxExecutor:
         timeout: int,
         cancel_event: Any = None,
         on_output: Any = None,
+        *,
+        timeout_is_success: bool = False,
     ) -> SandboxResult:
         """Stream process output while enforcing cancellation and timeouts."""
         assert proc.stdout is not None
@@ -565,8 +687,18 @@ class SandboxExecutor:
             now = time.monotonic()
             if now >= deadline and proc.poll() is None:
                 self._stop_process(proc)
-                emit(f"\n[ERROR: Command timed out after {timeout} seconds]\n")
+                if timeout_is_success:
+                    emit(f"\n[watch window elapsed: {timeout}s]\n")
+                else:
+                    emit(f"\n[ERROR: Command timed out after {timeout} seconds]\n")
                 self._drain_output_queue(output_queue, emit)
+                if timeout_is_success:
+                    return SandboxResult(
+                        ok=True,
+                        stdout="".join(output_lines),
+                        stderr="",
+                        exit_code=-1,
+                    )
                 return SandboxResult(
                     ok=False,
                     stdout="".join(output_lines),

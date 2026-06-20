@@ -620,7 +620,7 @@ class ChatView(QScrollArea):
 
             else:
                 controller.finalize(ok, result_text)
-                if controller.tool_name == "run_terminal_command":
+                if controller.tool_name == "run_terminal_command" or controller.tool_name == "run_and_watch":
                     self._terminal_cards.pop(tool_call_id, None)
 
             self._scroll_to_bottom()

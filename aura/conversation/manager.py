@@ -240,6 +240,7 @@ class ConversationManager:
         max_tool_rounds: int | None = None,
         hook_name: str = 'generate_planner_code',
         explicit_validation_commands: list[str] | None = None,
+        declared_run_command: str | None = None,
     ) -> None:
         """Run the model -> tool -> model loop until the model stops calling tools.
 
@@ -726,6 +727,20 @@ class ConversationManager:
                     if ok:
                         _terminal_dispatch = True
                     return {"id": tool_call_id, "skip": True}
+
+                if name == "run_and_watch":
+                    loop_info = self._tool_runner.handle_run_and_watch(
+                        tool_call_id=tool_call_id,
+                        args=args,
+                        on_event=on_event,
+                        cancel_event=cancel_event,
+                        declared_run_command=declared_run_command or "",
+                    )
+                    return {
+                        "id": tool_call_id,
+                        "skip": True,
+                        "completed_tool_result_for_final": terminal_result_completed(loop_info),
+                    }
 
                 if name == "run_terminal_command":
                     loop_info = self._tool_runner.handle_terminal_command(

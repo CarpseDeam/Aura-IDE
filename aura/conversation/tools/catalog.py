@@ -13,6 +13,7 @@ from aura.conversation.tools._schemas import (
     READ_TOOL_DEFS,
     REGISTER_DRONE_FOLDER_TOOL_DEF,
     RESEARCH_TOOL_DEFS,
+    RUN_AND_WATCH_TOOL_DEF,
     RUN_READ_ONLY_DRONE_TOOL_DEF,
     SUMMON_DRONE_TOOL_DEF,
     TERMINAL_TOOL_DEF,
@@ -110,6 +111,7 @@ class ToolCatalog:
                 + worker_write_tools
                 + [dict(WORKER_TODO_TOOL_DEF)]
                 + [dict(TERMINAL_TOOL_DEF)]
+                + [dict(RUN_AND_WATCH_TOOL_DEF)]
                 + list(GIT_TOOL_DEFS)
                 + list(RESEARCH_TOOL_DEFS)
                 + [dict(LAUNCH_READ_ONLY_DRONE_TOOL_DEF)]
@@ -122,6 +124,7 @@ class ToolCatalog:
                 list(READ_TOOL_DEFS)
                 + list(WRITE_TOOL_DEFS)
                 + [dict(TERMINAL_TOOL_DEF)]
+                + [dict(RUN_AND_WATCH_TOOL_DEF)]
                 + list(GIT_TOOL_DEFS)
                 + list(RESEARCH_TOOL_DEFS)
                 + [dict(DIAGNOSTIC_TOOL_DEF)]

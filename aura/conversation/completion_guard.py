@@ -26,6 +26,7 @@ COMPLETION_PHRASE_MARKERS = (
 )
 
 TASK_COMPLETION_TOOL_NAMES = {
+    "run_and_watch",
     "run_terminal_command",
     "run_diagnostic_command",
     "git_status",

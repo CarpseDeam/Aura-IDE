@@ -176,6 +176,23 @@ class WorkflowState:
                 else:
                     state = state.with_status(WorkflowStatus.validating)
 
+        if name == "run_and_watch" and isinstance(parsed, dict):
+            command = str(parsed.get("command") or "")
+            if command:
+                state = state.with_validation_run(
+                    command,
+                    ok=bool(parsed.get("ok")) if "ok" in parsed else ok,
+                    exit_code=_int_or_none(parsed.get("exit_code")),
+                )
+                if state.validation_status in {ValidationStatus.failed, ValidationStatus.mixed}:
+                    state = state.with_status(
+                        WorkflowStatus.blocked,
+                        blocker_reason=f"Validation failed: {command}",
+                        follow_up_required=True,
+                    )
+                else:
+                    state = state.with_status(WorkflowStatus.validating)
+
         return state
 
     def finish(

@@ -17,7 +17,7 @@ WRITE_TOOLS = {
     "delete_file",
     "patch_file",
 }
-TERMINAL_TOOLS = {"run_terminal_command"}
+TERMINAL_TOOLS = {"run_terminal_command", "run_and_watch"}
 DISPATCH_TOOLS = {"dispatch_to_worker"}
 RESEARCH_TOOLS = {"run_research"}
 PLANNER_CONTEXT_TOOLS = {

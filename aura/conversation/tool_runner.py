@@ -39,7 +39,7 @@ from aura.project_env import (
     build_project_command_rewrite,
     project_environment_missing_payload,
 )
-from aura.sandbox import SandboxExecutor, SandboxResult
+from aura.sandbox import SandboxExecutor, SandboxResult, WatchResult
 
 DEFAULT_TERMINAL_TIMEOUT_SECONDS = 45
 DEFAULT_PY_COMPILE_TIMEOUT_SECONDS = 30
@@ -454,6 +454,87 @@ class ToolRunner:
             loop_info = {}
         loop_info["_terminal_payload"] = payload_dict
         return loop_info
+
+    def handle_run_and_watch(
+        self,
+        tool_call_id: str,
+        args: dict[str, Any],
+        on_event: Any,
+        cancel_event: threading.Event,
+        declared_run_command: str,
+    ) -> dict[str, Any]:
+        # If no declared command, return clean informational result
+        if not declared_run_command or not declared_run_command.strip():
+            payload_dict = {
+                "ok": False,
+                "error": "no run command declared for this task",
+                "command": "",
+            }
+            payload = json.dumps(payload_dict, ensure_ascii=False)
+            self._history.append_tool_result(tool_call_id, payload)
+            on_event(ToolCallStart(index=0, id=tool_call_id, name="run_and_watch"))
+            on_event(ToolResult(
+                tool_call_id=tool_call_id,
+                name="run_and_watch",
+                ok=False,
+                result=payload,
+            ))
+            return {"_terminal_payload": payload_dict}
+
+        # Parse optional window_seconds from args
+        window_seconds = 10
+        raw_window = args.get("window_seconds")
+        if raw_window is not None:
+            try:
+                window_seconds = max(1, min(int(raw_window), 60))
+            except (TypeError, ValueError):
+                pass
+
+        # Emit ToolCallStart
+        on_event(ToolCallStart(index=0, id=tool_call_id, name="run_and_watch"))
+
+        settings = load_settings()
+        sandbox = SandboxExecutor(
+            mode="host",  # run_and_watch always runs in host mode for now
+            workspace_root=self._workspace_root,
+            network_enabled=True,
+        )
+
+        output_lines: list[str] = []
+
+        def on_output_chunk(text: str) -> None:
+            output_lines.append(text)
+            on_event(TerminalOutput(tool_call_id=tool_call_id, text=text))
+
+        result: WatchResult = sandbox.run_and_watch(
+            command=declared_run_command,
+            window_seconds=window_seconds,
+            cancel_event=cancel_event,
+            on_output=on_output_chunk,
+        )
+
+        full_output = result.output
+
+        payload_dict = {
+            "ok": result.ok,
+            "survived_window": result.survived_window,
+            "exited_early": result.exited_early,
+            "error_detected": result.error_detected,
+            "exit_code": result.exit_code,
+            "output": full_output,
+            "command": declared_run_command,
+        }
+        payload = json.dumps(payload_dict, ensure_ascii=False)
+
+        self._history.append_tool_result(tool_call_id, payload)
+        on_event(ToolResult(
+            tool_call_id=tool_call_id,
+            name="run_and_watch",
+            ok=result.ok,
+            result=payload,
+        ))
+
+        return {"_terminal_payload": payload_dict}
 
     def _resolve_terminal_timeout(
         self,

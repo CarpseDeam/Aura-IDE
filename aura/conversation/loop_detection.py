@@ -123,6 +123,8 @@ def _tool_key(tool_name: str, args: dict[str, Any]) -> str:
     if tool_name == "run_terminal_command":
         command = args.get("command", "")
         return f"terminal:{command}"
+    if tool_name == "run_and_watch":
+        return f"run_and_watch:{args.get('window_seconds', 10)}"
     return f"{tool_name}:{args_json}"
 
 

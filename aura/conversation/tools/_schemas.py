@@ -581,6 +581,16 @@ DISPATCH_TOOL_DEF: dict[str, Any] = {
                         "(e.g. ['Modified aura/config.py', 'Working CLI entry point'])."
                     ),
                 },
+                "run_command": {
+                    "type": "string",
+                    "description": (
+                        "An exact shell command to run after the worker completes changes, "
+                        "used with the run_and_watch tool. The worker will be able to observe "
+                        "the command's startup behavior. This is a declared contract intent — "
+                        "the worker cannot choose or override this command. Leave empty if "
+                        "no run-and-watch is needed."
+                    ),
+                },
                 "validation_commands": {
                     "type": "array",
                     "items": {"type": "string"},
@@ -1034,6 +1044,36 @@ TERMINAL_TOOL_DEF: dict[str, Any] = {
     },
 }
 
+RUN_AND_WATCH_TOOL_DEF: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "run_and_watch",
+        "description": (
+            "Run the task\'s declared run command and watch it for a startup "
+            "window. A clean survival of the window (no crash, still running) "
+            "is success. A crash (Traceback in output) is failure. "
+            "This tool takes NO command parameter — the command is fixed by "
+            "the task contract (dispatch_to_worker run_command field). "
+            "If no run command was declared for this task, it returns an "
+            "informational no-op result without running anything."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "window_seconds": {
+                    "type": "integer",
+                    "description": (
+                        "How many seconds to watch the process. Default: 10. "
+                        "Maximum: 60."
+                    ),
+                    "default": 10,
+                },
+            },
+            "required": [],
+        },
+    },
+}
+
 DIAGNOSTIC_TOOL_DEF: dict[str, Any] = {
     "type": "function",
     "function": {
@@ -1052,9 +1092,8 @@ DIAGNOSTIC_TOOL_DEF: dict[str, Any] = {
             "properties": {
                 "command": {
                     "type": "string",
-                        "description": (
-                            "A read-only diagnostic command. Examples: "
-                            "'python -m py_compile aura/gui/left_pane.py', "
+                    "description": (
+                        "A read-only diagnostic command."                            "'python -m py_compile aura/gui/left_pane.py', "
                             "'git status', 'git diff', "
                             "'npm test', 'cargo test', "
                             "'rg \"class LeftPane\" aura/', "

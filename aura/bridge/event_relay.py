@@ -281,8 +281,26 @@ class WorkerEventRelay(QObject):
                 self.terminal_results.append(record)
                 if _is_validation_terminal_record(record):
                     self.validation_results.append(record)
-        elif isinstance(ev, TerminalOutput):
-            self.terminalOutput.emit(tool_call_id, ev.tool_call_id, ev.text)
+
+            if (
+                ev.name == "run_and_watch"
+                and isinstance(parsed, dict)
+                and "command" in parsed
+                and "exit_code" in parsed
+                and "ok" in parsed
+            ):
+                output = str(parsed.get("output") or "")
+                record = {
+                    "command": parsed.get("command", ""),
+                    "ok": parsed.get("ok", False),
+                    "exit_code": parsed.get("exit_code", -1),
+                    "output": output[:TERMINAL_OUTPUT_CAPTURE_CHARS],
+                    "output_preview": output[:TERMINAL_OUTPUT_PREVIEW_CHARS],
+                }
+                self.terminal_results.append(record)
+                if _is_validation_terminal_record(record):
+                    self.validation_results.append(record)
+        elif isinstance(ev, TerminalOutput):            self.terminalOutput.emit(tool_call_id, ev.tool_call_id, ev.text)
         elif isinstance(ev, AgentProcessStarted):
             self.agentProcessStarted.emit(
                 tool_call_id, ev.process_id, ev.label, ev.command

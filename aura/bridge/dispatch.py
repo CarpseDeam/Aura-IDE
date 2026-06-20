@@ -364,6 +364,7 @@ class _DispatchProxy(QObject):
                 hook_name='generate_worker_code',
                 max_tool_rounds=self._max_tool_rounds,
                 explicit_validation_commands=task_spec.validation_commands,
+                declared_run_command=task_spec.run_command,
             )
         except Exception as exc:
             from aura.config import redact_secrets
