@@ -64,13 +64,13 @@ def run_focused_import_check(
         output = result.stdout + result.stderr
         if result.returncode == 0:
             outputs.append(f"{path} \u2192 {module}: imported ok")
+        elif _is_import_error(output):
+            found_real_failure = True
+            outputs.append(f"{path} \u2192 {module}: IMPORT FAILED\n{output}")
         elif _is_shell_failure(output):
             outputs.append(
                 f"{path} \u2192 {module}: infrastructure error (check could not run)\n{output}"
             )
-        elif _is_import_error(output):
-            found_real_failure = True
-            outputs.append(f"{path} \u2192 {module}: IMPORT FAILED\n{output}")
         else:
             found_real_failure = True
             outputs.append(f"{path} \u2192 {module}: FAILED\n{output}")

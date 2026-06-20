@@ -576,6 +576,9 @@ class ConversationManager:
                                     )
                                     self._history.append_user_text(instruction)
                                     continue
+                                else:
+                                    for path in product_paths:
+                                        import_verification_required.discard(path)
                             else:
                                 # Auto-py_compile failed — feed diagnostics back for repair
                                 for path in product_paths:
