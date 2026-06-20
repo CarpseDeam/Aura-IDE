@@ -541,6 +541,7 @@ class AuraPage(QWidget):
                     self._balance_thread.quit()
                     if not self._balance_thread.wait(5000):
                         logger.warning("Balance thread did not stop cleanly")
+                        self._balance_thread.wait()
             except RuntimeError:
                 pass
             self._balance_thread = None
@@ -554,6 +555,7 @@ class AuraPage(QWidget):
                     thread.quit()
                     if not thread.wait(5000):
                         logger.warning("Credit thread did not stop cleanly")
+                        thread.wait()
             except RuntimeError:
                 pass
         self._credit_threads.clear()

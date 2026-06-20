@@ -20,7 +20,7 @@ class CreditsCheckoutWorker(QObject):
     def run(self):
         try:
             url = self._base_url.rstrip("/") + "/credits/checkout"
-            logger.info("Checkout POST to %s with email=%s pack_id=%s", url, self._email, self._pack_id)
+            logger.info("Checkout POST to %s pack_id=%s", url, self._pack_id)
             resp = httpx.post(
                 url,
                 json={"email": self._email, "pack_id": self._pack_id},
