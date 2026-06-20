@@ -68,7 +68,13 @@ from aura.conversation.tools._types import (
     ApprovalRequest,
 )
 from aura.conversation.tools.registry import ToolRegistry
-from aura.conversation.planner_refresh import PlannerRefreshState, stale_read_notice
+from aura.conversation.planner_refresh import PlannerRefreshState
+from aura.conversation.worker_validation import (
+    emit_auto_dependent_import_info,
+    emit_auto_import_result,
+    emit_auto_py_compile_result,
+    run_focused_py_compile,
+)
 from aura.dependency_context import compute_dependents
 from aura.hooks import hooks
 from aura.project_env import preferred_python_for_compile, quote_command_arg
@@ -513,12 +519,16 @@ class ConversationManager:
                             if not _is_validation_scratch_path(path)
                         )
                         if product_paths:
-                            all_ok, diagnostics = self._run_focused_py_compile(product_paths)
-                            self._emit_auto_py_compile_result(
+                            all_ok, diagnostics = run_focused_py_compile(
+                                product_paths,
+                                workspace_root=self._tools.workspace_root,
+                            )
+                            emit_auto_py_compile_result(
                                 paths=product_paths,
                                 ok=all_ok,
                                 diagnostics=diagnostics,
                                 on_event=on_event,
+                                workspace_root=self._tools.workspace_root,
                             )
                             if all_ok:
                                 syntax_validation_required.clear()
@@ -530,10 +540,11 @@ class ConversationManager:
                                 if not import_ok:
                                     for path in product_paths:
                                         import_verification_required.add(path)
-                                    self._emit_auto_import_result(
+                                    emit_auto_import_result(
                                         paths=product_paths,
                                         diagnostics=import_diag,
                                         on_event=on_event,
+                                        workspace_root=self._tools.workspace_root,
                                     )
                                     instruction = WORKER_IMPORT_FAILURE_INSTRUCTION.format(
                                         diagnostics=import_diag,
@@ -557,18 +568,20 @@ class ConversationManager:
                                                 deps,
                                             )
                                             if info_diag:
-                                                self._emit_auto_dependent_import_info(
+                                                emit_auto_dependent_import_info(
                                                     paths=deps,
                                                     diagnostics=info_diag,
                                                     on_event=on_event,
+                                                    workspace_root=self._tools.workspace_root,
                                                 )
                                             if gating_paths:
                                                 for path in product_paths:
                                                     import_verification_required.add(path)
-                                                self._emit_auto_import_result(
+                                                emit_auto_import_result(
                                                     paths=gating_paths,
                                                     diagnostics=gating_diag,
                                                     on_event=on_event,
+                                                    workspace_root=self._tools.workspace_root,
                                                 )
                                                 instruction = WORKER_DEPENDENT_CONTRACT_INSTRUCTION.format(
                                                     edited_files=", ".join(product_paths),
@@ -1034,160 +1047,6 @@ class ConversationManager:
             if key in record:
                 details[key] = record[key]
         return details
-
-    def _run_focused_py_compile(
-        self,
-        paths: list[str],
-    ) -> tuple[bool, str]:
-        """Run python -m py_compile on each touched product Python file.
-
-        Returns (all_succeeded, combined_output).
-        Uses sys.executable, cwd=workspace root, timeout=30s.
-        Normalizes paths safely (backslash/slash, strip leading "./").
-        Preserves dot-prefixed directories like .aura.
-        """
-        if not paths:
-            return True, ""
-        workspace_root = self._tools.workspace_root
-        python_exe = str(preferred_python_for_compile(Path(workspace_root)))
-        outputs: list[str] = []
-        all_ok = True
-        for path in sorted(paths):
-            normalized = _normalize_worker_path(path)
-            if _is_validation_scratch_path(normalized):
-                continue
-            full_path = Path(workspace_root) / normalized
-            if not full_path.exists():
-                outputs.append(f"{normalized}: file not found — cannot py_compile")
-                all_ok = False
-                continue
-            try:
-                result = subprocess.run(
-                    [python_exe, "-m", "py_compile", str(full_path)],
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                    cwd=workspace_root,
-                )
-                if result.returncode != 0:
-                    all_ok = False
-                    err = result.stderr.strip() or result.stdout.strip() or "py_compile failed"
-                    outputs.append(f"{normalized}: {err}")
-                else:
-                    outputs.append(f"{normalized}: ok")
-            except subprocess.TimeoutExpired:
-                all_ok = False
-                outputs.append(f"{normalized}: timed out after 30s")
-            except FileNotFoundError:
-                all_ok = False
-                outputs.append(f"{normalized}: project Python interpreter not found")
-            except OSError as exc:
-                all_ok = False
-                outputs.append(f"{normalized}: OSError: {exc}")
-        combined = "\n".join(outputs)
-        return all_ok, combined
-
-    def _emit_auto_py_compile_result(
-        self,
-        *,
-        paths: list[str],
-        ok: bool,
-        diagnostics: str,
-        on_event: EventCallback,
-    ) -> None:
-        product_paths = [
-            _normalize_worker_path(path)
-            for path in paths
-            if not _is_validation_scratch_path(path)
-        ]
-        if not product_paths:
-            return
-        python_exe = quote_command_arg(preferred_python_for_compile(Path(self._tools.workspace_root)))
-        command = python_exe + " -m py_compile " + " ".join(product_paths)
-        payload = {
-            "ok": ok,
-            "command": command,
-            "exit_code": 0 if ok else 1,
-            "output": diagnostics,
-            "auto_validation": True,
-        }
-        content = json.dumps(payload, ensure_ascii=False)
-        on_event(
-            ToolResult(
-                tool_call_id="auto_py_compile",
-                name="run_terminal_command",
-                ok=ok,
-                result=content,
-            )
-        )
-
-    def _emit_auto_import_result(
-        self,
-        *,
-        paths: list[str],
-        diagnostics: str,
-        on_event: EventCallback,
-    ) -> None:
-        product_paths = [
-            _normalize_worker_path(path)
-            for path in paths
-            if not _is_validation_scratch_path(path)
-        ]
-        if not product_paths:
-            return
-        python_exe = quote_command_arg(preferred_python_for_compile(Path(self._tools.workspace_root)))
-        command = python_exe + " -c \"import <module>\"  # import verification"
-        payload = {
-            "ok": False,
-            "command": command,
-            "exit_code": 1,
-            "output": diagnostics,
-            "auto_validation": True,
-            "verification_rung": "import",
-        }
-        content = json.dumps(payload, ensure_ascii=False)
-        on_event(
-            ToolResult(
-                tool_call_id="auto_import_check",
-                name="run_terminal_command",
-                ok=False,
-                result=content,
-            )
-        )
-
-    def _emit_auto_dependent_import_info(
-        self,
-        *,
-        paths: list[str],
-        diagnostics: str,
-        on_event: EventCallback,
-    ) -> None:
-        product_paths = [
-            _normalize_worker_path(path)
-            for path in paths
-            if not _is_validation_scratch_path(path)
-        ]
-        if not product_paths:
-            return
-        python_exe = quote_command_arg(preferred_python_for_compile(Path(self._tools.workspace_root)))
-        command = python_exe + " -c \"import <module>\"  # import verification"
-        payload = {
-            "ok": True,
-            "command": command,
-            "exit_code": 0,
-            "output": diagnostics,
-            "auto_validation": True,
-            "verification_rung": "dependent_import_info",
-        }
-        content = json.dumps(payload, ensure_ascii=False)
-        on_event(
-            ToolResult(
-                tool_call_id="auto_dependent_import_info",
-                name="run_terminal_command",
-                ok=True,
-                result=content,
-            )
-        )
 
     def _worker_recovery_block(
         self,
