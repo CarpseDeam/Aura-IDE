@@ -54,6 +54,13 @@ from aura.conversation.tool_limits import (
     ToolLimitState,
     limit_reached_payload,
 )
+from aura.conversation.completion_guard import (
+    assistant_message_text,
+    is_completed_worker_result,
+    is_repetitive_completion_final,
+    terminal_result_completed,
+    tool_result_completes_action,
+)
 from aura.conversation.tool_runner import ToolRunner
 from aura.conversation.tools._types import (
     ApprovalCallback,
@@ -87,27 +94,9 @@ EDIT_TRANSACTION_FAILURE_CLASSES = {
     "edit_transaction_not_applicable",
 }
 
-COMPLETION_PHRASE_MARKERS = (
-    "all set",
-    "staged and ready",
-    "ready for you",
-    "let me know",
-    "if you need anything else",
-    "committed and done",
-    "everything else is in good shape",
-    "when you want to commit",
-    "no further action needed",
-)
 
-TASK_COMPLETION_TOOL_NAMES = {
-    "run_terminal_command",
-    "run_diagnostic_command",
-    "git_status",
-    "git_diff",
-    "git_log",
-    "git_show",
-    "git_log_file",
-}
+
+
 
 WORKER_RECOVERY_ALWAYS_ALLOWED = {
     "read_file",
@@ -130,7 +119,7 @@ WORKER_RECOVERY_ALWAYS_ALLOWED = {
 
 SYNTAX_REPAIR_ALWAYS_ALLOWED = WORKER_RECOVERY_ALWAYS_ALLOWED
 
-ACTION_COMPLETION_TOOL_NAMES = TASK_COMPLETION_TOOL_NAMES | WRITE_TOOLS
+
 
 WORKER_EDIT_RECOVERY_INSTRUCTION = (
     "Previous edit failed recoverably. Re-read the affected file with read_file or read_file_range, "
@@ -356,9 +345,9 @@ class ConversationManager:
                 and mode in {"planner", "single"}
                 and task_completion_context
             ):
-                content_text = self._assistant_message_text(full_message)
+                content_text = assistant_message_text(full_message)
                 if final_messages_after_completion >= 1:
-                    if self._is_repetitive_completion_final(
+                    if is_repetitive_completion_final(
                         content_text,
                         last_completion_final_text,
                     ):
@@ -710,7 +699,7 @@ class ConversationManager:
                     return {
                         "id": tool_call_id,
                         "skip": True,
-                        "completed_dispatch_for_final": self._is_completed_worker_result(result),
+                        "completed_dispatch_for_final": is_completed_worker_result(result),
                         "planner_stale_read_files": (
                             list(result.modified_files) if result and result.modified_files else []
                         ),
@@ -751,7 +740,7 @@ class ConversationManager:
                     return {
                         "id": tool_call_id,
                         "skip": True,
-                        "completed_tool_result_for_final": self._terminal_result_completed(loop_info),
+                        "completed_tool_result_for_final": terminal_result_completed(loop_info),
                     }
 
                 if reject_all_for_turn and name in WRITE_TOOLS:
@@ -829,7 +818,7 @@ class ConversationManager:
                     ),
                     "completed_tool_result_for_final": (
                         mode in {"planner", "single"}
-                        and self._tool_result_completes_action(name, exec_result.ok)
+                        and tool_result_completes_action(name, exec_result.ok)
                     ),
                 }
 
@@ -922,68 +911,7 @@ class ConversationManager:
             if _terminal_dispatch:
                 return
 
-    @staticmethod
-    def _assistant_message_text(message: dict[str, Any]) -> str:
-        content = message.get("content")
-        if isinstance(content, str):
-            return content
-        if isinstance(content, list):
-            parts: list[str] = []
-            for item in content:
-                if isinstance(item, dict) and isinstance(item.get("text"), str):
-                    parts.append(item["text"])
-            return "\n".join(parts)
-        return ""
 
-    @staticmethod
-    def _is_completed_worker_result(result: WorkerDispatchResult | None) -> bool:
-        if result is None or result.cancelled:
-            return False
-        if result.needs_followup or result.recoverable or result.phase_boundary:
-            return False
-        status = infer_outcome_status(result)
-        return status in {
-            WorkerOutcomeStatus.completed.value,
-            WorkerOutcomeStatus.completed_with_caveats.value,
-        }
-
-    @staticmethod
-    def _terminal_result_completed(info: dict[str, Any] | None) -> bool:
-        payload = info.get("_terminal_payload") if isinstance(info, dict) else None
-        return isinstance(payload, dict) and payload.get("ok") is True
-
-    @staticmethod
-    def _tool_result_completes_action(name: str, ok: bool) -> bool:
-        return ok and name in ACTION_COMPLETION_TOOL_NAMES
-
-    @staticmethod
-    def _completion_phrase_hits(text: str) -> set[str]:
-        lowered = " ".join(str(text or "").lower().split())
-        return {
-            marker
-            for marker in COMPLETION_PHRASE_MARKERS
-            if marker in lowered
-        }
-
-    @classmethod
-    def _is_completion_style_message(cls, text: str) -> bool:
-        return bool(cls._completion_phrase_hits(text))
-
-    @classmethod
-    def _is_repetitive_completion_final(cls, current: str, previous: str) -> bool:
-        current_hits = cls._completion_phrase_hits(current)
-        previous_hits = cls._completion_phrase_hits(previous)
-        if current_hits and (current_hits & previous_hits):
-            return True
-        return cls._text_overlap_ratio(current, previous) >= 0.7
-
-    @staticmethod
-    def _text_overlap_ratio(left: str, right: str) -> float:
-        left_words = set(re.findall(r"[a-z0-9_]+", str(left).lower()))
-        right_words = set(re.findall(r"[a-z0-9_]+", str(right).lower()))
-        if not left_words or not right_words:
-            return 0.0
-        return len(left_words & right_words) / max(len(left_words), len(right_words))
 
     @staticmethod
     def _syntax_repair_paths(
