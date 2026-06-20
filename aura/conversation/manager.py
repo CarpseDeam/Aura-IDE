@@ -83,6 +83,14 @@ from aura.conversation.path_utils import (
     normalize_worker_path as _normalize_worker_path,
     unique_worker_paths as _unique_worker_paths,
 )
+from aura.conversation.syntax_repair_state import (
+    syntax_repair_paths,
+    syntax_repair_state_for_path,
+    set_syntax_repair_state,
+    pop_syntax_repair_state,
+    discard_syntax_validation_path,
+    has_terminal_syntax_failure,
+)
 
 EventCallback = Callable[[Event], None]
 
@@ -369,7 +377,7 @@ class ConversationManager:
 
             if not tool_calls:
                 if mode == "worker":
-                    if self._has_terminal_syntax_failure(syntax_repair_required):
+                    if has_terminal_syntax_failure(syntax_repair_required):
                         if not worker_recovery_nudge_sent:
                             diagnostic_parts = []
                             for path, state in syntax_repair_required.items():
@@ -402,7 +410,7 @@ class ConversationManager:
                         or line_range_reread_required
                     )
                     syntax_repair_pending = bool(
-                        self._syntax_repair_paths(syntax_repair_required)
+                        syntax_repair_paths(syntax_repair_required)
                     )
                     if (
                         edit_recovery_pending
@@ -451,7 +459,7 @@ class ConversationManager:
                         details: dict[str, Any] = {}
                         if syntax_repair_pending:
                             sync_paths = sorted(
-                                self._syntax_repair_paths(syntax_repair_required)
+                                syntax_repair_paths(syntax_repair_required)
                             )
                             error_parts.append(
                                 f" Syntax repair pending on: {', '.join(sync_paths)}."
@@ -561,7 +569,7 @@ class ConversationManager:
                             else:
                                 # Auto-py_compile failed — feed diagnostics back for repair
                                 for path in product_paths:
-                                    self._set_syntax_repair_state(syntax_repair_required, path, {
+                                    set_syntax_repair_state(syntax_repair_required, path, {
                                         "error": diagnostics,
                                         "failed_repairs": 0,
                                     })
@@ -887,73 +895,6 @@ class ConversationManager:
             if _terminal_dispatch:
                 return
 
-
-
-    @staticmethod
-    def _syntax_repair_paths(
-        syntax_repair_required: dict[str, dict[str, Any]],
-    ) -> set[str]:
-        return {
-            _normalize_worker_path(path)
-            for path, state in syntax_repair_required.items()
-            if not state.get("awaiting_validation")
-        }
-
-    @staticmethod
-    def _syntax_repair_state_for_path(
-        syntax_repair_required: dict[str, dict[str, Any]],
-        path: str,
-    ) -> dict[str, Any]:
-        normalized = _normalize_worker_path(path)
-        state = syntax_repair_required.get(normalized)
-        if state is not None:
-            return state
-        for existing_path, existing_state in syntax_repair_required.items():
-            if _normalize_worker_path(existing_path) == normalized:
-                return existing_state
-        return {}
-
-    @staticmethod
-    def _set_syntax_repair_state(
-        syntax_repair_required: dict[str, dict[str, Any]],
-        path: str,
-        state: dict[str, Any],
-    ) -> dict[str, Any]:
-        normalized = _normalize_worker_path(path)
-        for existing_path in list(syntax_repair_required):
-            if _normalize_worker_path(existing_path) == normalized and existing_path != normalized:
-                syntax_repair_required.pop(existing_path, None)
-        syntax_repair_required[normalized] = state
-        return state
-
-    @staticmethod
-    def _pop_syntax_repair_state(
-        syntax_repair_required: dict[str, dict[str, Any]],
-        path: str,
-    ) -> None:
-        normalized = _normalize_worker_path(path)
-        syntax_repair_required.pop(normalized, None)
-        for existing_path in list(syntax_repair_required):
-            if _normalize_worker_path(existing_path) == normalized:
-                syntax_repair_required.pop(existing_path, None)
-
-    @staticmethod
-    def _discard_syntax_validation_path(
-        syntax_validation_required: set[str],
-        path: str,
-    ) -> None:
-        normalized = _normalize_worker_path(path)
-        syntax_validation_required.discard(normalized)
-        for existing_path in set(syntax_validation_required):
-            if _normalize_worker_path(existing_path) == normalized:
-                syntax_validation_required.discard(existing_path)
-
-    @staticmethod
-    def _has_terminal_syntax_failure(
-        syntax_repair_required: dict[str, dict[str, Any]],
-    ) -> bool:
-        return any(state.get("repair_failed") for state in syntax_repair_required.values())
-
     def _finish_worker_unrecoverable(
         self,
         on_event: EventCallback,
@@ -1033,10 +974,10 @@ class ConversationManager:
         patch_failed_cycles = patch_failed_cycles if patch_failed_cycles is not None else {}
         if name in WORKER_RECOVERY_ALWAYS_ALLOWED:
             return None
-        syntax_paths = self._syntax_repair_paths(syntax_repair_required)
+        syntax_paths = syntax_repair_paths(syntax_repair_required)
         if syntax_paths and not self._syntax_repair_tool_allowed(name, args, syntax_paths):
             target = sorted(syntax_paths)[0]
-            state = self._syntax_repair_state_for_path(syntax_repair_required, target)
+            state = syntax_repair_state_for_path(syntax_repair_required, target)
             repair_failed = bool(state.get("repair_failed"))
             error_msg = (
                 f"Python syntax is invalid in {target}. "
@@ -1328,8 +1269,8 @@ class ConversationManager:
                     self._pop_normalized_recovery_key(line_range_reread_required, path)
                     self._pop_normalized_key(worker_file_state, path)
                     self._clear_patch_failed_shapes_for_path(patch_failed_cycles, path)
-                    self._pop_syntax_repair_state(syntax_repair_required, path)
-                    self._discard_syntax_validation_path(syntax_validation_required, path)
+                    pop_syntax_repair_state(syntax_repair_required, path)
+                    discard_syntax_validation_path(syntax_validation_required, path)
                     return content
 
                 self._pop_normalized_recovery_key(edit_fallback_required, path)
@@ -1338,11 +1279,11 @@ class ConversationManager:
                 self._clear_patch_failed_shapes_for_path(patch_failed_cycles, path)
                 if self._is_python_path(path) and not _is_validation_scratch_path(path):
                     syntax_validation_required.add(path)
-                state = self._syntax_repair_state_for_path(syntax_repair_required, path)
+                state = syntax_repair_state_for_path(syntax_repair_required, path)
                 if state:
                     state["repair_attempted"] = True
                     state["awaiting_validation"] = True
-                    self._set_syntax_repair_state(syntax_repair_required, path, state)
+                    set_syntax_repair_state(syntax_repair_required, path, state)
                     if not _is_validation_scratch_path(path):
                         syntax_validation_required.add(path)
             return content
@@ -1430,10 +1371,10 @@ class ConversationManager:
         elif path and failure_class == "syntax_invalid":
             parsed.setdefault("applied", False)
             parsed.setdefault("write_outcome", "not_applied_craft_rejected")
-            state = self._syntax_repair_state_for_path(syntax_repair_required, path)
+            state = syntax_repair_state_for_path(syntax_repair_required, path)
             if not state:
                 state = {"failed_repairs": 0}
-            self._set_syntax_repair_state(syntax_repair_required, path, state)
+            set_syntax_repair_state(syntax_repair_required, path, state)
             state["awaiting_validation"] = False
             if name in WRITE_TOOLS:
                 state["failed_repairs"] = int(state.get("failed_repairs", 0)) + 1
@@ -1506,31 +1447,31 @@ class ConversationManager:
             return
         if payload.get("ok"):
             for path in targets:
-                state = self._syntax_repair_state_for_path(syntax_repair_required, path)
+                state = syntax_repair_state_for_path(syntax_repair_required, path)
                 if state and state.get("awaiting_validation") is False:
                     if stale_validation_notes is not None:
                         stale_validation_notes.append(
                             "Stale validation cleared: "
                             f"py_compile passed for {path} after a prior craft-gate rejection."
                         )
-                self._pop_syntax_repair_state(syntax_repair_required, path)
-                self._discard_syntax_validation_path(syntax_validation_required, path)
+                pop_syntax_repair_state(syntax_repair_required, path)
+                discard_syntax_validation_path(syntax_validation_required, path)
             return
         # Only Python compiler syntax output should trigger syntax repair state.
         output = str(payload.get("output") or "")
         if not self._is_py_compile_error(output):
             return
         for path in targets:
-            prior = self._syntax_repair_state_for_path(syntax_repair_required, path)
+            prior = syntax_repair_state_for_path(syntax_repair_required, path)
             failed_after_repair = bool(
                 prior.get("repair_attempted") or prior.get("awaiting_validation")
             )
-            self._set_syntax_repair_state(syntax_repair_required, path, {
+            set_syntax_repair_state(syntax_repair_required, path, {
                 "error": payload.get("output", ""),
                 "failed_repairs": int(prior.get("failed_repairs", 0)) + (1 if failed_after_repair else 0),
                 "repair_failed": failed_after_repair,
             })
-            self._discard_syntax_validation_path(syntax_validation_required, path)
+            discard_syntax_validation_path(syntax_validation_required, path)
 
     @staticmethod
     def _record_reads_for_recovery(
