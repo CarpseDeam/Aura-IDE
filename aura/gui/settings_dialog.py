@@ -54,6 +54,7 @@ class SettingsDialog(QDialog):
         self._tabs = QTabWidget(self)
 
         from aura.gui.settings_pages.api_keys_page import ApiKeysPage
+        from aura.gui.settings_pages.aura_page import AuraPage
         from aura.gui.settings_pages.automation_page import AutomationPage
         from aura.gui.settings_pages.models_page import ModelsPage
         from aura.gui.settings_pages.prompts_page import PromptsPage
@@ -62,8 +63,9 @@ class SettingsDialog(QDialog):
         from aura.gui.settings_pages.vision_page import VisionPage
 
         self._models_page = ModelsPage(self._settings)
+        self._aura_page = AuraPage(self._settings)
+        self._aura_page.credits_claimed.connect(self.credits_claimed)
         self._api_keys_page = ApiKeysPage(self._settings)
-        self._api_keys_page.credits_claimed.connect(self.credits_claimed)
         self._automation_page = AutomationPage(self._settings)
         self._companion_page = CompanionPage(self._settings)
         self._vision_page = VisionPage(self._settings)
@@ -72,6 +74,7 @@ class SettingsDialog(QDialog):
 
         self._pages = [
             (self._models_page, "Models"),
+            (self._aura_page, "Aura"),
             (self._api_keys_page, "API Keys"),
             (self._automation_page, "Automation"),
             (self._companion_page, "Companion"),
@@ -101,7 +104,10 @@ class SettingsDialog(QDialog):
         self._companion_page.apply_requested.connect(self._apply_companion_settings_live)
 
         if open_api_keys_tab:
-            self._tabs.setCurrentIndex(1)
+            for i in range(self._tabs.count()):
+                if self._tabs.tabText(i) == "API Keys":
+                    self._tabs.setCurrentIndex(i)
+                    break
 
     def _apply_companion_settings_live(self) -> None:
         new_settings = self.result_settings()
@@ -140,6 +146,7 @@ class SettingsDialog(QDialog):
         """
         result = copy.deepcopy(self._settings)
         self._models_page.collect_settings(result)
+        self._aura_page.collect_settings(result)
         self._api_keys_page.collect_settings(result)
         self._automation_page.collect_settings(result)
         self._companion_page.collect_settings(result)
