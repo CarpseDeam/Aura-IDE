@@ -97,6 +97,12 @@ from aura.conversation.syntax_repair_state import (
     discard_syntax_validation_path,
     has_terminal_syntax_failure,
 )
+from aura.conversation.edit_recovery_state import (
+    edit_recovery_details,
+    default_edit_failure_class,
+    worker_file_state_for_path,
+    worker_path_is_existing_file,
+)
 
 EventCallback = Callable[[Event], None]
 
@@ -475,7 +481,7 @@ class ConversationManager:
                             error_parts.append(
                                 " Edit mechanics recovery pending."
                             )
-                            details.update(self._edit_recovery_details(
+                            details.update(edit_recovery_details(
                                 edit_fallback_required,
                                 line_range_reread_required,
                             ))
@@ -926,37 +932,6 @@ class ConversationManager:
         on_event(ContentDelta(text=content))
         on_event(Done(finish_reason="stop", full_message=full_message))
 
-    @staticmethod
-    def _edit_recovery_details(
-        edit_fallback_required: dict[str, dict[str, Any]],
-        line_range_reread_required: dict[str, dict[str, Any]],
-    ) -> dict[str, Any]:
-        pending = edit_fallback_required or line_range_reread_required
-        if not pending:
-            return {}
-        path = sorted(pending)[0]
-        record = pending[path]
-        details: dict[str, Any] = {
-            "path": path,
-            "tool": record.get("tool") or record.get("name") or "",
-            "failure_class": record.get("failure_class") or "",
-            "error": record.get("error") or "",
-        }
-        for key in (
-            "operation_index",
-            "failed_operation",
-            "reason",
-            "stale",
-            "ambiguous",
-            "not_found",
-            "candidate_count",
-            "candidates",
-            "suggested_next_tool",
-            "suggested_next_action",
-        ):
-            if key in record:
-                details[key] = record[key]
-        return details
 
     def _worker_recovery_block(
         self,
@@ -1111,7 +1086,7 @@ class ConversationManager:
             block_key = self._edit_shape_signature(name, args)
             payload = recovery_payload(
                 path=path,
-                failure_class=str(prior.get("failure_class") or self._default_edit_failure_class(name)),
+                failure_class=str(prior.get("failure_class") or default_edit_failure_class(name)),
                 error="Repeated failed edit tactic. Do not retry this edit shape. Re-read the file and use patch_file for existing-file code changes.",
                 suggested_next_tool="patch_file",
                 suggested_next_action="Use read_file/read_file_outline, then submit one patch_file with exact hunks.",
@@ -1125,7 +1100,7 @@ class ConversationManager:
             if shape in edit_failed_shapes:
                 payload = recovery_payload(
                     path=path,
-                    failure_class=self._default_edit_failure_class(name),
+                    failure_class=default_edit_failure_class(name),
                     error="Repeated failed edit tactic. Do not retry this edit shape. Re-read the file and use patch_file for existing-file code changes.",
                     suggested_next_tool="patch_file",
                     suggested_next_action="Use read_file/read_file_outline, then submit one patch_file with exact hunks.",
@@ -1144,7 +1119,7 @@ class ConversationManager:
         args: dict[str, Any],
         worker_file_state: dict[str, dict[str, Any]],
     ) -> dict[str, Any] | None:
-        if not self._worker_path_is_existing_file(path):
+        if not worker_path_is_existing_file(self._tools.workspace_root, path):
             return None
 
         expected_hash = args.get("expected_file_hash")
@@ -1166,7 +1141,7 @@ class ConversationManager:
             payload["write_outcome"] = "not_applied_edit_mechanics_blocked"
             return blocked_tool_result(tool_call_id, name, payload)
 
-        state = self._worker_file_state_for_path(worker_file_state, path)
+        state = worker_file_state_for_path(worker_file_state, path)
         known_hash = str(state.get("content_hash") or "") if state else ""
         if not state or known_hash != expected_hash or not state.get("fresh_for_patch"):
             payload = recovery_payload(
@@ -1193,36 +1168,6 @@ class ConversationManager:
                 payload["last_read_tool"] = state.get("last_read_tool")
             return blocked_tool_result(tool_call_id, name, payload)
 
-        return None
-
-    def _worker_path_is_existing_file(self, path: str) -> bool:
-        try:
-            root = Path(self._tools.workspace_root).resolve()
-            candidate = Path(str(path).lstrip("/\\"))
-            if not candidate.is_absolute():
-                candidate = root / candidate
-            resolved = candidate.resolve()
-            resolved.relative_to(root)
-            return resolved.is_file()
-        except (OSError, ValueError):
-            return False
-
-    @staticmethod
-    def _worker_file_state_for_path(
-        worker_file_state: dict[str, dict[str, Any]],
-        path: str,
-    ) -> dict[str, Any] | None:
-        normalized_candidates = {
-            _normalize_worker_path(path),
-            _normalize_worker_path(str(path).lstrip("/\\")),
-        }
-        for normalized in normalized_candidates:
-            state = worker_file_state.get(normalized)
-            if state is not None:
-                return state
-        for existing_path, existing_state in worker_file_state.items():
-            if _normalize_worker_path(existing_path) in normalized_candidates:
-                return existing_state
         return None
 
     def _update_worker_recovery_state(
@@ -1782,13 +1727,6 @@ class ConversationManager:
             for op in operations
         )
 
-    @staticmethod
-    def _default_edit_failure_class(name: str) -> str:
-        if name == "edit_symbol":
-            return "edit_mechanics_symbol_not_found"
-        if name == "edit_line_range":
-            return "edit_mechanics_stale_line_range"
-        return "edit_mechanics_old_str_not_found"
 
     def _append_limit_tool_result(
         self,
