@@ -993,7 +993,7 @@ class ConversationManager:
         worker_file_state: dict[str, dict[str, Any]] | None = None,
         patch_failed_cycles: dict[str, int] | None = None,
     ) -> dict[str, Any] | None:
-        raw_path = self._tool_path(name, args)
+        raw_path = _edit_shapes.tool_path(name, args)
         path = _normalize_worker_path(raw_path) if raw_path else ""
         worker_file_state = worker_file_state if worker_file_state is not None else {}
         patch_failed_cycles = patch_failed_cycles if patch_failed_cycles is not None else {}
@@ -1051,7 +1051,7 @@ class ConversationManager:
             return blocked_tool_result(tool_call_id, name, payload)
 
         if name == "apply_edit_transaction" and path:
-            shape = self._edit_shape_signature(name, args)
+            shape = _edit_shapes.edit_shape_signature(name, args)
             if shape in edit_failed_shapes:
                 if f"ambiguous-replace-text:{shape}" in edit_failed_shapes:
                     payload = recovery_payload(
@@ -1101,7 +1101,7 @@ class ConversationManager:
             )
             if blocked is not None:
                 return blocked
-            shape = self._edit_shape_signature(name, args)
+            shape = _edit_shapes.edit_shape_signature(name, args)
             failed_cycles = patch_failed_cycles.get(shape, 0)
             if failed_cycles >= 2:
                 payload = recovery_payload(
@@ -1121,13 +1121,13 @@ class ConversationManager:
                 payload["applied"] = False
                 payload["write_outcome"] = "not_applied_edit_mechanics_blocked"
                 payload["patch_failed_cycles"] = failed_cycles
-                payload["patch_shape"] = self._shape_digest(shape)
+                payload["patch_shape"] = _edit_shapes.shape_digest(shape)
                 record_recovery_block(payload, f"patch-shape:{shape}", recovery_block_counts)
                 return blocked_tool_result(tool_call_id, name, payload)
 
         if name in ("edit_file", "edit_symbol") and path in edit_fallback_required:
             prior = edit_fallback_required[path]
-            block_key = self._edit_shape_signature(name, args)
+            block_key = _edit_shapes.edit_shape_signature(name, args)
             payload = recovery_payload(
                 path=path,
                 failure_class=str(prior.get("failure_class") or default_edit_failure_class(name)),
@@ -1140,7 +1140,7 @@ class ConversationManager:
             return blocked_tool_result(tool_call_id, name, payload)
 
         if name in ("edit_file", "edit_symbol", "edit_line_range"):
-            shape = self._edit_shape_signature(name, args)
+            shape = _edit_shapes.edit_shape_signature(name, args)
             if shape in edit_failed_shapes:
                 payload = recovery_payload(
                     path=path,
@@ -1241,7 +1241,7 @@ class ConversationManager:
             edit_fallback_required,
             worker_file_state,
         )
-        raw_path = self._tool_path(name, args, parsed)
+        raw_path = _edit_shapes.tool_path(name, args, parsed)
         path = _normalize_worker_path(raw_path) if raw_path else ""
         if name in WRITE_TOOLS and path and (
             not ok
@@ -1263,7 +1263,7 @@ class ConversationManager:
                     pop_normalized_recovery_key(edit_fallback_required, path)
                     pop_normalized_recovery_key(line_range_reread_required, path)
                     pop_normalized_key(worker_file_state, path)
-                    clear_patch_failed_shapes_for_path(patch_failed_cycles, path, self._parse_patch_shape)
+                    clear_patch_failed_shapes_for_path(patch_failed_cycles, path, _edit_shapes.parse_patch_shape)
                     pop_syntax_repair_state(syntax_repair_required, path)
                     discard_syntax_validation_path(syntax_validation_required, path)
                     return content
@@ -1271,7 +1271,7 @@ class ConversationManager:
                 pop_normalized_recovery_key(edit_fallback_required, path)
                 pop_normalized_recovery_key(line_range_reread_required, path)
                 pop_normalized_key(worker_file_state, path)
-                clear_patch_failed_shapes_for_path(patch_failed_cycles, path, self._parse_patch_shape)
+                clear_patch_failed_shapes_for_path(patch_failed_cycles, path, _edit_shapes.parse_patch_shape)
                 if is_python_path(path) and not _is_validation_scratch_path(path):
                     syntax_validation_required.add(path)
                 state = syntax_repair_state_for_path(syntax_repair_required, path)
@@ -1284,13 +1284,13 @@ class ConversationManager:
             return content
 
         if name in ("edit_file", "edit_symbol", "edit_line_range", "apply_edit_transaction"):
-            edit_failed_shapes.add(self._edit_shape_signature(name, args))
+            edit_failed_shapes.add(_edit_shapes.edit_shape_signature(name, args))
 
         if not isinstance(parsed, dict):
             return content
 
         failure_class = str(parsed.get("failure_class", ""))
-        shape = self._edit_shape_signature(name, args)
+        shape = _edit_shapes.edit_shape_signature(name, args)
         if path and failure_class in EDIT_TRANSACTION_FAILURE_CLASSES:
             parsed.setdefault("applied", False)
             parsed.setdefault("write_outcome", "not_applied_edit_mechanics_blocked")
@@ -1299,7 +1299,7 @@ class ConversationManager:
             parsed.pop("suggested_next_tool", None)
             if (
                 failure_class == "edit_transaction_ambiguous_symbol"
-                and self._has_replace_text_once_operation(args)
+                and _edit_shapes.has_replace_text_once_operation(args)
             ):
                 edit_failed_shapes.add(f"ambiguous-replace-text:{shape}")
                 parsed["suggested_next_action"] = (
@@ -1334,11 +1334,11 @@ class ConversationManager:
             parsed.setdefault("applied", False)
             parsed.setdefault("write_outcome", "not_applied_edit_mechanics_blocked")
             parsed.setdefault("tool", name)
-            patch_shape = self._edit_shape_signature(name, args)
+            patch_shape = _edit_shapes.edit_shape_signature(name, args)
             failed_cycles = patch_failed_cycles.get(patch_shape, 0) + 1
             patch_failed_cycles[patch_shape] = failed_cycles
             parsed["patch_failed_cycles"] = failed_cycles
-            parsed["patch_shape"] = self._shape_digest(patch_shape)
+            parsed["patch_shape"] = _edit_shapes.shape_digest(patch_shape)
             parsed["stale"] = True
             parsed["suggested_next_tool"] = "read_file"
             if failure_class == "patch_file_hash_mismatch":
@@ -1419,34 +1419,6 @@ class ConversationManager:
                 return any(path in command for path in syntax_paths)
             return False
         return False
-
-    @staticmethod
-    def _tool_path(name: str, args: dict[str, Any], parsed: Any = None) -> str:
-        return _edit_shapes.tool_path(name, args, parsed)
-
-    @staticmethod
-    def _edit_shape_signature(name: str, args: dict[str, Any]) -> str:
-        return _edit_shapes.edit_shape_signature(name, args)
-
-    @staticmethod
-    def _patch_shape_marker(args: dict[str, Any]) -> dict[str, Any]:
-        return _edit_shapes.patch_shape_marker(args)
-
-    @staticmethod
-    def _parse_patch_shape(shape: str) -> dict[str, Any]:
-        return _edit_shapes.parse_patch_shape(shape)
-
-    @staticmethod
-    def _shape_digest(shape: str) -> str:
-        return _edit_shapes.shape_digest(shape)
-
-    @staticmethod
-    def _transaction_shape_marker(args: dict[str, Any]) -> list[dict[str, Any]]:
-        return _edit_shapes.transaction_shape_marker(args)
-
-    @staticmethod
-    def _has_replace_text_once_operation(args: dict[str, Any]) -> bool:
-        return _edit_shapes.has_replace_text_once_operation(args)
 
 
     def _append_limit_tool_result(

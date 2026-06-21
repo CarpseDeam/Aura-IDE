@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from aura.conversation.history import History
+from aura.conversation import _edit_shapes
 from aura.conversation.manager import ConversationManager
 from aura.conversation.tools.registry import ToolRegistry
 
@@ -85,7 +86,7 @@ def test_repeated_ambiguous_replace_text_once_shape_is_blocked(tmp_workspace):
             {"op": "replace_text_once", "old": "value", "new": "changed"}
         ],
     }
-    shape = manager._edit_shape_signature("apply_edit_transaction", args)
+    shape = _edit_shapes.edit_shape_signature("apply_edit_transaction", args)
 
     blocked = manager._worker_recovery_block(
         tool_call_id="tc1",
@@ -276,7 +277,7 @@ def test_failed_py_compile_records_normalized_syntax_path(tmp_workspace):
 def test_patch_file_failure_does_not_block_different_patch_shape(tmp_workspace):
     manager = ConversationManager(History(), ToolRegistry(tmp_workspace, mode="worker"))
     args = {"path": "sample.py", "edits": [{"old": "missing", "new": "value"}]}
-    shape = manager._edit_shape_signature("patch_file", args)
+    shape = _edit_shapes.edit_shape_signature("patch_file", args)
     fallback_required = {
         "sample.py": {
             "tool": "patch_file",
@@ -976,7 +977,7 @@ def test_different_patch_shape_after_fresh_read_remains_recoverable(tmp_workspac
     )
     first_payload = json.loads(first)
     assert first_payload["recoverable"] is True
-    first_shape = manager._edit_shape_signature("patch_file", first_args)
+    first_shape = _edit_shapes.edit_shape_signature("patch_file", first_args)
     assert patch_failed_cycles == {first_shape: 1}
     assert "sample.py" in edit_fallback_required
 
@@ -1018,7 +1019,7 @@ def test_different_patch_shape_after_fresh_read_remains_recoverable(tmp_workspac
         patch_failed_cycles=patch_failed_cycles,
     )
     second_payload = json.loads(second)
-    second_shape = manager._edit_shape_signature("patch_file", second_args)
+    second_shape = _edit_shapes.edit_shape_signature("patch_file", second_args)
     assert second_payload["failure_class"] == "patch_hunk_not_found"
     assert second_payload["recoverable"] is True
     assert patch_failed_cycles == {first_shape: 1, second_shape: 1}
@@ -1028,7 +1029,7 @@ def test_different_patch_shape_after_fresh_read_remains_recoverable(tmp_workspac
 def test_successful_applied_write_resets_failed_patch_counter(tmp_workspace):
     manager = ConversationManager(History(), ToolRegistry(tmp_workspace, mode="worker"))
     args = {"path": "sample.py", "edits": [{"old": "a", "new": "b"}]}
-    shape = manager._edit_shape_signature("patch_file", args)
+    shape = _edit_shapes.edit_shape_signature("patch_file", args)
     patch_failed_cycles = {shape: 1}
     worker_file_state = {
         "sample.py": {
@@ -1062,7 +1063,7 @@ def test_successful_applied_write_resets_failed_patch_counter(tmp_workspace):
 def test_repeated_patch_file_block_becomes_nonrecoverable(tmp_workspace):
     manager = ConversationManager(History(), ToolRegistry(tmp_workspace, mode="worker"))
     args = {"path": "f.py", "edits": [{"old": "x", "new": "y"}]}
-    shape = manager._edit_shape_signature("patch_file", args)
+    shape = _edit_shapes.edit_shape_signature("patch_file", args)
 
     blocked = manager._worker_recovery_block(
         tool_call_id="tc1",
