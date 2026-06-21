@@ -34,7 +34,7 @@ class AuraPlayground(QWidget):
 
     def __init__(self, parent=None, terminal_window_geometry: str = ""):
         super().__init__(parent)
-        self.setMinimumWidth(320)
+        self.setMinimumWidth(280)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
         # Flat QVBoxLayout — no outer HBox or _content_widget wrapper

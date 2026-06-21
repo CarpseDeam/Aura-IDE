@@ -68,8 +68,21 @@ from aura.handoff import extract_handoff_text, generate_handoff_prompt, save_han
 from aura.prompts import SINGLE_SYSTEM_PROMPT
 from aura.updater import UpdateStatus
 
-
-
+class _ShrinkableStack(QStackedWidget):
+    """QStackedWidget that only considers the current (visible) page for
+    minimumSizeHint and sizeHint. Prevents hidden pages from forcing the
+    stack wider than the active content.
+    """
+    def minimumSizeHint(self):
+        w = self.currentWidget()
+        if w is not None:
+            return w.minimumSizeHint()
+        return super().minimumSizeHint()
+    def sizeHint(self):
+        w = self.currentWidget()
+        if w is not None:
+            return w.sizeHint()
+        return super().sizeHint()
 
 
 class MainWindow(WindowChromeMixin, QMainWindow):
@@ -158,7 +171,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._main_splitter.addWidget(self._left_pane)
 
         # Center column: stacked launchpad / workspace view
-        self._center_stack = QStackedWidget(self)
+        self._center_stack = _ShrinkableStack(self)
+        self._center_stack.setMinimumWidth(0)
         self._center_stack.setStyleSheet("background: transparent;")
 
         # Page 0: Project Launchpad (shown when no workspace)
@@ -306,6 +320,9 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._main_splitter.setStretchFactor(0, 0)  # workspace tree: fixed
         self._main_splitter.setStretchFactor(1, 1)  # chat: stable reading/planning column
         self._main_splitter.setStretchFactor(2, 2)  # workspace: primary work surface
+        self._main_splitter.setCollapsible(0, False)   # left pane: keep visible
+        self._main_splitter.setCollapsible(1, True)    # center: allow collapse to 0
+        self._main_splitter.setCollapsible(2, True)    # playground: allow collapse to 0
 
         self.setCentralWidget(self._main_splitter)
 
