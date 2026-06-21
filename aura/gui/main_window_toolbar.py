@@ -135,7 +135,7 @@ class MainWindowToolbar(QToolBar):
         self.addWidget(_toolbar_separator())
 
         self._debug_report_btn = QToolButton()
-        self._debug_report_btn.setText("Report")
+        self._debug_report_btn.setText("Send Logs")
         self._debug_report_btn.setToolTip("Send Debug Report")
         self._debug_report_btn.clicked.connect(self.debug_report_requested.emit)
         self.addWidget(self._debug_report_btn)
@@ -185,6 +185,14 @@ class MainWindowToolbar(QToolBar):
         self._read_only_btn.setChecked(checked)
         self._read_only_btn.blockSignals(False)
         self._update_read_only_state(checked)
+
+    def set_send_logs_busy(self, busy: bool) -> None:
+        if busy:
+            self._debug_report_btn.setText("Sending...")
+            self._debug_report_btn.setEnabled(False)
+        else:
+            self._debug_report_btn.setText("Send Logs")
+            self._debug_report_btn.setEnabled(True)
 
     def update_settings(self, settings) -> None:
         """Use the latest settings object and refresh setting-backed controls."""

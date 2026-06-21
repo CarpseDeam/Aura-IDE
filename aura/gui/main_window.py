@@ -743,7 +743,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
     def _on_send_debug_report(self) -> None:
         logger.info("debug_report_clicked")
-        self._toolbar._debug_report_btn.setEnabled(False)
+        self._toolbar.set_send_logs_busy(True)
+        self.statusBar().showMessage("Sending logs...")
 
         logger.info("debug_report_collect_start")
         log_text, metadata = self._collect_debug_report_data()
@@ -768,15 +769,16 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         }
 
         base_url = get_provider("aura").base_url
-        thread = QThread(self)
-        worker = DebugReportWorker(base_url=base_url, payload=payload)
-        worker.moveToThread(thread)
-        thread.started.connect(worker.run)
-        worker.finished.connect(lambda rid, err: self._on_debug_report_done(rid, err))
-        worker.finished.connect(thread.quit)
-        worker.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-        thread.start()
+        self._debug_report_thread = QThread(self)
+        self._debug_report_worker = DebugReportWorker(base_url=base_url, payload=payload)
+        self._debug_report_worker.moveToThread(self._debug_report_thread)
+        self._debug_report_thread.started.connect(self._debug_report_worker.run)
+        self._debug_report_worker.finished.connect(self._on_debug_report_done)
+        self._debug_report_worker.finished.connect(self._debug_report_thread.quit)
+        self._debug_report_thread.finished.connect(self._debug_report_thread.deleteLater)
+        self._debug_report_thread.finished.connect(self._on_debug_report_thread_finished)
+        self._debug_report_thread.start()
+        logger.info("debug_report_thread_start")
 
     def _collect_debug_report_data(self) -> tuple[str, dict]:
         """Collect recent logs and safe redacted metadata.
@@ -878,22 +880,26 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             return ""
 
     def _on_debug_report_done(self, report_id: str, error: str) -> None:
-        self._toolbar._debug_report_btn.setEnabled(True)
+        self._toolbar.set_send_logs_busy(False)
+        self.statusBar().clearMessage()
         if report_id:
             short_id = report_id[:5].upper() if len(report_id) > 5 else report_id
             logger.info("debug_report_upload_success report_id=%s", report_id)
             QMessageBox.information(
-                self,
-                "Debug Report",
+                self, "Debug Report",
                 f"Debug report sent: AURA-{short_id}",
             )
         else:
             logger.info("debug_report_upload_failed error=%s", error)
-            QMessageBox.warning(
-                self,
-                "Debug Report",
-                "Could not send debug report. Logs are still saved locally.",
-            )
+            msg = f"Could not send debug report.\n{error}" if error else "Could not send debug report."
+            QMessageBox.warning(self, "Debug Report", msg)
+
+    def _on_debug_report_thread_finished(self) -> None:
+        logger.info("debug_report_thread_finished")
+        if self._debug_report_worker:
+            self._debug_report_worker.deleteLater()
+            self._debug_report_worker = None
+        self._debug_report_thread = None
 
     def _on_open_checkpoints(self) -> None:
         if self._workspace_root is None or not self._workspace_root.exists():
