@@ -20,6 +20,7 @@ class DroneDefinition:
     output_contract: dict[str, Any] = field(default_factory=dict)
     budget: DroneBudget = field(default_factory=DroneBudget)
     scope: str = "global"
+    kind: str = "command"
     enabled: bool = True
     created_by: str = "user"
     created_at: str = ""

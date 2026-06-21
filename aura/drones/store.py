@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 _DRONE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 _WRITE_POLICIES = {"read_only", "ask_before_writes", "normal_diff_approval"}
+_VALID_KINDS = frozenset({"command", "harness-lap"})
 def _is_safe_drone_id(drone_id: str) -> bool:
     return bool(_DRONE_ID_RE.fullmatch(str(drone_id or "")))
 
@@ -409,9 +410,12 @@ class DroneStore:
             raise ValueError("Drone timeout_seconds must be at least 30")
         if drone.scope not in ("global", "project"):
             raise ValueError(f"Invalid Drone scope: {drone.scope}")
-        if not isinstance(drone.entrypoint, dict) or not drone.entrypoint:
-            raise ValueError("Drone entrypoint is required")
-        _validate_entrypoint(drone.entrypoint)
+        if drone.kind not in _VALID_KINDS:
+            raise ValueError(f"Invalid Drone kind: {drone.kind}. Must be one of {sorted(_VALID_KINDS)}")
+        if drone.kind == "command":
+            if not isinstance(drone.entrypoint, dict) or not drone.entrypoint:
+                raise ValueError("Drone entrypoint is required")
+            _validate_entrypoint(drone.entrypoint)
 
 
     @staticmethod

@@ -60,6 +60,9 @@ class DroneRunner(QObject):
         self._bridge = bridge
 
     def _is_harness_lap_drone(self) -> bool:
+        if self._drone.kind == "harness-lap":
+            return True
+        # Fallback: check the manifest on disk directly
         try:
             folder = DroneStore.drone_folder(self._workspace_root, self._drone.id)
             manifest_raw = (folder / "drone.json").read_text(encoding="utf-8")
