@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 
 from aura.git_ops import (
+    _AURA_GITIGNORE_ENTRIES,
     commit_changed_files,
     commit_diff,
     ensure_aura_gitignored,
@@ -541,73 +542,111 @@ class TestGitInit:
 
 
 class TestEnsureAuraGitignored:
-    """ensure_aura_gitignored() — add .aura/ to .gitignore."""
+    """ensure_aura_gitignored() — manage explicit .gitignore allowlist."""
 
-    def test_no_gitignore_creates_one(self, tmp_path: Path) -> None:
-        """Create .gitignore with ``.aura/`` when none exists."""
+    def test_no_gitignore_creates_all_entries(self, tmp_path: Path) -> None:
+        """Create .gitignore with all _AURA_GITIGNORE_ENTRIES when none exists."""
         gitignore = tmp_path / ".gitignore"
         assert not gitignore.exists()
         ensure_aura_gitignored(tmp_path)
         assert gitignore.exists()
         content = gitignore.read_text(encoding="utf-8")
-        assert content == ".aura/\n"
+        expected = "".join(f"{e}\n" for e in _AURA_GITIGNORE_ENTRIES)
+        assert content == expected
 
-    def test_append_when_missing(self, tmp_path: Path) -> None:
-        """Append ``.aura/`` when .gitignore exists but doesn't mention .aura."""
-        gitignore = tmp_path / ".gitignore"
-        gitignore.write_text("*.pyc\n", encoding="utf-8")
-        ensure_aura_gitignored(tmp_path)
-        content = gitignore.read_text(encoding="utf-8")
-        assert content == "*.pyc\n.aura/\n"
-
-    def test_already_present_as_dot_aura(self, tmp_path: Path) -> None:
-        """Leave unchanged when ``.aura`` (no slash) is already a line."""
-        gitignore = tmp_path / ".gitignore"
-        gitignore.write_text(".aura\n", encoding="utf-8")
-        ensure_aura_gitignored(tmp_path)
-        content = gitignore.read_text(encoding="utf-8")
-        assert content == ".aura\n"
-
-    def test_already_present_as_dot_aura_slash(self, tmp_path: Path) -> None:
-        """Leave unchanged when ``.aura/`` is already a line."""
+    def test_broad_aura_slash_removed(self, tmp_path: Path) -> None:
+        """.gitignore with `.aura/` gets broad line removed and entries added."""
         gitignore = tmp_path / ".gitignore"
         gitignore.write_text(".aura/\n", encoding="utf-8")
         ensure_aura_gitignored(tmp_path)
         content = gitignore.read_text(encoding="utf-8")
-        assert content == ".aura/\n"
+        expected = "".join(f"{e}\n" for e in _AURA_GITIGNORE_ENTRIES)
+        assert content == expected
 
-    def test_already_present_with_star(self, tmp_path: Path) -> None:
-        """Leave unchanged when ``.aura/*`` is already present."""
+    def test_broad_dot_aura_removed(self, tmp_path: Path) -> None:
+        """.gitignore with `.aura` gets broad line removed and entries added."""
+        gitignore = tmp_path / ".gitignore"
+        gitignore.write_text(".aura\n", encoding="utf-8")
+        ensure_aura_gitignored(tmp_path)
+        content = gitignore.read_text(encoding="utf-8")
+        expected = "".join(f"{e}\n" for e in _AURA_GITIGNORE_ENTRIES)
+        assert content == expected
+
+    def test_broad_root_aura_slash_removed(self, tmp_path: Path) -> None:
+        """.gitignore with `/.aura/` gets broad line removed and entries added."""
+        gitignore = tmp_path / ".gitignore"
+        gitignore.write_text("/.aura/\n", encoding="utf-8")
+        ensure_aura_gitignored(tmp_path)
+        content = gitignore.read_text(encoding="utf-8")
+        expected = "".join(f"{e}\n" for e in _AURA_GITIGNORE_ENTRIES)
+        assert content == expected
+
+    def test_specific_entries_kept_and_not_duplicated(self, tmp_path: Path) -> None:
+        """Existing specific entry kept, only missing entries appended."""
+        gitignore = tmp_path / ".gitignore"
+        gitignore.write_text("/.aura/backups/\n", encoding="utf-8")
+        ensure_aura_gitignored(tmp_path)
+        content = gitignore.read_text(encoding="utf-8")
+        entries = set(content.strip().splitlines())
+        assert "/.aura/backups/" in entries
+        for e in _AURA_GITIGNORE_ENTRIES:
+            assert e in entries
+        assert content.count("/.aura/backups/") == 1
+
+    def test_all_entries_present_idempotent(self, tmp_path: Path) -> None:
+        """All entries already present — no change."""
+        gitignore = tmp_path / ".gitignore"
+        original = "".join(f"{e}\n" for e in _AURA_GITIGNORE_ENTRIES)
+        gitignore.write_text(original, encoding="utf-8")
+        ensure_aura_gitignored(tmp_path)
+        content = gitignore.read_text(encoding="utf-8")
+        assert content == original
+
+    def test_unrelated_content_preserved(self, tmp_path: Path) -> None:
+        """Unrelated gitignore lines survive unchanged."""
+        gitignore = tmp_path / ".gitignore"
+        gitignore.write_text("*.pyc\n__pycache__/\n", encoding="utf-8")
+        ensure_aura_gitignored(tmp_path)
+        content = gitignore.read_text(encoding="utf-8")
+        assert "*.pyc" in content
+        assert "__pycache__/" in content
+        for e in _AURA_GITIGNORE_ENTRIES:
+            assert e in content
+
+    def test_negation_pattern_not_removed(self, tmp_path: Path) -> None:
+        """Negation pattern like `!.aura/drones/` is kept (not a broad ignore)."""
+        gitignore = tmp_path / ".gitignore"
+        gitignore.write_text("!.aura/drones/\n", encoding="utf-8")
+        ensure_aura_gitignored(tmp_path)
+        content = gitignore.read_text(encoding="utf-8")
+        assert "!.aura/drones/" in content
+        for e in _AURA_GITIGNORE_ENTRIES:
+            assert e in content
+
+    def test_aura_star_removed(self, tmp_path: Path) -> None:
+        """.gitignore with `.aura/*` gets broad line removed and entries added."""
         gitignore = tmp_path / ".gitignore"
         gitignore.write_text(".aura/*\n", encoding="utf-8")
         ensure_aura_gitignored(tmp_path)
         content = gitignore.read_text(encoding="utf-8")
-        assert content == ".aura/*\n"
-
-    def test_already_present_with_bang(self, tmp_path: Path) -> None:
-        """Leave unchanged when ``.aura!`` pattern is already present."""
-        gitignore = tmp_path / ".gitignore"
-        gitignore.write_text(".aura!important\n", encoding="utf-8")
-        ensure_aura_gitignored(tmp_path)
-        content = gitignore.read_text(encoding="utf-8")
-        assert content == ".aura!important\n"
+        assert ".aura/*" not in content
+        for e in _AURA_GITIGNORE_ENTRIES:
+            assert e in content
 
     def test_file_no_trailing_newline(self, tmp_path: Path) -> None:
-        """Add newline before appending when .gitignore doesn't end with one."""
+        """Append correctly when .gitignore doesn't end with newline."""
         gitignore = tmp_path / ".gitignore"
-        gitignore.write_text("some_rule", encoding="utf-8")
+        gitignore.write_text("*.pyc", encoding="utf-8")
         ensure_aura_gitignored(tmp_path)
         content = gitignore.read_text(encoding="utf-8")
-        assert content == "some_rule\n.aura/\n"
+        assert content.startswith("*.pyc\n")
+        for e in _AURA_GITIGNORE_ENTRIES:
+            assert e in content
 
     def test_os_error_on_read_is_silent(
         self, monkeypatch, tmp_path: Path,
     ) -> None:
-        """Silently return when reading .gitignore raises OSError.
-
-        Monkeypatch ``Path.read_text`` at the class level (the only safe way
-        on Windows where Path attributes are read-only on instances).
-        """
+        """Silently return when reading .gitignore raises OSError."""
         gitignore = tmp_path / ".gitignore"
         gitignore.write_text("some content\n", encoding="utf-8")
         original_content = "some content\n"
@@ -617,6 +656,5 @@ class TestEnsureAuraGitignored:
 
         monkeypatch.setattr(Path, "read_text", _broken_read_text)
         ensure_aura_gitignored(tmp_path)
-        # Undo the class-level patch so we can read the file for assertion
         monkeypatch.undo()
         assert gitignore.read_text(encoding="utf-8") == original_content

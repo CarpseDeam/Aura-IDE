@@ -523,18 +523,52 @@ def git_init(workspace_root: Path) -> tuple[bool, str]:
         return False, "git commit timed out."
 
 
-def ensure_aura_gitignored(workspace_root: Path) -> None:
-    """Ensure `.aura/` is listed in the workspace's .gitignore file.
+_AURA_GITIGNORE_ENTRIES = (
+    "/.aura/backups/",
+    "/.aura/conversations/",
+    "/.aura/handoffs/",
+    "/.aura/startup-smoke-profile/",
+    "/.aura/threads/",
+    "/.aura/tmp/",
+    "/.aura/memory.db",
+    "/.aura/planner.txt",
+    "/.aura/project.json",
+    "/.aura/toolist.txt",
+    "/.aura/drones/runs/",
+)
 
-    If no .gitignore exists, create one with `.aura/` as its content.
-    If a .gitignore exists but does not mention `.aura`, append `.aura/` to it.
-    The operation is idempotent — repeated calls are safe.
+
+def _is_broad_aura_ignore(line: str) -> bool:
+    """Return True if line would broadly ignore the entire .aura directory tree."""
+    stripped = line.strip()
+    if not stripped:
+        return False
+    # Negation patterns are not broad ignores
+    if stripped.startswith("!"):
+        return False
+    broad_patterns = {
+        ".aura",
+        ".aura/",
+        "/.aura",
+        "/.aura/",
+        ".aura/*",
+        ".aura/**",
+        "/.aura/*",
+        "/.aura/**",
+    }
+    return stripped in broad_patterns
+
+
+def ensure_aura_gitignored(workspace_root: Path) -> None:
+    """Manage an explicit allowlist of runtime Aura paths in .gitignore.
+
+    Ensures private/runtime .aura paths are ignored while allowing
+    repo-owned paths like .aura/drones/ to be tracked.
 
     All failures (missing permissions, disk full, etc.) are silently ignored
     so callers never need to handle exceptions from this function.
     """
     gitignore_path = workspace_root / ".gitignore"
-    aura_pattern = ".aura/"
 
     if gitignore_path.exists():
         try:
@@ -542,28 +576,38 @@ def ensure_aura_gitignored(workspace_root: Path) -> None:
         except OSError:
             return
 
-        # Check if .aura or .aura/ is already present (as a line or part of a glob)
         lines = content.splitlines()
-        for line in lines:
-            stripped = line.strip()
-            if stripped == ".aura" or stripped == ".aura/":
-                return  # Already present, nothing to do
-            # Also catch cases like ".aura/*" or similar
-            if stripped.startswith(".aura") and (len(stripped) == 5 or stripped[5] in ("/", "*", "!")):
-                return  # Already present in some form
+        filtered_lines = [l for l in lines if not _is_broad_aura_ignore(l)]
 
-        # Append .aura/ to the existing .gitignore
-        # Ensure we start on a new line if the file doesn't end with one
-        if content and not content.endswith("\n"):
-            content += "\n"
-        content += f"{aura_pattern}\n"
+        existing = set()
+        for line in filtered_lines:
+            stripped = line.strip()
+            if stripped:
+                existing.add(stripped)
+
+        missing = [e for e in _AURA_GITIGNORE_ENTRIES if e not in existing]
+
+        if not missing and len(lines) == len(filtered_lines):
+            return  # No changes needed
+
+        new_lines = list(filtered_lines)
+        for entry in missing:
+            new_lines.append(entry)
+
+        new_content = "\n".join(new_lines)
+        if new_content:
+            new_content += "\n"
+
+        if new_content == content:
+            return
+
         try:
-            gitignore_path.write_text(content, encoding="utf-8")
+            gitignore_path.write_text(new_content, encoding="utf-8")
         except OSError:
             pass
     else:
-        # Create a new .gitignore with just .aura/
         try:
-            gitignore_path.write_text(f"{aura_pattern}\n", encoding="utf-8")
+            content = "".join(f"{e}\n" for e in _AURA_GITIGNORE_ENTRIES)
+            gitignore_path.write_text(content, encoding="utf-8")
         except OSError:
             pass
