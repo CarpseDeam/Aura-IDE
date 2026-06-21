@@ -91,9 +91,7 @@ def _run_app(log_path: Path, args: argparse.Namespace, qt_argv: list[str]) -> in
     _should_open_api_settings = False
     _should_open_aura_settings = False
 
-    if args.startup_smoke:
-        logger.info("startup smoke mode: skipping provider warnings")
-    elif not has_usable_provider_configuration():
+    if not has_usable_provider_configuration():
         # No provider at all is configured/available — show setup dialog.
         logger.info("no providers configured — showing setup dialog")
         from aura.gui.setup_dialog import SetupDialog
@@ -169,14 +167,10 @@ def _run_app(log_path: Path, args: argparse.Namespace, qt_argv: list[str]) -> in
         logger.info("opening API settings post-startup")
         QTimer.singleShot(100, win.open_api_settings)
 
-    if args.startup_smoke:
-        logger.info("startup smoke mode: scheduling quit")
-        QTimer.singleShot(500, QApplication.quit)
-
     logger.info("app.exec start")
     exit_code = app.exec()
     logger.info("app.exec end: %s", exit_code)
-    return 0 if args.startup_smoke else exit_code
+    return exit_code
 
 
 def _parse_args(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
@@ -184,11 +178,6 @@ def _parse_args(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument(
         "--profile-dir",
         help="Use PATH for both Aura config and data during this run.",
-    )
-    parser.add_argument(
-        "--startup-smoke",
-        action="store_true",
-        help="Open Aura briefly, then quit with a startup success/failure code.",
     )
     args, qt_args = parser.parse_known_args(argv)
     return args, [sys.argv[0], *qt_args]

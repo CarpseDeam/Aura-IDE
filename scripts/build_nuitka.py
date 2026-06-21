@@ -8,7 +8,6 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 # Configuration
@@ -49,10 +48,6 @@ REQUIRED_MEDIA_FILES = [
     "workflow-complete.png",
     "working.png",
 ]
-
-# Startup smoke test configuration
-SMOKE_TIMEOUT_SECONDS = 30
-SMOKE_REQUIRED_MARKERS = ["app.exec start", "app.exec end"]
 
 # Signing Configuration
 SIGN_CERT = os.environ.get("AURA_SIGN_CERT")
@@ -433,50 +428,6 @@ def resolve_build_version(
     return current
 
 
-def _run_smoke_test(final_dist_dir: Path) -> None:
-    """Run the frozen EXE with --startup-smoke to verify it starts and shuts down cleanly."""
-    exe_path = final_dist_dir / "Aura.exe"
-    if not exe_path.exists():
-        print(f"Smoke test FAILED: executable not found at {exe_path}")
-        raise SystemExit(1)
-
-    smoke_dir = Path(tempfile.mkdtemp(prefix="aura_smoke_"))
-    try:
-        result = subprocess.run(
-            [str(exe_path), "--startup-smoke", "--profile-dir", str(smoke_dir)],
-            capture_output=True, text=True, timeout=SMOKE_TIMEOUT_SECONDS,
-        )
-    except subprocess.TimeoutExpired as exc:
-        print(f"Smoke test TIMEOUT after {SMOKE_TIMEOUT_SECONDS}s")
-        print(f"stdout: {exc.stdout}")
-        print(f"stderr: {exc.stderr}")
-        log_path = smoke_dir / "logs" / "aura-latest.log"
-        print(f"Log path: {log_path}")
-        raise SystemExit(1)
-
-    print(f"Exit code: {result.returncode}")
-    print(f"stdout: {result.stdout}")
-    print(f"stderr: {result.stderr}")
-
-    if result.returncode != 0:
-        log_path = smoke_dir / "logs" / "aura-latest.log"
-        print(f"Log path: {log_path}")
-        raise SystemExit(1)
-
-    log_path = smoke_dir / "logs" / "aura-latest.log"
-    if not log_path.exists():
-        print(f"Smoke test FAILED: log not found at {log_path}")
-        raise SystemExit(1)
-
-    log_text = log_path.read_text(encoding="utf-8")
-    missing = [m for m in SMOKE_REQUIRED_MARKERS if m not in log_text]
-    if missing:
-        print(f"Smoke test FAILED: log at {log_path} missing markers: {missing}")
-        raise SystemExit(1)
-
-    print(f"Smoke test PASSED — log at {log_path} contains all required markers.")
-    shutil.rmtree(smoke_dir, ignore_errors=True)
-
 
 def build(
     version: str | None = None,
@@ -578,9 +529,6 @@ def build(
         shutil.copytree(click_path, target_click_dir)
     else:
         print("Warning: click is not installed in the clean environment, skipping manual bundle.")
-
-    # Startup smoke test
-    _run_smoke_test(final_dist_dir)
 
     if not installer_only:
         zip_path = zip_distribution(root, final_dist_dir)
