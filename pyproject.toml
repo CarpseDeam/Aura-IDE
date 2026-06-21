@@ -4,13 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aura"
-version = "1.8.01"
+version = "1.8.2"
 description = "Aura — desktop chat troubleshooter for code, supporting DeepSeek, OpenAI, Anthropic, OpenRouter, and MCP."
 requires-python = ">=3.10"
 dependencies = [
     "beautifulsoup4>=4.12",
     "certifi>=2024.0",
-    "cryptography>=41.0",    "google-genai>=1.0",
+    "cryptography>=41.0",
+    "google-genai>=1.0",
     "httpx",
     "mcp>=1.0",
     "openai>=1.40",

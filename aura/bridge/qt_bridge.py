@@ -347,11 +347,13 @@ class ConversationBridge(QObject):
         return self._dispatch_proxy.result_metadata(tool_call_id)
 
     def set_workspace_root(self, root) -> None:
+        if root is None:
+            self._tier1_context = ""
+            return
         self._registry.set_workspace_root(root)
         self._dispatch_proxy.set_workspace_root(root)
         self._manager.set_workspace_root(root)
-        if root is not None:
-            self.refresh_tier1_context()
+        self.refresh_tier1_context()
 
     def set_read_only(self, value: bool) -> None:
         self._registry.set_read_only(value)

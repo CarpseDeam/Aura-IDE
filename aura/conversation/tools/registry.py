@@ -110,7 +110,9 @@ class ToolRegistry(
     def workspace_root(self) -> Path:
         return self._root
 
-    def set_workspace_root(self, root: Path) -> None:
+    def set_workspace_root(self, root: Path | None) -> None:
+        if root is None:
+            return
         self._root = root.resolve()
         self._dynamic_tools.set_workspace_root(self._root)
         # Reset codebase index for the new workspace
