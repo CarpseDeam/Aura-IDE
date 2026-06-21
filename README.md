@@ -11,74 +11,117 @@
   </a>
 </p>
 
-**The AI workflow IDE where the model is the fuel and the harness is the engine.**
+**Aura is a local-first AI coding workspace that turns prompts into reviewed, validated code changes.**
 
-Aura is an open-source AI workflow IDE / coding harness. It is not just chat — it runs a Planner → Worker engineering loop. The Planner reads your repo and writes a technical spec. The Worker executes through controlled tools, proposes every change as a diff, and runs validation. You review before any write touches disk.
+Aura gives AI a real workbench — not just a chat box. It runs a Planner/Worker loop: the Planner reads your repo and writes a structured technical spec; the Worker executes the spec through controlled file tools, proposes every change as a diff for your approval, runs validation, and commits the result. The architecture is model-agnostic: use DeepSeek, OpenAI, Anthropic, Gemini, or OpenRouter through your own keys, or use Aura Credits for hosted models without key management. Reusable Drones, Workbay automation, AST repo maps, BM25 codebase search, git integration, and a mobile companion ship with the desktop app.
 
-## Run it your way
-
-**Bring your own keys** — DeepSeek, OpenAI, Anthropic, Gemini, OpenRouter. Set your API key in Settings; it's encrypted to disk.
-
-**Aura Credits** — Use hosted Aura models without managing your own API keys. No credit card needed to start.
-1. Settings → Aura → Buy Credits
-2. Check Purchase
-3. Select Aura as your Planner or Worker provider
-
-## How it works
+## See it in action
 
 <p align="center">
-  <img src="media/plan_and_code.gif" alt="Aura planning and coding workflow demo" width="900">
+  <img src="media/plan_and_code.gif" alt="Aura planning and coding workflow" width="900">
 </p>
-<p align="center"><em>A full Planner → Worker cycle: spec writing, dispatch, code editing with diff approval, and auto-commit.</em></p>
+<p align="center"><em>Plan, dispatch, edit, review diffs, validate, and commit from one desktop workflow.</em></p>
 
-The Planner reads your code, understands the project structure, and writes a technical spec. You see the spec. You can edit it. When you're satisfied, you dispatch it. The Worker executes the spec with read and write filesystem access, proposes every change as a diff for your approval, runs validation, and recovers if something breaks. Every write is backed up. Every batch of changes gets an AI-generated commit message. The whole cycle produces a receipt you can review.
+## What Aura does
 
-What makes it different is the architecture. The Planner and Worker are two separate models that can run on different providers with different thinking depths. The Planner's output is a structured spec — not raw code — so the Worker starts from a clean target instead of inheriting the Planner's reasoning noise. Combined with a deterministic AST repo map and stable memory layers, this produces 90%+ prompt cache hit rates — not luck, architecture.
+The workflow is a tight loop you stay in control of:
 
-**Your agents, your workflows.** Drones are reusable workers you build from natural language. They show up in the main UI, run with one click, and can be dragged into Workbay: a visual canvas where you chain them into automations. Read-only drones run in parallel for safe background investigations. Write-capable drones follow the same diff-approval cycle as any Worker.
+1. **Prompt** — Describe the change you want, in your own words.
+2. **Planner spec** — The Planner reads your workspace (AST repo map, BM25 index, dependency graph) and writes a structured technical spec. You review and edit it before anything runs.
+3. **Dispatch** — When the spec looks right, you dispatch it.
+4. **Worker edits** — The Worker reads the spec and makes the changes through controlled file tools. It can read, write, edit, and search your codebase.
+5. **Diff approval** — Every proposed write shows as a diff. You approve, reject, approve all, or reject all before anything touches disk.
+6. **Validation** — The Worker runs validation after every change. If it fails, the Worker inspects the error and attempts a fix. If recovery fails, the change is aborted cleanly. No broken state left behind.
+7. **Commit** — Approved changes are committed with an AI-generated message. You get a receipt showing every tool call, token cost, and file changed.
+
+The user reviews the plan before execution and reviews diffs before writes. Nothing is automatic unless you choose automation.
+
+## Why Aura is different
+
+Most AI coding tools are chat interfaces that try to edit files directly with no intermediate reasoning layer. Aura separates concerns:
+
+**Planner and Worker are separate agents.** The Planner reads your codebase and produces a focused technical spec — not raw code. The Worker starts from that clean spec instead of inheriting the Planner's full reasoning trace. This means you can mix a cheap Planner with an expensive Worker, or use different providers per role.
+
+**Aura is a harness around models, not a model itself.** Swap DeepSeek for Anthropic mid-session, change thinking depth per agent, or switch providers entirely — the workflow stays the same. The architecture, not the model, produces the consistency.
+
+**Repo-aware by default.** Every Planner system prompt includes an AST-derived structural map of your workspace. BM25 full-text search covers 30+ file extensions across up to 1,500 files. A dependency graph traces import relationships. The AI doesn't guess your project layout — it reads it.
+
+**Verification is part of the loop.** Run-and-watch lets the Worker start a process (dev server, compiler, test watcher), observe its output over a window of seconds, and classify the outcome. Validation isn't bolted on — it's a tool the Worker uses like any other.
+
+## Drones and Workbay
+
+Drones are reusable workers you build from natural language. Describe the workflow once — "stage all changes, commit with a descriptive message, push to the current branch" — and it becomes a saved Drone in your workspace. Run it with one click from the main UI. Every Drone shows up as a card in your workspace.
+
+**Read-only Drones** run in parallel for safe background investigation — trace a bug, scout test coverage, map unused exports. No write access, no risk.
+
+**Write-capable Drones** follow the same controlled path as any Worker: spec → edits → diff approval → validation → commit. You review every change before it lands.
+
+**Workbay** is a visual canvas where you chain Drones into automations. Drag a Git Push Drone, a lint-fix Drone, and a test-runner Drone into a sequence. Run the chain with one click. Mission Control shows you the status of every active run.
+
+Examples you can build in a few minutes:
+- **Git Push Drone** — stage all, commit with a descriptive message, push.
+- **File Size Mapper** — scan the workspace for large files, report top offenders.
+- **Repo Gardener** — passive maintenance pass: remove deterministic debris, apply bounded refactors.
 
 <p align="center">
   <img src="media/drone-workbay.png" alt="Drones and Workbay" width="900">
 </p>
 <p align="center"><em>Drones in Workbay — reusable agents you can run, chain, and automate.</em></p>
 
-<p align="center">
-  <img src="media/phone-home.jpg" alt="Aura mobile companion" width="300">
-</p>
-<p align="center"><em>Your Planner, from your phone. Chat, dispatch, watch it stream live on desktop.</em></p>
+## Model access
 
----
+Aura supports two model paths. Pick the one that fits you.
 
-## What you get
+**Aura Credits** — hosted Aura models without managing provider keys. Open Settings → Aura → Buy Credits, check purchase, then select Aura as your Planner or Worker provider. No credit card needed to start.
 
-**Planner/Worker architecture** — Two specialized agents. One plans, one executes. The spec is a token firewall between them. You review every dispatch before it runs. Mix a cheap Planner with an expensive Worker — the architecture abstracts the model.
+**Bring Your Own Keys** — connect DeepSeek, OpenAI, Anthropic, Gemini, or OpenRouter directly. Set your API key in Settings; it's encrypted to disk with a machine-derived key. Environment variables also work (DEEPSEEK_API_KEY, OPENAI_API_KEY, etc.).
 
-**Diff approval on every write** — Every `write_file`, `edit_file`, or `edit_symbol` shows you a diff before touching disk. Approve, reject, approve all, or reject all. Existing files are backed up to `.aura/backups/` automatically.
+Both paths support the full Planner/Worker architecture. Mix them — use your own key for one role and Aura Credits for the other.
 
-**AST repo map and BM25 codebase search** — Every system prompt includes a structural map of your workspace built from Python AST parsing. The BM25 full-text index over 1,500 files gives the AI semantic search — not keyword grep — across 30+ file extensions.
+## Safety and control
 
-**Validation and recovery** — After every change the Worker runs validation. If it fails, the Worker inspects the error and attempts a fix. If recovery fails, the change is aborted cleanly. No broken state left behind.
+Aura is designed around reviewable changes, not blind writes.
 
-**Drones and Workbay** — Reusable AI workers you create from natural language and save per project. Run with one click, or chain them in the Workbay canvas for multi-step automations. Read-only drones are parallel-safe for background investigation. Write drones follow the same diff-approval cycle. The Planner can summon saved drones when it detects a match.
+- **Diff approval on every write** — every write_file, edit_file, or edit_symbol shows a diff before touching disk. Approve, reject, approve all, or reject all.
+- **Automatic backups** — existing files are backed up to `.aura/backups/` before any edit.
+- **Read-only mode** — prevents all writes. Safe for exploration and investigation.
+- **Validation and recovery** — every change is validated. The Worker retries on failure and aborts cleanly if recovery fails.
+- **Git safety net** — snapshot/restore for experimental checkpoints, `/undo` to soft-reset the last commit, auto-generated commit messages.
+- **Encrypted API keys** — stored with a hardware-derived key, not plaintext.
 
-**Mobile companion** — A relay server lets you chat with your Planner from your phone. Dispatch specs remotely, watch the desktop stream the execution live. No separate app needed — works through your browser.
+## Quick start
 
-**Multi-provider model agnosticism** — DeepSeek, OpenAI, Anthropic, Gemini, OpenRouter — swap models and providers per session or per agent without changing anything else. Set different providers for Planner and Worker.
+**Windows:** Download the latest installer from [Releases](https://github.com/CarpseDeam/Aura-IDE/releases). Per-user install, no admin rights needed. In-app updates handled automatically.
 
-**Git integration** — Auto-commit with AI-generated messages, `/undo` to soft-reset the last commit, snapshot/restore for experimental checkpoints, automatic `.gitignore` setup.
+**From source (all platforms):**
+```bash
+git clone https://github.com/CarpseDeam/Aura-IDE.git
+cd Aura-IDE
+pip install .
+aura
+```
 
-**More** — Web research sub-agent (Tavily + BeautifulSoup), MCP tool integration for custom stdio servers, Windows installer with self-updater.
+**First run:**
+1. Open a workspace (File → Open Workspace).
+2. Choose your model path:
+   - **Aura Credits:** Settings → Aura → Buy Credits. Select Aura as Planner or Worker provider.
+   - **BYOK:** Settings → API Keys. Add your key for DeepSeek, OpenAI, Anthropic, Gemini, or OpenRouter.
+3. Ask for something small — "fix a typo in README.md" or "add a docstring to this function."
+4. Review the Planner's spec, then click dispatch.
+5. Approve or reject each diff the Worker proposes.
+6. Watch validation run. Review the receipt.
 
-## Safety
+## Advanced capabilities
 
-- Every file write is presented as a diff for your approval before touching disk.
-- Existing files are automatically backed up to `.aura/backups/` before any edit.
-- Read-only mode prevents all writes — safe for exploration.
-- API keys are encrypted to a machine-derived key before storage.
-- `/undo` soft-resets the last commit. Git snapshot/restore provides experimental checkpoints.
-- The Worker validates after every change and aborts cleanly if recovery fails.
-
----
+- **AST repo map** — structural workspace map built from Python AST parsing. Every Planner system prompt includes it.
+- **Dependency graph** — import-tree traversal for blast radius analysis. Know what breaks before you change it.
+- **BM25 codebase search** — full-text semantic search across 30+ file extensions and up to 1,500 files. Powers the `search_codebase` tool.
+- **Run-and-watch verification** — the Worker can start a process (dev server, compiler, watcher), observe output over a configurable window, and classify the result.
+- **Git integration** — status, diff, commit, undo, snapshot/restore, automatic `.gitignore` setup.
+- **Mobile companion** — relay server lets you chat with your Planner from your phone. Dispatch specs remotely, watch the desktop stream execution live. No separate app needed — works through your browser.
+- **Web research** — built-in sub-agent using Tavily + BeautifulSoup for live web lookups during planning.
+- **MCP tool integration** — connect custom stdio MCP servers. Tools are converted to OpenAI-compatible function schemas automatically.
+- **Self-updater** — Windows builds check for updates and install in-place. Git-based updates for source installs.
 
 ## Built with Aura
 
@@ -89,27 +132,6 @@ Aura wrote most of itself. During May 2026 it processed **1.1 billion DeepSeek t
 </p>
 
 The harness produces the quality, not the model. Swap models, swap providers, change thinking depth — the workflow stays the same and the output stays consistent.
-
----
-
-## Quick start
-
-**Windows** — Download the latest installer from [releases](https://github.com/CarpseDeam/Aura-IDE/releases). Per-user install, no admin rights needed. In-app updates handled automatically.
-
-**From source** (all platforms):
-```bash
-git clone https://github.com/CarpseDeam/Aura-IDE.git
-cd Aura-IDE
-pip install .
-aura
-```
-
-**First run:**
-1. Open a workspace (File → Open Workspace).
-2. Configure model access — set your own API key in Settings, or buy Aura Credits (Settings → Aura → Buy Credits).
-3. Ask for something small — "fix a typo in README.md" or "add a docstring to this function."
-4. Review the Planner's spec, then dispatch.
-5. Approve or reject each diff the Worker proposes.
 
 ---
 
