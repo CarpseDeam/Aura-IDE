@@ -13,7 +13,7 @@ import threading
 from datetime import datetime
 from pathlib import Path
 from types import TracebackType
-from typing import Any
+from typing import Any, TextIO
 
 LOG_FILENAME = "aura-startup.log"
 LATEST_LOG = "aura-latest.log"
@@ -27,6 +27,8 @@ _original_excepthook = sys.excepthook
 _original_threading_excepthook = getattr(threading, "excepthook", None)
 
 _session_id: str = ""
+
+_faulthandler_file: TextIO | None = None
 
 
 def logs_dir() -> Path:
@@ -150,10 +152,18 @@ def _prune_old_logs(log_dir: Path) -> None:
 
 
 def _enable_faulthandler(log_path: Path) -> None:
+    global _faulthandler_file
     try:
         import faulthandler
 
-        faulthandler.enable(log_path.open("a"))
+        if faulthandler.is_enabled():
+            faulthandler.disable()
+            if _faulthandler_file is not None:
+                _faulthandler_file.close()
+                _faulthandler_file = None
+
+        _faulthandler_file = log_path.open("a", encoding="utf-8")
+        faulthandler.enable(_faulthandler_file, all_threads=True)
     except Exception:
         logger.exception("failed to enable faulthandler")
 

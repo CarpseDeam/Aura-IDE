@@ -17,12 +17,48 @@ if TYPE_CHECKING:
     from aura.gui.main_window import MainWindow
 
 
+def _categorize_blocked_root(path: Path) -> str | None:
+    """Return a category string if path is a blocked broad root, else None."""
+    try:
+        resolved = path.resolve()
+    except (OSError, ValueError):
+        return None
+    home = Path.home().resolve()
+    if resolved.parent == resolved:
+        return "filesystem root"
+    if resolved == home:
+        return "home folder"
+    if resolved == home / "Desktop":
+        return "Desktop"
+    if resolved == home / "Downloads":
+        return "Downloads"
+    if resolved == home / "Documents":
+        return "Documents"
+    if resolved == home / "OneDrive":
+        return "OneDrive"
+    return None
+
+
 class MainWindowWorkspaceController(QObject):
     """Owns the Workspace / Project Navigation responsibility cluster for MainWindow."""
 
     def __init__(self, window: MainWindow, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._window = window
+
+    def _warn_blocked_root(self, path: Path) -> bool:
+        """Return True if path was blocked (warning shown), False if OK to proceed."""
+        category = _categorize_blocked_root(path)
+        if category is None:
+            return False
+        logger.warning("Blocked workspace root selection: %s", category)
+        QMessageBox.warning(
+            self._window,
+            "Workspace Root Too Broad",
+            f"Aura needs a specific project folder, not a broad system folder like {category}.\n\n"
+            "Please choose a project-specific folder as your workspace root.",
+        )
+        return True
 
     def on_change_root(self) -> None:
         window = self._window
@@ -31,6 +67,8 @@ class MainWindowWorkspaceController(QObject):
         if not chosen:
             return
         path = Path(chosen)
+        if self._warn_blocked_root(path):
+            return
         self._on_project_selected(path)
 
         # Offer to initialize git if the workspace is not a git repo.
@@ -90,6 +128,8 @@ class MainWindowWorkspaceController(QObject):
         if not chosen:
             return
         chosen_path = Path(chosen)
+        if self._warn_blocked_root(chosen_path):
+            return
         from aura.projects.store import ProjectStore
         ProjectStore().create_or_update_project(chosen_path)
         self._on_project_selected(chosen_path)
@@ -102,6 +142,8 @@ class MainWindowWorkspaceController(QObject):
         if not chosen:
             return None
         path = Path(chosen)
+        if self._warn_blocked_root(path):
+            return None
         window._workspace_root = path
         window._bridge.set_workspace_root(path)
         window._input.set_workspace_root(path)
@@ -130,6 +172,8 @@ class MainWindowWorkspaceController(QObject):
         if not chosen:
             return
         path = Path(chosen)
+        if self._warn_blocked_root(path):
+            return
         self._on_project_selected(path)
         if not is_git_repo(path):
             reply = QMessageBox.question(
@@ -156,6 +200,8 @@ class MainWindowWorkspaceController(QObject):
         if not chosen:
             return
         path = Path(chosen)
+        if self._warn_blocked_root(path):
+            return
         self._on_project_selected(path)
         if not is_git_repo(path):
             reply = QMessageBox.question(

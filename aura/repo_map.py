@@ -7,11 +7,15 @@ giving the model a structural overview of the codebase on every turn.
 from __future__ import annotations
 
 import ast
+import logging
 import os
+import time
 from pathlib import Path
 from typing import Any
 
 from aura.ast_utils import parse_python_ast
+
+logger = logging.getLogger(__name__)
 
 # Directories and file suffixes to skip when generating the repo map.
 SKIP_DIRS: set[str] = {
@@ -37,9 +41,11 @@ SKIP_FILE_SUFFIXES: set[str] = {".pyc", ".pyo", ".so", ".o", ".class", ".jar"}
 _repo_map_cache: dict[str, tuple[float, str]] = {}
 
 MAX_LINES = 300
+MAX_DIRS_VISITED = 2000        # Directories walked before budget stop
+MAX_FILES_CONSIDERED = 5000    # Relevant files (matching extensions) before stop
+MAX_SCAN_SECONDS = 5.0         # Maximum wall-clock seconds for a scan
 
 _PY_FUNC_TYPES = (ast.FunctionDef, ast.AsyncFunctionDef)
-
 
 def _should_skip(path: Path) -> bool:
     """Check if a path should be excluded from the repo map."""
@@ -56,8 +62,17 @@ def _should_skip(path: Path) -> bool:
 def _get_max_mtime(root: Path) -> float:
     """Return the maximum mtime of all files that would be included."""
     latest = 0.0
+    dirs_visited = 0
+    files_considered = 0
+    start_time = time.monotonic()
+    budget_exceeded = False
     try:
         for dirpath, dirnames, filenames in os.walk(root):
+            dirs_visited += 1
+            if dirs_visited > MAX_DIRS_VISITED or time.monotonic() - start_time > MAX_SCAN_SECONDS:
+                budget_exceeded = True
+            if budget_exceeded:
+                break
             # Prune skipped directories in-place so os.walk doesn't descend.
             dirnames[:] = [
                 d
@@ -68,6 +83,10 @@ def _get_max_mtime(root: Path) -> float:
                 suffix = Path(fname).suffix.lower()
                 if suffix not in (".py", ".ts", ".tsx", ".js"):
                     continue
+                files_considered += 1
+                if files_considered > MAX_FILES_CONSIDERED:
+                    budget_exceeded = True
+                    break
                 fpath = os.path.join(dirpath, fname)
                 try:
                     mtime = os.path.getmtime(fpath)
@@ -75,10 +94,16 @@ def _get_max_mtime(root: Path) -> float:
                         latest = mtime
                 except OSError:
                     continue
+            if budget_exceeded:
+                break
     except PermissionError:
         pass
+    if budget_exceeded:
+        logger.info(
+            "Repo-map mtime scan truncated: root=%s dirs_visited=%d files_considered=%d elapsed_ms=%.0f",
+            root, dirs_visited, files_considered, (time.monotonic() - start_time) * 1000,
+        )
     return latest
-
 
 def _outline_python(text: str, filename: str = "<unknown>") -> dict[str, Any]:
     """AST-based outline for Python files.
@@ -202,8 +227,18 @@ def generate_repo_map(workspace_root: Path, force: bool = False) -> str:
     # Walk workspace and collect outlines
     tree_lines: list[str] = []
     file_count = 0
+    dirs_visited = 0
+    files_considered = 0
+    start_time = time.monotonic()
+    budget_exceeded = False
 
     for dirpath, dirnames, filenames in os.walk(workspace_root):
+        dirs_visited += 1
+        if dirs_visited > MAX_DIRS_VISITED or time.monotonic() - start_time > MAX_SCAN_SECONDS:
+            budget_exceeded = True
+        if budget_exceeded:
+            break
+
         # Prune skipped/hidden dirs
         dirnames[:] = [
             d
@@ -219,6 +254,10 @@ def generate_repo_map(workspace_root: Path, force: bool = False) -> str:
             suffix = Path(fname).suffix.lower()
             if suffix not in (".py", ".ts", ".tsx", ".js"):
                 continue
+            files_considered += 1
+            if files_considered > MAX_FILES_CONSIDERED:
+                budget_exceeded = True
+                break
 
             fpath = os.path.join(dirpath, fname)
             try:
@@ -263,7 +302,19 @@ def generate_repo_map(workspace_root: Path, force: bool = False) -> str:
                 for fn in outline["functions"]:
                     tree_lines.append(f"  {fn['signature']}")
 
-    if file_count == 0:
+        if budget_exceeded:
+            break
+
+    if budget_exceeded:
+        tree_lines.append("")
+        tree_lines.append("... (repo map truncated: scan budget exceeded)")
+        logger.info(
+            "Repo-map scan truncated: root=%s dirs_visited=%d files_considered=%d elapsed_ms=%.0f",
+            root_str, dirs_visited, files_considered,
+            (time.monotonic() - start_time) * 1000,
+        )
+
+    if file_count == 0 and not budget_exceeded:
         result = "No Python/TypeScript files found."
         _repo_map_cache[root_str] = (current_mtime, result)
         return result
