@@ -17,11 +17,12 @@ class _MarkdownTextBlock(QTextBrowser):
 
     def __init__(self, html: str, parent=None) -> None:
         super().__init__(parent)
+        self.setMinimumWidth(0)
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setOpenExternalLinks(True)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self.setStyleSheet("background: transparent; border: none;")
         self.document().setDocumentMargin(0)
         self.setHtml(html)

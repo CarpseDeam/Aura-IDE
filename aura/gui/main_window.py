@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import difflib
 import logging
+import sys
+from datetime import datetime
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -54,6 +56,7 @@ from aura.gui.main_window_toolbar import MainWindowToolbar
 from aura.gui.onboarding_dialog import OnboardingDialog
 from aura.gui.playground import AuraPlayground
 from aura.gui.send_handler import SendHandler
+from aura.gui.debug_report_worker import DebugReportWorker
 from aura.gui.main_window_balance import MainWindowBalanceController
 from aura.gui.main_window_settings import MainWindowSettingsController
 from aura.gui.status_bar import AuraStatusBar
@@ -121,6 +124,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._toolbar.update_requested.connect(self._on_open_update)
         self._toolbar.settings_requested.connect(self._settings_controller.open_settings)
         self._toolbar.logs_requested.connect(self._open_logs_folder)
+        self._toolbar.debug_report_requested.connect(self._on_send_debug_report)
         self._toolbar.minimize_requested.connect(self.showMinimized)
         self._toolbar.maximize_requested.connect(self._toggle_maximize)
         self._toolbar.close_requested.connect(self.close)
@@ -175,7 +179,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
         # Page 1: Chat + Input (normal workspace view)
         center = QWidget()
-        center.setMinimumWidth(360)
+        center.setMinimumWidth(280)
         center_layout = QVBoxLayout(center)
         center_layout.setContentsMargins(20, 0, 20, 16)
         center_layout.setSpacing(0)
@@ -292,7 +296,11 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
         # Override with saved splitter sizes if available.
         if self._settings.main_splitter_sizes:
-            self._main_splitter.setSizes(self._settings.main_splitter_sizes)
+            sizes = self._settings.main_splitter_sizes
+            w = self.width()
+            if len(sizes) == 3 and sum(sizes) > 0 and all(s >= 40 for s in sizes) and sum(sizes) <= 2 * w:
+                self._main_splitter.setSizes(sizes)
+            # else keep the defaults already set above
 
         # Keep the sidebar stable and let the workspace receive most extra room.
         self._main_splitter.setStretchFactor(0, 0)  # workspace tree: fixed
@@ -374,6 +382,17 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._balance_controller.refresh(self._settings)
         self._position_edge_tabs()
 
+        logger.debug(
+            "layout_diag win_min=(%d,%d) splitter_min=(%d,%d) left_min=(%d,%d) center_min=(%d,%d) playground_min=(%d,%d) chat_min=(%d,%d) input_min=(%d,%d)",
+            self.minimumSizeHint().width(), self.minimumSizeHint().height(),
+            self._main_splitter.minimumSizeHint().width(), self._main_splitter.minimumSizeHint().height(),
+            self._left_pane.minimumSizeHint().width(), self._left_pane.minimumSizeHint().height(),
+            self._center_stack.minimumSizeHint().width(), self._center_stack.minimumSizeHint().height(),
+            self._playground_aura.minimumSizeHint().width(), self._playground_aura.minimumSizeHint().height(),
+            self._chat.minimumSizeHint().width(), self._chat.minimumSizeHint().height(),
+            self._input.minimumSizeHint().width(), self._input.minimumSizeHint().height(),
+        )
+
         # Restore most recent conversation if enabled.
         if self._settings.restore_last_conversation:
             # Defer restoration so the UI paints and becomes interactive first.
@@ -394,6 +413,14 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         if self._settings.main_window_state:
             state = QByteArray.fromBase64(self._settings.main_window_state.encode("ascii"))
             self.restoreState(state)
+        if self._settings.main_splitter_sizes:
+            sizes = self._settings.main_splitter_sizes
+            w = self.width()
+            if not (len(sizes) == 3 and sum(sizes) > 0 and all(s >= 40 for s in sizes) and sum(sizes) <= 2 * w):
+                left_w = max(180, int(w * 0.16))
+                center_w = max(320, int(w * 0.40))
+                right_w = max(320, int(w * 0.44))
+                self._main_splitter.setSizes([left_w, center_w, right_w])
 
     def closeEvent(self, event) -> None:
         # Save window geometry/state.
@@ -696,6 +723,160 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         path.mkdir(parents=True, exist_ok=True)
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
         logger.info("open_logs_folder path=%s", path)
+
+    def _on_send_debug_report(self) -> None:
+        logger.info("debug_report_clicked")
+        self._toolbar._debug_report_btn.setEnabled(False)
+
+        logger.info("debug_report_collect_start")
+        log_text, metadata = self._collect_debug_report_data()
+        logger.info(
+            "debug_report_collect_done file_count=%d total_chars=%d",
+            metadata.get("_file_count", 0),
+            len(log_text),
+        )
+
+        from aura.startup_logging import session_id as get_session_id
+        from aura.version import __version__
+
+        payload = {
+            "app_version": __version__,
+            "session_id": get_session_id(),
+            "platform": sys.platform,
+            "packaged": getattr(sys, "frozen", False) or "__compiled__" in globals(),
+            "workspace_root_redacted": self._redact_path(self._workspace_root) if self._workspace_root else "",
+            "last_breadcrumb": "debug_report_clicked",
+            "payload_json": metadata,
+            "log_text": log_text,
+        }
+
+        base_url = get_provider("aura").base_url
+        thread = QThread(self)
+        worker = DebugReportWorker(base_url=base_url, payload=payload)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(lambda rid, err: self._on_debug_report_done(rid, err))
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.start()
+
+    def _collect_debug_report_data(self) -> tuple[str, dict]:
+        """Collect recent logs and safe redacted metadata.
+        Returns (log_text, payload_json_dict).
+        """
+        from aura.startup_logging import logs_dir as get_logs_dir
+
+        ld = get_logs_dir()
+        log_text_parts: list[str] = []
+        total_chars = 0
+        MAX_LOG_CHARS = 100000
+        file_count = 0
+
+        priority_names = ["aura-latest.log", "aura-previous.log"]
+        files_to_read: list[Path] = []
+        for name in priority_names:
+            p = ld / name
+            if p.exists():
+                files_to_read.append(p)
+
+        try:
+            session_logs = sorted(
+                [
+                    p
+                    for p in ld.iterdir()
+                    if p.name.startswith("aura-") and p.name.endswith(".log") and p.name not in ("aura-latest.log", "aura-previous.log")
+                ],
+                key=lambda p: p.stat().st_mtime if p.exists() else 0,
+                reverse=True,
+            )
+            files_to_read.extend(session_logs[:8])
+        except Exception:
+            logger.warning("debug_report: failed to list session logs", exc_info=True)
+
+        for fp in files_to_read:
+            try:
+                text = fp.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                continue
+            remaining = MAX_LOG_CHARS - total_chars
+            if remaining <= 0:
+                break
+            header = f"--- {fp.name} ---\n"
+            if len(header) + len(text) <= remaining:
+                log_text_parts.append(header + text)
+                total_chars += len(header) + len(text)
+                file_count += 1
+            else:
+                truncated = text[:max(0, remaining - len(header) - 50)]
+                log_text_parts.append(header + truncated + "\n... [truncated]")
+                total_chars += len(header) + len(truncated) + 20
+                file_count += 1
+                break
+
+        metadata: dict[str, object] = {
+            "client_timestamp": datetime.utcnow().isoformat() + "Z",
+            "platform": sys.platform,
+            "python_version": sys.version.split()[0],
+            "_file_count": file_count,
+        }
+
+        try:
+            from aura.config import get_provider as _get_provider
+            from urllib.parse import urlparse
+
+            provider = _get_provider("deepseek")
+            metadata["deepseek_base_url_host"] = urlparse(provider.base_url).hostname or ""
+        except Exception:
+            logger.debug("debug_report: could not read deepseek base_url", exc_info=True)
+
+        try:
+            from aura.config import load_settings as _load_settings
+
+            settings = _load_settings()
+            metadata["provider"] = settings.provider
+            metadata["planner_provider"] = settings.planner_provider
+            metadata["worker_provider"] = settings.worker_provider
+            metadata["model"] = settings.model
+            metadata["thinking"] = settings.thinking
+        except Exception:
+            logger.debug("debug_report: could not load settings", exc_info=True)
+
+        if self._workspace_root:
+            metadata["workspace"] = self._workspace_root.name
+        else:
+            metadata["workspace"] = ""
+
+        log_text = "\n".join(log_text_parts)
+        return log_text, metadata
+
+    @staticmethod
+    def _redact_path(path: Path | None) -> str:
+        if path is None:
+            return ""
+        try:
+            return path.name
+        except Exception:
+            logger.debug("debug_report: redact_path failed", exc_info=True)
+            return ""
+
+    def _on_debug_report_done(self, report_id: str, error: str) -> None:
+        self._toolbar._debug_report_btn.setEnabled(True)
+        if report_id:
+            short_id = report_id[:5].upper() if len(report_id) > 5 else report_id
+            logger.info("debug_report_upload_success report_id=%s", report_id)
+            QMessageBox.information(
+                self,
+                "Debug Report",
+                f"Debug report sent: AURA-{short_id}",
+            )
+        else:
+            logger.info("debug_report_upload_failed error=%s", error)
+            QMessageBox.warning(
+                self,
+                "Debug Report",
+                "Could not send debug report. Logs are still saved locally.",
+            )
 
     def _on_open_checkpoints(self) -> None:
         if self._workspace_root is None or not self._workspace_root.exists():

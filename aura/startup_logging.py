@@ -66,9 +66,9 @@ def configure_startup_logging() -> Path:
     try:
         log_dir.mkdir(parents=True, exist_ok=True)
 
-        # Rotate: previous session log -> aura-previous.log
+        # Rotate the prior latest log to aura-previous.log.
         if latest_path.exists():
-            latest_path.rename(previous_path)
+            latest_path.replace(previous_path)
 
         # Configure with two file handlers
         _configure_file_logging(latest_path, session_log_path)

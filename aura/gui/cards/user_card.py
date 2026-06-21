@@ -5,7 +5,7 @@ import base64
 
 from PySide6.QtCore import QBuffer, QByteArray, QSize, Qt, QTimer
 from PySide6.QtGui import QIcon, QMovie, QPixmap
-from PySide6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QToolButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QSizePolicy, QToolButton, QVBoxLayout, QWidget
 
 from aura.config import media_path
 from aura.gui.markdown_renderer import _render_markdown_with_code
@@ -67,6 +67,8 @@ class UserCard(QFrame):
             body.setText(_render_markdown_with_code(text, color=FG_BODY_USER))
             # The QLabel stylesheet color is now redundant but kept for safety.
             body.setStyleSheet(f"color: {FG_BODY_USER};")
+            body.setMinimumWidth(0)
+            body.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
             layout.addWidget(body)
 
 
@@ -114,7 +116,7 @@ class UserCard(QFrame):
     def _on_copy(self) -> None:
         QApplication.clipboard().setText(self._text)
         self._copy_btn.setIcon(QIcon())
-        self._copy_btn.setText("✓")
+        self._copy_btn.setText("\u2713")
         self._copy_btn.setToolTip("Copied!")
         QTimer.singleShot(2000, self._reset_copy_btn)
 

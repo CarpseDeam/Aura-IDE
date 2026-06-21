@@ -17,9 +17,10 @@ class _StreamLabel(QLabel):
 
     def __init__(self, italic: bool = False, parent=None) -> None:
         super().__init__(parent)
+        self.setMinimumWidth(0)
         self.setWordWrap(True)
         self.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self._italic = italic
         if italic:
             self.setObjectName("reasoning")

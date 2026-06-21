@@ -33,6 +33,7 @@ class MainWindowToolbar(QToolBar):
     update_requested = Signal()
     settings_requested = Signal()
     logs_requested = Signal()
+    debug_report_requested = Signal()
     minimize_requested = Signal()
     maximize_requested = Signal()
     close_requested = Signal()
@@ -130,6 +131,14 @@ class MainWindowToolbar(QToolBar):
         self._logs_btn.setToolTip("Open Logs Folder")
         self._logs_btn.clicked.connect(self.logs_requested.emit)
         self.addWidget(self._logs_btn)
+
+        self.addWidget(_toolbar_separator())
+
+        self._debug_report_btn = QToolButton()
+        self._debug_report_btn.setText("Report")
+        self._debug_report_btn.setToolTip("Send Debug Report")
+        self._debug_report_btn.clicked.connect(self.debug_report_requested.emit)
+        self.addWidget(self._debug_report_btn)
 
         # Small spacer before window controls.
         win_spacer = QWidget()

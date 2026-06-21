@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QScrollArea,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -43,10 +44,14 @@ class ChatView(QScrollArea):
 
     def __init__(self) -> None:
         super().__init__()
+        self.setMinimumWidth(0)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setWidgetResizable(True)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
         container = QWidget()
+        container.setMinimumWidth(0)
+        container.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding)
         self._layout = QVBoxLayout(container)
         self._layout.setContentsMargins(20, 20, 20, self._BOTTOM_SAFE_MARGIN_PX)
         self._layout.setSpacing(32)
@@ -135,6 +140,8 @@ class ChatView(QScrollArea):
         if w.parent() is None:
             w.setParent(self)
         # Insert before the trailing stretch.
+        w.setMinimumWidth(0)
+        w.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self._layout.insertWidget(self._layout.count() - 1, w)
         if not self._is_bulk_updating:
             _fade_in_widget(w)
