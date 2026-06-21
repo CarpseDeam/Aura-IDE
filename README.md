@@ -50,23 +50,36 @@ Most AI coding tools are chat interfaces that try to edit files directly with no
 
 ## Drones and Workbay
 
-Drones are reusable workers you build from natural language. Describe the workflow once — "stage all changes, commit with a descriptive message, push to the current branch" — and it becomes a saved Drone in your workspace. Run it with one click from the main UI. Every Drone shows up as a card in your workspace.
+Drones are folder-backed project tools that handle repeatable tasks without re-explaining them every time. Each Drone lives in its own folder with a `drone.json` manifest and an entrypoint program. Drones are stored in Aura's global Drone roster and appear as cards in the Workbay.
 
-**Read-only Drones** run in parallel for safe background investigation — trace a bug, scout test coverage, map unused exports. No write access, no risk.
+**Command Drones** run a local entrypoint through json-stdio: Aura sends one JSON payload on stdin, the Drone processes it, and writes one JSON result to stdout. Any language works — Python, shell scripts, compiled binaries — as long as it reads stdin and writes JSON to stdout.
 
-**Write-capable Drones** follow the same controlled path as any Worker: spec → edits → diff approval → validation → commit. You review every change before it lands.
+**Harness-lap Drones** (like Repo Gardener) run through Aura's Planner/Worker loop with guardrails: clean worktree, protected paths, max changed files, rollback on failure. Each lap is one bounded maintenance pass.
 
-**Workbay** is a visual canvas where you chain Drones into automations. Drag a Git Push Drone, a lint-fix Drone, and a test-runner Drone into a sequence. Run the chain with one click. Mission Control shows you the status of every active run.
+**Write-policy** controls what a Drone can do:
+- `read_only` — analysis only. No file modifications. Safe to run multiple in parallel.
+- `normal_diff_approval` — changes files through the same diff-approval cycle as any Worker.
+- `ask_before_writes` — per-action approval for sensitive operations.
 
-Examples you can build in a few minutes:
+**Read-only Drones** run in parallel (up to 3 at once) for safe background investigation. **Write-capable Drones** use a shared write lane and run exclusively.
+
+**Workbay** is where saved Drones appear as cards. From each card you can:
+- **Run** — start one Drone run.
+- **Loop** — repeat the Drone on a timer until stopped. Each lap is one bounded run.
+- **Delete** — remove the Drone from the roster (deletes the folder).
+- See live status: running, completed, failed, or waiting for the next loop lap.
+
+Every run produces a **receipt** — the Drone's JSON output plus run metadata — saved to `.aura/drones/runs/` so you can review past work without re-running.
+
+Examples you can use or build in minutes:
 - **Git Push Drone** — stage all, commit with a descriptive message, push.
 - **File Size Mapper** — scan the workspace for large files, report top offenders.
-- **Repo Gardener** — passive maintenance pass: remove deterministic debris, apply bounded refactors.
+- **Repo Gardener** — passive maintenance pass with harness-lap guardrails. Removes deterministic debris, applies bounded refactors, and rolls back on failure.
 
 <p align="center">
   <img src="media/drone-workbay.png" alt="Drones and Workbay" width="900">
 </p>
-<p align="center"><em>Drones in Workbay — reusable agents you can run, chain, and automate.</em></p>
+<p align="center"><em>Drones in Workbay — reusable automation cards you can run, loop, and delete.</em></p>
 
 ## Model access
 
