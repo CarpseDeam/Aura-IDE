@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QSplitter,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -84,8 +85,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
         # Workspace.
         self._workspace_root: Path | None = load_workspace_root()
-        if self._workspace_root is None:
-            self._workspace_root = Path.cwd()
 
         # Bridge — provider-aware.
         self._bridge = ConversationBridge(
@@ -152,8 +151,28 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._left_pane.new_drone_requested.connect(self._drone_controller.on_create_drone)
         self._main_splitter.addWidget(self._left_pane)
 
-        # Middle pane: chat + input
-        center = QWidget(self)
+        # Center column: stacked launchpad / workspace view
+        self._center_stack = QStackedWidget(self)
+        self._center_stack.setStyleSheet("background: transparent;")
+
+        # Page 0: Project Launchpad (shown when no workspace)
+        from aura.gui.project_launchpad import ProjectLaunchpad
+        self._launchpad = ProjectLaunchpad(self)
+        self._center_stack.addWidget(self._launchpad)
+
+        # Wire launchpad signals
+        self._launchpad.open_existing_requested.connect(
+            self._workspace_controller.on_open_existing
+        )
+        self._launchpad.create_new_requested.connect(
+            self._workspace_controller.on_create_new_project
+        )
+        self._launchpad.create_demo_requested.connect(
+            self._workspace_controller.on_create_demo_project
+        )
+
+        # Page 1: Chat + Input (normal workspace view)
+        center = QWidget()
         center.setMinimumWidth(360)
         center_layout = QVBoxLayout(center)
         center_layout.setContentsMargins(20, 0, 20, 16)
@@ -165,8 +184,9 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             self._chat.set_compact_tools(True)
         center_layout.addWidget(self._chat, 1)
 
-        self._input = InputPanel(self._workspace_root, parent=self)
+        self._center_stack.addWidget(center)
 
+        self._input = InputPanel(self._workspace_root, parent=self)
 
 
         # Send handler — owns message queue, vision routing, undo logic.
@@ -253,7 +273,11 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._set_sidebar_planner_worker_mode(self._settings.planner_worker_mode)
         center_layout.addWidget(self._input)
 
-        self._main_splitter.addWidget(center)
+        # Show appropriate initial page
+        self._center_stack.setCurrentIndex(0 if self._workspace_root is None else 1)
+
+        # Add to splitter (replacing previous center addWidget with stack)
+        self._main_splitter.addWidget(self._center_stack)
         self._main_splitter.addWidget(self._playground_aura)
 
         # Sensible initial distribution: left is narrow, chat is comfortable,
@@ -499,7 +523,23 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             if dlg.selected_mission_text:
                 self._input.set_text(dlg.selected_mission_text)
 
+        # After dialog closes, show launchpad or workspace view
+        self._update_center_view()
 
+    def _switch_to_workspace_view(self) -> None:
+        """Switch to the chat+input workspace view."""
+        self._center_stack.setCurrentIndex(1)
+
+    def _show_launchpad(self) -> None:
+        """Show the project launchpad."""
+        self._center_stack.setCurrentIndex(0)
+
+    def _update_center_view(self) -> None:
+        """Toggle between launchpad and workspace view based on workspace_root state."""
+        if self._workspace_root is None:
+            self._show_launchpad()
+        else:
+            self._switch_to_workspace_view()
 
     # ----- provider-aware model combo helpers -----------------------------
 

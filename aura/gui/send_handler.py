@@ -88,6 +88,14 @@ class SendHandler(QObject):
 
     def handle_send(self, payload: SendPayload, model: str, thinking: ThinkingMode) -> None:
         """Process a send payload: route built-ins, queue if busy, or send."""
+        # Guard: no workspace selected
+        if self._workspace_root is None:
+            self._chat.add_error(
+                "No workspace",
+                "Choose a project folder first. Aura needs a workspace before it can plan, edit, or run tools.",
+            )
+            return
+
         # Drone mode checks removed — drone lifecycle removed.
 
         route = classify_user_request(payload.text)

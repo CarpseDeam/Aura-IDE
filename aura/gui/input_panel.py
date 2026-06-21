@@ -209,6 +209,13 @@ class InputPanel(QFrame):
         self._editor.submitted.connect(self._on_submit)
         self._editor.image_pasted.connect(self._on_image_pasted)
         self._editor.files_dropped.connect(self._on_files_dropped)
+        if workspace_root is not None:
+            self._editor.setPlaceholderText(
+                "Describe the bug, paste a screenshot (Ctrl+V), or drop files here. "
+                "Ctrl+Enter to send."
+            )
+        else:
+            self._editor.setPlaceholderText("Choose a project folder first.")
         outer.addWidget(self._editor)
 
         # Slash command hint
