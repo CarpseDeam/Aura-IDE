@@ -523,6 +523,71 @@ def git_init(workspace_root: Path) -> tuple[bool, str]:
         return False, "git commit timed out."
 
 
+def commit_all(workspace_root: Path, message: str) -> tuple[bool, str | None, str]:
+    """Stage all changes and commit. Returns (ok, new_sha_or_None, message).
+
+    - If nothing to commit: (True, None, "nothing to commit") — not an error.
+    - On successful commit: (True, <HEAD sha>, "") with the new HEAD sha.
+    - On git failure: (False, None, <stderr>).
+    """
+    try:
+        add_result = subprocess.run(
+            ["git", "add", "-A"],
+            cwd=str(workspace_root),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+            **get_subprocess_kwargs(),
+        )
+        if add_result.returncode != 0:
+            stderr = add_result.stderr.strip() if add_result.stderr else "git add failed"
+            return False, None, stderr
+    except subprocess.TimeoutExpired:
+        return False, None, "git add timed out."
+    except FileNotFoundError:
+        return False, None, "git executable not found."
+
+    try:
+        commit_result = subprocess.run(
+            ["git", "commit", "-m", message],
+            cwd=str(workspace_root),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+            **get_subprocess_kwargs(),
+        )
+        if commit_result.returncode == 0:
+            # Capture the new HEAD sha
+            try:
+                sha_result = subprocess.run(
+                    ["git", "rev-parse", "HEAD"],
+                    cwd=str(workspace_root),
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=5,
+                    **get_subprocess_kwargs(),
+                )
+                sha = sha_result.stdout.strip() if sha_result.returncode == 0 else None
+            except (subprocess.TimeoutExpired, FileNotFoundError):
+                sha = None
+            return True, sha, ""
+        else:
+            stderr = commit_result.stderr.strip() if commit_result.stderr else ""
+            if "nothing to commit" in stderr.lower():
+                return True, None, "nothing to commit"
+            return False, None, stderr
+    except subprocess.TimeoutExpired:
+        return False, None, "git commit timed out."
+    except FileNotFoundError:
+        return False, None, "git executable not found."
+
+
 _AURA_GITIGNORE_ENTRIES = (
     "/.aura/backups/",
     "/.aura/conversations/",

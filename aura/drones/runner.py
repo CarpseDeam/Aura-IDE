@@ -96,7 +96,7 @@ class DroneRunner(QObject):
             raise RuntimeError("Harness-lap drone requires a bridge but none was provided")
 
         import datetime as dt
-        from aura.git_ops import working_tree_status, snapshot, changes_since, restore_to_snapshot
+        from aura.git_ops import working_tree_status, snapshot, changes_since, restore_to_snapshot, commit_all
         from aura.conversation.dispatch import WorkerOutcomeStatus
 
         # 1. Check clean working tree before starting
@@ -213,6 +213,19 @@ class DroneRunner(QObject):
             else:
                 rollback_status = "no_changes_to_revert"
 
+        # 8.5. Commit successful lap changes
+        commit_sha: str | None = None
+        if not lap_failed and changed_files:
+            commit_ok, sha, commit_msg = commit_all(workspace_root, lap_result.summary)
+            commit_sha = sha
+            if not commit_ok:
+                # Commit failure is not a lap failure — the edit is valid, just uncommitted
+                summary_extra = f" [commit failed: {commit_msg}]"
+            else:
+                summary_extra = ""
+        else:
+            summary_extra = ""
+
         final_status: str
         if not lap_failed:
             final_status = "completed"
@@ -233,7 +246,7 @@ class DroneRunner(QObject):
             if rollback_status and "rollback_failed" in rollback_status:
                 summary += f" Rollback failed -- tree may be dirty."
         else:
-            summary = lap_result.summary
+            summary = lap_result.summary + summary_extra
 
         artifact: dict[str, Any] = {
             "has_work": bool(changed_files),
@@ -243,6 +256,7 @@ class DroneRunner(QObject):
             "worker_errors": worker_errors,
             "policy_violations": policy_violations,
             "rollback_status": rollback_status,
+            "commit_sha": commit_sha,
         }
 
         receipt = DroneReceipt(
