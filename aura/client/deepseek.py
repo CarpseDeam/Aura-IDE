@@ -10,7 +10,9 @@ from __future__ import annotations
 import json
 import logging
 import os
+import queue
 import threading
+import time
 from collections.abc import Iterator
 from typing import Any
 from urllib.parse import urlparse
@@ -36,6 +38,8 @@ from aura.config import (
     get_provider,
     resolve_api_key,
 )
+
+FIRST_STREAM_EVENT_TIMEOUT_SECONDS = 60.0
 
 
 class DeepSeekClient:
@@ -203,98 +207,153 @@ class DeepSeekClient:
             yield ApiError(status_code=None, message=f"{type(exc).__name__}: {exc}")
             return
 
-        _first_chunk_event = True
+        # Queue+pump-daemon pattern guards against silent hangs when the
+        # provider never sends the first streaming chunk.
+        _log.info(
+            "provider_stream_first_event_wait_start provider=%s model=%s timeout_s=%s",
+            self._provider, model, FIRST_STREAM_EVENT_TIMEOUT_SECONDS,
+        )
 
-        try:
-            for chunk in stream:
-                if cancel_event is not None and cancel_event.is_set():
-                    break
+        chunk_queue: queue.Queue = queue.Queue()
 
-                if _first_chunk_event:
-                    _log.info(
-                        "provider_stream_first_event provider=%s model=%s",
-                        self._provider, model,
-                    )
-                    _first_chunk_event = False
+        def _pump_stream() -> None:
+            try:
+                for chunk in stream:
+                    chunk_queue.put(('chunk', chunk))
+                chunk_queue.put(('sentinel', None))
+            except Exception as exc:  # noqa: BLE001
+                chunk_queue.put(('error', exc))
 
-                # Usage may appear on a terminal-only chunk OR be bundled with the final
-                # choice chunk depending on the server. Emit at most once.
-                if not usage_emitted and getattr(chunk, "usage", None) is not None:
-                    u = chunk.usage
-                    cache_hit = getattr(u, "prompt_cache_hit_tokens", 0) or 0
-                    cache_miss = getattr(u, "prompt_cache_miss_tokens", 0) or 0
-                    yield Usage(
-                        prompt_tokens=getattr(u, "prompt_tokens", 0) or 0,
-                        completion_tokens=getattr(u, "completion_tokens", 0) or 0,
-                        cache_hit_tokens=cache_hit,
-                        cache_miss_tokens=cache_miss,
-                    )
-                    usage_emitted = True
+        pump_thread = threading.Thread(target=_pump_stream, daemon=True)
+        pump_thread.start()
 
-                if not chunk.choices:
-                    continue
+        _first_event_start = time.time()
+        _first_read = True
 
-                choice = chunk.choices[0]
-                delta = choice.delta
-                if choice.finish_reason:
-                    finish_reason = choice.finish_reason
+        while True:
+            if cancel_event is not None and cancel_event.is_set():
+                break
 
-                # Reasoning text (CoT) — the thinking-mode field.
-                rc = getattr(delta, "reasoning_content", None)
-                if rc:
-                    reasoning_buf.append(rc)
-                    yield ReasoningDelta(rc)
-
-                # Final answer text.
-                if delta.content:
-                    content_buf.append(delta.content)
-                    yield ContentDelta(delta.content)
-
-                # Tool-call fragments. OpenAI streams them as deltas keyed by index.
-                if delta.tool_calls:
-                    for tc in delta.tool_calls:
-                        idx = tc.index
-                        slot = tool_calls.setdefault(
-                            idx,
-                            {
-                                "id": "",
-                                "type": "function",
-                                "function": {"name": "", "arguments": ""},
-                            },
+            try:
+                if _first_read:
+                    kind, value = chunk_queue.get(timeout=0.1)
+                else:
+                    kind, value = chunk_queue.get(timeout=0.5)
+            except queue.Empty:
+                if _first_read:
+                    elapsed = time.time() - _first_event_start
+                    if elapsed > FIRST_STREAM_EVENT_TIMEOUT_SECONDS:
+                        _log.info(
+                            "provider_stream_first_event_timeout provider=%s model=%s "
+                            "elapsed_ms=%d base_url_host=%s",
+                            self._provider, model,
+                            int(elapsed * 1000),
+                            urlparse(self._base_url).hostname,
                         )
-                        if tc.id:
-                            slot["id"] = tc.id
-                        if tc.function is not None:
-                            if tc.function.name:
-                                slot["function"]["name"] = tc.function.name
-                            if tc.function.arguments:
-                                slot["function"]["arguments"] += tc.function.arguments
-                                # Buffer arguments if we haven't yielded start yet
-                                if idx not in seen_starts:
-                                    args_buffers.setdefault(idx, []).append(tc.function.arguments)
+                        yield ApiError(
+                            status_code=None,
+                            message=(
+                                f"Provider did not send a first response chunk within "
+                                f"{int(FIRST_STREAM_EVENT_TIMEOUT_SECONDS)} seconds. "
+                                f"Check connection, provider status, model availability, "
+                                f"or try Send Logs."
+                            ),
+                        )
+                        return
+                continue
 
-                        if idx not in seen_starts and slot["id"] and slot["function"]["name"]:
-                            seen_starts.add(idx)
-                            yield ToolCallStart(
-                                index=idx, id=slot["id"], name=slot["function"]["name"]
-                            )
-                            # Flush buffered arguments
-                            if idx in args_buffers:
-                                for fragment in args_buffers.pop(idx):
-                                    yield ToolCallArgsDelta(index=idx, args_chunk=fragment)
-                        elif idx in seen_starts and tc.function is not None and tc.function.arguments:
-                            yield ToolCallArgsDelta(
-                                index=idx, args_chunk=tc.function.arguments
-                            )
-        except APIStatusError as exc:
-            yield ApiError(status_code=exc.status_code, message=str(exc))
-            return
-        except APIError as exc:
-            yield ApiError(status_code=None, message=str(exc))
-            return
-        except Exception as exc:
-            yield ApiError(status_code=None, message=f"{type(exc).__name__}: {exc}")
-            return
+            if kind == 'sentinel':
+                break
+            if kind == 'error':
+                exc = value
+                if isinstance(exc, APIStatusError):
+                    yield ApiError(status_code=exc.status_code, message=str(exc))
+                elif isinstance(exc, APIError):
+                    yield ApiError(status_code=None, message=str(exc))
+                else:
+                    yield ApiError(status_code=None, message=f"{type(exc).__name__}: {exc}")
+                return
+
+            # kind == 'chunk'
+            chunk = value
+
+            if _first_read:
+                _first_read = False
+                elapsed_ms = int((time.time() - _first_event_start) * 1000)
+                _log.info(
+                    "provider_stream_first_event provider=%s model=%s elapsed_ms=%d",
+                    self._provider, model, elapsed_ms,
+                )
+
+            # Usage may appear on a terminal-only chunk OR be bundled with the final
+            # choice chunk depending on the server. Emit at most once.
+            if not usage_emitted and getattr(chunk, "usage", None) is not None:
+                u = chunk.usage
+                cache_hit = getattr(u, "prompt_cache_hit_tokens", 0) or 0
+                cache_miss = getattr(u, "prompt_cache_miss_tokens", 0) or 0
+                yield Usage(
+                    prompt_tokens=getattr(u, "prompt_tokens", 0) or 0,
+                    completion_tokens=getattr(u, "completion_tokens", 0) or 0,
+                    cache_hit_tokens=cache_hit,
+                    cache_miss_tokens=cache_miss,
+                )
+                usage_emitted = True
+
+            if not chunk.choices:
+                continue
+
+            choice = chunk.choices[0]
+            delta = choice.delta
+            if choice.finish_reason:
+                finish_reason = choice.finish_reason
+
+            # Reasoning text (CoT) — the thinking-mode field.
+            rc = getattr(delta, "reasoning_content", None)
+            if rc:
+                reasoning_buf.append(rc)
+                yield ReasoningDelta(rc)
+
+            # Final answer text.
+            if delta.content:
+                content_buf.append(delta.content)
+                yield ContentDelta(delta.content)
+
+            # Tool-call fragments. OpenAI streams them as deltas keyed by index.
+            if delta.tool_calls:
+                for tc in delta.tool_calls:
+                    idx = tc.index
+                    slot = tool_calls.setdefault(
+                        idx,
+                        {
+                            "id": "",
+                            "type": "function",
+                            "function": {"name": "", "arguments": ""},
+                        },
+                    )
+                    if tc.id:
+                        slot["id"] = tc.id
+                    if tc.function is not None:
+                        if tc.function.name:
+                            slot["function"]["name"] = tc.function.name
+                        if tc.function.arguments:
+                            slot["function"]["arguments"] += tc.function.arguments
+                            # Buffer arguments if we haven't yielded start yet
+                            if idx not in seen_starts:
+                                args_buffers.setdefault(idx, []).append(tc.function.arguments)
+
+                    if idx not in seen_starts and slot["id"] and slot["function"]["name"]:
+                        seen_starts.add(idx)
+                        yield ToolCallStart(
+                            index=idx, id=slot["id"], name=slot["function"]["name"]
+                        )
+                        # Flush buffered arguments
+                        if idx in args_buffers:
+                            for fragment in args_buffers.pop(idx):
+                                yield ToolCallArgsDelta(index=idx, args_chunk=fragment)
+                    elif idx in seen_starts and tc.function is not None and tc.function.arguments:
+                        yield ToolCallArgsDelta(
+                            index=idx, args_chunk=tc.function.arguments
+                        )
 
         # Close out any tool-calls we started.
         for idx in sorted(tool_calls):
