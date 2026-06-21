@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from aura import python_env
+from aura.python_env import quote_command_arg
 
 
 @dataclass(frozen=True)
@@ -155,11 +156,6 @@ def preferred_python_for_compile(workspace_root: Path) -> Path:
     return env.python_for_compile
 
 
-def quote_command_arg(value: Path | str) -> str:
-    text = str(value)
-    if os.name == "nt":
-        return subprocess.list2cmdline([text])
-    return shlex.quote(text)
 
 
 def missing_external_tool_for_command(command: str) -> str | None:
