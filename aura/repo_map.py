@@ -14,36 +14,14 @@ from pathlib import Path
 from typing import Any
 
 from aura.ast_utils import parse_python_ast
+from aura.fs_utils import SKIP_DIRS, SKIP_FILE_SUFFIXES, MAX_DIRS_VISITED, MAX_FILES_CONSIDERED, MAX_SCAN_SECONDS, get_max_mtime
 
 logger = logging.getLogger(__name__)
-
-# Directories and file suffixes to skip when generating the repo map.
-SKIP_DIRS: set[str] = {
-    ".git",
-    ".aura",
-    "__pycache__",
-    "node_modules",
-    "build",
-    "dist",
-    ".mypy_cache",
-    ".pytest_cache",
-    ".ruff_cache",
-    ".venv",
-    "venv",
-    ".svn",
-    ".hg",
-    "eggs",
-    ".eggs",
-}
-SKIP_FILE_SUFFIXES: set[str] = {".pyc", ".pyo", ".so", ".o", ".class", ".jar"}
 
 # Cache: workspace_root_str -> (max_mtime, cached_text)
 _repo_map_cache: dict[str, tuple[float, str]] = {}
 
 MAX_LINES = 300
-MAX_DIRS_VISITED = 2000        # Directories walked before budget stop
-MAX_FILES_CONSIDERED = 5000    # Relevant files (matching extensions) before stop
-MAX_SCAN_SECONDS = 5.0         # Maximum wall-clock seconds for a scan
 
 _PY_FUNC_TYPES = (ast.FunctionDef, ast.AsyncFunctionDef)
 
@@ -59,51 +37,6 @@ def _should_skip(path: Path) -> bool:
     return False
 
 
-def _get_max_mtime(root: Path) -> float:
-    """Return the maximum mtime of all files that would be included."""
-    latest = 0.0
-    dirs_visited = 0
-    files_considered = 0
-    start_time = time.monotonic()
-    budget_exceeded = False
-    try:
-        for dirpath, dirnames, filenames in os.walk(root):
-            dirs_visited += 1
-            if dirs_visited > MAX_DIRS_VISITED or time.monotonic() - start_time > MAX_SCAN_SECONDS:
-                budget_exceeded = True
-            if budget_exceeded:
-                break
-            # Prune skipped directories in-place so os.walk doesn't descend.
-            dirnames[:] = [
-                d
-                for d in dirnames
-                if not d.startswith(".") and d not in SKIP_DIRS and (root / d).parts[-1] not in SKIP_DIRS
-            ]
-            for fname in filenames:
-                suffix = Path(fname).suffix.lower()
-                if suffix not in (".py", ".ts", ".tsx", ".js"):
-                    continue
-                files_considered += 1
-                if files_considered > MAX_FILES_CONSIDERED:
-                    budget_exceeded = True
-                    break
-                fpath = os.path.join(dirpath, fname)
-                try:
-                    mtime = os.path.getmtime(fpath)
-                    if mtime > latest:
-                        latest = mtime
-                except OSError:
-                    continue
-            if budget_exceeded:
-                break
-    except PermissionError:
-        pass
-    if budget_exceeded:
-        logger.info(
-            "Repo-map mtime scan truncated: root=%s dirs_visited=%d files_considered=%d elapsed_ms=%.0f",
-            root, dirs_visited, files_considered, (time.monotonic() - start_time) * 1000,
-        )
-    return latest
 
 def _outline_python(text: str, filename: str = "<unknown>") -> dict[str, Any]:
     """AST-based outline for Python files.
@@ -217,7 +150,7 @@ def generate_repo_map(workspace_root: Path, force: bool = False) -> str:
             return cached_text
 
     # Check cache with mtime validation
-    current_mtime = _get_max_mtime(workspace_root)
+    current_mtime = get_max_mtime(workspace_root)
     cached_mtime, cached_text = _repo_map_cache.get(root_str, (0.0, ""))
     if current_mtime == cached_mtime and cached_text:
         return cached_text

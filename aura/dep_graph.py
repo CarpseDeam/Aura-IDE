@@ -15,7 +15,7 @@ from typing import Any
 
 from aura.ast_utils import parse_python_ast
 from aura.config import MAX_READ_BYTES
-from aura.repo_map import SKIP_DIRS, _get_max_mtime
+from aura.fs_utils import SKIP_DIRS, get_max_mtime
 
 _cache: dict[str, tuple[float, DepGraph]] = {}
 
@@ -227,7 +227,7 @@ def build_graph(workspace_root: Path, force: bool = False) -> DepGraph:
             return cached_graph
 
     # Mtime validation
-    current_mtime = _get_max_mtime(workspace_root)
+    current_mtime = get_max_mtime(workspace_root)
     cached_mtime, cached_graph = _cache.get(root_str, (0.0, None))
     if current_mtime == cached_mtime and cached_graph is not None:
         return cached_graph
