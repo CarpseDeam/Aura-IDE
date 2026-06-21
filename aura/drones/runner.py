@@ -5,7 +5,7 @@ import datetime as dt
 import json
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from PySide6.QtCore import QObject, Signal, Slot
 
@@ -15,6 +15,10 @@ from aura.drones.folder_runner import is_folder_backed_drone, run_folder_drone_s
 from aura.drones.receipt import DroneReceipt
 from aura.drones.run import DroneRun
 from aura.drones.store import DroneStore, RunHistoryStore
+
+if TYPE_CHECKING:
+    from aura.drones.probes import ProbeFinding
+
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +87,7 @@ class DroneRunner(QObject):
         self._auto_approve = auto_approve
         self._bridge = bridge
         self._run_owned_files: set[str] = set()
+        self._lap_target: str | None = None
 
     def cancel(self) -> None:
         self._run.cancel()
@@ -105,6 +110,39 @@ class DroneRunner(QObject):
 
     def _build_harness_lap_want(self) -> str:
         instructions = self._drone.instructions or self._drone.description or ""
+        budget = self._drone.permissions.get("max_file_lines", 800)
+        if budget > 0:
+            from aura.drones.probes import probe_file_sizes
+
+            findings = probe_file_sizes(self._workspace_root, budget)
+            if findings:
+                runs = RunHistoryStore.list_runs(self._workspace_root, limit=50)
+                chosen = self._select_lap_target(findings, runs)
+                self._lap_target = chosen
+                lines = [
+                    f"## Size budget probe — {chosen} is over budget (max {budget})",
+                    "",
+                    f"Read `{chosen}` live and make one bounded, behavior-preserving extraction that reduces it.",
+                    "Lift a cohesive unit into its own module with a minimal call left behind.",
+                    "Change nothing unrelated.",
+                    "",
+                ]
+                prior = [r for r in runs if r.get("drone_id") == self._drone.id][:10]
+                if prior:
+                    lines.append("## Recent laps (most recent first) — do not redo or revert")
+                    lines.append("")
+                    for i, r in enumerate(prior, 1):
+                        summary = r.get("summary", "")
+                        artifact = r.get("produced_artifact") or {}
+                        changed = artifact.get("changed_files", [])
+                        suffix = f" [changed: {', '.join(changed)}]" if changed else " [no changes]"
+                        lines.append(f"{i}. {summary}{suffix}")
+                    lines.append("")
+                    lines.append("---")
+                    lines.append("")
+                lines.append(instructions)
+                return "\n".join(lines)
+        self._lap_target = None
         runs = RunHistoryStore.list_runs(self._workspace_root, limit=50)
         prior = [r for r in runs if r.get("drone_id") == self._drone.id][:10]
         if not prior:
@@ -121,6 +159,48 @@ class DroneRunner(QObject):
         lines.append("")
         lines.append(instructions)
         return "\n".join(lines)
+
+    def _select_lap_target(
+        self,
+        findings: list[ProbeFinding],
+        runs: list[dict],
+    ) -> str:
+        """Select which over-budget file to target, rotating away from recently-failed targets.
+
+        A target is 'parked' if its most recent attempt ended with status 'failed'.
+        Prefers the highest-line-count unparked finding.
+        If every finding is parked, picks the one whose most-recent failed attempt is oldest
+        (rotate back to the longest-untried hard target).
+        """
+        # Build dict: target_path -> (most_recent_status, most_recent_started_at)
+        # Runs list is most-recent-first, so first encounter per target wins.
+        target_latest: dict[str, tuple[str, str]] = {}
+        for r in runs:
+            if r.get("drone_id") != self._drone.id:
+                continue
+            artifact = r.get("produced_artifact") or {}
+            target = artifact.get("attempted_target")
+            if target and target not in target_latest:
+                target_latest[target] = (
+                    r.get("status", ""),
+                    r.get("started_at", ""),
+                )
+
+        parked = {t for t, (status, _) in target_latest.items() if status == "failed"}
+
+        # Unparked: findings whose path is not in the parked set
+        unparked = [f for f in findings if f.path not in parked]
+        if unparked:
+            unparked.sort(key=lambda f: f.line_count, reverse=True)
+            return unparked[0].path
+
+        # All findings are parked — rotate to the one left alone longest
+        def _oldest_attempt(path: str) -> str:
+            _, started_at = target_latest.get(path, ("", ""))
+            return started_at
+
+        findings.sort(key=lambda f: _oldest_attempt(f.path))
+        return findings[0].path
 
     def _run_harness_lap(self) -> None:
         if self._bridge is None:
@@ -503,6 +583,7 @@ class DroneRunner(QObject):
             "dirty_files_owned": list(self._run_owned_files),
             "commit_sha": commit_sha,
             "repair_attempts": repair_attempts_log,
+            "attempted_target": self._lap_target,
         }
 
         receipt = DroneReceipt(
