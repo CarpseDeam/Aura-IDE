@@ -649,6 +649,7 @@ class ConversationBridge(QObject):
 
             loop = QEventLoop()
             worker.finished.connect(loop.quit)
+            worker.finished.connect(thread.quit)
 
             thread.started.connect(worker.run)
             thread.start()
