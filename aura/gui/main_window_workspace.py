@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QObject, Qt, QTimer
+from PySide6.QtCore import QObject, Qt, QTimer, Signal, QThread
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 
 from aura.config import save_workspace_root
@@ -40,12 +40,26 @@ def _categorize_blocked_root(path: Path) -> str | None:
     return None
 
 
+class _GitCheckWorker(QObject):
+    """Runs is_git_repo on a thread so the 5s timeout never blocks the UI."""
+    finished = Signal(Path, bool)  # path, is_git
+
+    def __init__(self, path: Path, parent=None):
+        super().__init__(parent)
+        self._path = path
+
+    def run(self):
+        result = is_git_repo(self._path)
+        self.finished.emit(self._path, result)
+
+
 class MainWindowWorkspaceController(QObject):
     """Owns the Workspace / Project Navigation responsibility cluster for MainWindow."""
 
     def __init__(self, window: MainWindow, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._window = window
+        self._pending_git_path: Path | None = None
 
     def _warn_blocked_root(self, path: Path) -> bool:
         """Return True if path was blocked (warning shown), False if OK to proceed."""
@@ -87,6 +101,27 @@ class MainWindowWorkspaceController(QObject):
         msg_box.buttonClicked.connect(_on_button_clicked)
         msg_box.show()
 
+    def _check_git_async(self, root_path: Path) -> None:
+        """Check git in background; show non-modal warning if not a repo."""
+        self._pending_git_path = root_path
+        worker = _GitCheckWorker(root_path)
+        thread = QThread(self)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(self._on_git_check_done)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.start()
+
+    def _on_git_check_done(self, root_path: Path, is_git: bool) -> None:
+        """Called from worker thread when git check completes."""
+        # Ignore stale results when the user has already changed workspace
+        if root_path != self._pending_git_path:
+            return
+        if not is_git:
+            self._show_non_git_warning(root_path)
+
     def on_change_root(self) -> None:
         window = self._window
         start = str(window._workspace_root) if window._workspace_root else str(Path.home())
@@ -97,11 +132,7 @@ class MainWindowWorkspaceController(QObject):
         if self._warn_blocked_root(path):
             return
         self._on_project_selected(path)
-        t0 = time.perf_counter()
-        not_git = not is_git_repo(path)
-        logger.info("is_git_repo done in %.3fs", time.perf_counter() - t0)
-        if not_git:
-            self._show_non_git_warning(path)
+        self._check_git_async(path)
 
     def _retarget_workspace(self, root_path: Path, *, restore_last: bool = True) -> None:
         from aura.drones.store import _project_root_for_drone_storage
@@ -168,8 +199,6 @@ class MainWindowWorkspaceController(QObject):
         chosen_path = Path(chosen)
         if self._warn_blocked_root(chosen_path):
             return
-        from aura.projects.store import ProjectStore
-        ProjectStore().create_or_update_project(chosen_path)
         self._on_project_selected(chosen_path)
 
     def onboarding_change_workspace(self) -> str | None:
@@ -225,11 +254,7 @@ class MainWindowWorkspaceController(QObject):
         if self._warn_blocked_root(path):
             return
         self._on_project_selected(path)
-        t0 = time.perf_counter()
-        not_git = not is_git_repo(path)
-        logger.info("is_git_repo done in %.3fs", time.perf_counter() - t0)
-        if not_git:
-            self._show_non_git_warning(path)
+        self._check_git_async(path)
 
     def on_create_new_project(self) -> None:
         """Let user choose or create an empty folder, then set it as workspace."""
@@ -242,11 +267,7 @@ class MainWindowWorkspaceController(QObject):
         if self._warn_blocked_root(path):
             return
         self._on_project_selected(path)
-        t0 = time.perf_counter()
-        not_git = not is_git_repo(path)
-        logger.info("is_git_repo done in %.3fs", time.perf_counter() - t0)
-        if not_git:
-            self._show_non_git_warning(path)
+        self._check_git_async(path)
 
     def on_create_demo_project(self) -> None:
         """Create a tiny demo project suitable for first-time users."""

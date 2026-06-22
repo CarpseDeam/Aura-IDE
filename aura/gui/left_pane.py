@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal, Slot
+from PySide6.QtCore import Qt, QTimer, Signal, Slot
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
@@ -491,11 +491,6 @@ class LeftPane(QFrame):
             return
 
         for project in projects:
-            try:
-                store.backfill_threads_from_conversations(project)
-            except Exception:
-                logging.warning("Failed to backfill threads")
-
             is_active = (workspace_root is not None and project.root_path.resolve() == workspace_root.resolve())
 
             row = _ProjectRow(project, is_active, parent=self._projects_container)
@@ -530,6 +525,19 @@ class LeftPane(QFrame):
                     self._projects_layout.addWidget(more_row)
 
         self._projects_layout.addStretch(1)
+
+        # Defer thread backfill so the project list renders first
+        def _do_backfill():
+            for project in projects:
+                try:
+                    store.backfill_threads_from_conversations(project)
+                except Exception:
+                    logging.warning("Failed to backfill threads")
+            # Refresh to show any newly discovered threads
+            if self._last_workspace_root is not None:
+                self.refresh_projects(self._last_workspace_root)
+
+        QTimer.singleShot(0, _do_backfill)
 
     def _on_show_more_clicked(self) -> None:
         self._show_all_active_threads = True
