@@ -6,6 +6,7 @@ right-click shows Aura/open/reveal/copy actions.
 """
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 import sys
@@ -38,7 +39,11 @@ from aura.config import media_path
 # Mirrors the SKIP rules in conversation/tools/fs_read.py so the user sees
 # what the tools see — minus `.aura`, which we keep visible so backups are
 # discoverable.
-_HIDDEN_DIRS = {"__pycache__", ".venv", ".git", "node_modules"}
+_HIDDEN_DIRS = {
+    "__pycache__", ".venv", ".git", "node_modules",
+    "venv", "env", "dist", "build", ".next", ".cache",
+    "target",
+}
 _HIDDEN_SUFFIXES = set()
 
 
@@ -80,6 +85,9 @@ class _WorkspaceFilterProxy(QSortFilterProxyModel):
         if not name or name in (".", ".."):
             return False
         is_dir = model.isDir(idx)
+        # Reject symlinks to avoid traversal loops
+        if os.path.islink(model.filePath(idx)):
+            return False
         if is_dir:
             if name in _HIDDEN_DIRS:
                 return False
@@ -158,10 +166,14 @@ class WorkspaceTree(QWidget):
     # ---- public API -------------------------------------------------------
 
     def set_root(self, root: Path) -> None:
+        import time
+        t0 = time.perf_counter()
         self._root = root
         src_index = self._fs_model.setRootPath(str(root))
         proxy_root = self._proxy.mapFromSource(src_index)
         self._view.setRootIndex(proxy_root)
+        elapsed = time.perf_counter() - t0
+        logging.getLogger(__name__).info("tree.set_root %s done in %.3fs", root, elapsed)
 
     def root(self) -> Path | None:
         return self._root

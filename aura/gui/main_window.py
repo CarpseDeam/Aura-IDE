@@ -392,8 +392,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._persistence.project_thread_updated.connect(self._on_project_thread_updated)
         self._persistence.current_context_changed.connect(self._on_current_context_changed)
 
-        self._left_pane.refresh_projects(self._workspace_root)
-        self._left_pane.refresh_drones(self._workspace_root)
+        QTimer.singleShot(0, lambda: self._left_pane.refresh_projects(self._workspace_root))
+        QTimer.singleShot(0, lambda: self._left_pane.refresh_drones(self._workspace_root))
 
         self._refresh_status_bar()
         self._balance_controller.refresh(self._settings)

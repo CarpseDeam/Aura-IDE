@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import logging
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QObject, QTimer
+from PySide6.QtCore import QObject, Qt, QTimer
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 
 from aura.config import save_workspace_root
@@ -60,6 +61,32 @@ class MainWindowWorkspaceController(QObject):
         )
         return True
 
+    def _show_non_git_warning(self, root_path: Path) -> None:
+        """Non-modal warning that the folder is not a Git repo."""
+        msg_box = QMessageBox(self._window)
+        msg_box.setWindowTitle("Not a Git Repository")
+        msg_box.setText(
+            "This folder is not a Git repo. Aura can still browse it, "
+            "but undo and auto-commit need Git."
+        )
+        init_btn = msg_box.addButton("Initialize Git", QMessageBox.ButtonRole.ActionRole)
+        msg_box.addButton("Not now", QMessageBox.ButtonRole.RejectRole)
+        msg_box.setIcon(QMessageBox.Icon.Information)
+        msg_box.setModal(False)
+        msg_box.setWindowModality(Qt.WindowModality.NonModal)
+
+        def _on_button_clicked(btn):
+            if btn == init_btn:
+                ok, msg = git_init(root_path)
+                if ok:
+                    QMessageBox.information(self._window, "Git Repository", msg)
+                else:
+                    QMessageBox.warning(self._window, "Git Init Failed", msg)
+            msg_box.close()
+
+        msg_box.buttonClicked.connect(_on_button_clicked)
+        msg_box.show()
+
     def on_change_root(self) -> None:
         window = self._window
         start = str(window._workspace_root) if window._workspace_root else str(Path.home())
@@ -70,24 +97,11 @@ class MainWindowWorkspaceController(QObject):
         if self._warn_blocked_root(path):
             return
         self._on_project_selected(path)
-
-        # Offer to initialize git if the workspace is not a git repo.
-        if not is_git_repo(path):
-            reply = QMessageBox.question(
-                window,
-                "Not a Git Repository",
-                "This workspace is not a git repository.\n\n"
-                "Aura uses git for auto-commit and undo.\n"
-                "Would you like to run 'git init' and create an initial commit?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.Yes,
-            )
-            if reply == QMessageBox.Yes:
-                ok, msg = git_init(path)
-                if ok:
-                    QMessageBox.information(window, "Git Repository", msg)
-                else:
-                    QMessageBox.warning(window, "Git Init Failed", msg)
+        t0 = time.perf_counter()
+        not_git = not is_git_repo(path)
+        logger.info("is_git_repo done in %.3fs", time.perf_counter() - t0)
+        if not_git:
+            self._show_non_git_warning(path)
 
     def _retarget_workspace(self, root_path: Path, *, restore_last: bool = True) -> None:
         from aura.drones.store import _project_root_for_drone_storage
@@ -103,23 +117,47 @@ class MainWindowWorkspaceController(QObject):
         window._send_handler.set_workspace_root(storage_root)
         window._playground.set_workspace_root(storage_root)
         window._companion.set_workspace_root(str(window._workspace_root))
+        t0 = time.perf_counter()
         window._tree.set_root(storage_root)
+        logger.info("tree.set_root done in %.3fs", time.perf_counter() - t0)
         self.update_workspace_label()
         window._refresh_status_bar()
         # Switch from launchpad to workspace view
         window._switch_to_workspace_view()
         if window._settings.restore_last_conversation and restore_last:
-            QTimer.singleShot(0, lambda: window._persistence.restore_last(storage_root))
+            t1 = time.perf_counter()
+
+            def _do_restore():
+                window._persistence.restore_last(storage_root)
+                logger.info("restore_last done in %.3fs", time.perf_counter() - t1)
+
+            QTimer.singleShot(0, _do_restore)
 
     def _on_project_selected(self, root_path: Path, *, restore_last: bool = True) -> None:
         from aura.projects.store import ProjectStore
+        t0 = time.perf_counter()
+        logger.info("create_or_update_project start")
         project = ProjectStore().create_or_update_project(root_path)
+        logger.info("create_or_update_project done in %.3fs", time.perf_counter() - t0)
         window = self._window
         window._companion.set_current_project(project.id, project.name)
         save_workspace_root(root_path)
+        t_retarget = time.perf_counter()
         self._retarget_workspace(root_path, restore_last=restore_last)
-        window._left_pane.refresh_projects(window._workspace_root)
-        window._left_pane.refresh_drones(window._workspace_root)
+        logger.info("retarget_workspace done in %.3fs", time.perf_counter() - t_retarget)
+
+        def _do_refresh_projects():
+            t1 = time.perf_counter()
+            window._left_pane.refresh_projects(window._workspace_root)
+            logger.info("refresh_projects done in %.3fs", time.perf_counter() - t1)
+
+        def _do_refresh_drones():
+            t2 = time.perf_counter()
+            window._left_pane.refresh_drones(window._workspace_root)
+            logger.info("refresh_drones done in %.3fs", time.perf_counter() - t2)
+
+        QTimer.singleShot(0, _do_refresh_projects)
+        QTimer.singleShot(0, _do_refresh_drones)
 
     def on_new_project(self) -> None:
         window = self._window
@@ -156,8 +194,20 @@ class MainWindowWorkspaceController(QObject):
         _project = ProjectStore().create_or_update_project(path)
         window._companion.set_current_project(_project.id, _project.name)
         self.update_workspace_label()
-        window._left_pane.refresh_projects(path)
-        window._left_pane.refresh_drones(path)
+
+        def _do_refresh_projects():
+            t0 = time.perf_counter()
+            window._left_pane.refresh_projects(path)
+            logger.info("refresh_projects done in %.3fs", time.perf_counter() - t0)
+
+        def _do_refresh_drones():
+            t0 = time.perf_counter()
+            window._left_pane.refresh_drones(path)
+            logger.info("refresh_drones done in %.3fs", time.perf_counter() - t0)
+
+        QTimer.singleShot(0, _do_refresh_projects)
+        QTimer.singleShot(0, _do_refresh_drones)
+
         # Close drone workbay when workspace root changes
         window._drone_controller.hide_workbay()
         clear_drone_construction()
@@ -175,22 +225,11 @@ class MainWindowWorkspaceController(QObject):
         if self._warn_blocked_root(path):
             return
         self._on_project_selected(path)
-        if not is_git_repo(path):
-            reply = QMessageBox.question(
-                window,
-                "Not a Git Repository",
-                "This workspace is not a git repository.\n\n"
-                "Aura uses git for auto-commit and undo.\n"
-                "Would you like to run 'git init' and create an initial commit?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.Yes,
-            )
-            if reply == QMessageBox.Yes:
-                ok, msg = git_init(path)
-                if ok:
-                    QMessageBox.information(window, "Git Repository", msg)
-                else:
-                    QMessageBox.warning(window, "Git Init Failed", msg)
+        t0 = time.perf_counter()
+        not_git = not is_git_repo(path)
+        logger.info("is_git_repo done in %.3fs", time.perf_counter() - t0)
+        if not_git:
+            self._show_non_git_warning(path)
 
     def on_create_new_project(self) -> None:
         """Let user choose or create an empty folder, then set it as workspace."""
@@ -203,22 +242,11 @@ class MainWindowWorkspaceController(QObject):
         if self._warn_blocked_root(path):
             return
         self._on_project_selected(path)
-        if not is_git_repo(path):
-            reply = QMessageBox.question(
-                window,
-                "Not a Git Repository",
-                "This workspace is not a git repository.\n\n"
-                "Aura uses git for auto-commit and undo.\n"
-                "Would you like to run 'git init' and create an initial commit?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.Yes,
-            )
-            if reply == QMessageBox.Yes:
-                ok, msg = git_init(path)
-                if ok:
-                    QMessageBox.information(window, "Git Repository", msg)
-                else:
-                    QMessageBox.warning(window, "Git Init Failed", msg)
+        t0 = time.perf_counter()
+        not_git = not is_git_repo(path)
+        logger.info("is_git_repo done in %.3fs", time.perf_counter() - t0)
+        if not_git:
+            self._show_non_git_warning(path)
 
     def on_create_demo_project(self) -> None:
         """Create a tiny demo project suitable for first-time users."""
@@ -251,7 +279,10 @@ class MainWindowWorkspaceController(QObject):
         (src_dir / "main.py").write_text(main_content, encoding="utf-8")
 
         # Git init if possible (non-fatal if it fails)
-        if not is_git_repo(demo_dir):
+        t0 = time.perf_counter()
+        not_git = not is_git_repo(demo_dir)
+        logger.info("is_git_repo done in %.3fs", time.perf_counter() - t0)
+        if not_git:
             try:
                 git_init(demo_dir)
             except Exception as exc:
