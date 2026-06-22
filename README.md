@@ -41,7 +41,9 @@ The user reviews the plan before execution and reviews diffs before writes. Noth
 Most AI coding tools are chat interfaces that try to edit files directly with no intermediate reasoning layer. Aura separates concerns:
 
 **Planner and Worker are separate agents.** The Planner reads your codebase and produces a focused technical spec — not raw code. The Worker starts from that clean spec instead of inheriting the Planner's full reasoning trace. This means you can mix a cheap Planner with an expensive Worker, or use different providers per role.
-
+<p align="left">
+  <img src="media/aura-opening.png" alt="Planner/Worker" width="600">
+</p>
 **Aura is a harness around models, not a model itself.** Swap DeepSeek for Anthropic mid-session, change thinking depth per agent, or switch providers entirely — the workflow stays the same. The architecture, not the model, produces the consistency.
 
 **Repo-aware by default.** Every Planner system prompt includes an AST-derived structural map of your workspace. BM25 full-text search covers 30+ file extensions across up to 1,500 files. A dependency graph traces import relationships. The AI doesn't guess your project layout — it reads it.
