@@ -86,6 +86,9 @@ class TerminalCard(QFrame):
         )
         body_layout.addWidget(self._output_view)
 
+        # Prevent unbounded document growth that slows rendering
+        self._output_view.document().setMaximumBlockCount(4000)
+
         self._body.setVisible(not start_collapsed)
         layout.addWidget(self._body)
 
@@ -100,6 +103,12 @@ class TerminalCard(QFrame):
         self._timer.timeout.connect(self._flush)
         self._timer.setInterval(33)  # ~30 fps
         self._timer.start()
+
+        # Coalesce auto-scroll to avoid stutter during rapid flushes
+        self._scroll_timer = QTimer(self)
+        self._scroll_timer.setSingleShot(True)
+        self._scroll_timer.setInterval(40)
+        self._scroll_timer.timeout.connect(self._do_scroll)
 
     def _toggle_body(self) -> None:
         self._set_body_visible(not self._body.isVisible())
@@ -167,13 +176,21 @@ class TerminalCard(QFrame):
         self._dirty = False
         self._output_view.insertPlainText(self._pending)
         self._pending = ""
-        # Auto-scroll to bottom
+        # Coalesced auto-scroll: defer the scrollbar work
+        if not self._scroll_timer.isActive():
+            self._scroll_timer.start()
+
+    def _do_scroll(self) -> None:
+        """Scroll the output view to the bottom."""
         sb = self._output_view.verticalScrollBar()
         sb.setValue(sb.maximum())
 
     def set_result(self, exit_code: int) -> None:
         """Set the final state based on the exit code."""
         self._flush()  # Flush any buffered output before stopping the timer
+        # Force final scroll to show last output
+        self._scroll_timer.stop()
+        self._do_scroll()
         self._timer.stop()
         self._state = self.STATE_DONE if exit_code == 0 else self.STATE_FAILED
         if exit_code != 0:

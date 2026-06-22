@@ -87,6 +87,11 @@ class ChatView(QScrollArea):
         self._is_bulk_updating: bool = False
         self._show_empty_hint()
 
+        self._scroll_timer = QTimer(self)
+        self._scroll_timer.setSingleShot(True)
+        self._scroll_timer.setInterval(40)
+        self._scroll_timer.timeout.connect(self._scroll_to_bottom)
+
         # Follow new content while the user is reading the bottom of the thread.
         # If they scroll upward, leave the viewport alone until they return.
         self._auto_follow_bottom = True
@@ -152,6 +157,7 @@ class ChatView(QScrollArea):
         return bar.maximum() - bar.value() <= threshold
 
     def _scroll_to_bottom(self, force: bool = False) -> None:
+        self._scroll_timer.stop()
         if self._is_bulk_updating and not force:
             return
         if not force and not self._auto_follow_bottom:
@@ -169,6 +175,13 @@ class ChatView(QScrollArea):
         self._scroll_anim.finished.connect(self._end_programmatic_scroll)
         self._programmatic_scroll_depth += 1
         self._scroll_anim.start()
+
+    def _request_scroll_to_bottom(self, force: bool = False) -> None:
+        if force:
+            self._scroll_timer.stop()
+            self._scroll_to_bottom()
+        elif not self._scroll_timer.isActive():
+            self._scroll_timer.start()
 
     def _stop_scroll_animation(self) -> None:
         if self._scroll_anim is not None:
@@ -218,6 +231,7 @@ class ChatView(QScrollArea):
     # ---- mutation API -----------------------------------------------------
 
     def reset(self) -> None:
+        self._scroll_timer.stop()
         # Strip everything except the trailing stretch.
         while self._layout.count() > 1:
             item = self._layout.takeAt(0)
@@ -476,7 +490,7 @@ class ChatView(QScrollArea):
         self.current_assistant().append_reasoning(text)
         if self._current_aura is not None:
             self._current_aura.set_glow_state("thinking")
-        self._scroll_to_bottom()
+        self._request_scroll_to_bottom()
 
     def append_content(self, text: str) -> None:
         ac = self.current_assistant()
@@ -488,7 +502,7 @@ class ChatView(QScrollArea):
         if not ac._content_label.isVisible() and self._current_aura is not None:
             self._current_aura.set_glow_state("thinking")
         ac.append_content(text)
-        self._scroll_to_bottom()
+        self._request_scroll_to_bottom()
 
     def add_tool_call(self, tool_call_id: str, name: str) -> None:
         if self._current_aura is not None:
@@ -528,7 +542,7 @@ class ChatView(QScrollArea):
         controller = self._controllers.get(tool_call_id)
         if controller:
             controller.append_fragment(fragment)
-            self._scroll_to_bottom()
+            self._request_scroll_to_bottom()
 
     def set_tool_result(self, tool_call_id: str, ok: bool, result_text: str) -> None:
         if tool_call_id in self._compact_tool_names:
@@ -646,7 +660,7 @@ class ChatView(QScrollArea):
         card = self._terminal_cards.get(tool_call_id)
         if card is not None:
             card.append_output(text)
-        self._scroll_to_bottom()
+        self._request_scroll_to_bottom()
 
     def add_diff_card(
         self,

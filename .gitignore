@@ -19,6 +19,18 @@ env/
 
 # Aura user data (per-workspace)
 
+# Secrets and credentials
+.env
+.env.*
+
+# Logs and diagnostics
+*.log
+logs/
+debug_reports/
+diagnostics/
+
+# Temporary / smoke
+$smoke/
 
 # IDE
 .vscode/
@@ -58,6 +70,8 @@ Thumbs.db
 /.aura/project.json
 /.aura/toolist.txt
 /.aura/drones/runs/
+/.aura/tools/
+/.aura/**/*.log
 
 /.aura/memory.db-shm
 /.aura/memory.db-wal
