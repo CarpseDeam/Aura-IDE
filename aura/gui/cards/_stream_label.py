@@ -52,9 +52,8 @@ class _StreamLabel(QLabel):
             return
         self._dirty = False
         if self._italic:
-            # For reasoning, we still want to show it as it streams, but now
-            # we can use the proper markdown renderer with reasoning styles.
-            self.setText(_render_markdown_with_code(self._buf, color=FG_ITALIC, italic=True))
+            escaped = _html.escape(self._buf)
+            self.setText(f"<div style='color:{FG_ITALIC}; font-style:italic; white-space:pre-wrap;'>{escaped}</div>")
         else:
             self.setText(_render_markdown_with_code(self._buf))
 

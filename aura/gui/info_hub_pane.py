@@ -33,8 +33,6 @@ class InfoHubPane(QWidget):
         clear() -> None
     """
 
-    _LOG_REVEAL_CHARS_PER_TICK = 256
-
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setMinimumSize(0, 0)
@@ -83,26 +81,25 @@ class InfoHubPane(QWidget):
 
         self._tabs.addTab(self._log_tab, "Worker Log")
 
-        # Typewriter state for the log
-        self._log_buffer = ""
-        self._log_visible = ""
-        self._log_timer = QTimer(self)
-        self._log_timer.timeout.connect(self._on_log_tick)
-        self._log_timer.setInterval(20)  # reveal N chars per tick (see _LOG_REVEAL_CHARS_PER_TICK)
-
     # Public API — Worker Log
 
     def append_reasoning(self, text: str) -> None:
-        """Append text to the Worker Log buffer with typewriter effect."""
-        self._log_buffer += text
-        if not self._log_timer.isActive():
-            self._log_timer.start()
+        """Append text to the Worker Log directly."""
+        cursor = self._log_view.textCursor()
+        cursor.movePosition(cursor.MoveOperation.End)
+        self._log_view.setTextCursor(cursor)
+        self._log_view.insertPlainText(text)
+        sb = self._log_view.verticalScrollBar()
+        sb.setValue(sb.maximum())
 
     def append_content(self, text: str) -> None:
-        """Append text to the Worker Log buffer with typewriter effect."""
-        self._log_buffer += text
-        if not self._log_timer.isActive():
-            self._log_timer.start()
+        """Append text to the Worker Log directly."""
+        cursor = self._log_view.textCursor()
+        cursor.movePosition(cursor.MoveOperation.End)
+        self._log_view.setTextCursor(cursor)
+        self._log_view.insertPlainText(text)
+        sb = self._log_view.verticalScrollBar()
+        sb.setValue(sb.maximum())
 
     def update_todo_list(self, tasks: list[dict]) -> None:
         """Delegate to the embedded TodoListWidget."""
@@ -130,9 +127,6 @@ class InfoHubPane(QWidget):
 
         Flushes the typewriter immediately so the summary is visible at once.
         """
-        # Flush any pending typewriter content
-        self._flush_log()
-
         if status is not None:
             from aura.conversation.dispatch import WorkerOutcomeStatus
             status_labels = {
@@ -191,9 +185,6 @@ class InfoHubPane(QWidget):
 
     def clear(self) -> None:
         """Reset the Worker Log: clear text, todo, and dynamic cards."""
-        self._log_timer.stop()
-        self._log_buffer = ""
-        self._log_visible = ""
         self._log_view.setPlainText("")
 
         self._todo_widget.update_tasks([])
@@ -204,40 +195,6 @@ class InfoHubPane(QWidget):
             if item and item.widget():
                 item.widget().deleteLater()
 
-
-    def _on_log_tick(self) -> None:
-        """Reveal more characters of the log buffer."""
-        if len(self._log_visible) >= len(self._log_buffer):
-            self._log_timer.stop()
-            return
-            
-        chunk_size = self._LOG_REVEAL_CHARS_PER_TICK
-        next_chunk = self._log_buffer[len(self._log_visible):len(self._log_visible) + chunk_size]
-        self._log_visible += next_chunk
-        
-        cursor = self._log_view.textCursor()
-        cursor.movePosition(cursor.MoveOperation.End)
-        self._log_view.setTextCursor(cursor)
-        self._log_view.insertPlainText(next_chunk)
-
-        # Auto-scroll to bottom
-        sb = self._log_view.verticalScrollBar()
-        sb.setValue(sb.maximum())
-
-    def _flush_log(self) -> None:
-        """Immediately reveal all buffered log text."""
-        self._log_timer.stop()
-        if len(self._log_visible) < len(self._log_buffer):
-            remaining = self._log_buffer[len(self._log_visible):]
-            self._log_visible = self._log_buffer
-            
-            cursor = self._log_view.textCursor()
-            cursor.movePosition(cursor.MoveOperation.End)
-            self._log_view.setTextCursor(cursor)
-            self._log_view.insertPlainText(remaining)
-            
-        sb = self._log_view.verticalScrollBar()
-        sb.setValue(sb.maximum())
 
     # Styling
 

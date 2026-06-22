@@ -96,6 +96,7 @@ class AssistantCard(QFrame):
         self._reasoning_section: _CollapsibleSection | None = None
         self._reasoning_label: _StreamLabel | None = None
         self._reasoning_scroll_area: QScrollArea | None = None
+        self._reasoning_scroll_timer: QTimer | None = None
 
         # Content: the streamed answer.
         self._content_label = _StreamLabel(italic=False, parent=self)
@@ -141,7 +142,15 @@ class AssistantCard(QFrame):
             # Insert reasoning at the top, after header (index 1).
             self._outer.insertWidget(1, section)
         self._reasoning_label.append(text)
-        # Auto-scroll the reasoning box to the bottom
+        # Auto-scroll the reasoning box to the bottom (coalesced via timer)
+        if self._reasoning_scroll_area is not None:
+            if self._reasoning_scroll_timer is None:
+                self._reasoning_scroll_timer = QTimer(self)
+                self._reasoning_scroll_timer.setSingleShot(True)
+                self._reasoning_scroll_timer.timeout.connect(self._scroll_reasoning_to_bottom)
+            self._reasoning_scroll_timer.start(50)
+
+    def _scroll_reasoning_to_bottom(self) -> None:
         if self._reasoning_scroll_area is not None:
             sb = self._reasoning_scroll_area.verticalScrollBar()
             sb.setValue(sb.maximum())

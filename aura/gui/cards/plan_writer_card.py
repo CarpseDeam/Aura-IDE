@@ -114,7 +114,8 @@ class PlanWriterCard(QFrame):
     def update_spec(self, spec: str) -> None:
         """Store the latest streamed spec without displaying it inline."""
         self._latest_spec = spec
-        self._refresh()
+        # No _refresh() — the visible card does not display the spec,
+        # so per-fragment refresh is wasted work.
 
     def set_result(self, ok: bool, result_text: str | None = None) -> None:
         if result_text:

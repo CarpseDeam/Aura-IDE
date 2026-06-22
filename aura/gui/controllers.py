@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from typing import Any
 
 from PySide6.QtCore import QObject, Signal
@@ -43,6 +44,7 @@ class ToolStreamController(QObject):
         self._command: str | None = None
         self._last_content: str = ""
         self._last_goal_stream: str = ""
+        self._last_content_emit_time: float = 0.0
         self._state = "running"
 
         # Regex for early extraction from partial JSON
@@ -138,7 +140,13 @@ class ToolStreamController(QObject):
 
             if content and content != self._last_content:
                 self._last_content = content
-                self.content_updated.emit(content)
+                if self._tool_name == "dispatch_to_worker":
+                    now = time.monotonic()
+                    if now - self._last_content_emit_time >= 0.08:
+                        self._last_content_emit_time = now
+                        self.content_updated.emit(content)
+                else:
+                    self.content_updated.emit(content)
                 # For run_research, the objective is also the goal
                 if self._tool_name == "run_research" and content != self._goal:
                     self.goal_updated.emit(content)
@@ -176,7 +184,13 @@ class ToolStreamController(QObject):
                 content = self._extract_partial_string(key)
                 if content is not None and content != self._last_content:
                     self._last_content = content
-                    self.content_updated.emit(content)
+                    if self._tool_name == "dispatch_to_worker":
+                        now = time.monotonic()
+                        if now - self._last_content_emit_time >= 0.08:
+                            self._last_content_emit_time = now
+                            self.content_updated.emit(content)
+                    else:
+                        self.content_updated.emit(content)
 
     def _extract_partial_string(self, key: str) -> str | None:
         """Surgically extract a JSON string value from the buffer, handling escapes."""

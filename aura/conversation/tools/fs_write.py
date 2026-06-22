@@ -318,6 +318,25 @@ def _normalize_newlines(text: str, newline: str) -> str:
     return normalized.replace("\n", newline)
 
 
+def _map_offset_norm_to_orig(original: str, norm_offset: int) -> int:
+    """Map a character offset in normalized (LF-only) content back to original content.
+
+    Normalization converts \r\n → \n (2 chars → 1 char) and \r → \n (1→1).
+    Only \r\n causes a length discrepancy, so walk the original string and
+    advance orig_idx by 2 for each \r\n while norm_count advances by 1.
+    """
+    orig_idx = 0
+    norm_count = 0
+    while norm_count < norm_offset and orig_idx < len(original):
+        if original.startswith("\r\n", orig_idx):
+            orig_idx += 2
+            norm_count += 1
+        else:
+            orig_idx += 1
+            norm_count += 1
+    return orig_idx
+
+
 def _replace_span(text: str, start: int, end: int, new: str) -> str:
     return text[:start] + new + text[end:]
 
@@ -530,6 +549,15 @@ def apply_replacement_to_content(
     else:
         old, new, sanitized = old_str, new_str, False
 
+    # ---- CRLF-aware matching: normalize newlines for matching only ----
+    _norm_content = content.replace("\r\n", "\n").replace("\r", "\n")
+    _norm_old = old.replace("\r\n", "\n").replace("\r", "\n")
+    _crlf_present = (_norm_content != content)
+
+    _match_content = _norm_content if _crlf_present else content
+    _match_old = _norm_old if _crlf_present else old
+    _use_normalize = normalize_replacement_newlines or _crlf_present
+
     if old == "":
         return _not_found_replacement(
             best_ratio=0.0,
@@ -539,16 +567,19 @@ def apply_replacement_to_content(
         )
 
     # ---- Tier 1: Exact string match ----
-    exact_spans = _find_all_spans(content, old)
+    exact_spans = _find_all_spans(_match_content, _match_old)
     if occurrence is not None and exact_spans:
         if occurrence <= len(exact_spans):
             start, end = exact_spans[occurrence - 1]
+            if _crlf_present:
+                start = _map_offset_norm_to_orig(content, start)
+                end = _map_offset_norm_to_orig(content, end)
             replacement = _replacement_for_span(
                 content,
                 start,
                 end,
                 new,
-                normalize_replacement_newlines=normalize_replacement_newlines,
+                normalize_replacement_newlines=_use_normalize,
             )
             result: dict[str, Any] = {
                 "ok": True,
@@ -569,12 +600,15 @@ def apply_replacement_to_content(
         )
     if len(exact_spans) == 1:
         start, end = exact_spans[0]
+        if _crlf_present:
+            start = _map_offset_norm_to_orig(content, start)
+            end = _map_offset_norm_to_orig(content, end)
         replacement = _replacement_for_span(
             content,
             start,
             end,
             new,
-            normalize_replacement_newlines=normalize_replacement_newlines,
+            normalize_replacement_newlines=_use_normalize,
         )
         result = {
             "ok": True,
@@ -586,13 +620,17 @@ def apply_replacement_to_content(
         return result
     if len(exact_spans) > 1:
         if allow_multiple:
+            if _crlf_present:
+                mapped_spans = [(_map_offset_norm_to_orig(content, s), _map_offset_norm_to_orig(content, e)) for s, e in exact_spans]
+            else:
+                mapped_spans = exact_spans
             result = {
                 "ok": True,
                 "content": _replace_spans(
                     content,
-                    exact_spans,
+                    mapped_spans,
                     new,
-                    normalize_replacement_newlines=normalize_replacement_newlines,
+                    normalize_replacement_newlines=_use_normalize,
                 ),
                 "match_tier": "exact",
                 "occurrence_count": len(exact_spans),
@@ -614,9 +652,9 @@ def apply_replacement_to_content(
             )
 
     # Prepare line-based structures for Tiers 2 & 3.
-    lines_with_nl = content.splitlines(keepends=True)
-    file_lines = content.splitlines()
-    old_lines = old.splitlines()
+    lines_with_nl = _match_content.splitlines(keepends=True)
+    file_lines = _match_content.splitlines()
+    old_lines = _match_old.splitlines()
     window_len = len(old_lines)
 
     if not old_lines:
@@ -643,12 +681,15 @@ def apply_replacement_to_content(
         if occurrence is not None:
             if occurrence <= len(line_spans):
                 start, end = line_spans[occurrence - 1]
+                if _crlf_present:
+                    start = _map_offset_norm_to_orig(content, start)
+                    end = _map_offset_norm_to_orig(content, end)
                 replacement = _replacement_for_span(
                     content,
                     start,
                     end,
                     new,
-                    normalize_replacement_newlines=normalize_replacement_newlines,
+                    normalize_replacement_newlines=_use_normalize,
                 )
                 result = {
                     "ok": True,
@@ -669,12 +710,15 @@ def apply_replacement_to_content(
             )
         if len(line_spans) == 1:
             start, end = line_spans[0]
+            if _crlf_present:
+                start = _map_offset_norm_to_orig(content, start)
+                end = _map_offset_norm_to_orig(content, end)
             replacement = _replacement_for_span(
                 content,
                 start,
                 end,
                 new,
-                normalize_replacement_newlines=normalize_replacement_newlines,
+                normalize_replacement_newlines=_use_normalize,
             )
             result = {
                 "ok": True,
@@ -685,13 +729,17 @@ def apply_replacement_to_content(
                 result["sanitized"] = True
             return result
         if allow_multiple:
+            if _crlf_present:
+                mapped_spans = [(_map_offset_norm_to_orig(content, s), _map_offset_norm_to_orig(content, e)) for s, e in line_spans]
+            else:
+                mapped_spans = line_spans
             result = {
                 "ok": True,
                 "content": _replace_spans(
                     content,
-                    line_spans,
+                    mapped_spans,
                     new,
-                    normalize_replacement_newlines=normalize_replacement_newlines,
+                    normalize_replacement_newlines=_use_normalize,
                 ),
                 "match_tier": "line_exact",
                 "occurrence_count": len(line_spans),
@@ -748,12 +796,15 @@ def apply_replacement_to_content(
             start_idx, ratio = candidates[occurrence - 1]
             start = _line_offsets(lines_with_nl)[start_idx]
             end = _line_offsets(lines_with_nl)[start_idx + len(old_lines)]
+            if _crlf_present:
+                start = _map_offset_norm_to_orig(content, start)
+                end = _map_offset_norm_to_orig(content, end)
             replacement = _replacement_for_span(
                 content,
                 start,
                 end,
                 new,
-                normalize_replacement_newlines=normalize_replacement_newlines,
+                normalize_replacement_newlines=_use_normalize,
             )
             result = {
                 "ok": True,
@@ -779,12 +830,15 @@ def apply_replacement_to_content(
         offsets = _line_offsets(lines_with_nl)
         start = offsets[start_idx]
         end = offsets[start_idx + len(old_lines)]
+        if _crlf_present:
+            start = _map_offset_norm_to_orig(content, start)
+            end = _map_offset_norm_to_orig(content, end)
         replacement = _replacement_for_span(
             content,
             start,
             end,
             new,
-            normalize_replacement_newlines=normalize_replacement_newlines,
+            normalize_replacement_newlines=_use_normalize,
         )
         result = {
             "ok": True,
@@ -804,12 +858,15 @@ def apply_replacement_to_content(
             offsets = _line_offsets(lines_with_nl)
             start = offsets[start_idx]
             end = offsets[start_idx + len(old_lines)]
+            if _crlf_present:
+                start = _map_offset_norm_to_orig(content, start)
+                end = _map_offset_norm_to_orig(content, end)
             replacement = _replacement_for_span(
                 content,
                 start,
                 end,
                 new,
-                normalize_replacement_newlines=normalize_replacement_newlines,
+                normalize_replacement_newlines=_use_normalize,
             )
             result = {
                 "ok": True,

@@ -39,6 +39,7 @@ from aura.gui.theme import ACCENT, BG, BORDER, FG
 
 logger = logging.getLogger(__name__)
 
+STREAM_LARGE_FILE_THRESHOLD = 50_000
 
 class CodeEditorPane(QWidget):
     """Tabbed code editor with streaming typewriter animation.
@@ -250,6 +251,11 @@ class CodeEditorPane(QWidget):
         streamer.stop()
         state["target"] = new_content
 
+        # Large file bypass: skip animation, set editor content immediately
+        if len(new_content) > STREAM_LARGE_FILE_THRESHOLD:
+            self.set_content(canonical_tool_id, new_content)
+            return
+
         if old_content == new_content:
             self.set_content(canonical_tool_id, new_content)
             return
@@ -312,6 +318,9 @@ class CodeEditorPane(QWidget):
         canonical_tool_id = self._canonical_tool_id(tool_id)
         state = self._typing_state.get(canonical_tool_id)
         if state is None:
+            return
+        if len(content) > STREAM_LARGE_FILE_THRESHOLD:
+            self.set_content(canonical_tool_id, content)
             return
         state["target"] = content
         state["animation_phase"] = "type"
