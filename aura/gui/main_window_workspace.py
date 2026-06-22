@@ -63,6 +63,17 @@ class MainWindowWorkspaceController(QObject):
         self._active_git_worker: _GitCheckWorker | None = None
         self._active_git_thread: QThread | None = None
 
+    def _begin_workspace_loading(self, message: str = "Loading workspace…") -> None:
+        """Start the glow animation and set loading status."""
+        self._window._playground_aura.start_aura()
+        self._window.statusBar().showMessage(message)
+
+    def _end_workspace_loading(self) -> None:
+        """Stop the glow unless a chat/worker is streaming, then restore status bar."""
+        if not self._window._bridge.is_running():
+            self._window._playground_aura.stop_aura()
+        self._window._refresh_status_bar()
+
     def _warn_blocked_root(self, path: Path) -> bool:
         """Return True if path was blocked (warning shown), False if OK to proceed."""
         category = _categorize_blocked_root(path)
@@ -171,6 +182,7 @@ class MainWindowWorkspaceController(QObject):
             QTimer.singleShot(0, _do_restore)
 
     def _on_project_selected(self, root_path: Path, *, restore_last: bool = True) -> None:
+        self._begin_workspace_loading()
         from aura.projects.store import ProjectStore
         t0 = time.perf_counter()
         logger.info("create_or_update_project start")
@@ -183,18 +195,16 @@ class MainWindowWorkspaceController(QObject):
         self._retarget_workspace(root_path, restore_last=restore_last)
         logger.info("retarget_workspace done in %.3fs", time.perf_counter() - t_retarget)
 
-        def _do_refresh_projects():
+        def _do_refresh_after_load():
             t1 = time.perf_counter()
             window._left_pane.refresh_projects(window._workspace_root, schedule_backfill=True)
             logger.info("refresh_projects done in %.3fs", time.perf_counter() - t1)
-
-        def _do_refresh_drones():
             t2 = time.perf_counter()
             window._left_pane.refresh_drones(window._workspace_root)
             logger.info("refresh_drones done in %.3fs", time.perf_counter() - t2)
+            self._end_workspace_loading()
 
-        QTimer.singleShot(0, _do_refresh_projects)
-        QTimer.singleShot(0, _do_refresh_drones)
+        QTimer.singleShot(0, _do_refresh_after_load)
 
     def on_new_project(self) -> None:
         window = self._window
@@ -217,6 +227,7 @@ class MainWindowWorkspaceController(QObject):
         path = Path(chosen)
         if self._warn_blocked_root(path):
             return None
+        self._begin_workspace_loading()
         window._workspace_root = path
         window._bridge.set_workspace_root(path)
         window._input.set_workspace_root(path)
@@ -230,18 +241,16 @@ class MainWindowWorkspaceController(QObject):
         window._companion.set_current_project(_project.id, _project.name)
         self.update_workspace_label()
 
-        def _do_refresh_projects():
+        def _do_refresh_after_load():
             t0 = time.perf_counter()
             window._left_pane.refresh_projects(path, schedule_backfill=True)
             logger.info("refresh_projects done in %.3fs", time.perf_counter() - t0)
-
-        def _do_refresh_drones():
-            t0 = time.perf_counter()
+            t1 = time.perf_counter()
             window._left_pane.refresh_drones(path)
-            logger.info("refresh_drones done in %.3fs", time.perf_counter() - t0)
+            logger.info("refresh_drones done in %.3fs", time.perf_counter() - t1)
+            self._end_workspace_loading()
 
-        QTimer.singleShot(0, _do_refresh_projects)
-        QTimer.singleShot(0, _do_refresh_drones)
+        QTimer.singleShot(0, _do_refresh_after_load)
 
         # Close drone workbay when workspace root changes
         window._drone_controller.hide_workbay()
