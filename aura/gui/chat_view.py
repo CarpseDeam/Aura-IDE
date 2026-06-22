@@ -179,7 +179,7 @@ class ChatView(QScrollArea):
     def _request_scroll_to_bottom(self, force: bool = False) -> None:
         if force:
             self._scroll_timer.stop()
-            self._scroll_to_bottom()
+            self._scroll_to_bottom(force=True)
         elif not self._scroll_timer.isActive():
             self._scroll_timer.start()
 

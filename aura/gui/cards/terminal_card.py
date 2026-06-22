@@ -35,7 +35,7 @@ class TerminalCard(QFrame):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         self._command = command
         self._state = self.STATE_RUNNING
-        self._output_buf = ""
+
         self._pending = ""
         self._dirty = False
 
@@ -165,7 +165,6 @@ class TerminalCard(QFrame):
 
     def append_output(self, text: str) -> None:
         """Append a chunk of stdout/stderr text (buffered, flushed at 30fps)."""
-        self._output_buf += text
         self._pending += text
         self._dirty = True
 

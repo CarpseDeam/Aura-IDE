@@ -33,7 +33,7 @@ class InfoHubPane(QWidget):
         clear() -> None
     """
 
-    _LOG_REVEAL_CHARS_PER_TICK = 16
+    _LOG_REVEAL_CHARS_PER_TICK = 256
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
