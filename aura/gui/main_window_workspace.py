@@ -60,6 +60,8 @@ class MainWindowWorkspaceController(QObject):
         super().__init__(parent)
         self._window = window
         self._pending_git_path: Path | None = None
+        self._active_git_worker: _GitCheckWorker | None = None
+        self._active_git_thread: QThread | None = None
 
     def _warn_blocked_root(self, path: Path) -> bool:
         """Return True if path was blocked (warning shown), False if OK to proceed."""
@@ -113,12 +115,16 @@ class MainWindowWorkspaceController(QObject):
         worker.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
         thread.start()
+        self._active_git_thread = thread
+        self._active_git_worker = worker
 
     def _on_git_check_done(self, root_path: Path, is_git: bool) -> None:
         """Called from worker thread when git check completes."""
         # Ignore stale results when the user has already changed workspace
         if root_path != self._pending_git_path:
             return
+        self._active_git_thread = None
+        self._active_git_worker = None
         if not is_git:
             self._show_non_git_warning(root_path)
 
@@ -179,7 +185,7 @@ class MainWindowWorkspaceController(QObject):
 
         def _do_refresh_projects():
             t1 = time.perf_counter()
-            window._left_pane.refresh_projects(window._workspace_root)
+            window._left_pane.refresh_projects(window._workspace_root, schedule_backfill=True)
             logger.info("refresh_projects done in %.3fs", time.perf_counter() - t1)
 
         def _do_refresh_drones():
@@ -226,7 +232,7 @@ class MainWindowWorkspaceController(QObject):
 
         def _do_refresh_projects():
             t0 = time.perf_counter()
-            window._left_pane.refresh_projects(path)
+            window._left_pane.refresh_projects(path, schedule_backfill=True)
             logger.info("refresh_projects done in %.3fs", time.perf_counter() - t0)
 
         def _do_refresh_drones():

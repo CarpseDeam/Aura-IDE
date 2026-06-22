@@ -461,7 +461,7 @@ class LeftPane(QFrame):
             if item.widget():
                 item.widget().deleteLater()
 
-    def refresh_projects(self, workspace_root: Path | None) -> None:
+    def refresh_projects(self, workspace_root: Path | None, *, schedule_backfill: bool = False) -> None:
         """Update the projects list and show threads for the active project."""
         if workspace_root != self._last_workspace_root:
             self._show_all_active_threads = False
@@ -526,18 +526,18 @@ class LeftPane(QFrame):
 
         self._projects_layout.addStretch(1)
 
-        # Defer thread backfill so the project list renders first
-        def _do_backfill():
-            for project in projects:
-                try:
-                    store.backfill_threads_from_conversations(project)
-                except Exception:
-                    logging.warning("Failed to backfill threads")
-            # Refresh to show any newly discovered threads
-            if self._last_workspace_root is not None:
-                self.refresh_projects(self._last_workspace_root)
+        if schedule_backfill:
+            def _do_backfill():
+                for project in projects:
+                    try:
+                        store.backfill_threads_from_conversations(project)
+                    except Exception:
+                        logging.warning("Failed to backfill threads")
+                # Refresh to show any newly discovered threads
+                if self._last_workspace_root is not None:
+                    self.refresh_projects(self._last_workspace_root)
 
-        QTimer.singleShot(0, _do_backfill)
+            QTimer.singleShot(0, _do_backfill)
 
     def _on_show_more_clicked(self) -> None:
         self._show_all_active_threads = True
