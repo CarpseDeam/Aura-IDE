@@ -9,6 +9,7 @@
     "require_clean_worktree": true,
     "revert_on_failure": true,
     "max_changed_files": 4,
+    "launch_command": "python -m aura --selfcheck",
     "protected_paths": []
   },
   "input_contract": {

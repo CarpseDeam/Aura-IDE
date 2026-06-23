@@ -615,9 +615,8 @@ class ConversationManager:
                             watch = sandbox.run_and_watch(
                                 declared_run_command,
                                 window_seconds=10,
-                                require_survive_window=True,
                             )
-                            if not watch.ok:
+                            if not (watch.ok and watch.exited_early):
                                 emit_auto_launch_result(
                                     command=declared_run_command,
                                     ok=False,

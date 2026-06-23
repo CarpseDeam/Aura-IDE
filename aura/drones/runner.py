@@ -535,13 +535,18 @@ class DroneRunner(QObject):
                 launch_command,
                 window_seconds=launch_window_seconds,
             )
-            if result.survived_window:
+            if result.ok and result.exited_early:
                 self.contentDelta.emit("App launched successfully.")
             else:
                 output_tail = (result.output or "")[-300:]
-                violation = (
-                    f"App failed to launch after lap (exit {result.exit_code}): {output_tail}"
-                )
+                if not result.exited_early:
+                    violation = (
+                        f"App launch hung (survived {launch_window_seconds}s window without clean exit): {output_tail}"
+                    )
+                else:
+                    violation = (
+                        f"App crashed after launch (exit {result.exit_code}): {output_tail}"
+                    )
                 policy_violations.append(violation)
                 lap_failed = True
                 self.contentDelta.emit(

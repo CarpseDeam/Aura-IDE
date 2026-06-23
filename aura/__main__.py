@@ -21,7 +21,9 @@ def main() -> int:
         return _run_app(log_path, args, qt_argv)
     except Exception as exc:
         logger.critical("Aura failed to start", exc_info=True)
-        if _qapplication_exists():
+        if args.selfcheck:
+            _print_startup_failure(log_path, exc)
+        elif _qapplication_exists():
             try:
                 _show_crash_dialog(log_path, exc)
             except Exception:
@@ -116,30 +118,32 @@ def _run_app(log_path: Path, args: argparse.Namespace, qt_argv: list[str]) -> in
             cfg = PROVIDERS[selected_provider]
             kind = get_provider_kind(selected_provider)
             if kind == "external_cli":
-                logger.info("selected provider external CLI unavailable warning start")
-                QMessageBox.warning(
-                    None,
-                    APP_NAME,
-                    f"{cfg.label} is selected, but its CLI executable is not available.\n\n"
-                    "Install and sign in to the CLI, or choose another provider in "
-                    "Settings -> Provider Setup.\n\n"
-                    "The app will open, but chat with this provider will fail until "
-                    "the CLI is available.",
-                )
-                logger.info("selected provider external CLI unavailable warning end")
+                if not args.selfcheck:
+                    logger.info("selected provider external CLI unavailable warning start")
+                    QMessageBox.warning(
+                        None,
+                        APP_NAME,
+                        f"{cfg.label} is selected, but its CLI executable is not available.\n\n"
+                        "Install and sign in to the CLI, or choose another provider in "
+                        "Settings -> Provider Setup.\n\n"
+                        "The app will open, but chat with this provider will fail until "
+                        "the CLI is available.",
+                    )
+                    logger.info("selected provider external CLI unavailable warning end")
                 _should_open_aura_settings = True
             else:
-                logger.info("provider key warning start")
-                QMessageBox.warning(
-                    None,
-                    APP_NAME,
-                    f"{cfg.label} is selected, but no API key is configured.\n\n"
-                    "Choose one of these options in Settings → Aura:\n"
-                    "  • Set up Aura Credits (easiest — no API key needed)\n"
-                    "  • Bring your own API key in Settings → API Keys\n\n"
-                    "The app will open, but chat will fail until a provider is configured.",
-                )
-                logger.info("provider key warning end")
+                if not args.selfcheck:
+                    logger.info("provider key warning start")
+                    QMessageBox.warning(
+                        None,
+                        APP_NAME,
+                        f"{cfg.label} is selected, but no API key is configured.\n\n"
+                        "Choose one of these options in Settings → Aura:\n"
+                        "  • Set up Aura Credits (easiest — no API key needed)\n"
+                        "  • Bring your own API key in Settings → API Keys\n\n"
+                        "The app will open, but chat will fail until a provider is configured.",
+                    )
+                    logger.info("provider key warning end")
                 _should_open_aura_settings = True
 
     from aura.gui.main_window import MainWindow
@@ -152,12 +156,17 @@ def _run_app(log_path: Path, args: argparse.Namespace, qt_argv: list[str]) -> in
     win.show()
     logger.info("win.show end")
 
-    if _should_open_aura_settings:
-        logger.info("opening Aura settings post-startup")
-        QTimer.singleShot(100, win.open_aura_settings)
-    elif _should_open_api_settings:
-        logger.info("opening API settings post-startup")
-        QTimer.singleShot(100, win.open_api_settings)
+    if not args.selfcheck:
+        if _should_open_aura_settings:
+            logger.info("opening Aura settings post-startup")
+            QTimer.singleShot(100, win.open_aura_settings)
+        elif _should_open_api_settings:
+            logger.info("opening API settings post-startup")
+            QTimer.singleShot(100, win.open_api_settings)
+
+    if args.selfcheck:
+        QTimer.singleShot(200, app.quit)
+        print("Aura selfcheck: OK", flush=True)
 
     logger.info("app.exec start")
     exit_code = app.exec()
@@ -170,6 +179,11 @@ def _parse_args(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument(
         "--profile-dir",
         help="Use PATH for both Aura config and data during this run.",
+    )
+    parser.add_argument(
+        "--selfcheck",
+        action="store_true",
+        help="Boot the app, confirm the main window constructs, then exit cleanly. Used by automated launch verification.",
     )
     args, qt_args = parser.parse_known_args(argv)
     return args, [sys.argv[0], *qt_args]
