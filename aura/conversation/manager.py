@@ -617,37 +617,7 @@ class ConversationManager:
                                             "Dependent import check failed non-fatally",
                                             exc_info=True,
                                         )
-                                    # --- Launch verification rung ---
-                                    if declared_run_command:
-                                        try:
-                                            from aura.sandbox import SandboxExecutor
-                                            sandbox = SandboxExecutor(
-                                                mode="host",
-                                                workspace_root=Path(self._tools.workspace_root),
-                                            )
-                                            watch = sandbox.run_and_watch(
-                                                declared_run_command,
-                                                window_seconds=10,
-                                            )
-                                            if not watch.ok:
-                                                emit_auto_launch_result(
-                                                    command=declared_run_command,
-                                                    ok=False,
-                                                    output=watch.output,
-                                                    on_event=on_event,
-                                                    workspace_root=self._tools.workspace_root,
-                                                )
-                                                instruction = WORKER_LAUNCH_FAILURE_INSTRUCTION.format(
-                                                    command=declared_run_command,
-                                                    output=watch.output,
-                                                )
-                                                self._history.append_user_text(instruction)
-                                                continue
-                                        except Exception:
-                                            logging.getLogger(__name__).warning(
-                                                "Launch verification failed non-fatally",
-                                                exc_info=True,
-                                            )
+
                             else:
                                 # Auto-py_compile failed — feed diagnostics back for repair
                                 for path in product_paths:
@@ -661,6 +631,45 @@ class ConversationManager:
                                 )
                                 self._history.append_user_text(instruction)
                                 continue
+                    # --- Launch verification rung ---
+                    if declared_run_command:
+                        try:
+                            from aura.sandbox import SandboxExecutor
+                            sandbox = SandboxExecutor(
+                                mode="host",
+                                workspace_root=Path(self._tools.workspace_root),
+                            )
+                            watch = sandbox.run_and_watch(
+                                declared_run_command,
+                                window_seconds=10,
+                                require_survive_window=True,
+                            )
+                            if not watch.ok:
+                                emit_auto_launch_result(
+                                    command=declared_run_command,
+                                    ok=False,
+                                    output=watch.output,
+                                    on_event=on_event,
+                                    workspace_root=self._tools.workspace_root,
+                                )
+                                instruction = WORKER_LAUNCH_FAILURE_INSTRUCTION.format(
+                                    command=declared_run_command,
+                                    output=watch.output,
+                                )
+                                self._history.append_user_text(instruction)
+                                continue
+                            emit_auto_launch_result(
+                                command=declared_run_command,
+                                ok=True,
+                                output=watch.output,
+                                on_event=on_event,
+                                workspace_root=self._tools.workspace_root,
+                            )
+                        except Exception:
+                            logging.getLogger(__name__).warning(
+                                "Launch verification failed non-fatally",
+                                exc_info=True,
+                            )
                     return
                 return
 

@@ -195,7 +195,7 @@ def emit_auto_launch_result(
         ToolResult(
             tool_call_id="auto_launch_check",
             name="run_terminal_command",
-            ok=False,
+            ok=ok,
             result=content,
         )
     )

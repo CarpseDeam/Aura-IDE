@@ -61,6 +61,8 @@ def classify_watch_outcome(
     exit_code: int | None,
     output: str,
     window_seconds: int,
+    *,
+    require_survive_window: bool = False,
 ) -> WatchResult:
     error_detected = _has_traceback(output)
 
@@ -79,6 +81,12 @@ def classify_watch_outcome(
         return WatchResult(
             ok=False, survived_window=False, exited_early=True,
             error_detected=True, exit_code=exit_code, output=output,
+        )
+
+    if require_survive_window:
+        return WatchResult(
+            ok=False, survived_window=False, exited_early=True,
+            error_detected=False, exit_code=exit_code, output=output,
         )
 
     if exit_code == 0:
@@ -210,6 +218,8 @@ class SandboxExecutor:
         window_seconds: int = 10,
         cancel_event: Any = None,
         on_output: Any = None,
+        *,
+        require_survive_window: bool = False,
     ) -> WatchResult:
         """Run a command in host mode and watch it for a time window.
 
@@ -253,6 +263,7 @@ class SandboxExecutor:
                     exit_code=None,
                     output=result.stdout,
                     window_seconds=window_seconds,
+                    require_survive_window=require_survive_window,
                 )
 
             return classify_watch_outcome(
@@ -260,6 +271,7 @@ class SandboxExecutor:
                 exit_code=result.exit_code,
                 output=result.stdout,
                 window_seconds=window_seconds,
+                require_survive_window=require_survive_window,
             )
 
         except Exception as exc:
@@ -271,6 +283,7 @@ class SandboxExecutor:
                 exit_code=-1,
                 output=output,
                 window_seconds=window_seconds,
+                require_survive_window=require_survive_window,
             )
 
     @staticmethod
