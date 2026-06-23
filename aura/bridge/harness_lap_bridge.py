@@ -233,6 +233,18 @@ class HarnessLapBridge(QObject):
             try:
                 from aura.conversation.dispatch import WorkerOutcomeStatus
 
+                _SEVERITY = {
+                    WorkerOutcomeStatus.completed.value: 0,
+                    WorkerOutcomeStatus.completed_with_caveats.value: 1,
+                    WorkerOutcomeStatus.needs_followup.value: 2,
+                    WorkerOutcomeStatus.validation_failed.value: 3,
+                    WorkerOutcomeStatus.edit_mechanics_blocked.value: 4,
+                    WorkerOutcomeStatus.harness_error.value: 5,
+                }
+
+                def _sev(s: str) -> int:
+                    return _SEVERITY.get(s, -1)
+
                 for record in self._dispatch_proxy.records():
                     meta = self._dispatch_proxy.result_metadata(
                         record.tool_call_id
@@ -246,44 +258,69 @@ class HarnessLapBridge(QObject):
                     vr = extras.get("validation_results") or []
                     if vr:
                         validation_results.extend(vr)
+
+                    candidate: str | None = None
                     if extras.get("internal_error"):
-                        worker_ok = False
-                        worker_status = (
-                            WorkerOutcomeStatus.harness_error.value
-                        )
+                        candidate = WorkerOutcomeStatus.harness_error.value
                         if not worker_errors:
                             worker_errors.append(
                                 str(extras["internal_error"])
                             )
                     elif extras.get("unrecovered_not_applied_writes"):
-                        worker_ok = False
-                        worker_status = (
+                        candidate = (
                             WorkerOutcomeStatus.edit_mechanics_blocked.value
                         )
                         if not worker_errors:
                             worker_errors.append(
                                 "Unrecovered write failures"
                             )
-                    elif extras.get("validation_not_run") and meta.get(
-                        "modified_files"
+                    else:
+                        if vr and any(
+                            r.get("exit_code") not in (0, None)
+                            for r in vr
+                        ):
+                            candidate = (
+                                WorkerOutcomeStatus.validation_failed.value
+                            )
+                            if not worker_errors:
+                                worker_errors.append(
+                                    "Validation command failed"
+                                )
+                        elif any(
+                            "Validation command failed" in str(e)
+                            for e in errs
+                        ):
+                            candidate = (
+                                WorkerOutcomeStatus.validation_failed.value
+                            )
+                            if not worker_errors:
+                                worker_errors.append(
+                                    "Validation command failed"
+                                )
+                        elif extras.get("validation_not_run") and meta.get(
+                            "modified_files"
+                        ):
+                            candidate = (
+                                WorkerOutcomeStatus.validation_failed.value
+                            )
+                            if not worker_errors:
+                                worker_errors.append(
+                                    "Validation not run after writes"
+                                )
+                        elif extras.get("needs_followup"):
+                            candidate = (
+                                WorkerOutcomeStatus.needs_followup.value
+                            )
+                            if not worker_errors:
+                                worker_errors.append(
+                                    "Worker reported needs_followup"
+                                )
+
+                    if candidate is not None and _sev(candidate) > _sev(
+                        worker_status
                     ):
+                        worker_status = candidate
                         worker_ok = False
-                        worker_status = (
-                            WorkerOutcomeStatus.validation_failed.value
-                        )
-                        if not worker_errors:
-                            worker_errors.append(
-                                "Validation not run after writes"
-                            )
-                    elif extras.get("needs_followup"):
-                        worker_ok = False
-                        worker_status = (
-                            WorkerOutcomeStatus.needs_followup.value
-                        )
-                        if not worker_errors:
-                            worker_errors.append(
-                                "Worker reported needs_followup"
-                            )
             except Exception:
                 logger.warning(
                     "Failed to collect worker dispatch metadata",
