@@ -85,10 +85,9 @@ class _WorkspaceFilterProxy(QSortFilterProxyModel):
         if not name or name in (".", ".."):
             return False
         is_dir = model.isDir(idx)
-        # Reject symlinks to avoid traversal loops
-        if os.path.islink(model.filePath(idx)):
-            return False
         if is_dir:
+            if model.fileInfo(idx).isSymLink():
+                return False
             if name in _HIDDEN_DIRS:
                 return False
             # Hide dotfile dirs except `.aura` (so user sees backups exist).
