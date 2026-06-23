@@ -128,6 +128,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._toolbar = MainWindowToolbar(self._settings, self)
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self._toolbar)
         self._settings_controller = MainWindowSettingsController(self)
+        self._debug_report_handler = DebugReportHandler(window=self, parent=self)
         self._toolbar.new_conversation_requested.connect(self._on_new_conversation)
         self._toolbar.open_conversation_requested.connect(self._on_open_conversation)
         self._toolbar.read_only_toggled.connect(self._on_read_only_toggled)
@@ -141,8 +142,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._toolbar.minimize_requested.connect(self.showMinimized)
         self._toolbar.maximize_requested.connect(self._toggle_maximize)
         self._toolbar.close_requested.connect(self.close)
-
-        self._debug_report_handler = DebugReportHandler(window=self, parent=self)
 
         # ----- status bar -----
         self._status_bar = AuraStatusBar(self)
