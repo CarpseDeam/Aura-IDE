@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from aura.conversation.tools._types import ApprovalDecision, ApprovalRequest
+from aura.bridge.harness_lap_bridge import HarnessLapBridge
 from aura.drones.construction_context import enter_drone_construction
 from aura.drones.definition import DroneBudget, DroneDefinition
 from aura.drones.receipt import DroneReceipt
@@ -341,7 +342,12 @@ class MainWindowDroneController(QObject):
             provider_id=self._window._settings.worker_provider,
             model=self._window.current_worker_model(),
             auto_approve=self._window._settings.auto_approve,
-            bridge=self._window._bridge,
+            harness_bridge=HarnessLapBridge(
+                workspace_root=self._window._workspace_root,
+                provider=self._window._settings.planner_provider or self._window._settings.worker_provider,
+                planner_provider=self._window._settings.planner_provider,
+                planner_system_prompt="",
+            ),
             parent=None,
         )
         runner.moveToThread(thread)

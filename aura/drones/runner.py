@@ -17,6 +17,7 @@ from aura.drones.run import DroneRun
 from aura.drones.store import DroneStore, RunHistoryStore
 
 if TYPE_CHECKING:
+    from aura.bridge.harness_lap_bridge import HarnessLapBridge
     from aura.drones.probes import ProbeFinding
 
 
@@ -75,7 +76,7 @@ class DroneRunner(QObject):
         provider_id: str | None = None,
         model: str | None = None,
         auto_approve: bool = False,
-        bridge: Any = None,
+        harness_bridge: Any = None,
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
@@ -85,15 +86,12 @@ class DroneRunner(QObject):
         self._provider = provider_id
         self._model = model
         self._auto_approve = auto_approve
-        self._bridge = bridge
+        self._harness_bridge = harness_bridge
         self._run_owned_files: set[str] = set()
         self._lap_target: str | None = None
 
     def cancel(self) -> None:
         self._run.cancel()
-
-    def set_bridge(self, bridge: Any) -> None:
-        self._bridge = bridge
 
     def _is_harness_lap_drone(self) -> bool:
         if self._drone.kind == "harness-lap":
@@ -203,7 +201,7 @@ class DroneRunner(QObject):
         return findings[0].path
 
     def _run_harness_lap(self) -> None:
-        if self._bridge is None:
+        if self._harness_bridge is None:
             raise RuntimeError("Harness-lap drone requires a bridge but none was provided")
 
         import datetime as dt
@@ -336,7 +334,7 @@ class DroneRunner(QObject):
 
         # 4. Run the lap
         want = self._build_harness_lap_want()
-        lap_result = self._bridge.run_one_lap(want)
+        lap_result = self._harness_bridge.run_one_lap(want)
 
         # 5. Collect outcomes
         changed_files = list(lap_result.changed_files)
@@ -444,7 +442,7 @@ class DroneRunner(QObject):
                 "errors": validation_errors,
             })
 
-            lap_result = self._bridge.run_one_lap(repair_want)
+            lap_result = self._harness_bridge.run_one_lap(repair_want)
 
             # Re-detect outcomes for loop check
             has_work, repair_changed = changes_since(workspace_root, repair_pre_sha)

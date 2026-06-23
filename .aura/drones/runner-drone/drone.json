@@ -1,0 +1,1 @@
+{"id": "runner-drone", "name": "Runner Drone", "description": "Run this goal.", "entrypoint": {"kind": "command", "command": ["python", "main.py"], "protocol": "json-stdio"}, "instructions": "Run.", "write_policy": "read_only", "output_contract": "Return cargo."}

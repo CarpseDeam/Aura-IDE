@@ -16,7 +16,6 @@ Planner / worker mode:
 from __future__ import annotations
 
 import threading
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -182,22 +181,6 @@ class _Worker(QObject):
             self.agentProcessFinished.emit(ev.process_id, ev.exit_code)
 
 
-@dataclass(frozen=True)
-class LapResult:
-    """Result of one unattended planner→worker lap.
-
-    Attributes:
-        has_work: True if the git working tree changed during the pass.
-        summary: Human-readable one-line description of what changed.
-        changed_files: Tuple of workspace-relative paths that were modified.
-    """
-    has_work: bool
-    summary: str
-    changed_files: tuple[str, ...]
-    worker_ok: bool = True
-    worker_status: str = "completed"
-    worker_errors: list[str] = field(default_factory=list)
-    validation_results: list[dict] = field(default_factory=list)
 
 
 class ConversationBridge(QObject):
@@ -570,181 +553,7 @@ class ConversationBridge(QObject):
         self.started.emit()
         self._thread.start()
 
-    def run_one_lap(self, want: str) -> LapResult:
-        if self.is_running():
-            return LapResult(
-                has_work=False,
-                summary="Bridge is already running.",
-                changed_files=(),
-            )
 
-        old_auto_dispatch = self._auto_dispatch
-        old_auto_approve = self._approval_proxy._approve_all_session
-        old_planner_worker_mode = self._planner_worker_mode
-        old_registry_mode = self._registry.mode
-
-        try:
-            self._auto_dispatch = True
-            self.set_auto_approve(True)
-            self._planner_worker_mode = True
-            self._registry.set_mode("planner")
-
-            self.reset_history()
-            self._history.append_user_text(want)
-
-            workspace_root = self._registry.workspace_root
-            if workspace_root is not None:
-                base_prompt = (
-                    self._planner_system_prompt
-                    if self._planner_system_prompt
-                    else PLANNER_SYSTEM_PROMPT
-                )
-                self._manager.configure_for_planner(
-                    base_prompt=base_prompt,
-                    workspace_root=workspace_root,
-                )
-                self._history.set_system(
-                    inject_tier1_context(base_prompt, self._tier1_context)
-                )
-
-            if workspace_root is not None:
-                from aura.git_ops import snapshot
-
-                self._pre_worker_sha = snapshot(workspace_root)
-            else:
-                self._pre_worker_sha = None
-
-            from aura.models import DEFAULT_PLANNER_THINKING
-            from aura.settings import resolve_role_default_model
-
-            model = resolve_role_default_model(
-                getattr(self, "_planner_provider", None), "planner"
-            )
-            thinking = DEFAULT_PLANNER_THINKING
-
-            self._cancel = threading.Event()
-            self._index_to_id.clear()
-            self._index_to_name.clear()
-            self._active_model = str(model)
-
-            from PySide6.QtCore import QEventLoop
-
-            thread = QThread()
-            worker = _Worker(
-                manager=self._manager,
-                approval_proxy=self._approval_proxy,
-                dispatch_proxy=self._dispatch_proxy,
-                cancel_event=self._cancel,
-                model=model,
-                thinking=thinking,
-                temperature=self._temperature,
-                workspace_root=workspace_root,
-                max_tool_rounds=None,
-            )
-
-            self._dispatch_proxy.showSpecCard.disconnect(
-                self.workerDispatchRequested
-            )
-            self._dispatch_proxy.showSpecCard.connect(
-                lambda tool_id, goal, files, spec, acceptance, summary: self.user_dispatched(
-                    tool_id, goal, list(files), spec, acceptance, summary
-                )
-            )
-
-            loop = QEventLoop()
-            worker.finished.connect(loop.quit)
-            worker.finished.connect(thread.quit)
-
-            thread.started.connect(worker.run)
-            thread.start()
-            loop.exec()
-
-            thread.wait(2000)
-            thread.deleteLater()
-            worker.deleteLater()
-
-            self._dispatch_proxy.showSpecCard.disconnect()
-            self._dispatch_proxy.showSpecCard.connect(
-                self.workerDispatchRequested
-            )
-
-            # --- added: collect worker dispatch metadata ---
-            worker_ok = True
-            worker_status = "completed"
-            worker_errors: list[str] = []
-            validation_results: list[dict] = []
-            try:
-                from aura.conversation.dispatch import WorkerOutcomeStatus
-                for record in self._dispatch_proxy.records():
-                    meta = self._dispatch_proxy.result_metadata(record.tool_call_id)
-                    if not meta:
-                        continue
-                    extras = meta.get("extras", {}) or {}
-                    errs = extras.get("errors") or []
-                    if errs:
-                        worker_errors.extend(str(e) for e in errs)
-                    vr = extras.get("validation_results") or []
-                    if vr:
-                        validation_results.extend(vr)
-                    if extras.get("internal_error"):
-                        worker_ok = False
-                        worker_status = WorkerOutcomeStatus.harness_error.value
-                        if not worker_errors:
-                            worker_errors.append(str(extras["internal_error"]))
-                    elif extras.get("unrecovered_not_applied_writes"):
-                        worker_ok = False
-                        worker_status = WorkerOutcomeStatus.edit_mechanics_blocked.value
-                        if not worker_errors:
-                            worker_errors.append("Unrecovered write failures")
-                    elif extras.get("validation_not_run") and meta.get("modified_files"):
-                        worker_ok = False
-                        worker_status = WorkerOutcomeStatus.validation_failed.value
-                        if not worker_errors:
-                            worker_errors.append("Validation not run after writes")
-                    elif extras.get("needs_followup"):
-                        worker_ok = False
-                        worker_status = WorkerOutcomeStatus.needs_followup.value
-                        if not worker_errors:
-                            worker_errors.append("Worker reported needs_followup")
-            except Exception:
-                import logging
-                logging.getLogger(__name__).warning(
-                    "Failed to collect worker dispatch metadata", exc_info=True
-                )
-            # --- end added ---
-
-            has_work = False
-            changed_files: tuple[str, ...] = ()
-            summary = ""
-
-            from aura.git_ops import changes_since
-
-            has_work, changed_files = changes_since(
-                workspace_root, self._pre_worker_sha
-            )
-            if has_work:
-                names = [p.split("/")[-1] for p in changed_files[:3]]
-                if len(changed_files) <= 3:
-                    summary = f"Changed {len(changed_files)} file(s): {', '.join(names)}"
-                else:
-                    summary = f"Changed {len(changed_files)} file(s): {', '.join(names)}, ..."
-            else:
-                summary = "No changes since lap start."
-
-            return LapResult(
-                has_work=has_work,
-                summary=summary,
-                changed_files=changed_files,
-                worker_ok=worker_ok,
-                worker_status=worker_status,
-                worker_errors=worker_errors,
-                validation_results=validation_results,
-            )
-        finally:
-            self._auto_dispatch = old_auto_dispatch
-            self._approval_proxy._approve_all_session = old_auto_approve
-            self._planner_worker_mode = old_planner_worker_mode
-            self._registry.set_mode(old_registry_mode)
 
     def request_cancel(self) -> None:
         self._cancel.set()
