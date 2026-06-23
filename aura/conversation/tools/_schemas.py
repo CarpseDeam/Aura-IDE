@@ -476,7 +476,7 @@ DISPATCH_TOOL_DEF: dict[str, Any] = {
             "workspace. Provide a complete, self-contained implementation handoff — the "
             "worker does not see this conversation. Include: goal, files involved (use "
             "exact paths from your earlier read_file calls), a concise Builder Note with "
-            "the specific change and important constraints, and acceptance checks. The "
+            "the specific change and important constraints, acceptance checks, and a self-terminating run_command smoke check for any change that affects whether the app boots or a runnable entry point behaves. The "
             "worker will return a summary of what it did."
         ),
         "parameters": {
@@ -584,11 +584,16 @@ DISPATCH_TOOL_DEF: dict[str, Any] = {
                 "run_command": {
                     "type": "string",
                     "description": (
-                        "An exact shell command to run after the worker completes changes, "
-                        "used with the run_and_watch tool. The worker will be able to observe "
-                        "the command's startup behavior. This is a declared contract intent — "
-                        "the worker cannot choose or override this command. Leave empty if "
-                        "no run-and-watch is needed."
+                        "An exact, self-terminating shell command run after the worker completes changes, "
+                        "via run_and_watch. The command MUST exit on its own with code 0 and no traceback — "
+                        "a command that keeps running and merely survives the window is scored as a launch "
+                        "failure, so do not declare server-style or long-running commands here. Declare a "
+                        "command by default whenever the change could affect whether the application boots "
+                        "or a known entry point runs correctly; for this project the canonical smoke command "
+                        "is \"python -m aura --selfcheck\". The worker observes the command's startup behavior. "
+                        "This is a declared contract intent — the worker cannot choose or override it. "
+                        "Leave empty only for changes with no runnable surface, e.g. pure documentation or "
+                        "comment edits, or an isolated pure-helper extraction with no import-time effect."
                     ),
                 },
                 "validation_commands": {
