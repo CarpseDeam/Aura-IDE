@@ -71,7 +71,7 @@ class DroneRunCard(QFrame):
         self._tool_calls_log: list[tuple[str, str, bool, str]] = []  # (call_id, name, ok, result)
         self._tool_output_expanded = False
         self._tool_output_widgets: list[QWidget] = []
-        self._live_content = ""
+        self._live_content = "⏳ Starting unattended lap…"
         self._elapsed_timer: QTimer | None = None
         self._report_placeholder: QLabel | None = None
         self._build_ui()
@@ -310,6 +310,9 @@ class DroneRunCard(QFrame):
                 f"padding: 2px 10px; border-radius: 4px; "
                 f"background: #1a1a24; border: 1px solid {WARN};"
             )
+            if self._live_content in ("⏳ Starting unattended lap…", "▶ Preparing unattended lap…"):
+                self._live_content = f"🔄 {status}"
+                self._live_label.setText(self._live_content)
             return
         if normalized in {"waiting", "approval", "waiting_approval"}:
             normalized = "waiting_for_approval"
@@ -327,6 +330,9 @@ class DroneRunCard(QFrame):
                 f"padding: 2px 10px; border-radius: 4px; "
                 f"background: #0a1a10; border: 1px solid {SUCCESS};"
             )
+            if self._live_content and self._live_content.startswith("⏳"):
+                self._live_content = "▶ Preparing unattended lap…"
+                self._live_label.setText(self._live_content)
         elif normalized == "completed":
             self._status_badge.setStyleSheet(
                 f"color: {SUCCESS}; font-size: 11px; font-weight: 600; "
@@ -351,7 +357,14 @@ class DroneRunCard(QFrame):
 
     def on_content_delta(self, text: str) -> None:
         """Append streaming content to the live status area."""
-        self._live_content += text
+        # Replace placeholder defaults with first real content chunk
+        if self._live_content in (
+            "⏳ Starting unattended lap…",
+            "▶ Preparing unattended lap…",
+        ):
+            self._live_content = text
+        else:
+            self._live_content += "\n" + text
         self._live_label.setText(self._live_content)
 
     def on_tool_call_start(self, index: int, call_id: str, name: str) -> None:
@@ -421,6 +434,85 @@ class DroneRunCard(QFrame):
             if w is not None:
                 w.deleteLater()
 
+    def _build_artifact_summary_widget(self, receipt: DroneReceipt) -> QFrame | None:
+        """Build a compact artifact summary frame from receipt.produced_artifact."""
+        artifact = receipt.produced_artifact
+        if not artifact:
+            return None
+
+        labels_data: list[tuple[str, str]] = []
+
+        target = artifact.get("attempted_target")
+        if target:
+            labels_data.append((f"🎯 Target: {target}", ACCENT))
+
+        changed = artifact.get("changed_files")
+        if changed and isinstance(changed, list) and len(changed) > 0:
+            count = len(changed)
+            first_few = changed[:5]
+            parts = ", ".join(first_few)
+            if count > 5:
+                parts += f", …and {count - 5} more"
+            labels_data.append((f"📄 Changed: {count} — {parts}", SUCCESS))
+
+        wstatus = artifact.get("worker_status")
+        if wstatus:
+            if wstatus == "completed":
+                wcolor = SUCCESS
+            elif "fail" in str(wstatus).lower():
+                wcolor = DANGER
+            else:
+                wcolor = WARN
+            labels_data.append((f"Worker: {wstatus}", wcolor))
+
+        errors = artifact.get("worker_errors")
+        if errors and isinstance(errors, list) and len(errors) > 0:
+            first = str(errors[0])
+            truncated = first[:200] + "…" if len(first) > 200 else first
+            suffix = f" …and {len(errors) - 1} more" if len(errors) > 1 else ""
+            labels_data.append((f"❌ {truncated}{suffix}", DANGER))
+
+        rollback = artifact.get("rollback_status")
+        if rollback and rollback != "no_changes_to_revert":
+            labels_data.append((f"↩ Rollback: {rollback}", WARN))
+
+        sha = artifact.get("commit_sha")
+        if sha and isinstance(sha, str) and len(sha) >= 8:
+            labels_data.append((f"Commit: {sha[:8]}", ACCENT))
+
+        repairs = artifact.get("repair_attempts")
+        if repairs and isinstance(repairs, list) and len(repairs) > 0:
+            labels_data.append((f"🔄 Repairs: {len(repairs)}", WARN))
+
+        violations = artifact.get("policy_violations")
+        if violations and isinstance(violations, list) and len(violations) > 0:
+            text = "; ".join(str(v) for v in violations[:2])
+            if len(violations) > 2:
+                text += "; …"
+            labels_data.append((f"⚠ {text}", DANGER))
+
+        if not labels_data:
+            return None
+
+        frame = QFrame()
+        frame.setStyleSheet(
+            f"QFrame {{ background: {BG}; border: 1px solid {BORDER}; "
+            f"border-radius: 6px; }}"
+        )
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(3)
+
+        for text, color in labels_data:
+            label = QLabel(text)
+            label.setWordWrap(True)
+            label.setStyleSheet(
+                f"color: {color}; font-size: 11px; background: transparent;"
+            )
+            layout.addWidget(label)
+
+        return frame
+
     def on_receipt_ready(self, receipt: DroneReceipt) -> None:
         """Transform card into final-report mode."""
         logger.debug("[DroneRunCard] on_receipt_ready start run_id=%s", receipt.run_id)
@@ -435,6 +527,9 @@ class DroneRunCard(QFrame):
         # Switch from live to report
         self._live_area.hide()
         self._clear_report_content()
+        artifact_widget = self._build_artifact_summary_widget(receipt)
+        if artifact_widget is not None:
+            self._report_layout.addWidget(artifact_widget)
         if receipt.summary:
             self._report_placeholder = QLabel("Loading report...")
             self._report_placeholder.setStyleSheet(f"color: {FG_DIM}; font-size: 13px; background: transparent;")
@@ -512,6 +607,9 @@ class DroneRunCard(QFrame):
         # Hide live, show report
         self._live_area.hide()
         self._clear_report_content()
+        artifact_widget = self._build_artifact_summary_widget(receipt)
+        if artifact_widget is not None:
+            self._report_layout.addWidget(artifact_widget)
         if receipt.summary:
             html = _render_markdown_with_code(receipt.summary)
             md_block = _MarkdownTextBlock(html, self._report_area)

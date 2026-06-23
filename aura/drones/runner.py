@@ -308,6 +308,8 @@ class DroneRunner(QObject):
                     return
             # else: no dirty paths extracted — proceed (tree is effectively clean)
 
+        self.contentDelta.emit("Preparing unattended lap…")
+
         # 2. Capture pre-lap snapshot
         pre_sha = snapshot(workspace_root)
 
@@ -334,7 +336,11 @@ class DroneRunner(QObject):
 
         # 4. Run the lap
         want = self._build_harness_lap_want()
+        if self._lap_target:
+            self.contentDelta.emit(f"**Target:** `{self._lap_target}`")
+        self.contentDelta.emit("Running planner → worker lap…")
         lap_result = self._harness_bridge.run_one_lap(want)
+        self.contentDelta.emit("Lap complete. Checking results…")
 
         # 5. Collect outcomes
         changed_files = list(lap_result.changed_files)
@@ -535,6 +541,7 @@ class DroneRunner(QObject):
         commit_sha: str | None = None
         if not lap_failed and changed_files:
             commit_summary = lap_result.summary if hasattr(lap_result, 'summary') else ""
+            self.contentDelta.emit("Validation passed, committing…")
             commit_ok, sha, commit_msg = commit_all(workspace_root, commit_summary)
             commit_sha = sha
             if not commit_ok:
