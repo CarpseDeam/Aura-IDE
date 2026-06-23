@@ -21,7 +21,13 @@ jobs:
           python - <<'PY'
           import json
           import os
+          import sys
+          import urllib.error
           import urllib.request
+
+          webhook_url = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
+          if not webhook_url:
+              raise SystemExit("Missing DISCORD_RELEASE_WEBHOOK_URL repo secret")
 
           tag = os.environ.get("RELEASE_TAG", "").strip()
           title = os.environ.get("RELEASE_NAME", "").strip() or tag or "New Aura-IDE release"
@@ -46,14 +52,26 @@ jobs:
 
           data = json.dumps(payload).encode("utf-8")
           req = urllib.request.Request(
-              os.environ["DISCORD_WEBHOOK_URL"],
+              webhook_url,
               data=data,
-              headers={"Content-Type": "application/json"},
+              headers={
+                  "Content-Type": "application/json",
+                  "User-Agent": "Aura-IDE Release Bot (GitHub Actions)",
+              },
               method="POST",
           )
 
-          with urllib.request.urlopen(req, timeout=15) as response:
-              if response.status not in (200, 204):
-                  raise SystemExit(f"Discord webhook failed: HTTP {response.status}")
+          try:
+              with urllib.request.urlopen(req, timeout=15) as response:
+                  pass
+          except urllib.error.HTTPError as e:
+              body_text = e.read()
+              if isinstance(body_text, bytes):
+                  body_text = body_text.decode("utf-8", errors="replace")
+              print(f"Discord webhook error response: {body_text}")
+              raise SystemExit(f"Discord webhook returned HTTP {e.code}")
+          except urllib.error.URLError as e:
+              print(f"Discord webhook connection error: {e.reason}")
+              sys.exit(1)
           PY
 
