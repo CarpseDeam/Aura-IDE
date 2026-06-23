@@ -6,7 +6,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QObject, Qt, QTimer, Signal, QThread
-from PySide6.QtWidgets import QFileDialog, QMessageBox
+from PySide6.QtWidgets import (
+    QDialog, QFileDialog, QHBoxLayout, QLabel,
+    QLineEdit, QMessageBox, QPushButton, QVBoxLayout,
+)
 
 from aura.config import save_settings, save_workspace_root
 from aura.drones.construction_context import clear_drone_construction
@@ -51,6 +54,99 @@ class _GitCheckWorker(QObject):
     def run(self):
         result = is_git_repo(self._path)
         self.finished.emit(self._path, result)
+
+
+class _NewProjectDialog(QDialog):
+    """Dialog for creating a new project folder."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Create New Project")
+        self.setMinimumWidth(420)
+        self.setModal(True)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+
+        # Project name
+        layout.addWidget(QLabel("Project name:"))
+        self._name_edit = QLineEdit()
+        self._name_edit.setPlaceholderText("Enter project name")
+        layout.addWidget(self._name_edit)
+
+        # Location (parent folder)
+        layout.addWidget(QLabel("Location:"))
+        loc_layout = QHBoxLayout()
+        default_location = str(Path.home() / "Documents" / "Aura Projects")
+        self._location_edit = QLineEdit(default_location)
+        self._location_edit.setReadOnly(True)
+        loc_layout.addWidget(self._location_edit)
+        browse_btn = QPushButton("Browse...")
+        browse_btn.clicked.connect(self._on_browse)
+        loc_layout.addWidget(browse_btn)
+        layout.addLayout(loc_layout)
+
+        layout.addSpacing(6)
+
+        # Buttons
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        create_btn = QPushButton("Create")
+        create_btn.setDefault(True)
+        create_btn.clicked.connect(self._on_create)
+        btn_layout.addWidget(cancel_btn)
+        btn_layout.addWidget(create_btn)
+        layout.addLayout(btn_layout)
+
+        self._name_edit.setFocus()
+
+    def _on_browse(self) -> None:
+        chosen = QFileDialog.getExistingDirectory(
+            self, "Choose Parent Folder", self._location_edit.text()
+        )
+        if chosen:
+            self._location_edit.setText(chosen)
+
+    def _on_create(self) -> None:
+        name = self._name_edit.text().strip()
+        if not name:
+            QMessageBox.warning(self, "Invalid Name", "Project name cannot be empty.")
+            self._name_edit.setFocus()
+            return
+
+        invalid_chars = set('<>:"/\\|?*')
+        if any(c in name for c in invalid_chars):
+            QMessageBox.warning(
+                self, "Invalid Name",
+                "Project name cannot contain: < > : \" / \\ | ? *"
+            )
+            self._name_edit.setFocus()
+            return
+
+        parent_path = Path(self._location_edit.text())
+        project_path = parent_path / name
+
+        if project_path.exists():
+            try:
+                has_children = any(project_path.iterdir())
+            except PermissionError:
+                has_children = True
+            if has_children:
+                QMessageBox.warning(
+                    self, "Folder Exists",
+                    f"The folder \"{name}\" already exists and is not empty.\n"
+                    "Please choose a different name or location."
+                )
+                return
+
+        self._project_path = project_path
+        self._parent_path = parent_path
+        self.accept()
+
+    def result_data(self) -> tuple[Path, Path]:
+        return self._project_path, self._parent_path
 
 
 class MainWindowWorkspaceController(QObject):
@@ -262,17 +358,55 @@ class MainWindowWorkspaceController(QObject):
         self._check_git_async(path)
 
     def on_create_new_project(self) -> None:
-        """Let user choose or create an empty folder, then set it as workspace."""
-        window = self._window
-        start = str(window._workspace_root) if window._workspace_root else str(Path.home())
-        chosen = QFileDialog.getExistingDirectory(window, "Create Project Folder", start)
-        if not chosen:
+        """Show a dialog to create a new project folder, then set it as workspace."""
+        dialog = _NewProjectDialog(self._window)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return
-        path = Path(chosen)
-        if self._warn_blocked_root(path):
+
+        project_path, parent_path = dialog.result_data()
+
+        if self._warn_blocked_root(project_path):
             return
-        self._on_project_selected(path)
-        self._check_git_async(path)
+
+        parent_path.mkdir(parents=True, exist_ok=True)
+
+        project_path.mkdir(parents=False, exist_ok=True)
+
+        name = project_path.name
+
+        # Write README.md
+        readme = "\n".join([
+            f"# {name}",
+            "",
+            "Welcome to your new project!",
+            "",
+            "This project was created with Aura.",
+        ])
+        (project_path / "README.md").write_text(readme, encoding="utf-8")
+
+        # Write src/main.py
+        src_dir = project_path / "src"
+        src_dir.mkdir(parents=True, exist_ok=True)
+        main_py = "\n".join([
+            "def main() -> None:",
+            '    print("Hello from Aura!")',
+            "",
+            "",
+            'if __name__ == "__main__":',
+            "    main()",
+        ])
+        (src_dir / "main.py").write_text(main_py, encoding="utf-8")
+
+        # Git init if possible (non-fatal)
+        try:
+            if not is_git_repo(project_path):
+                git_init(project_path)
+        except Exception as exc:
+            logger.warning("git init for new project failed: %s", exc)
+
+        # Select as workspace — reuses the same pipeline as demo/open
+        self._on_project_selected(project_path)
+        self._check_git_async(project_path)
 
     def on_create_demo_project(self) -> None:
         """Create a tiny demo project suitable for first-time users."""
