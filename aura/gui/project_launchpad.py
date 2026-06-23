@@ -12,16 +12,27 @@ from aura.gui.theme import ACCENT, BG_RAISED, BORDER, FG, FG_DIM, FG_MUTED
 class _ActionCard(QFrame):
     """Clickable card with icon, title, and description."""
 
-    def __init__(self, emoji: str, title: str, description: str, parent=None):
+    def __init__(
+        self,
+        emoji: str,
+        title: str,
+        description: str,
+        *,
+        badge_text: str | None = None,
+        border_color: str | None = None,
+        parent=None,
+    ):
         super().__init__(parent)
         self.setMinimumWidth(0)
         self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.setObjectName("launchpadCard")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        card_border = border_color or BORDER
         self.setStyleSheet(
             f"#launchpadCard {{"
             f"  background: {BG_RAISED};"
-            f"  border: 1px solid {BORDER};"
+            f"  border: 1px solid {card_border};"
             f"  border-radius: 12px;"
             f"  padding: 24px;"
             f"}}"
@@ -33,6 +44,18 @@ class _ActionCard(QFrame):
 
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
+
+        # Optional badge at top-right corner
+        if badge_text:
+            badge_row = QHBoxLayout()
+            badge_row.setContentsMargins(0, 0, 0, 0)
+            badge_row.addStretch()
+            badge_lbl = QLabel(badge_text)
+            badge_lbl.setStyleSheet(
+                f"font-size: 11px; font-weight: 700; color: {ACCENT}; background: transparent;"
+            )
+            badge_row.addWidget(badge_lbl)
+            layout.addLayout(badge_row)
 
         icon_lbl = QLabel(emoji)
         icon_lbl.setStyleSheet("font-size: 32px; background: transparent;")
@@ -116,6 +139,45 @@ class ProjectLaunchpad(QWidget):
 
         layout.addLayout(title_block)
 
+        # First-run hints section for new users
+        hints_frame = QFrame()
+        hints_frame.setStyleSheet(
+            f"QFrame {{"
+            f"  background: {BG_RAISED};"
+            f"  border: 1px solid {BORDER};"
+            f"  border-radius: 8px;"
+            f"  padding: 12px;"
+            f"}}"
+        )
+        hints_layout = QVBoxLayout(hints_frame)
+        hints_layout.setSpacing(6)
+
+        hint1 = QLabel("\U0001f680 New here? Try the demo project first \u2014 it\'s a safe sandbox.")
+        hint1.setStyleSheet(
+            f"font-size: 12px; color: {FG_MUTED}; background: transparent;"
+        )
+        hint1.setWordWrap(True)
+        hint1.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        hints_layout.addWidget(hint1)
+
+        hint2 = QLabel("\U0001f4c2 You can also open an existing project folder.")
+        hint2.setStyleSheet(
+            f"font-size: 12px; color: {FG_MUTED}; background: transparent;"
+        )
+        hint2.setWordWrap(True)
+        hint2.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        hints_layout.addWidget(hint2)
+
+        hint3 = QLabel("\u2699\ufe0f No AI provider yet? You can browse first, then set up Aura Credits in Settings.")
+        hint3.setStyleSheet(
+            f"font-size: 12px; color: {FG_MUTED}; background: transparent;"
+        )
+        hint3.setWordWrap(True)
+        hint3.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        hints_layout.addWidget(hint3)
+
+        layout.addWidget(hints_frame)
+
         # Three action cards in a horizontal row
         cards_layout = QHBoxLayout()
         cards_layout.setSpacing(20)
@@ -126,6 +188,9 @@ class ProjectLaunchpad(QWidget):
             "Choose an existing project folder. Aura will scan and index it."
         )
         open_card.action_button.clicked.connect(self.open_existing_requested.emit)
+        open_card.action_button.setToolTip(
+            "Choose a specific project folder. Avoid Desktop, Downloads, or your whole Documents folder."
+        )
         cards_layout.addWidget(open_card)
 
         create_card = _ActionCard(
@@ -133,23 +198,19 @@ class ProjectLaunchpad(QWidget):
             "Create an empty folder. Aura will set it up as a workspace."
         )
         create_card.action_button.clicked.connect(self.create_new_requested.emit)
+        create_card.action_button.setToolTip("Start from an empty folder.")
         cards_layout.addWidget(create_card)
 
         demo_card = _ActionCard(
             "\U0001f680", "Try Demo Project",
-            "Create a tiny safe demo to try the Planner \u2192 Worker \u2192 Diff \u2192 Validation loop."
+            "Create a tiny safe demo to try the Planner \u2192 Worker \u2192 Diff \u2192 Validation loop.",
+            badge_text="\u2605 Recommended",
+            border_color="rgba(122, 162, 247, 0.5)",
         )
         demo_card.action_button.clicked.connect(self.create_demo_requested.emit)
+        demo_card.action_button.setToolTip(
+            "Create a tiny safe project to test Aura without touching your real code."
+        )
         cards_layout.addWidget(demo_card)
 
         layout.addLayout(cards_layout)
-
-        # Bottom hint
-        hint = QLabel(
-            "Settings and Aura Credits are always available from the toolbar above."
-        )
-        hint.setStyleSheet(
-            f"font-size: 11px; color: {FG_MUTED}; background: transparent;"
-        )
-        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(hint)

@@ -95,7 +95,7 @@ class SendHandler(QObject):
         if self._workspace_root is None:
             self._chat.add_error(
                 "No workspace",
-                "Choose a project folder first. Aura needs a workspace before it can plan, edit, or run tools.",
+                "Open a project first. Try the Demo Project to test Aura safely, or open an existing project folder.",
             )
             return
 

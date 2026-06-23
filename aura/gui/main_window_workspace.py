@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from PySide6.QtCore import QObject, Qt, QTimer, Signal, QThread
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 
-from aura.config import save_workspace_root
+from aura.config import save_settings, save_workspace_root
 from aura.drones.construction_context import clear_drone_construction
 from aura.git_ops import git_init, is_git_repo
 
@@ -170,6 +170,11 @@ class MainWindowWorkspaceController(QObject):
 
             QTimer.singleShot(0, _do_restore)
 
+        # Mark first launch done once user picks a project
+        if not window._settings.first_launch_done:
+            window._settings.first_launch_done = True
+            save_settings(window._settings)
+
     def _on_project_selected(self, root_path: Path, *, restore_last: bool = True) -> None:
         from aura.projects.store import ProjectStore
         t0 = time.perf_counter()
@@ -196,7 +201,7 @@ class MainWindowWorkspaceController(QObject):
     def on_new_project(self) -> None:
         window = self._window
         start = str(window._workspace_root) if window._workspace_root else str(Path.home())
-        chosen = QFileDialog.getExistingDirectory(window, "Choose or Create Workspace Directory", start)
+        chosen = QFileDialog.getExistingDirectory(window, "Choose or Create Project Folder", start)
         if not chosen:
             return
         chosen_path = Path(chosen)

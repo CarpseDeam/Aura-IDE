@@ -468,13 +468,15 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             self._toolbar.set_update_available(True)
 
     def showEvent(self, event) -> None:
-        """Triggered when the window is shown. Used for first-launch onboarding."""
+        """Triggered when the window is shown."""
         super().showEvent(event)
         self._position_edge_tabs()
-        if not self._settings.first_launch_done:
-            # We use a 0ms timer to ensure the event loop processes the window
-            # show COMPLETELY before popping the modal dialog.
-            QTimer.singleShot(0, self._show_onboarding)
+        # Mark first launch done so onboarding never shows on subsequent starts.
+        QTimer.singleShot(0, self._mark_first_launch_done)
+
+    def _mark_first_launch_done(self) -> None:
+        self._settings.first_launch_done = True
+        save_settings(self._settings)
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
