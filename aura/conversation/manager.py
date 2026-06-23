@@ -78,6 +78,7 @@ from aura.conversation.planner_refresh import PlannerRefreshState
 from aura.conversation.worker_validation import (
     emit_auto_dependent_import_info,
     emit_auto_import_result,
+    emit_auto_launch_result,
     emit_auto_py_compile_result,
     run_focused_py_compile,
 )
@@ -196,6 +197,15 @@ WORKER_DEPENDENT_CONTRACT_INSTRUCTION = (
     "Edited: {edited_files}\n"
     "Broken dependents: {dependent_files}\n\n"
     "Diagnostic output:\n{diagnostics}"
+)
+
+WORKER_LAUNCH_FAILURE_INSTRUCTION = (
+    "Launch verification failed \u2014 the run command exited early or printed a "
+    "traceback. The import checks passed, so the code is structurally valid, "
+    "but it crashes at runtime. Re-read the relevant file(s), repair the "
+    "error shown in the output below, then finish again.\n\n"
+    "Command: {command}\n\n"
+    "Diagnostic output:\n{output}"
 )
 
 
@@ -607,6 +617,37 @@ class ConversationManager:
                                             "Dependent import check failed non-fatally",
                                             exc_info=True,
                                         )
+                                    # --- Launch verification rung ---
+                                    if declared_run_command:
+                                        try:
+                                            from aura.sandbox import SandboxExecutor
+                                            sandbox = SandboxExecutor(
+                                                mode="host",
+                                                workspace_root=Path(self._tools.workspace_root),
+                                            )
+                                            watch = sandbox.run_and_watch(
+                                                declared_run_command,
+                                                window_seconds=10,
+                                            )
+                                            if not watch.ok:
+                                                emit_auto_launch_result(
+                                                    command=declared_run_command,
+                                                    ok=False,
+                                                    output=watch.output,
+                                                    on_event=on_event,
+                                                    workspace_root=self._tools.workspace_root,
+                                                )
+                                                instruction = WORKER_LAUNCH_FAILURE_INSTRUCTION.format(
+                                                    command=declared_run_command,
+                                                    output=watch.output,
+                                                )
+                                                self._history.append_user_text(instruction)
+                                                continue
+                                        except Exception:
+                                            logging.getLogger(__name__).warning(
+                                                "Launch verification failed non-fatally",
+                                                exc_info=True,
+                                            )
                             else:
                                 # Auto-py_compile failed — feed diagnostics back for repair
                                 for path in product_paths:

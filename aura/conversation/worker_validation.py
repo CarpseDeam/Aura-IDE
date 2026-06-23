@@ -171,3 +171,31 @@ def emit_auto_dependent_import_info(
             result=content,
         )
     )
+
+
+def emit_auto_launch_result(
+    *,
+    command: str,
+    ok: bool,
+    output: str,
+    on_event: EventCallback,
+    workspace_root: str | Path,
+) -> None:
+
+    payload = {
+        "ok": ok,
+        "command": command,
+        "exit_code": 1 if not ok else 0,
+        "output": output,
+        "auto_validation": True,
+        "verification_rung": "launch",
+    }
+    content = json.dumps(payload, ensure_ascii=False)
+    on_event(
+        ToolResult(
+            tool_call_id="auto_launch_check",
+            name="run_terminal_command",
+            ok=False,
+            result=content,
+        )
+    )
