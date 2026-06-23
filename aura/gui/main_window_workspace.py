@@ -294,17 +294,6 @@ class MainWindowWorkspaceController(QObject):
 
         QTimer.singleShot(0, _do_refresh_after_load)
 
-    def on_new_project(self) -> None:
-        window = self._window
-        start = str(window._workspace_root) if window._workspace_root else str(Path.home())
-        chosen = QFileDialog.getExistingDirectory(window, "Choose or Create Project Folder", start)
-        if not chosen:
-            return
-        chosen_path = Path(chosen)
-        if self._warn_blocked_root(chosen_path):
-            return
-        self._on_project_selected(chosen_path)
-
     def onboarding_change_workspace(self) -> str | None:
         """Called from onboarding dialog to change workspace. Returns new path or None."""
         window = self._window

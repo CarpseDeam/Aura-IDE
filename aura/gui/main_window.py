@@ -161,7 +161,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._workspace_controller = MainWindowWorkspaceController(self)
         self._left_pane.change_root_requested.connect(self._workspace_controller.on_change_root)
         self._left_pane.project_selected.connect(self._workspace_controller._on_project_selected)
-        self._left_pane.new_project_requested.connect(self._workspace_controller.on_new_project)
+        self._left_pane.new_project_requested.connect(self._workspace_controller.on_create_new_project)
         self._left_pane.planner_model_changed.connect(lambda: self._refresh_status_bar())
         self._left_pane.planner_thinking_changed.connect(lambda: self._refresh_status_bar())
         self._left_pane.worker_model_changed.connect(self._on_sidebar_worker_model_changed)
