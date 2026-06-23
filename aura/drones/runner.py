@@ -15,6 +15,7 @@ from aura.drones.folder_runner import is_folder_backed_drone, run_folder_drone_s
 from aura.drones.receipt import DroneReceipt
 from aura.drones.run import DroneRun
 from aura.drones.store import DroneStore, RunHistoryStore
+from aura.sandbox import SandboxExecutor
 
 if TYPE_CHECKING:
     from aura.bridge.harness_lap_bridge import HarnessLapBridge
@@ -319,6 +320,8 @@ class DroneRunner(QObject):
         revert_on_failure = permissions.get("revert_on_failure", True)
         max_changed_files = permissions.get("max_changed_files", 0)  # 0 = unlimited
         protected_paths = permissions.get("protected_paths", []) or []
+        launch_command = permissions.get("launch_command", "")
+        launch_window_seconds = int(permissions.get("launch_window_seconds", 10))
 
         import fnmatch
 
@@ -523,6 +526,27 @@ class DroneRunner(QObject):
                     f"Changed protected path '{f}'"
                 )
                 lap_failed = True
+
+        # --- Launch gate: verify the app boots ---
+        if launch_command and not lap_failed and changed_files:
+            self.contentDelta.emit("Verifying app launches…")
+            executor = SandboxExecutor(workspace_root)
+            result = executor.run_and_watch(
+                launch_command,
+                window_seconds=launch_window_seconds,
+            )
+            if result.survived_window:
+                self.contentDelta.emit("App launched successfully.")
+            else:
+                output_tail = (result.output or "")[-300:]
+                violation = (
+                    f"App failed to launch after lap (exit {result.exit_code}): {output_tail}"
+                )
+                policy_violations.append(violation)
+                lap_failed = True
+                self.contentDelta.emit(
+                    "App launch failed — lap will be reverted."
+                )
 
         # 8. Revert on failure if policy says so
         rollback_status: str | None = None
