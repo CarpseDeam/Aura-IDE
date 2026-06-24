@@ -287,10 +287,11 @@ def prewarm_grammars(final_dist_dir: Path, python_exe: Path) -> None:
 
     print("Pre-warming tree-sitter grammars...")
     try:
-        subprocess.check_output(
+        output = subprocess.check_output(
             [str(python_exe), "-c", grammar_prewarm_script(), str(grammar_dir)] + SUPPORTED_GRAMMARS,
             stderr=subprocess.STDOUT,
         ).decode()
+        print(output)
     except subprocess.CalledProcessError as exc:
         print(f"Grammar prewarm failed:\n{exc.output.decode()}")
         print("Warning: tree-sitter grammar prewarm failed; continuing release build.")
