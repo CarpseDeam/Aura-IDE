@@ -125,10 +125,20 @@ def update_files(root: Path, new_version: str) -> None:
 # Helpers
 
 
-def run(cmd: list[str]) -> None:
+def run(cmd: list[str], *, env: dict[str, str] | None = None) -> None:
     """Run a subprocess command and fail loudly if it errors."""
     print(f"Running: {' '.join(cmd)}")
-    subprocess.run(cmd, check=True)
+    subprocess.run(cmd, check=True, env=env)
+
+
+def clean_pip_env() -> dict[str, str]:
+    """Return a copy of the current environment with user pip config stripped."""
+    env = os.environ.copy()
+    for key in ("PIP_CONFIG_FILE", "PIP_INDEX_URL", "PIP_EXTRA_INDEX_URL", "PIP_FIND_LINKS", "PIP_TRUSTED_HOST"):
+        env.pop(key, None)
+    env["PIP_CONFIG_FILE"] = "NUL" if sys.platform == "win32" else "/dev/null"
+    env["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
+    return env
 
 
 def create_build_venv(root: Path, *, fast: bool = False, refresh_build_venv: bool = False) -> Path:
@@ -158,8 +168,8 @@ def create_build_venv(root: Path, *, fast: bool = False, refresh_build_venv: boo
     if not python_exe.exists():
         raise SystemExit(f"Failed to find python executable in {venv_dir}")
 
-    print("Installing Aura and build dependencies into pristine environment...")
-    run([str(python_exe), "-m", "pip", "install", "-e", ".", "nuitka", "zstandard"])
+    print("Installing Aura and build dependencies into pristine isolated environment...")
+    run([str(python_exe), "-m", "pip", "--isolated", "install", "-e", ".", "nuitka", "zstandard"], env=clean_pip_env())
 
     return python_exe
 
