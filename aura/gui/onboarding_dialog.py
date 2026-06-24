@@ -373,7 +373,7 @@ class OnboardingDialog(QDialog):
 
         body = self._make_body(
             f"{APP_NAME} supports multiple AI providers. The easiest way to start is with "
-            "<b>Aura Credits</b> — buy credits or paste an Aura API key in Settings → Aura.\n\n"
+            "<b>Aura Credits</b> — buy credits or paste an Aura API key in Settings → Credits & Account.\n\n"
             "You can also bring your own API key for DeepSeek, OpenAI, Anthropic, Gemini, "
             "OpenRouter, or other providers in Settings → API Keys.\n\n"
             "You can still browse your project folder and explore the app without configuring AI."

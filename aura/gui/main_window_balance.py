@@ -24,12 +24,24 @@ class MainWindowBalanceController(QObject):
     def balance_micros(self) -> int | None:
         return self._balance_micros
 
+    def shutdown(self) -> None:
+        thread = self._thread
+        if thread is None:
+            return
+        try:
+            if thread.isRunning():
+                thread.quit()
+                if not thread.wait(15000):
+                    logger.warning("Balance fetch thread did not stop cleanly")
+                    thread.wait()
+        except RuntimeError:
+            pass
+        self._thread = None
+        self._worker = None
+        self._inflight = False
+
     def refresh(self, settings: AppSettings) -> None:
         if self._inflight:
-            return
-        if settings.planner_provider != "aura" and settings.worker_provider != "aura":
-            self._balance_micros = None
-            self.balance_changed.emit()
             return
         api_key = get_api_key("aura")
         if not api_key:

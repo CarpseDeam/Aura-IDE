@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import QLabel, QSizeGrip, QStatusBar
 
@@ -44,7 +44,22 @@ class _StatusResizeGrip(QSizeGrip):
         super().mousePressEvent(event)
 
 
+class _ClickableLabel(QLabel):
+    clicked = Signal()
+
+    def __init__(self, text: str = "", parent=None) -> None:
+        super().__init__(text, parent)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
+
+
 class AuraStatusBar(QStatusBar):
+    credits_chip_clicked = Signal()
+
     def __init__(self, parent=None, show_resize_grip: bool = True) -> None:
         super().__init__(parent)
 
@@ -62,10 +77,11 @@ class AuraStatusBar(QStatusBar):
         self._status_cost.setObjectName("statusCost")
         self.addPermanentWidget(self._status_cost)
 
-        self._status_balance = QLabel("")
+        self._status_balance = _ClickableLabel("")
         self._status_balance.setObjectName("statusBalance")
         self.addPermanentWidget(self._status_balance)
-        self._status_balance.setVisible(False)
+        self._status_balance.clicked.connect(self.credits_chip_clicked)
+        self._status_balance.setVisible(True)
 
         self.setSizeGripEnabled(False)
         self._resize_grip = _StatusResizeGrip(self)
@@ -92,7 +108,7 @@ class AuraStatusBar(QStatusBar):
         model_id: str, 
         thinking: ThinkingMode,
         session_usage: dict[str, dict[str, int]],
-        show_balance: bool = False,
+        has_aura_key: bool = False,
         balance_micros: int | None = None,
     ) -> None:
         # Workspace path truncation
@@ -149,14 +165,14 @@ class AuraStatusBar(QStatusBar):
             )
 
         # Balance display
-        if show_balance:
+        if has_aura_key:
             if balance_micros is not None:
-                self._status_balance.setText(f"Credits: ${balance_micros / 1_000_000:.2f}")
-                self._status_balance.setToolTip("")
+                self._status_balance.setText(f"Aura Credits: ${balance_micros / 1_000_000:.2f}")
+                self._status_balance.setToolTip("Aura Credits balance. Click to open Credits & Account.")
             else:
-                self._status_balance.setText("Credits: $—")
-                self._status_balance.setToolTip("Balance not loaded yet.")
-            self._status_balance.setVisible(True)
+                self._status_balance.setText("Aura Credits: $—")
+                self._status_balance.setToolTip("Aura Credits balance. Click to open Credits & Account.")
         else:
-            self._status_balance.setVisible(False)
-            self._status_balance.setToolTip("")
+            self._status_balance.setText("Aura Credits")
+            self._status_balance.setToolTip("Set up Aura Credits. Click to open Credits & Account.")
+        self._status_balance.setVisible(True)

@@ -156,6 +156,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
         self._balance_controller = MainWindowBalanceController(self)
         self._balance_controller.balance_changed.connect(self._refresh_status_bar)
+        self._status_bar.credits_chip_clicked.connect(self._settings_controller.open_aura_settings)
 
         self._drone_controller = MainWindowDroneController(self)
         self._terminal_controller = MainWindowTerminalController(self)
@@ -452,6 +453,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._settings.main_splitter_sizes = list(self._main_splitter.sizes())
         save_settings(self._settings)
         self._companion_controller.stop()
+        self._balance_controller.shutdown()
         super().closeEvent(event)
 
     def _check_for_updates(self) -> None:
@@ -588,13 +590,13 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
     def _refresh_status_bar(self) -> None:
         ws = str(self._workspace_root) if self._workspace_root else "(none)"
-        show_balance = self._settings.planner_provider == "aura" or self._settings.worker_provider == "aura"
+        has_aura_key = bool(get_api_key("aura"))
         self._status_bar.refresh(
             workspace_root=ws,
             model_id=self.current_model(),
             thinking=self.current_thinking(),
             session_usage=self._worker_handler.session_usage,
-            show_balance=show_balance,
+            has_aura_key=has_aura_key,
             balance_micros=self._balance_controller.balance_micros,
         )
 
@@ -650,7 +652,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._settings_controller.open_api_settings()
 
     def open_aura_settings(self) -> None:
-        """Open settings dialog directly to the Aura tab."""
+        """Open settings dialog directly to the Credits & Account tab."""
         self._settings_controller.open_aura_settings()
 
 

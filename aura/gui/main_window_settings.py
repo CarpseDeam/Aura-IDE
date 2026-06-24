@@ -69,7 +69,7 @@ class MainWindowSettingsController(QObject):
             QMessageBox.critical(window, "Settings Error", "Could not open the API Settings dialog. See the log for details.")
 
     def open_aura_settings(self) -> None:
-        """Open settings dialog directly to the Aura tab."""
+        """Open settings dialog directly to the Credits & Account tab."""
         window = self._window
         try:
             dlg = SettingsDialog(
@@ -86,8 +86,8 @@ class MainWindowSettingsController(QObject):
             if dlg.exec() == SettingsDialog.DialogCode.Accepted:
                 self._apply_settings(dlg.result_settings())
         except Exception:
-            logger.exception("Failed to open Aura Settings dialog")
-            QMessageBox.critical(window, "Settings Error", "Could not open the Aura Settings dialog. See the log for details.")
+            logger.exception("Failed to open Credits & Account Settings dialog")
+            QMessageBox.critical(window, "Settings Error", "Could not open the Credits & Account Settings dialog. See the log for details.")
 
     def _apply_settings(self, settings: AppSettings) -> None:
         window = self._window

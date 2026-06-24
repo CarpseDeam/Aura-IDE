@@ -16,6 +16,8 @@ from PySide6.QtWidgets import (
 
 from aura.config import APP_NAME, AppSettings, save_settings
 
+AURA_CREDITS_TAB_LABEL = "Credits & Account"
+
 
 class SettingsDialog(QDialog):
     """Modal settings.
@@ -79,7 +81,7 @@ class SettingsDialog(QDialog):
 
         self._pages = [
             (self._models_page, "Models"),
-            (self._aura_page, "Aura"),
+            (self._aura_page, AURA_CREDITS_TAB_LABEL),
             (self._api_keys_page, "API Keys"),
             (self._automation_page, "Automation"),
             (self._companion_page, "Companion"),
@@ -110,7 +112,7 @@ class SettingsDialog(QDialog):
 
         if open_aura_tab:
             for i in range(self._tabs.count()):
-                if self._tabs.tabText(i) == "Aura":
+                if self._tabs.tabText(i) == AURA_CREDITS_TAB_LABEL:
                     self._tabs.setCurrentIndex(i)
                     break
         elif open_api_keys_tab:
