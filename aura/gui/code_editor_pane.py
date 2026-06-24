@@ -673,11 +673,14 @@ class CodeEditorPane(QWidget):
                 font-weight: 600;
             }}
             QTabBar::close-button {{
-                image: none;
+                subcontrol-position: right center;
+                image: url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Cline x1='3.5' y1='3.5' x2='12.5' y2='12.5' stroke='%23eaecef' stroke-width='1.6' stroke-linecap='round'/%3E%3Cline x1='12.5' y1='3.5' x2='3.5' y2='12.5' stroke='%23eaecef' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E");
                 background: transparent;
                 border: none;
+                width: 16px;
+                height: 16px;
                 padding: 0;
-                margin: 0 0 0 6px;
+                margin: 0 0 0 4px;
             }}
             QTabBar::close-button:hover {{
                 background: rgba(247, 118, 142, 0.20);
