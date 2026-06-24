@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import logging
 
-from PySide6.QtCore import Qt, QObject, Signal, QThread
+from PySide6.QtCore import QObject, Qt, QThread, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
     QFormLayout,
+    QHBoxLayout,
     QLabel,
     QPushButton,
     QVBoxLayout,
@@ -20,10 +21,10 @@ from aura.config import (
     resolve_role_default_model,
     save_dynamic_catalog,
 )
-from aura.providers.base import ProviderId
-from aura.providers.registry import provider_registry
 from aura.gui.theme import FG_DIM
 from aura.gui.widgets.glass_switch import GlassSwitch
+from aura.providers.base import ProviderId
+from aura.providers.registry import provider_registry
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +87,14 @@ class ModelsPage(QWidget):
 
         self._planner_model_combo = QComboBox()
 
+        self._planner_refresh_btn = QPushButton("↻ Refresh")
+        self._planner_refresh_btn.setFixedHeight(20)
+        self._planner_refresh_btn.setStyleSheet(
+            "QPushButton { background: transparent; border: none; color: #888; font-size: 10px; padding: 0 4px; }"
+            "QPushButton:hover { color: #ccc; }"
+        )
+        self._planner_refresh_btn.setToolTip("Fetch latest models and pricing from provider")
+
         self._planner_thinking_combo = QComboBox()
         for label, val in _THINKING_ITEMS:
             self._planner_thinking_combo.addItem(label, val)
@@ -99,6 +108,14 @@ class ModelsPage(QWidget):
             self._worker_provider_combo.addItem(f"{spec.label} ({kind_label})", pid)
 
         self._worker_model_combo = QComboBox()
+
+        self._worker_refresh_btn = QPushButton("↻ Refresh")
+        self._worker_refresh_btn.setFixedHeight(20)
+        self._worker_refresh_btn.setStyleSheet(
+            "QPushButton { background: transparent; border: none; color: #888; font-size: 10px; padding: 0 4px; }"
+            "QPushButton:hover { color: #ccc; }"
+        )
+        self._worker_refresh_btn.setToolTip("Fetch latest models and pricing from provider")
 
         self._worker_thinking_combo = QComboBox()
         for label, val in _THINKING_ITEMS:
@@ -127,9 +144,10 @@ class ModelsPage(QWidget):
         form.addRow("", self._pw_mode_chk)
         form.addRow("Planner provider:", self._planner_provider_combo)
 
-        planner_model_row = QVBoxLayout()
-        planner_model_row.setSpacing(2)
-        planner_model_row.addWidget(self._planner_model_combo)
+        planner_model_row = QHBoxLayout()
+        planner_model_row.setSpacing(4)
+        planner_model_row.addWidget(self._planner_model_combo, 1)
+        planner_model_row.addWidget(self._planner_refresh_btn)
         form.addRow("Planner model:", planner_model_row)
 
         form.addRow("Planner thinking:", self._planner_thinking_combo)
@@ -143,9 +161,10 @@ class ModelsPage(QWidget):
 
         form.addRow("Worker provider:", self._worker_provider_combo)
 
-        worker_model_row = QVBoxLayout()
-        worker_model_row.setSpacing(2)
-        worker_model_row.addWidget(self._worker_model_combo)
+        worker_model_row = QHBoxLayout()
+        worker_model_row.setSpacing(4)
+        worker_model_row.addWidget(self._worker_model_combo, 1)
+        worker_model_row.addWidget(self._worker_refresh_btn)
         form.addRow("Worker model:", worker_model_row)
 
         form.addRow("Worker thinking:", self._worker_thinking_combo)
@@ -173,6 +192,16 @@ class ModelsPage(QWidget):
 
         self._populate_all_role_models()
 
+        self._planner_refresh_btn.setVisible(
+            self._planner_provider_combo.currentData() == "openrouter"
+        )
+        self._worker_refresh_btn.setVisible(
+            self._worker_provider_combo.currentData() == "openrouter"
+        )
+
+        self._start_discovery(self._settings.planner_provider)
+        self._start_discovery(self._settings.worker_provider)
+
         self._set_combo_to_data(
             self._planner_thinking_combo, self._settings.default_planner_thinking
         )
@@ -191,6 +220,13 @@ class ModelsPage(QWidget):
         self._pw_mode_chk.toggled.connect(self._on_pw_toggled)
         self._planner_provider_combo.currentIndexChanged.connect(self._on_planner_provider_changed)
         self._worker_provider_combo.currentIndexChanged.connect(self._on_worker_provider_changed)
+
+        self._planner_refresh_btn.clicked.connect(
+            lambda: self._start_discovery(self._planner_provider_combo.currentData())
+        )
+        self._worker_refresh_btn.clicked.connect(
+            lambda: self._start_discovery(self._worker_provider_combo.currentData())
+        )
 
     # --- Thread cleanup ---
 
@@ -260,12 +296,14 @@ class ModelsPage(QWidget):
             self._populate_role_models(
                 self._planner_model_combo, planner_pid, current, role="planner"
             )
+            self._planner_refresh_btn.setVisible(provider_id == "openrouter")
 
         if provider_id == worker_pid:
             current = self._worker_model_combo.currentData()
             self._populate_role_models(
                 self._worker_model_combo, worker_pid, current, role="worker"
             )
+            self._worker_refresh_btn.setVisible(provider_id == "openrouter")
 
     # --- Provider / Model helpers ---
 
@@ -277,6 +315,8 @@ class ModelsPage(QWidget):
             resolve_role_default_model(provider_id, "planner"),
             role="planner",
         )
+        self._start_discovery(provider_id)
+        self._planner_refresh_btn.setVisible(provider_id == "openrouter")
 
     def _on_worker_provider_changed(self) -> None:
         provider_id: ProviderId = self._worker_provider_combo.currentData()  # type: ignore[assignment]
@@ -286,6 +326,8 @@ class ModelsPage(QWidget):
             resolve_role_default_model(provider_id, "worker"),
             role="worker",
         )
+        self._start_discovery(provider_id)
+        self._worker_refresh_btn.setVisible(provider_id == "openrouter")
 
     def _populate_all_role_models(self) -> None:
         planner_pid: ProviderId = self._planner_provider_combo.currentData()  # type: ignore[assignment]

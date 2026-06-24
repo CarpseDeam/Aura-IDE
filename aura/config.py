@@ -10,29 +10,32 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from aura.paths import APP_NAME, APP_AUTHOR, config_dir, data_dir
-from aura.key_manager import get_key as _stored_get_key, has_key as _stored_has_key, set_key as _stored_set_key
-from aura.providers.registry import provider_registry
-from aura.providers.base import ModelInfo, ProviderSpec as ProviderConfig, ProviderId, ThinkingMode, ModelId
+from aura.key_manager import get_key as _stored_get_key
+from aura.key_manager import has_key as _stored_has_key
+from aura.key_manager import set_key as _stored_set_key
+from aura.models import PROVIDERS, cost_usd, get_pricing
+from aura.paths import APP_AUTHOR, APP_NAME, config_dir, data_dir
+from aura.providers.base import ModelId, ModelInfo, ProviderId, ThinkingMode
+from aura.providers.base import ProviderSpec as ProviderConfig
 from aura.providers.catalog import (
     DEFAULT_MODEL,
-    DEFAULT_THINKING,
     DEFAULT_PLANNER_MODEL,
-    DEFAULT_WORKER_MODEL,
     DEFAULT_PLANNER_THINKING,
+    DEFAULT_THINKING,
+    DEFAULT_WORKER_MODEL,
     DEFAULT_WORKER_THINKING,
 )
-from aura.models import get_pricing, cost_usd, PROVIDERS
+from aura.providers.registry import provider_registry
 from aura.settings import (
-    AppSettings,
-    load_settings,
-    save_settings,
-    resolve_role_default_model,
     DEFAULT_PROVIDER,
     DEFAULT_SANDBOX_MODE,
     DEFAULT_VISION_ENABLED,
-    DEFAULT_VISION_MODEL,
     DEFAULT_VISION_ENDPOINT,
+    DEFAULT_VISION_MODEL,
+    AppSettings,
+    load_settings,
+    resolve_role_default_model,
+    save_settings,
 )
 
 # Backward-compatible aliases
@@ -455,22 +458,30 @@ def load_dynamic_catalog() -> None:
         cached_models = entry.get("models", {})
         cached_pricing = entry.get("pricing", {})
 
-        for mid, m_data in cached_models.items():
-            if mid in cfg.models:
-                hc_m = cfg.models[mid]
-                if m_data.get("input_per_m_usd", 0.0) == 0.0 and m_data.get("output_per_m_usd", 0.0) == 0.0:
-                    if hc_m.input_per_m_usd > 0.0 or hc_m.output_per_m_usd > 0.0:
-                        m_data["input_per_m_usd"] = hc_m.input_per_m_usd
-                        m_data["output_per_m_usd"] = hc_m.output_per_m_usd
-                        m_data["cache_hit_per_m_usd"] = hc_m.cache_hit_per_m_usd
-            cfg.models[mid] = ModelInfo(**m_data)
-            
-        for mid, p_data in cached_pricing.items():
-            if p_data.get("in_miss", 0.0) == 0.0 and p_data.get("out", 0.0) == 0.0:
-                hc_p = cfg.pricing.get(mid, {})
-                if hc_p.get("in_miss", 0.0) > 0.0 or hc_p.get("out", 0.0) > 0.0:
-                    continue
-            cfg.pricing[mid] = p_data
+        if pid == "openrouter":
+            # OpenRouter pricing is authoritative — never overwrite zero pricing
+            # with seed defaults (free models are genuinely free).
+            for mid, m_data in cached_models.items():
+                cfg.models[mid] = ModelInfo(**m_data)
+            for mid, p_data in cached_pricing.items():
+                cfg.pricing[mid] = p_data
+        else:
+            for mid, m_data in cached_models.items():
+                if mid in cfg.models:
+                    hc_m = cfg.models[mid]
+                    if m_data.get("input_per_m_usd", 0.0) == 0.0 and m_data.get("output_per_m_usd", 0.0) == 0.0:
+                        if hc_m.input_per_m_usd > 0.0 or hc_m.output_per_m_usd > 0.0:
+                            m_data["input_per_m_usd"] = hc_m.input_per_m_usd
+                            m_data["output_per_m_usd"] = hc_m.output_per_m_usd
+                            m_data["cache_hit_per_m_usd"] = hc_m.cache_hit_per_m_usd
+                cfg.models[mid] = ModelInfo(**m_data)
+                
+            for mid, p_data in cached_pricing.items():
+                if p_data.get("in_miss", 0.0) == 0.0 and p_data.get("out", 0.0) == 0.0:
+                    hc_p = cfg.pricing.get(mid, {})
+                    if hc_p.get("in_miss", 0.0) > 0.0 or hc_p.get("out", 0.0) > 0.0:
+                        continue
+                cfg.pricing[mid] = p_data
 
 
 # Restore dynamic models on load

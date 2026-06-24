@@ -146,9 +146,9 @@ OPENROUTER_MODELS: dict[str, ModelInfo] = {
     "openrouter/owl-alpha": ModelInfo(
         id="openrouter/owl-alpha",
         label="Owl Alpha",
-        input_per_m_usd=2.00,
-        output_per_m_usd=8.00,
-        cache_hit_per_m_usd=1.00,
+        input_per_m_usd=0.0,
+        output_per_m_usd=0.0,
+        cache_hit_per_m_usd=0.0,
     ),
 }
 OPENROUTER_PRICING: dict[str, dict[str, float]] = {
@@ -157,7 +157,7 @@ OPENROUTER_PRICING: dict[str, dict[str, float]] = {
     "openai/gpt-oss-20b": {"in_miss": 0.40, "in_hit": 0.20, "out": 1.60},
     "qwen/qwen3-coder:free": {"in_miss": 0.0, "in_hit": 0.0, "out": 0.0},
     "meta-llama/llama-3.3-70b-instruct:free": {"in_miss": 0.0, "in_hit": 0.0, "out": 0.0},
-    "openrouter/owl-alpha": {"in_miss": 2.00, "in_hit": 1.00, "out": 8.00},
+    "openrouter/owl-alpha": {"in_miss": 0.0, "in_hit": 0.0, "out": 0.0},
 }
 
 # Google Cloud / Vertex AI

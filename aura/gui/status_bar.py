@@ -134,15 +134,19 @@ class AuraStatusBar(QStatusBar):
             self._status_cost.setToolTip("")
         elif unknown_count == total_models:
             self._status_cost.setText("$?.??????")
-            self._status_cost.setToolTip("")
+            self._status_cost.setToolTip(
+                "Session cost estimate — pricing unknown for all models used."
+            )
         elif unknown_count > 0:
             self._status_cost.setText(f"${known_cost:.6f}*")
             self._status_cost.setToolTip(
-                "Some models have unknown pricing — actual cost may be higher."
+                "Session cost estimate — some model pricing unknown, actual may differ from provider billing."
             )
         else:
             self._status_cost.setText(f"${known_cost:.6f}")
-            self._status_cost.setToolTip("")
+            self._status_cost.setToolTip(
+                "Session cost estimate — does not reflect actual provider billing."
+            )
 
         # Balance display
         if show_balance:
