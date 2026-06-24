@@ -117,6 +117,7 @@ class WindowChromeMixin:
         toolbar = getattr(self, "_toolbar", None)
         if toolbar is not None:
             toolbar.update_maximize_icon(self.isMaximized())
+        self._update_status_resize_grip()
 
     def changeEvent(self, event) -> None:
         """Update the maximize icon when the window state changes."""
@@ -124,7 +125,13 @@ class WindowChromeMixin:
             toolbar = getattr(self, "_toolbar", None)
             if toolbar is not None:
                 toolbar.update_maximize_icon(self.isMaximized())
+            self._update_status_resize_grip()
         super().changeEvent(event)  # type: ignore[misc]
+
+    def _update_status_resize_grip(self) -> None:
+        status_bar = getattr(self, "_status_bar", None)
+        if status_bar is not None and hasattr(status_bar, "set_resize_grip_visible"):
+            status_bar.set_resize_grip_visible(not self.isMaximized())
 
     # ----- native event: WM_NCHITTEST resize edges/corners -----------------
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import difflib
 import logging
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -95,6 +96,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self._checkpoint_dialog: CheckpointDialog | None = None
+        self._use_native_chrome = os.environ.get("AURA_NATIVE_CHROME") == "1"
         self.setWindowTitle(APP_NAME)
         self.setWindowIcon(QIcon(str(icon_path())))
         clamp_to_screen(self, 1500, 920)
@@ -146,7 +148,10 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._toolbar.close_requested.connect(self.close)
 
         # ----- status bar -----
-        self._status_bar = AuraStatusBar(self)
+        self._status_bar = AuraStatusBar(
+            self,
+            show_resize_grip=not self._use_native_chrome,
+        )
         self.setStatusBar(self._status_bar)
 
         self._balance_controller = MainWindowBalanceController(self)
@@ -343,8 +348,9 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._edge_rail.droneRunFocusRequested.connect(self._drone_controller.on_focus_drone_run)
         self._drone_controller.sync_drone_tab_checked()
 
-        # Frameless window — no native title bar
-        self.setWindowFlags(self.windowFlags() | Qt.WindowType.FramelessWindowHint)
+        # Frameless window — no native title bar unless explicitly disabled.
+        if not self._use_native_chrome:
+            self.setWindowFlags(self.windowFlags() | Qt.WindowType.FramelessWindowHint)
 
         # ----- wire bridge ↔ view -----
         self._bridge.started.connect(self._on_started)

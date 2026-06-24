@@ -1,17 +1,55 @@
 from __future__ import annotations
 
-from PySide6.QtGui import QFont
-from PySide6.QtWidgets import QLabel, QStatusBar
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QFont, QPainter, QPen
+from PySide6.QtWidgets import QLabel, QSizeGrip, QStatusBar
 
 from aura.config import PROVIDERS, ThinkingMode, cost_usd
 
 _THINKING_LABEL = {"off": "Off", "high": "High", "max": "Max"}
 
-class AuraStatusBar(QStatusBar):
+
+class _StatusResizeGrip(QSizeGrip):
     def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setFixedSize(20, 20)
+        self.setToolTip("Resize window")
+        self.setCursor(Qt.CursorShape.SizeFDiagCursor)
+        self.setStyleSheet("background: transparent;")
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor(120, 130, 150, 150), 1))
+
+        right = self.width() - 5
+        bottom = self.height() - 5
+        for offset in (0, 5, 10):
+            painter.drawLine(right - offset, bottom, right, bottom - offset)
+
+        painter.end()
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            window = self.window()
+            handle = window.windowHandle() if window is not None else None
+            if handle is not None:
+                edges = Qt.Edge.RightEdge | Qt.Edge.BottomEdge
+                if handle.startSystemResize(edges):
+                    event.accept()
+                    return
+
+        super().mousePressEvent(event)
+
+
+class AuraStatusBar(QStatusBar):
+    def __init__(self, parent=None, show_resize_grip: bool = True) -> None:
         super().__init__(parent)
 
         self._drone_label: QLabel | None = None
+        self._resize_grip_allowed = show_resize_grip
 
         # Left side: workspace, model, thinking
         self._status_left = QLabel("")
@@ -29,6 +67,12 @@ class AuraStatusBar(QStatusBar):
         self.addPermanentWidget(self._status_balance)
         self._status_balance.setVisible(False)
 
+        self.setSizeGripEnabled(False)
+        self._resize_grip = _StatusResizeGrip(self)
+        self.addPermanentWidget(self._resize_grip)
+        self._resize_grip.setVisible(show_resize_grip)
+        self._resize_grip.setEnabled(show_resize_grip)
+
         # Monospace for numbers
         mono_font = QFont("Geist Mono, JetBrains Mono, Consolas, monospace")
         mono_font.setStyleHint(QFont.StyleHint.Monospace)
@@ -36,6 +80,11 @@ class AuraStatusBar(QStatusBar):
         self._status_tokens.setFont(mono_font)
         self._status_cost.setFont(mono_font)
         self._status_balance.setFont(mono_font)
+
+    def set_resize_grip_visible(self, visible: bool) -> None:
+        visible = visible and self._resize_grip_allowed
+        self._resize_grip.setVisible(visible)
+        self._resize_grip.setEnabled(visible)
 
     def refresh(
         self, 
