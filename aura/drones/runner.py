@@ -530,13 +530,28 @@ class DroneRunner(QObject):
         # --- Launch gate: verify the app boots ---
         if launch_command and not lap_failed and changed_files:
             self.contentDelta.emit("Verifying app launches…")
+            folder = DroneStore.drone_folder(self._workspace_root, self._drone.id)
+            contract_path = folder / "ui_contract.json"
+            artifact_path = folder / ".ui_tree.json"
+            actual_command = launch_command
+            if contract_path.exists():
+                actual_command = f'{launch_command} --dump-ui-tree "{artifact_path}"'
             executor = SandboxExecutor(workspace_root)
             result = executor.run_and_watch(
-                launch_command,
+                actual_command,
                 window_seconds=launch_window_seconds,
             )
             if result.ok and result.exited_early:
-                self.contentDelta.emit("App launched successfully.")
+                from aura.ui_gate import evaluate_ui_contract
+                verdict = evaluate_ui_contract(contract_path, artifact_path)
+                if verdict.severity == "block":
+                    policy_violations.append(verdict.summary)
+                    lap_failed = True
+                    self.contentDelta.emit(f"UI contract failed: {verdict.summary}")
+                elif verdict.severity == "warn":
+                    self.contentDelta.emit(f"UI contract warning: {verdict.summary}")
+                else:
+                    self.contentDelta.emit("App launched successfully.")
             else:
                 output_tail = (result.output or "")[-300:]
                 if not result.exited_early:

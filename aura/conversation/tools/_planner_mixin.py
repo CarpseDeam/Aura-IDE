@@ -309,4 +309,85 @@ class PlannerHandlersMixin:
                 payload={"ok": False, "error": str(e)},
             )
 
+    def _handle_declare_ui_contract(
+        self,
+        args: dict[str, Any],
+        approval_cb: Any,
+        reject_all: bool,
+    ) -> ToolExecResult:
+        """Write a ui_contract.json sidecar into a drone folder."""
+        import json
+
+        folder_raw = str(args.get("folder_path") or "").strip()
+        if not folder_raw:
+            return ToolExecResult(
+                ok=False,
+                payload={"ok": False, "error": "folder_path is required"},
+            )
+
+        try:
+            folder = self._resolve_in_root(folder_raw)
+            if not folder.is_dir():
+                return ToolExecResult(
+                    ok=False,
+                    payload={"ok": False, "error": f"Drone folder does not exist: {folder_raw}"},
+                )
+
+            assertions = args.get("assertions")
+            if not isinstance(assertions, list) or not assertions:
+                return ToolExecResult(
+                    ok=False,
+                    payload={"ok": False, "error": "assertions must be a non-empty list"},
+                )
+
+            for i, assertion in enumerate(assertions):
+                if not isinstance(assertion, dict):
+                    return ToolExecResult(
+                        ok=False,
+                        payload={"ok": False, "error": f"assertions[{i}] must be an object"},
+                    )
+                a_type = assertion.get("type")
+                if a_type not in ("node_exists", "node_absent"):
+                    return ToolExecResult(
+                        ok=False,
+                        payload={
+                            "ok": False,
+                            "error": (
+                                f"assertions[{i}].type must be 'node_exists' or 'node_absent', "
+                                f"got '{a_type}'"
+                            ),
+                        },
+                    )
+                if not any(k in assertion for k in ("role", "name", "object_name")):
+                    return ToolExecResult(
+                        ok=False,
+                        payload={
+                            "ok": False,
+                            "error": (
+                                f"assertions[{i}] must have at least one of "
+                                "role, name, object_name"
+                            ),
+                        },
+                    )
+
+            contract = {"schema_version": 1, "assertions": assertions}
+            contract_path = folder / "ui_contract.json"
+            contract_text = json.dumps(contract, indent=2) + "\n"
+            contract_path.write_text(contract_text, encoding="utf-8")
+
+            return ToolExecResult(
+                ok=True,
+                payload={
+                    "ok": True,
+                    "contract_written": True,
+                    "path": str(contract_path),
+                    "assertion_count": len(assertions),
+                },
+            )
+        except Exception as e:
+            return ToolExecResult(
+                ok=False,
+                payload={"ok": False, "error": str(e)},
+            )
+
 

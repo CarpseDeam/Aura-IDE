@@ -253,6 +253,7 @@ TOOL_HANDLERS["launch_read_only_drone"] = ToolRegistry._handle_launch_read_only_
 TOOL_HANDLERS["run_read_only_drone"] = ToolRegistry._handle_run_read_only_drone
 TOOL_HANDLERS["check_drone_run"] = ToolRegistry._handle_check_drone_run
 TOOL_HANDLERS["register_drone_folder"] = ToolRegistry._handle_register_drone_folder
+TOOL_HANDLERS["declare_ui_contract"] = ToolRegistry._handle_declare_ui_contract
 TOOL_HANDLERS["code_intel_outline"] = ToolRegistry._handle_code_intel_outline
 TOOL_HANDLERS["code_intel_references"] = ToolRegistry._handle_code_intel_references
 TOOL_HANDLERS["code_intel_dependents"] = ToolRegistry._handle_code_intel_dependents

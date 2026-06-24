@@ -167,6 +167,12 @@ def _run_app(log_path: Path, args: argparse.Namespace, qt_argv: list[str]) -> in
     def _finish_selfcheck() -> None:
         logger.info("Aura selfcheck success")
         print("Aura selfcheck: OK", flush=True)
+        if args.dump_ui_tree is not None:
+            try:
+                from aura.ui_probe import dump_ui_tree
+                dump_ui_tree(win, args.dump_ui_tree)
+            except Exception:
+                logger.exception("dump-ui-tree failed")
         logging.shutdown()
         os._exit(0)
 
@@ -189,6 +195,9 @@ def _parse_args(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
         "--selfcheck",
         action="store_true",
         help="Boot the app, confirm the main window constructs, then exit cleanly. Used by automated launch verification.",
+    )
+    parser.add_argument("--dump-ui-tree", type=str, default=None, metavar="PATH",
+        help="(Honored only alongside --selfcheck.) Write an accessibility-tree snapshot as JSON to PATH.",
     )
     args, qt_args = parser.parse_known_args(argv)
     return args, [sys.argv[0], *qt_args]

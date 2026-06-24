@@ -124,3 +124,53 @@ REGISTER_DRONE_FOLDER_TOOL_DEF: dict[str, Any] = {
         },
     },
 }
+
+
+DECLARE_UI_CONTRACT_TOOL_DEF: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "declare_ui_contract",
+        "description": (
+            "Declares the UI contract the launch gate verifies after boot. "
+            "Must be called before the worker lap edits code. Each assertion "
+            "names a node the post-edit accessibility tree must contain or "
+            "must not contain."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "folder_path": {
+                    "type": "string",
+                    "description": "The drone folder path, same convention register_drone_folder uses.",
+                },
+                "assertions": {
+                    "type": "array",
+                    "description": "List of UI assertions to verify after boot.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "type": {
+                                "type": "string",
+                                "enum": ["node_exists", "node_absent"],
+                                "description": "Whether the node must exist or be absent.",
+                            },
+                            "role": {
+                                "type": "string",
+                                "description": "Accessibility role of the node.",
+                            },
+                            "name": {
+                                "type": "string",
+                                "description": "Accessibility name of the node.",
+                            },
+                            "object_name": {
+                                "type": "string",
+                                "description": "Qt object name of the node.",
+                            },
+                        },
+                    },
+                },
+            },
+            "required": ["folder_path", "assertions"],
+        },
+    },
+}

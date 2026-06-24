@@ -6,6 +6,7 @@ from typing import Any
 
 from aura.conversation.tools._drone_schemas import (
     CHECK_DRONE_RUN_TOOL_DEF,
+    DECLARE_UI_CONTRACT_TOOL_DEF,
     LAUNCH_READ_ONLY_DRONE_TOOL_DEF,
     REGISTER_DRONE_FOLDER_TOOL_DEF,
     RUN_READ_ONLY_DRONE_TOOL_DEF,
@@ -102,6 +103,7 @@ class ToolCatalog:
                 + [dict(LAUNCH_READ_ONLY_DRONE_TOOL_DEF)]
                 + [dict(RUN_READ_ONLY_DRONE_TOOL_DEF)]
                 + [dict(CHECK_DRONE_RUN_TOOL_DEF)]
+                + [dict(DECLARE_UI_CONTRACT_TOOL_DEF)]
                 + list(RESEARCH_TOOL_DEFS)
                 + [dict(DIAGNOSTIC_TOOL_DEF)]
                 + [dict(WORKSPACE_SNAPSHOT_TOOL_DEF)]
