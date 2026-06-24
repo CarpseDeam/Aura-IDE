@@ -11,9 +11,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from aura.gui.theme import LABEL_APPROVE, LABEL_DISPATCH, LABEL_DRONES, LABEL_READ_ONLY
 from aura.config import media_path
+from aura.gui.theme import LABEL_APPROVE, LABEL_DISPATCH, LABEL_DRONES, LABEL_READ_ONLY
 from aura.gui.widgets.glass_switch import GlassSwitch
+
 
 def _toolbar_separator() -> QFrame:
     sep = QFrame()
@@ -110,11 +111,6 @@ class MainWindowToolbar(QToolBar):
         self._update_btn.clicked.connect(self.update_requested.emit)
         self.addWidget(self._update_btn)
 
-        # Settings button on the right side
-        settings_act = QAction(QIcon(str(media_path("settings_24dp.svg"))), "Settings", self)
-        settings_act.triggered.connect(self.settings_requested.emit)
-        self.addAction(settings_act)
-
         self.addWidget(_toolbar_separator())
 
         self._logs_btn = QToolButton()
@@ -131,10 +127,17 @@ class MainWindowToolbar(QToolBar):
         self._debug_report_btn.clicked.connect(self.debug_report_requested.emit)
         self.addWidget(self._debug_report_btn)
 
-        # Small spacer before window controls.
-        win_spacer = QWidget()
-        win_spacer.setFixedWidth(8)
-        self.addWidget(win_spacer)
+        # Spacer between Send Logs and Settings.
+        settings_spacer = QWidget()
+        settings_spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.addWidget(settings_spacer)
+
+        # Settings button
+        settings_act = QAction(QIcon(str(media_path("settings_24dp.svg"))), "Settings", self)
+        settings_act.triggered.connect(self.settings_requested.emit)
+        self.addAction(settings_act)
+
+        self.addWidget(_toolbar_separator())
 
         # Window control buttons.
         min_btn = QToolButton()
