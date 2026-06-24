@@ -29,6 +29,8 @@ UPDATER_HELPER_DIST_NAME = "AuraUpdater.cmd"
 DRONES_SOURCE_REL = Path(".aura") / "drones"
 DRONES_DEST_REL = Path(".aura") / "drones"
 
+SUPPORTED_GRAMMARS = ["javascript", "typescript", "tsx", "go", "rust"]
+
 REQUIRED_MEDIA_FILES = [
     "account_tree_.svg",
     "arrow_forward_24dp.svg",
@@ -247,6 +249,44 @@ def bundle_drones(root: Path, final_dist_dir: Path) -> None:
         print(f"Bundled {len(bundled)} drone(s): {', '.join(bundled)}")
     else:
         print("No drones found to bundle.")
+
+
+def prewarm_grammars(final_dist_dir: Path, python_exe: Path) -> None:
+    """Pre-download tree-sitter grammar .so files into the dist so runtime loading works."""
+    grammar_dir = final_dist_dir / "grammars"
+    grammar_dir.mkdir(parents=True, exist_ok=True)
+
+    inline = (
+        "import sys; "
+        "import tree_sitter_language_pack as _lp; "
+        "cache_path = sys.argv[1]; "
+        "languages = sys.argv[2:]; "
+        "try: "
+        "    _lp.configure({'cache_dir': cache_path}); "
+        "    _lp.download(languages); "
+        "    print(f'Downloaded languages: {_lp.downloaded_languages()}'); "
+        "except Exception as e: "
+        "    print(f'Grammar prewarm failed: {e}', file=sys.stderr); "
+        "    sys.exit(1)"
+    )
+
+    print("Pre-warming tree-sitter grammars...")
+    try:
+        subprocess.check_output(
+            [str(python_exe), "-c", inline, str(grammar_dir)] + SUPPORTED_GRAMMARS,
+            stderr=subprocess.STDOUT,
+        ).decode()
+    except subprocess.CalledProcessError as exc:
+        print(f"Grammar prewarm failed:\n{exc.output.decode()}")
+        sys.exit(1)
+
+    # Verify the grammar directory is non-empty
+    entries = list(grammar_dir.iterdir())
+    if not entries:
+        print("Grammar prewarm completed but grammars directory is empty.")
+        sys.exit(1)
+
+    print(f"Grammar prewarm complete: {len(entries)} file(s) in {grammar_dir}")
 
 
 def zip_distribution(root: Path, final_dist_dir: Path) -> Path:
@@ -576,6 +616,9 @@ def build(
 
     # Bundle .aura/drones into the dist for DroneStore runtime loading
     bundle_drones(root, final_dist_dir)
+
+    # Pre-warm tree-sitter grammars into the dist
+    prewarm_grammars(final_dist_dir, python_exe)
 
     if not installer_only:
         zip_path = zip_distribution(root, final_dist_dir)
