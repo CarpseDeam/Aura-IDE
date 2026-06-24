@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -16,8 +17,10 @@ from scripts.build_nuitka import (
     UPDATER_HELPER_DIST_NAME,
     UPDATER_HELPER_SOURCE,
     create_nuitka_command,
+    grammar_prewarm_script,
     normalize_version,
     parse_args,
+    prewarm_grammars,
     read_current_version,
     validate_project_paths,
     zip_distribution,
@@ -80,6 +83,29 @@ def test_create_nuitka_command_can_disable_low_memory() -> None:
 def test_create_nuitka_command_rejects_zero_jobs() -> None:
     with pytest.raises(SystemExit, match="--jobs cannot be 0"):
         create_nuitka_command(jobs=0)
+
+
+def test_grammar_prewarm_script_is_valid_python() -> None:
+    compile(grammar_prewarm_script(), "<grammar-prewarm>", "exec")
+
+
+def test_prewarm_grammars_invokes_python_snippet(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    calls = []
+
+    def fake_check_output(cmd: list[str], stderr: int) -> bytes:
+        calls.append(SimpleNamespace(cmd=cmd, stderr=stderr))
+        grammar_dir = Path(cmd[3])
+        grammar_dir.mkdir(parents=True, exist_ok=True)
+        (grammar_dir / "javascript.so").write_bytes(b"grammar")
+        return b"Downloaded languages: ['javascript']"
+
+    monkeypatch.setattr("scripts.build_nuitka.subprocess.check_output", fake_check_output)
+
+    prewarm_grammars(tmp_path / "Aura.dist", Path("python"))
+
+    assert calls
+    assert calls[0].cmd[0:2] == ["python", "-c"]
+    assert calls[0].cmd[2] == grammar_prewarm_script()
 
 
 def test_validate_project_paths_requires_all_media_files(tmp_path: Path) -> None:

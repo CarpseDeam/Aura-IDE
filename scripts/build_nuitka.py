@@ -251,29 +251,34 @@ def bundle_drones(root: Path, final_dist_dir: Path) -> None:
         print("No drones found to bundle.")
 
 
+def grammar_prewarm_script() -> str:
+    """Return the Python snippet used to pre-download tree-sitter grammars."""
+    return """
+import sys
+import tree_sitter_language_pack as _lp
+
+cache_path = sys.argv[1]
+languages = sys.argv[2:]
+
+try:
+    _lp.configure({"cache_dir": cache_path})
+    _lp.download(languages)
+    print(f"Downloaded languages: {_lp.downloaded_languages()}")
+except Exception as e:
+    print(f"Grammar prewarm failed: {e}", file=sys.stderr)
+    sys.exit(1)
+""".strip()
+
+
 def prewarm_grammars(final_dist_dir: Path, python_exe: Path) -> None:
     """Pre-download tree-sitter grammar .so files into the dist so runtime loading works."""
     grammar_dir = final_dist_dir / "grammars"
     grammar_dir.mkdir(parents=True, exist_ok=True)
 
-    inline = (
-        "import sys; "
-        "import tree_sitter_language_pack as _lp; "
-        "cache_path = sys.argv[1]; "
-        "languages = sys.argv[2:]; "
-        "try: "
-        "    _lp.configure({'cache_dir': cache_path}); "
-        "    _lp.download(languages); "
-        "    print(f'Downloaded languages: {_lp.downloaded_languages()}'); "
-        "except Exception as e: "
-        "    print(f'Grammar prewarm failed: {e}', file=sys.stderr); "
-        "    sys.exit(1)"
-    )
-
     print("Pre-warming tree-sitter grammars...")
     try:
         subprocess.check_output(
-            [str(python_exe), "-c", inline, str(grammar_dir)] + SUPPORTED_GRAMMARS,
+            [str(python_exe), "-c", grammar_prewarm_script(), str(grammar_dir)] + SUPPORTED_GRAMMARS,
             stderr=subprocess.STDOUT,
         ).decode()
     except subprocess.CalledProcessError as exc:
