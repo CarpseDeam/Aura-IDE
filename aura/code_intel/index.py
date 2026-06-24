@@ -48,9 +48,9 @@ class CodeIntelIndex:
         self._symbols: dict[str, list[Any]] = {}  # path -> list[SymbolInfo]
         self._refs: dict[str, list[Any]] = {}  # path -> list[ReferenceEdge]
         # Reverse index: symbol_name -> set[file_path] (files that define it)
-        self._symbol_defs: dict[str, set[str]] = defaultdict(set)
+        self._symbol_defs: dict[tuple[str, str], set[str]] = defaultdict(set)
         # Forward index: file -> set[symbol_names] it defines
-        self._file_defines: dict[str, set[str]] = defaultdict(set)
+        self._file_defines: dict[str, set[tuple[str, str]]] = defaultdict(set)
         # File -> set[file] that it references (dependency edges)
         self._dep_edges: dict[str, set[str]] = defaultdict(set)
         # Reverse: file -> set[file] that depend on it
@@ -220,8 +220,9 @@ class CodeIntelIndex:
 
         # Update symbol definition indices
         for sym in symbols:
-            self._symbol_defs[sym.name].add(path)
-            self._file_defines[path].add(sym.name)
+            key = (adapter.language_id, sym.name)
+            self._symbol_defs[key].add(path)
+            self._file_defines[path].add(key)
 
         # --- Dependency edges ---
         raw_deps = adapter.dependencies(path, content)
@@ -290,9 +291,21 @@ class CodeIntelIndex:
                 abs_path = os.path.join(dirpath, fname)
 
                 try:
-                    file_size = os.path.getsize(abs_path)
-                    if file_size > _MAX_PARSE_BYTES:
-                        continue
+                    st = os.stat(abs_path)
+                    file_size = st.st_size
+                    file_mtime = st.st_mtime
+                except OSError:
+                    continue
+
+                # Stat-based skip: if FileInfo exists and the file hasn't changed, skip
+                existing = self._files.get(rel_path)
+                if existing is not None and existing.mtime == file_mtime and existing.size == file_size:
+                    continue
+
+                if file_size > _MAX_PARSE_BYTES:
+                    continue
+
+                try:
                     with open(abs_path, "rb") as f:
                         raw = f.read(_MAX_PARSE_BYTES)
                 except (OSError, PermissionError):
@@ -359,3 +372,25 @@ class CodeIntelIndex:
 
             if content.strip():
                 self._index_file(norm, content)
+
+
+# ---------------------------------------------------------------------------
+# Per-workspace index cache (dispatch/worker thread only; single-threaded)
+# ---------------------------------------------------------------------------
+_index_cache: dict[str, CodeIntelIndex] = {}
+
+
+def get_cached_index(root: Path) -> CodeIntelIndex:
+    """Return a cached CodeIntelIndex for *root* (construct + refresh on miss).
+
+    The returned index is shared across audit and code-intel tool calls
+    running on the dispatch/worker thread.  Callers must still call
+    ``index.refresh()`` to pick up new/changed files \u2014 the stat-based
+    skip gate makes subsequent full walks cheap.
+    """
+    resolved = str(root.resolve())
+    if resolved not in _index_cache:
+        idx = CodeIntelIndex(root)
+        idx.refresh()
+        _index_cache[resolved] = idx
+    return _index_cache[resolved]

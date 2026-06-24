@@ -10,7 +10,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from aura.code_intel.index import CodeIntelIndex
+from aura.code_intel.index import get_cached_index
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +22,7 @@ def audit_changed_files(
 
     Phases:
 
-    1. Build/refresh a :class:`CodeIntelIndex` for the workspace (full
+    1. Cached/refresh a :class:`CodeIntelIndex` for the workspace (full
        refresh for blast-radius context, then re-parse changed files).
     2. Parse-failure detection on each changed file.
     3. Removed-export detection via git HEAD comparison.
@@ -41,7 +41,7 @@ def audit_changed_files(
     findings: list[AuditFinding] = []
 
     try:
-        index = CodeIntelIndex(workspace_root)
+        index = get_cached_index(workspace_root)
         # Full refresh first to build whole-repo context for blast radius
         index.refresh()
         # Then re-parse changed files specifically
@@ -161,7 +161,7 @@ def _detect_removed_exports(
         for name in sorted(removed):
             line = _find_symbol_line(pre_symbols, name)
             is_private = name.startswith("_")
-            defined_elsewhere = index._symbol_defs.get(name, set()) - {path_str}
+            defined_elsewhere = index._symbol_defs.get((adapter.language_id, name), set()) - {path_str}
 
             if defined_elsewhere:
                 # Cross-file collision — symbol removed from this file but

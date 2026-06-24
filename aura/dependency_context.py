@@ -12,9 +12,9 @@ def compute_dependents(
         return []
 
     try:
-        from aura.code_intel.index import CodeIntelIndex
+        from aura.code_intel.index import get_cached_index
 
-        index = CodeIntelIndex(workspace_root)
+        index = get_cached_index(workspace_root)
         # Full refresh first for blast-radius context
         index.refresh()
         # Re-parse the specific files
