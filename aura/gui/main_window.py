@@ -28,7 +28,6 @@ from PySide6.QtWidgets import (
 
 from aura.bridge import ConversationBridge
 from aura.bridge.qt_bridge import PLANNER_SYSTEM_PROMPT
-from aura.companion import CompanionManager
 from aura.config import (
     APP_NAME,
     PROVIDERS,
@@ -44,6 +43,7 @@ from aura.config import (
 from aura.conversation.tools._types import ApprovalRequest
 from aura.git_ops import is_git_repo
 from aura.gui.main_window_drones import MainWindowDroneController
+from aura.gui.main_window_companion import MainWindowCompanionController
 from aura.gui.main_window_workspace import MainWindowWorkspaceController
 from aura.gui.chat_view import ChatView
 from aura.gui.checkpoint_dialog import CheckpointDialog
@@ -224,13 +224,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._send_handler.drone_bay_requested.connect(self._drone_controller.on_drone_bay_requested)
 
         # Companion (mobile control plane)
-        self._companion = CompanionManager(self._settings)
-        self._companion.connection_status_changed.connect(self._on_companion_status)
-        self._companion.message_received.connect(self._on_companion_message)
-        self._companion.conversation_selected_by_companion.connect(self._on_companion_thread_selected)
-        self._companion.set_bridge(self._bridge)
-        self._companion.set_workspace_root(str(self._workspace_root))
-        self._companion.start()
+        self._companion_controller = MainWindowCompanionController(self)
 
         # Right pane: worker activity (embedded, not a separate window)
         self._playground = AuraPlayground(
@@ -450,7 +444,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         # Save splitter sizes.
         self._settings.main_splitter_sizes = list(self._main_splitter.sizes())
         save_settings(self._settings)
-        self._companion.stop()
+        self._companion_controller.stop()
         super().closeEvent(event)
 
     def _check_for_updates(self) -> None:
@@ -630,7 +624,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._input.set_attachments([])
         self._input.set_queued_messages(0)
         self._reset_session_usage()
-        self._companion.set_current_conversation("")
+        self._companion_controller.set_current_conversation("")
 
     def _on_open_conversation(self) -> None:
         if self._bridge.is_running():
@@ -652,32 +646,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         """Open settings dialog directly to the Aura tab."""
         self._settings_controller.open_aura_settings()
 
-    def _on_companion_status(self, status: str) -> None:
-        """Handle companion connection status changes."""
-        logger.info("[MainWindow] Companion status: %s", status)
-        # Phase 2: update status bar indicator
-
-    def _on_companion_message(self, msg: dict) -> None:
-        """Handle an incoming companion message."""
-        logger.debug("[MainWindow] Companion msg: %s", msg.get("type"))
-
-    def _on_companion_thread_selected(self, project_root: Path, conversation_path: Path) -> None:
-        if self._bridge.is_running():
-            self._companion.complete_conversation_select(
-                False, "Desktop is busy — wait for the current response to finish, or click Stop."
-            )
-            return
-        if self._workspace_root is not None and self._workspace_root.resolve() != project_root.resolve():
-            self._on_project_selected(project_root, restore_last=False)
-        try:
-            self._persistence.load_and_apply(conversation_path)
-            self._send_handler.clear_queue()
-            self._input.set_queued_messages(0)
-            self._reset_session_usage()
-            self._companion.complete_conversation_select(True)
-        except Exception as _err:
-            QMessageBox.warning(self, APP_NAME, f"Could not open conversation:\n{_err}")
-            self._companion.complete_conversation_select(False, str(_err))
 
     def _on_open_update(self) -> None:
         dlg = UpdateDialog(self)
@@ -948,9 +916,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
     def _on_current_context_changed(self, project_id: str, thread_id: str) -> None:
         """Sync companion with the active project and conversation context."""
-        if project_id:
-            self._companion.set_current_project(project_id)
-        self._companion.set_current_conversation(thread_id or "")
+        self._companion_controller.sync_context(project_id, thread_id)
 
     def _on_project_thread_updated(self) -> None:
         self._left_pane.refresh_projects(self._workspace_root)
