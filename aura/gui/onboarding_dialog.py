@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 from aura.config import APP_NAME, has_usable_provider_configuration, icon_path
+from aura.gui._screen import clamp_to_screen
 from aura.gui.theme import ACCENT, BG_RAISED, BORDER, FG, FG_DIM, SUCCESS, WARN
 
 
@@ -122,7 +123,8 @@ class OnboardingDialog(QDialog):
 
         self.setWindowTitle(f"Welcome to {APP_NAME}")
         self.setWindowIcon(QIcon(str(icon_path())))
-        self.setFixedSize(680, 540)
+        self.setMinimumSize(0, 0)
+        clamp_to_screen(self, 680, 540)
 
         # Dark background
         self.setStyleSheet("QDialog { background: #0f111a; }")

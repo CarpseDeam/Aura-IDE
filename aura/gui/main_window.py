@@ -63,6 +63,7 @@ from aura.gui.main_window_terminal import MainWindowTerminalController
 from aura.gui.status_bar import AuraStatusBar
 from aura.gui.update_dialog import UpdateDialog, UpdateWorker
 from aura.gui.widgets.aura_glow import AuraWidget
+from aura.gui._screen import clamp_to_screen
 from aura.gui.window_chrome import WindowChromeMixin
 from aura.gui.worker_handler import WorkerEventHandler
 from aura.handoff import extract_handoff_text, generate_handoff_prompt, save_handoff
@@ -96,7 +97,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._checkpoint_dialog: CheckpointDialog | None = None
         self.setWindowTitle(APP_NAME)
         self.setWindowIcon(QIcon(str(icon_path())))
-        self.resize(1500, 920)
+        clamp_to_screen(self, 1500, 920)
 
         # Settings.
         self._settings: AppSettings = load_settings()

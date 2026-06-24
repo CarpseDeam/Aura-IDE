@@ -155,12 +155,11 @@ class WindowChromeMixin:
                 return super().nativeEvent(eventType, message)
 
             if msg.message == 0x0084:  # WM_NCHITTEST
-                # Screen coordinates from lParam (signed 16-bit).
-                x = ctypes.c_short(msg.lParam & 0xFFFF).value
-                y = ctypes.c_short((msg.lParam >> 16) & 0xFFFF).value
-                dpr = self.devicePixelRatioF() or 1.0
-                x = x / dpr
-                y = y / dpr
+                # Logical global cursor position (Qt-scaled), matches frameGeometry units.
+                from PySide6.QtGui import QCursor
+                cursor = QCursor.pos()
+                x = cursor.x()
+                y = cursor.y()
                 rect = self.frameGeometry()
                 margin = 8
 
