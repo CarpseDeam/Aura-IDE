@@ -78,7 +78,8 @@ class AuraStatusBar(QStatusBar):
         self.addPermanentWidget(self._status_cost)
 
         self._status_balance = _ClickableLabel("")
-        self._status_balance.setObjectName("statusBalance")
+        self._status_balance.setObjectName("aura_credits_status_chip")
+        self._status_balance.setAccessibleName("Aura Credits status")
         self.addPermanentWidget(self._status_balance)
         self._status_balance.clicked.connect(self.credits_chip_clicked)
         self._status_balance.setVisible(True)
