@@ -24,7 +24,9 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QSizePolicy,
+    QTabBar,
     QTabWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -67,7 +69,7 @@ class CodeEditorPane(QWidget):
         self._tabs.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
-        self._tabs.setTabsClosable(True)
+        self._tabs.setTabsClosable(False)
         self._tabs.tabCloseRequested.connect(self._on_tab_close_requested)
         self._tabs.setStyleSheet(self._tab_widget_style())
         layout.addWidget(self._tabs)
@@ -126,6 +128,7 @@ class CodeEditorPane(QWidget):
         idx = self._tabs.addTab(editor, resolved.name)
         self._tabs.setTabToolTip(idx, self._rel_path(resolved))
         self._tabs.setCurrentIndex(idx)
+        self._install_tab_close_button(idx, editor)
 
         self._file_tabs[resolved] = editor
         self._editor_file_paths[editor] = resolved
@@ -178,6 +181,7 @@ class CodeEditorPane(QWidget):
 
         idx = self._tabs.addTab(editor, f"{basename} ●")
         self._tabs.setCurrentIndex(idx)
+        self._install_tab_close_button(idx, editor)
 
         self._editors[tool_id] = editor
         self._tool_aliases[tool_id] = tool_id
@@ -431,6 +435,40 @@ class CodeEditorPane(QWidget):
         self._editor_file_paths[editor] = Path(file_path)
         return editor
 
+    def _install_tab_close_button(self, index: int, editor: QWidget) -> None:
+        btn = QToolButton(self._tabs.tabBar())
+        btn.setText("\u00d7")
+        btn.setCursor(Qt.PointingHandCursor)
+        btn.setToolTip("Close tab")
+        btn.setFixedSize(16, 16)
+        btn.setStyleSheet(f"""
+            QToolButton {{
+                background: transparent;
+                color: {FG};
+                border: none;
+                font-size: 14px;
+                font-weight: 600;
+                padding: 0;
+                margin: 0;
+            }}
+            QToolButton:hover {{
+                color: #f7768e;
+                background: rgba(247, 118, 142, 0.15);
+                border-radius: 3px;
+            }}
+        """)
+        btn.clicked.connect(
+            lambda checked, e=editor: self._on_close_button_clicked(e)
+        )
+        self._tabs.tabBar().setTabButton(
+            index, QTabBar.ButtonPosition.RightSide, btn
+        )
+
+    def _on_close_button_clicked(self, editor: QWidget) -> None:
+        idx = self._tabs.indexOf(editor)
+        if idx >= 0:
+            self._on_tab_close_requested(idx)
+
     def _current_editor(self) -> QPlainTextEdit | None:
         current = self._tabs.currentWidget()
         return current if isinstance(current, QPlainTextEdit) else None
@@ -671,19 +709,5 @@ class CodeEditorPane(QWidget):
                 border-bottom: 2px solid {ACCENT};
                 color: {FG};
                 font-weight: 600;
-            }}
-            QTabBar::close-button {{
-                subcontrol-position: right center;
-                image: url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Cline x1='3.5' y1='3.5' x2='12.5' y2='12.5' stroke='%23eaecef' stroke-width='1.6' stroke-linecap='round'/%3E%3Cline x1='12.5' y1='3.5' x2='3.5' y2='12.5' stroke='%23eaecef' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E");
-                background: transparent;
-                border: none;
-                width: 16px;
-                height: 16px;
-                padding: 0;
-                margin: 0 0 0 4px;
-            }}
-            QTabBar::close-button:hover {{
-                background: rgba(247, 118, 142, 0.20);
-                border-radius: 3px;
             }}
         """
