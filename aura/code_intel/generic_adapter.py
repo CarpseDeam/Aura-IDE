@@ -1,4 +1,4 @@
-"""Tree-sitter-backed code-intelligence adapter for JS, TS, Go, Rust.
+"""Tree-sitter-backed code-intelligence adapter for non-Python languages.
 
 Provides symbols and outlines using tree-sitter grammar parsing and
 tags queries.  References and dependency resolution are not implemented
@@ -32,13 +32,12 @@ except ImportError:
 # ---------------------------------------------------------------------------
 # Build note for packaging
 #
-# Packaging MUST pre-warm the bundled grammars directory with:
-#
-#   _lp.download(["javascript", "typescript", "tsx", "go", "rust"])
-#
-# against the pinned package version into <app_root>/grammars/ (the path
-# resolved by get_resource_path("grammars")).  Include that directory as
-# packaged data.  Frozen-app validation must be done with network disabled.
+# Packaging MUST pre-warm the bundled grammars directory with
+# grammar_prewarm_script() from scripts/build_nuitka.py, which downloads
+# all SUPPORTED_GRAMMARS grammars from the language pack into
+# <app_root>/grammars/ (the path resolved by get_resource_path("grammars")).
+# Include that directory as packaged data.  Frozen-app validation must be
+# done with network disabled.
 # ---------------------------------------------------------------------------
 
 # (language_id, extensions)
@@ -48,6 +47,29 @@ _SUPPORTED_LANGUAGES: list[tuple[str, tuple[str, ...]]] = [
     ("tsx", (".tsx",)),
     ("go", (".go",)),
     ("rust", (".rs",)),
+    ("java", (".java",)),
+    ("c", (".c", ".h")),
+    ("cpp", (".cpp", ".cc", ".cxx", ".hpp", ".hh", ".hxx")),
+    ("csharp", (".cs",)),
+    ("php", (".php",)),
+    ("ruby", (".rb",)),
+    ("swift", (".swift",)),
+    ("kotlin", (".kt", ".kts")),
+    ("dart", (".dart",)),
+    ("scala", (".scala", ".sc")),
+    ("lua", (".lua",)),
+    ("bash", (".sh", ".bash", ".zsh")),
+    ("powershell", (".ps1", ".psm1", ".psd1")),
+    ("html", (".html", ".htm")),
+    ("css", (".css",)),
+    ("scss", (".scss",)),
+    ("json", (".json",)),
+    ("yaml", (".yaml", ".yml")),
+    ("toml", (".toml",)),
+    ("xml", (".xml",)),
+    ("sql", (".sql",)),
+    ("markdown", (".md", ".markdown")),
+    ("dockerfile", ("dockerfile", ".dockerfile")),
 ]
 
 _CONFIGURED = False

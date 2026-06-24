@@ -29,7 +29,13 @@ UPDATER_HELPER_DIST_NAME = "AuraUpdater.cmd"
 DRONES_SOURCE_REL = Path(".aura") / "drones"
 DRONES_DEST_REL = Path(".aura") / "drones"
 
-SUPPORTED_GRAMMARS = ["javascript", "typescript", "tsx", "go", "rust"]
+SUPPORTED_GRAMMARS = [
+    "javascript", "typescript", "tsx", "go", "rust",
+    "java", "c", "cpp", "csharp", "php", "ruby", "swift",
+    "kotlin", "dart", "scala", "lua", "bash", "powershell",
+    "html", "css", "scss", "json", "yaml", "toml", "xml",
+    "sql", "markdown", "dockerfile",
+]
 
 REQUIRED_MEDIA_FILES = [
     "account_tree_.svg",
@@ -270,10 +276,25 @@ import tree_sitter_language_pack as _lp
 cache_path = sys.argv[1]
 languages = sys.argv[2:]
 
+print(f"Requested languages: {languages}")
+
 try:
-    _lp.configure({"cache_dir": cache_path})
-    _lp.download(languages)
+    try:
+        _lp.configure(_lp.PackConfig(cache_dir=cache_path))
+    except AttributeError:
+        _lp.configure({"cache_dir": cache_path})
+    print(f"Cache directory: {_lp.cache_dir()}")
+
+    for lang in languages:
+        print(f"Loading {lang}...")
+        _lp.get_language(lang)
+
     print(f"Downloaded languages: {_lp.downloaded_languages()}")
+
+    import pathlib
+    cache_path_obj = pathlib.Path(cache_path)
+    for p in cache_path_obj.rglob("*"):
+        print(p)
 except Exception as e:
     print(f"Grammar prewarm failed: {e}", file=sys.stderr)
     sys.exit(1)
@@ -298,10 +319,9 @@ def prewarm_grammars(final_dist_dir: Path, python_exe: Path) -> None:
         return
 
     # Verify the grammar directory is non-empty
-    entries = list(grammar_dir.iterdir())
+    entries = list(grammar_dir.rglob("*"))
     if not entries:
-        print("Warning: grammar prewarm produced no files; continuing release build.")
-        return
+        raise SystemExit("Grammar prewarm produced no files; aborting build.")
 
     print(f"Grammar prewarm complete: {len(entries)} file(s) in {grammar_dir}")
 
