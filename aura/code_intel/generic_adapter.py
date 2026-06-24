@@ -126,8 +126,17 @@ class GenericSymbolAdapter(CodeIntelAdapter):
         return self._language_id
 
     def detect(self, file_path: str, content: str | None = None) -> bool:
-        """Return True when file suffix matches one of this adapter's extensions."""
-        return Path(file_path).suffix.lower() in self._extensions
+        """Return True when file suffix or basename matches this adapter's extensions."""
+        p = Path(file_path)
+        suffix = p.suffix.lower()
+        if suffix in self._extensions:
+            return True
+        # Also check basename for extensions that are full filenames (e.g. "dockerfile" without leading dot)
+        name = p.name.lower()
+        for ext in self._extensions:
+            if not ext.startswith(".") and name == ext:
+                return True
+        return False
 
     def _lazy_init(self) -> bool:
         """Load language, parser, and tags query on first use.
