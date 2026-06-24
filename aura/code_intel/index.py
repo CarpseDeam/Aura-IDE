@@ -121,7 +121,7 @@ class CodeIntelIndex:
             if file is not None and src_file != file:
                 continue
             for edge in edges:
-                if edge.target_symbol == symbol:
+                if edge.target_symbol == symbol or edge.target_symbol.rsplit(".", 1)[-1] == symbol:
                     results.append(edge)
         return results
 

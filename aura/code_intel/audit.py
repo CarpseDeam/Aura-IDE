@@ -159,12 +159,31 @@ def _detect_removed_exports(
 
         removed = pre_names - post_names
         for name in sorted(removed):
-            # Still defined elsewhere in the workspace (e.g. moved)?
-            if name in index._symbol_defs:
+            line = _find_symbol_line(pre_symbols, name)
+            is_private = name.startswith("_")
+            defined_elsewhere = index._symbol_defs.get(name, set()) - {path_str}
+
+            if defined_elsewhere:
+                # Cross-file collision — symbol removed from this file but
+                # still defined in other files.  Cannot hard-block because
+                # the name survives, but the removal may break intra-file
+                # references within this changed file.
+                elsewhere = sorted(defined_elsewhere)
+                findings.append(
+                    AuditFinding(
+                        file=path_str,
+                        line=line,
+                        message=f"Removed '{name}' from this file; still defined in {', '.join(elsewhere)}. "
+                        "Verify importers within this file.",
+                        severity="warning",
+                        kind="removed_export",
+                    )
+                )
                 continue
 
-            line = _find_symbol_line(pre_symbols, name)
-            if name.startswith("_"):
+            # Genuinely gone from the workspace — hard error for public,
+            # warning for private.
+            if is_private:
                 findings.append(
                     AuditFinding(
                         file=path_str,
@@ -190,7 +209,13 @@ def _detect_removed_exports(
 def _detect_stale_references(
     index: CodeIntelIndex, workspace_root: Path, changed_files: list[str]
 ) -> list[Any]:
-    """Detect references in blast-radius files pointing to now-removed symbols."""
+    """Detect references to symbols that this change concretely removed.
+
+    For each changed file, reads the pre-change symbol set from git HEAD,
+    computes which symbols were removed, then flags blast-radius files that
+    import those specific names from that specific module.
+    """
+    from aura.code_intel.adapter import get_adapter
     from aura.code_intel.models import AuditFinding
 
     findings: list[AuditFinding] = []
@@ -198,6 +223,32 @@ def _detect_stale_references(
     seen: set[tuple[str, int, str]] = set()
 
     for path_str in changed_norm:
+        # --- Pre-change baseline ---
+        pre_content = _get_pre_change_content(workspace_root, path_str)
+        if pre_content is None:
+            continue  # New file or untracked \u2014 no baseline
+
+        adapter = get_adapter(path_str, content=pre_content)
+        if adapter is None:
+            continue
+
+        pre_names = {s.name for s in adapter.symbols(path_str, pre_content)}
+        post_names = {s.name for s in index.get_symbols(path_str)}
+
+        removed_here = pre_names - post_names
+        if not removed_here:
+            continue
+
+        # --- Derive dotted module path ---
+        # e.g. "aura/repo_map.py"         -> "aura.repo_map"
+        #      "aura/code_intel/__init__.py" -> "aura.code_intel"
+        mp = path_str
+        if mp.endswith(".py"):
+            mp = mp[:-3]
+        if mp.endswith("/__init__"):
+            mp = mp[:-9]
+        changed_module = mp.replace("/", ".")
+
         try:
             blast_files = index.get_blast_radius(path_str)
         except Exception:
@@ -206,7 +257,7 @@ def _detect_stale_references(
         for blast_file in blast_files:
             refs = index._refs.get(blast_file, [])
             for ref in refs:
-                # Skip references in the changed files themselves
+                # Skip references within changed files themselves
                 if ref.source_file in changed_norm:
                     continue
 
@@ -215,12 +266,23 @@ def _detect_stale_references(
                     continue
                 seen.add(key)
 
-                if ref.target_symbol not in index._symbol_defs:
+                # Flag only if this reference targets the changed module
+                if not (
+                    ref.target_symbol == changed_module
+                    or ref.target_symbol.startswith(changed_module + ".")
+                ):
+                    continue
+
+                bare = ref.target_symbol.rsplit(".", 1)[-1]
+                if bare in removed_here:
                     findings.append(
                         AuditFinding(
                             file=ref.source_file,
                             line=ref.line,
-                            message=f"Stale reference to removed symbol '{ref.target_symbol}'",
+                            message=(
+                                f"Stale reference to removed symbol '{bare}' "
+                                f"(imported from {changed_module})"
+                            ),
                             severity="warning",
                             kind="stale_reference",
                         )
