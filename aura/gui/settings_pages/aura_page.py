@@ -131,14 +131,31 @@ class AuraPage(QWidget):
         buy_card_layout.addLayout(email_row)
 
         # Buy buttons
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(6)
-        self._buy5 = QPushButton("Buy $5 Credits")
-        self._buy10 = QPushButton("Buy $10 Credits")
-        btn_row.addWidget(self._buy5)
-        btn_row.addWidget(self._buy10)
-        btn_row.addStretch()
-        buy_card_layout.addLayout(btn_row)
+        self._buy_buttons: dict[str, QPushButton] = {}
+        buy_btn_container = QVBoxLayout()
+        buy_btn_container.setSpacing(6)
+
+        packs = [
+            ("5", "Buy $5 Credits"),
+            ("10", "Buy $10 Credits"),
+            ("20", "Buy $20 Credits"),
+            ("50", "Buy $50 Credits"),
+        ]
+
+        for i in range(0, 4, 2):
+            row = QHBoxLayout()
+            row.setSpacing(6)
+            for pid, label in packs[i : i + 2]:
+                btn = QPushButton(label)
+                self._buy_buttons[pid] = btn
+                btn.clicked.connect(
+                    lambda checked, pid=pid: self._on_buy_credits(pid)
+                )
+                row.addWidget(btn)
+            row.addStretch()
+            buy_btn_container.addLayout(row)
+
+        buy_card_layout.addLayout(buy_btn_container)
 
         self._purchase_status = QLabel("")
         self._purchase_status.setWordWrap(True)
@@ -156,8 +173,6 @@ class AuraPage(QWidget):
             )
             self._purchase_status.setStyleSheet(f"color: {WARN};")
 
-        self._buy5.clicked.connect(lambda: self._on_buy_credits("5"))
-        self._buy10.clicked.connect(lambda: self._on_buy_credits("10"))
         self._check_btn.clicked.connect(self._on_check_purchase)
 
         layout.addWidget(buy_card)
@@ -349,6 +364,10 @@ class AuraPage(QWidget):
 
     # ── Credit checkout / claim ────────────────────────────────────────
 
+    def _set_buy_buttons_enabled(self, enabled: bool) -> None:
+        for btn in self._buy_buttons.values():
+            btn.setEnabled(enabled)
+
     def _on_buy_credits(self, pack_id: str) -> None:
         email = self._email_input.text().strip()
         if not email:
@@ -356,8 +375,7 @@ class AuraPage(QWidget):
             self._purchase_status.setStyleSheet(f"color: {WARN};")
             return
 
-        self._buy5.setEnabled(False)
-        self._buy10.setEnabled(False)
+        self._set_buy_buttons_enabled(False)
         self._purchase_status.setText("Starting checkout...")
         self._purchase_status.setStyleSheet(f"color: {FG_MUTED};")
 
@@ -400,8 +418,7 @@ class AuraPage(QWidget):
         error: str,
         pack_id: str,
     ) -> None:
-        self._buy5.setEnabled(True)
-        self._buy10.setEnabled(True)
+        self._set_buy_buttons_enabled(True)
 
         if error:
             self._purchase_status.setText(f"Checkout failed: {error}")
@@ -439,8 +456,7 @@ class AuraPage(QWidget):
             return
 
         self._check_btn.setEnabled(False)
-        self._buy5.setEnabled(False)
-        self._buy10.setEnabled(False)
+        self._set_buy_buttons_enabled(False)
         self._purchase_status.setText("Checking payment status...")
         self._purchase_status.setStyleSheet(f"color: {FG_MUTED};")
 
@@ -486,8 +502,7 @@ class AuraPage(QWidget):
         token_required: bool,
     ) -> None:
         self._check_btn.setEnabled(True)
-        self._buy5.setEnabled(True)
-        self._buy10.setEnabled(True)
+        self._set_buy_buttons_enabled(True)
 
         if error:
             self._purchase_status.setText(error)
