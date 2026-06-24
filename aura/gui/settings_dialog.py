@@ -19,6 +19,10 @@ from aura.config import APP_NAME, AppSettings, save_settings
 AURA_CREDITS_TAB_LABEL = "Credits & Account"
 
 
+def _qt_tab_label(label: str) -> str:
+    return label.replace("&", "&&")
+
+
 class SettingsDialog(QDialog):
     """Modal settings.
 
@@ -81,7 +85,7 @@ class SettingsDialog(QDialog):
 
         self._pages = [
             (self._models_page, "Models"),
-            (self._aura_page, AURA_CREDITS_TAB_LABEL),
+            (self._aura_page, _qt_tab_label(AURA_CREDITS_TAB_LABEL)),
             (self._api_keys_page, "API Keys"),
             (self._automation_page, "Automation"),
             (self._companion_page, "Companion"),
@@ -112,7 +116,7 @@ class SettingsDialog(QDialog):
 
         if open_aura_tab:
             for i in range(self._tabs.count()):
-                if self._tabs.tabText(i) == AURA_CREDITS_TAB_LABEL:
+                if self._tabs.tabText(i).replace("&&", "&") == AURA_CREDITS_TAB_LABEL:
                     self._tabs.setCurrentIndex(i)
                     break
         elif open_api_keys_tab:

@@ -213,7 +213,7 @@ class AuraPage(QWidget):
         # Initial state
         self._refresh_key_status()
         self._update_balance_status_text()
-        self._maybe_start_balance_refresh()
+        self._set_balance_placeholder()
 
     # ── Balance ────────────────────────────────────────────────────────
 
@@ -271,6 +271,12 @@ class AuraPage(QWidget):
 
         self._update_balance_status_text()
 
+    def _set_balance_placeholder(self) -> None:
+        if get_api_key("aura"):
+            self._balance_label.setText("Balance not loaded")
+        else:
+            self._balance_label.setText("Balance unavailable")
+
     def _update_balance_status_text(self) -> None:
         has_key = bool(get_api_key("aura"))
         is_aura_active = (
@@ -300,19 +306,9 @@ class AuraPage(QWidget):
             )
 
     def _maybe_start_balance_refresh(self) -> None:
-        has_key = bool(get_api_key("aura"))
-        is_aura_active = (
-            self._settings.planner_provider == "aura"
-            or self._settings.worker_provider == "aura"
-        )
-
-        if has_key and is_aura_active:
-            self._refresh_balance()
-            self._balance_timer.start()
-        else:
-            self._balance_timer.stop()
-            if self._balance_micros is None:
-                self._balance_label.setText("Balance unavailable")
+        self._balance_timer.stop()
+        if self._balance_micros is None:
+            self._set_balance_placeholder()
 
     # ── Key helpers ────────────────────────────────────────────────────
 
@@ -510,7 +506,7 @@ class AuraPage(QWidget):
             )
             self._purchase_status.setStyleSheet(f"color: {SUCCESS};")
             self.credits_claimed.emit()
-            self._refresh_balance()
+            self._show_claimed_balance(balance_micros)
             self._update_balance_status_text()
         elif token_required:
             self._settings.aura_pending_session_id = ""
@@ -523,7 +519,7 @@ class AuraPage(QWidget):
             )
             self._purchase_status.setStyleSheet(f"color: {SUCCESS};")
             self.credits_claimed.emit()
-            self._refresh_balance()
+            self._show_claimed_balance(balance_micros)
             self._update_balance_status_text()
         else:
             self._settings.aura_pending_session_id = ""
@@ -533,10 +529,18 @@ class AuraPage(QWidget):
             self._purchase_status.setText("Credits claimed successfully!")
             self._purchase_status.setStyleSheet(f"color: {SUCCESS};")
             self.credits_claimed.emit()
-            self._refresh_balance()
+            self._show_claimed_balance(balance_micros)
             self._update_balance_status_text()
 
     # ── Cleanup ────────────────────────────────────────────────────────
+
+    def _show_claimed_balance(self, balance_micros: int) -> None:
+        self._balance_micros = balance_micros
+        if balance_micros >= 0:
+            dollars = balance_micros / 1_000_000
+            self._balance_label.setText(f"Balance: ${dollars:.2f}")
+        else:
+            self._set_balance_placeholder()
 
     def cleanup_threads(self) -> None:
         # Stop balance timer
