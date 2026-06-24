@@ -1,5 +1,7 @@
 # Providers
 
+> **Note:** Aura also supports **Aura Credits** as an alternative to managing API keys. See [Model Access Setup](getting-started.md#model-access-setup) in the getting-started guide.
+
 ## Supported Providers
 
 Aura supports five API-key-based providers:

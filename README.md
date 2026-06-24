@@ -96,7 +96,7 @@ Examples you can use or build in minutes:
 
 Aura supports two model paths. Pick the one that fits you.
 
-**Aura Credits** — hosted Aura models without managing provider keys. Open Settings → Aura → Buy Credits, check purchase, then select Aura as your Planner or Worker provider. No credit card needed to start.
+**Aura Credits** — hosted Aura models without managing provider keys. Open Settings → Credits, buy credits ($5, $10, $20, $50 packs available), then select Aura as your Planner or Worker provider. No credit card needed to start.
 <p align="center">
   <img src="media/aura-credits-balance.png" alt="Aura credits balance" width="900">
 </p>
@@ -130,7 +130,7 @@ aura
 **First run:**
 1. Open a workspace (File → Open Workspace).
 2. Choose your model path:
-   - **Aura Credits:** Settings → Aura → Buy Credits. Select Aura as Planner or Worker provider.
+   - **Aura Credits:** Settings → Credits, buy credits ($5, $10, $20, $50 packs). Select Aura as Planner or Worker provider.
    - **BYOK:** Settings → API Keys. Add your key for DeepSeek, OpenAI, Anthropic, Gemini, or OpenRouter.
 3. Ask for something small — "fix a typo in README.md" or "add a docstring to this function."
 4. Review the Planner's spec, then click dispatch.

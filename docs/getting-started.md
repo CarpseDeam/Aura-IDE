@@ -3,7 +3,7 @@
 ## Prerequisites
 
 - Python 3.10+ (only needed for pip install — the Windows installer bundles it)
-- An API key from at least one provider (DeepSeek recommended for cheapest trial)
+- An API key from at least one provider — or use Aura Credits to skip key management (see "Model Access Setup" below)
 - Optional: Git, Docker, Ollama (for vision)
 
 ## Install
@@ -18,9 +18,13 @@ pip install .
 pip install -e .[dev]
 ```
 
-## API Key Setup
+## Model Access Setup
 
-Aura supports multiple providers. Set your key via environment variable or the Settings dialog (encrypted to disk).
+Aura offers two ways to access models:
+
+**Aura Credits** — No API keys needed. Open Settings → Credits, buy credits ($5, $10, $20, $50 packs), then select Aura as your Planner or Worker provider.
+
+**Bring Your Own Keys** — Connect one of the providers below. Set your key via environment variable or the Settings → API Keys dialog (encrypted to disk).
 
 | Provider     | Environment Variable      | Default Model         |
 |--------------|---------------------------|-----------------------|
@@ -37,7 +41,9 @@ export DEEPSEEK_API_KEY="sk-..."
 aura
 ```
 
-You can also set keys through Settings → Provider, which encrypts them to `~/.config/Aura/keys.json`.
+You can also set keys through Settings → API Keys, which encrypts them to `~/.config/Aura/keys.json`.
+
+Both paths support the full Planner/Worker architecture, and you can mix them — use your own key for one role and Aura Credits for the other.
 
 ## First Launch
 
@@ -46,7 +52,7 @@ Run `aura` or `python -m aura`. The onboarding wizard walks you through 5 steps:
 1. **Welcome** — What Aura is and how Planner/Worker work.
 2. **Workspace** — Select a project folder. Aura indexes it for search and repo mapping.
 3. **Safety** — Diff approval is on by default. Auto-Approve and Auto-Dispatch are off.
-4. **Provider** — Set your API key or confirm it's already configured.
+4. **Provider** — Choose your model path: set an API key (BYOK) or select Aura Credits as your provider.
 5. **First Mission** — Choose a safe starter prompt (explain the project, suggest improvements, or write a README).
 
 ## Basic Workflow
