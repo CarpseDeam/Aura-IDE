@@ -158,6 +158,9 @@ class WindowChromeMixin:
                 # Screen coordinates from lParam (signed 16-bit).
                 x = ctypes.c_short(msg.lParam & 0xFFFF).value
                 y = ctypes.c_short((msg.lParam >> 16) & 0xFFFF).value
+                dpr = self.devicePixelRatioF() or 1.0
+                x = x / dpr
+                y = y / dpr
                 rect = self.frameGeometry()
                 margin = 8
 

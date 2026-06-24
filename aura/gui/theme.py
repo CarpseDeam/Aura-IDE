@@ -9,8 +9,9 @@ from PySide6.QtWidgets import QApplication
 BG = "#141418"           # window background (was #1e1e1e)
 BG_ALT = "#1c1c22"       # panels / generic cards (was #25252d)
 BG_RAISED = "#222228"    # text field, pressed buttons (was #2a2a33)
-BORDER = "#252830"
-BORDER_STRONG = "#2e3340"
+BG_HOVER = "#313742"
+BORDER = "#373d4e"
+BORDER_STRONG = "#4b5369"
 
 # Message-card backgrounds — distinct so user/assistant turns separate at a glance.
 BG_USER_CARD = "#151b28"        # cool blue tint (user — feels like prompt)
@@ -105,12 +106,12 @@ QToolBar {{
 QToolBar QToolButton {{
     background: transparent;
     color: {FG};
-    border: 1px solid transparent;
+    border: 1px solid {BORDER};
     border-radius: 5px;
     padding: 4px 10px;
 }}
 QToolBar QToolButton:hover {{
-    background: {BG_RAISED};
+    background: {BG_HOVER};
     border-color: {BORDER};
 }}
 QToolBar QToolButton:checked {{
@@ -130,7 +131,7 @@ QToolBar QToolButton#winMaxBtn {{
 }}
 QToolBar QToolButton#winMinBtn:hover,
 QToolBar QToolButton#winMaxBtn:hover {{
-    background: {BG_RAISED};
+    background: {BG_HOVER};
     color: {FG};
 }}
 QToolBar QToolButton#winCloseBtn {{
@@ -159,7 +160,7 @@ QPushButton {{
     padding: 5px 12px;
 }}
 QPushButton:hover {{
-    background: {BORDER_STRONG};
+    background: {BG_HOVER};
 }}
 QPushButton:disabled {{
     color: {FG_MUTED};
@@ -400,7 +401,7 @@ QToolButton#reasoningToggle {{
     font-size: 12px;
 }}
 QToolButton#reasoningToggle:hover {{
-    background: {BG_RAISED};
+    background: {BG_HOVER};
     border-color: {BORDER};
     color: {FG};
 }}
@@ -415,7 +416,7 @@ QToolButton#closeAllBtn, QToolButton#closeTerminalsBtn {{
     font-size: 11px;
 }}
 QToolButton#closeAllBtn:hover, QToolButton#closeTerminalsBtn:hover {{
-    background: {BG_RAISED};
+    background: {BG_HOVER};
     border-color: {BORDER};
     color: {FG};
 }}

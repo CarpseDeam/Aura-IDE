@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import logging
 from PySide6.QtCore import QObject
+from PySide6.QtWidgets import QMessageBox
 
 from aura.config import AppSettings, save_settings
 from aura.gui.settings_dialog import SettingsDialog
@@ -10,6 +12,8 @@ from aura.gui.settings_dialog import SettingsDialog
 
 if TYPE_CHECKING:
     from aura.gui.main_window import MainWindow
+
+logger = logging.getLogger(__name__)
 
 
 class MainWindowSettingsController(QObject):
@@ -26,58 +30,70 @@ class MainWindowSettingsController(QObject):
 
     def open_settings(self) -> None:
         window = self._window
-        dlg = SettingsDialog(
-            settings=window._settings,
-            workspace_root=window._workspace_root,
-            on_change_root=window._workspace_controller.on_change_root,
-            parent=window,
-            on_live_settings_applied=self._apply_settings,
-        )
-        dlg.set_companion_manager(window._companion)
-        dlg.credits_claimed.connect(lambda: window._balance_controller.refresh(window._settings))
-        dlg.credits_claimed.connect(window._refresh_status_bar)
-        if dlg.exec() == SettingsDialog.DialogCode.Accepted:
-            self._apply_settings(dlg.result_settings())
+        try:
+            dlg = SettingsDialog(
+                settings=window._settings,
+                workspace_root=window._workspace_root,
+                on_change_root=window._workspace_controller.on_change_root,
+                parent=window,
+                on_live_settings_applied=self._apply_settings,
+            )
+            dlg.set_companion_manager(window._companion_controller.companion_manager)
+            dlg.credits_claimed.connect(lambda: window._balance_controller.refresh(window._settings))
+            dlg.credits_claimed.connect(window._refresh_status_bar)
+            if dlg.exec() == SettingsDialog.DialogCode.Accepted:
+                self._apply_settings(dlg.result_settings())
+        except Exception:
+            logger.exception("Failed to open Settings dialog")
+            QMessageBox.critical(window, "Settings Error", "Could not open the Settings dialog. See the log for details.")
 
     def open_api_settings(self) -> None:
         """Open settings dialog directly to the API Keys tab."""
         window = self._window
-        dlg = SettingsDialog(
-            settings=window._settings,
-            workspace_root=window._workspace_root,
-            on_change_root=window._workspace_controller.on_change_root,
-            parent=window,
-            open_api_keys_tab=True,
-            on_live_settings_applied=self._apply_settings,
-        )
-        dlg.set_companion_manager(window._companion)
-        dlg.credits_claimed.connect(lambda: window._balance_controller.refresh(window._settings))
-        dlg.credits_claimed.connect(window._refresh_status_bar)
-        if dlg.exec() == SettingsDialog.DialogCode.Accepted:
-            self._apply_settings(dlg.result_settings())
+        try:
+            dlg = SettingsDialog(
+                settings=window._settings,
+                workspace_root=window._workspace_root,
+                on_change_root=window._workspace_controller.on_change_root,
+                parent=window,
+                open_api_keys_tab=True,
+                on_live_settings_applied=self._apply_settings,
+            )
+            dlg.set_companion_manager(window._companion_controller.companion_manager)
+            dlg.credits_claimed.connect(lambda: window._balance_controller.refresh(window._settings))
+            dlg.credits_claimed.connect(window._refresh_status_bar)
+            if dlg.exec() == SettingsDialog.DialogCode.Accepted:
+                self._apply_settings(dlg.result_settings())
+        except Exception:
+            logger.exception("Failed to open API Settings dialog")
+            QMessageBox.critical(window, "Settings Error", "Could not open the API Settings dialog. See the log for details.")
 
     def open_aura_settings(self) -> None:
         """Open settings dialog directly to the Aura tab."""
         window = self._window
-        dlg = SettingsDialog(
-            settings=window._settings,
-            workspace_root=window._workspace_root,
-            on_change_root=window._workspace_controller.on_change_root,
-            parent=window,
-            open_aura_tab=True,
-            on_live_settings_applied=self._apply_settings,
-        )
-        dlg.set_companion_manager(window._companion)
-        dlg.credits_claimed.connect(lambda: window._balance_controller.refresh(window._settings))
-        dlg.credits_claimed.connect(window._refresh_status_bar)
-        if dlg.exec() == SettingsDialog.DialogCode.Accepted:
-            self._apply_settings(dlg.result_settings())
+        try:
+            dlg = SettingsDialog(
+                settings=window._settings,
+                workspace_root=window._workspace_root,
+                on_change_root=window._workspace_controller.on_change_root,
+                parent=window,
+                open_aura_tab=True,
+                on_live_settings_applied=self._apply_settings,
+            )
+            dlg.set_companion_manager(window._companion_controller.companion_manager)
+            dlg.credits_claimed.connect(lambda: window._balance_controller.refresh(window._settings))
+            dlg.credits_claimed.connect(window._refresh_status_bar)
+            if dlg.exec() == SettingsDialog.DialogCode.Accepted:
+                self._apply_settings(dlg.result_settings())
+        except Exception:
+            logger.exception("Failed to open Aura Settings dialog")
+            QMessageBox.critical(window, "Settings Error", "Could not open the Aura Settings dialog. See the log for details.")
 
     def _apply_settings(self, settings: AppSettings) -> None:
         window = self._window
         window._settings = settings
         window._send_handler.update_settings(settings)
-        window._companion.update_settings(settings)
+        window._companion_controller.update_settings(settings)
         window._persistence.update_settings(settings)
         window._worker_handler.update_settings(settings)
         window._toolbar.update_settings(settings)

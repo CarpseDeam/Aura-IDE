@@ -249,7 +249,8 @@ class MainWindowWorkspaceController(QObject):
         window._input.set_workspace_root(storage_root)
         window._send_handler.set_workspace_root(storage_root)
         window._playground.set_workspace_root(storage_root)
-        window._companion.set_workspace_root(str(window._workspace_root))
+        cc = window._companion_controller
+        cc.set_workspace_root(str(window._workspace_root))
         t0 = time.perf_counter()
         window._tree.set_root(storage_root)
         logger.info("tree.set_root done in %.3fs", time.perf_counter() - t0)
@@ -278,7 +279,8 @@ class MainWindowWorkspaceController(QObject):
         project = ProjectStore().create_or_update_project(root_path)
         logger.info("create_or_update_project done in %.3fs", time.perf_counter() - t0)
         window = self._window
-        window._companion.set_current_project(project.id, project.name)
+        cc = window._companion_controller
+        cc.set_current_project(project.id, project.name)
         save_workspace_root(root_path)
         t_retarget = time.perf_counter()
         self._retarget_workspace(root_path, restore_last=restore_last)
@@ -309,12 +311,13 @@ class MainWindowWorkspaceController(QObject):
         window._input.set_workspace_root(path)
         window._send_handler.set_workspace_root(path)
         window._playground.set_workspace_root(path)
-        window._companion.set_workspace_root(str(window._workspace_root))
+        cc = window._companion_controller
+        cc.set_workspace_root(str(window._workspace_root))
         window._tree.set_root(path)
         save_workspace_root(path)
         from aura.projects.store import ProjectStore
         _project = ProjectStore().create_or_update_project(path)
-        window._companion.set_current_project(_project.id, _project.name)
+        cc.set_current_project(_project.id, _project.name)
         self.update_workspace_label()
 
         def _do_refresh_after_load():

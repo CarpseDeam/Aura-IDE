@@ -31,6 +31,22 @@ class MainWindowCompanionController(QObject):
         self._companion.set_workspace_root(str(window._workspace_root))
         self._companion.start()
 
+    @property
+    def companion_manager(self):
+        return self._companion
+
+    def update_settings(self, settings) -> None:
+        self._companion.update_settings(settings)
+
+    def set_drone_runner(self, runner) -> None:
+        self._companion.set_drone_runner(runner)
+
+    def set_workspace_root(self, path: str) -> None:
+        self._companion.set_workspace_root(path)
+
+    def set_current_project(self, project_id: str, project_name: str) -> None:
+        self._companion.set_current_project(project_id, project_name)
+
     def stop(self) -> None:
         self._companion.stop()
 

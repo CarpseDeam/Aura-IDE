@@ -361,70 +361,91 @@ class MainWindowDroneController(QObject):
         if run_drone.write_policy != "read_only":
             self._write_drone_run_id = run_id
         self._drone_runner = runner
-        self._window._companion.set_drone_runner(self._drone_runner)
-        self._drone_runner_thread = thread
-        self._active_run_card = run_card
-        self._window._drone_reports_window.add_run_card(run_id, run_card)
+        try:
+            self._window._companion_controller.set_drone_runner(self._drone_runner)
+            self._drone_runner_thread = thread
+            self._active_run_card = run_card
+            self._window._drone_reports_window.add_run_card(run_id, run_card)
 
-        # Connect signals.
-        runner.statusChanged.connect(run_card.on_status_changed)
-        runner.statusChanged.connect(
-            lambda status, rid=run_id, name=run_drone.name: self._window.droneStatusChangedOnUiThread.emit(
-                rid, name, status
-            )
-        )
-        runner.contentDelta.connect(run_card.on_content_delta)
-        runner.toolCallStart.connect(run_card.on_tool_call_start)
-        runner.toolCallArgsDelta.connect(run_card.on_tool_call_args)
-        runner.toolResult.connect(run_card.on_tool_result)
-        runner.apiError.connect(run_card.on_api_error)
-        runner.receiptReady.connect(run_card.on_receipt_ready)
-        runner.receiptReady.connect(
-            lambda receipt, rid=run_id: self._window.droneReceiptReadyOnUiThread.emit(
-                receipt, rid
-            )
-        )
-        runner.finished.connect(
-            lambda rid=run_id: self._window.droneRunFinishedOnUiThread.emit(rid)
-        )
-
-        # Standard Qt worker lifetime cleanup — no blocking wait on GUI thread.
-        runner.finished.connect(thread.quit)
-        runner.finished.connect(runner.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-
-        # Wire approval for write-capable drones.
-        if run_drone.write_policy != "read_only":
-            runner.approval_requested.connect(
-                lambda request, r=runner, rid=run_id, name=run_drone.name: (
-                    self.on_drone_approval_requested(request, r, rid, name)
+            # Connect signals.
+            runner.statusChanged.connect(run_card.on_status_changed)
+            runner.statusChanged.connect(
+                lambda status, rid=run_id, name=run_drone.name: self._window.droneStatusChangedOnUiThread.emit(
+                    rid, name, status
                 )
             )
+            runner.contentDelta.connect(run_card.on_content_delta)
+            runner.toolCallStart.connect(run_card.on_tool_call_start)
+            runner.toolCallArgsDelta.connect(run_card.on_tool_call_args)
+            runner.toolResult.connect(run_card.on_tool_result)
+            runner.apiError.connect(run_card.on_api_error)
+            runner.receiptReady.connect(run_card.on_receipt_ready)
+            runner.receiptReady.connect(
+                lambda receipt, rid=run_id: self._window.droneReceiptReadyOnUiThread.emit(
+                    receipt, rid
+                )
+            )
+            runner.finished.connect(
+                lambda rid=run_id: self._window.droneRunFinishedOnUiThread.emit(rid)
+            )
 
-        # Wire cancel button.
-        run_card.cancelRequested.connect(
-            lambda rid=run_id: self.on_cancel_drone_run(rid)
-        )
+            # Standard Qt worker lifetime cleanup — no blocking wait on GUI thread.
+            runner.finished.connect(thread.quit)
+            runner.finished.connect(runner.deleteLater)
+            thread.finished.connect(thread.deleteLater)
 
-        # Add or rekey pip for looping drone runs (persistent pip across laps)
-        if loop_drone_id:
-            old_run_id = self._loop_pip_run_id.get(loop_drone_id)
-            if old_run_id is not None:
-                self._window._edge_rail.rekey_drone_run_pip(old_run_id, run_id)
-                self._window._edge_rail.set_drone_run_pip_state(run_id, run_drone.name, "running")
+            # Wire approval for write-capable drones.
+            if run_drone.write_policy != "read_only":
+                runner.approval_requested.connect(
+                    lambda request, r=runner, rid=run_id, name=run_drone.name: (
+                        self.on_drone_approval_requested(request, r, rid, name)
+                    )
+                )
+
+            # Wire cancel button.
+            run_card.cancelRequested.connect(
+                lambda rid=run_id: self.on_cancel_drone_run(rid)
+            )
+
+            # Add or rekey pip for looping drone runs (persistent pip across laps)
+            if loop_drone_id:
+                old_run_id = self._loop_pip_run_id.get(loop_drone_id)
+                if old_run_id is not None:
+                    self._window._edge_rail.rekey_drone_run_pip(old_run_id, run_id)
+                    self._window._edge_rail.set_drone_run_pip_state(run_id, run_drone.name, "running")
+                else:
+                    self._window._edge_rail.add_drone_run_pip(run_id, run_drone.name)
+                self._loop_pip_run_id[loop_drone_id] = run_id
             else:
                 self._window._edge_rail.add_drone_run_pip(run_id, run_drone.name)
-            self._loop_pip_run_id[loop_drone_id] = run_id
-        else:
-            self._window._edge_rail.add_drone_run_pip(run_id, run_drone.name)
-        # Notify workbay card that this drone is running
-        card_id = loop_drone_id if loop_drone_id else run_drone.id
-        self.update_workbay_card_run_state(card_id, "running")
-        self._window._position_edge_tabs()
+            # Notify workbay card that this drone is running
+            card_id = loop_drone_id if loop_drone_id else run_drone.id
+            self.update_workbay_card_run_state(card_id, "running")
+            self._window._position_edge_tabs()
 
-        # Start the thread.
-        thread.started.connect(runner.run)
-        thread.start()
+            # Start the thread.
+            thread.started.connect(runner.run)
+            thread.start()
+        except Exception:
+            logger.exception("Failed to start drone run %s", run_id)
+            # Clean up state so no stale "already running" record remains
+            self._drone_runs.pop(run_id, None)
+            if self._write_drone_run_id == run_id:
+                self._write_drone_run_id = None
+            self._drone_runner = None
+            self._drone_runner_thread = None
+            self._active_run_card = None
+            # Update workbay card back to idle with visible error
+            self.update_workbay_card_run_state(run_drone.id, "failed", "Startup error")
+            # Remove pip if it was added (if loop pip was added before the exception)
+            if loop_drone_id:
+                self._loop_pip_run_id.pop(loop_drone_id, None)
+            if run_id:
+                self._window._edge_rail.remove_drone_run_pip(run_id)
+                self._window._position_edge_tabs()
+            # Cancel the runner so its worker thread doesn't leak
+            runner.cancel()
+            return
 
     def can_start_drone(self, drone: DroneDefinition) -> bool:
         active_runs = []
@@ -702,7 +723,7 @@ class MainWindowDroneController(QObject):
             self._write_drone_run_id = None
         if self._drone_runner is runner:
             self._drone_runner = None
-            self._window._companion.set_drone_runner(None)
+            self._window._companion_controller.set_drone_runner(None)
             self._drone_runner_thread = None
         logger.debug("[DroneRun] on_drone_finished end run_id=%s", run_id)
 
@@ -821,7 +842,7 @@ class MainWindowDroneController(QObject):
         record = self._drone_runs.get(run_id)
         if record is not None:
             record["receipt"] = receipt
-        self._window._drone_reports_window.on_receipt_ready(run_id, receipt)
+
 
     def on_focus_drone_run(self, run_id: str = "") -> None:
         """Open Drone Reports and focus the requested run card."""
