@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from aura.code_intel.adapter import CodeIntelAdapter, register_adapter
+from aura.resources import get_resource_path
 
 logger = logging.getLogger(__name__)
 
@@ -31,11 +32,12 @@ except ImportError:
 # ---------------------------------------------------------------------------
 # Build note for packaging
 #
-# Packaging MUST pre-warm the bundled tree-sitter cache with:
+# Packaging MUST pre-warm the bundled grammars directory with:
 #
 #   _lp.download(["javascript", "typescript", "tsx", "go", "rust"])
 #
-# against the pinned package version, then include that cache folder as
+# against the pinned package version into <app_root>/grammars/ (the path
+# resolved by get_resource_path("grammars")).  Include that directory as
 # packaged data.  Frozen-app validation must be done with network disabled.
 # ---------------------------------------------------------------------------
 
@@ -57,10 +59,16 @@ def _ensure_configured() -> None:
     if _CONFIGURED or not _TS_AVAILABLE:
         return
     try:
-        from platformdirs import user_cache_dir
-
-        cache_path = Path(user_cache_dir("aura", ensure_exists=True)) / "tree-sitter"
-        cache_path.mkdir(parents=True, exist_ok=True)
+        cache_path = get_resource_path("grammars")
+        if not cache_path.exists() or not cache_path.is_dir():
+            logger.warning(
+                "Bundled grammars path %s not found; "
+                "packager should pre-warm grammars with "
+                "_lp.download(...) against the pinned version",
+                cache_path,
+            )
+            _CONFIGURED = True
+            return
 
         pack_config_cls = getattr(_lp, "PackConfig", None)
         if pack_config_cls is not None:
