@@ -102,6 +102,8 @@ class _AutoGrowTextEdit(QTextEdit):
         self.setAcceptRichText(False)
         self.setWordWrapMode(QTextOption.WrapMode.WordWrap)
         self.setAcceptDrops(True)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.document().contentsChanged.connect(self._adjust_height)
         self._adjust_height()
@@ -187,6 +189,7 @@ class InputPanel(QFrame):
 
         self._workspace_root = workspace_root
         self._streaming = False
+        self._attachments: list[Attachment] = []
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(16, 12, 16, 14)
@@ -228,6 +231,7 @@ class InputPanel(QFrame):
 
         # Connect text changed for slash hint
         self._editor.textChanged.connect(self._update_slash_hint)
+        self._editor.textChanged.connect(self._update_send_button_enabled)
 
         # Controls row.
         controls = QHBoxLayout()
@@ -251,25 +255,47 @@ class InputPanel(QFrame):
 
         self._stop_btn = QPushButton("Stop")
         self._stop_btn.setObjectName("danger")
+        self._stop_btn.setMinimumSize(44, 36)
         self._stop_btn.setVisible(False)
         self._stop_btn.clicked.connect(self.stop_requested.emit)
         controls.addWidget(self._stop_btn)
 
         self._send_btn = QPushButton("→")
-        self._send_btn.setObjectName("primary")
-        font = self._send_btn.font()
-        font.setPointSize(14)
-        self._send_btn.setFont(font)
+        self._send_btn.setObjectName("sendButton")
+        self._send_btn.setMinimumSize(32, 30)
+        self._send_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._send_btn.setToolTip("Send message (Ctrl+Enter)")
         self._send_btn.setStyleSheet(
-            "QPushButton#primary { padding: 5px 14px; font-size: 16px; }"
+            "QPushButton#sendButton {"
+            "  background: #4a9eff;"
+            "  color: white;"
+            "  border: none;"
+            "  border-radius: 8px;"
+            "  font-size: 14px;"
+            "  font-weight: bold;"
+            "  padding: 1px 8px;"
+            "  min-width: 24px;"
+            "  min-height: 28px;"
+            "}"
+            "QPushButton#sendButton:hover {"
+            "  background: #6ab0ff;"
+            "}"
+            "QPushButton#sendButton:pressed {"
+            "  background: #3a8ee0;"
+            "}"
+            "QPushButton#sendButton:disabled {"
+            "  background: rgba(74,158,255,0.25);"
+            "  color: rgba(255,255,255,0.3);"
+            "}"
+            "QPushButton#sendButton:focus {"
+            "  border: 2px solid rgba(255,255,255,0.6);"
+            "}"
         )
         self._send_btn.clicked.connect(self._on_submit)
         controls.addWidget(self._send_btn)
+        self._update_send_button_enabled()
 
         outer.addLayout(controls)
-
-        self._attachments: list[Attachment] = []
-
 
     # ---- public state -----------------------------------------------------
 
@@ -290,9 +316,15 @@ class InputPanel(QFrame):
     def set_queued_messages(self, count: int) -> None:
         """Update the send button to show how many messages are queued."""
         if count > 0:
-            self._send_btn.setText(f"\u2192  [{count} queued]")
+            self._send_btn.setText(f"\u2192  {count}")
         else:
             self._send_btn.setText("\u2192")
+
+    def _update_send_button_enabled(self) -> None:
+        self._send_btn.setEnabled(
+            bool(self._editor.toPlainText().strip()) or bool(self._attachments)
+        )
+
     # ---- attachments ------------------------------------------------------
 
     def _on_image_pasted(self, qimg: QImage) -> None:
@@ -350,6 +382,7 @@ class InputPanel(QFrame):
         # Insert before stretch.
         self._chips_row.insertWidget(self._chips_row.count() - 1, chip)
         self._chips_container.setVisible(True)
+        self._update_send_button_enabled()
 
     def _remove_chip(self, chip: _AttachmentChip) -> None:
         try:
@@ -359,6 +392,7 @@ class InputPanel(QFrame):
         chip.deleteLater()
         if not self._attachments:
             self._chips_container.setVisible(False)
+        self._update_send_button_enabled()
 
     def _clear_attachments(self) -> None:
         self._attachments.clear()
@@ -368,6 +402,7 @@ class InputPanel(QFrame):
             if w is not None:
                 w.deleteLater()
         self._chips_container.setVisible(False)
+        self._update_send_button_enabled()
 
     # ---- slash hint -------------------------------------------------------
 
