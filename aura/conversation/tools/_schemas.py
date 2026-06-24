@@ -1143,13 +1143,19 @@ RUN_AND_WATCH_TOOL_DEF: dict[str, Any] = {
     "function": {
         "name": "run_and_watch",
         "description": (
-            "Run the task\'s declared run command and watch it for a startup "
-            "window. A clean survival of the window (no crash, still running) "
-            "is success. A crash (Traceback in output) is failure. "
-            "This tool takes NO command parameter — the command is fixed by "
-            "the task contract (dispatch_to_worker run_command field). "
-            "If no run command was declared for this task, it returns an "
-            "informational no-op result without running anything."
+            "Run the task\'s declared run_command and watch for startup "
+            "behavior. Success means the command exits on its own within the "
+            "watch window with exit code 0 and no traceback. A command that "
+            "survives the window without crashing (still running when the "
+            "window expires) is FAILURE — the command must self-terminate. "
+            "A crash (Traceback in output) or non-zero exit code is also "
+            "failure. This tool takes NO command parameter — the command is "
+            "fixed by the task contract (dispatch_to_worker run_command "
+            "field). If no run command was declared for this task, it "
+            "returns an informational no-op result. Normally you do NOT "
+            "need to call this tool yourself — the harness automatically "
+            "runs launch verification after you finish. Use "
+            "run_terminal_command for your own validation checks."
         ),
         "parameters": {
             "type": "object",

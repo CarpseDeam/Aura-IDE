@@ -467,6 +467,7 @@ class ToolRunner:
         if not declared_run_command or not declared_run_command.strip():
             payload_dict = {
                 "ok": False,
+                "failure_class": None,
                 "error": "no run command declared for this task",
                 "command": "",
             }
@@ -493,7 +494,6 @@ class ToolRunner:
         # Emit ToolCallStart
         on_event(ToolCallStart(index=0, id=tool_call_id, name="run_and_watch"))
 
-        settings = load_settings()
         sandbox = SandboxExecutor(
             mode="host",  # run_and_watch always runs in host mode for now
             workspace_root=self._workspace_root,
@@ -515,8 +515,22 @@ class ToolRunner:
 
         full_output = result.output
 
+        ok = result.ok and result.exited_early
+        if not ok:
+            if result.survived_window and not result.error_detected:
+                failure_class = "launch_command_did_not_exit"
+            elif result.error_detected:
+                failure_class = "launch_command_crashed"
+            elif result.exit_code is not None and result.exit_code != 0:
+                failure_class = "launch_command_nonzero_exit"
+            else:
+                failure_class = "launch_command_failed"
+        else:
+            failure_class = None
+
         payload_dict = {
-            "ok": result.ok,
+            "ok": ok,
+            "failure_class": failure_class,
             "survived_window": result.survived_window,
             "exited_early": result.exited_early,
             "error_detected": result.error_detected,
@@ -530,7 +544,7 @@ class ToolRunner:
         on_event(ToolResult(
             tool_call_id=tool_call_id,
             name="run_and_watch",
-            ok=result.ok,
+            ok=ok,
             result=payload,
         ))
 
