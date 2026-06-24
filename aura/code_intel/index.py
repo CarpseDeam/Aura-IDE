@@ -279,6 +279,7 @@ class CodeIntelIndex:
         dirs_visited = 0
         files_considered = 0
         budget_exceeded = False
+        seen_paths: set[str] = set()
 
         for dirpath, dirnames, filenames in os.walk(self._root):
             dirs_visited += 1
@@ -322,6 +323,8 @@ class CodeIntelIndex:
                 except OSError:
                     continue
 
+                seen_paths.add(rel_path)
+
                 # Stat-based skip: if FileInfo exists and the file hasn't changed, skip
                 existing = self._files.get(rel_path)
                 if existing is not None and existing.mtime == file_mtime and existing.size == file_size:
@@ -349,6 +352,11 @@ class CodeIntelIndex:
                     continue
 
                 self._index_file(rel_path, content)
+
+        if not budget_exceeded:
+            stale = set(self._files.keys()) - seen_paths
+            for path in stale:
+                self._evict_file(path)
 
         if budget_exceeded:
             logger.info(
