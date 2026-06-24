@@ -39,13 +39,13 @@ except ImportError:
 # packaged data.  Frozen-app validation must be done with network disabled.
 # ---------------------------------------------------------------------------
 
-# (language_id, extensions, tags_fallback)
-_SUPPORTED_LANGUAGES: list[tuple[str, tuple[str, ...], str | None]] = [
-    ("javascript", (".js", ".jsx", ".mjs", ".cjs"), None),
-    ("typescript", (".ts",), "javascript"),
-    ("tsx", (".tsx",), "javascript"),
-    ("go", (".go",), None),
-    ("rust", (".rs",), None),
+# (language_id, extensions)
+_SUPPORTED_LANGUAGES: list[tuple[str, tuple[str, ...]]] = [
+    ("javascript", (".js", ".jsx", ".mjs", ".cjs")),
+    ("typescript", (".ts",)),
+    ("tsx", (".tsx",)),
+    ("go", (".go",)),
+    ("rust", (".rs",)),
 ]
 
 _CONFIGURED = False
@@ -72,19 +72,6 @@ def _ensure_configured() -> None:
     _CONFIGURED = True
 
 
-def _tags_query_for(language_id: str) -> str | None:
-    """Return the tags query for *language_id*, with fallback for TS/TSX."""
-    q = _lp.get_tags_query(language_id)
-    if q is not None:
-        return q
-    # TypeScript / TSX don't ship tags queries — use JavaScript's.
-    fallback_map = {lid: fb for lid, _, fb in _SUPPORTED_LANGUAGES}
-    fb_lang = fallback_map.get(language_id)
-    if fb_lang:
-        q = _lp.get_tags_query(fb_lang)
-    return q
-
-
 class GenericSymbolAdapter(CodeIntelAdapter):
     """Tree-sitter-backed adapter for a single non-Python language.
 
@@ -94,11 +81,10 @@ class GenericSymbolAdapter(CodeIntelAdapter):
     """
 
     def __init__(
-        self, language_id: str, extensions: tuple[str, ...], tags_fallback: str | None = None
+        self, language_id: str, extensions: tuple[str, ...]
     ) -> None:
         self._language_id = language_id
         self._extensions = extensions
-        self._tags_fallback = tags_fallback
         self._language: Any | None = None
         self._parser: Any | None = None
         self._tags_query_source: str | None = None
@@ -129,6 +115,22 @@ class GenericSymbolAdapter(CodeIntelAdapter):
         _ensure_configured()
 
         try:
+            downloaded = _lp.downloaded_languages()
+            if self._language_id not in downloaded:
+                logger.info(
+                    "Tree-sitter grammar for '%s' not in downloaded set; no on-demand fetch performed",
+                    self._language_id,
+                )
+                return False
+        except Exception:
+            logger.warning(
+                "Failed to check downloaded languages for '%s'",
+                self._language_id,
+                exc_info=True,
+            )
+            return False
+
+        try:
             self._language = _lp.get_language(self._language_id)
             # Use tree_sitter.Parser (not language-pack's get_parser) so
             # parsed nodes are tree_sitter.Node instances compatible with
@@ -140,8 +142,8 @@ class GenericSymbolAdapter(CodeIntelAdapter):
             )
             return False
 
-        # Resolve tags query (TypeScript/TSX fall back to JavaScript)
-        self._tags_query_source = _tags_query_for(self._language_id)
+        # Resolve tags query directly — no fallback
+        self._tags_query_source = _lp.get_tags_query(self._language_id)
         if self._tags_query_source is not None:
             try:
                 self._tags_query = _ts.Query(
@@ -285,8 +287,10 @@ class GenericSymbolAdapter(CodeIntelAdapter):
 
 def register_generic_adapters() -> None:
     """Register one GenericSymbolAdapter per supported language."""
-    for language_id, extensions, tags_fallback in _SUPPORTED_LANGUAGES:
-        register_adapter(GenericSymbolAdapter(language_id, extensions, tags_fallback))
+    if not _TS_AVAILABLE:
+        return
+    for language_id, extensions in _SUPPORTED_LANGUAGES:
+        register_adapter(GenericSymbolAdapter(language_id, extensions))
 
 
 # Auto-register at import time

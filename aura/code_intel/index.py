@@ -179,10 +179,35 @@ class CodeIntelIndex:
 
         self._index_file(path, content)
 
+    def _evict_file(self, path: str) -> None:
+        """Remove all cached data for *path* from this index."""
+        # Remove symbol definition mappings
+        old_defines = self._file_defines.pop(path, set())
+        for sym in old_defines:
+            self._symbol_defs[sym].discard(path)
+            if not self._symbol_defs[sym]:
+                del self._symbol_defs[sym]
+
+        # Remove dependency edge mappings
+        old_deps = self._dep_edges.pop(path, set())
+        for dep in old_deps:
+            self._rev_dep_edges[dep].discard(path)
+
+        # Remove core caches
+        self._files.pop(path, None)
+        self._outlines.pop(path, None)
+        self._symbols.pop(path, None)
+        self._refs.pop(path, None)
+        self._diagnostics.pop(path, None)
+
     def _index_file(self, path: str, content: str) -> None:
         """Parse *content* for *path* and populate all caches."""
         from aura.code_intel.adapter import get_adapter
         from aura.code_intel.models import FileInfo
+
+        # Evict any prior data for this path so renames/rewrites don't leave
+        # stale symbol definitions or reverse dependency edges behind.
+        self._evict_file(path)
 
         adapter = get_adapter(path, content=content)
         if adapter is None:
@@ -338,23 +363,7 @@ class CodeIntelIndex:
         """Re-parse changed files and invalidate downstream caches."""
         for path_str in changed_files:
             norm = path_str.replace("\\", "/")
-
-            # Remove old entries
-            old_defines = self._file_defines.pop(norm, set())
-            for sym in old_defines:
-                self._symbol_defs[sym].discard(norm)
-                if not self._symbol_defs[sym]:
-                    del self._symbol_defs[sym]
-
-            old_deps = self._dep_edges.pop(norm, set())
-            for dep in old_deps:
-                self._rev_dep_edges[dep].discard(norm)
-
-            self._files.pop(norm, None)
-            self._outlines.pop(norm, None)
-            self._symbols.pop(norm, None)
-            self._refs.pop(norm, None)
-            self._diagnostics.pop(norm, None)
+            self._evict_file(norm)
 
             # Re-parse
             abs_path = self._root / norm
