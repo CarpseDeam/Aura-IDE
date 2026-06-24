@@ -577,17 +577,17 @@ class _DispatchProxy(QObject):
                 from aura.code_intel.audit import audit_changed_files
                 touched = sorted(relay.touched_files)
                 audit_findings = audit_changed_files(self._workspace_root, touched)
-                parse_failures = [f for f in audit_findings if f.kind == "parse_failure" and f.severity in ("error",)]
-                if parse_failures:
-                    failure_files = sorted({f.file for f in parse_failures})
+                blocked = [f for f in audit_findings if f.severity in ("error",)]
+                if blocked:
+                    failure_files = sorted({f.file for f in blocked})
                     msg = (
-                        "Post-edit structural audit found parse failures in: "
+                        "Post-edit structural audit found high-severity issues in: "
                         + ", ".join(failure_files[:5])
                         + ". Fix these before declaring success."
                     )
                     result_errors.append(msg)
-                    for pf in parse_failures[:5]:
-                        result_errors.append(f"  {pf.file}:{pf.line}: {pf.message}")
+                    for bf in blocked[:5]:
+                        result_errors.append(f"  {bf.file}:{bf.line}: {bf.message}")
             except Exception:
                 _log.exception("Post-edit structural audit failed")
 

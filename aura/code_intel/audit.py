@@ -1,7 +1,7 @@
 """Structural audit API — cheap deterministic checks on changed files.
 
-Detects parse failures in changed files.  Blast-radius context is computed
-for future export/stale-reference checks (not yet implemented).
+Detects parse failures, removed exports, stale references, and
+unresolved dependencies in changed files.
 """
 
 from __future__ import annotations
@@ -20,13 +20,15 @@ def audit_changed_files(
 ) -> list[Any]:
     """Run structural audit on a set of changed files.
 
-    Steps:
+    Phases:
 
     1. Build/refresh a :class:`CodeIntelIndex` for the workspace (full
        refresh for blast-radius context, then re-parse changed files).
-    2. For each changed file, check indexability and emit parse diagnostics.
-    3. Compute blast-radius dependents (future use, not yet implemented).
-    4. Return findings sorted by file, then line.
+    2. Parse-failure detection on each changed file.
+    3. Removed-export detection via git HEAD comparison.
+    4. Stale-reference detection in blast-radius dependents.
+    5. Unresolved-dependency detection.
+    6. Return findings sorted by file, then line.
 
     Returns:
         list[AuditFinding]
@@ -56,9 +58,54 @@ def audit_changed_files(
             )
         ]
 
+    # Phase 1 — Parse failures
+    findings.extend(_detect_parse_failures(index, changed_files))
+
+    # Phase 2 — Removed exports
+    findings.extend(_detect_removed_exports(index, workspace_root, changed_files))
+
+    # Phase 3 — Stale references in blast radius
+    findings.extend(_detect_stale_references(index, workspace_root, changed_files))
+
+    # Phase 4 — Unresolved dependencies
+    findings.extend(_detect_unresolved_dependencies(index, workspace_root, changed_files))
+
+    findings.sort(key=lambda f: (f.file, f.line or 0))
+    return findings
+
+
+def _get_pre_change_content(workspace_root: Path, file_path: str) -> str | None:
+    """Return git HEAD content for *file_path*, or None if untracked/unavailable."""
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(workspace_root), "show", f"HEAD:{file_path}"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode != 0:
+            return None
+        return result.stdout
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return None
+
+
+def _find_symbol_line(symbols, name: str) -> int | None:
+    """Return the line number of *name* in a list of SymbolInfo, or None."""
+    for s in symbols:
+        if s.name == name:
+            return s.line
+    return None
+
+
+def _detect_parse_failures(
+    index: CodeIntelIndex, changed_files: list[str]
+) -> list[Any]:
+    """Return parse_failure findings for changed files."""
+    from aura.code_intel.models import AuditFinding
+
+    findings: list[AuditFinding] = []
     changed_norm = {p.replace("\\", "/") for p in changed_files}
 
-    # 1. Check parse failures and diagnostics for changed files
     for path_str in changed_norm:
         file_info = index.get_file(path_str)
         if file_info is None:
@@ -72,7 +119,6 @@ def audit_changed_files(
                 )
             )
         else:
-            # Report any parse diagnostics for this file
             for diag in index.get_diagnostics(path_str):
                 findings.append(
                     AuditFinding(
@@ -83,20 +129,172 @@ def audit_changed_files(
                         kind="parse_failure",
                     )
                 )
+    return findings
 
-    # 2. Compute blast radius for future export/stale-reference checks
-    blast: set[str] = set()
+
+def _detect_removed_exports(
+    index: CodeIntelIndex, workspace_root: Path, changed_files: list[str]
+) -> list[Any]:
+    """Detect removed/renamed top-level symbols by comparing git HEAD with index."""
+    from aura.code_intel.adapter import get_adapter
+    from aura.code_intel.models import AuditFinding
+
+    findings: list[AuditFinding] = []
+    changed_norm = {p.replace("\\", "/") for p in changed_files}
+
+    for path_str in changed_norm:
+        pre_content = _get_pre_change_content(workspace_root, path_str)
+        if pre_content is None:
+            continue  # New file or not tracked
+
+        adapter = get_adapter(path_str, content=pre_content)
+        if adapter is None:
+            continue
+
+        pre_symbols = adapter.symbols(path_str, pre_content)
+        pre_names = {s.name for s in pre_symbols}
+
+        post_symbols = index.get_symbols(path_str)
+        post_names = {s.name for s in post_symbols}
+
+        removed = pre_names - post_names
+        for name in sorted(removed):
+            # Still defined elsewhere in the workspace (e.g. moved)?
+            if name in index._symbol_defs:
+                continue
+
+            line = _find_symbol_line(pre_symbols, name)
+            if name.startswith("_"):
+                findings.append(
+                    AuditFinding(
+                        file=path_str,
+                        line=line,
+                        message=f"Removed private symbol '{name}'",
+                        severity="warning",
+                        kind="removed_export",
+                    )
+                )
+            else:
+                findings.append(
+                    AuditFinding(
+                        file=path_str,
+                        line=line,
+                        message=f"Removed public symbol '{name}'",
+                        severity="error",
+                        kind="removed_export",
+                    )
+                )
+    return findings
+
+
+def _detect_stale_references(
+    index: CodeIntelIndex, workspace_root: Path, changed_files: list[str]
+) -> list[Any]:
+    """Detect references in blast-radius files pointing to now-removed symbols."""
+    from aura.code_intel.models import AuditFinding
+
+    findings: list[AuditFinding] = []
+    changed_norm = {p.replace("\\", "/") for p in changed_files}
+    seen: set[tuple[str, int, str]] = set()
+
     for path_str in changed_norm:
         try:
-            for dep in index.get_blast_radius(path_str):
-                blast.add(dep)
-            # Also include direct dependents
-            for dep in index.get_dependents(path_str):
-                blast.add(dep)
+            blast_files = index.get_blast_radius(path_str)
         except Exception:
             continue
 
-    # Subtract the changed files themselves
-    blast -= changed_norm
+        for blast_file in blast_files:
+            refs = index._refs.get(blast_file, [])
+            for ref in refs:
+                # Skip references in the changed files themselves
+                if ref.source_file in changed_norm:
+                    continue
 
-    return sorted(findings, key=lambda f: (f.file, f.line or 0))
+                key = (ref.source_file, ref.line, ref.target_symbol)
+                if key in seen:
+                    continue
+                seen.add(key)
+
+                if ref.target_symbol not in index._symbol_defs:
+                    findings.append(
+                        AuditFinding(
+                            file=ref.source_file,
+                            line=ref.line,
+                            message=f"Stale reference to removed symbol '{ref.target_symbol}'",
+                            severity="warning",
+                            kind="stale_reference",
+                        )
+                    )
+    return findings
+
+
+def _detect_unresolved_dependencies(
+    index: CodeIntelIndex, workspace_root: Path, changed_files: list[str]
+) -> list[Any]:
+    """Detect import paths in changed files that no longer resolve to workspace files."""
+    from aura.code_intel.adapter import get_adapter
+    from aura.code_intel.models import AuditFinding
+
+    findings: list[AuditFinding] = []
+    changed_norm = {p.replace("\\", "/") for p in changed_files}
+    indexed_paths = set(index.file_paths())
+
+    for path_str in changed_norm:
+        abs_path = workspace_root / path_str
+        if not abs_path.is_file():
+            continue
+
+        try:
+            content = abs_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+
+        adapter = get_adapter(path_str, content=content)
+        if adapter is None:
+            continue
+
+        try:
+            deps = adapter.dependencies(path_str, content)
+        except Exception:
+            continue
+
+        for dep in deps:
+            dep_path = dep.replace("\\", "/")
+
+            # Skip relative imports
+            if dep_path.startswith("."):
+                continue
+
+            # Skip bare module names with no path separator (stdlib / third-party)
+            if "/" not in dep_path and not dep_path.endswith(".py"):
+                continue
+
+            # Try direct file path
+            if (workspace_root / dep_path).is_file():
+                continue
+
+            # Try dotted-module -> path conversion
+            if "." in dep_path and dep_path.endswith(".py"):
+                alt = dep_path.replace(".", "/")
+                if (workspace_root / alt).is_file():
+                    continue
+
+            if dep_path in indexed_paths:
+                continue
+
+            # For bare module names ending in .py (e.g. "os.py", "click.py")
+            # with no directory separator: likely stdlib or third-party
+            if "/" not in dep_path and dep_path.endswith(".py"):
+                continue
+
+            findings.append(
+                AuditFinding(
+                    file=path_str,
+                    line=None,
+                    message=f"Unresolved dependency '{dep}'",
+                    severity="warning",
+                    kind="unresolved_dependency",
+                )
+            )
+    return findings
+

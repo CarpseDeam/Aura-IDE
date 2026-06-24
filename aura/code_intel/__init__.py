@@ -1,7 +1,7 @@
 # Import adapters to trigger registration — text first for last-match-wins semantics
-from aura.code_intel import (
-    python_adapter,  # noqa: F401
+from aura.code_intel import (  # isort: skip
     text_adapter,  # noqa: F401
+    python_adapter,  # noqa: F401
 )
 
 from aura.code_intel.adapter import (  # isort: skip
