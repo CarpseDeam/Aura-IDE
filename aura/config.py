@@ -46,10 +46,6 @@ ENV_API_KEY: str = provider_registry.get("deepseek").env_key
 # Deprecated module-level model dict — kept for backward compat with smoke scripts.
 MODELS: dict[str, ModelInfo] = dict(provider_registry.get("deepseek").models)
 
-# Tavily (web search) API key
-
-TAVILY_API_KEY_ENV: str = "TAVILY_API_KEY"
-
 # Convenience accessors
 
 
@@ -185,17 +181,6 @@ def list_stored_providers() -> list[str]:
     return result
 
 
-def get_tavily_api_key() -> str | None:
-    """Read the Tavily key from the environment or saved app settings."""
-    env_key = os.environ.get(TAVILY_API_KEY_ENV)
-    if env_key:
-        return env_key
-    try:
-        return load_settings().tavily_api_key or None
-    except Exception:
-        return None
-
-
 def fetch_provider_models(provider_id: str) -> tuple[dict[str, ModelInfo], dict[str, dict[str, float]], str | None]:
     """Fetch models and pricing from the provider's API.
 
@@ -274,17 +259,6 @@ def fetch_provider_models(provider_id: str) -> tuple[dict[str, ModelInfo], dict[
     return models, pricing, None
 
 
-def require_tavily_api_key() -> str:
-    """Like get_tavily_api_key() but raises RuntimeError if not found."""
-    key = get_tavily_api_key()
-    if not key:
-        raise RuntimeError(
-            "Tavily API key not found. "
-            f"Set the {TAVILY_API_KEY_ENV} environment variable."
-        )
-    return key
-
-
 def redact_secrets(text: str) -> str:
     """Redact all known API keys from the given text."""
     if not text:
@@ -298,10 +272,6 @@ def redact_secrets(text: str) -> str:
                 keys_to_redact.add(key)
         except Exception:
             pass
-
-    tavily_key = get_tavily_api_key()
-    if tavily_key:
-        keys_to_redact.add(tavily_key)
 
     redacted = text
     for key in keys_to_redact:

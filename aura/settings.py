@@ -82,7 +82,6 @@ class AppSettings:
     max_tool_rounds: int = 50
     aura_pending_session_id: str = ""
     aura_pending_claim_secret: str = ""
-    tavily_api_key: str = ""
     terminal_window_geometry: str = ""
     drone_reports_window_geometry: str = ""
     drone_workbay_window_geometry: str = ""
@@ -130,8 +129,6 @@ class AppSettings:
         # Flags
         if isinstance(data.get("first_launch_done"), bool):
             s.first_launch_done = data["first_launch_done"]
-        if isinstance(data.get("tavily_api_key"), str):
-            s.tavily_api_key = data["tavily_api_key"]
         if isinstance(data.get("aura_pending_session_id"), str):
             s.aura_pending_session_id = data["aura_pending_session_id"]
         if isinstance(data.get("aura_pending_claim_secret"), str):

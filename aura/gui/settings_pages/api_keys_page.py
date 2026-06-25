@@ -131,38 +131,6 @@ class ApiKeysPage(QWidget):
                     "status": status_label,
                 }
 
-        # Tavily separator
-        tavily_sep = QLabel("Web Search (Tavily)")
-        tavily_sep.setStyleSheet(
-            f"color: {FG_DIM}; font-weight: 600; font-size: 11px;"
-            " text-transform: uppercase; letter-spacing: 0.04em;"
-        )
-        form.addRow("", tavily_sep)
-
-        tavily_row = QHBoxLayout()
-        tavily_row.setSpacing(6)
-        self._tavily_key_input = QLineEdit()
-        self._tavily_key_input.setEchoMode(QLineEdit.EchoMode.Password)
-        self._tavily_key_input.setPlaceholderText("Paste Tavily API key here...")
-        tavily_row.addWidget(self._tavily_key_input, 1)
-
-        self._save_tavily_btn = QPushButton("Save")
-        self._save_tavily_btn.clicked.connect(self._on_save_tavily_key)
-        tavily_row.addWidget(self._save_tavily_btn)
-
-        self._clear_tavily_btn = QPushButton("Clear")
-        self._clear_tavily_btn.clicked.connect(self._on_clear_tavily_key)
-        tavily_row.addWidget(self._clear_tavily_btn)
-
-        tavily_widget = QWidget()
-        tavily_widget.setLayout(tavily_row)
-        form.addRow("Tavily Key:", tavily_widget)
-
-        self._tavily_status = QLabel("")
-        self._tavily_status.setWordWrap(True)
-        form.addRow("", self._tavily_status)
-        self._refresh_tavily_status()
-
         layout.addLayout(form)
         layout.addStretch()
 
@@ -212,35 +180,7 @@ class ApiKeysPage(QWidget):
         get_key_manager().delete_key(provider_id)
         self._refresh_key_status(provider_id)
 
-    # --- Tavily ---
-
-    def _refresh_tavily_status(self) -> None:
-        if os.environ.get("TAVILY_API_KEY"):
-            text = "Tavily key loaded from TAVILY_API_KEY."
-            color = SUCCESS
-        elif self._settings.tavily_api_key:
-            text = "Tavily key is saved in settings."
-            color = SUCCESS
-        else:
-            text = "No Tavily key saved. Web search will be unavailable."
-            color = WARN
-        self._tavily_status.setText(text)
-        self._tavily_status.setStyleSheet(f"color: {color};")
-
-    def _on_save_tavily_key(self) -> None:
-        key = self._tavily_key_input.text().strip()
-        if not key:
-            QMessageBox.information(self, APP_NAME, "Paste a Tavily key before saving.")
-            return
-        self._settings.tavily_api_key = key
-        self._tavily_key_input.clear()
-        self._refresh_tavily_status()
-
-    def _on_clear_tavily_key(self) -> None:
-        self._settings.tavily_api_key = ""
-        self._refresh_tavily_status()
-
     # --- Collect ---
 
     def collect_settings(self, settings: AppSettings) -> None:
-        settings.tavily_api_key = self._settings.tavily_api_key
+        return

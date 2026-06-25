@@ -937,31 +937,6 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
     },
 ]
 
-RESEARCH_TOOL_DEFS: list[dict[str, Any]] = [
-    {
-        "type": "function",
-        "function": {
-            "name": "run_research",
-            "description": (
-                "Dispatch an open-ended research task to a background sub-agent. The agent will "
-                "autonomously use search engines and web scraping to gather information before "
-                "returning a summarized report. Use this to look up documentation, troubleshooting "
-                "steps, or general information not found in the workspace."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "objective": {
-                        "type": "string",
-                        "description": "The specific question or goal the researcher should answer.",
-                    }
-                },
-                "required": ["objective"],
-            },
-        },
-    }
-]
-
 WORKER_TODO_TOOL_DEF: dict[str, Any] = {
     "type": "function",
     "function": {
@@ -1042,54 +1017,6 @@ PROJECT_MEMORY_TOOL_DEFS: list[dict[str, Any]] = [
                     },
                 },
                 "required": ["content"],
-            },
-        },
-    },
-]
-
-WEB_TOOL_DEFS: list[dict[str, Any]] = [
-    {
-        "type": "function",
-        "function": {
-            "name": "web_search",
-            "description": (
-                "Search the web using Tavily. Returns a list of result objects "
-                "with title, url, and content (snippet)."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "The search query, e.g. 'python 3.13 features'.",
-                    },
-                    "max_results": {
-                        "type": "integer",
-                        "description": "Maximum number of results to return. Default: 5.",
-                        "default": 5,
-                    },
-                },
-                "required": ["query"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "web_fetch",
-            "description": (
-                "Fetch and scrape the text content of a URL. Returns the page title "
-                "and a cleaned, truncated text version of the content."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "url": {
-                        "type": "string",
-                        "description": "The full URL to fetch, e.g. 'https://docs.python.org/3/whatsnew/3.13.html'.",
-                    }
-                },
-                "required": ["url"],
             },
         },
     },

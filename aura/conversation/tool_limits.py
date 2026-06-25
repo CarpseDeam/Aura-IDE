@@ -10,7 +10,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Literal
 
-RegistryMode = Literal["single", "planner", "worker", "researcher"]
+RegistryMode = Literal["single", "planner", "worker"]
 
 WRITE_TOOLS = {
     "write_file",
@@ -19,7 +19,6 @@ WRITE_TOOLS = {
 }
 TERMINAL_TOOLS = {"run_terminal_command", "run_and_watch"}
 DISPATCH_TOOLS = {"dispatch_to_worker"}
-RESEARCH_TOOLS = {"run_research"}
 PLANNER_CONTEXT_TOOLS = {
     "read_file",
     "read_files",
@@ -36,7 +35,6 @@ MAX_TOOL_CALLS_BY_MODE: dict[RegistryMode, int] = {
     "planner": 300,
     "worker": 300,
     "single": 300,
-    "researcher": 80,
 }
 
 MAX_WORKER_REDISPATCHES_PER_USER_TURN = 2
@@ -47,7 +45,6 @@ MAX_CONTEXT_CALLS_PER_PLANNER_TURN: int | None = None
 MAX_TERMINAL_CALLS_PER_WORKER_PASS: int | None = None
 MAX_WRITE_CALLS_PER_WORKER_PASS: int | None = None
 MAX_DISPATCH_CALLS_PER_PLANNER_TURN: int | None = None
-MAX_RESEARCH_CALLS_PER_PLANNER_TURN: int | None = None
 
 
 @dataclass
@@ -59,15 +56,12 @@ class ToolLimitState:
     terminal_calls: int = 0
     write_calls: int = 0
     dispatch_calls: int = 0
-    research_calls: int = 0
     planner_context_calls: int = 0
     round_dispatch_calls: int = 0
-    round_research_calls: int = 0
 
     def begin_model_round(self) -> None:
         """Reset per-round telemetry counters."""
         self.round_dispatch_calls = 0
-        self.round_research_calls = 0
 
     def check(self, tool_name: str) -> tuple[bool, dict[str, Any]]:
         """Return whether *tool_name* may run plus a JSON-ready reason payload."""
@@ -95,9 +89,6 @@ class ToolLimitState:
         if tool_name in DISPATCH_TOOLS:
             self.dispatch_calls += 1
             self.round_dispatch_calls += 1
-        if tool_name in RESEARCH_TOOLS:
-            self.research_calls += 1
-            self.round_research_calls += 1
         if self.mode == "planner" and tool_name in PLANNER_CONTEXT_TOOLS:
             self.planner_context_calls += 1
 
@@ -143,10 +134,8 @@ class ToolLimitState:
             "terminal_calls": self.terminal_calls,
             "write_calls": self.write_calls,
             "dispatch_calls": self.dispatch_calls,
-            "research_calls": self.research_calls,
             "planner_context_calls": self.planner_context_calls,
             "round_dispatch_calls": self.round_dispatch_calls,
-            "round_research_calls": self.round_research_calls,
         }
 
 
@@ -159,12 +148,10 @@ __all__ = [
     "DISPATCH_TOOLS",
     "MAX_CONTEXT_CALLS_PER_PLANNER_TURN",
     "MAX_DISPATCH_CALLS_PER_PLANNER_TURN",
-    "MAX_RESEARCH_CALLS_PER_PLANNER_TURN",
     "MAX_TERMINAL_CALLS_PER_WORKER_PASS",
     "MAX_TOOL_CALLS_BY_MODE",
     "MAX_WORKER_REDISPATCHES_PER_USER_TURN",
     "MAX_WRITE_CALLS_PER_WORKER_PASS",
-    "RESEARCH_TOOLS",
     "PLANNER_CONTEXT_TOOLS",
     "RegistryMode",
     "TERMINAL_TOOLS",
