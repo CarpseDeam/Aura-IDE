@@ -645,6 +645,10 @@ class ChatView(QScrollArea):
                         status=status,
                     )
 
+                # Close the current assistant turn so the next Planner
+                # continuation starts a fresh card.
+                self.close_current_assistant_for_continuation()
+
             elif controller.tool_name == "run_research":
                 report = ""
                 needs_followup = False
@@ -670,6 +674,10 @@ class ChatView(QScrollArea):
                         tool_call_id, controller.goal or "Research", ok, report,
                         needs_followup=needs_followup,
                     )
+
+                # Close the current assistant turn so the next Planner
+                # continuation starts a fresh card.
+                self.close_current_assistant_for_continuation()
 
             else:
                 controller.finalize(ok, result_text)
@@ -773,7 +781,12 @@ class ChatView(QScrollArea):
         # Stop the breathing glow — content is complete, no need to pulse anymore.
         if self._current_aura is not None:
             self._current_aura.stop_aura()
-        self._scroll_to_bottom()
+        # Tighten final scroll with delayed reflow for layout settling,
+        # but only if the user hasn't scrolled up.
+        if self._auto_follow_bottom:
+            self.scroll_to_bottom(force=True)
+        else:
+            self._scroll_to_bottom()
 
     def finalize_markdown_only(self) -> None:
         """Finalize Markdown rendering without stopping the breathing aura.
@@ -785,6 +798,26 @@ class ChatView(QScrollArea):
         if ac is not None:
             ac.finalize_content()
             self._scroll_to_bottom()
+
+    def close_current_assistant_for_continuation(self) -> None:
+        """Finalize the current assistant turn so the next Planner
+        continuation opens a fresh card instead of appending to the
+        existing dispatch/assistant card.
+        """
+        if self._current_assistant is None:
+            return
+        # Finalize current assistant content
+        self._current_assistant.finalize_content()
+        # Remove failed write cards from that assistant
+        self._remove_failed_write_cards_from_assistant(self._current_assistant)
+        # Stop the current Aura glow if present
+        if self._current_aura is not None:
+            self._current_aura.stop_aura()
+        # Clear references so current_assistant() creates a new card
+        self._current_assistant = None
+        self._current_aura = None
+        # Do NOT delete the existing card — it stays visible
+        # Do NOT clear _tool_owner, _spec_cards, _controllers, or worker summary maps
 
     # ---- spec card / worker dispatch ------------------------------------
 
