@@ -1,4 +1,4 @@
-"""ToolRunner — delegates tool execution for ConversationManager."""
+"""ToolRunner - delegates tool execution for ConversationManager."""
 from __future__ import annotations
 
 import json
@@ -8,14 +8,12 @@ from pathlib import Path
 from typing import Any
 
 from aura.client import (
-    ApiError,
-    Done,
     TerminalOutput,
     ToolCallStart,
     ToolResult,
     WorkerDispatchRequested,
 )
-from aura.config import ModelId, ThinkingMode, load_settings, redact_secrets
+from aura.config import ModelId, load_settings, redact_secrets
 from aura.conversation.dispatch import (
     DispatchCallback,
     WorkerDispatchRequest,
@@ -25,15 +23,6 @@ from aura.conversation.history import History
 from aura.conversation.loop_detection import LoopDetector
 from aura.conversation.spec_quality import validate_worker_dispatch_spec
 from aura.conversation.terminal_policy import worker_terminal_command_allowed
-from aura.conversation.tool_limits import (
-    ToolLimitState,
-    limit_reached_payload,
-)
-from aura.conversation.tools._types import (
-    ApprovalDecision,
-)
-from aura.conversation.tools.registry import ToolRegistry
-from aura.hooks import hooks
 from aura.project_env import (
     build_project_command,
     build_project_command_rewrite,
@@ -47,12 +36,12 @@ MAX_TERMINAL_TIMEOUT_SECONDS = 300
 
 _CD_WRAPPER_RE = re.compile(
     r'^(?:cd|chdir)\s+(?:"/workspace"|\'/workspace\'|/workspace)\s*(?:&&|;)\s*',
-    re.IGNORECASE
+    re.IGNORECASE,
 )
 
 
 class ToolRunner:
-    """Owns the execution of dispatch, research, and terminal tools."""
+    """Owns execution of dispatch, disabled research, and terminal tools."""
 
     def __init__(
         self, history: History, workspace_root: Path, loop_detector: LoopDetector
@@ -63,10 +52,6 @@ class ToolRunner:
 
     def set_workspace_root(self, root: Path) -> None:
         self._workspace_root = root
-
-    # ------------------------------------------------------------------
-    # dispatch_to_worker
-    # ------------------------------------------------------------------
 
     def handle_dispatch(
         self,
@@ -83,7 +68,7 @@ class ToolRunner:
             ]
             missing_text = ", ".join(missing) if missing else "required details"
             error_message = (
-                f"Plan incomplete — missing {missing_text}. "
+                f"Plan incomplete - missing {missing_text}. "
                 "The Worker was not started. Missing required fields:\n"
                 + "\n".join(f"- {item}" for item in quality.errors)
             )
@@ -118,7 +103,7 @@ class ToolRunner:
 
         if dispatch_cb is None:
             err = (
-                "dispatch_to_worker is not enabled for this manager — "
+                "dispatch_to_worker is not enabled for this manager - "
                 "planner/worker mode is off."
             )
             payload = json.dumps({"ok": False, "error": err})
@@ -131,7 +116,7 @@ class ToolRunner:
                     result=payload,
                 )
             )
-            return
+            return None
 
         on_event(
             WorkerDispatchRequested(
@@ -170,9 +155,6 @@ class ToolRunner:
             "followup_reason": result.followup_reason,
         }
         event_extras.update(result.extras)
-        # Recoverable Worker failures are Planner control-flow, not a visible
-        # failed planner tool. Keep the payload truthful for the model while
-        # avoiding a transient red tool card when the Planner can redispatch.
         event_ok = result.ok or bool(result.recoverable and not result.cancelled)
         on_event(
             ToolResult(
@@ -185,10 +167,6 @@ class ToolRunner:
         )
         return result
 
-    # ------------------------------------------------------------------
-    # run_research
-    # ------------------------------------------------------------------
-
     def handle_research(
         self,
         tool_call_id: str,
@@ -198,97 +176,38 @@ class ToolRunner:
         cancel_event: threading.Event,
         temperature: float = 0.7,
     ) -> bool:
+        """Return a clean disabled result after removing the old research path."""
+        _ = (model, cancel_event, temperature)
         objective = args.get("objective") or args.get("goal") or args.get("spec") or ""
         if not objective:
-            payload = json.dumps({"ok": False, "error": f"objective is required. Got args: {args}"})
-            self._history.append_tool_result(tool_call_id, payload)
-            on_event(ToolResult(tool_call_id=tool_call_id, name="run_research", ok=False, result=payload))
-            return False
-
-        # Web research loop using a sub-agent
-        res_tools = ToolRegistry(self._workspace_root, mode="researcher")
-        res_history = History()
-        res_history.set_system(
-            "You are a skilled Research Sub-Agent. Your goal is to answer the objective "
-            "below using web search and page fetching. Be thorough but efficient. "
-            "When you have enough information, write a detailed, synthesized report "
-            "answering the objective and STOP. Do not provide a generic summary; "
-            "answer the specific question."
+            payload_dict = {
+                "ok": False,
+                "error": f"objective is required. Got args: {args}",
+                "research_removed": True,
+            }
+        else:
+            payload_dict = {
+                "ok": False,
+                "error": (
+                    "run_research is disabled while Aura's research substrate is "
+                    "being rebuilt. The old hidden researcher and Tavily web path "
+                    "have been removed."
+                ),
+                "objective": str(objective),
+                "research_removed": True,
+            }
+        payload = json.dumps(payload_dict, ensure_ascii=False)
+        self._history.append_tool_result(tool_call_id, payload)
+        on_event(
+            ToolResult(
+                tool_call_id=tool_call_id,
+                name="run_research",
+                ok=False,
+                result=payload,
+                extras={"research_removed": True},
+            )
         )
-        res_history.append_user_text(f"Objective: {objective}")
-
-        final_report = "Research failed to produce a report."
-        thinking: ThinkingMode = "off"  # Keep researcher fast
-        res_limits = ToolLimitState(mode="researcher")
-
-        try:
-            for _round in range(5):  # Max 5 research steps
-                res_limits.begin_model_round()
-                if cancel_event.is_set():
-                    break
-
-                full_msg = None
-                for ev in hooks.trigger(
-                    'generate_worker_code',
-                    messages=res_history.for_api(),
-                    tools=res_tools.tool_defs(),
-                    model=model,
-                    thinking=thinking,
-                    cancel_event=cancel_event,
-                    temperature=temperature,
-                ):
-                    # For now, we don't stream researcher sub-events to the main UI
-                    # to avoid card nesting complexity.
-                    if isinstance(ev, Done):
-                        full_msg = ev.full_message
-                    if isinstance(ev, ApiError):
-                        raise Exception(f"Research API Error: {ev.message}")
-
-                if not full_msg:
-                    break
-
-                res_history.append_assistant(full_msg)
-                tool_calls = full_msg.get("tool_calls") or []
-
-                if not tool_calls:
-                    final_report = full_msg.get("content") or "Research complete (no content)."
-                    break
-
-                for tc in tool_calls:
-                    if cancel_event.is_set():
-                        break
-                    tc_id = tc["id"]
-                    fn = tc["function"]
-                    name = fn["name"]
-                    try:
-                        t_args = json.loads(fn.get("arguments") or "{}")
-                    except json.JSONDecodeError:
-                        t_args = {}
-
-                    allowed, limit_info = res_limits.check(name)
-                    if not allowed:
-                        res_history.append_tool_result(tc_id, limit_reached_payload(limit_info))
-                        continue
-                    res_limits.record(name)
-
-                    # Execute web tool (no approval needed for search/fetch)
-                    res = res_tools.execute(name, t_args, approval_cb=lambda r: ApprovalDecision("approve"))
-                    res_history.append_tool_result(tc_id, res.to_tool_message_content())
-
-            payload = json.dumps({"ok": True, "report": final_report}, ensure_ascii=False)
-            self._history.append_tool_result(tool_call_id, payload)
-            on_event(ToolResult(tool_call_id=tool_call_id, name="run_research", ok=True, result=payload))
-            return True
-
-        except Exception as exc:
-            payload = json.dumps({"ok": False, "error": str(exc)})
-            self._history.append_tool_result(tool_call_id, payload)
-            on_event(ToolResult(tool_call_id=tool_call_id, name="run_research", ok=False, result=payload))
-            return False
-
-    # ------------------------------------------------------------------
-    # run_terminal_command
-    # ------------------------------------------------------------------
+        return False
 
     def handle_terminal_command(
         self,
@@ -383,23 +302,20 @@ class ToolRunner:
             original_command = command_plan.original_command or requested_command
 
         command = _CD_WRAPPER_RE.sub('', command, count=1).lstrip()
-
         timeout = self._resolve_terminal_timeout(
             command=command,
             timeout_arg=args.get("timeout"),
         )
 
-        # Emit ToolCallStart so the GUI can create a TerminalCard
         on_event(ToolCallStart(index=0, id=tool_call_id, name="run_terminal_command"))
 
         settings = load_settings()
         sandbox = SandboxExecutor(
             mode=settings.sandbox_mode,  # type: ignore[arg-type]
             workspace_root=self._workspace_root,
-            network_enabled=True,  # Terminal commands often need network (pip install, etc.)
+            network_enabled=True,
         )
 
-        # Collect output for streaming to GUI
         output_lines: list[str] = []
 
         def on_output_chunk(text: str) -> None:
@@ -417,7 +333,6 @@ class ToolRunner:
         ok = result.ok
         exit_code = result.exit_code
 
-        # If Docker isn't available and mode is docker, result will have the error in stderr
         if not ok and result.stderr and "Docker is not available" in result.stderr:
             full_output = f"[SANDBOX ERROR] {result.stderr}"
 
@@ -463,7 +378,6 @@ class ToolRunner:
         cancel_event: threading.Event,
         declared_run_command: str,
     ) -> dict[str, Any]:
-        # If no declared command, return clean informational result
         if not declared_run_command or not declared_run_command.strip():
             payload_dict = {
                 "ok": False,
@@ -474,15 +388,16 @@ class ToolRunner:
             payload = json.dumps(payload_dict, ensure_ascii=False)
             self._history.append_tool_result(tool_call_id, payload)
             on_event(ToolCallStart(index=0, id=tool_call_id, name="run_and_watch"))
-            on_event(ToolResult(
-                tool_call_id=tool_call_id,
-                name="run_and_watch",
-                ok=False,
-                result=payload,
-            ))
+            on_event(
+                ToolResult(
+                    tool_call_id=tool_call_id,
+                    name="run_and_watch",
+                    ok=False,
+                    result=payload,
+                )
+            )
             return {"_terminal_payload": payload_dict}
 
-        # Parse optional window_seconds from args
         window_seconds = 10
         raw_window = args.get("window_seconds")
         if raw_window is not None:
@@ -491,11 +406,10 @@ class ToolRunner:
             except (TypeError, ValueError):
                 pass
 
-        # Emit ToolCallStart
         on_event(ToolCallStart(index=0, id=tool_call_id, name="run_and_watch"))
 
         sandbox = SandboxExecutor(
-            mode="host",  # run_and_watch always runs in host mode for now
+            mode="host",
             workspace_root=self._workspace_root,
             network_enabled=True,
         )
@@ -514,7 +428,6 @@ class ToolRunner:
         )
 
         full_output = result.output
-
         ok = result.ok and result.exited_early
         if not ok:
             if result.survived_window and not result.error_detected:
@@ -541,12 +454,14 @@ class ToolRunner:
         payload = json.dumps(payload_dict, ensure_ascii=False)
 
         self._history.append_tool_result(tool_call_id, payload)
-        on_event(ToolResult(
-            tool_call_id=tool_call_id,
-            name="run_and_watch",
-            ok=ok,
-            result=payload,
-        ))
+        on_event(
+            ToolResult(
+                tool_call_id=tool_call_id,
+                name="run_and_watch",
+                ok=ok,
+                result=payload,
+            )
+        )
 
         return {"_terminal_payload": payload_dict}
 
@@ -555,7 +470,6 @@ class ToolRunner:
         command: str,
         timeout_arg: Any,
     ) -> int:
-        """Resolve a safe timeout for terminal commands."""
         if timeout_arg is None:
             if self._is_py_compile_command(command):
                 return DEFAULT_PY_COMPILE_TIMEOUT_SECONDS
