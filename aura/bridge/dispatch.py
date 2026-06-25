@@ -304,7 +304,13 @@ class _DispatchProxy(QObject):
         t1 = time.monotonic()
         if self._workspace_root is not None:
             try:
-                tier1_context = build_tier1_context(self._workspace_root, mode="worker")
+                tier1_context = build_tier1_context(
+                    self._workspace_root,
+                    mode="worker",
+                    model=str(self._worker_model),
+                    task_kind=req.task_shape.task_kind if req.task_shape is not None else None,
+                    target_files=tuple(req.files),
+                )
             except Exception:
                 tier1_context = self._tier1_context
         else:

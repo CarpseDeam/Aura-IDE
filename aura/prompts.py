@@ -452,7 +452,14 @@ def inject_private_worker_style(prompt: str) -> str:
 
 
 
-def build_tier1_context(workspace_root: Path, force: bool = False, mode: str = "all") -> str:
+def build_tier1_context(
+    workspace_root: Path,
+    force: bool = False,
+    mode: str = "all",
+    model: str | None = None,
+    task_kind: str | None = None,
+    target_files: tuple[str, ...] = (),
+) -> str:
     """Compose the Tier 1 (Core Context) string for a given workspace.
 
     Pass force=True when the workspace may have changed since the last
@@ -461,6 +468,9 @@ def build_tier1_context(workspace_root: Path, force: bool = False, mode: str = "
     The *mode* parameter controls which sections are included:
     - "all" (default), "planner", "single": include all sections including Available Drones.
     - "worker": exclude the Available Drones context section.
+
+    Optional terrain kwargs (model, task_kind, target_files) are forwarded
+    to the hazard guard context builder for terrain-scoped guard selection.
 
     Returns:
         A string containing the project rules (from ``project_rules.md``),
@@ -519,7 +529,12 @@ def build_tier1_context(workspace_root: Path, force: bool = False, mode: str = "
     # 6. Hazard guard context
     try:
         from aura.hazard.guard_text import build_hazard_guard_context
-        guard_ctx = build_hazard_guard_context(workspace_root)
+        guard_ctx = build_hazard_guard_context(
+            workspace_root,
+            model=model,
+            task_kind=task_kind,
+            target_files=target_files,
+        )
         if guard_ctx:
             parts.append(guard_ctx)
     except Exception:
