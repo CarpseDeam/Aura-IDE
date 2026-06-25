@@ -7,14 +7,14 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Literal
 
 ApprovalAction = Literal["approve", "reject", "reject_all", "approve_all"]
-RegistryMode = Literal["single", "planner", "worker", "researcher"]
+RegistryMode = Literal["single", "planner", "worker"]
 
 
 @dataclass
 class ApprovalRequest:
     """Passed to approval_cb when a write is proposed."""
 
-    tool_name: str  # e.g. "write_file" or "patch_file"
+    tool_name: str
     rel_path: str
     old_content: str
     new_content: str
