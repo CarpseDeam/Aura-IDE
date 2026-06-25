@@ -346,15 +346,17 @@ class ConversationBridge(QObject):
         # Inject Tier 1 core context (project rules + repo map) into the system prompt.
         workspace_root = self._registry.workspace_root
         if workspace_root is not None:
-            self._tier1_context = build_tier1_context(workspace_root)
+            mode = "planner" if self._planner_worker_mode else "single"
+            self._tier1_context = build_tier1_context(workspace_root, mode=mode)
         enriched = inject_tier1_context(prompt, self._tier1_context)
         self._history.set_system(enriched)
 
     def _compute_and_cache_tier1(self, force_repo_map: bool = False) -> None:
         """Recompute Tier 1 context from the current workspace root and cache it."""
+        mode = "planner" if self._planner_worker_mode else "single"
         workspace_root = self._registry.workspace_root
         if workspace_root is not None:
-            self._tier1_context = build_tier1_context(workspace_root, force=force_repo_map)
+            self._tier1_context = build_tier1_context(workspace_root, force=force_repo_map, mode=mode)
         self._dispatch_proxy.set_tier1_context(self._tier1_context)
 
     def refresh_tier1_context(self, force_repo_map: bool = False) -> None:

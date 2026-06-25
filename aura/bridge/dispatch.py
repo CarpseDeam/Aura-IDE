@@ -304,7 +304,7 @@ class _DispatchProxy(QObject):
         t1 = time.monotonic()
         if self._workspace_root is not None:
             try:
-                tier1_context = build_tier1_context(self._workspace_root)
+                tier1_context = build_tier1_context(self._workspace_root, mode="worker")
             except Exception:
                 tier1_context = self._tier1_context
         else:
