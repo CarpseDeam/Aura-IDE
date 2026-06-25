@@ -1,17 +1,4 @@
-"""Tool registry — compatibility facade that coordinates focused sub-modules.
-
-This module remains the public API entry point. Internals are delegated to:
-- ToolCatalog      — schema/mode/read-only tool-definition building
-- DynamicToolRegistry — .aura/tools scanning, caching, and dynamic tool lookup
-- MCPToolRegistry  — MCP server connections, schemas, and execution
-- ToolExecutor     — execution dispatch across static/MCP/dynamic handlers
-
-Modes:
-- "single"     — legacy / planner-worker disabled: read + write tools.
-- "planner"    — read tools + dispatch_to_worker; the planner cannot write.
-- "worker"     — read + write tools, no dispatch (workers don't dispatch).
-- "researcher" — web tools only.
-"""
+"""Tool registry facade for Aura conversation tools."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -31,11 +18,7 @@ from aura.conversation.tools._types import (
     RegistryMode,
     ToolExecResult,
 )
-from aura.conversation.tools._web_mixin import WebHandlersMixin
 from aura.conversation.tools._write_mixin import WriteHandlersMixin
-
-# Imports kept for test-patch compatibility (patching
-# aura.conversation.tools.registry.<name> in test_tool_registry.py).
 from aura.conversation.tools.backup import backup_existing  # noqa: F401
 from aura.conversation.tools.catalog import ToolCatalog
 from aura.conversation.tools.dynamic_registry import DynamicToolRegistry
@@ -49,7 +32,6 @@ from aura.conversation.tools.fs_write import (  # noqa: F401
 from aura.conversation.tools.git_handler import GitHandler
 from aura.conversation.tools.grep import grep_files  # noqa: F401
 from aura.conversation.tools.mcp_registry import MCPToolRegistry
-from aura.conversation.tools.web_handler import WebHandler
 
 try:
     from aura.craft import ExplicitSpecContract
@@ -61,8 +43,6 @@ try:
 except ImportError:
     TaskShape = None
 
-# Tool handler dispatch table.
-# Maps tool name -> unbound method that accepts (self, args, approval_cb, reject_all).
 TOOL_HANDLERS: dict[str, Any] = {}
 
 
@@ -71,17 +51,12 @@ class ToolRegistry(
     ReadHandlersMixin,
     SearchHandlersMixin,
     GitHandlersMixin,
-    WebHandlersMixin,
     WriteHandlersMixin,
     MemoryHandlersMixin,
     DiagnosticHandlersMixin,
     PlannerHandlersMixin,
 ):
-    """Workspace-jailed tool dispatcher.
-
-    `read_only` swaps the API tool list to read-only — the model literally cannot
-    propose edits. Toggle it via `set_read_only` between turns.
-    """
+    """Workspace-scoped tool dispatcher."""
 
     def __init__(
         self,
@@ -95,7 +70,6 @@ class ToolRegistry(
         self._codebase_index: CodebaseIndex | None = None
         self._fs_handler = FsReadHandler(self._root, self._resolve_in_root)
         self._git_handler = GitHandler(self._root)
-        self._web_handler = WebHandler()
         self._catalog = ToolCatalog()
         self._dynamic_tools = DynamicToolRegistry(self._root)
         self._mcp_tools = MCPToolRegistry()
@@ -116,9 +90,7 @@ class ToolRegistry(
             return
         self._root = root.resolve()
         self._dynamic_tools.set_workspace_root(self._root)
-        # Reset codebase index for the new workspace
         self._codebase_index = None
-        # Refresh handlers with the new root
         self._fs_handler = FsReadHandler(self._root, self._resolve_in_root)
         self._git_handler = GitHandler(self._root)
 
@@ -138,7 +110,6 @@ class ToolRegistry(
 
     def tool_defs(self) -> list[dict[str, Any]]:
         dynamic_schemas = self._dynamic_tools.schemas() if not self._read_only else []
-
         return self._catalog.build_tool_defs(
             mode=self._mode,
             read_only=self._read_only,
@@ -146,60 +117,28 @@ class ToolRegistry(
             mcp_schemas=self._mcp_tools.schemas or None,
         )
 
-    # ---- MCP server support ------------------------------------------------
-
     def connect_mcp_server(self, server_command: str) -> int:
-        """Launch an MCP server, fetch its tools, and register them.
-
-        Args:
-            server_command: Shell command to launch the MCP server, e.g.
-                            "python -m my_mcp_server" or "node server.js".
-
-        Returns:
-            Number of tools registered from this server.
-
-        Raises:
-            RuntimeError: If the server fails to launch or initialize.
-        """
         return self._mcp_tools.connect_server(server_command)
 
-    # ---- path resolution ---------------------------------------------------
-
     def set_contract(self, contract: ExplicitSpecContract | None) -> None:
-        """Set a Planner contract for the current worker session."""
         self._contract = contract
 
     def get_contract(self) -> ExplicitSpecContract | None:
-        """Get the current Planner contract, if any."""
         return self._contract
 
     def set_task_shape(self, task_shape: TaskShape | None) -> None:
-        """Set hidden task-shaping context for the current worker session."""
         self._task_shape = task_shape
 
     def get_task_shape(self) -> TaskShape | None:
-        """Get hidden task-shaping context for write/Craft gates."""
         return getattr(self, "_task_shape", None)
 
     def _resolve_in_root(self, raw: str) -> Path:
-        """Resolve a workspace-relative path; raise if it escapes the jail.
-
-        Rejections:
-        - any '..' segment (even if final resolved path lands inside)
-        - absolute paths outside the workspace
-        - resolved paths not under the workspace root
-        """
         if raw is None:
             raise ValueError("path is required")
         s = str(raw).strip()
         if s == "":
             raise ValueError("path must not be empty")
-
-        # Strip leading slashes to prevent absolute path interpretation on Windows/Linux.
-        # Models often provide /path/to/file or \\path\\to\\file, which on Windows
-        # resolves relative to the drive root, escaping the project jail.
-        s = s.lstrip("/\\\\")
-
+        s = s.lstrip("/\\")
         if ".." in Path(s).parts:
             raise ValueError("'..' is not allowed in tool paths")
         candidate = (self._root / s).resolve() if not Path(s).is_absolute() else Path(s).resolve()
@@ -207,8 +146,6 @@ class ToolRegistry(
         if not safe_is_relative_to(candidate, self._root):
             raise ValueError(f"path '{raw}' escapes workspace root")
         return candidate
-
-    # ---- main dispatch -----------------------------------------------------
 
     def execute(
         self,
@@ -220,7 +157,6 @@ class ToolRegistry(
         return self._executor.execute(name, args, approval_cb, reject_all)
 
 
-# Populate the dispatch table after ToolRegistry is defined
 TOOL_HANDLERS["read_file"] = ToolRegistry._handle_read_file
 TOOL_HANDLERS["read_files"] = ToolRegistry._handle_read_files
 TOOL_HANDLERS["read_file_range"] = ToolRegistry._handle_read_file_range
@@ -238,8 +174,6 @@ TOOL_HANDLERS["git_log_file"] = ToolRegistry._handle_git_log_file
 TOOL_HANDLERS["git_branch_list"] = ToolRegistry._handle_git_branch_list
 TOOL_HANDLERS["git_stash_list"] = ToolRegistry._handle_git_stash_list
 TOOL_HANDLERS["git_stash_show"] = ToolRegistry._handle_git_stash_show
-TOOL_HANDLERS["web_search"] = ToolRegistry._handle_web_search
-TOOL_HANDLERS["web_fetch"] = ToolRegistry._handle_web_fetch
 TOOL_HANDLERS["write_file"] = ToolRegistry._handle_write_file
 TOOL_HANDLERS["delete_file"] = ToolRegistry._handle_delete_file
 TOOL_HANDLERS["patch_file"] = ToolRegistry._handle_patch_file
@@ -258,4 +192,3 @@ TOOL_HANDLERS["code_intel_outline"] = ToolRegistry._handle_code_intel_outline
 TOOL_HANDLERS["code_intel_references"] = ToolRegistry._handle_code_intel_references
 TOOL_HANDLERS["code_intel_dependents"] = ToolRegistry._handle_code_intel_dependents
 TOOL_HANDLERS["code_intel_audit"] = ToolRegistry._handle_code_intel_audit
-
