@@ -75,3 +75,9 @@ Thumbs.db
 
 /.aura/memory.db-shm
 /.aura/memory.db-wal
+/manifest.json
+/.download.lock
+/grammars/tree_sitter_gdscript.dll
+/aura/code_intel/godot_adapter.py
+/grammars/tree_sitter_gdshader.dll
+/bundles/windows-x86_64-7962dd72bfd58823445234a8b95fb16606a2fedece083dbb7f7b69a032f7ca70.tar.zst

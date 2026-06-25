@@ -35,6 +35,8 @@ SUPPORTED_GRAMMARS = [
     "kotlin", "dart", "scala", "lua", "bash", "powershell",
     "html", "css", "scss", "json", "yaml", "toml", "xml",
     "sql", "markdown", "dockerfile",
+    "gdscript",
+    "gdshader",
 ]
 
 REQUIRED_MEDIA_FILES = [

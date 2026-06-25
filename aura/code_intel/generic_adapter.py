@@ -70,7 +70,9 @@ _SUPPORTED_LANGUAGES: list[tuple[str, tuple[str, ...]]] = [
     ("sql", (".sql",)),
     ("markdown", (".md", ".markdown")),
     ("dockerfile", ("dockerfile", ".dockerfile")),
-]
+    ("gdscript", (".gd",)),
+    ("gdshader", (".gdshader",)),
+    ]
 
 _CONFIGURED = False
 

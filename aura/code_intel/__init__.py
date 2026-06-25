@@ -2,6 +2,7 @@
 from aura.code_intel import (  # isort: skip
     text_adapter,  # noqa: F401
     generic_adapter,  # noqa: F401
+    godot_adapter,  # noqa: F401
     python_adapter,  # noqa: F401
 )
 
