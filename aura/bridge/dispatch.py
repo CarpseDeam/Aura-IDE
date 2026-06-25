@@ -299,6 +299,7 @@ class _DispatchProxy(QObject):
     ) -> WorkerDispatchResult:
         worker_history = History()
         base_prompt = self._worker_system_prompt if self._worker_system_prompt else WORKER_SYSTEM_PROMPT
+        task_spec = normalize_worker_task(req)
         # Refresh Tier 1 context so a prior Worker pass's blueprint is visible.
         _log.info("worker_context_build_start tool_call_id=%s", tool_call_id)
         t1 = time.monotonic()
@@ -308,8 +309,8 @@ class _DispatchProxy(QObject):
                     self._workspace_root,
                     mode="worker",
                     model=str(self._worker_model),
-                    task_kind=req.task_shape.task_kind if req.task_shape is not None else None,
-                    target_files=tuple(req.files),
+                    task_kind=task_spec.task_shape.task_kind if task_spec.task_shape is not None else None,
+                    target_files=tuple(task_spec.files),
                 )
             except Exception:
                 tier1_context = self._tier1_context
@@ -322,7 +323,6 @@ class _DispatchProxy(QObject):
         full_prompt = inject_tier1_context(base_prompt, tier1_context)
         full_prompt = inject_private_worker_style(full_prompt)
         worker_history.set_system(full_prompt)
-        task_spec = normalize_worker_task(req)
         _log.info("worker_profile_detect_start tool_call_id=%s", tool_call_id)
         t2 = time.monotonic()
         if self._workspace_root is not None:
