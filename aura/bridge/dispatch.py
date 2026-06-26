@@ -650,10 +650,6 @@ class _DispatchProxy(QObject):
         has_no_work = not relay.touched_files and not relay.failed_tool_results and not internal_error and not relay.api_errors
         has_unverified_acceptance = acceptance_unverified or validation_not_run
 
-        # Is this a broad/risky/multi-file task that should have used TODO?
-        files_count = len(req.files)
-        is_broad = files_count >= 3 or bool(req.allowed_responsibilities) or bool(req.risk_notes)
-
         # Determine severity
         if has_planner_resolution_mismatch:
             # Planner control-flow, not a validation/harness/edit/hard failure.
@@ -685,12 +681,6 @@ class _DispatchProxy(QObject):
             ok = False
             needs_followup = True
             recoverable = True
-        elif is_broad and not relay.todo_used and relay.touched_files:
-            # Broad task skipped TODO but did work — caveat, not failure
-            ok = True
-            needs_followup = False
-            recoverable = False
-            result_caveats.append("Broad/multi-file task did not use update_todo_list — consider a visible plan next time.")
         else:
             ok = True
             needs_followup = False

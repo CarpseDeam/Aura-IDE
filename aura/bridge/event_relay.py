@@ -143,6 +143,7 @@ class WorkerEventRelay(QObject):
                     tasks = parsed.get("tasks")
                 if not isinstance(tasks, list):
                     tasks = []
+                self.todo_used = True
                 self.todoListUpdated.emit(tool_call_id, tasks)
             if (
                 isinstance(parsed, dict)

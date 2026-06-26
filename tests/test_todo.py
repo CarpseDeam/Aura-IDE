@@ -53,6 +53,7 @@ def test_event_relay_emits_todo_list_updated():
     relay.relay("parent_tc", ev)
     assert len(emitted_tasks) == 1
     assert emitted_tasks[0] == [{"task": "Do homework", "status": "active"}]
+    assert relay.todo_used is True
 
     # Also test where extras is missing, but result has tasks
     emitted_tasks.clear()
@@ -66,6 +67,7 @@ def test_event_relay_emits_todo_list_updated():
     relay.relay("parent_tc", ev_no_extras)
     assert len(emitted_tasks) == 1
     assert emitted_tasks[0] == [{"task": "Do homework", "status": "active"}]
+    assert relay.todo_used is True  # still True after second relay
 
 
 def test_todo_widget_ignores_identical_updates(qapp):
