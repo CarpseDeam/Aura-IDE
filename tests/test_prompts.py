@@ -147,6 +147,14 @@ def test_planner_has_concise_completion_rule():
     assert rule in PLANNER_SYSTEM_PROMPT
 
 
+def test_planner_uses_research_tool_for_current_info():
+    assert "research_current_info" in PLANNER_SYSTEM_PROMPT
+    assert "current external information" in PLANNER_SYSTEM_PROMPT
+    assert "Do not use `run_diagnostic_command`, Python, shell, curl, or repo tools for web research." in PLANNER_SYSTEM_PROMPT
+    assert "Do not dispatch to Worker just to research." in PLANNER_SYSTEM_PROMPT
+    assert "research_current_info" not in WORKER_SYSTEM_PROMPT
+
+
 def test_planner_prompt_does_not_carry_worker_quality_blocks():
     """Planner should stay lightweight; Worker owns implementation quality."""
     assert "Code quality contract" not in PLANNER_SYSTEM_PROMPT
