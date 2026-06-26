@@ -12,6 +12,7 @@ import hashlib
 import json
 import logging
 import re as _re
+import os
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -98,7 +99,7 @@ def save_monitor_state(workspace_root: Path, state: dict[str, Any]) -> None:
     path = monitor_store_path(workspace_root)
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_path = tempfile.mkstemp(dir=str(path.parent), suffix=".json")
-    with open(fd, "w", encoding="utf-8") as f:
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
         json.dump(state, f, indent=2, sort_keys=True, ensure_ascii=False)
     Path(tmp_path).replace(path)
 
