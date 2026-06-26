@@ -133,6 +133,6 @@ def _login_result(
         "final_url": final_url,
         "title": title,
         "elapsed_seconds": elapsed,
-        "waited_seconds": min(elapsed, 0.0),
+        "waited_seconds": elapsed,
         "errors": errors,
     }

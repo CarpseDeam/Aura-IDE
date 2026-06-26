@@ -135,7 +135,16 @@ def _run_login_session_mode(
         on_status("completed")
         return
 
-    # login_session_closed or login_session_cancelled
+    if status == "login_session_cancelled":
+        summary = f"Login session cancelled for profile '{browser_profile}'."
+        on_content(summary)
+        _save_login_receipt(run, drone, summary, artifact, errors, elapsed,
+                            started, "cancelled", workspace_root, on_receipt)
+        run.mark("cancelled")
+        on_status("cancelled")
+        return
+
+    # login_session_closed
     summary = f"Login session closed for profile '{browser_profile}'."
     on_content(summary)
     _save_login_receipt(run, drone, summary, artifact, errors, elapsed,
