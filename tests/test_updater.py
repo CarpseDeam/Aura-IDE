@@ -209,8 +209,8 @@ def test_installer_update_stages_in_localappdata_update_folder(monkeypatch, tmp_
 
     expected_dir = local_app_data / "Aura" / "updates" / "1.4.6"
     assert result.success is True
-    assert downloads == [(expected_dir, "AuraSetup-1.4.7.exe")]
-    assert (expected_dir / "AuraSetup-1.4.7.exe").exists()
+    assert downloads == [(expected_dir, "AuraSetup-1.4.6.exe")]
+    assert (expected_dir / "AuraSetup-1.4.6.exe").exists()
 
 
 def test_download_packaged_installer_returns_launch_pending_without_launch(monkeypatch, tmp_path: Path) -> None:
@@ -235,7 +235,7 @@ def test_download_packaged_installer_returns_launch_pending_without_launch(monke
 
     result = download_packaged_installer(release)
 
-    installer_path = local_app_data / "Aura" / "updates" / "1.4.6" / "AuraSetup-1.4.7.exe"
+    installer_path = local_app_data / "Aura" / "updates" / "1.4.6" / "AuraSetup-1.4.6.exe"
     assert result.success is True
     assert result.launch_pending is True
     assert result.target_version == "1.4.6"
@@ -266,7 +266,7 @@ def test_installer_shell_execute_failure_returns_pull_result_false_with_path(mon
 
     result = install_packaged_update(release, output_callback=output.append)
 
-    installer_path = local_app_data / "Aura" / "updates" / "1.4.6" / "AuraSetup-1.4.7.exe"
+    installer_path = local_app_data / "Aura" / "updates" / "1.4.6" / "AuraSetup-1.4.6.exe"
     assert result.success is False
     assert str(installer_path) in result.message
     assert "Launch method: ShellExecuteW/open" in result.message
@@ -321,7 +321,7 @@ def test_installer_shell_execute_success_returns_pull_result_true(monkeypatch, t
 
     result = install_packaged_update(release, output_callback=output.append)
 
-    installer_path = local_app_data / "Aura" / "updates" / "1.4.6" / "AuraSetup-1.4.7.exe"
+    installer_path = local_app_data / "Aura" / "updates" / "1.4.6" / "AuraSetup-1.4.6.exe"
     assert result.success is True
     assert launched == [(installer_path, ["/CURRENTUSER", "/LAUNCHAFTERUPDATE=1"])]
     assert "Launch method: ShellExecuteW/open" in output

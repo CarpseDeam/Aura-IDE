@@ -67,7 +67,7 @@ def test_planner_dispatch_is_not_category_capped_per_round():
 def test_worker_terminal_and_write_tools_are_not_category_capped():
     state = ToolLimitState(mode="worker")
 
-    for name in ["run_terminal_command", "edit_file"]:
+    for name in ["run_terminal_command", "write_file"]:
         for _ in range(40):
             allowed, info = state.check(name)
             assert allowed is True

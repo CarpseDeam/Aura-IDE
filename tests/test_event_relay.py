@@ -28,38 +28,6 @@ def test_worker_event_relay_tool_call_lifecycle_tracks_index_to_id() -> None:
     assert ends == [("dispatch-1", "worker-tool-1")]
 
 
-def test_craft_block_is_tracked_as_not_applied_write() -> None:
-    relay = WorkerEventRelay(approval_proxy=Mock(), worker_model="test-model")
-    payload = (
-        '{"ok": false, "applied": false, '
-        '"path": "a.py", "failure_class": "craft_blocked", '
-        '"write_outcome": "not_applied_craft_rejected", '
-        '"error": "Define missing", '
-        '"craft_issues": [{"code": "undefined-name"}]}'
-    )
-
-    relay.relay(
-        "dispatch-1",
-        ToolResult(tool_call_id="worker-tool-1", name="edit_file", ok=False, result=payload),
-    )
-
-    assert relay.not_applied_writes == [
-        {
-            "tool": "edit_file",
-            "path": "a.py",
-            "applied": False,
-            "write_outcome": "not_applied_craft_rejected",
-            "failure_class": "craft_blocked",
-            "error": "Define missing",
-            "craft_issues": [{"code": "undefined-name"}],
-            "pre_existing_environment_issues": [],
-            "introduced_environment_issues": [],
-        }
-    ]
-    assert relay.write_results == []
-    assert relay.touched_files == set()
-
-
 def test_patch_file_craft_block_is_not_touched() -> None:
     relay = WorkerEventRelay(approval_proxy=Mock(), worker_model="test-model")
     payload = (

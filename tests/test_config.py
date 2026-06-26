@@ -19,7 +19,7 @@ from aura.models import PROVIDERS
 
 def test_all_providers_registered():
     """The PROVIDERS dict should contain all expected providers."""
-    expected = {"deepseek", "openai", "openrouter", "anthropic", "google_cloud", "claude_code", "codex"}
+    expected = {"deepseek", "openai", "openrouter", "anthropic", "google_cloud", "claude_code", "codex", "aura"}
     assert set(PROVIDERS.keys()) == expected
 
 
@@ -43,7 +43,7 @@ def test_provider_has_env_key():
         if cfg.id in ("claude_code", "codex"):
             continue
         assert cfg.env_key
-        assert cfg.env_key.startswith(("OPEN", "DEEPSEEK", "ANTHROPIC", "GOOGLE_CLOUD_PROJECT", "GEMINI"))
+        assert cfg.env_key.startswith(("OPEN", "DEEPSEEK", "ANTHROPIC", "GOOGLE_CLOUD_PROJECT", "GEMINI", "AURA"))
 
 
 def test_provider_has_default_model():
@@ -368,7 +368,7 @@ def test_redact_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_provider_registry_contains_expected():
     """provider_registry should contain the expected supported providers."""
     from aura.providers.registry import provider_registry
-    expected = {"deepseek", "openai", "openrouter", "anthropic", "google_cloud", "claude_code", "codex"}
+    expected = {"deepseek", "openai", "openrouter", "anthropic", "google_cloud", "claude_code", "codex", "aura"}
     assert set(provider_registry.ids()) == expected
 
 
@@ -379,11 +379,15 @@ def test_provider_registry_does_not_contain_google():
     assert not provider_registry.has("vertex_ai")
 
 
-def test_provider_registry_creates_client():
+def test_provider_registry_creates_client(monkeypatch: pytest.MonkeyPatch):
     """create_client should return a DeepSeekClient for each provider, except google_cloud and agents."""
     from aura.client.deepseek import DeepSeekClient
     from aura.providers.google_cloud.client import GoogleCloudClient
     from aura.providers.registry import provider_registry
+    for pid in ("deepseek", "openai", "openrouter", "anthropic", "aura"):
+        env_key = provider_registry.get(pid).env_key
+        if env_key:
+            monkeypatch.setenv(env_key, "test-key")
     for pid in provider_registry.ids():
         if pid in ("claude_code", "codex"):
             continue

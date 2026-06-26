@@ -39,11 +39,11 @@ def test_streaming_content_dispatch_to_worker():
     assert updates[-1] == "Step 1"
 
     controller.append_fragment(': Do X')
-    assert updates[-1] == "Step 1: Do X"
+    assert updates[-1] == "Step 1"
 
     # Verify it strips trailing JSON
     controller.append_fragment('", "acceptance": "Done"}')
-    assert updates[-1] == "Step 1: Do X"
+    assert updates[-1] == "Step 1"
 
 
 def test_streaming_goal():

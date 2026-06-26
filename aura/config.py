@@ -272,6 +272,9 @@ def redact_secrets(text: str) -> str:
                 keys_to_redact.add(key)
         except Exception:
             pass
+    for env_name, env_value in os.environ.items():
+        if env_name.endswith(("_API_KEY", "_TOKEN")) and env_value:
+            keys_to_redact.add(env_value)
 
     redacted = text
     for key in keys_to_redact:

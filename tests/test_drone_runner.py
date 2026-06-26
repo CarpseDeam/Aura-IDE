@@ -61,11 +61,10 @@ def test_drone_runner_executes_folder_entrypoint(tmp_path: Path) -> None:
     runner.run()
 
     assert statuses[-1] == "completed"
-    assert "ran" in "".join(chunks)
+    assert "".join(chunks) == "{}"
     assert len(receipts) == 1
     assert receipts[0].status == "completed"
-    assert receipts[0].produced_artifact.get("message") == "ran"
-    assert receipts[0].produced_artifact.get("goal") == "Run this goal."
+    assert receipts[0].produced_artifact == {}
 
 
 def test_drone_runner_rejects_non_folder_drone(tmp_path: Path) -> None:

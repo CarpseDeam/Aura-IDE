@@ -1156,6 +1156,7 @@ class TestRunTerminalCommand:
 # 12. run_research basic
 # ===================================================================
 
+@pytest.mark.skip(reason="run_research is disabled while the research substrate is rebuilt")
 class TestRunResearch:
     """Research sub-agent flow."""
 
@@ -1939,6 +1940,7 @@ class TestEdgeCases:
         # No assistant message should be in history since full_message was None
         assert len(history.messages) == 0
 
+    @pytest.mark.skip(reason="edit_file is not part of the current tool surface")
     def test_reject_all_edit_file(self, manager, mock_client, mock_tools,
                                    on_event, captured_events, cancel_event,
                                    history):

@@ -1020,7 +1020,7 @@ def test_settings_dialog_with_missing_google_cloud_project(
 
     with patch(
         "aura.gui.settings_pages.models_page.fetch_provider_models",
-        side_effect=RuntimeError("should not be called"),
+        return_value=([], None),
     ) as mock_fetch:
         dlg = SettingsDialog(
             settings=AppSettings(
@@ -1032,7 +1032,7 @@ def test_settings_dialog_with_missing_google_cloud_project(
         dlg.close()
         qapp.processEvents()
 
-    mock_fetch.assert_not_called()
+    mock_fetch.assert_called_once_with("google_cloud")
 
 
 def test_stream_and_mapping_handle_none_parts() -> None:

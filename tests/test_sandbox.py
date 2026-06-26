@@ -808,7 +808,7 @@ class TestTerminalStreamingBehavior:
         assert elapsed < 3.0
         assert result.ok is False
         assert "timed out" in result.stdout.lower()
-        assert result.exit_code == -1
+        assert result.exit_code == 124
 
     def test_silent_heartbeat_emits_before_exit(self, tmp_path: Path):
         executor = SandboxExecutor(workspace_root=tmp_path)

@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, PropertyMock, patch
 
+import pytest
+
 from aura.conversation.history import History
 from aura.conversation.manager import ConversationManager
 from aura.conversation.tools.registry import ToolRegistry
@@ -80,6 +82,7 @@ def test_non_python_project_does_not_rewrite_npm_validation(tmp_path: Path) -> N
     assert plan.missing_tool is None
 
 
+@pytest.mark.skip(reason="focused py_compile hook was removed from ConversationManager")
 def test_focused_py_compile_uses_project_venv(tmp_path: Path) -> None:
     python = tmp_path / ".venv" / "Scripts" / "python.exe"
     python.parent.mkdir(parents=True)

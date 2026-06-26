@@ -17,7 +17,7 @@ def _make_runner(tmp_path: Path) -> ToolRunner:
     return ToolRunner(History(), tmp_path, LoopDetector())
 
 
-def test_terminal_command_default_timeout_is_45_seconds(tmp_path: Path):
+def test_terminal_command_default_timeout_is_300_seconds(tmp_path: Path):
     runner = _make_runner(tmp_path)
     events = []
     sandbox = MagicMock()
@@ -42,7 +42,7 @@ def test_terminal_command_default_timeout_is_45_seconds(tmp_path: Path):
         )
 
     sandbox.run_terminal_command.assert_called_once()
-    assert sandbox.run_terminal_command.call_args.kwargs["timeout"] == 45
+    assert sandbox.run_terminal_command.call_args.kwargs["timeout"] == 300
     assert any(isinstance(ev, ToolCallStart) for ev in events)
     assert any(isinstance(ev, ToolResult) for ev in events)
 

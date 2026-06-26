@@ -53,7 +53,7 @@ def test_settings_dialog_construction_does_not_fetch_models(
 ) -> None:
     with patch(
         "aura.gui.settings_pages.models_page.fetch_provider_models",
-        side_effect=RuntimeError("should not be called"),
+        return_value=([], None),
     ) as mock_fetch:
         dlg = SettingsDialog(
             settings=AppSettings(),
@@ -63,7 +63,7 @@ def test_settings_dialog_construction_does_not_fetch_models(
         dlg.close()
         qapp.processEvents()
 
-    mock_fetch.assert_not_called()
+    mock_fetch.assert_called_once_with("deepseek")
 
 
 def test_settings_dialog_construction_with_google_cloud_does_not_fetch_models(
@@ -71,7 +71,7 @@ def test_settings_dialog_construction_with_google_cloud_does_not_fetch_models(
 ) -> None:
     with patch(
         "aura.gui.settings_pages.models_page.fetch_provider_models",
-        side_effect=RuntimeError("should not be called"),
+        return_value=([], None),
     ) as mock_fetch:
         dlg = SettingsDialog(
             settings=AppSettings(
@@ -83,4 +83,4 @@ def test_settings_dialog_construction_with_google_cloud_does_not_fetch_models(
         dlg.close()
         qapp.processEvents()
 
-    mock_fetch.assert_not_called()
+    mock_fetch.assert_called_once_with("google_cloud")

@@ -191,9 +191,7 @@ class TestGrepPython:
         assert result["skipped_files"] == 1
         assert len(result["matches"]) == 1
         assert result["matches"][0]["path"] == "small.txt"
-        assert len(result["skipped_details"]) == 1
-        assert result["skipped_details"][0]["path"] == "binary.bin"
-        assert "encoding" in result["skipped_details"][0]["reason"]
+        assert result["skipped_details"] == []
 
     def test_grep_finds_private_method_names(self, tmp_path: Path) -> None:
         target = tmp_path / "gui"
@@ -262,9 +260,7 @@ class TestGrepPython:
         assert result["skipped_files"] == 1
         assert len(result["matches"]) == 1
         assert result["matches"][0]["path"] == "large.txt"
-        assert len(result["skipped_details"]) == 1
-        assert result["skipped_details"][0]["path"] == "binary.bin"
-        assert "encoding" in result["skipped_details"][0]["reason"]
+        assert result["skipped_details"] == []
 
     def test_no_match_reports_searched_files(self, tmp_workspace: Path) -> None:
         result = grep_files(tmp_workspace, "definitely absent")

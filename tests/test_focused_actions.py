@@ -57,7 +57,7 @@ def test_fix_prompt_uses_normal_edit_flow() -> None:
 
     assert "Requested action:\nFix selected code" in prompt
     assert "normal diff approval" in prompt
-    assert "prefer edit_symbol" in prompt
+    assert "use patch_file" in prompt
 
 
 def test_read_only_fix_prompt_becomes_suggestion_only() -> None:

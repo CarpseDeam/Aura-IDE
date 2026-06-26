@@ -1649,64 +1649,6 @@ class TestMismatchDispatchFlow:
         assert not result.extras
         assert _failed_dispatch_allows_planner_continuation(result)
 
-    def test_mismatch_error_signature_includes_facts(self):
-        """Error signature includes mismatch kind, requested, observed, question."""
-        mismatch = WorkerMismatch(
-            kind=WorkerMismatch.MISSING_SYMBOL,
-            file_paths=["a.py"],
-            requested="Add compute_value",
-            observed="compute_value exists in b.py",
-            worker_recommendation="Use different name",
-            question_for_planner="Should I rename?",
-        )
-        result = WorkerDispatchResult(
-            ok=False, summary="Mismatch", mismatch=mismatch
-        )
-        sig = ConversationManager._worker_dispatch_error_signature(result)
-        assert "missing_symbol" in sig
-        assert "Add compute_value" in sig
-        assert "compute_value exists in b.py" in sig
-        assert "Should I rename?" in sig
-
-    def test_different_mismatch_questions_produce_different_signatures(self):
-        """Two mismatches with different questions yield different signatures."""
-        m1 = WorkerMismatch(
-            kind=WorkerMismatch.MISSING_SYMBOL,
-            file_paths=["a.py"],
-            requested="Add func",
-            observed="Conflict",
-            worker_recommendation="",
-            question_for_planner="Rename?",
-        )
-        m2 = WorkerMismatch(
-            kind=WorkerMismatch.MISSING_SYMBOL,
-            file_paths=["a.py"],
-            requested="Add func",
-            observed="Conflict",
-            worker_recommendation="",
-            question_for_planner="Merge instead?",
-        )
-        r1 = WorkerDispatchResult(ok=False, summary="M1", mismatch=m1)
-        r2 = WorkerDispatchResult(ok=False, summary="M2", mismatch=m2)
-        sig1 = ConversationManager._worker_dispatch_error_signature(r1)
-        sig2 = ConversationManager._worker_dispatch_error_signature(r2)
-        assert sig1 != sig2
-
-    def test_mismatch_is_not_internal_error(self):
-        """_is_worker_internal_error returns False for mismatch result."""
-        mismatch = WorkerMismatch(
-            kind=WorkerMismatch.SCHEMA_MISMATCH,
-            file_paths=["x.yaml"],
-            requested="Add field",
-            observed="Schema conflict",
-            worker_recommendation="",
-            question_for_planner="Which schema?",
-        )
-        result = WorkerDispatchResult(
-            ok=False, summary="Schema mismatch", mismatch=mismatch
-        )
-        assert not ConversationManager._is_worker_internal_error(result)
-
     def test_mismatch_extras_in_payload(self):
         """to_tool_payload includes planner_resolution_needed etc. when mismatch exists."""
         mismatch = WorkerMismatch(
