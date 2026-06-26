@@ -81,7 +81,6 @@ from aura.conversation.terminal_syntax import (
     is_python_path,
 )
 from aura.conversation.tool_limits import (
-    MAX_WORKER_REDISPATCHES_PER_USER_TURN,
     WRITE_TOOLS,
     ToolLimitState,
     limit_reached_payload,
@@ -1711,45 +1710,16 @@ class ConversationManager:
         reason: str,
         on_event: EventCallback,
     ) -> None:
-        if reason == "internal":
-            message = (
-                "Harness error due to an internal Worker exception. "
-                "I stopped automatic redispatch to avoid repeating the same handoff."
-            )
-        elif reason == "repeated":
-            if result.extras.get("dispatch_spec_rejected"):
-                message = (
-                    "Plan incomplete — missing required dispatch details. "
-                    "The same Worker handoff was rejected twice, so I stopped automatic redispatch."
-                )
-            elif result.mismatch is not None or result.extras.get("planner_resolution_needed"):
-                message = (
-                    "The same Worker mismatch was returned twice. I stopped automatic redispatch "
-                    "so the Planner handoff can change."
-                )
-            else:
-                message = (
-                    "The same Worker dispatch failed twice with the same result. "
-                    "I stopped automatic redispatch so the plan can be corrected first."
-                )
-        elif reason == "limit":
-            message = (
-                "Worker dispatch did not complete after "
-                f"{MAX_WORKER_REDISPATCHES_PER_USER_TURN} failed attempts this turn. "
-                "I stopped automatic redispatch so the next handoff can change."
-            )
-        else:
-            message = (
-                "Harness error. I stopped automatic redispatch so the failure can be addressed first."
-            )
-        on_event(ContentDelta(text=message))
-        full_message = {
-            "role": "assistant",
-            "content": message,
-            "reasoning_content": None,
-        }
-        self._history.append_assistant(full_message)
-        on_event(Done(finish_reason="stop", full_message=full_message))
+        # Suppress visible card. Still emit Done with empty content so the
+        # planner stream closes cleanly. No ContentDelta, no history append.
+        on_event(Done(
+            finish_reason="stop",
+            full_message={
+                "role": "assistant",
+                "content": "",
+                "reasoning_content": None,
+            },
+        ))
 
     def _apply_loop_detection(
         self,

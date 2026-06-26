@@ -926,9 +926,14 @@ def test_redispatch_counter_stops_runaway_followups(
     )
 
     assert dispatch_cb.call_count == 2
-    final_content = history.messages[-1]["content"]
-    assert "failed attempts this turn" in final_content
-    assert "stopped automatic redispatch" in final_content
+    # Suppressed visible card: no ContentDelta, Done with empty content
+    content_deltas = [ev for ev in captured_events if isinstance(ev, ContentDelta)]
+    assert len(content_deltas) == 0
+    done_events = [ev for ev in captured_events if isinstance(ev, Done)]
+    assert len(done_events) >= 1
+    # The last Done (from _append_dispatch_blocker_message) has empty content
+    last_done = done_events[-1]
+    assert last_done.full_message.get("content") == ""
 
 
 def test_identical_dispatch_failure_stops_after_second_attempt(
@@ -963,9 +968,13 @@ def test_identical_dispatch_failure_stops_after_second_attempt(
     )
 
     assert dispatch_cb.call_count == 2
-    final_content = history.messages[-1]["content"]
-    assert "same Worker dispatch failed twice" in final_content
-    assert "stopped automatic redispatch" in final_content
+    # Suppressed visible card: no ContentDelta, Done with empty content
+    content_deltas = [ev for ev in captured_events if isinstance(ev, ContentDelta)]
+    assert len(content_deltas) == 0
+    done_events = [ev for ev in captured_events if isinstance(ev, Done)]
+    assert len(done_events) >= 1
+    last_done = done_events[-1]
+    assert last_done.full_message.get("content") == ""
 
 
 def test_worker_internal_error_stops_without_redispatch(
@@ -995,9 +1004,13 @@ def test_worker_internal_error_stops_without_redispatch(
     )
 
     assert dispatch_cb.call_count == 1
-    final_content = history.messages[-1]["content"]
-    assert "Harness error due to an internal Worker exception." in final_content
-    assert "AttributeError" not in final_content
+    # Suppressed visible card: no ContentDelta, Done with empty content
+    content_deltas = [ev for ev in captured_events if isinstance(ev, ContentDelta)]
+    assert len(content_deltas) == 0
+    done_events = [ev for ev in captured_events if isinstance(ev, Done)]
+    assert len(done_events) >= 1
+    last_done = done_events[-1]
+    assert last_done.full_message.get("content") == ""
 
 
 # ===================================================================
@@ -2130,3 +2143,49 @@ class TestDeleteFileRecovery:
         )
 
         assert "new.py" in syntax_validation_required
+
+
+# ===================================================================
+# 18. Redispatch blocker suppression
+# ===================================================================
+
+class TestRedispatchBlockerSuppression:
+    """_append_dispatch_blocker_message must suppress visible output."""
+
+    def test_no_content_delta_emitted(self, manager, on_event, captured_events, history):
+        """No ContentDelta event is fired."""
+        from aura.conversation.dispatch import WorkerDispatchResult
+        result = WorkerDispatchResult(ok=False, summary="fail")
+        manager._append_dispatch_blocker_message(result, "limit", on_event)
+        for ev in captured_events:
+            assert not isinstance(ev, ContentDelta), "Must not emit ContentDelta"
+
+    def test_no_assistant_message_appended_to_history(self, manager, on_event, captured_events, history):
+        """No assistant message is added to history."""
+        from aura.conversation.dispatch import WorkerDispatchResult
+        before = len(history.messages)
+        result = WorkerDispatchResult(ok=False, summary="fail")
+        manager._append_dispatch_blocker_message(result, "limit", on_event)
+        assert len(history.messages) == before, "Must not append to history"
+
+    def test_done_emitted_with_empty_content(self, manager, on_event, captured_events, history):
+        """Done event is emitted with empty content to close stream."""
+        from aura.conversation.dispatch import WorkerDispatchResult
+        result = WorkerDispatchResult(ok=False, summary="fail")
+        manager._append_dispatch_blocker_message(result, "limit", on_event)
+        done_events = [ev for ev in captured_events if isinstance(ev, Done)]
+        assert len(done_events) == 1, "Exactly one Done must be emitted"
+        full = done_events[0].full_message
+        assert full.get("content") == "", "Done content must be empty string"
+
+    def test_all_reasons_suppressed(self, manager, on_event, captured_events, history):
+        """All four reason codes suppress ContentDelta."""
+        from aura.conversation.dispatch import WorkerDispatchResult
+        for reason in ("internal", "repeated", "limit", "unknown"):
+            captured_events.clear()
+            result = WorkerDispatchResult(ok=False, summary="fail")
+            if reason == "repeated":
+                result = WorkerDispatchResult(ok=False, summary="fail", extras={"dispatch_spec_rejected": True})
+            manager._append_dispatch_blocker_message(result, reason, on_event)
+            for ev in captured_events:
+                assert not isinstance(ev, ContentDelta), f"Reason '{reason}' must not emit ContentDelta"
