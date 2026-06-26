@@ -195,7 +195,7 @@ def test_worker_summary_replaces_existing_card_for_same_dispatch(qapp) -> None:
     cards = chat.findChildren(WorkerSummaryCard)
     assert cards == [first]
     labels = [label.text() for label in first.findChildren(QLabel)]
-    assert "Completed" in labels
+    assert "✅ Done" in labels
     assert any("done" in text for text in labels)
 
 
