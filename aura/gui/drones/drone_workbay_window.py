@@ -12,10 +12,13 @@ from PySide6.QtGui import QCloseEvent, QColor, QFont
 from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
+    QDialogButtonBox,
+    QFormLayout,
     QFrame,
     QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -23,6 +26,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from dataclasses import replace
 
 from aura.drones.store import DroneStore
 from aura.gui.theme import ACCENT, BG, BG_ALT, BORDER, DANGER, FG, FG_DIM, FG_MUTED, SUCCESS, WARN
@@ -407,6 +412,68 @@ class _DroneCard(QFrame):
         self._run_state_label.show()
 
 
+class _NewBrowseMonitorDialog(QDialog):
+    """Dialog to configure a new Browse Monitor drone."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("New Browse Monitor")
+        self.setMinimumWidth(420)
+
+        layout = QVBoxLayout(self)
+
+        form = QFormLayout()
+        form.setSpacing(8)
+
+        self._name_edit = QLineEdit()
+        self._name_edit.setPlaceholderText("e.g. Home Page Monitor")
+        form.addRow("Name:", self._name_edit)
+
+        self._url_edit = QLineEdit()
+        self._url_edit.setPlaceholderText("https://example.com")
+        form.addRow("Start URL:", self._url_edit)
+
+        self._key_edit = QLineEdit()
+        self._key_edit.setPlaceholderText("e.g. home_page")
+        form.addRow("Monitor Key:", self._key_edit)
+
+        self._fields_edit = QLineEdit("title, url, body_excerpt")
+        form.addRow("Monitor Fields:", self._fields_edit)
+
+        self._chars_spin = QSpinBox()
+        self._chars_spin.setRange(100, 10000)
+        self._chars_spin.setValue(2000)
+        form.addRow("Excerpt Chars:", self._chars_spin)
+
+        layout.addLayout(form)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    @property
+    def name_value(self) -> str:
+        return self._name_edit.text().strip()
+
+    @property
+    def start_url_value(self) -> str:
+        return self._url_edit.text().strip()
+
+    @property
+    def monitor_key_value(self) -> str:
+        return self._key_edit.text().strip()
+
+    @property
+    def monitor_fields_value(self) -> list[str]:
+        raw = self._fields_edit.text().strip()
+        return [f.strip() for f in raw.split(",") if f.strip()]
+
+    @property
+    def excerpt_chars_value(self) -> int:
+        return self._chars_spin.value()
+
+
 class DroneWorkbayWindow(QDialog):
     """Non-modal window showing a scrollable card menu of saved Drones.
 
@@ -454,8 +521,28 @@ class DroneWorkbayWindow(QDialog):
 
         self._build_ui()
 
+        # Wire New Browse Monitor button
+        self._btn_new_browse.clicked.connect(self._on_new_browse_monitor)
+
         self._restore_geometry(self._initial_geometry)
         self._geometry_restore_done = True
+
+    def _on_new_browse_monitor(self) -> None:
+        """Open the New Browse Monitor dialog and create the drone on accept."""
+        dlg = _NewBrowseMonitorDialog(self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            try:
+                DroneStore.create_browse_monitor(
+                    workspace_root=self._workspace_root,
+                    name=dlg.name_value,
+                    start_url=dlg.start_url_value,
+                    monitor_key=dlg.monitor_key_value,
+                    monitor_fields=dlg.monitor_fields_value,
+                    monitor_excerpt_chars=dlg.excerpt_chars_value,
+                )
+                self.refresh()
+            except Exception as exc:
+                logger.error("Failed to create browse monitor: %s", exc)
 
     # -- UI construction ----------------------------------------------------
 
@@ -507,6 +594,26 @@ class DroneWorkbayWindow(QDialog):
         scroll.setWidget(self._content)
         root.addWidget(scroll, 1)
 
+        # New Browse Monitor button
+        self._btn_new_browse = QPushButton("+ New Browse Monitor")
+        self._btn_new_browse.setCursor(Qt.PointingHandCursor)
+        self._btn_new_browse.setStyleSheet(
+            f"QPushButton {{"
+            f"  background: rgba(122, 162, 247, 0.10);"
+            f"  border: 1px solid rgba(122, 162, 247, 0.25);"
+            f"  border-radius: 6px;"
+            f"  color: #7aa2f7;"
+            f"  font-size: 12px;"
+            f"  padding: 8px 16px;"
+            f"  margin: 0px 12px 12px 12px;"
+            f"}}"
+            f"QPushButton:hover {{"
+            f"  background: rgba(122, 162, 247, 0.18);"
+            f"  border-color: rgba(122, 162, 247, 0.40);"
+            f"}}"
+        )
+        root.addWidget(self._btn_new_browse)
+
     # -- Public API ---------------------------------------------------------
 
     def set_workspace_root(self, root: Path) -> None:
@@ -536,6 +643,11 @@ class DroneWorkbayWindow(QDialog):
         # Rebuild or update cards
         for d in drones:
             status = status_map.get(d.id, "Ready")
+            # Determine loop state from persisted permissions
+            perm_loop_enabled = bool(d.permissions.get("loop_enabled", False))
+            perm_interval = d.permissions.get("loop_interval_seconds")
+            if perm_interval is None:
+                perm_interval = 3600 if d.kind == "browse" else 60
             if d.id in self._cards:
                 card = self._cards[d.id]
                 card.update_status(status)
@@ -546,6 +658,7 @@ class DroneWorkbayWindow(QDialog):
                     description=d.description,
                     write_policy=d.write_policy,
                     status=status,
+                    loop_enabled=perm_loop_enabled,
                 )
                 card._btn_run.clicked.connect(
                     lambda checked, did=d.id: self.runDroneRequested.emit(did, "")
@@ -559,13 +672,13 @@ class DroneWorkbayWindow(QDialog):
                 self._cards[d.id] = card
                 card.set_run_state("idle")
                 self._card_layout.insertWidget(self._card_layout.count() - 1, card)
-                # Restore loop state if this drone was looping before refresh
-                if d.id in self._loop_intervals:
-                    saved_interval = self._loop_intervals[d.id]
-                    card.interval_seconds = saved_interval
-                    card._loop_toggle.blockSignals(True)
-                    card._loop_toggle.setChecked(True)
-                    card._loop_toggle.blockSignals(False)
+            # Apply loop state from permissions for all cards
+            if perm_loop_enabled:
+                card.interval_seconds = perm_interval
+                card._loop_toggle.blockSignals(True)
+                card._loop_toggle.setChecked(True)
+                card._loop_toggle.blockSignals(False)
+                self._loop_intervals[d.id] = perm_interval
 
     def set_card_loop_state(self, drone_id: str, enabled: bool, interval_seconds: int = 0) -> None:
         """Update the loop state on a drone card."""
@@ -587,12 +700,32 @@ class DroneWorkbayWindow(QDialog):
         if card is not None:
             card.set_run_state(state, detail)
 
+    def _persist_loop_state(self, drone_id: str, enabled: bool, interval_seconds: int) -> None:
+        """Persist the loop toggle and interval to the drone's permissions on disk."""
+        try:
+            drone = DroneStore.load_drone(self._workspace_root, drone_id)
+            if drone is None:
+                return
+            updated = replace(
+                drone,
+                permissions={
+                    **drone.permissions,
+                    "loop_enabled": enabled,
+                    "loop_interval_seconds": interval_seconds,
+                },
+            )
+            DroneStore.save_drone(self._workspace_root, updated)
+        except Exception as exc:
+            logger.warning("Failed to persist loop state for %s: %s", drone_id, exc)
+
     def _on_card_loop_toggled(self, drone_id: str, enabled: bool, interval_seconds: int) -> None:
         self._loop_intervals[drone_id] = interval_seconds
+        self._persist_loop_state(drone_id, enabled, interval_seconds)
         self.loopDroneRequested.emit(drone_id, enabled, interval_seconds)
 
     def _on_card_loop_interval_changed(self, drone_id: str, interval_seconds: int) -> None:
         self._loop_intervals[drone_id] = interval_seconds
+        self._persist_loop_state(drone_id, self._cards.get(drone_id, _DroneCard)._loop_toggle.isChecked() if drone_id in self._cards else False, interval_seconds)
         self.loopIntervalChanged.emit(drone_id, interval_seconds)
 
     def show_and_raise(self) -> None:

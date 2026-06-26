@@ -12,6 +12,8 @@
     "monitor_key": null,
     "monitor_fields": ["title", "url", "body_excerpt"],
     "monitor_excerpt_chars": 2000,
+    "loop_enabled": false,
+    "loop_interval_seconds": null,
     "visible": false,
     "login_session": false
   },

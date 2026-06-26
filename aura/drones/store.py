@@ -377,6 +377,8 @@ class DroneStore:
         name: str,
         start_url: str,
         monitor_key: str | None = None,
+        monitor_fields: list[str] | None = None,
+        monitor_excerpt_chars: int = 2000,
     ) -> DroneDefinition:
         """Create a configured Browse Monitor drone from the bundled template.
 
@@ -385,6 +387,8 @@ class DroneStore:
             name: Human-readable name for the drone (e.g. "Docs Page Watch").
             start_url: The URL to monitor.
             monitor_key: Stable slug for fingerprinting. Defaults to slugify(name).
+            monitor_fields: Fields to fingerprint. Defaults to ["title", "url", "body_excerpt"].
+            monitor_excerpt_chars: Max excerpt characters. Defaults to 2000.
 
         Returns:
             The newly created DroneDefinition.
@@ -419,8 +423,10 @@ class DroneStore:
                 "start_url": start_url,
                 "monitor_enabled": True,
                 "monitor_key": monitor_key,
-                "monitor_fields": ["title", "url", "body_excerpt"],
-                "monitor_excerpt_chars": 2000,
+                "monitor_fields": monitor_fields if monitor_fields is not None else ["title", "url", "body_excerpt"],
+                "monitor_excerpt_chars": monitor_excerpt_chars,
+                "loop_enabled": False,
+                "loop_interval_seconds": 3600,
                 "visible": False,
                 "login_session": False,
             },

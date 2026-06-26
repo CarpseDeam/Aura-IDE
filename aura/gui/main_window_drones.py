@@ -229,7 +229,7 @@ class MainWindowDroneController(QObject):
             self._drone_workbay_window is not None
             and self._drone_workbay_window.is_open()
         ):
-            self._drone_workbay_window.chain_editor.refresh_roster()
+            self._drone_workbay_window.refresh()
 
     # -- Drone Bay --
 
@@ -262,6 +262,26 @@ class MainWindowDroneController(QObject):
         workbay.loopIntervalChanged.connect(self.on_loop_interval_changed)
         workbay.geometry_saved.connect(self._window._terminal_controller._on_drone_workbay_geometry_saved)
         workbay.show_and_raise()
+
+        # Auto-resume loops from persisted permissions
+        try:
+            drones = DroneStore.list_drones(self._window._workspace_root)
+            for d in drones:
+                if d.permissions.get("loop_enabled", False):
+                    drone_id = d.id
+                    interval = d.permissions.get("loop_interval_seconds", 3600)
+                    if interval is None:
+                        interval = 3600
+                    self._looping_drones[drone_id] = interval
+                    self.start_next_loop_lap(drone_id)
+                    workbay.set_card_loop_state(drone_id, True, interval)
+                    logger.info(
+                        "[DroneLoop] auto-resumed loop for drone=%s interval=%ds",
+                        drone_id,
+                        interval,
+                    )
+        except Exception as exc:
+            logger.warning("Failed to auto-resume loops: %s", exc)
 
     def sync_drone_tab_checked(self) -> None:
         if self._window._edge_rail.drone_tab is not None:
@@ -614,10 +634,29 @@ class MainWindowDroneController(QObject):
 
     # -- looping --
 
+    def _persist_loop_state(self, drone_id: str, enabled: bool, interval_seconds: int) -> None:
+        """Persist the loop toggle and interval to the drone's permissions on disk."""
+        try:
+            drone = DroneStore.load_drone(self._window._workspace_root, drone_id)
+            if drone is None:
+                return
+            updated = replace(
+                drone,
+                permissions={
+                    **drone.permissions,
+                    "loop_enabled": enabled,
+                    "loop_interval_seconds": interval_seconds,
+                },
+            )
+            DroneStore.save_drone(self._window._workspace_root, updated)
+        except Exception as exc:
+            logger.warning("Failed to persist loop state for %s: %s", drone_id, exc)
+
     def on_loop_drone_toggled(
         self, drone_id: str, enabled: bool, interval_seconds: int = 60
     ) -> None:
         """Enable or disable looping for a single drone."""
+        self._persist_loop_state(drone_id, enabled, interval_seconds)
         if enabled:
             self._looping_drones[drone_id] = interval_seconds
             logger.info(
@@ -648,6 +687,7 @@ class MainWindowDroneController(QObject):
     def on_loop_interval_changed(self, drone_id: str, interval_seconds: int) -> None:
         if drone_id in self._looping_drones:
             self._looping_drones[drone_id] = interval_seconds
+            self._persist_loop_state(drone_id, True, interval_seconds)
             logger.debug(
                 "[DroneLoop] interval updated for drone=%s to %ds",
                 drone_id,
