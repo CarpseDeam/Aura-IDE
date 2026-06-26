@@ -328,6 +328,29 @@ def prewarm_grammars(final_dist_dir: Path, python_exe: Path) -> None:
     print(f"Grammar prewarm complete: {len(entries)} file(s) in {grammar_dir}")
 
 
+def bundle_chromium(final_dist_dir: Path, python_exe: Path) -> None:
+    """Install Chromium browser into the dist using Playwright's CLI."""
+    browsers_dir = final_dist_dir / "ms-playwright"
+    browsers_dir.mkdir(parents=True, exist_ok=True)
+    env = os.environ.copy()
+    env["PLAYWRIGHT_BROWSERS_PATH"] = str(browsers_dir)
+
+    print("Installing Chromium for bundled Playwright...")
+    try:
+        subprocess.run(
+            [str(python_exe), "-m", "playwright", "install", "chromium"],
+            env=env, check=True, capture_output=True, text=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        print(f"Chromium install failed:\n{exc.stdout}\n{exc.stderr}")
+        raise SystemExit("Chromium bundle failed; aborting build.")
+
+    entries = list(browsers_dir.rglob("*"))
+    if not entries:
+        raise SystemExit("Chromium install produced no files; aborting build.")
+    print(f"Chromium bundled: {len(entries)} file(s) in {browsers_dir}")
+
+
 def zip_distribution(root: Path, final_dist_dir: Path) -> Path:
     """Package Aura.dist into a ZIP."""
     zip_base = root / OUTPUT_DIR / "Aura-Windows-x64"
@@ -499,6 +522,7 @@ def create_nuitka_command(
         "--nofollow-import-to=pytest",
         "--nofollow-import-to=charset_normalizer",
         "--nofollow-import-to=click",
+        "--nofollow-import-to=playwright",
         "--lto=no",
     ]
     if not fast:
@@ -653,11 +677,25 @@ def build(
     else:
         print("Warning: click is not installed in the clean environment, skipping manual bundle.")
 
+    # Copy playwright as pure Python files to avoid Nuitka compilation hang/crash
+    playwright_path = get_venv_package_path("playwright")
+    if playwright_path and playwright_path.exists():
+        target_playwright_dir: Path = final_dist_dir / "playwright"
+        print(f"Bundling playwright as raw source: {playwright_path} -> {target_playwright_dir}")
+        if target_playwright_dir.exists():
+            shutil.rmtree(target_playwright_dir)
+        shutil.copytree(playwright_path, target_playwright_dir)
+    else:
+        print("Warning: playwright is not installed in the clean environment, skipping manual bundle.")
+
     # Bundle .aura/drones into the dist for DroneStore runtime loading
     bundle_drones(root, final_dist_dir)
 
     # Pre-warm tree-sitter grammars into the dist
     prewarm_grammars(final_dist_dir, python_exe)
+
+    # Bundle Chromium browser for Playwright
+    bundle_chromium(final_dist_dir, python_exe)
 
     if not installer_only:
         zip_path = zip_distribution(root, final_dist_dir)

@@ -11,6 +11,14 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
+def normalize_text(raw: str) -> str:
+    """Strip trailing whitespace from each line, then collapse runs of consecutive blank lines."""
+    lines = raw.split("\n")
+    stripped = [line.rstrip() for line in lines]
+    collapsed = _collapse_blank_lines(stripped)
+    return "\n".join(collapsed)
+
+
 @dataclass(frozen=True)
 class ParsedPage:
     """Structured representation of a parsed Playwright page report."""

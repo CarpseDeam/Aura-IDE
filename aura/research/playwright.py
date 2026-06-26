@@ -1,25 +1,22 @@
-"""PlaywrightResearcher — manages a private Playwright MCP child process.
+"""PlaywrightResearcher — manages a local Playwright browser instance.
 
-Uses ``aura.mcp_client.MCPClient`` directly.  No tools are registered
-into any catalog or registry; the private MCP client is the sole
-communication channel.
+Uses ``playwright.sync_api`` directly. No MCP dependency.
 """
 
 from __future__ import annotations
 
 import os
+import sys
 import urllib.parse
-from typing import Any
 
-from aura.mcp_client import MCPClient
-
-from aura.research.extract import ParsedPage, parse_call_result
+from aura.research.extract import ParsedPage, normalize_text
 from aura.research.limits import DEFAULT_LIMITS, ResearchLimits
 from aura.research.models import Source
+from aura.resources import get_resource_path
 
 
 class PlaywrightResearcher:
-    """Manages a private Playwright MCP subprocess for web research.
+    """Manages a local Playwright browser instance for web research.
 
     Create the instance, call ``start()``, then use ``search()`` and
     ``open()`` to fetch page content.  Call ``close()`` when done.
@@ -30,91 +27,122 @@ class PlaywrightResearcher:
     def __init__(
         self,
         limits: ResearchLimits = DEFAULT_LIMITS,
-        search_url_template: str = "https://www.bing.com/search?q={q}",
     ) -> None:
         self._limits = limits
-        self._search_url_template = search_url_template
-
-        cmd = "npx.cmd" if os.name == "nt" else "npx"
-        self._server_command = [cmd, "@playwright/mcp@latest", "--headless", "--isolated"]
-
-        self._client: MCPClient | None = None
-        self._unavailable_reason: str = ""
+        self._unavailable_reason = ""
+        self._pw = None
+        self._browser = None
+        self._context = None
 
     # -- Lifecycle -------------------------------------------------------
 
     def start(self) -> bool:
-        """Launch the Playwright MCP server and establish a session.
+        """Launch a local Playwright browser and create a browsing context.
 
         Returns True on success.  On failure sets ``_unavailable_reason``
         and returns False — never raises.
         """
         try:
-            client = MCPClient(self._server_command)
-            client.connect()
-            self._client = client
+            try:
+                import playwright.sync_api  # noqa: F811
+            except ImportError as exc:
+                self._unavailable_reason = str(exc)
+                return False
+
+            # Determine if running packaged
+            if getattr(sys, "frozen", False) or hasattr(sys, "_MEIPASS") or "__compiled__" in globals():
+                os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(get_resource_path("ms-playwright"))
+
+            self._pw = playwright.sync_api.sync_playwright().start()
+            self._browser = self._pw.chromium.launch(headless=True)
+            self._context = self._browser.new_context()
+            self._context.set_default_navigation_timeout(20000)
             return True
         except Exception as exc:
             self._unavailable_reason = str(exc)
-            self._client = None
+            # Tear down partial state — we are already in the error path
+            self._context = None
+            self._browser = None
+            if self._pw is not None:
+                self._pw.stop()
+                self._pw = None
             return False
 
     def close(self) -> None:
-        """Shut down the MCP server and clean up resources."""
-        if self._client is not None:
-            self._client.close()
-            self._client = None
-
-    # -- Internal helpers ------------------------------------------------
-
-    def _call(self, tool_name: str, arguments: dict[str, Any]) -> ParsedPage:
-        """Call an MCP tool and parse the result into a ParsedPage.
-
-        Returns an error-indicating ParsedPage when the client is not
-        started.
-        """
-        if self._client is None:
-            return ParsedPage(clean_text="Researcher not started")
-        result: dict[str, Any] = self._client.call_tool(tool_name, arguments)
-        return parse_call_result(result)
+        """Shut down the browser and clean up resources."""
+        if self._context is not None:
+            self._context.close()
+            self._context = None
+        if self._browser is not None:
+            self._browser.close()
+            self._browser = None
+        if self._pw is not None:
+            self._pw.stop()
+            self._pw = None
 
     # -- Public API ------------------------------------------------------
 
     def search(self, query: str) -> list[Source]:
         """Navigate to the search engine and return result links as Sources.
 
-        Returns an empty list when the researcher is not started.
+        Returns an empty list when the researcher is not started or on error.
         """
-        if self._client is None:
+        if self._context is None:
             return []
 
-        encoded = urllib.parse.quote(query)
-        url = self._search_url_template.format(q=encoded)
+        page = self._context.new_page()
+        try:
+            encoded = urllib.parse.quote(query)
+            url = f"https://www.bing.com/search?q={encoded}"
+            page.goto(url)
 
-        self._call("browser_navigate", {"url": url})
-        snapshot = self._call("browser_snapshot", {})
+            links = page.eval_on_selector_all(
+                "a",
+                "els => els.map(e => ({href: e.href, text: e.innerText}))",
+            )
 
-        sources: list[Source] = []
-        for visible_text, href in snapshot.links:
-            # Only real http(s) links
-            if not href.startswith(("http://", "https://")):
-                continue
-            # Drop bing.com internal / promoted links
-            if "bing.com" in href:
-                continue
-            sources.append(Source(url=href, title=visible_text))
+            seen: set[str] = set()
+            sources: list[Source] = []
+            for link in links:
+                href = link["href"]
+                text = link["text"]
+                if not href.startswith(("http://", "https://")):
+                    continue
+                if "bing.com" in href or "microsoft.com" in href:
+                    continue
+                if href in seen:
+                    continue
+                seen.add(href)
+                sources.append(Source(url=href, title=text.strip()))
 
-        return sources[: self._limits.max_pages]
+            return sources[: self._limits.max_pages]
+        except Exception as exc:
+            self._unavailable_reason = str(exc)
+            return []
+        finally:
+            page.close()
 
     def open(self, url: str) -> ParsedPage:
         """Navigate to a URL and return the parsed page content.
 
         Returns an error-indicating ParsedPage when the researcher is
-        not started.
+        not started or on error.
         """
-        if self._client is None:
+        if self._context is None:
             return ParsedPage(clean_text="Researcher not started")
 
-        self._call("browser_navigate", {"url": url})
-        snapshot = self._call("browser_snapshot", {})
-        return snapshot
+        page = self._context.new_page()
+        try:
+            page.goto(url)
+            title = page.title()
+            body_text = page.inner_text("body")
+            return ParsedPage(
+                url=url,
+                title=title,
+                clean_text=normalize_text(body_text),
+            )
+        except Exception as exc:
+            # Return error text rather than raising to the caller
+            return ParsedPage(clean_text=f"Error: {exc}")
+        finally:
+            page.close()
