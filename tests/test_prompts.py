@@ -6,8 +6,8 @@ contract and that required sections are present.
 
 from __future__ import annotations
 
-from aura.prompts import PLANNER_SYSTEM_PROMPT, SINGLE_SYSTEM_PROMPT, WORKER_SYSTEM_PROMPT
 from aura.conversation.tools._schemas import DIAGNOSTIC_TOOL_DEF, DISPATCH_TOOL_DEF
+from aura.prompts import PLANNER_SYSTEM_PROMPT, SINGLE_SYSTEM_PROMPT, WORKER_SYSTEM_PROMPT
 
 
 def test_planner_worker_contract_consistency():
@@ -38,34 +38,38 @@ def test_planner_required_spec_sections():
         assert section in PLANNER_SYSTEM_PROMPT
 
 
-def test_worker_adherence_protocol():
-    """Ensure Worker has a clear adherence protocol for the Planner's spec."""
-    assert "Handoff Adherence Protocol" in WORKER_SYSTEM_PROMPT
-    assert "Acceptance Verification" in WORKER_SYSTEM_PROMPT
+def test_worker_doctrine_is_lean_and_action_first():
+    required_rules = [
+        "fewest safe tool calls",
+        "Inspect only the target files or regions needed",
+        "Edit as soon as the correct change is clear",
+        "Do not expand scope",
+        "Do not make product decisions",
+        "Do not narrate obvious steps",
+        "Do not say done before validation passes",
+    ]
+
+    for rule in required_rules:
+        assert rule in WORKER_SYSTEM_PROMPT
 
 
 def test_worker_prompt_is_patch_first():
-    assert "Use `patch_file` for existing-file changes" in WORKER_SYSTEM_PROMPT
-    assert "`expected_file_hash`" in WORKER_SYSTEM_PROMPT
+    assert "For existing files, use `patch_file` with `expected_file_hash`" in WORKER_SYSTEM_PROMPT
+    assert "Put all intended hunks for one file in one `patch_file` call when practical." in WORKER_SYSTEM_PROMPT
+    assert "re-read the smallest affected region and retry once with a better hunk" in WORKER_SYSTEM_PROMPT
+    assert "Do not switch tools randomly" in WORKER_SYSTEM_PROMPT
     assert "Use `write_file` only for new files or intentional full-file replacement." in WORKER_SYSTEM_PROMPT
-    assert "re-read the affected file or region, retry once with `patch_file`" in WORKER_SYSTEM_PROMPT
-    assert "do not switch tools randomly" in WORKER_SYSTEM_PROMPT
-    assert "quoting, escaping, repeated text, or giant string blocks" in WORKER_SYSTEM_PROMPT
-    assert "choose a smaller edit shape" in WORKER_SYSTEM_PROMPT
     assert "Use `apply_edit_transaction` for existing-file code changes." not in WORKER_SYSTEM_PROMPT
 
 
 def test_worker_prompt_keeps_core_edit_and_validation_rules():
     required_rules = [
         "Read before editing",
-        "structured read tools",
-        "`read_file`",
-        "`read_files`",
         "`read_file_outline`",
         "`read_file_range`",
-        "Keep scope tight",
-        "Make the edit as soon as the correct change is clear",
-        "cheapest meaningful focused command",
+        "Run exact validation commands from the handoff when provided",
+        "Use the cheapest focused validation that proves the change",
+        "Do not run broad tests by default",
         "Touched Python files must pass `python -m py_compile`",
         "changed files and validation results",
     ]
@@ -100,7 +104,7 @@ def test_dispatch_tool_schema_exposes_optional_target_regions():
 
 
 def test_snappy_planner_worker_rules():
-    """Ensure snappy workflow and execution rules are present."""
+    """Ensure snappy workflow and lean Worker execution rules are present."""
     # Planner
     assert "Snappy workflow" in PLANNER_SYSTEM_PROMPT
     assert "fast dispatch compiler" in PLANNER_SYSTEM_PROMPT
@@ -108,14 +112,30 @@ def test_snappy_planner_worker_rules():
     assert "Do not narrate reasoning" in PLANNER_SYSTEM_PROMPT
 
     # Worker
-    assert "Snappy execution" in WORKER_SYSTEM_PROMPT
-    assert "update_todo_list" in WORKER_SYSTEM_PROMPT
-    assert "multiple meaningful steps/files or has real risk" in WORKER_SYSTEM_PROMPT
-    assert "Small localized tasks should skip TODOs and edit directly" in WORKER_SYSTEM_PROMPT
-    assert "Read before editing" in WORKER_SYSTEM_PROMPT
+    assert "Worker doctrine" in WORKER_SYSTEM_PROMPT
+    assert "Work loop" in WORKER_SYSTEM_PROMPT
+    assert "If validation fails" in WORKER_SYSTEM_PROMPT
+    assert "patch once, and rerun the exact failing gate" in WORKER_SYSTEM_PROMPT
 
     # Continuation report still exists
     assert "continuation_report" in WORKER_SYSTEM_PROMPT
+
+
+def test_worker_validation_failure_guidance_is_one_repair_loop():
+    required_rules = [
+        "If validation fails, run the smallest diagnostic that reveals the actual error/value, patch once, and rerun the exact failing gate.",
+        "Do not repeat the same validation command unless code changed or you are verifying the exact repair.",
+        "For assertion failures, do not debate expected values.",
+        "Print the actual value",
+        "A normal patch failure, syntax failure, or validation failure is not a Planner mismatch unless the instructed retry also fails.",
+    ]
+
+    for rule in required_rules:
+        assert rule in WORKER_SYSTEM_PROMPT
+
+
+def test_worker_final_response_rule_is_compact():
+    assert "When complete, say `Done.` with changed files and validation results." in WORKER_SYSTEM_PROMPT
 
 
 def test_worker_continuation_report_format_is_exact():
@@ -185,11 +205,16 @@ def test_code_taste_block_present():
 
 
 def test_worker_prompt_is_meaningfully_shorter():
-    assert len(WORKER_SYSTEM_PROMPT) < 8000
+    assert len(WORKER_SYSTEM_PROMPT) < 5000
 
 
 def test_worker_prompt_removed_long_examples():
     removed_example_text = [
+        "Handoff Adherence Protocol",
+        "Handoff Mismatch Protocol",
+        "Acceptance Verification",
+        "update_todo_list",
+        "Snappy execution",
         "Bad docstring-heavy helper",
         "Good direct helper",
         "Bad swallowed parse error",
@@ -205,8 +230,6 @@ def test_worker_prompt_removed_long_examples():
 
 def test_validation_guidance_is_windows_safe():
     """Worker/Planner validation guidance should avoid Unix-only grep failures."""
-    assert "Do not use bare `grep`" in WORKER_SYSTEM_PROMPT
-    assert "exits 0 when the pattern is absent" in WORKER_SYSTEM_PROMPT
     assert "Avoid bare `grep`" in PLANNER_SYSTEM_PROMPT
 
     command_desc = DIAGNOSTIC_TOOL_DEF["function"]["parameters"]["properties"]["command"]["description"]
