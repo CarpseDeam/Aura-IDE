@@ -227,3 +227,39 @@ def build_failed_receipt(
         elapsed_seconds=run.elapsed_seconds,
     )
     return receipt
+
+
+def build_login_session_artifact(
+    *,
+    start_url: str,
+    final_url: str,
+    page_title: str,
+    status: str,
+    browser_profile: str,
+    action_trace: list[dict[str, Any]],
+    errors: list[str],
+    skipped_reason: str | None = None,
+) -> dict[str, Any]:
+    """Build a produced_artifact dict for a login session result.
+
+    Status is one of the login session status values
+    (e.g. ``login_session_closed``, ``login_session_timeout``,
+    ``login_session_failed``).  Snapshots are None because
+    no automated candidate extraction occurs in a login session.
+    """
+    return {
+        "kind": "browse",
+        "status": status,
+        "start_url": start_url,
+        "final_url": final_url,
+        "title": page_title,
+        "action_trace": action_trace,
+        "before_snapshot": None,
+        "after_snapshot": None,
+        "candidate_count": 0,
+        "skipped_reason": skipped_reason,
+        "errors": errors,
+        "browser_profile": browser_profile,
+        "persistent_session": True,
+        "visible": True,
+    }

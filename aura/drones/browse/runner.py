@@ -41,7 +41,168 @@ def _read_browse_settings(permissions: dict) -> dict:
         "visible": bool(permissions.get("visible", False)),
         "requires_login": bool(permissions.get("requires_login", False)),
         "login_required_text": permissions.get("login_required_text", ["log in", "sign in"]),
+        "login_session": bool(permissions.get("login_session", False)),
+        "login_wait_seconds": int(permissions.get("login_wait_seconds", 900)),
     }
+
+
+def _run_login_session_mode(
+    *,
+    workspace_root: Path,
+    run: DroneRun,
+    drone: DroneDefinition,
+    start_url: str,
+    browser_profile: str | None,
+    login_wait_seconds: int,
+    on_content: Callable[[str], None],
+    on_status: Callable[[str], None],
+    on_receipt: Callable[[DroneReceipt], None],
+) -> None:
+    """Run a visible login session and produce a receipt.
+
+    Delegates to ``login_session.run_login_session`` for the browser
+    lifecycle, then builds and saves a receipt from the result.
+    """
+    from aura.drones.browse.login_session import run_login_session
+    from aura.drones.browse.artifacts import build_login_session_artifact
+
+    on_content("Starting visible login session\u2026")
+
+    if not browser_profile:
+        _emit_failed_login(run, drone, start_url,
+                           "browser_profile is required for login session",
+                           workspace_root, on_content, on_status, on_receipt)
+        return
+
+    started = dt.datetime.now(dt.timezone.utc)
+
+    action_trace: list[dict[str, Any]] = [
+        {
+            "type": "open_login_session",
+            "url": start_url,
+            "browser_profile": browser_profile,
+        },
+    ]
+
+    result = run_login_session(
+        start_url=start_url,
+        browser_profile=browser_profile,
+        wait_seconds=login_wait_seconds,
+        on_content=on_content,
+        cancel_event=run.cancel_event,
+    )
+
+    status = result["status"]
+    final_url = result.get("final_url", "")
+    page_title = result.get("title", "")
+    errors: list[str] = result.get("errors", [])
+    elapsed = result.get("elapsed_seconds", 0.0)
+
+    success = status not in ("login_session_failed",)
+    action_trace[0]["success"] = success
+
+    artifact = build_login_session_artifact(
+        start_url=start_url,
+        final_url=final_url,
+        page_title=page_title,
+        status=status,
+        browser_profile=browser_profile,
+        action_trace=action_trace,
+        errors=errors,
+        skipped_reason=(
+            f"Timed out after {login_wait_seconds}s"
+            if status == "login_session_timeout"
+            else (errors[0] if errors else None)
+        ),
+    )
+
+    if status == "login_session_failed":
+        summary = f"Login session failed for profile '{browser_profile}'"
+        summary += f": {errors[0]}" if errors else ""
+        on_content(summary)
+        _save_login_receipt(run, drone, summary, artifact, errors, elapsed,
+                            started, "failed", workspace_root, on_receipt)
+        run.mark("failed")
+        on_status("failed")
+        return
+
+    if status == "login_session_timeout":
+        summary = f"Login session timed out for profile '{browser_profile}'."
+        on_content(summary)
+        _save_login_receipt(run, drone, summary, artifact, errors, elapsed,
+                            started, "completed", workspace_root, on_receipt)
+        run.mark("completed")
+        on_status("completed")
+        return
+
+    # login_session_closed or login_session_cancelled
+    summary = f"Login session closed for profile '{browser_profile}'."
+    on_content(summary)
+    _save_login_receipt(run, drone, summary, artifact, errors, elapsed,
+                        started, "completed", workspace_root, on_receipt)
+    run.mark("completed")
+    on_status("completed")
+
+
+def _save_login_receipt(
+    run: DroneRun,
+    drone: DroneDefinition,
+    summary: str,
+    produced_artifact: dict,
+    errors: list[str],
+    elapsed: float,
+    started: dt.datetime,
+    receipt_status: str,
+    workspace_root: Path,
+    on_receipt: Callable[[DroneReceipt], None],
+) -> None:
+    """Build, save, and emit a login session receipt."""
+    ended = dt.datetime.now(dt.timezone.utc).isoformat()
+    receipt = DroneReceipt(
+        run_id=run.run_id,
+        drone_id=drone.id,
+        drone_name=drone.name,
+        status=receipt_status,
+        started_at=started.isoformat(),
+        ended_at=ended,
+        summary=summary,
+        produced_artifact=produced_artifact,
+        errors=errors,
+        elapsed_seconds=elapsed,
+    )
+    on_receipt(receipt)
+    RunHistoryStore.save_run(workspace_root, receipt)
+
+
+def _emit_failed_login(
+    run: DroneRun,
+    drone: DroneDefinition,
+    start_url: str,
+    msg: str,
+    workspace_root: Path,
+    on_content: Callable[[str], None],
+    on_status: Callable[[str], None],
+    on_receipt: Callable[[DroneReceipt], None],
+) -> None:
+    """Emit a failed receipt when a login session cannot start."""
+    from aura.drones.browse.artifacts import build_login_session_artifact
+
+    on_content(msg)
+    artifact = build_login_session_artifact(
+        start_url=start_url,
+        final_url="",
+        page_title="",
+        status="login_session_failed",
+        browser_profile="",
+        action_trace=[],
+        errors=[msg],
+        skipped_reason=msg,
+    )
+    started = dt.datetime.fromtimestamp(run.started_at, tz=dt.timezone.utc)
+    _save_login_receipt(run, drone, msg, artifact, [msg], 0.0,
+                        started, "failed", workspace_root, on_receipt)
+    run.mark("failed")
+    on_status("failed")
 
 
 def run_browse_drone(
@@ -70,6 +231,24 @@ def run_browse_drone(
     requires_login: bool = settings["requires_login"]
     login_required_text: list[str] = settings["login_required_text"]
     has_action = bool(click_text or fill_text)
+
+    login_session_flag: bool = settings["login_session"]
+    login_wait_seconds: int = settings["login_wait_seconds"]
+
+    # --- Login session mode ---
+    if login_session_flag:
+        _run_login_session_mode(
+            workspace_root=workspace_root,
+            run=run,
+            drone=drone,
+            start_url=start_url,
+            browser_profile=browser_profile,
+            login_wait_seconds=login_wait_seconds,
+            on_content=on_content,
+            on_status=on_status,
+            on_receipt=on_receipt,
+        )
+        return
 
     on_content(f"Navigating to {start_url}\u2026")
 
