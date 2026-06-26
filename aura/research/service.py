@@ -50,6 +50,7 @@ def research_current_info(
 
             deadline = Deadline(limits.timeout_seconds)
             collected: list[Evidence] = []
+            notes: list[str] = []
 
             open_steps = plan_opens(sources, limits)
             for open_step in open_steps:
@@ -58,6 +59,9 @@ def research_current_info(
 
                 page = researcher.open(open_step.payload)
                 clean_text = page.clean_text.strip()
+                if clean_text.startswith("Error:"):
+                    notes.append(f"{open_step.payload}: {clean_text}")
+                    continue
 
                 if clean_text:
                     # Find the matching Source by URL
@@ -68,6 +72,8 @@ def research_current_info(
                             break
                     if matching_source is None:
                         matching_source = Source(url=open_step.payload, title=page.title)
+                    elif page.url and page.url != matching_source.url:
+                        matching_source = Source(url=page.url, title=page.title or matching_source.title)
 
                     evidence = Evidence(
                         source=matching_source,
@@ -82,7 +88,7 @@ def research_current_info(
                     sources=sources,
                     evidence=collected,
                     ok=True,
-                    notes=[f"researched {len(collected)} page(s)"],
+                    notes=[f"researched {len(collected)} page(s)", *notes],
                 )
             else:
                 return ResearchResult(
@@ -90,7 +96,7 @@ def research_current_info(
                     sources=sources,
                     evidence=collected,
                     ok=False,
-                    notes=["all pages returned empty content"],
+                    notes=[*notes, "all pages returned empty content"],
                 )
         finally:
             researcher.close()

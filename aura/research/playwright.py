@@ -15,6 +15,21 @@ from aura.research.models import Source
 from aura.resources import get_resource_path
 
 
+_BING_CHROME_TITLES = {
+    "all",
+    "search",
+    "images",
+    "videos",
+    "maps",
+    "news",
+    "shopping",
+    "flights",
+    "travel",
+    "more",
+    "tools",
+}
+
+
 class PlaywrightResearcher:
     """Manages a local Playwright browser instance for web research.
 
@@ -97,23 +112,41 @@ class PlaywrightResearcher:
             page.goto(url)
 
             links = page.eval_on_selector_all(
-                "a",
-                "els => els.map(e => ({href: e.href, text: e.innerText}))",
+                "li.b_algo h2 a",
+                "els => els.map(e => ({href: e.href, text: "
+                "(e.innerText || e.textContent || e.getAttribute('aria-label') || '')}))",
             )
+            if not links:
+                links = page.eval_on_selector_all(
+                    "a",
+                    "els => els.map(e => ({href: e.href, text: "
+                    "(e.innerText || e.textContent || e.getAttribute('aria-label') || '')}))",
+                )
 
             seen: set[str] = set()
             sources: list[Source] = []
             for link in links:
-                href = link["href"]
-                text = link["text"]
+                href = (link.get("href") or "").strip()
+                title = (link.get("text") or "").strip()
+                if not href or href.startswith("javascript:"):
+                    continue
                 if not href.startswith(("http://", "https://")):
                     continue
-                if "bing.com" in href or "microsoft.com" in href:
+                if not title:
+                    continue
+                parsed = urllib.parse.urlparse(href)
+                hostname = parsed.hostname or ""
+                path = parsed.path.rstrip("/")
+                is_bing_url = hostname == "bing.com" or hostname.endswith(".bing.com")
+                is_bing_redirect = is_bing_url and path.startswith("/ck/a")
+                if is_bing_url and title.lower() in _BING_CHROME_TITLES:
+                    continue
+                if is_bing_url and not is_bing_redirect:
                     continue
                 if href in seen:
                     continue
                 seen.add(href)
-                sources.append(Source(url=href, title=text.strip()))
+                sources.append(Source(url=href, title=title))
 
             return sources[: self._limits.max_pages]
         except Exception as exc:
@@ -134,10 +167,11 @@ class PlaywrightResearcher:
         page = self._context.new_page()
         try:
             page.goto(url)
+            final_url = page.url
             title = page.title()
             body_text = page.inner_text("body")
             return ParsedPage(
-                url=url,
+                url=final_url,
                 title=title,
                 clean_text=normalize_text(body_text),
             )
