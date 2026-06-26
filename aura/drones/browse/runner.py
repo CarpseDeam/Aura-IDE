@@ -10,37 +10,13 @@ from typing import Any, Callable
 
 from aura.browser.runtime import BrowserRuntime
 from aura.drones.browse.models import BrowseCandidate, BrowseSnapshot
+from aura.drones.browse.policy import PolicyResult, classify_action
 from aura.drones.definition import DroneDefinition
 from aura.drones.receipt import DroneReceipt
 from aura.drones.run import DroneRun
 from aura.drones.store import RunHistoryStore
 
 logger = logging.getLogger(__name__)
-
-# Deny list — hard block with message about future approval gate.
-# Actions containing any of these phrases (case-insensitive substring match)
-# on label or href are denied.
-DENIED_PHRASES: tuple[str, ...] = (
-    "submit",
-    "send",
-    "delete",
-    "remove",
-    "purchase",
-    "buy",
-    "checkout",
-    "place order",
-    "confirm",
-    "save",
-    "unsubscribe",
-    "logout",
-    "sign out",
-    "connect",
-    "upload",
-    "pay",
-    "subscribe",
-    "cancel account",
-    "close account",
-)
 
 
 def _read_browse_settings(permissions: dict) -> dict:
@@ -51,6 +27,7 @@ def _read_browse_settings(permissions: dict) -> dict:
         "fill_text": permissions.get("fill_text") or None,
         "fill_value": permissions.get("fill_value") or None,
         "max_candidates": int(permissions.get("max_candidates", 30)),
+        "allowed_consequential_actions": permissions.get("allowed_consequential_actions", []),
     }
 
 
@@ -233,17 +210,6 @@ def _find_candidate(
     return min(matches, key=lambda m: len(m.label))
 
 
-def _is_denied_action(candidate: BrowseCandidate) -> str | None:
-    """Check if a candidate action is denied by the deny list.
-
-    Returns the matched deny phrase or None if allowed.
-    """
-    label_lower = candidate.label.lower()
-    href_lower = candidate.href.lower()
-    for phrase in DENIED_PHRASES:
-        if phrase in label_lower or phrase in href_lower:
-            return phrase
-    return None
 
 
 def run_browse_drone(
@@ -266,6 +232,7 @@ def run_browse_drone(
     fill_text = settings["fill_text"]
     fill_value = settings["fill_value"]
     max_candidates = settings["max_candidates"]
+    allowed_consequential_actions = settings["allowed_consequential_actions"]
     has_action = bool(click_text or fill_text)
 
     on_content(f"Navigating to {start_url}\u2026")
@@ -300,10 +267,11 @@ def run_browse_drone(
             {"type": "navigate", "url": start_url, "success": True},
         ]
         skipped_reason: str | None = None
+        policy_block: tuple[PolicyResult, BrowseCandidate, str] | None = None
+        action_executed: bool = False
 
         # --- Optional click ---
         if click_text:
-            # Re-extract candidates (they may have changed after navigation)
             candidates = _extract_candidates(page, max_candidates=max_candidates)
             candidate = _find_candidate(candidates, click_text)
 
@@ -313,27 +281,27 @@ def run_browse_drone(
                         "type": "click",
                         "candidate_id": "",
                         "label": click_text,
+                        "href": "",
+                        "policy_result": None,
+                        "policy_reason": "",
+                        "matched_text": None,
                         "success": False,
                     }
                 )
-                skipped_reason = (
-                    f"No matching visible enabled candidate for '{click_text}'"
-                )
-            else:
-                denied_phrase = _is_denied_action(candidate)
-                if denied_phrase:
-                    action_trace.append(
-                        {
-                            "type": "click",
-                            "candidate_id": candidate.id,
-                            "label": candidate.label,
-                            "success": False,
-                        }
-                    )
-                    skipped_reason = (
-                        f"Action skipped: requires future approval gate \u2014 {denied_phrase}"
-                    )
-                else:
+                if not skipped_reason:
+                    skipped_reason = f"No matching visible enabled candidate for '{click_text}'"
+            elif policy_block is None:
+                policy_result = classify_action("click", candidate, page.url, page.title(), allowed_consequential_actions)
+                entry = {
+                    "type": "click",
+                    "candidate_id": candidate.id,
+                    "label": candidate.label,
+                    "href": candidate.href,
+                    "policy_result": policy_result.verdict,
+                    "policy_reason": policy_result.reason,
+                    "matched_text": policy_result.matched_text,
+                }
+                if policy_result.verdict == "allow":
                     try:
                         page.click(f'[data-aura-browse-id="{candidate.id}"]')
                         page.wait_for_timeout(500)
@@ -344,29 +312,21 @@ def run_browse_drone(
                                 "wait_for_load_state timed out after click on %s",
                                 candidate.id,
                             )
-                        action_trace.append(
-                            {
-                                "type": "click",
-                                "candidate_id": candidate.id,
-                                "label": candidate.label,
-                                "success": True,
-                            }
-                        )
+                        entry["success"] = True
+                        action_executed = True
                     except Exception as exc:
-                        action_trace.append(
-                            {
-                                "type": "click",
-                                "candidate_id": candidate.id,
-                                "label": candidate.label,
-                                "success": False,
-                            }
-                        )
+                        entry["success"] = False
                         if not skipped_reason:
                             skipped_reason = str(exc)
+                else:
+                    entry["success"] = False
+                    policy_block = (policy_result, candidate, "click")
+                    if not skipped_reason:
+                        skipped_reason = policy_result.reason
+                action_trace.append(entry)
 
         # --- Optional fill ---
-        if fill_text and fill_value:
-            # Re-extract candidates (page may have changed after click)
+        if fill_text and fill_value and policy_block is None:
             candidates = _extract_candidates(page, max_candidates=max_candidates)
             candidate = _find_candidate(candidates, fill_text)
 
@@ -376,47 +336,82 @@ def run_browse_drone(
                         "type": "fill",
                         "candidate_id": "",
                         "label": fill_text,
+                        "href": "",
+                        "policy_result": None,
+                        "policy_reason": "",
+                        "matched_text": None,
                         "value": fill_value,
                         "success": False,
                     }
                 )
                 if not skipped_reason:
-                    skipped_reason = (
-                        f"No matching visible enabled input for '{fill_text}'"
-                    )
+                    skipped_reason = f"No matching visible enabled input for '{fill_text}'"
             else:
-                try:
-                    page.fill(f'[data-aura-browse-id="{candidate.id}"]', fill_value)
-                    action_trace.append(
-                        {
-                            "type": "fill",
-                            "candidate_id": candidate.id,
-                            "label": candidate.label,
-                            "value": fill_value,
-                            "success": True,
-                        }
-                    )
-                except Exception as exc:
-                    action_trace.append(
-                        {
-                            "type": "fill",
-                            "candidate_id": candidate.id,
-                            "label": candidate.label,
-                            "value": fill_value,
-                            "success": False,
-                        }
-                    )
+                policy_result = classify_action("fill", candidate, page.url, page.title(), allowed_consequential_actions)
+                entry = {
+                    "type": "fill",
+                    "candidate_id": candidate.id,
+                    "label": candidate.label,
+                    "href": candidate.href,
+                    "policy_result": policy_result.verdict,
+                    "policy_reason": policy_result.reason,
+                    "matched_text": policy_result.matched_text,
+                    "value": fill_value,
+                }
+                if policy_result.verdict == "allow":
+                    try:
+                        page.fill(f'[data-aura-browse-id="{candidate.id}"]', fill_value)
+                        entry["success"] = True
+                        action_executed = True
+                    except Exception as exc:
+                        entry["success"] = False
+                        if not skipped_reason:
+                            skipped_reason = str(exc)
+                else:
+                    entry["success"] = False
+                    policy_block = (policy_result, candidate, "fill")
                     if not skipped_reason:
-                        skipped_reason = str(exc)
+                        skipped_reason = policy_result.reason
+                action_trace.append(entry)
 
-        # Snapshot #2 — after action(s), only if there was an action
-        after_snapshot = (
-            _capture_snapshot(page, max_candidates=max_candidates)
-            if has_action
-            else None
-        )
+        # Receipt-building: branch on policy_block
+        if policy_block is not None:
+            policy_result, banned_candidate, banned_action_type = policy_block
+            proposed_action = {
+                "action_type": banned_action_type,
+                "target_id": banned_candidate.id,
+                "target_label": banned_candidate.label,
+                "target_role": banned_candidate.role,
+                "target_tag": banned_candidate.tag,
+                "target_href": banned_candidate.href,
+                "current_url": page.url,
+                "page_title": page.title(),
+                "reason": policy_result.reason,
+                "matched_text": policy_result.matched_text,
+            }
+            artifact_status = "needs_planner_decision" if policy_result.verdict == "needs_planner_decision" else "blocked_manual"
+            after_snapshot = None
+        else:
+            artifact_status = "completed"
+            after_snapshot = _capture_snapshot(page, max_candidates=max_candidates) if (action_executed or has_action) else None
 
         ended = dt.datetime.now(dt.timezone.utc).isoformat()
+        produced_artifact = {
+            "kind": "browse",
+            "status": artifact_status,
+            "start_url": start_url,
+            "final_url": page.url,
+            "title": page.title(),
+            "action_trace": action_trace,
+            "before_snapshot": before_snapshot.to_dict(),
+            "after_snapshot": after_snapshot.to_dict() if after_snapshot else None,
+            "candidate_count": before_snapshot.candidate_count,
+            "skipped_reason": skipped_reason,
+            "errors": [],
+        }
+        if policy_block:
+            produced_artifact["proposed_action"] = proposed_action
+
         receipt = DroneReceipt(
             run_id=run.run_id,
             drone_id=drone.id,
@@ -427,19 +422,7 @@ def run_browse_drone(
             ).isoformat(),
             ended_at=ended,
             summary=f"Browsed {page.url} \u2014 {before_snapshot.candidate_count} candidates",
-            produced_artifact={
-                "kind": "browse",
-                "status": "completed",
-                "start_url": start_url,
-                "final_url": page.url,
-                "title": page.title(),
-                "action_trace": action_trace,
-                "before_snapshot": before_snapshot.to_dict(),
-                "after_snapshot": after_snapshot.to_dict() if after_snapshot else None,
-                "candidate_count": before_snapshot.candidate_count,
-                "skipped_reason": skipped_reason,
-                "errors": [],
-            },
+            produced_artifact=produced_artifact,
             elapsed_seconds=run.elapsed_seconds,
         )
         on_receipt(receipt)
