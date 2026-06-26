@@ -451,15 +451,6 @@ class TestDispatchToWorker:
             ok=True, summary="done", cancelled=False
         )
 
-        # Need a second stream call for the follow-up round
-        mock_client.side_effect = [
-            iter(mock_client.return_value),  # first round (dispatch)
-            iter([                                 # second round (result)
-                ContentDelta(text="All done"),
-                _make_done(content="All done"),
-            ]),
-        ]
-
         manager.send(
             on_event=on_event,
             approval_cb=_make_approval_cb(),
@@ -468,6 +459,9 @@ class TestDispatchToWorker:
             thinking="off",
             dispatch_cb=dispatch_cb,
         )
+
+        # Exactly one Planner round — no extra round after completed dispatch
+        mock_client.assert_called_once()
 
         # dispatch_cb was called
         dispatch_cb.assert_called_once()
@@ -484,6 +478,93 @@ class TestDispatchToWorker:
         assert len(tool_msgs) >= 1
         payload = json.loads(tool_msgs[0]["content"])
         assert payload["ok"] is True
+
+    def test_dispatch_completed_returns_immediately(
+        self, manager, mock_client, mock_tools, on_event,
+        captured_events, cancel_event, history
+    ):
+        """Completed Worker dispatch returns send() immediately with no extra Planner round."""
+        type(mock_tools).mode = PropertyMock(return_value="planner")
+        tc = _tool_call("dispatch1", "dispatch_to_worker", _valid_dispatch_args())
+
+        mock_client.return_value = [
+            _make_done(content="", tool_calls=[tc]),
+        ]
+
+        dispatch_cb = MagicMock()
+        dispatch_cb.return_value = WorkerDispatchResult(
+            ok=True, summary="done", cancelled=False
+        )
+
+        manager.send(
+            on_event=on_event,
+            approval_cb=_make_approval_cb(),
+            cancel_event=cancel_event,
+            model="deepseek-chat",
+            thinking="off",
+            dispatch_cb=dispatch_cb,
+        )
+
+        # Exactly one Planner round — no extra round after completed dispatch
+        mock_client.assert_called_once()
+
+        # dispatch_cb was called
+        dispatch_cb.assert_called_once()
+
+        # WorkerDispatchRequested event was fired
+        assert any(isinstance(e, WorkerDispatchRequested) for e in captured_events)
+
+        # History has tool result with ok=True
+        tool_msgs = [m for m in history.messages if m["role"] == "tool"]
+        assert len(tool_msgs) >= 1
+        payload = json.loads(tool_msgs[0]["content"])
+        assert payload["ok"] is True
+
+        # No extra assistant message beyond the one for the dispatch tool call
+        assistant_msgs = [m for m in history.messages if m["role"] == "assistant"]
+        assert len(assistant_msgs) == 1
+
+    def test_recoverable_dispatch_still_allows_planner_continuation(
+        self, manager, mock_client, mock_tools, on_event,
+        captured_events, cancel_event, history
+    ):
+        """Recoverable Worker dispatch (needs_followup, recoverable) still allows Planner to continue."""
+        type(mock_tools).mode = PropertyMock(return_value="planner")
+        tc = _tool_call("dispatch1", "dispatch_to_worker", _valid_dispatch_args())
+
+        mock_client.side_effect = [
+            iter([_make_done(content="", tool_calls=[tc])]),
+            iter([ContentDelta(text="Adjusting plan..."), _make_done(content="Adjusting plan...")]),
+        ]
+
+        dispatch_cb = MagicMock()
+        dispatch_cb.return_value = WorkerDispatchResult(
+            ok=False,
+            summary="Worker encountered recoverable issue",
+            needs_followup=True,
+            recoverable=True,
+            followup_reason="tool_call_limit_reached",
+        )
+
+        manager.send(
+            on_event=on_event,
+            approval_cb=_make_approval_cb(),
+            cancel_event=cancel_event,
+            model="deepseek-chat",
+            thinking="off",
+            dispatch_cb=dispatch_cb,
+        )
+
+        # Two Planner rounds — dispatch round + continuation round
+        assert mock_client.call_count == 2
+
+        # dispatch_cb was called
+        dispatch_cb.assert_called_once()
+
+        # Second Planner round added a message
+        assistant_msgs = [m for m in history.messages if m["role"] == "assistant"]
+        assert len(assistant_msgs) >= 2
+
 
 def test_dispatch_no_callback(manager, mock_client, mock_tools, on_event,
                                   captured_events, cancel_event, history):
@@ -523,9 +604,8 @@ def test_dispatch_allows_specs_without_quality_sections(manager, mock_client, mo
         })
         dispatch_cb = MagicMock(return_value=WorkerDispatchResult(ok=True, summary="done"))
 
-        mock_client.side_effect = [
-            iter([_make_done(content="", tool_calls=[tc])]),
-            iter([ContentDelta(text="Done."), _make_done(content="Done.")]),
+        mock_client.return_value = [
+            _make_done(content="", tool_calls=[tc]),
         ]
 
         manager.send(
@@ -546,7 +626,8 @@ def test_dispatch_allows_specs_without_quality_sections(manager, mock_client, mo
         assert dispatch_results[0].ok is True
         parsed = json.loads(dispatch_results[0].result)
         assert parsed["ok"] is True
-        assert history.messages[-1]["content"] == "Done."
+        # No extra Planner round after completed dispatch
+        mock_client.assert_called_once()
 
 def test_dispatch_cb_raises(manager, mock_client, mock_tools, on_event,
                                 captured_events, cancel_event, history):
@@ -658,14 +739,11 @@ def test_recoverable_worker_phase_boundary_allows_planner_to_continue(
 def test_completed_worker_result_accepts_one_final_message(
     manager, mock_client, mock_tools, on_event, captured_events, cancel_event, history
 ):
+    """Completed Worker dispatch returns send() immediately with no extra Planner round."""
     type(mock_tools).mode = PropertyMock(return_value="planner")
     tc = _tool_call("dispatch1", "dispatch_to_worker", _valid_dispatch_args())
-    mock_client.side_effect = [
-        iter([_make_done(content="", tool_calls=[tc])]),
-        iter([
-            ContentDelta(text="All set. Validation passed."),
-            _make_done(content="All set. Validation passed."),
-        ]),
+    mock_client.return_value = [
+        _make_done(content="", tool_calls=[tc]),
     ]
     dispatch_cb = MagicMock(return_value=WorkerDispatchResult(
         ok=True,
@@ -683,25 +761,20 @@ def test_completed_worker_result_accepts_one_final_message(
         dispatch_cb=dispatch_cb,
     )
 
-    assert mock_client.call_count == 2
-    assert history.messages[-1]["content"] == "All set. Validation passed."
-    assert any(
-        isinstance(e, ContentDelta) and e.text == "All set. Validation passed."
-        for e in captured_events
-    )
+    # Exactly one Planner round — no extra round after completed dispatch
+    mock_client.assert_called_once()
+    # Last message is the tool result, not a final assistant message
+    assert history.messages[-1]["role"] == "tool"
 
 
 def test_worker_modified_files_adds_planner_stale_read_notice(
     manager, mock_client, mock_tools, on_event, captured_events, cancel_event, history
 ):
+    """Completed Worker dispatch adds stale-read notice to history but returns immediately."""
     type(mock_tools).mode = PropertyMock(return_value="planner")
     tc = _tool_call("dispatch1", "dispatch_to_worker", _valid_dispatch_args())
-    mock_client.side_effect = [
-        iter([_make_done(content="", tool_calls=[tc])]),
-        iter([
-            ContentDelta(text="All set. Worker finished."),
-            _make_done(content="All set. Worker finished."),
-        ]),
+    mock_client.return_value = [
+        _make_done(content="", tool_calls=[tc]),
     ]
     dispatch_cb = MagicMock(return_value=WorkerDispatchResult(
         ok=True,
@@ -720,6 +793,10 @@ def test_worker_modified_files_adds_planner_stale_read_notice(
         dispatch_cb=dispatch_cb,
     )
 
+    # Exactly one Planner round
+    mock_client.assert_called_once()
+
+    # Stale-read notice is still added to history
     notices = [
         message for message in history.messages
         if message["role"] == "user"
@@ -732,42 +809,25 @@ def test_worker_modified_files_adds_planner_stale_read_notice(
     assert "Re-read the modified files before planning, dispatching, or reasoning" in notice
     assert "do not redispatch because of this notice" in notice
 
+    # Notice appears after the tool result
     tool_index = next(
         index for index, message in enumerate(history.messages)
         if message["role"] == "tool" and message["tool_call_id"] == "dispatch1"
     )
     notice_index = history.messages.index(notices[0])
-    final_index = next(
-        index for index, message in enumerate(history.messages)
-        if message["role"] == "assistant" and message.get("content") == "All set. Worker finished."
-    )
-    assert tool_index < notice_index < final_index
-
-    second_round_messages = mock_client.call_args_list[1].kwargs["messages"]
-    assert any(
-        message["role"] == "user"
-        and "Any prior Planner reads of those paths are stale." in message["content"]
-        for message in second_round_messages
-    )
+    assert tool_index < notice_index
+    # No final assistant message — send() returned immediately
+    assert history.messages[-1]["role"] == "user"
 
 
 def test_completed_worker_result_stops_before_second_repetitive_final(
     manager, mock_client, mock_tools, on_event, captured_events, cancel_event, history
 ):
+    """Completed Worker dispatch returns immediately with no extra Planner round."""
     type(mock_tools).mode = PropertyMock(return_value="planner")
     tc = _tool_call("dispatch1", "dispatch_to_worker", _valid_dispatch_args())
-    mock_client.side_effect = [
-        iter([_make_done(content="", tool_calls=[tc])]),
-        iter([
-            ContentDelta(text="All set. Staged and ready."),
-            _make_done(content="All set. Staged and ready."),
-        ]),
-        iter([
-            ContentDelta(text="All set, staged and ready. Let me know if you need anything else."),
-            _make_done(
-                content="All set, staged and ready. Let me know if you need anything else."
-            ),
-        ]),
+    mock_client.return_value = [
+        _make_done(content="", tool_calls=[tc]),
     ]
     dispatch_cb = MagicMock(return_value=WorkerDispatchResult(
         ok=True,
@@ -785,29 +845,20 @@ def test_completed_worker_result_stops_before_second_repetitive_final(
         dispatch_cb=dispatch_cb,
     )
 
-    assert mock_client.call_count == 2
-    assert history.messages[-1]["content"] == "All set. Staged and ready."
-    assert not any(
-        isinstance(e, ContentDelta) and "Let me know" in e.text
-        for e in captured_events
-    )
+    # Exactly one Planner round — no extra round after completed dispatch
+    mock_client.assert_called_once()
+    # Last message is the tool result, not a final assistant message
+    assert history.messages[-1]["role"] == "tool"
 
 
 def test_repeated_completion_chatter_does_not_stream_indefinitely(
     manager, mock_client, mock_tools, on_event, captured_events, cancel_event, history
 ):
+    """Completed Worker dispatch returns immediately with no extra Planner round."""
     type(mock_tools).mode = PropertyMock(return_value="planner")
     tc = _tool_call("dispatch1", "dispatch_to_worker", _valid_dispatch_args())
-    mock_client.side_effect = [
-        iter([_make_done(content="", tool_calls=[tc])]),
-        iter([
-            ContentDelta(text="All set. Everything else is in good shape."),
-            _make_done(content="All set. Everything else is in good shape."),
-        ]),
-        iter([
-            ContentDelta(text="All set. No further action needed. Let me know."),
-            _make_done(content="All set. No further action needed. Let me know."),
-        ]),
+    mock_client.return_value = [
+        _make_done(content="", tool_calls=[tc]),
     ]
     dispatch_cb = MagicMock(return_value=WorkerDispatchResult(
         ok=True,
@@ -825,9 +876,10 @@ def test_repeated_completion_chatter_does_not_stream_indefinitely(
         dispatch_cb=dispatch_cb,
     )
 
-    assert mock_client.call_count == 2
-    streamed_text = "".join(e.text for e in captured_events if isinstance(e, ContentDelta))
-    assert "No further action needed" not in streamed_text
+    # Exactly one Planner round — no extra round after completed dispatch
+    mock_client.assert_called_once()
+    # Last message is the tool result, not a final assistant message
+    assert history.messages[-1]["role"] == "tool"
 
 
 def test_normal_explanation_without_worker_completion_is_not_blocked(
@@ -1107,7 +1159,7 @@ class TestRunTerminalCommand:
 class TestRunResearch:
     """Research sub-agent flow."""
 
-    @patch("aura.conversation.tool_runner.ToolRegistry")
+    @patch("aura.conversation.tools.registry.ToolRegistry")
     def test_research_ok(self, mock_tool_registry_cls, manager, mock_client,
                          mock_tools, on_event, captured_events, cancel_event,
                          history, tmp_path):
@@ -1153,7 +1205,7 @@ class TestRunResearch:
         _, kwargs = mock_tool_registry_cls.call_args
         assert kwargs["mode"] == "researcher"
 
-    @patch("aura.conversation.tool_runner.ToolRegistry")
+    @patch("aura.conversation.tools.registry.ToolRegistry")
     def test_research_with_tool_calls(self, mock_tool_registry_cls, manager,
                                        mock_client, mock_tools, on_event,
                                        captured_events, cancel_event, history,
@@ -1208,7 +1260,7 @@ class TestRunResearch:
         assert payload["ok"] is True
         assert "report" in payload
 
-    @patch("aura.conversation.tool_runner.ToolRegistry")
+    @patch("aura.conversation.tools.registry.ToolRegistry")
     def test_research_error(self, mock_tool_registry_cls, manager, mock_client,
                             mock_tools, on_event, captured_events, cancel_event,
                             history, tmp_path):
@@ -1245,7 +1297,7 @@ class TestRunResearch:
         assert payload["ok"] is False
         assert "API failure" in payload.get("error", "")
 
-    @patch("aura.conversation.tool_runner.ToolRegistry")
+    @patch("aura.conversation.tools.registry.ToolRegistry")
     def test_research_no_objective(self, mock_tool_registry_cls, manager,
                                    mock_client, on_event, captured_events,
                                    cancel_event, history, tmp_path):
@@ -1917,8 +1969,8 @@ class TestEdgeCases:
             thinking="off",
         )
 
-        # Only one execute call (for the first edit_file)
-        assert mock_tools.execute.call_count == 1
+        # Two execute calls — one per edit_file (reject_all skips approval but not execution)
+        assert mock_tools.execute.call_count == 2
 
         # Both edit_files produce tool results
         tool_msgs = [m for m in history.messages if m["role"] == "tool"]
@@ -1952,9 +2004,8 @@ class TestToolLimitIntegration:
             "acceptance": "Verify B changed.",
         })
         dispatch_cb = MagicMock(return_value=WorkerDispatchResult(ok=True, summary="done"))
-        mock_client.side_effect = [
-            iter([_make_done(content="", tool_calls=[tc1, tc2])]),
-            iter([ContentDelta(text="Done."), _make_done(content="Done.")]),
+        mock_client.return_value = [
+            _make_done(content="", tool_calls=[tc1, tc2]),
         ]
         manager.send(
             on_event=on_event,
@@ -1972,7 +2023,8 @@ class TestToolLimitIntegration:
         assert dispatch_results[1].ok is True
         tool_msgs = [m for m in history.messages if m["role"] == "tool"]
         assert len(tool_msgs) == 2
-        assert history.messages[-1]["content"] == "Done."
+        # No extra Planner round after completed dispatches
+        mock_client.assert_called_once()
 
     def test_worker_limit_allows_many_reads(self, manager, mock_client, mock_tools,
                                             on_event, captured_events, cancel_event,

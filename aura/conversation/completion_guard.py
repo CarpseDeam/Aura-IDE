@@ -7,11 +7,7 @@ import re
 from typing import Any
 
 from aura.conversation.tool_limits import WRITE_TOOLS
-from aura.conversation.dispatch import (
-    WorkerDispatchResult,
-    WorkerOutcomeStatus,
-    infer_outcome_status,
-)
+
 
 COMPLETION_PHRASE_MARKERS = (
     "all set",
@@ -51,17 +47,6 @@ def assistant_message_text(message: dict[str, Any]) -> str:
         return "\n".join(parts)
     return ""
 
-
-def is_completed_worker_result(result: WorkerDispatchResult | None) -> bool:
-    if result is None or result.cancelled:
-        return False
-    if result.needs_followup or result.recoverable or result.phase_boundary:
-        return False
-    status = infer_outcome_status(result)
-    return status in {
-        WorkerOutcomeStatus.completed.value,
-        WorkerOutcomeStatus.completed_with_caveats.value,
-    }
 
 
 def terminal_result_completed(info: dict[str, Any] | None) -> bool:

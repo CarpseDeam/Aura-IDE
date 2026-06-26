@@ -42,7 +42,6 @@ from aura.conversation import _edit_shapes
 from aura.conversation._recovery_tool_policy import WORKER_RECOVERY_ALWAYS_ALLOWED, syntax_repair_tool_allowed
 from aura.conversation.completion_guard import (
     assistant_message_text,
-    is_completed_worker_result,
     is_repetitive_completion_final,
     terminal_result_completed,
     tool_result_completes_action,
@@ -834,7 +833,14 @@ class ConversationManager:
                     return {
                         "id": tool_call_id,
                         "skip": True,
-                        "completed_dispatch_for_final": is_completed_worker_result(result),
+                        "completed_dispatch_for_final": (
+                            result is not None
+                            and not result.cancelled
+                            and not result.needs_followup
+                            and not result.recoverable
+                            and not result.phase_boundary
+                            and result.ok
+                        ),
                         "planner_stale_read_files": (
                             list(result.modified_files) if result and result.modified_files else []
                         ),
@@ -1055,7 +1061,9 @@ class ConversationManager:
                 worker_needs_final_report = True
                 continue
 
-            if completed_dispatch_for_final or completed_tool_result_for_final:
+            if completed_dispatch_for_final:
+                return
+            if completed_tool_result_for_final:
                 task_completion_context = True
                 continue
 
