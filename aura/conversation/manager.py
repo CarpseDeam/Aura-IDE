@@ -45,6 +45,7 @@ from aura.conversation.completion_guard import (
     is_repetitive_completion_final,
     terminal_result_completed,
     tool_result_completes_action,
+    worker_dispatch_is_terminal,
 )
 from aura.conversation.dispatch import (
     DispatchCallback,
@@ -791,14 +792,7 @@ class ConversationManager:
                     return {
                         "id": tool_call_id,
                         "skip": True,
-                        "completed_dispatch_for_final": (
-                            result is not None
-                            and not result.cancelled
-                            and not result.needs_followup
-                            and not result.recoverable
-                            and not result.phase_boundary
-                            and result.ok
-                        ),
+                        "completed_dispatch_for_final": worker_dispatch_is_terminal(result),
                         "planner_stale_read_files": (
                             list(result.modified_files) if result and result.modified_files else []
                         ),

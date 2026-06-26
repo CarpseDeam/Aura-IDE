@@ -851,7 +851,7 @@ def test_completed_worker_result_stops_before_second_repetitive_final(
     assert history.messages[-1]["role"] == "tool"
 
 
-def test_repeated_completion_chatter_does_not_stream_indefinitely(
+def test_completed_with_caveats_does_not_call_planner_again(
     manager, mock_client, mock_tools, on_event, captured_events, cancel_event, history
 ):
     """Completed Worker dispatch returns immediately with no extra Planner round."""
@@ -862,9 +862,10 @@ def test_repeated_completion_chatter_does_not_stream_indefinitely(
     ]
     dispatch_cb = MagicMock(return_value=WorkerDispatchResult(
         ok=True,
-        summary="done",
-        needs_followup=False,
         status="completed_with_caveats",
+        summary="done with caveats",
+        modified_files=["a.py"],
+        extras={"caveats": ["minor caveat"]},
     ))
 
     manager.send(
@@ -878,8 +879,10 @@ def test_repeated_completion_chatter_does_not_stream_indefinitely(
 
     # Exactly one Planner round — no extra round after completed dispatch
     mock_client.assert_called_once()
-    # Last message is the tool result, not a final assistant message
-    assert history.messages[-1]["role"] == "tool"
+    # Tool result is in history (stale-read notice may follow from modified_files)
+    assert any(m["role"] == "tool" for m in history.messages)
+    # The terminal dispatch result is present
+    assert any("done with caveats" in str(m.get("content", "")) for m in history.messages)
 
 
 def test_normal_explanation_without_worker_completion_is_not_blocked(
