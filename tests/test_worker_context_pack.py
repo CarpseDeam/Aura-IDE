@@ -20,6 +20,22 @@ def test_basic_pack(tmp_workspace: Path) -> None:
     assert "aura/config.py" in result
 
 
+def test_pack_header_does_not_repeat_dispatch_spec_or_acceptance(tmp_workspace: Path) -> None:
+    result = build_worker_context_pack(
+        tmp_workspace,
+        files=["aura/config.py"],
+        goal="Test goal",
+        spec="Do not duplicate this spec.",
+        acceptance="Do not duplicate this acceptance.",
+    )
+
+    assert "Goal: Test goal" in result
+    assert "Spec:" not in result
+    assert "Acceptance:" not in result
+    assert "Do not duplicate this spec." not in result
+    assert "Do not duplicate this acceptance." not in result
+
+
 def test_max_chars_respected(tmp_workspace: Path) -> None:
     """Setting max_chars=50 limits the output length."""
     result = build_worker_context_pack(

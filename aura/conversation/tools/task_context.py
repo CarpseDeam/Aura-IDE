@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -174,10 +175,10 @@ def _query_context_section(workspace_root: Path, query: str) -> tuple[ContextPac
             score = _line_score(line, rel, terms)
             if score <= 0:
                 continue
+            hits.append((score, {"path": rel, "line_number": line_number, "line": line.strip()}))
             if len(hits) >= _MAX_QUERY_HITS:
                 truncated = True
                 break
-            hits.append((score, {"path": rel, "line_number": line_number, "line": line.strip()}))
         if truncated:
             break
 
@@ -220,17 +221,58 @@ def _symbol_context_section(workspace_root: Path, symbols: list[str]) -> tuple[C
     return ContextPackSection("Symbol Hits", body_lines), truncated
 
 
-def _iter_text_candidates(workspace_root: Path):
-    for path in sorted(workspace_root.rglob("*"), key=lambda item: safe_relative_to(item, workspace_root).as_posix()):
-        if not path.is_file():
+def _iter_text_candidates(workspace_root: Path, *, max_files: int = 500):
+    yielded = 0
+    root = workspace_root.resolve()
+    stack = [root]
+
+    while stack and yielded < max_files:
+        directory = stack.pop()
+        child_dirs: list[Path] = []
+        try:
+            with os.scandir(directory) as scanner:
+                entries = sorted(
+                    scanner,
+                    key=lambda entry: entry.name.lower(),
+                )
+                for entry in entries:
+                    entry_path = Path(entry.path)
+                    try:
+                        resolved = entry_path.resolve()
+                    except OSError:
+                        continue
+                    if not safe_is_relative_to(resolved, root):
+                        continue
+
+                    rel = safe_relative_to(resolved, root)
+                    if entry.is_dir(follow_symlinks=False):
+                        if _should_skip_dir(rel):
+                            continue
+                        child_dirs.append(resolved)
+                        continue
+
+                    if not entry.is_file(follow_symlinks=False):
+                        continue
+                    if _should_skip_file(rel):
+                        continue
+
+                    yield resolved
+                    yielded += 1
+                    if yielded >= max_files:
+                        break
+        except OSError:
             continue
-        rel = safe_relative_to(path, workspace_root)
-        if _should_skip(rel):
-            continue
-        yield path
+
+        stack.extend(reversed(child_dirs))
 
 
-def _should_skip(rel_path: Path) -> bool:
+def _should_skip_dir(rel_path: Path) -> bool:
+    if any(part in SKIP_DIRS or part.startswith(".") for part in rel_path.parts):
+        return True
+    return False
+
+
+def _should_skip_file(rel_path: Path) -> bool:
     if any(part in SKIP_DIRS or part.startswith(".") for part in rel_path.parts):
         return True
     return rel_path.suffix in SKIP_FILE_SUFFIXES

@@ -32,8 +32,6 @@ def assemble_worker_context_pack(
         "",
         f"Goal: {goal}",
         f"Files: {', '.join(files)}",
-        f"Spec: {spec}",
-        f"Acceptance: {acceptance}",
     ]
     tracker.add_section("\n".join(header_lines))
 

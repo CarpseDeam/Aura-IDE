@@ -280,6 +280,8 @@ class AuraPlayground(QWidget):
         self._info_hub.append_content(text)
 
     def add_tool_call(self, worker_tool_id: str, name: str):
+        self._info_hub.flush_worker_log()
+        self._info_hub.mark_worker_log_boundary()
         c = ToolStreamController(name, self)
         self._controllers[worker_tool_id] = c
 
@@ -311,6 +313,8 @@ class AuraPlayground(QWidget):
         controller.append_fragment(fragment)
 
     def set_tool_result(self, worker_tool_id: str, ok: bool, result: str):
+        self._info_hub.flush_worker_log()
+        self._info_hub.mark_worker_log_boundary()
         controller = self._controllers.pop(worker_tool_id, None)
         if controller is not None:
             controller.finalize(ok, result)

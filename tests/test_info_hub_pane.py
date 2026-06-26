@@ -60,3 +60,15 @@ def test_clear_drops_pending_prose(qapp) -> None:
     pane._log_stream.flush()
 
     assert pane._log_view.toPlainText() == ""
+
+
+def test_worker_log_public_boundary_api_separates_same_kind_prose(qapp) -> None:
+    pane = InfoHubPane()
+
+    pane.append_content("changes")
+    pane.flush_worker_log()
+    pane.mark_worker_log_boundary()
+    pane.append_content("Now let me")
+    pane.flush_worker_log()
+
+    assert pane._log_view.toPlainText() == "changes\n\nNow let me"

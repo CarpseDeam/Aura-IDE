@@ -27,6 +27,7 @@ class WorkerLogStreamBuffer(QObject):
         self._pending = ""
         self._tail = ""
         self._previous_kind: str | None = None
+        self._boundary_pending = False
 
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
@@ -50,9 +51,15 @@ class WorkerLogStreamBuffer(QObject):
             return
 
         current_tail = self._current_tail()
-        if needs_section_break(current_tail, self._previous_kind, kind):
+        if self._boundary_pending and current_tail.strip():
             self._pending += self._section_separator(current_tail)
             normalized = normalized.lstrip("\n")
+            self._boundary_pending = False
+        elif needs_section_break(current_tail, self._previous_kind, kind):
+            self._pending += self._section_separator(current_tail)
+            normalized = normalized.lstrip("\n")
+        else:
+            self._boundary_pending = False
 
         self._pending += normalized
         self._pending = compact_excess_blank_lines(self._pending)
@@ -73,6 +80,11 @@ class WorkerLogStreamBuffer(QObject):
         self._append_callback(text)
         self._remember_tail(text)
 
+    def mark_boundary(self) -> None:
+        """Ensure the next prose append starts on a clean paragraph boundary."""
+        self.flush()
+        self._boundary_pending = True
+
     def clear(self) -> None:
         """Drop pending prose and reset stream-kind tracking."""
         if self._timer.isActive():
@@ -80,6 +92,7 @@ class WorkerLogStreamBuffer(QObject):
         self._pending = ""
         self._tail = ""
         self._previous_kind = None
+        self._boundary_pending = False
 
     def _current_tail(self) -> str:
         return (self._tail + self._pending)[-200:]

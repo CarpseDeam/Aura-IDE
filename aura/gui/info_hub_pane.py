@@ -32,6 +32,8 @@ class InfoHubPane(QWidget):
         update_todo_list(tasks) -> None
         add_diff_card(rel_path, old, new, decision, is_new_file) -> None
         add_error(message) -> None
+        flush_worker_log() -> None
+        mark_worker_log_boundary() -> None
         show_final_summary(ok, summary) -> None
         clear() -> None
     """
@@ -95,6 +97,14 @@ class InfoHubPane(QWidget):
         """Append content prose to the Worker Log through the stream buffer."""
         self._log_stream.append("content", text)
 
+    def flush_worker_log(self) -> None:
+        """Flush any pending Worker Log prose immediately."""
+        self._log_stream.flush()
+
+    def mark_worker_log_boundary(self) -> None:
+        """Make the next Worker prose append start after a paragraph boundary."""
+        self._log_stream.mark_boundary()
+
     def _append_worker_log_batch(self, text: str) -> None:
         """Insert one buffered Worker Log prose batch and scroll once."""
         cursor = self._log_view.textCursor()
@@ -117,15 +127,17 @@ class InfoHubPane(QWidget):
         is_new_file: bool,
     ) -> None:
         """Create a DiffCard and add it to the Worker Log's dynamic cards area."""
-        self._log_stream.flush()
+        self.flush_worker_log()
         card = DiffCard(rel_path, old, new, decision, is_new_file, parent=self._log_tab)
         self._cards_layout.addWidget(card)
+        self.mark_worker_log_boundary()
 
     def add_error(self, message: str) -> None:
         """Create an ErrorCard and add it to the Worker Log's dynamic cards area."""
-        self._log_stream.flush()
+        self.flush_worker_log()
         card = ErrorCard("Worker Error", message, parent=self._log_tab)
         self._cards_layout.addWidget(card)
+        self.mark_worker_log_boundary()
 
     def show_final_summary(self, ok: bool, summary: str, needs_followup: bool = False, status: str | None = None) -> None:
         """Append a formatted summary block to the Worker Log text.

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QCoreApplication
+from PySide6.QtWidgets import QApplication
 
 from aura.gui.worker_log_stream import (
     WorkerLogStreamBuffer,
@@ -25,7 +25,7 @@ def test_needs_section_break_on_stream_kind_change() -> None:
 
 
 def test_buffer_append_stores_pending_text() -> None:
-    _ensure_qcore_app()
+    _ensure_qapp()
     emitted: list[str] = []
     buffer = WorkerLogStreamBuffer(emitted.append)
 
@@ -37,7 +37,7 @@ def test_buffer_append_stores_pending_text() -> None:
 
 
 def test_buffer_flush_emits_one_combined_chunk() -> None:
-    _ensure_qcore_app()
+    _ensure_qapp()
     emitted: list[str] = []
     buffer = WorkerLogStreamBuffer(emitted.append)
 
@@ -50,7 +50,7 @@ def test_buffer_flush_emits_one_combined_chunk() -> None:
 
 
 def test_buffer_clear_drops_pending_text() -> None:
-    _ensure_qcore_app()
+    _ensure_qapp()
     emitted: list[str] = []
     buffer = WorkerLogStreamBuffer(emitted.append)
 
@@ -63,7 +63,7 @@ def test_buffer_clear_drops_pending_text() -> None:
 
 
 def test_buffer_kind_switch_separates_without_token_spacing() -> None:
-    _ensure_qcore_app()
+    _ensure_qapp()
     emitted: list[str] = []
     buffer = WorkerLogStreamBuffer(emitted.append)
 
@@ -75,8 +75,49 @@ def test_buffer_kind_switch_separates_without_token_spacing() -> None:
     assert emitted == ["changes\n\nNow let me"]
 
 
-def _ensure_qcore_app() -> QCoreApplication:
-    app = QCoreApplication.instance()
+def test_buffer_mark_boundary_separates_same_kind_prose() -> None:
+    _ensure_qapp()
+    emitted: list[str] = []
+    buffer = WorkerLogStreamBuffer(emitted.append)
+
+    buffer.append("content", "changes")
+    buffer.mark_boundary()
+    buffer.append("content", "Now let me")
+    buffer.flush()
+
+    assert "".join(emitted) == "changes\n\nNow let me"
+
+
+def test_buffer_mark_boundary_does_not_add_giant_blank_gaps() -> None:
+    _ensure_qapp()
+    emitted: list[str] = []
+    buffer = WorkerLogStreamBuffer(emitted.append)
+
+    buffer.append("content", "changes\n\n")
+    buffer.mark_boundary()
+    buffer.append("content", "Now let me")
+    buffer.flush()
+
+    assert "".join(emitted) == "changes\n\nNow let me"
+
+
+def test_buffer_clear_resets_boundary_state() -> None:
+    _ensure_qapp()
+    emitted: list[str] = []
+    buffer = WorkerLogStreamBuffer(emitted.append)
+
+    buffer.append("content", "old")
+    buffer.flush()
+    buffer.mark_boundary()
+    buffer.clear()
+    buffer.append("content", "fresh")
+    buffer.flush()
+
+    assert emitted == ["old", "fresh"]
+
+
+def _ensure_qapp() -> QApplication:
+    app = QApplication.instance()
     if app is None:
-        app = QCoreApplication([])
+        app = QApplication([])
     return app
