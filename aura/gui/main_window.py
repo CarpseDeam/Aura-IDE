@@ -10,7 +10,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-from PySide6.QtCore import QByteArray, Qt, QThread, QTimer, QUrl, Signal
+from PySide6.QtCore import QByteArray, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QIcon
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
@@ -61,15 +61,15 @@ from aura.gui.debug_report_handler import DebugReportHandler
 from aura.gui.main_window_balance import MainWindowBalanceController
 from aura.gui.main_window_settings import MainWindowSettingsController
 from aura.gui.main_window_terminal import MainWindowTerminalController
+from aura.gui.main_window_update import MainWindowUpdateController
 from aura.gui.status_bar import AuraStatusBar
-from aura.gui.update_dialog import UpdateDialog, UpdateWorker
+from aura.gui.update_dialog import UpdateDialog
 from aura.gui.widgets.aura_glow import AuraWidget
 from aura.gui._screen import clamp_to_screen
 from aura.gui.window_chrome import WindowChromeMixin
 from aura.gui.worker_handler import WorkerEventHandler
 from aura.handoff import extract_handoff_text, generate_handoff_prompt, save_handoff
 from aura.prompts import SINGLE_SYSTEM_PROMPT
-from aura.updater import UpdateStatus
 
 class _ShrinkableStack(QStackedWidget):
     """QStackedWidget that only considers the current (visible) page for
@@ -146,6 +146,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._toolbar.minimize_requested.connect(self.showMinimized)
         self._toolbar.maximize_requested.connect(self._toggle_maximize)
         self._toolbar.close_requested.connect(self.close)
+
+        self._update_controller = MainWindowUpdateController(self._toolbar, parent=self)
 
         # ----- status bar -----
         self._status_bar = AuraStatusBar(
@@ -421,7 +423,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             QTimer.singleShot(100, lambda: self._persistence.restore_last(initial_root))
 
         # Check for updates in the background.
-        QTimer.singleShot(2000, self._check_for_updates)
+        self._update_controller.schedule_background_check(2000)
 
         # Restore saved window geometry/state after construction.
         if self._settings.main_window_geometry:
@@ -455,23 +457,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._companion_controller.stop()
         self._balance_controller.shutdown()
         super().closeEvent(event)
-
-    def _check_for_updates(self) -> None:
-        """Run a background update check."""
-        self._update_worker = UpdateWorker("check")
-        self._update_thread = QThread(self)
-        self._update_worker.moveToThread(self._update_thread)
-        self._update_thread.started.connect(self._update_worker.run)
-        self._update_worker.finished.connect(self._on_background_update_finished)
-        self._update_worker.finished.connect(self._update_thread.quit)
-        self._update_worker.finished.connect(self._update_worker.deleteLater)
-        self._update_thread.finished.connect(self._update_thread.deleteLater)
-        self._update_thread.start()
-
-    def _on_background_update_finished(self, status: UpdateStatus) -> None:
-        if status.state == "behind":
-            # Visually mark the Update button
-            self._toolbar.set_update_available(True)
 
     def showEvent(self, event) -> None:
         """Triggered when the window is shown."""
