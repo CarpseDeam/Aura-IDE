@@ -12,6 +12,7 @@ from aura.conversation.tools._git_mixin import GitHandlersMixin
 from aura.conversation.tools._memory_mixin import MemoryHandlersMixin
 from aura.conversation.tools._planner_mixin import PlannerHandlersMixin
 from aura.conversation.tools._read_mixin import ReadHandlersMixin
+from aura.conversation.tools._research_mixin import ResearchHandlersMixin
 from aura.conversation.tools._search_mixin import SearchHandlersMixin
 from aura.conversation.tools._types import (
     ApprovalCallback,
@@ -55,6 +56,7 @@ class ToolRegistry(
     MemoryHandlersMixin,
     DiagnosticHandlersMixin,
     PlannerHandlersMixin,
+    ResearchHandlersMixin,
 ):
     """Workspace-scoped tool dispatcher."""
 
@@ -188,6 +190,7 @@ TOOL_HANDLERS["run_read_only_drone"] = ToolRegistry._handle_run_read_only_drone
 TOOL_HANDLERS["check_drone_run"] = ToolRegistry._handle_check_drone_run
 TOOL_HANDLERS["register_drone_folder"] = ToolRegistry._handle_register_drone_folder
 TOOL_HANDLERS["declare_ui_contract"] = ToolRegistry._handle_declare_ui_contract
+TOOL_HANDLERS["research_current_info"] = ToolRegistry._handle_research_current_info
 TOOL_HANDLERS["code_intel_outline"] = ToolRegistry._handle_code_intel_outline
 TOOL_HANDLERS["code_intel_references"] = ToolRegistry._handle_code_intel_references
 TOOL_HANDLERS["code_intel_dependents"] = ToolRegistry._handle_code_intel_dependents
