@@ -240,6 +240,15 @@ def build_tier1_context(
         except Exception:
             logger.debug("Drone context unavailable", exc_info=True)
 
+    # 4.5 Recent Drone Run Activity
+    if mode in ("all", "planner", "single"):
+        try:
+            run_ctx = _build_recent_run_context(workspace_root)
+            if run_ctx:
+                parts.append(run_ctx)
+        except Exception:
+            logger.debug("Recent run context unavailable", exc_info=True)
+
     # 5. Drone Construction context (only active during Drone build/edit)
     try:
         from aura.drones.construction_context import build_construction_guide
@@ -313,3 +322,46 @@ def _build_drone_context(workspace_root: Path, store_cls) -> str:
         lines.append(f'  Output: {contract_short}')
     lines.append("")
     return "\n".join(lines)
+
+
+def _build_recent_run_context(workspace_root: Path) -> str:
+    """Build compact markdown of recent Drone run activity with monitor verdicts.
+
+    Returns an empty string if no runs are available.
+    The caller is responsible for exception handling.
+    """
+    from aura.drones.store import RunHistoryStore
+    runs = RunHistoryStore.list_runs(workspace_root, limit=10)
+
+    if not runs:
+        return ""
+
+    lines = [
+        "",
+        "## Recent Drone Run Activity",
+    ]
+    for run in runs:
+        drone_name = (run.get("drone_name") or "?")[:40]
+        status = run.get("status", "?")
+
+        artifact = run.get("produced_artifact")
+        if artifact and isinstance(artifact, dict):
+            monitor = artifact.get("monitor")
+            if monitor and isinstance(monitor, dict):
+                verdict = monitor.get("verdict", "")
+                monitor_key = monitor.get("monitor_key", "")
+                changed_at = monitor.get("changed_at", "")
+
+                line = f'- "{drone_name}" {status} — Monitor: {verdict}'
+                if monitor_key:
+                    line += f" ({monitor_key})"
+                if verdict == "changed" and changed_at:
+                    line += f" [{changed_at}]"
+                lines.append(line)
+                continue
+
+        lines.append(f'- "{drone_name}" {status}')
+
+    lines.append("")
+    return "\n".join(lines)
+

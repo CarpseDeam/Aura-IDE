@@ -656,6 +656,36 @@ class DroneRunCard(QFrame):
                     WARN,
                 ))
 
+        # Browse monitor verdict
+        if artifact.get("kind") == "browse":
+            monitor = artifact.get("monitor")
+            if monitor and isinstance(monitor, dict):
+                verdict = monitor.get("verdict", "")
+                monitor_key = monitor.get("monitor_key", "")
+                changed_at = monitor.get("changed_at", "")
+
+                if verdict == "first_seen":
+                    label_text = "Monitor: baseline captured"
+                    color = ACCENT
+                elif verdict == "unchanged":
+                    label_text = "Monitor: unchanged"
+                    color = FG_DIM
+                elif verdict == "changed":
+                    label_text = "Monitor: changed"
+                    color = DANGER
+                elif verdict == "not_checked":
+                    label_text = "Monitor: not checked"
+                    color = FG_DIM
+                else:
+                    label_text = f"Monitor: {verdict}"
+                    color = FG_DIM
+
+                if monitor_key:
+                    label_text += f" ({monitor_key})"
+
+                tooltip = changed_at if verdict == "changed" and changed_at else None
+                labels_data.append((label_text, color, tooltip))
+
         if not labels_data:
             label = QLabel("(no summary)")
             label.setStyleSheet(
@@ -664,12 +694,16 @@ class DroneRunCard(QFrame):
             self._summary_layout.addWidget(label)
             return
 
-        for text, color in labels_data:
+        for item in labels_data:
+            text, color = item[0], item[1]
+            tooltip = item[2] if len(item) > 2 else None
             label = QLabel(text)
             label.setWordWrap(False)
             label.setStyleSheet(
                 f"color: {color}; font-size: 11px; background: transparent;"
             )
+            if tooltip:
+                label.setToolTip(tooltip)
             self._summary_layout.addWidget(label)
 
     def _clear_report_content(self) -> None:
@@ -749,6 +783,36 @@ class DroneRunCard(QFrame):
                     WARN,
                 ))
 
+        # Browse monitor verdict
+        if artifact.get("kind") == "browse":
+            monitor = artifact.get("monitor")
+            if monitor and isinstance(monitor, dict):
+                verdict = monitor.get("verdict", "")
+                monitor_key = monitor.get("monitor_key", "")
+                changed_at = monitor.get("changed_at", "")
+
+                if verdict == "first_seen":
+                    label_text = "Monitor: baseline captured"
+                    color = ACCENT
+                elif verdict == "unchanged":
+                    label_text = "Monitor: unchanged"
+                    color = FG_DIM
+                elif verdict == "changed":
+                    label_text = "Monitor: changed"
+                    color = DANGER
+                elif verdict == "not_checked":
+                    label_text = "Monitor: not checked"
+                    color = FG_DIM
+                else:
+                    label_text = f"Monitor: {verdict}"
+                    color = FG_DIM
+
+                if monitor_key:
+                    label_text += f" ({monitor_key})"
+
+                tooltip = changed_at if verdict == "changed" and changed_at else None
+                labels_data.append((label_text, color, tooltip))
+
         if not labels_data:
             return None
 
@@ -761,12 +825,16 @@ class DroneRunCard(QFrame):
         flayout.setContentsMargins(8, 6, 8, 6)
         flayout.setSpacing(3)
 
-        for text, color in labels_data:
+        for item in labels_data:
+            text, color = item[0], item[1]
+            tooltip = item[2] if len(item) > 2 else None
             label = QLabel(text)
             label.setWordWrap(True)
             label.setStyleSheet(
                 f"color: {color}; font-size: 11px; background: transparent;"
             )
+            if tooltip:
+                label.setToolTip(tooltip)
             flayout.addWidget(label)
 
         return frame
