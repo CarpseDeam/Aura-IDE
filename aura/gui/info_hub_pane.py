@@ -19,6 +19,7 @@ from aura.gui.cards._helpers import _mono_font
 from aura.gui.cards.diff_card import DiffCard
 from aura.gui.cards.error_card import ErrorCard
 from aura.gui.theme import ACCENT, BG, BG_RAISED, BORDER, FG
+from aura.gui.worker_log_stream import WorkerLogStreamBuffer
 from aura.gui.widgets.todo_list import TodoListWidget
 
 
@@ -63,7 +64,7 @@ class InfoHubPane(QWidget):
         self._todo_widget = TodoListWidget(self._log_tab)
         log_layout.addWidget(self._todo_widget)
 
-        # Typewriter log text area
+        # Worker prose log text area
         self._log_view = QPlainTextEdit(self._log_tab)
         self._log_view.setReadOnly(True)
         self._log_view.setMinimumSize(0, 0)
@@ -74,6 +75,7 @@ class InfoHubPane(QWidget):
             f"background: transparent; color: {FG}; border: none; padding: 8px;"
         )
         log_layout.addWidget(self._log_view, 1)
+        self._log_stream = WorkerLogStreamBuffer(self._append_worker_log_batch, parent=self)
 
         # Dynamic cards area (diff cards, error cards)
         self._cards_layout = QVBoxLayout()
@@ -86,16 +88,15 @@ class InfoHubPane(QWidget):
     # Public API — Worker Log
 
     def append_reasoning(self, text: str) -> None:
-        """Append text to the Worker Log directly."""
-        cursor = self._log_view.textCursor()
-        cursor.movePosition(cursor.MoveOperation.End)
-        self._log_view.setTextCursor(cursor)
-        self._log_view.insertPlainText(text)
-        sb = self._log_view.verticalScrollBar()
-        sb.setValue(sb.maximum())
+        """Append reasoning prose to the Worker Log through the stream buffer."""
+        self._log_stream.append("reasoning", text)
 
     def append_content(self, text: str) -> None:
-        """Append text to the Worker Log directly."""
+        """Append content prose to the Worker Log through the stream buffer."""
+        self._log_stream.append("content", text)
+
+    def _append_worker_log_batch(self, text: str) -> None:
+        """Insert one buffered Worker Log prose batch and scroll once."""
         cursor = self._log_view.textCursor()
         cursor.movePosition(cursor.MoveOperation.End)
         self._log_view.setTextCursor(cursor)
@@ -116,19 +117,22 @@ class InfoHubPane(QWidget):
         is_new_file: bool,
     ) -> None:
         """Create a DiffCard and add it to the Worker Log's dynamic cards area."""
+        self._log_stream.flush()
         card = DiffCard(rel_path, old, new, decision, is_new_file, parent=self._log_tab)
         self._cards_layout.addWidget(card)
 
     def add_error(self, message: str) -> None:
         """Create an ErrorCard and add it to the Worker Log's dynamic cards area."""
+        self._log_stream.flush()
         card = ErrorCard("Worker Error", message, parent=self._log_tab)
         self._cards_layout.addWidget(card)
 
     def show_final_summary(self, ok: bool, summary: str, needs_followup: bool = False, status: str | None = None) -> None:
         """Append a formatted summary block to the Worker Log text.
 
-        Flushes the typewriter immediately so the summary is visible at once.
+        Flushes buffered prose immediately so the summary is ordered correctly.
         """
+        self._log_stream.flush()
         if status is not None:
             from aura.conversation.dispatch import WorkerOutcomeStatus
             status_labels = {
@@ -197,6 +201,7 @@ class InfoHubPane(QWidget):
 
     def clear(self) -> None:
         """Reset the Worker Log: clear text, todo, and dynamic cards."""
+        self._log_stream.clear()
         self._log_view.setPlainText("")
 
         self._todo_widget.update_tasks([])

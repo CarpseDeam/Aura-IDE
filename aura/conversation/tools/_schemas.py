@@ -57,6 +57,53 @@ READ_TOOL_DEFS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "read_task_context",
+            "description": (
+                "Read a compact, read-only task context packet in one call. "
+                "Use this when you need several file summaries, query hits, symbol hits, "
+                "test hints, or dependency hints before planning or editing. "
+                "No files are modified. Output context is capped by max_chars."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "files": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional workspace-relative file paths to summarize.",
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Optional natural-language or keyword query for bounded workspace text hits.",
+                    },
+                    "symbols": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional symbol names to locate with word-boundary matching.",
+                    },
+                    "max_chars": {
+                        "type": "integer",
+                        "description": "Maximum characters in the returned context string. Default: 16000.",
+                        "default": 16000,
+                    },
+                    "include_dependents": {
+                        "type": "boolean",
+                        "description": "Include dependency/dependent hints for requested files when available.",
+                        "default": True,
+                    },
+                    "include_tests": {
+                        "type": "boolean",
+                        "description": "Include likely test file hints for requested files.",
+                        "default": True,
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "list_directory",
             "description": (
                 "List files and subdirectories of a workspace directory. Hidden files and "

@@ -30,6 +30,7 @@ PLANNER_TOOL_NAMES = {
     "read_file",
     "read_files",
     "read_file_range",
+    "read_task_context",
     "read_file_outline",
     "list_directory",
     "glob",

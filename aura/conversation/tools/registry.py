@@ -33,6 +33,7 @@ from aura.conversation.tools.fs_write import (  # noqa: F401
 from aura.conversation.tools.git_handler import GitHandler
 from aura.conversation.tools.grep import grep_files  # noqa: F401
 from aura.conversation.tools.mcp_registry import MCPToolRegistry
+from aura.conversation.tools.task_context import TaskContextHandlersMixin
 
 try:
     from aura.craft import ExplicitSpecContract
@@ -49,6 +50,7 @@ TOOL_HANDLERS: dict[str, Any] = {}
 
 class ToolRegistry(
     CodeIntelHandlersMixin,
+    TaskContextHandlersMixin,
     ReadHandlersMixin,
     SearchHandlersMixin,
     GitHandlersMixin,
@@ -162,6 +164,7 @@ class ToolRegistry(
 TOOL_HANDLERS["read_file"] = ToolRegistry._handle_read_file
 TOOL_HANDLERS["read_files"] = ToolRegistry._handle_read_files
 TOOL_HANDLERS["read_file_range"] = ToolRegistry._handle_read_file_range
+TOOL_HANDLERS["read_task_context"] = ToolRegistry._handle_read_task_context
 TOOL_HANDLERS["list_directory"] = ToolRegistry._handle_list_directory
 TOOL_HANDLERS["glob"] = ToolRegistry._handle_glob
 TOOL_HANDLERS["grep_search"] = ToolRegistry._handle_grep_search

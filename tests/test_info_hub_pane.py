@@ -16,57 +16,47 @@ def qapp():
     yield app
 
 
-def test_worker_log_appends_incrementally(qapp) -> None:
+def test_worker_log_batches_tiny_fragments_until_flush(qapp) -> None:
     pane = InfoHubPane()
-    pane.append_content("Hello")
-    assert pane._log_buffer == "Hello"
-    assert pane._log_visible == ""
 
-    # Tick enough times to reveal text incrementally
-    pane._on_log_tick()
-    assert pane._log_visible == "Hello"
-    assert pane._log_view.toPlainText() == "Hello"
-
-    # Append more text
+    pane.append_content("Hel")
+    pane.append_content("lo")
     pane.append_content(" World")
-    assert pane._log_buffer == "Hello World"
 
-    pane._on_log_tick()
-    assert pane._log_visible == "Hello World"
+    assert pane._log_view.toPlainText() == ""
+
+    pane._log_stream.flush()
+
     assert pane._log_view.toPlainText() == "Hello World"
 
 
-def test_worker_log_flush(qapp) -> None:
+def test_worker_log_separates_reasoning_and_content(qapp) -> None:
     pane = InfoHubPane()
-    pane.append_content("A very long string that should not be fully revealed in one tick")
-    assert pane._log_visible == ""
-    pane._flush_log()
-    assert pane._log_visible == "A very long string that should not be fully revealed in one tick"
-    assert pane._log_view.toPlainText() == "A very long string that should not be fully revealed in one tick"
+
+    pane.append_reasoning("Checking files")
+    pane.append_content("Now applying changes")
+    pane._log_stream.flush()
+
+    assert pane._log_view.toPlainText() == "Checking files\n\nNow applying changes"
 
 
-def test_worker_log_reveals_in_chunks(qapp) -> None:
+def test_final_summary_flushes_pending_prose_first(qapp) -> None:
     pane = InfoHubPane()
-    chunk = pane._LOG_REVEAL_CHARS_PER_TICK
-    # Feed text longer than one reveal chunk
-    long_text = "Hello World, this is a very long text that should span multiple ticks."
-    assert len(long_text) > chunk
-    pane.append_content(long_text)
 
-    # After first tick, only first chunk chars should be visible
-    pane._on_log_tick()
-    expected_first = long_text[:chunk]
-    assert pane._log_visible == expected_first, f"Expected '{expected_first}', got '{pane._log_visible}'"
-    assert pane._log_view.toPlainText() == expected_first
+    pane.append_content("Pending prose")
+    pane.show_final_summary(True, "Done")
 
-    # After second tick, next chunk appended, previous text preserved
-    pane._on_log_tick()
-    expected_second = long_text[: chunk * 2]
-    assert pane._log_visible == expected_second, f"Expected '{expected_second}', got '{pane._log_visible}'"
-    assert pane._log_view.toPlainText() == expected_second
+    text = pane._log_view.toPlainText()
+    assert text.startswith("Pending prose\n\n")
+    assert "Worker completed successfully." in text
+    assert text.index("Pending prose") < text.index("Worker completed successfully.")
 
-    # After enough ticks, full text is revealed
-    while pane._log_visible != long_text:
-        pane._on_log_tick()
-    assert pane._log_visible == long_text
-    assert pane._log_view.toPlainText() == long_text
+
+def test_clear_drops_pending_prose(qapp) -> None:
+    pane = InfoHubPane()
+
+    pane.append_content("stale")
+    pane.clear()
+    pane._log_stream.flush()
+
+    assert pane._log_view.toPlainText() == ""
