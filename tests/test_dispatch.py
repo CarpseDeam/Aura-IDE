@@ -609,9 +609,17 @@ def test_worker_prompt_guides_search_validation_semantics():
 
     prompt = _format_spec_as_user_message(req)
 
-    assert "Use grep_search for discovery" in prompt
-    assert "read_file or read_file_range for exact known-file verification" in prompt
-    assert "make intended no-match exit 0" in prompt
+    assert "Task Shape Contract" in prompt
+    assert "Task shape: unknown" in prompt
+    assert "Goal" in prompt
+    assert "Do things" in prompt
+    assert "Files" in prompt
+    assert "- x.py" in prompt
+    assert "Builder Note" in prompt
+    assert "Do it." in prompt
+    assert "Acceptance / Validation" in prompt
+    assert "Check it." in prompt
+    assert "Begin." in prompt
     assert "pytest" not in prompt
 
 
@@ -1605,6 +1613,7 @@ class TestMismatchDispatchFlow:
 
     def test_mismatch_allows_planner_continuation(self):
         """_failed_dispatch_allows_planner_continuation returns True for mismatch."""
+        from aura.conversation.dispatch_failure import _failed_dispatch_allows_planner_continuation
         mismatch = WorkerMismatch(
             kind=WorkerMismatch.MISSING_SYMBOL,
             file_paths=["a.py"],
@@ -1616,19 +1625,21 @@ class TestMismatchDispatchFlow:
         result = WorkerDispatchResult(
             ok=False, summary="Mismatch", mismatch=mismatch
         )
-        assert ConversationManager._failed_dispatch_allows_planner_continuation(result)
+        assert _failed_dispatch_allows_planner_continuation(result)
 
     def test_planner_resolution_needed_extra_allows_continuation(self):
         """_failed_dispatch_allows_planner_continuation returns True for extras flag."""
+        from aura.conversation.dispatch_failure import _failed_dispatch_allows_planner_continuation
         result = WorkerDispatchResult(
             ok=False,
             summary="Need planner",
             extras={"planner_resolution_needed": True},
         )
-        assert ConversationManager._failed_dispatch_allows_planner_continuation(result)
+        assert _failed_dispatch_allows_planner_continuation(result)
 
     def test_explicit_status_allows_continuation_without_mismatch_extras(self):
         """Explicit status=needs_planner_resolution allows continuation with no mismatch/extras."""
+        from aura.conversation.dispatch_failure import _failed_dispatch_allows_planner_continuation
         result = WorkerDispatchResult(
             ok=False,
             summary="Need planner",
@@ -1636,7 +1647,7 @@ class TestMismatchDispatchFlow:
         )
         assert result.mismatch is None
         assert not result.extras
-        assert ConversationManager._failed_dispatch_allows_planner_continuation(result)
+        assert _failed_dispatch_allows_planner_continuation(result)
 
     def test_mismatch_error_signature_includes_facts(self):
         """Error signature includes mismatch kind, requested, observed, question."""
@@ -1827,3 +1838,108 @@ class TestMismatchParsing:
         assert result["remaining"] == ["Fix test_c.py"]
         assert result["recommended_next_step"] == "Run tests again"
         assert result["mismatch"] is None
+
+
+def test_worker_context_pack_appended_to_user_message(tmp_path, monkeypatch):
+    """When build_worker_context_pack returns content, it is appended with separator."""
+    from unittest.mock import Mock, MagicMock
+    from aura.bridge.dispatch import _DispatchProxy, _DispatchPending
+    from aura.conversation.dispatch import WorkerDispatchRequest
+
+    # Patch heavyweight internal calls
+    monkeypatch.setattr("aura.bridge.dispatch.build_tier1_context", lambda *a, **kw: "")
+    monkeypatch.setattr("aura.bridge.dispatch.detect_project_profile", lambda *a, **kw: None)
+    monkeypatch.setattr(
+        "aura.bridge.dispatch.build_worker_context_pack",
+        lambda *a, **kw: "Worker Context Pack\nfile summary...",
+    )
+    monkeypatch.setattr(
+        "aura.conversation.manager.ConversationManager.send",
+        lambda *a, **kw: None,
+    )
+
+    proxy = _DispatchProxy(
+        parent_widget=Mock(),
+        registry_factory=Mock(),
+        approval_proxy=Mock(),
+        workspace_root=tmp_path,
+    )
+    proxy.set_worker_model("deepseek-chat")
+    proxy.set_worker_thinking("disabled")
+    proxy.set_worker_temperature(0.7)
+    proxy.set_worker_system_prompt("You are a worker.")
+
+    req = WorkerDispatchRequest(
+        goal="Test goal",
+        files=["test.py"],
+        spec="Test spec",
+        acceptance="Test acceptance",
+    )
+    pending = _DispatchPending(request=req)
+
+    result = proxy._run_worker("test_id", req, pending)
+
+    assert len(proxy._records) >= 1
+    record = proxy._records[0]
+    user_messages = [
+        m["content"] for m in record.worker_history
+        if m.get("role") == "user" and isinstance(m.get("content"), str)
+    ]
+    assert len(user_messages) >= 1
+    first_user = user_messages[0]
+    assert "Test goal" in first_user
+    assert "Worker Context Pack" in first_user
+    assert "---" in first_user
+
+
+def test_worker_context_pack_empty_unchanged(tmp_path, monkeypatch):
+    """When build_worker_context_pack returns empty, the message is unchanged."""
+    from unittest.mock import Mock, MagicMock
+    from aura.bridge.dispatch import _DispatchProxy, _DispatchPending
+    from aura.conversation.dispatch import WorkerDispatchRequest
+
+    # Patch heavyweight internal calls
+    monkeypatch.setattr("aura.bridge.dispatch.build_tier1_context", lambda *a, **kw: "")
+    monkeypatch.setattr("aura.bridge.dispatch.detect_project_profile", lambda *a, **kw: None)
+    monkeypatch.setattr(
+        "aura.bridge.dispatch.build_worker_context_pack",
+        lambda *a, **kw: "",
+    )
+    monkeypatch.setattr(
+        "aura.conversation.manager.ConversationManager.send",
+        lambda *a, **kw: None,
+    )
+
+    proxy = _DispatchProxy(
+        parent_widget=Mock(),
+        registry_factory=Mock(),
+        approval_proxy=Mock(),
+        workspace_root=tmp_path,
+    )
+    proxy.set_worker_model("deepseek-chat")
+    proxy.set_worker_thinking("disabled")
+    proxy.set_worker_temperature(0.7)
+    proxy.set_worker_system_prompt("You are a worker.")
+
+    req = WorkerDispatchRequest(
+        goal="Test goal",
+        files=["test.py"],
+        spec="Test spec",
+        acceptance="Test acceptance",
+    )
+    pending = _DispatchPending(request=req)
+
+    result = proxy._run_worker("test_id", req, pending)
+
+    assert len(proxy._records) >= 1
+    record = proxy._records[0]
+    user_messages = [
+        m["content"] for m in record.worker_history
+        if m.get("role") == "user" and isinstance(m.get("content"), str)
+    ]
+    assert len(user_messages) >= 1
+    first_user = user_messages[0]
+    assert "Test goal" in first_user
+    assert "---" not in first_user
+    assert "Worker Context Pack" not in first_user
+    assert first_user.rstrip().endswith("Begin.")

@@ -40,6 +40,7 @@ from aura.conversation import (
     WorkerTaskSpec,
     normalize_worker_task,
 )
+from aura.conversation.context_pack import build_worker_context_pack
 from aura.conversation.persistence import WorkerDispatchRecord
 from aura.conversation.project_profile import detect_project_profile
 from aura.conversation.task_shape import task_shape_contract_lines
@@ -335,7 +336,18 @@ class _DispatchProxy(QObject):
             "worker_profile_detect_end tool_call_id=%s duration_ms=%.0f",
             tool_call_id, (time.monotonic() - t2) * 1000,
         )
-        worker_history.append_user_text(_format_spec_as_user_message(task_spec))
+        context_pack = build_worker_context_pack(
+            self._workspace_root,
+            files=task_spec.files,
+            goal=task_spec.goal,
+            spec=task_spec.builder_note,
+            acceptance=task_spec.acceptance,
+            validation_commands=task_spec.validation_commands,
+        )
+        base_message = _format_spec_as_user_message(task_spec)
+        if context_pack:
+            base_message = base_message + "\n\n---\n\n" + context_pack
+        worker_history.append_user_text(base_message)
 
         worker_registry = self._registry_factory("worker")
         # Set the Planner contract on the worker's registry for contract gate checks
