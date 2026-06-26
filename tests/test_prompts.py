@@ -50,6 +50,8 @@ def test_worker_prompt_is_patch_first():
     assert "Use `write_file` only for new files or intentional full-file replacement." in WORKER_SYSTEM_PROMPT
     assert "re-read the affected file or region, retry once with `patch_file`" in WORKER_SYSTEM_PROMPT
     assert "do not switch tools randomly" in WORKER_SYSTEM_PROMPT
+    assert "quoting, escaping, repeated text, or giant string blocks" in WORKER_SYSTEM_PROMPT
+    assert "choose a smaller edit shape" in WORKER_SYSTEM_PROMPT
     assert "Use `apply_edit_transaction` for existing-file code changes." not in WORKER_SYSTEM_PROMPT
 
 
@@ -108,8 +110,9 @@ def test_snappy_planner_worker_rules():
     # Worker
     assert "Snappy execution" in WORKER_SYSTEM_PROMPT
     assert "update_todo_list" in WORKER_SYSTEM_PROMPT
-    assert "visible execution plan" in WORKER_SYSTEM_PROMPT
-    assert "Read before you edit" in WORKER_SYSTEM_PROMPT
+    assert "multiple meaningful steps/files or has real risk" in WORKER_SYSTEM_PROMPT
+    assert "Small localized tasks should skip TODOs and edit directly" in WORKER_SYSTEM_PROMPT
+    assert "Read before editing" in WORKER_SYSTEM_PROMPT
 
     # Continuation report still exists
     assert "continuation_report" in WORKER_SYSTEM_PROMPT
