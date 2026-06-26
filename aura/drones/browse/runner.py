@@ -271,6 +271,50 @@ def run_browse_drone(
         )
         return
 
+    # --- Monitor config guard: require explicit target before browser launch ---
+    if monitor_enabled:
+        start_url_invalid = (
+            not start_url
+            or not start_url.strip()
+            or start_url.strip() == "https://example.com"
+        )
+        monitor_key_invalid = not monitor_key or not monitor_key.strip()
+        if start_url_invalid or monitor_key_invalid:
+            summary = "Browse Monitor needs start_url and monitor_key before it can run."
+            on_content(summary)
+            produced_artifact = {
+                "kind": "browse",
+                "status": "skipped_monitor_config",
+                "start_url": start_url,
+                "final_url": "",
+                "title": "",
+                "action_trace": [],
+                "before_snapshot": None,
+                "after_snapshot": None,
+                "candidate_count": 0,
+                "skipped_reason": summary,
+                "errors": [],
+            }
+            ended = dt.datetime.now(dt.timezone.utc).isoformat()
+            receipt = DroneReceipt(
+                run_id=run.run_id,
+                drone_id=drone.id,
+                drone_name=drone.name,
+                status="completed",
+                started_at=dt.datetime.fromtimestamp(
+                    run.started_at, tz=dt.timezone.utc
+                ).isoformat(),
+                ended_at=ended,
+                summary=summary,
+                produced_artifact=produced_artifact,
+                elapsed_seconds=run.elapsed_seconds,
+            )
+            on_receipt(receipt)
+            RunHistoryStore.save_run(workspace_root, receipt)
+            run.mark("completed")
+            on_status("completed")
+            return
+
     on_content(f"Navigating to {start_url}\u2026")
 
     if browser_profile:
