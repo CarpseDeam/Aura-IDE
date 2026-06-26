@@ -29,6 +29,9 @@ UPDATER_HELPER_DIST_NAME = "AuraUpdater.cmd"
 DRONES_SOURCE_REL = Path(".aura") / "drones"
 DRONES_DEST_REL = Path(".aura") / "drones"
 
+BUILTIN_DRONES_SOURCE_REL = Path("aura") / "drones" / "bundled"
+BUILTIN_DRONES_DEST_REL = Path("aura") / "drones" / "bundled"
+
 SUPPORTED_GRAMMARS = [
     "javascript", "typescript", "tsx", "go", "rust",
     "java", "c", "cpp", "csharp", "php", "ruby", "swift",
@@ -267,6 +270,43 @@ def bundle_drones(root: Path, final_dist_dir: Path) -> None:
         print(f"Bundled {len(bundled)} drone(s): {', '.join(bundled)}")
     else:
         print("No drones found to bundle.")
+
+
+def bundle_builtin_drones(root: Path, final_dist_dir: Path) -> None:
+    """Copy built-in drone definitions from aura/drones/bundled into the dist.
+
+    DroneStore._bundled_drones_root() loads from this path at runtime.
+    """
+    source = root / BUILTIN_DRONES_SOURCE_REL
+    dest = final_dist_dir / BUILTIN_DRONES_DEST_REL
+
+    if not source.exists():
+        print("aura/drones/bundled not found; skipping built-in drone bundle.")
+        return
+
+    if dest.exists():
+        shutil.rmtree(dest, ignore_errors=True)
+
+    ignore_func = shutil.ignore_patterns(
+        "__pycache__", ".pytest_cache", "*.pyc", "*.pyo",
+        "*.tmp", "*.swp", "*~", "*.bak",
+    )
+
+    bundled = []
+    for entry in sorted(source.iterdir()):
+        if not entry.is_dir():
+            continue
+        drone_json = entry / "drone.json"
+        if not drone_json.exists():
+            continue
+        target = dest / entry.name
+        shutil.copytree(entry, target, ignore=ignore_func)
+        bundled.append(entry.name)
+
+    if bundled:
+        print(f"Bundled {len(bundled)} built-in drone(s): {', '.join(bundled)}")
+    else:
+        print("No built-in drones found to bundle.")
 
 
 def grammar_prewarm_script() -> str:
@@ -729,6 +769,9 @@ def build(
 
     # Bundle .aura/drones into the dist for DroneStore runtime loading
     bundle_drones(root, final_dist_dir)
+
+    # Bundle built-in drone templates (e.g. Browse Monitor) into the dist
+    bundle_builtin_drones(root, final_dist_dir)
 
     # Pre-warm tree-sitter grammars into the dist
     prewarm_grammars(final_dist_dir, python_exe)
