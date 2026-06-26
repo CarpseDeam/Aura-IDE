@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 
 from aura.resources import get_resource_path
 
@@ -15,8 +16,9 @@ class BrowserRuntime:
     browsing.  Call ``close()`` when done.
     """
 
-    def __init__(self, headless: bool = True) -> None:
+    def __init__(self, headless: bool = True, user_data_dir: Path | None = None) -> None:
         self._headless = headless
+        self._user_data_dir = user_data_dir
         self._pw = None
         self._browser = None
         self._context = None
@@ -50,8 +52,19 @@ class BrowserRuntime:
                 os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(get_resource_path("ms-playwright"))
 
             self._pw = playwright.sync_api.sync_playwright().start()
-            self._browser = self._pw.chromium.launch(headless=self._headless)
-            self._context = self._browser.new_context()
+
+            if self._user_data_dir is not None:
+                # Persistent profile mode — use launch_persistent_context
+                self._user_data_dir.mkdir(parents=True, exist_ok=True)
+                self._context = self._pw.chromium.launch_persistent_context(
+                    user_data_dir=str(self._user_data_dir),
+                    headless=self._headless,
+                )
+                # self._browser stays None — lifecycle tied to persistent context
+            else:
+                # Anonymous mode
+                self._browser = self._pw.chromium.launch(headless=self._headless)
+                self._context = self._browser.new_context()
             return True
         except Exception as exc:
             self._unavailable_reason = str(exc)

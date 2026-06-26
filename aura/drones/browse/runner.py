@@ -13,9 +13,12 @@ from aura.drones.browse.artifacts import (
     build_boundary_artifact,
     build_completed_artifact,
     build_failed_receipt,
+    build_needs_login_artifact,
+    detect_login_required,
 )
 from aura.drones.browse.models import BrowseCandidate
 from aura.drones.browse.policy import PolicyResult, classify_action
+from aura.drones.browse.profiles import ensure_profile_dir
 from aura.drones.browse.snapshot import capture_snapshot, extract_candidates, find_candidate
 from aura.drones.definition import DroneDefinition
 from aura.drones.receipt import DroneReceipt
@@ -34,6 +37,10 @@ def _read_browse_settings(permissions: dict) -> dict:
         "fill_value": permissions.get("fill_value") or None,
         "max_candidates": int(permissions.get("max_candidates", 30)),
         "allowed_consequential_actions": permissions.get("allowed_consequential_actions", []),
+        "browser_profile": permissions.get("browser_profile") or None,
+        "visible": bool(permissions.get("visible", False)),
+        "requires_login": bool(permissions.get("requires_login", False)),
+        "login_required_text": permissions.get("login_required_text", ["log in", "sign in"]),
     }
 
 
@@ -58,18 +65,31 @@ def run_browse_drone(
     fill_value = settings["fill_value"]
     max_candidates = settings["max_candidates"]
     allowed_consequential_actions = settings["allowed_consequential_actions"]
+    browser_profile: str | None = settings["browser_profile"]
+    visible: bool = settings["visible"]
+    requires_login: bool = settings["requires_login"]
+    login_required_text: list[str] = settings["login_required_text"]
     has_action = bool(click_text or fill_text)
 
     on_content(f"Navigating to {start_url}\u2026")
 
-    runtime = BrowserRuntime(headless=True)
+    if browser_profile:
+        profile_path = ensure_profile_dir(browser_profile)
+        runtime = BrowserRuntime(headless=not visible, user_data_dir=profile_path)
+    else:
+        runtime = BrowserRuntime(headless=True)
     if not runtime.start():
+        profile_metadata = {
+            "browser_profile": browser_profile if browser_profile else None,
+            "visible": visible,
+        }
         receipt = build_failed_receipt(
             run=run,
             drone=drone,
             start_url=start_url,
             summary=f"Browser unavailable: {runtime.unavailable_reason}",
             errors=[runtime.unavailable_reason],
+            profile_metadata=profile_metadata,
         )
         on_receipt(receipt)
         RunHistoryStore.save_run(workspace_root, receipt)
@@ -95,6 +115,46 @@ def run_browse_drone(
         skipped_reason: str | None = None
         policy_block: tuple[PolicyResult, BrowseCandidate, str] | None = None
         action_executed: bool = False
+
+        # --- Login detection ---
+        if requires_login and detect_login_required(
+            before_snapshot.body_excerpt,
+            before_snapshot.candidates,
+            login_required_text,
+        ):
+            on_content("Login required for this profile/session \u2014 skipping actions.")
+            profile_metadata = {
+                "browser_profile": browser_profile if browser_profile else None,
+                "visible": visible,
+            }
+            produced_artifact = build_needs_login_artifact(
+                start_url=start_url,
+                final_url=page.url,
+                page_title=page.title(),
+                before_snapshot=before_snapshot,
+                action_trace=action_trace,
+                browser_profile=browser_profile,
+                visible=visible,
+            )
+            ended = dt.datetime.now(dt.timezone.utc).isoformat()
+            receipt = DroneReceipt(
+                run_id=run.run_id,
+                drone_id=drone.id,
+                drone_name=drone.name,
+                status="completed",
+                started_at=dt.datetime.fromtimestamp(
+                    run.started_at, tz=dt.timezone.utc
+                ).isoformat(),
+                ended_at=ended,
+                summary=f"Login needed for {page.url} with profile '{browser_profile}'" if browser_profile else f"Login needed for {page.url}",
+                produced_artifact=produced_artifact,
+                elapsed_seconds=run.elapsed_seconds,
+            )
+            on_receipt(receipt)
+            RunHistoryStore.save_run(workspace_root, receipt)
+            run.mark("completed")
+            on_status("completed")
+            return
 
         # --- Optional click ---
         if click_text:
@@ -190,6 +250,12 @@ def run_browse_drone(
                         skipped_reason = policy_result.reason
                 action_trace.append(entry)
 
+        # Build profile_metadata for all non-login artifacts
+        profile_metadata = {
+            "browser_profile": browser_profile if browser_profile else None,
+            "visible": visible,
+        }
+
         # Receipt-building: branch on policy_block
         if policy_block is not None:
             policy_result, banned_candidate, banned_action_type = policy_block
@@ -203,6 +269,7 @@ def run_browse_drone(
                 candidate=banned_candidate,
                 action_type=banned_action_type,
                 skipped_reason=skipped_reason or "",
+                profile_metadata=profile_metadata,
             )
         else:
             after_snapshot = capture_snapshot(page, max_candidates=max_candidates) if (action_executed or has_action) else None
@@ -214,6 +281,7 @@ def run_browse_drone(
                 after_snapshot=after_snapshot,
                 action_trace=action_trace,
                 skipped_reason=skipped_reason,
+                profile_metadata=profile_metadata,
             )
 
         ended = dt.datetime.now(dt.timezone.utc).isoformat()
@@ -237,6 +305,10 @@ def run_browse_drone(
 
     except Exception as exc:
         logger.exception("Browse drone failed")
+        profile_metadata = {
+            "browser_profile": browser_profile if browser_profile else None,
+            "visible": visible,
+        }
         receipt = build_failed_receipt(
             run=run,
             drone=drone,
@@ -246,6 +318,7 @@ def run_browse_drone(
             action_trace=[
                 {"type": "navigate", "url": start_url, "success": False},
             ],
+            profile_metadata=profile_metadata,
         )
         on_receipt(receipt)
         RunHistoryStore.save_run(workspace_root, receipt)
