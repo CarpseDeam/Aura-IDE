@@ -68,8 +68,12 @@ def build_needs_login_artifact(
     The artifact status is ``needs_login`` with no after_snapshot.
     Profile metadata (browser_profile, persistent_session, visible)
     are included directly.
+
+    When ``browser_profile`` is set, a ``reauth_request`` dict is added
+    so the UI can offer structured re-authentication.
+    When no profile is provided the ``skipped_reason`` explains the gap.
     """
-    return {
+    artifact = {
         "kind": "browse",
         "status": "needs_login",
         "start_url": start_url,
@@ -85,6 +89,21 @@ def build_needs_login_artifact(
         "persistent_session": browser_profile is not None,
         "visible": visible,
     }
+    if browser_profile:
+        artifact["reauth_request"] = {
+            "kind": "browse_login_session",
+            "start_url": start_url,
+            "browser_profile": browser_profile,
+            "login_session": True,
+            "login_wait_seconds": 900,
+            "reason": "Login required for this profile/session",
+        }
+    else:
+        artifact["skipped_reason"] = (
+            "A login refresh requires a named browser_profile. "
+            "Set one in the Drone permissions."
+        )
+    return artifact
 
 
 def build_boundary_artifact(

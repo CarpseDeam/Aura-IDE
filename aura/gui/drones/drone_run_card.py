@@ -640,6 +640,22 @@ class DroneRunCard(QFrame):
         if errors and isinstance(errors, list) and len(errors) > 0:
             labels_data.append((f"❌ Errors: {len(errors)}", DANGER))
 
+        # Browse needs_login reauth hint
+        if artifact.get("kind") == "browse" and artifact.get("status") == "needs_login":
+            profile = artifact.get("browser_profile")
+            reauth = artifact.get("reauth_request")
+            if reauth and profile:
+                labels_data.append((
+                    f"Login required for profile '{profile}'. "
+                    f"Run a visible login session, then retry this Browse Drone.",
+                    WARN,
+                ))
+            elif not profile:
+                labels_data.append((
+                    "Login required — no browser_profile set for reauth.",
+                    WARN,
+                ))
+
         if not labels_data:
             label = QLabel("(no summary)")
             label.setStyleSheet(
@@ -716,6 +732,22 @@ class DroneRunCard(QFrame):
             if len(violations) > 2:
                 text += "; …"
             labels_data.append((f"⚠ {text}", DANGER))
+
+        # Browse needs_login reauth hint
+        if artifact.get("kind") == "browse" and artifact.get("status") == "needs_login":
+            profile = artifact.get("browser_profile")
+            reauth = artifact.get("reauth_request")
+            if reauth and profile:
+                labels_data.append((
+                    f"Login required for profile '{profile}'. "
+                    f"Run a visible login session, then retry this Browse Drone.",
+                    WARN,
+                ))
+            elif not profile:
+                labels_data.append((
+                    "Login required — no browser_profile set for reauth.",
+                    WARN,
+                ))
 
         if not labels_data:
             return None
