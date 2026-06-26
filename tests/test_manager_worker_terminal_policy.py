@@ -7,11 +7,12 @@ from unittest.mock import MagicMock, PropertyMock, patch
 
 import pytest
 
-from aura.client.events import Done, Event, ToolCallStart, ToolResult
+from aura.client.events import ContentDelta, Done, Event, ToolCallStart, ToolResult
 from aura.conversation.history import History
 from aura.conversation.manager import ConversationManager
 from aura.conversation.tools._types import ApprovalDecision, ToolExecResult
 from aura.conversation.tools.registry import ToolRegistry
+from aura.conversation.worker_final_validation import WorkerFinalValidationResult
 from aura.hooks import hooks
 from aura.sandbox import SandboxResult
 
@@ -288,8 +289,10 @@ def test_worker_explicit_validation_command_executes(
     with (
         patch("aura.conversation.tool_runner.load_settings") as load_settings,
         patch("aura.conversation.tool_runner.SandboxExecutor") as sandbox_cls,
+        patch("aura.conversation.manager.run_explicit_validation_commands") as run_validation,
     ):
         load_settings.return_value = MagicMock(sandbox_mode="host")
+        run_validation.return_value = WorkerFinalValidationResult(ok=True)
         sandbox = MagicMock()
         sandbox.run_terminal_command.return_value = SandboxResult(
             ok=True,
@@ -310,6 +313,73 @@ def test_worker_explicit_validation_command_executes(
         )
 
     sandbox.run_terminal_command.assert_called_once()
+
+
+def test_worker_final_text_is_quarantined_until_explicit_validation_passes(
+    worker_manager: tuple[ConversationManager, MagicMock],
+    worker_backend: MagicMock,
+) -> None:
+    manager, _tools = worker_manager
+    events: list[Event] = []
+    command = 'python -c "assert False"'
+    worker_backend.side_effect = [
+        iter([
+            ContentDelta("All set before validation."),
+            Done(
+                finish_reason="stop",
+                full_message={
+                    "role": "assistant",
+                    "content": "All set before validation.",
+                    "reasoning_content": None,
+                },
+            ),
+        ]),
+        iter([
+            ContentDelta("Fixed after validation."),
+            Done(
+                finish_reason="stop",
+                full_message={
+                    "role": "assistant",
+                    "content": "Fixed after validation.",
+                    "reasoning_content": None,
+                },
+            ),
+        ]),
+    ]
+
+    with patch("aura.conversation.manager.run_explicit_validation_commands") as run_validation:
+        run_validation.side_effect = [
+            WorkerFinalValidationResult(
+                ok=False,
+                command=command,
+                diagnostics="AssertionError",
+            ),
+            WorkerFinalValidationResult(ok=True),
+        ]
+        manager.send(
+            on_event=events.append,
+            approval_cb=_approval_cb,
+            cancel_event=threading.Event(),
+            model="deepseek-chat",
+            thinking="off",
+            hook_name="generate_worker_code",
+            explicit_validation_commands=[command],
+        )
+
+    content = [event.text for event in events if isinstance(event, ContentDelta)]
+    assert content == ["Fixed after validation."]
+    validation_results = [
+        event for event in events
+        if isinstance(event, ToolResult) and event.tool_call_id == "auto_explicit_validation"
+    ]
+    assert validation_results
+    assert validation_results[0].ok is False
+    assistant_messages = [
+        message.get("content")
+        for message in manager.history.messages
+        if message.get("role") == "assistant"
+    ]
+    assert assistant_messages == ["Fixed after validation."]
 
 
 def test_worker_structured_read_and_patch_file_are_unaffected(

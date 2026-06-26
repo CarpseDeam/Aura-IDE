@@ -38,33 +38,53 @@ from aura.client import (
     WorkerDispatchRequested,
 )
 from aura.config import ModelId, ThinkingMode
-from aura.conversation.dispatch import (
-    DispatchCallback,
-    WorkerDispatchRequest,
-    WorkerDispatchResult,
-)
-from aura.conversation.dispatch_failure import classify_failed_worker_dispatch
-from aura.conversation.worker_recovery_payload import (
-    blocked_tool_result,
-    is_recoverable_phase_boundary,
-    parse_tool_payload,
-    record_recovery_block,
-    recovery_payload,
-)
-from aura.conversation.history import History
-from aura.conversation.loop_detection import LoopDetector
-from aura.conversation.tool_limits import (
-    MAX_WORKER_REDISPATCHES_PER_USER_TURN,
-    WRITE_TOOLS,
-    ToolLimitState,
-    limit_reached_payload,
-)
+from aura.conversation import _edit_shapes
+from aura.conversation._recovery_tool_policy import WORKER_RECOVERY_ALWAYS_ALLOWED, syntax_repair_tool_allowed
 from aura.conversation.completion_guard import (
     assistant_message_text,
     is_completed_worker_result,
     is_repetitive_completion_final,
     terminal_result_completed,
     tool_result_completes_action,
+)
+from aura.conversation.dispatch import (
+    DispatchCallback,
+    WorkerDispatchRequest,
+    WorkerDispatchResult,
+)
+from aura.conversation.dispatch_failure import classify_failed_worker_dispatch
+from aura.conversation.edit_recovery_state import (
+    default_edit_failure_class,
+    edit_recovery_details,
+    worker_file_state_for_path,
+    worker_path_is_existing_file,
+)
+from aura.conversation.history import History
+from aura.conversation.loop_detection import LoopDetector
+from aura.conversation.path_utils import (
+    is_validation_scratch_path as _is_validation_scratch_path,
+)
+from aura.conversation.path_utils import (
+    normalize_worker_path as _normalize_worker_path,
+)
+from aura.conversation.planner_refresh import PlannerRefreshState
+from aura.conversation.syntax_repair_state import (
+    discard_syntax_validation_path,
+    has_terminal_syntax_failure,
+    pop_syntax_repair_state,
+    set_syntax_repair_state,
+    syntax_repair_paths,
+    syntax_repair_state_for_path,
+)
+from aura.conversation.syntax_terminal_state import update_syntax_state_from_terminal
+from aura.conversation.terminal_syntax import (
+    is_python_path,
+)
+from aura.conversation.tool_limits import (
+    MAX_WORKER_REDISPATCHES_PER_USER_TURN,
+    WRITE_TOOLS,
+    ToolLimitState,
+    limit_reached_payload,
 )
 from aura.conversation.tool_runner import ToolRunner
 from aura.conversation.tools._types import (
@@ -73,7 +93,41 @@ from aura.conversation.tools._types import (
     ApprovalRequest,
 )
 from aura.conversation.tools.registry import ToolRegistry
-from aura.conversation.planner_refresh import PlannerRefreshState
+from aura.conversation.worker_final_validation import (
+    WORKER_EXPLICIT_VALIDATION_FAILURE_INSTRUCTION,
+    emit_explicit_validation_result,
+    run_explicit_validation_commands,
+)
+from aura.conversation.worker_recovery_payload import (
+    blocked_tool_result,
+    is_recoverable_phase_boundary,
+    parse_tool_payload,
+    record_recovery_block,
+    recovery_payload,
+)
+from aura.conversation.worker_recovery_state import (
+    clear_patch_failed_shapes_for_path,
+    normalized_state_value,
+    pop_normalized_key,
+    pop_normalized_recovery_key,
+    record_reads_for_recovery,
+)
+from aura.conversation.worker_smoothness import (
+    WorkerSmoothnessState,
+)
+from aura.conversation.worker_smoothness import (
+    note_validation_result as _note_validation_result,
+)
+from aura.conversation.worker_smoothness import (
+    observe_tool_result as _observe_tool_result,
+)
+from aura.conversation.worker_smoothness import (
+    phase_boundary_payload as _smoothness_phase_boundary_payload,
+)
+from aura.conversation.worker_smoothness import (
+    precheck_tool as _precheck_tool,
+)
+from aura.conversation.worker_stream_buffer import WorkerStreamBuffer
 from aura.conversation.worker_validation import (
     emit_auto_dependent_import_info,
     emit_auto_import_result,
@@ -83,42 +137,7 @@ from aura.conversation.worker_validation import (
 )
 from aura.dependency_context import compute_dependents
 from aura.hooks import hooks
-from aura.verify import run_focused_import_check, run_dependent_import_check
-from aura.conversation.path_utils import (
-    is_validation_scratch_path as _is_validation_scratch_path,
-    normalize_worker_path as _normalize_worker_path,
-    unique_worker_paths as _unique_worker_paths,
-)
-from aura.conversation.syntax_repair_state import (
-    syntax_repair_paths,
-    syntax_repair_state_for_path,
-    set_syntax_repair_state,
-    pop_syntax_repair_state,
-    discard_syntax_validation_path,
-    has_terminal_syntax_failure,
-)
-from aura.conversation.edit_recovery_state import (
-    edit_recovery_details,
-    default_edit_failure_class,
-    worker_file_state_for_path,
-    worker_path_is_existing_file,
-)
-from aura.conversation.worker_recovery_state import (
-    record_reads_for_recovery,
-    pop_normalized_recovery_key,
-    normalized_state_value,
-    pop_normalized_key,
-    clear_patch_failed_shapes_for_path,
-)
-
-from aura.conversation.terminal_syntax import (
-    py_compile_targets,
-    is_python_path,
-)
-
-from aura.conversation.syntax_terminal_state import update_syntax_state_from_terminal
-from aura.conversation import _edit_shapes
-from aura.conversation._recovery_tool_policy import WORKER_RECOVERY_ALWAYS_ALLOWED, syntax_repair_tool_allowed
+from aura.verify import run_dependent_import_check, run_focused_import_check
 
 EventCallback = Callable[[Event], None]
 
@@ -193,6 +212,14 @@ WORKER_LAUNCH_FAILURE_INSTRUCTION = (
     "Diagnostic output:\n{output}"
 )
 
+WORKER_SMOOTHNESS_PHASE_BOUNDARY_INSTRUCTION = (
+    "Worker paused before thrashing.\n"
+    "Progress made: {progress_note}\n"
+    "Reason: {reason}\n"
+    "Next: planner should redispatch with a narrower target or "
+    "explicit validation command."
+)
+
 
 
 class ConversationManager:
@@ -256,6 +283,9 @@ class ConversationManager:
         reject_all_for_turn = False
         mode = getattr(self._tools, "mode", "single")
         limits = ToolLimitState(mode=mode)
+        smoothness = WorkerSmoothnessState() if mode == "worker" else None
+        stream_buffer = WorkerStreamBuffer() if mode == "worker" else None
+        candidate_final_message: dict[str, Any] | None = None
         rounds_used = 0
         worker_needs_final_report = False
         worker_phase_boundary_info: dict[str, Any] | None = None
@@ -278,6 +308,26 @@ class ConversationManager:
         final_messages_after_completion = 0
         last_completion_final_text = ""
 
+        def discard_worker_candidate_final() -> None:
+            nonlocal candidate_final_message
+            candidate_final_message = None
+            if stream_buffer is not None:
+                stream_buffer.discard()
+
+        def smoothness_boundary_instruction(info: dict[str, Any]) -> str:
+            details = info.get("details") if isinstance(info.get("details"), dict) else {}
+            progress_note = str(details.get("last_progress_note") or "none recorded")
+            reason = str(
+                details.get("budget_reason")
+                or info.get("message")
+                or info.get("reason")
+                or "budget reached"
+            )
+            return WORKER_SMOOTHNESS_PHASE_BOUNDARY_INSTRUCTION.format(
+                progress_note=progress_note,
+                reason=reason,
+            )
+
         while True:
             if (
                 mode in {"planner", "single"}
@@ -298,6 +348,8 @@ class ConversationManager:
 
             full_message: dict[str, Any] | None = None
             tool_defs = [] if worker_needs_final_report else self._tools.tool_defs()
+            if stream_buffer is not None:
+                stream_buffer.begin_round()
 
             label = "planner_stream" if "planner" in hook_name else "worker_stream"
             _log.info(
@@ -318,7 +370,10 @@ class ConversationManager:
                 if _first_event:
                     _log.info("%s_first_event model=%s", label, model)
                     _first_event = False
-                on_event(ev)
+                if mode == "worker" and stream_buffer is not None:
+                    stream_buffer.capture_or_forward(ev, on_event)
+                else:
+                    on_event(ev)
                 if isinstance(ev, Done):
                     full_message = ev.full_message
                 if isinstance(ev, ApiError):
@@ -372,9 +427,22 @@ class ConversationManager:
                 last_completion_final_text = content_text
                 return
 
-            self._history.append_assistant(full_message)
+            # Worker final quarantine: hold candidate until validation gates pass
+            if not tool_calls and mode == "worker":
+                candidate_final_message = full_message
+            else:
+                self._history.append_assistant(full_message)
+                if tool_calls and stream_buffer is not None:
+                    stream_buffer.flush(on_event)
 
             if worker_needs_final_report:
+                if not tool_calls:
+                    if candidate_final_message is not None:
+                        self._history.append_assistant(candidate_final_message)
+                        candidate_final_message = None
+                    if stream_buffer is not None:
+                        stream_buffer.flush(on_event)
+                    return
                 for tc in tool_calls:
                     fn = tc["function"]
                     name = fn["name"]
@@ -410,6 +478,8 @@ class ConversationManager:
                         "counts": limits.to_dict(),
                     }
                     self._append_limit_tool_result(tool_call_id, name, info, on_event)
+                if stream_buffer is not None:
+                    stream_buffer.discard()
                 return
 
             if not tool_calls:
@@ -431,6 +501,7 @@ class ConversationManager:
                                 instruction += f"\n\nDiagnostic output:\n{diagnostic_text}"
                             self._history.append_user_text(instruction)
                             worker_recovery_nudge_sent = True
+                            discard_worker_candidate_final()
                             continue
                         self._finish_worker_unrecoverable(
                             on_event,
@@ -497,6 +568,7 @@ class ConversationManager:
                                     instruction += f"\n\nDiagnostic output:\n{diagnostic_text}"
                             self._history.append_user_text(instruction)
                             worker_recovery_nudge_sent = True
+                            discard_worker_candidate_final()
                             continue
                         error_parts = [
                             "Worker stopped before recovering from a recoverable failure."
@@ -570,6 +642,7 @@ class ConversationManager:
                                         diagnostics=import_diag,
                                     )
                                     self._history.append_user_text(instruction)
+                                    discard_worker_candidate_final()
                                     continue
                                 else:
                                     for path in product_paths:
@@ -609,6 +682,7 @@ class ConversationManager:
                                                     diagnostics=gating_diag,
                                                 )
                                                 self._history.append_user_text(instruction)
+                                                discard_worker_candidate_final()
                                                 continue
                                     except Exception:
                                         logging.getLogger(__name__).warning(
@@ -628,6 +702,7 @@ class ConversationManager:
                                     diagnostics=diagnostics,
                                 )
                                 self._history.append_user_text(instruction)
+                                discard_worker_candidate_final()
                                 continue
                     # --- Launch verification rung ---
                     if declared_run_command:
@@ -654,6 +729,7 @@ class ConversationManager:
                                     output=watch.output,
                                 )
                                 self._history.append_user_text(instruction)
+                                discard_worker_candidate_final()
                                 continue
                             emit_auto_launch_result(
                                 command=declared_run_command,
@@ -667,6 +743,42 @@ class ConversationManager:
                                 "Launch verification failed non-fatally",
                                 exc_info=True,
                             )
+                    # --- Explicit validation commands rung ---
+                    if explicit_validation_commands:
+                        val_result = run_explicit_validation_commands(
+                            workspace_root=Path(self._tools.workspace_root),
+                            commands=explicit_validation_commands,
+                        )
+                        if smoothness is not None:
+                            _note_validation_result(
+                                smoothness,
+                                gate="explicit_validation",
+                                ok=val_result.ok,
+                                diagnostics=val_result.diagnostics,
+                            )
+                        if not val_result.ok:
+                            emit_explicit_validation_result(
+                                command=val_result.command,
+                                ok=False,
+                                output=val_result.diagnostics,
+                                on_event=on_event,
+                                workspace_root=self._tools.workspace_root,
+                            )
+                            instruction = WORKER_EXPLICIT_VALIDATION_FAILURE_INSTRUCTION.format(
+                                command=val_result.command,
+                                diagnostics=val_result.diagnostics,
+                            )
+                            self._history.append_user_text(instruction)
+                            discard_worker_candidate_final()
+                            continue
+                    # All gates passed — release candidate final and flush buffer
+                    if candidate_final_message is not None:
+                        if smoothness is not None:
+                            _note_validation_result(smoothness, gate="final", ok=True)
+                        self._history.append_assistant(candidate_final_message)
+                        candidate_final_message = None
+                    if stream_buffer is not None:
+                        stream_buffer.flush(on_event)
                     return
                 return
 
@@ -737,6 +849,14 @@ class ConversationManager:
                             _worker_phase_boundary_info = blocked_payload
                         return blocked
 
+                # Smoothness precheck — after recovery block which takes priority
+                if mode == "worker" and smoothness is not None:
+                    decision = _precheck_tool(smoothness, name=name, args=args)
+                    if not decision.allowed:
+                        payload = _smoothness_phase_boundary_payload(decision)
+                        _worker_phase_boundary_info = payload
+                        return blocked_tool_result(tool_call_id, name, payload)
+
                 if name == "dispatch_to_worker":
                     result = self._tool_runner.handle_dispatch(
                         tool_call_id=tool_call_id,
@@ -799,6 +919,25 @@ class ConversationManager:
                         cancel_event=cancel_event,
                         declared_run_command=declared_run_command or "",
                     )
+                    if mode == "worker" and smoothness is not None:
+                        terminal_payload = (
+                            loop_info.get("_terminal_payload")
+                            if isinstance(loop_info, dict)
+                            else None
+                        )
+                        decision = _observe_tool_result(
+                            smoothness,
+                            name=name,
+                            args=args,
+                            ok=bool(
+                                terminal_payload.get("ok")
+                                if isinstance(terminal_payload, dict)
+                                else loop_info and loop_info.get("ok")
+                            ),
+                            payload_text=json.dumps(loop_info) if loop_info else "",
+                        )
+                        if decision.phase_boundary:
+                            _worker_phase_boundary_info = _smoothness_phase_boundary_payload(decision)
                     return {
                         "id": tool_call_id,
                         "skip": True,
@@ -825,6 +964,27 @@ class ConversationManager:
                         )
                     if is_recoverable_phase_boundary(loop_info):
                         _worker_phase_boundary_info = loop_info
+                    # Smoothness observe for terminal commands
+                    if mode == "worker" and smoothness is not None:
+                        terminal_payload = (
+                            loop_info.get("_terminal_payload")
+                            if isinstance(loop_info, dict)
+                            else None
+                        )
+                        payload_text = json.dumps(loop_info) if loop_info else ""
+                        decision = _observe_tool_result(
+                            smoothness,
+                            name=name,
+                            args=args,
+                            ok=bool(
+                                terminal_payload.get("ok")
+                                if isinstance(terminal_payload, dict)
+                                else loop_info and loop_info.get("ok")
+                            ),
+                            payload_text=payload_text,
+                        )
+                        if decision.phase_boundary:
+                            _worker_phase_boundary_info = _smoothness_phase_boundary_payload(decision)
                     return {
                         "id": tool_call_id,
                         "skip": True,
@@ -891,6 +1051,18 @@ class ConversationManager:
                 )
                 tool_msg_content = loop_result["content"]
                 loop_info = loop_result["info"]
+
+                # Smoothness observation — after tool result is fully processed
+                if mode == "worker" and smoothness is not None:
+                    decision = _observe_tool_result(
+                        smoothness,
+                        name=name,
+                        args=args,
+                        ok=exec_result.ok,
+                        payload_text=tool_msg_content,
+                    )
+                    if decision.phase_boundary:
+                        _worker_phase_boundary_info = _smoothness_phase_boundary_payload(decision)
 
                 if is_recoverable_phase_boundary(loop_info):
                     _worker_phase_boundary_info = loop_info
@@ -988,6 +1160,12 @@ class ConversationManager:
 
             if _worker_phase_boundary_info is not None:
                 worker_phase_boundary_info = _worker_phase_boundary_info
+                if worker_phase_boundary_info.get("smoothness_phase_boundary"):
+                    self._history.append_user_text(
+                        smoothness_boundary_instruction(worker_phase_boundary_info)
+                    )
+                elif worker_phase_boundary_info.get("message"):
+                    self._history.append_user_text(str(worker_phase_boundary_info["message"]))
                 worker_needs_final_report = True
                 continue
 

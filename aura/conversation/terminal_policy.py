@@ -38,7 +38,46 @@ def worker_terminal_command_allowed(
     explicit_validation_commands: list[str] | None = None,
     workspace_root: Path | str | None = None,
 ) -> TerminalPolicyDecision:
+    _ = workspace_root
+    normalized = " ".join(str(command or "").strip().lower().split())
+    explicit_commands = {
+        " ".join(str(explicit or "").strip().lower().split())
+        for explicit in explicit_validation_commands or []
+    }
+    if normalized and normalized in explicit_commands:
+        return TerminalPolicyDecision(True, "worker terminal command allowed", "", "", "")
+    if _looks_like_python_source_inspection(normalized):
+        return TerminalPolicyDecision(
+            allowed=False,
+            reason=(
+                "Worker terminal source inspection is blocked. Use read_file, "
+                "read_file_range, or grep_search instead."
+            ),
+            failure_class="source_inspection_command_blocked",
+            suggested_next_tool="read_file",
+            suggested_next_action=(
+                "Use read_file or read_file_range for source inspection, then run "
+                "terminal commands only for validation or execution."
+            ),
+        )
     return TerminalPolicyDecision(True, "worker terminal command allowed", "", "", "")
+
+
+def _looks_like_python_source_inspection(normalized_command: str) -> bool:
+    if "python" not in normalized_command or " -c " not in normalized_command:
+        return False
+    source_read_markers = (
+        ".read_text(",
+        ".read_bytes(",
+        "open(",
+    )
+    path_markers = (
+        "path(",
+        "pathlib",
+    )
+    return any(marker in normalized_command for marker in source_read_markers) and any(
+        marker in normalized_command for marker in path_markers
+    )
 
 
 __all__ = [

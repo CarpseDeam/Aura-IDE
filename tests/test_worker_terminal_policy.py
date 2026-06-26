@@ -17,7 +17,6 @@ def test_worker_terminal_policy_allows_common_coding_agent_commands() -> None:
         "cat graph_main_window.py",
         "type graph_main_window.py",
         "Get-Content graph_main_window.py",
-        'python -c "from pathlib import Path; print(Path(\'graph_main_window.py\').read_text())"',
         'rg "def main" aura',
         "grep -R main aura",
         "git status",
@@ -48,4 +47,26 @@ def test_worker_terminal_policy_allows_common_coding_agent_commands() -> None:
 def test_worker_terminal_policy_classifies_empty_command() -> None:
     assert classify_worker_terminal_command("") == "empty"
     decision = worker_terminal_command_allowed("")
+    assert decision.allowed is True
+
+
+def test_worker_terminal_policy_blocks_python_source_inspection() -> None:
+    command = 'python -c "from pathlib import Path; print(Path(\'graph_main_window.py\').read_text())"'
+
+    decision = worker_terminal_command_allowed(command)
+
+    assert decision.allowed is False
+    assert decision.failure_class == "source_inspection_command_blocked"
+    assert decision.suggested_next_tool == "read_file"
+    assert decision.to_blocked_payload(command)["blocked_command"] == command
+
+
+def test_worker_terminal_policy_allows_explicit_validation_command() -> None:
+    command = 'python -c "from pathlib import Path; print(Path(\'graph_main_window.py\').read_text())"'
+
+    decision = worker_terminal_command_allowed(
+        command,
+        explicit_validation_commands=[command],
+    )
+
     assert decision.allowed is True
