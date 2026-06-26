@@ -45,11 +45,31 @@ def test_worker_adherence_protocol():
 
 
 def test_worker_prompt_is_patch_first():
-    assert "Use `patch_file` for existing-file code changes." in WORKER_SYSTEM_PROMPT
+    assert "Use `patch_file` for existing-file changes" in WORKER_SYSTEM_PROMPT
+    assert "`expected_file_hash`" in WORKER_SYSTEM_PROMPT
     assert "Use `write_file` only for new files or intentional full-file replacement." in WORKER_SYSTEM_PROMPT
-    assert "re-read the affected file before retrying once" in WORKER_SYSTEM_PROMPT
-    assert "Do not switch between edit tools trying random tactics." in WORKER_SYSTEM_PROMPT
+    assert "re-read the affected file or region, retry once with `patch_file`" in WORKER_SYSTEM_PROMPT
+    assert "do not switch tools randomly" in WORKER_SYSTEM_PROMPT
     assert "Use `apply_edit_transaction` for existing-file code changes." not in WORKER_SYSTEM_PROMPT
+
+
+def test_worker_prompt_keeps_core_edit_and_validation_rules():
+    required_rules = [
+        "Read before editing",
+        "structured read tools",
+        "`read_file`",
+        "`read_files`",
+        "`read_file_outline`",
+        "`read_file_range`",
+        "Keep scope tight",
+        "Make the edit as soon as the correct change is clear",
+        "cheapest meaningful focused command",
+        "Touched Python files must pass `python -m py_compile`",
+        "changed files and validation results",
+    ]
+
+    for rule in required_rules:
+        assert rule in WORKER_SYSTEM_PROMPT
 
 
 def test_tool_schema_uses_builder_note_style():
@@ -95,6 +115,30 @@ def test_snappy_planner_worker_rules():
     assert "continuation_report" in WORKER_SYSTEM_PROMPT
 
 
+def test_worker_continuation_report_format_is_exact():
+    expected_format = """<continuation_report>
+<status>needs_followup</status>
+<reason>tool_limit_reached</reason>
+<completed>
+- ...
+</completed>
+<modified_files>
+- ...
+</modified_files>
+<validation>
+...
+</validation>
+<remaining>
+- ...
+</remaining>
+<recommended_next_step>
+...
+</recommended_next_step>
+</continuation_report>"""
+
+    assert expected_format in WORKER_SYSTEM_PROMPT
+
+
 def test_planner_has_concise_completion_rule():
     rule = "After Worker or built-in action completes, emit one concise final response and stop."
     assert rule in PLANNER_SYSTEM_PROMPT
@@ -103,20 +147,47 @@ def test_planner_has_concise_completion_rule():
 def test_planner_prompt_does_not_carry_worker_quality_blocks():
     """Planner should stay lightweight; Worker owns implementation quality."""
     assert "Code quality contract" not in PLANNER_SYSTEM_PROMPT
-    assert "Architecture guardrails" not in PLANNER_SYSTEM_PROMPT
-    assert "App/tool style contract" not in PLANNER_SYSTEM_PROMPT
 
     assert "Code quality contract" in WORKER_SYSTEM_PROMPT
-    assert "Architecture guardrails" in WORKER_SYSTEM_PROMPT
-    assert "App/tool style contract" in WORKER_SYSTEM_PROMPT
+    assert "app-shaped code" in WORKER_SYSTEM_PROMPT
+    assert "fake architecture" in WORKER_SYSTEM_PROMPT
+    assert "premature abstractions" in WORKER_SYSTEM_PROMPT
 
 
 def test_code_taste_block_present():
-    """Ensure the code taste block is in Worker and Single prompts but not Planner."""
-    marker = "AI generated"
-    assert marker in WORKER_SYSTEM_PROMPT
-    assert marker in SINGLE_SYSTEM_PROMPT
-    assert marker not in PLANNER_SYSTEM_PROMPT
+    """Ensure the compact code taste block is in Worker and Single prompts but not Planner."""
+    markers = [
+        "app-shaped code",
+        "Match existing project style",
+        "tutorial/demo scaffolding",
+        "placeholders, elisions",
+        "obvious narration comments/docstrings",
+        "Handle realistic failures honestly",
+    ]
+
+    for marker in markers:
+        assert marker in WORKER_SYSTEM_PROMPT
+        assert marker in SINGLE_SYSTEM_PROMPT
+        assert marker not in PLANNER_SYSTEM_PROMPT
+
+
+def test_worker_prompt_is_meaningfully_shorter():
+    assert len(WORKER_SYSTEM_PROMPT) < 8000
+
+
+def test_worker_prompt_removed_long_examples():
+    removed_example_text = [
+        "Bad docstring-heavy helper",
+        "Good direct helper",
+        "Bad swallowed parse error",
+        "Good clear parse failure",
+        "Bad helper reporting success",
+        "Good helper returning the result",
+        "DroneBuildBrief only exposes",
+    ]
+
+    for text in removed_example_text:
+        assert text not in WORKER_SYSTEM_PROMPT
 
 
 def test_validation_guidance_is_windows_safe():
