@@ -30,7 +30,7 @@ from aura.project_env import (
 )
 from aura.sandbox import SandboxExecutor, SandboxResult, WatchResult
 
-DEFAULT_TERMINAL_TIMEOUT_SECONDS = 45
+DEFAULT_TERMINAL_TIMEOUT_SECONDS = 300
 DEFAULT_PY_COMPILE_TIMEOUT_SECONDS = 30
 MAX_TERMINAL_TIMEOUT_SECONDS = 300
 

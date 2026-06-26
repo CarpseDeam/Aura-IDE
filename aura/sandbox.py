@@ -716,7 +716,7 @@ class SandboxExecutor:
                     ok=False,
                     stdout="".join(output_lines),
                     stderr="",
-                    exit_code=-1,
+                    exit_code=124,
                 )
 
             if (
