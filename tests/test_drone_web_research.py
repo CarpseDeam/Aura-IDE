@@ -182,7 +182,7 @@ class TestOutputShape:
         )
 
         required_keys = {
-            "ok", "summary", "query",
+            "ok", "summary", "query", "answer",
             "verified_facts", "sources", "evidence", "gaps",
             "confidence", "trace", "route_used",
         }
@@ -196,7 +196,8 @@ class TestOutputShape:
         assert isinstance(data["route_used"], dict)
 
         assert data["ok"] is True
-        assert data["confidence"] == "medium"
+        assert isinstance(data["answer"], str)
+        assert data["confidence"] in {"low", "none"}
         assert data["query"] == "What is the capital of France?"
         assert "live_research_ready" not in data
 
@@ -219,8 +220,30 @@ class TestOutputShape:
         )
         assert data["ok"] is True
         assert data["confidence"] != "none"
+        assert "USA vs England" in data["answer"]
+        assert "8:00 PM GMT" in data["answer"]
+        assert any(
+            "USA vs England" in fact and "8:00 PM GMT" in fact
+            for fact in data["verified_facts"]
+        )
+        assert data["sources"]
+        assert data["evidence"]
         assert any("World Cup Matches Today: USA vs ENG" in ev["excerpt"] for ev in data["evidence"])
         assert any("fifa.com" in src["url"] for src in data["sources"])
+
+    def test_mocked_schedule_evidence_without_parse_returns_gap(
+        self, web_research_folder: Path, monkeypatch, block_real_subprocess
+    ) -> None:
+        data = self._run_drone(
+            web_research_folder, "What time are matches today?",
+            monkeypatch, block_real_subprocess,
+        )
+        assert data["ok"] is True
+        assert data.get("answer", "") == ""
+        assert data["confidence"] in ["none", "low"]
+        assert data["sources"]
+        assert data["evidence"]
+        assert any("No extractable schedule match and time" in gap for gap in data["gaps"])
 
     def test_mocked_no_evidence_result(
         self, web_research_folder: Path, monkeypatch, block_real_subprocess

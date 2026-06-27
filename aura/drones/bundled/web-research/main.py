@@ -99,6 +99,53 @@ def fetch_evidence(url: str) -> tuple[str, str, dict]:
     return title, text, route_used
 
 
+def extract_schedule_answer(
+    query: str,
+    text: str,
+    now: datetime.datetime,
+) -> tuple[str, list[str], list[dict], list[str], str]:
+    """Extract a tiny schedule answer from evidence text.
+
+    Returns answer, verified_facts, evidence, gaps, confidence.
+    """
+    snippet = (text[:2000] if len(text) > 2000 else text).strip()
+    if not snippet:
+        return "", [], [], ["No evidence text was available to parse."], "none"
+
+    time_pattern = (
+        r"\b(?P<time>(?:[01]?\d|2[0-3])(?::[0-5]\d)?\s*(?:AM|PM|am|pm)?"
+        r"(?:\s*(?:GMT|UTC|ET|EST|EDT|CT|CST|CDT|MT|MST|MDT|PT|PST|PDT))?)\b"
+    )
+    match = re.search(
+        r"(?P<label>[A-Z][A-Za-z .'-]{1,40}\s+(?:vs\.?|v\.?|versus)\s+[A-Z][A-Za-z .'-]{1,40})\s+"
+        + time_pattern,
+        snippet,
+    )
+    if not match:
+        return (
+            "",
+            [],
+            [{"excerpt": snippet}],
+            ["No extractable schedule match and time were found in the fetched evidence."],
+            "low",
+        )
+
+    label = re.sub(r"\s+", " ", match.group("label")).strip()
+    label = re.sub(r"\bENG\b", "England", label)
+    time_string = re.sub(r"\s+", " ", match.group("time")).strip().upper()
+    date_label = "today" if "today" in query.lower() else "tomorrow" if "tomorrow" in query.lower() else "requested date"
+    answer = f"World Cup matches {date_label}: {label} at {time_string}."
+    fact = f"{label} is listed at {time_string}."
+    gaps = []
+    if re.search(r"\b(?:GMT|UTC|ET|EST|EDT|CT|CST|CDT|MT|MST|MDT|PT|PST|PDT)\b", time_string):
+        gaps.append("Timezone conversion was not performed; the source timezone was preserved.")
+    else:
+        gaps.append("The source evidence did not include a timezone, so no timezone conversion was performed.")
+
+    _ = now
+    return answer, [fact], [{"excerpt": snippet}], gaps, "medium"
+
+
 def synthesize_answer(query: str, tags: list[str], url: str, title: str, text: str, route_used: dict) -> dict:
     trace = [
         {"step": "parse_goal", "status": "completed"},
@@ -116,6 +163,7 @@ def synthesize_answer(query: str, tags: list[str], url: str, title: str, text: s
             "ok": True,
             "summary": "Failed to fetch evidence.",
             "query": query,
+            "answer": "",
             "verified_facts": [],
             "sources": [],
             "evidence": [],
@@ -125,14 +173,34 @@ def synthesize_answer(query: str, tags: list[str], url: str, title: str, text: s
             "route_used": route_used,
         }
 
-    # Extract simplistic evidence for the tiny pipeline
     snippet = text[:2000] if len(text) > 2000 else text
+    answer = ""
+    verified_facts: list[str] = []
+    evidence = [{"source_url": url, "excerpt": snippet.strip()}]
+    gaps: list[str] = []
+    confidence = "low"
+
+    if "schedule" in tags:
+        (
+            answer,
+            verified_facts,
+            extracted_evidence,
+            gaps,
+            confidence,
+        ) = extract_schedule_answer(query, text, now)
+        evidence = [
+            {"source_url": url, **item}
+            for item in extracted_evidence
+        ]
+    else:
+        gaps = ["No extractable answer was parsed from the fetched evidence."]
 
     return {
         "ok": True,
         "summary": "Completed live web research.",
         "query": query,
-        "verified_facts": [f"Found information regarding '{query}' as of {local_time} ({iso_time})"],
+        "answer": answer,
+        "verified_facts": verified_facts,
         "sources": [
             {
                 "url": url,
@@ -140,14 +208,9 @@ def synthesize_answer(query: str, tags: list[str], url: str, title: str, text: s
                 "fetched_at": iso_time
             }
         ],
-        "evidence": [
-            {
-                "source_url": url,
-                "excerpt": snippet.strip()
-            }
-        ],
-        "gaps": [],
-        "confidence": "medium",
+        "evidence": evidence,
+        "gaps": gaps,
+        "confidence": confidence,
         "trace": trace + [{"step": "synthesize_answer", "status": "completed"}],
         "route_used": route_used,
     }

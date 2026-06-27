@@ -115,3 +115,44 @@ def test_run_login_session_failed_start_includes_attempted_routes(monkeypatch: p
     assert result["status"] == "login_session_failed"
     assert "No browser found" in result["errors"][0]
     assert result["attempted_routes"] == ["route-a"]
+
+
+def test_run_login_session_page_failure_does_not_mask_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    class MockContext:
+        pages = []
+
+        def new_page(self):
+            raise RuntimeError("new page failed")
+
+    class MockRuntime:
+        def __init__(self, **kwargs):
+            self.context = MockContext()
+            self.route_metadata = {
+                "browser_id": "test-b-2",
+                "browser_label": "TestBrowser",
+                "browser_source": "system",
+                "browser_persistent": True,
+                "browser_visible": True,
+                "attempted_routes": ["route1"],
+            }
+
+        def start(self):
+            return True
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("aura.drones.browse.login_session.BrowserRuntime", MockRuntime)
+    monkeypatch.setattr("aura.drones.browse.login_session.ensure_profile_dir", lambda p: p)
+
+    result = run_login_session(
+        start_url="https://example.com",
+        browser_profile="my-profile",
+        wait_seconds=10,
+        on_content=lambda x: None,
+    )
+
+    assert result["status"] == "login_session_failed"
+    assert result["errors"] == ["new page failed"]
+    assert result["browser_id"] == "test-b-2"
+    assert result["attempted_routes"] == ["route1"]

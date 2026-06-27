@@ -51,19 +51,28 @@ def run_login_session(
     title = ""
     status = "login_session_failed"
     started = dt.datetime.now()
+    browser_meta: dict = {}
 
     try:
         if not runtime.start():
             reason = runtime.unavailable_reason or "Browser runtime failed to start"
             errors.append(reason)
             on_content(f"Failed to start browser session: {reason}")
-            
-            browser_meta = {}
+
             if "attempted_routes" in runtime.route_metadata:
                 browser_meta["attempted_routes"] = runtime.route_metadata["attempted_routes"]
                 
             return _login_result(status, browser_profile, start_url, final_url,
                                  title, errors, started, browser_meta)
+
+        browser_meta = {
+            "browser_id": runtime.route_metadata.get("browser_id", ""),
+            "browser_label": runtime.route_metadata.get("browser_label", ""),
+            "browser_source": runtime.route_metadata.get("browser_source", ""),
+            "browser_persistent": runtime.route_metadata.get("browser_persistent", False),
+            "browser_visible": runtime.route_metadata.get("browser_visible", False),
+            "attempted_routes": runtime.route_metadata.get("attempted_routes", []),
+        }
 
         page = runtime.context.new_page()
         page.goto(start_url, wait_until="domcontentloaded")
@@ -105,15 +114,6 @@ def run_login_session(
                     title = pages[0].title()
             except Exception:
                 logger.debug("Could not capture final page state after session close")
-
-        browser_meta = {
-            "browser_id": runtime.route_metadata.get("browser_id", ""),
-            "browser_label": runtime.route_metadata.get("browser_label", ""),
-            "browser_source": runtime.route_metadata.get("browser_source", ""),
-            "browser_persistent": runtime.route_metadata.get("browser_persistent", False),
-            "browser_visible": runtime.route_metadata.get("browser_visible", False),
-            "attempted_routes": runtime.route_metadata.get("attempted_routes", []),
-        }
 
     except Exception as exc:
         logger.exception("Login session failed")
