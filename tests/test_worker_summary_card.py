@@ -307,7 +307,7 @@ def test_card_dedupe_still_works(qapp) -> None:
     assert not any("First summary" in t for t in second_labels)
 
 
-def test_worker_summary_card_inserted_by_default():
+def test_worker_summary_card_inserted_by_default(qapp):
     """WorkerSummaryCard is inserted by add_worker_summary when not disabled."""
     from aura.gui.chat_view import ChatView
     view = ChatView()

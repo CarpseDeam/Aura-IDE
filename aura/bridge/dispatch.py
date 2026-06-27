@@ -45,6 +45,16 @@ from aura.conversation.persistence import WorkerDispatchRecord
 from aura.conversation.project_profile import detect_project_profile
 from aura.conversation.task_shape import task_shape_contract_lines
 from aura.conversation.tool_limits import WRITE_TOOLS
+from aura.conversation.validation_orchestrator import (
+    MALFORMED_VALIDATION_COMMAND,
+    MISSING_DEPENDENCY,
+    MISSING_EXECUTABLE,
+    NO_TESTS_COLLECTED,
+    POLICY_BLOCKED,
+    TEST_SELECTION_EMPTY,
+    TIMEOUT,
+    validation_issue_message,
+)
 from aura.dependency_context import build_dependency_stanza
 from aura.prompts import (
     WORKER_SYSTEM_PROMPT,
@@ -427,6 +437,9 @@ class _DispatchProxy(QObject):
             getattr(relay, "terminal_results", []),
             task_spec.validation_commands,
         )
+        validation_command_issues = _validation_command_issues_for_task(
+            getattr(relay, "terminal_results", [])
+        )
         if not preserve_scratch_records:
             validation_results = _filter_scratch_validation_results(validation_results)
         has_writes = bool(relay.write_results)
@@ -559,6 +572,8 @@ class _DispatchProxy(QObject):
             result_caveats.append(_format_recoverable_write_failure(recoverable_write_failures[0]))
         if validation_not_run:
             result_caveats.append("Files changed but validation did not run.")
+        if validation_command_issues:
+            result_caveats.append("Validation command issue(s) were recorded; code validation failures are reported separately.")
         for caveat in diagnostic_environment_caveats:
             if caveat not in result_caveats:
                 result_caveats.append(caveat)
@@ -720,6 +735,7 @@ class _DispatchProxy(QObject):
             summary_continuation,
             result_caveats,
             validation_results=validation_results,
+            validation_command_issues=validation_command_issues,
             not_applied_writes=unrecovered_not_applied_writes,
             status=status,
             internal_error=internal_error,
@@ -748,6 +764,7 @@ class _DispatchProxy(QObject):
             "environment_setup_blockers": environment_setup_blockers,
             "terminal_results": getattr(relay, "terminal_results", []),
             "validation_results": validation_results,
+            "validation_command_issues": validation_command_issues,
             "errors": result_errors,
             "caveats": result_caveats,
             "worker_internal_error": bool(internal_error),
@@ -1177,6 +1194,8 @@ def _unrecovered_validation_failures(results: list[dict[str, Any]]) -> list[dict
     for index, result in enumerate(results):
         if result.get("ok"):
             continue
+        if result.get("counts_as_product_failure") is False:
+            continue
         if _is_benign_search_no_match(result):
             continue
         command = str(result.get("command", ""))
@@ -1185,6 +1204,44 @@ def _unrecovered_validation_failures(results: list[dict[str, Any]]) -> list[dict
             continue
         failures.append(result)
     return failures
+
+
+_VALIDATION_COMMAND_ISSUE_CLASSES = {
+    MALFORMED_VALIDATION_COMMAND,
+    NO_TESTS_COLLECTED,
+    TEST_SELECTION_EMPTY,
+    MISSING_DEPENDENCY,
+    MISSING_EXECUTABLE,
+    POLICY_BLOCKED,
+    TIMEOUT,
+}
+
+
+def _validation_command_issues_for_task(
+    terminal_results: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    issues: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for record in terminal_results:
+        classification = str(record.get("validation_classification") or record.get("classification") or "")
+        normalized = bool(record.get("validation_command_normalized") or record.get("normalized"))
+        if (
+            classification not in _VALIDATION_COMMAND_ISSUE_CLASSES
+            and not normalized
+        ):
+            continue
+        if record.get("counts_as_product_failure") is True:
+            continue
+        key = (
+            str(record.get("validation_raw_text") or record.get("raw_text") or ""),
+            str(record.get("command") or ""),
+            classification,
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        issues.append(record)
+    return issues
 
 
 def _validation_results_for_task(
@@ -1325,6 +1382,7 @@ def _build_worker_summary(
     continuation: dict[str, Any] | None = None,
     caveats: list[str] | None = None,
     validation_results: list[dict[str, Any]] | None = None,
+    validation_command_issues: list[dict[str, Any]] | None = None,
     not_applied_writes: list[dict[str, Any]] | None = None,
     status: str | None = None,
     internal_error: str | None = None,
@@ -1332,6 +1390,7 @@ def _build_worker_summary(
     continuation = continuation or {}
     caveats = caveats or []
     validation_results = validation_results or []
+    validation_command_issues = validation_command_issues or []
     not_applied_writes = not_applied_writes or []
 
     # Derive status if not provided (backward compat for callers without status)
@@ -1448,18 +1507,21 @@ def _build_worker_summary(
     # === Validation detail ===
     if validation_results:
         passed_v = [v for v in validation_results if v.get("ok")]
-        failed_v = [v for v in validation_results if not v.get("ok")]
+        failed_v = [
+            v for v in validation_results
+            if not v.get("ok") and v.get("counts_as_product_failure") is not False
+        ]
 
         if passed_v:
             lines.append("")
-            lines.append(" Validation:")
+            lines.append(" Validated:")
             for v in passed_v:
                 cmd = str(v.get("command") or "")
                 lines.append(f"  \u2022 {cmd}  \u2192  passed")
 
         if failed_v:
             lines.append("")
-            lines.append(" Validation failures:")
+            lines.append(" Product failures:")
             for v in failed_v:
                 cmd = str(v.get("command") or "")
                 exit_code = v.get("exit_code")
@@ -1470,6 +1532,12 @@ def _build_worker_summary(
                     first_line = output.strip().split("\n")[0][:200]
                     if first_line:
                         lines.append(f"    {first_line}")
+
+    if validation_command_issues:
+        lines.append("")
+        lines.append(" Validation command issues:")
+        for issue in validation_command_issues[:5]:
+            lines.append(f"  \u2022 {validation_issue_message(issue)}")
 
     # === Harness errors ===
     if internal_error:

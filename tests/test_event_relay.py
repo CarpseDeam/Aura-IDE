@@ -233,3 +233,63 @@ def test_shell_assertion_search_terminal_result_is_validation() -> None:
     )
 
     assert relay.validation_results == relay.terminal_results
+
+
+def test_terminal_result_classifies_pytest_prose_token_as_command_issue() -> None:
+    relay = WorkerEventRelay(approval_proxy=Mock(), worker_model="test-model")
+    payload = {
+        "ok": False,
+        "command": "python -m pytest tests/test_worker_summary_card.py -k worker_summary_card_inserted_by_default -x",
+        "requested_command": "python -m pytest tests/test_worker_summary_card.py -k worker_summary_card_inserted_by_default -x passes",
+        "validation_raw_text": "python -m pytest tests/test_worker_summary_card.py -k worker_summary_card_inserted_by_default -x passes",
+        "expected_outcome": "passes",
+        "validation_source": "worker_command",
+        "exit_code": 4,
+        "output": "ERROR: file or directory not found: passes\n",
+        "validation_command_normalized": True,
+        "normalization_reason": "trailing outcome prose token",
+    }
+
+    relay.relay(
+        "dispatch-1",
+        ToolResult(
+            tool_call_id="worker-tool-1",
+            name="run_terminal_command",
+            ok=False,
+            result=json.dumps(payload),
+        ),
+    )
+
+    assert relay.terminal_results[0]["classification"] == "malformed_validation_command"
+    assert relay.terminal_results[0]["counts_as_product_failure"] is False
+    assert relay.validation_results == []
+
+
+def test_corrected_explicit_validation_pass_counts_as_validation_with_raw_audit() -> None:
+    relay = WorkerEventRelay(approval_proxy=Mock(), worker_model="test-model")
+    payload = {
+        "ok": True,
+        "command": "python -m pytest tests/test_worker_summary_card.py -k worker_summary_card_inserted_by_default -x",
+        "validation_raw_text": "python -m pytest tests/test_worker_summary_card.py -k worker_summary_card_inserted_by_default -x passes",
+        "expected_outcome": "passes",
+        "validation_source": "explicit_task_command",
+        "exit_code": 0,
+        "output": "1 passed\n",
+        "auto_validation": True,
+        "validation_command_normalized": True,
+        "normalization_reason": "trailing outcome prose token",
+    }
+
+    relay.relay(
+        "dispatch-1",
+        ToolResult(
+            tool_call_id="auto_explicit_validation",
+            name="run_terminal_command",
+            ok=True,
+            result=json.dumps(payload),
+        ),
+    )
+
+    assert relay.validation_results == relay.terminal_results
+    assert relay.validation_results[0]["classification"] == "passed"
+    assert relay.validation_results[0]["validation_raw_text"].endswith("passes")

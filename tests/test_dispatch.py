@@ -1171,6 +1171,43 @@ def test_worker_summary_dedupes_duplicate_failed_writes():
     assert summary.count("_tmp_inspect_wear.py") == 1
 
 
+def test_worker_summary_separates_validated_command_from_validation_issue():
+    summary = _build_worker_summary(
+        WorkerDispatchRequest(goal="Fix", files=["a.py"], spec="spec", acceptance=""),
+        History(),
+        [{"tool": "patch_file", "path": "a.py", "applied": True, "is_new_file": False}],
+        [],
+        {},
+        [],
+        validation_results=[
+            {
+                "command": "python -m pytest tests/test_worker_summary_card.py -k worker_summary_card_inserted_by_default -x",
+                "ok": True,
+                "exit_code": 0,
+                "counts_as_validation": True,
+                "counts_as_product_failure": False,
+            }
+        ],
+        validation_command_issues=[
+            {
+                "command": "python -m pytest tests/test_worker_summary_card.py -k worker_summary_card_inserted_by_default -x",
+                "validation_raw_text": "python -m pytest tests/test_worker_summary_card.py -k worker_summary_card_inserted_by_default -x passes",
+                "classification": "passed",
+                "expected_outcome": "passes",
+                "normalized": True,
+                "normalization_reason": "trailing outcome prose token",
+                "counts_as_product_failure": False,
+            }
+        ],
+        status=WorkerOutcomeStatus.completed_with_caveats.value,
+    )
+
+    assert "Validated:" in summary
+    assert "Validation command issues:" in summary
+    assert "Product failures:" not in summary
+    assert "trailing prose token `passes`" in summary
+
+
 def test_scratch_diagnostic_missing_import_is_caveat_not_project_patch():
     relay = SimpleNamespace(
         write_results=[

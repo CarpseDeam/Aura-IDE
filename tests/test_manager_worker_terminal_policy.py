@@ -382,6 +382,53 @@ def test_worker_final_text_is_quarantined_until_explicit_validation_passes(
     assert assistant_messages == ["Fixed after validation."]
 
 
+def test_worker_does_not_retry_malformed_explicit_validation_command(
+    worker_manager: tuple[ConversationManager, MagicMock],
+    worker_backend: MagicMock,
+) -> None:
+    manager, _tools = worker_manager
+    events: list[Event] = []
+    command = "Run pytest and make sure it passes"
+    worker_backend.side_effect = [
+        iter([
+            ContentDelta("Done after code change."),
+            Done(
+                finish_reason="stop",
+                full_message={
+                    "role": "assistant",
+                    "content": "Done after code change.",
+                    "reasoning_content": None,
+                },
+            ),
+        ]),
+    ]
+
+    manager.send(
+        on_event=events.append,
+        approval_cb=_approval_cb,
+        cancel_event=threading.Event(),
+        model="deepseek-chat",
+        thinking="off",
+        hook_name="generate_worker_code",
+        explicit_validation_commands=[command],
+    )
+
+    assert worker_backend.call_count == 1
+    validation_results = [
+        event for event in events
+        if isinstance(event, ToolResult) and event.tool_call_id == "auto_explicit_validation"
+    ]
+    assert validation_results
+    payload = json.loads(validation_results[0].result)
+    assert payload["classification"] == "malformed_validation_command"
+    assistant_messages = [
+        message.get("content")
+        for message in manager.history.messages
+        if message.get("role") == "assistant"
+    ]
+    assert assistant_messages == ["Done after code change."]
+
+
 def test_worker_structured_read_and_patch_file_are_unaffected(
     worker_manager: tuple[ConversationManager, MagicMock],
     worker_backend: MagicMock,

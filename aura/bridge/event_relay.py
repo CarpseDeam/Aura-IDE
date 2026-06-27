@@ -24,6 +24,7 @@ from aura.client import (
     Usage,
 )
 from aura.conversation.tool_limits import WRITE_TOOLS
+from aura.conversation.validation_orchestrator import classify_validation_payload
 
 TERMINAL_OUTPUT_CAPTURE_CHARS = 4000
 TERMINAL_OUTPUT_PREVIEW_CHARS = 200
@@ -279,6 +280,7 @@ class WorkerEventRelay(QObject):
                 }
                 if parsed.get("auto_validation"):
                     record["auto_validation"] = True
+                _attach_validation_metadata(record, parsed)
                 self.terminal_results.append(record)
                 if _is_validation_terminal_record(record):
                     self.validation_results.append(record)
@@ -298,6 +300,7 @@ class WorkerEventRelay(QObject):
                     "output": output[:TERMINAL_OUTPUT_CAPTURE_CHARS],
                     "output_preview": output[:TERMINAL_OUTPUT_PREVIEW_CHARS],
                 }
+                _attach_validation_metadata(record, parsed)
                 self.terminal_results.append(record)
                 if _is_validation_terminal_record(record):
                     self.validation_results.append(record)
@@ -382,6 +385,18 @@ class WorkerEventRelay(QObject):
             "not_found",
             "candidate_count",
             "candidates",
+            "validation_classification",
+            "classification",
+            "counts_as_validation",
+            "counts_as_product_failure",
+            "user_action",
+            "validation_raw_text",
+            "raw_text",
+            "expected_outcome",
+            "validation_source",
+            "validation_command_normalized",
+            "normalized",
+            "normalization_reason",
         )
         for key in fields:
             if key in parsed:
@@ -398,6 +413,8 @@ class WorkerEventRelay(QObject):
 
 
 def _is_validation_terminal_record(record: dict[str, Any]) -> bool:
+    if "counts_as_validation" in record:
+        return bool(record.get("counts_as_validation"))
     if record.get("auto_validation"):
         return True
     command = str(record.get("command") or "").strip()
@@ -440,3 +457,17 @@ def _is_search_command_with_explicit_shell_assertion(normalized_command: str) ->
         re.search(r"&&\s*exit\s+1\s*\|\|\s*exit\s+0\b", normalized_command)
         or re.search(r"\|\|\s*exit\s+1\b", normalized_command)
     )
+
+
+def _attach_validation_metadata(record: dict[str, Any], parsed: dict[str, Any]) -> None:
+    should_classify = (
+        bool(parsed.get("auto_validation"))
+        or bool(parsed.get("validation_source"))
+        or bool(parsed.get("validation_raw_text"))
+        or bool(parsed.get("classification"))
+        or bool(parsed.get("validation_classification"))
+    )
+    if not should_classify:
+        return
+    run = classify_validation_payload(parsed)
+    record.update(run.metadata())

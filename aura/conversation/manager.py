@@ -95,6 +95,7 @@ from aura.conversation.tools._types import (
 from aura.conversation.tools.registry import ToolRegistry
 from aura.conversation.worker_final_validation import (
     WORKER_EXPLICIT_VALIDATION_FAILURE_INSTRUCTION,
+    emit_explicit_validation_runs,
     emit_explicit_validation_result,
     run_explicit_validation_commands,
 )
@@ -748,14 +749,22 @@ class ConversationManager:
                             workspace_root=Path(self._tools.workspace_root),
                             commands=explicit_validation_commands,
                         )
-                        if not val_result.ok:
-                            emit_explicit_validation_result(
-                                command=val_result.command,
-                                ok=False,
-                                output=val_result.diagnostics,
+                        validation_runs = getattr(val_result, "runs", None)
+                        if validation_runs:
+                            emit_explicit_validation_runs(
+                                runs=validation_runs,
                                 on_event=on_event,
                                 workspace_root=self._tools.workspace_root,
                             )
+                        if not val_result.ok:
+                            if not validation_runs:
+                                emit_explicit_validation_result(
+                                    command=val_result.command,
+                                    ok=False,
+                                    output=val_result.diagnostics,
+                                    on_event=on_event,
+                                    workspace_root=self._tools.workspace_root,
+                                )
                             instruction = WORKER_EXPLICIT_VALIDATION_FAILURE_INSTRUCTION.format(
                                 command=val_result.command,
                                 diagnostics=val_result.diagnostics,

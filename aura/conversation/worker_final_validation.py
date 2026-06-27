@@ -9,6 +9,11 @@ from pathlib import Path
 from typing import Callable
 
 from aura.client import Event, ToolResult
+from aura.conversation.validation_orchestrator import (
+    ValidationRunResult,
+    classify_validation_run,
+    parse_validation_command,
+)
 from aura.sandbox import SandboxExecutor
 
 EventCallback = Callable[[Event], None]
@@ -20,6 +25,11 @@ class WorkerFinalValidationResult:
     gate: str = "explicit_validation"
     diagnostics: str = ""
     command: str = ""
+    runs: list[ValidationRunResult] | None = None
+
+    @property
+    def counts_as_product_failure(self) -> bool:
+        return any(run.counts_as_product_failure for run in self.runs or [])
 
 
 def run_explicit_validation_commands(
@@ -41,17 +51,49 @@ def run_explicit_validation_commands(
         workspace_root=workspace_root,
     )
 
-    for command in commands:
+    runs: list[ValidationRunResult] = []
+    for raw_command in commands:
+        validation_command = parse_validation_command(
+            raw_command,
+            source="explicit_task_command",
+        )
+        if validation_command.malformed:
+            runs.append(
+                classify_validation_run(
+                    validation_command,
+                    exit_code=None,
+                    output="Validation text was not a runnable command.",
+                    ok=False,
+                )
+            )
+            continue
+        command = validation_command.command
         try:
             watch = sandbox.run_and_watch(command, window_seconds=window_seconds)
         except Exception as exc:
-            return WorkerFinalValidationResult(
+            diagnostics = f"Exception running command: {type(exc).__name__}: {exc}"
+            run = classify_validation_run(
+                validation_command,
+                exit_code=None,
+                output=diagnostics,
                 ok=False,
-                diagnostics=f"Exception running command: {type(exc).__name__}: {exc}",
+            )
+            runs.append(run)
+            return WorkerFinalValidationResult(
+                ok=not run.counts_as_product_failure,
+                diagnostics=diagnostics,
                 command=command,
+                runs=runs,
             )
 
         ok = bool(watch.ok and watch.exited_early)
+        run = classify_validation_run(
+            validation_command,
+            exit_code=watch.exit_code,
+            output=watch.output,
+            ok=ok,
+        )
+        runs.append(run)
         if not ok:
             diagnostics = watch.output
             if not diagnostics.strip():
@@ -61,13 +103,16 @@ def run_explicit_validation_commands(
                     f"survived_window={watch.survived_window}, "
                     f"exited_early={watch.exited_early})."
                 )
+            if not run.counts_as_product_failure:
+                continue
             return WorkerFinalValidationResult(
                 ok=False,
                 diagnostics=diagnostics,
                 command=command,
+                runs=runs,
             )
 
-    return WorkerFinalValidationResult(ok=True)
+    return WorkerFinalValidationResult(ok=True, runs=runs)
 
 
 def emit_explicit_validation_result(
@@ -77,6 +122,14 @@ def emit_explicit_validation_result(
     output: str,
     on_event: EventCallback,
     workspace_root: str | Path,
+    raw_text: str = "",
+    expected_outcome: str = "",
+    classification: str = "",
+    counts_as_validation: bool | None = None,
+    counts_as_product_failure: bool | None = None,
+    user_action: str = "",
+    normalized: bool = False,
+    normalization_reason: str = "",
 ) -> None:
     """Emit a ToolResult event for an explicit validation command failure."""
     payload = {
@@ -86,7 +139,26 @@ def emit_explicit_validation_result(
         "output": output,
         "auto_validation": True,
         "verification_rung": "explicit_validation",
+        "validation_source": "explicit_task_command",
     }
+    if raw_text:
+        payload["validation_raw_text"] = raw_text
+        payload["raw_text"] = raw_text
+    if expected_outcome:
+        payload["expected_outcome"] = expected_outcome
+    if classification:
+        payload["validation_classification"] = classification
+        payload["classification"] = classification
+    if counts_as_validation is not None:
+        payload["counts_as_validation"] = counts_as_validation
+    if counts_as_product_failure is not None:
+        payload["counts_as_product_failure"] = counts_as_product_failure
+    if user_action:
+        payload["user_action"] = user_action
+    payload["validation_command_normalized"] = normalized
+    payload["normalized"] = normalized
+    if normalization_reason:
+        payload["normalization_reason"] = normalization_reason
     content = json.dumps(payload, ensure_ascii=False)
     on_event(
         ToolResult(
@@ -97,6 +169,30 @@ def emit_explicit_validation_result(
             extras={"auto_validation": True, "verification_rung": "explicit_validation"},
         )
     )
+
+
+def emit_explicit_validation_runs(
+    *,
+    runs: list[ValidationRunResult],
+    on_event: EventCallback,
+    workspace_root: str | Path,
+) -> None:
+    for run in runs:
+        emit_explicit_validation_result(
+            command=run.command,
+            ok=run.ok,
+            output=run.output,
+            on_event=on_event,
+            workspace_root=workspace_root,
+            raw_text=run.raw_text,
+            expected_outcome=run.expected_outcome,
+            classification=run.classification,
+            counts_as_validation=run.counts_as_validation,
+            counts_as_product_failure=run.counts_as_product_failure,
+            user_action=run.user_action,
+            normalized=run.normalized,
+            normalization_reason=run.normalization_reason,
+        )
 
 
 WORKER_EXPLICIT_VALIDATION_FAILURE_INSTRUCTION = (
@@ -113,4 +209,5 @@ __all__ = [
     "run_explicit_validation_commands",
     "WORKER_EXPLICIT_VALIDATION_FAILURE_INSTRUCTION",
     "emit_explicit_validation_result",
+    "emit_explicit_validation_runs",
 ]

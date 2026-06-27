@@ -23,6 +23,12 @@ from aura.conversation.history import History
 from aura.conversation.loop_detection import LoopDetector
 from aura.conversation.spec_quality import validate_worker_dispatch_spec
 from aura.conversation.terminal_policy import worker_terminal_command_allowed
+from aura.conversation.validation_orchestrator import (
+    MALFORMED_VALIDATION_COMMAND,
+    classify_validation_run,
+    looks_like_validation_command,
+    parse_validation_command,
+)
 from aura.project_env import (
     build_project_command,
     build_project_command_rewrite,
@@ -233,6 +239,41 @@ class ToolRunner:
             )
             return {"_terminal_payload": {"ok": False, "error": "command is required", "command": ""}}
 
+        validation_command = parse_validation_command(
+            requested_command,
+            source="worker_command" if mode == "worker" else "single_command",
+        )
+        if mode == "worker" and validation_command.malformed:
+            run_result = classify_validation_run(
+                validation_command,
+                exit_code=None,
+                output="Validation text was not a runnable command.",
+                ok=False,
+            )
+            payload_dict = {
+                "ok": False,
+                "exit_code": None,
+                "output": run_result.output,
+                "command": "",
+                "requested_command": requested_command,
+                "original_command": requested_command,
+                "failure_class": MALFORMED_VALIDATION_COMMAND,
+            }
+            payload_dict.update(run_result.metadata())
+            payload = json.dumps(payload_dict, ensure_ascii=False)
+            self._history.append_tool_result(tool_call_id, payload)
+            on_event(
+                ToolResult(
+                    tool_call_id=tool_call_id,
+                    name="run_terminal_command",
+                    ok=False,
+                    result=payload,
+                )
+            )
+            return {"_terminal_payload": payload_dict}
+
+        command = validation_command.command or requested_command
+
         if mode == "worker":
             explicit = self._matches_explicit_validation(
                 str(command),
@@ -344,6 +385,22 @@ class ToolRunner:
             "requested_command": requested_command,
             "original_command": original_command,
         }
+        should_classify_validation = (
+            mode == "worker"
+            and (
+                explicit
+                or validation_command.normalized
+                or looks_like_validation_command(validation_command.command)
+            )
+        )
+        if should_classify_validation:
+            run_result = classify_validation_run(
+                validation_command,
+                exit_code=exit_code,
+                output=full_output,
+                ok=ok,
+            )
+            payload_dict.update(run_result.metadata())
         payload = json.dumps(payload_dict, ensure_ascii=False)
 
         observed = self._loop_detector.observe(
@@ -491,7 +548,13 @@ class ToolRunner:
     ) -> bool:
         normalized = " ".join(str(command or "").strip().lower().split())
         return any(
-            normalized == " ".join(str(explicit or "").strip().lower().split())
+            normalized == " ".join(
+                parse_validation_command(str(explicit or ""), source="explicit_task_command")
+                .command
+                .strip()
+                .lower()
+                .split()
+            )
             for explicit in explicit_validation_commands or []
         )
 
