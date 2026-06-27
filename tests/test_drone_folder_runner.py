@@ -8,15 +8,14 @@ from pathlib import Path
 
 import pytest
 
-from aura import paths as aura_paths
 from aura.drones.folder_runner import run_folder_drone_sync
 from aura.drones.run import DroneRun
 from aura.drones.store import DroneStore, RunHistoryStore
 
 
 @pytest.fixture(autouse=True)
-def _patch_data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(aura_paths, "data_dir", lambda: tmp_path / "data")
+def _patch_drones_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("aura.drones.store.aura_root", lambda: tmp_path / "aura_root")
 
 
 def _register_cancellable_drone(workspace: Path):
