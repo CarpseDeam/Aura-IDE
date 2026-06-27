@@ -102,14 +102,15 @@ def test_normal_coding_tasks_are_no_research(text: str) -> None:
     assert decide_research_policy(text).route == NO_RESEARCH
 
 
-def test_hybrid_external_docs_plus_code_routes_research_then_worker() -> None:
+def test_hybrid_external_docs_plus_code_is_planner_guided_research_then_worker() -> None:
     decision = decide_research_policy(
         "Use the latest FastAPI docs to update our endpoint implementation."
     )
 
     assert decision.route == RESEARCH_THEN_WORKER
     assert decision.requires_research_first is True
-    assert decision.worker_after_research_only is True
+    assert decision.planner_guided_worker_after_research is True
+    assert decision.deterministically_enforced is False
 
 
 def test_pure_external_question_routes_answer_only() -> None:
@@ -117,6 +118,7 @@ def test_pure_external_question_routes_answer_only() -> None:
 
     assert decision.route == ANSWER_ONLY
     assert decision.allow_worker_dispatch is False
+    assert decision.deterministically_enforced is True
 
 
 def test_research_request_preserves_user_question_cleanly() -> None:

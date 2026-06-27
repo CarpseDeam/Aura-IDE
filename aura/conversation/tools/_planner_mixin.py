@@ -397,6 +397,13 @@ class PlannerHandlersMixin:
 
 
 def format_web_research_answer(result: dict[str, Any]) -> str:
-    """Build compact chat prose from a Web Research Drone receipt."""
+    """Compatibility wrapper for compact Web Research Drone chat prose."""
     normalized = ResearchResult.from_drone_receipt(result)
     return format_research_answer(normalized)
+
+
+__all__ = [
+    "PlannerHandlersMixin",
+    "WEB_RESEARCH_DRONE_ID",
+    "format_web_research_answer",
+]

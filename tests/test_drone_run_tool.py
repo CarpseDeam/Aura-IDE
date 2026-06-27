@@ -227,6 +227,40 @@ class TestRunReadOnlyDroneHandler:
         assert "https://www.fifa.com/en/match-centre" in answer
 
     @patch("aura.drones.sync_runner.run_read_only_drone_sync")
+    def test_web_research_direct_handler_produces_answer_for_chat_without_name_error(
+        self, mock_runner, workspace: Path
+    ):
+        _register_web_research_drone(workspace)
+        mock_runner.return_value = {
+            "ok": True,
+            "run_id": "run-web",
+            "drone_id": "web-research",
+            "drone_name": "Web Research",
+            "status": "completed",
+            "summary": "researched",
+            "cargo": {
+                "answer": "Python 3.14.0 is the latest stable version.",
+                "verified_facts": ["Python 3.14.0 is listed as stable."],
+                "sources": [{"title": "Python Downloads", "url": "https://www.python.org/downloads/"}],
+                "evidence": [{"excerpt": "Python 3.14.0"}],
+                "gaps": [],
+                "confidence": "high",
+            },
+        }
+        registry = ToolRegistry(workspace_root=workspace, read_only=False, mode="planner")
+
+        result = registry._handle_run_read_only_drone(
+            {"drone_id": "web-research", "goal": "What is the latest Python version?"},
+            MagicMock(return_value=ApprovalDecision(action="approve")),
+            False,
+        )
+
+        assert result.ok is True
+        assert result.payload["answer_for_chat"]
+        assert "Python 3.14.0" in result.payload["answer_for_chat"]
+        assert "Python Downloads" in result.payload["answer_for_chat"]
+
+    @patch("aura.drones.sync_runner.run_read_only_drone_sync")
     def test_web_research_low_confidence_adds_careful_chat_answer(
         self, mock_runner, workspace: Path
     ):

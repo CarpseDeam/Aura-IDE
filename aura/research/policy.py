@@ -19,7 +19,8 @@ class ResearchPolicyDecision:
     reason: str
     allow_worker_dispatch: bool
     requires_research_first: bool = False
-    worker_after_research_only: bool = False
+    planner_guided_worker_after_research: bool = False
+    deterministically_enforced: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -40,10 +41,12 @@ def decide_research_policy(text: str) -> ResearchPolicyDecision:
         return ResearchPolicyDecision(
             route=RESEARCH_THEN_WORKER,
             intent=intent,
-            reason="external research is needed before a concrete code objective",
+            reason=(
+                "Planner should research before dispatching a concrete code objective"
+            ),
             allow_worker_dispatch=True,
             requires_research_first=True,
-            worker_after_research_only=True,
+            planner_guided_worker_after_research=True,
         )
 
     return ResearchPolicyDecision(
@@ -52,4 +55,5 @@ def decide_research_policy(text: str) -> ResearchPolicyDecision:
         reason="pure external/current-information request",
         allow_worker_dispatch=False,
         requires_research_first=True,
+        deterministically_enforced=True,
     )
