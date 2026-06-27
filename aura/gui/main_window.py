@@ -274,6 +274,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._worker_handler.usage_updated.connect(self._refresh_status_bar)
         self._worker_handler.usage_updated.connect(lambda: self._balance_controller.refresh(self._settings))
         self._worker_handler.worker_started.connect(lambda: self._input.set_streaming(False))
+        self._playground.stop_worker_requested.connect(self._bridge.request_cancel)
+        self._worker_handler.worker_running_changed.connect(self._playground.set_worker_running)
 
         # Conversation persistence (auto-save, load, restore, replay).
         self._persistence = ConversationPersistence(

@@ -38,6 +38,7 @@ class WorkerEventHandler(QObject):
 
     usage_updated = Signal()
     worker_started = Signal()
+    worker_running_changed = Signal(bool)
 
     def __init__(
         self,
@@ -254,6 +255,7 @@ class WorkerEventHandler(QObject):
             WorkflowStatus.dispatched,
             pending_user_action="",
         )
+        self.worker_running_changed.emit(True)
 
     def _on_worker_finished(
         self,
@@ -318,6 +320,7 @@ class WorkerEventHandler(QObject):
                 )
             )
         self._clear_active_spec_card(tool_call_id)
+        self.worker_running_changed.emit(False)
 
     @staticmethod
     def _is_planner_resolution_result(status: str | None, metadata: dict) -> bool:
@@ -384,6 +387,7 @@ class WorkerEventHandler(QObject):
             pending_user_action="",
         )
         self._clear_active_spec_card(tool_call_id)
+        self.worker_running_changed.emit(False)
 
     # ---- worker content slots --------------------------------------------------
 
