@@ -642,6 +642,7 @@ class ChatView(QScrollArea):
                 self._cleanup_failed_code_cards(tool_call_id)
 
                 if summary and not dispatch_not_started and not (needs_followup and recoverable):
+                    context_gearbox = extras.get("context_gearbox") if isinstance(extras, dict) else None
                     goal = (
                         controller.goal
                         or self._tool_goal_from_args(controller.buffer)
@@ -654,6 +655,7 @@ class ChatView(QScrollArea):
                         summary,
                         needs_followup=needs_followup,
                         status=status,
+                        context_gearbox=context_gearbox,
                     )
 
                 # Close the current assistant turn so the next Planner
@@ -853,6 +855,7 @@ class ChatView(QScrollArea):
     def add_worker_summary(
         self, tool_call_id: str, goal: str, ok: bool, summary: str,
         needs_followup: bool = False, status: str | None = None,
+        context_gearbox: dict | None = None,
     ) -> None:
         """Add a summary card to the chat after a worker completes."""
         if self._worker_summary_disabled:
@@ -861,13 +864,21 @@ class ChatView(QScrollArea):
         self._remove_plan_writer_card(tool_call_id)
         existing = self._worker_summary_cards.get(tool_call_id)
         if existing is not None:
-            existing.update_summary(goal, ok, summary, needs_followup=needs_followup, status=status)
+            existing.update_summary(
+                goal,
+                ok,
+                summary,
+                needs_followup=needs_followup,
+                status=status,
+                context_gearbox=context_gearbox,
+            )
             self._scroll_after_bottom_layout_change()
             return
         card = WorkerSummaryCard(
             tool_call_id, goal, ok, summary,
             needs_followup=needs_followup, parent=self,
             status=status,
+            context_gearbox=context_gearbox,
         )
         self._worker_summary_cards[tool_call_id] = card
         self._add_card(card)

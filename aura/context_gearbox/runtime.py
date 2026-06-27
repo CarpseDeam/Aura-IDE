@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any, Iterable
 
 from aura.context_gearbox.models import ComposedContext, ContextLedgerEntry, RuntimeRole
 from aura.context_gearbox.sources import collect_source_text, iter_registered_sources
@@ -34,6 +35,98 @@ def default_role_prompt(role: RuntimeRole | str) -> str:
 PLANNER_SYSTEM_PROMPT = default_role_prompt(RuntimeRole.PLANNER)
 WORKER_SYSTEM_PROMPT = default_role_prompt(RuntimeRole.WORKER)
 SINGLE_SYSTEM_PROMPT = default_role_prompt(RuntimeRole.SINGLE)
+
+
+def serialize_context_ledger(
+    entries: Iterable[ContextLedgerEntry],
+) -> list[dict[str, Any]]:
+    """Return deterministic plain data for runtime context ledger entries."""
+    serialized: list[dict[str, Any]] = []
+    for entry in entries:
+        item: dict[str, Any] = {
+            "source_id": entry.source_id,
+            "kind": entry.kind,
+            "role": entry.role.value,
+            "included": bool(entry.included),
+            "reason": entry.reason,
+            "char_count": int(entry.char_count),
+        }
+        if entry.error:
+            item["error"] = entry.error
+        serialized.append(item)
+    return serialized
+
+
+def summarize_context_ledger(
+    ledger: Iterable[ContextLedgerEntry] | Iterable[dict[str, Any]],
+) -> dict[str, Any]:
+    """Return compact loaded/skipped counts for a serialized or raw ledger."""
+    entries: list[dict[str, Any]] = []
+    for entry in ledger:
+        if isinstance(entry, ContextLedgerEntry):
+            entries.append(serialize_context_ledger((entry,))[0])
+        else:
+            entries.append(dict(entry))
+
+    loaded = [str(entry["source_id"]) for entry in entries if entry.get("included")]
+    skipped = [
+        {
+            "source_id": str(entry.get("source_id", "")),
+            "reason": str(entry.get("reason", "")),
+        }
+        for entry in entries
+        if not entry.get("included")
+    ]
+    loaded_count = len(loaded)
+    skipped_count = len(skipped)
+    return {
+        "loaded_count": loaded_count,
+        "skipped_count": skipped_count,
+        "loaded": loaded,
+        "skipped": skipped,
+        "display": f"Context: {loaded_count} loaded, {skipped_count} skipped",
+    }
+
+
+def context_gearbox_metadata(
+    entries: Iterable[ContextLedgerEntry],
+) -> dict[str, Any]:
+    """Return the inspectable Context Gearbox payload without prompt text."""
+    ledger = serialize_context_ledger(entries)
+    return {
+        "summary": summarize_context_ledger(ledger),
+        "ledger": ledger,
+    }
+
+
+def format_context_gearbox_display(metadata: dict[str, Any]) -> list[str]:
+    """Format compact Context Gearbox lines for log/detail surfaces."""
+    summary = metadata.get("summary") if isinstance(metadata, dict) else {}
+    if not isinstance(summary, dict):
+        return []
+
+    display = str(summary.get("display") or "").strip()
+    lines = [display] if display else []
+
+    loaded = summary.get("loaded")
+    if isinstance(loaded, list) and loaded:
+        lines.append("Loaded: " + ", ".join(str(item) for item in loaded))
+
+    skipped = summary.get("skipped")
+    if isinstance(skipped, list) and skipped:
+        formatted: list[str] = []
+        for item in skipped:
+            if not isinstance(item, dict):
+                continue
+            source_id = str(item.get("source_id") or "").strip()
+            reason = str(item.get("reason") or "").strip()
+            if not source_id:
+                continue
+            formatted.append(f"{source_id} ({reason})" if reason else source_id)
+        if formatted:
+            lines.append("Skipped: " + ", ".join(formatted))
+
+    return lines
 
 
 def build_context_text(

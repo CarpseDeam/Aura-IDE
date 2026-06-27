@@ -272,6 +272,7 @@ class WorkerEventHandler(QObject):
         )
 
         metadata = self._worker_result_metadata(tool_call_id)
+        context_gearbox = self._context_gearbox_metadata(metadata)
         suppress_main_summary = self._is_recoverable_internal_worker_result(
             ok=ok,
             needs_followup=bool(needs_followup),
@@ -290,6 +291,10 @@ class WorkerEventHandler(QObject):
             self._playground.worker_finished(
                 ok, summary, needs_followup=bool(needs_followup), status=status
             )
+        if context_gearbox:
+            shower = getattr(self._playground, "show_context_gearbox_metadata", None)
+            if callable(shower):
+                shower(context_gearbox)
 
         if is_mismatch:
             self._chat.begin_planner_resolution_aura()
@@ -306,6 +311,7 @@ class WorkerEventHandler(QObject):
                 summary,
                 needs_followup=bool(needs_followup),
                 status=status,
+                context_gearbox=context_gearbox,
             )
         if self._active_workflow is not None and self._active_workflow.tool_call_id == tool_call_id:
             self._set_active_workflow(
@@ -336,6 +342,12 @@ class WorkerEventHandler(QObject):
             extras.get("mismatch_kind", ""),
             extras.get("mismatch_question", ""),
         )
+
+    @staticmethod
+    def _context_gearbox_metadata(metadata: dict) -> dict:
+        extras = metadata.get("extras") if isinstance(metadata.get("extras"), dict) else {}
+        context_gearbox = extras.get("context_gearbox")
+        return context_gearbox if isinstance(context_gearbox, dict) else {}
 
     @staticmethod
     def _is_recoverable_internal_worker_result(

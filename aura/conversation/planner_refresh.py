@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from aura.context_gearbox.models import RuntimeRole
-from aura.context_gearbox.runtime import compose_system_prompt
+from aura.context_gearbox.runtime import context_gearbox_metadata, compose_system_prompt
+
+logger = logging.getLogger(__name__)
 
 
 def stale_read_notice(modified_files: list[str]) -> str:
@@ -67,11 +70,13 @@ class PlannerRefreshState:
                 self._workspace_root,
                 force=True,
             )
+            metadata = context_gearbox_metadata(composed.ledger)
+            logger.info(
+                "planner_context_refresh_summary %s",
+                metadata["summary"]["display"],
+            )
             history.set_system(composed.system_prompt)
         except Exception:
-            import logging
-
-            logger = logging.getLogger(__name__)
             logger.warning(
                 "Failed to refresh Tier 1 context after worker writes", exc_info=True
             )

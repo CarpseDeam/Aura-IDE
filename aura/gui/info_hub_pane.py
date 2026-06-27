@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from aura.config import media_path
+from aura.context_gearbox.runtime import format_context_gearbox_display
 from aura.gui.cards._helpers import _mono_font
 from aura.gui.cards.diff_card import DiffCard
 from aura.gui.cards.error_card import ErrorCard
@@ -219,6 +220,15 @@ class InfoHubPane(QWidget):
 
         self._cards_layout.addWidget(row)
 
+    def show_context_gearbox_metadata(self, metadata: dict | None) -> None:
+        """Append compact Context Gearbox details to the Worker Log."""
+        lines = format_context_gearbox_display(metadata or {})
+        if not lines:
+            return
+        self._log_stream.flush()
+        self._log_view.insertPlainText("\n" + "\n".join(lines) + "\n")
+        sb = self._log_view.verticalScrollBar()
+        sb.setValue(sb.maximum())
 
     def _on_copy_summary(self, btn: QToolButton, receipt_text: str) -> None:
         QGuiApplication.clipboard().setText(receipt_text)

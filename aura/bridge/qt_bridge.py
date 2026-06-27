@@ -15,6 +15,7 @@ Planner / worker mode:
 """
 from __future__ import annotations
 
+import copy
 import threading
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -61,6 +62,7 @@ from aura.context_gearbox.runtime import (
     PLANNER_SYSTEM_PROMPT,
     SINGLE_SYSTEM_PROMPT,
     build_context_text,
+    context_gearbox_metadata,
     compose_system_prompt,
 )
 from aura.conversation import (
@@ -276,6 +278,7 @@ class ConversationBridge(QObject):
         self._single_system_prompt: str = ""
         self._planner_system_prompt: str = ""
         self._tier1_context: str = ""
+        self._context_gearbox_metadata: dict = {}
         self._auto_dispatch: bool = False
         self._pre_worker_sha: str | None = None
         self._active_prompt_mode: str | None = None
@@ -331,9 +334,13 @@ class ConversationBridge(QObject):
     def worker_result_metadata(self, tool_call_id: str) -> dict:
         return self._dispatch_proxy.result_metadata(tool_call_id)
 
+    def context_gearbox_metadata(self) -> dict:
+        return copy.deepcopy(self._context_gearbox_metadata)
+
     def set_workspace_root(self, root) -> None:
         if root is None:
             self._tier1_context = ""
+            self._context_gearbox_metadata = {}
             return
         self._registry.set_workspace_root(root)
         self._dispatch_proxy.set_workspace_root(root)
@@ -355,6 +362,7 @@ class ConversationBridge(QObject):
             self._registry.workspace_root,
             force=force_repo_map,
         )
+        self._context_gearbox_metadata = context_gearbox_metadata(context.ledger)
         self._tier1_context = context.context_text
         self._dispatch_proxy.set_tier1_context(self._tier1_context)
 
@@ -430,6 +438,7 @@ class ConversationBridge(QObject):
             self._registry.workspace_root,
             force=force_repo_map,
         )
+        self._context_gearbox_metadata = context_gearbox_metadata(composed.ledger)
         self._tier1_context = composed.context_text
         self._dispatch_proxy.set_tier1_context(self._tier1_context)
         return composed

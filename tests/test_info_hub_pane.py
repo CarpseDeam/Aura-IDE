@@ -52,6 +52,33 @@ def test_final_summary_flushes_pending_prose_first(qapp) -> None:
     assert text.index("Pending prose") < text.index("Worker completed successfully.")
 
 
+def test_context_gearbox_metadata_appends_compact_log_lines(qapp) -> None:
+    pane = InfoHubPane()
+
+    pane.show_context_gearbox_metadata(
+        {
+            "summary": {
+                "loaded_count": 2,
+                "skipped_count": 1,
+                "loaded": ["core_kernel", "repo_map"],
+                "skipped": [
+                    {
+                        "source_id": "project_rules",
+                        "reason": "project_rules.md not found",
+                    }
+                ],
+                "display": "Context: 2 loaded, 1 skipped",
+            },
+            "ledger": [],
+        }
+    )
+
+    text = pane._log_view.toPlainText()
+    assert "Context: 2 loaded, 1 skipped" in text
+    assert "Loaded: core_kernel, repo_map" in text
+    assert "Skipped: project_rules (project_rules.md not found)" in text
+
+
 def test_clear_drops_pending_prose(qapp) -> None:
     pane = InfoHubPane()
 

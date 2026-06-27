@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
-from aura.context_gearbox.models import ComposedContext, RuntimeRole
-from aura.context_gearbox.runtime import compose_system_prompt
+from aura.context_gearbox.models import ComposedContext, ContextLedgerEntry, RuntimeRole
+from aura.context_gearbox.runtime import (
+    context_gearbox_metadata,
+    compose_system_prompt,
+    serialize_context_ledger,
+    summarize_context_ledger,
+)
 from aura.context_gearbox.sources import iter_registered_sources
+from aura.conversation.history import History
+from aura.conversation.planner_refresh import PlannerRefreshState
 from aura.prompts import (
     PLANNER_SYSTEM_PROMPT,
     SINGLE_SYSTEM_PROMPT,
@@ -177,3 +185,94 @@ def test_contracts_do_not_appear_in_prompts_py():
 
     for source_id in CONTRACT_IDS:
         assert source_id not in source
+
+
+def test_context_ledger_serialization_is_deterministic_plain_data(tmp_path):
+    composed = compose_system_prompt(RuntimeRole.WORKER, "", tmp_path)
+    serialized = serialize_context_ledger(composed.ledger)
+
+    assert [entry["source_id"] for entry in serialized] == [
+        source.source_id for source in iter_registered_sources()
+    ]
+    assert serialized == serialize_context_ledger(composed.ledger)
+    assert set(serialized[0]) == {
+        "source_id",
+        "kind",
+        "role",
+        "included",
+        "reason",
+        "char_count",
+    }
+    assert serialized[0]["role"] == "worker"
+
+
+def test_context_ledger_serialization_keeps_skips_and_errors(tmp_path):
+    composed = compose_system_prompt(RuntimeRole.WORKER, "", tmp_path)
+    serialized = serialize_context_ledger(composed.ledger)
+
+    skipped = [entry for entry in serialized if not entry["included"]]
+    assert skipped
+    assert any(entry["source_id"] == "planner_dispatch_contract" for entry in skipped)
+    assert all("reason" in entry for entry in skipped)
+
+    errored = serialize_context_ledger(
+        [
+            ContextLedgerEntry(
+                source_id="broken_source",
+                kind="workspace_file",
+                role=RuntimeRole.PLANNER,
+                reason="failed",
+                included=False,
+                char_count=0,
+                error="RuntimeError: boom",
+            )
+        ]
+    )
+    assert errored[0]["error"] == "RuntimeError: boom"
+
+
+def test_context_ledger_summary_counts_loaded_and_skipped(tmp_path):
+    composed = compose_system_prompt(RuntimeRole.WORKER, "", tmp_path)
+    metadata = context_gearbox_metadata(composed.ledger)
+    summary = metadata["summary"]
+
+    loaded = [entry for entry in metadata["ledger"] if entry["included"]]
+    skipped = [entry for entry in metadata["ledger"] if not entry["included"]]
+    assert summary["loaded_count"] == len(loaded)
+    assert summary["skipped_count"] == len(skipped)
+    assert summary["loaded"] == [entry["source_id"] for entry in loaded]
+    assert summary["skipped"] == [
+        {"source_id": entry["source_id"], "reason": entry["reason"]}
+        for entry in skipped
+    ]
+    assert summary["display"] == (
+        f"Context: {len(loaded)} loaded, {len(skipped)} skipped"
+    )
+    assert summarize_context_ledger(metadata["ledger"]) == summary
+
+
+def test_context_gearbox_metadata_exposes_no_prompt_or_context_text(tmp_path):
+    (tmp_path / "project_rules.md").write_text(
+        "SECRET PROJECT RULE TEXT",
+        encoding="utf-8",
+    )
+    composed = compose_system_prompt(RuntimeRole.PLANNER, "", tmp_path)
+    payload = json.dumps(context_gearbox_metadata(composed.ledger), sort_keys=True)
+
+    assert "SECRET PROJECT RULE TEXT" not in payload
+    assert "Core kernel:" not in payload
+    assert "Planner role:" not in payload
+    assert composed.context_text
+    assert composed.system_prompt
+
+
+def test_planner_refresh_logs_compact_context_summary(tmp_path, caplog):
+    state = PlannerRefreshState()
+    state.configure("", tmp_path)
+    history = History()
+
+    with caplog.at_level("INFO", logger="aura.conversation.planner_refresh"):
+        state.refresh_tier1_after_writes(history)
+
+    assert history.system_prompt
+    assert "planner_context_refresh_summary Context:" in caplog.text

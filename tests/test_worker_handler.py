@@ -123,6 +123,39 @@ class TestWorkerLifecycle:
         handler._on_worker_finished("tc1", True, "done")
         playground.worker_finished.assert_called_once_with(True, "done", status=None)
 
+    def test_worker_finished_surfaces_context_gearbox_metadata(
+        self, handler: WorkerEventHandler, bridge: Mock, chat: Mock, playground: Mock,
+    ) -> None:
+        context_gearbox = {
+            "summary": {
+                "loaded_count": 2,
+                "skipped_count": 1,
+                "loaded": ["core_kernel", "repo_map"],
+                "skipped": [
+                    {
+                        "source_id": "project_rules",
+                        "reason": "project_rules.md not found",
+                    }
+                ],
+                "display": "Context: 2 loaded, 1 skipped",
+            },
+            "ledger": [],
+        }
+        bridge.worker_result_metadata.return_value = {
+            "extras": {"context_gearbox": context_gearbox}
+        }
+
+        handler._on_worker_finished(
+            "tc1",
+            True,
+            "done",
+            needs_followup=False,
+            status="completed",
+        )
+
+        playground.show_context_gearbox_metadata.assert_called_once_with(context_gearbox)
+        assert chat.add_worker_summary.call_args.kwargs["context_gearbox"] == context_gearbox
+
     def test_recoverable_worker_followup_does_not_add_main_summary(
         self, handler: WorkerEventHandler, bridge: Mock, chat: Mock, playground: Mock,
     ) -> None:

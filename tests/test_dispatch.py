@@ -980,6 +980,72 @@ def test_dispatch_proxy_cancel_all_unblocks_and_cancels_active_dialog():
     assert results[0].extras.get("dispatch_cancelled") is True
 
 
+def test_worker_dispatch_metadata_includes_context_gearbox(tmp_path):
+    from unittest.mock import Mock
+
+    from aura.bridge.dispatch import _DispatchPending, _DispatchProxy
+    from aura.client.events import Done
+    from aura.conversation.dispatch import WorkerDispatchRequest
+    from aura.conversation.tools import ToolRegistry
+    from aura.hooks import hooks
+
+    def worker_backend(**_kwargs):
+        return iter(
+            [
+                Done(
+                    finish_reason="stop",
+                    full_message={
+                        "role": "assistant",
+                        "content": "Done.",
+                        "reasoning_content": None,
+                    },
+                )
+            ]
+        )
+
+    previous_worker_hook = hooks._handlers.get("generate_worker_code")
+    hooks.unregister("generate_worker_code")
+    hooks.register("generate_worker_code", worker_backend)
+    try:
+        proxy = _DispatchProxy(
+            parent_widget=Mock(),
+            registry_factory=lambda _mode: ToolRegistry(
+                workspace_root=tmp_path,
+                mode="worker",
+            ),
+            approval_proxy=Mock(),
+            workspace_root=tmp_path,
+        )
+        req = WorkerDispatchRequest(
+            goal="Inspect context metadata",
+            files=["aura/example.py"],
+            spec="Inspect only.",
+            acceptance="No validation required.",
+        )
+
+        result = proxy._run_worker("context_call", req, _DispatchPending(req))
+
+        context_gearbox = result.extras.get("context_gearbox")
+        assert isinstance(context_gearbox, dict)
+        assert set(context_gearbox) == {"summary", "ledger"}
+        assert context_gearbox["summary"]["display"].startswith("Context: ")
+        assert any(
+            entry["source_id"] == "planner_dispatch_contract"
+            and entry["included"] is False
+            for entry in context_gearbox["ledger"]
+        )
+        assert proxy.result_metadata("context_call")["extras"]["context_gearbox"] == context_gearbox
+
+        encoded = json.dumps(context_gearbox, sort_keys=True)
+        assert "Worker role:" not in encoded
+        assert "Core kernel:" not in encoded
+        assert "Done." not in encoded
+    finally:
+        hooks.unregister("generate_worker_code")
+        if previous_worker_hook is not None:
+            hooks.register("generate_worker_code", previous_worker_hook)
+
+
 def test_approval_proxy_active_dialog_cancellation():
     from unittest.mock import Mock, patch
     from aura.bridge.approval_proxy import _ApprovalProxy

@@ -152,6 +152,7 @@ class WorkerSummaryCard(QFrame):
         needs_followup: bool = False,
         parent=None,
         status: str | None = None,
+        context_gearbox: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(parent)
         self.tool_call_id = tool_call_id
@@ -195,7 +196,14 @@ class WorkerSummaryCard(QFrame):
         self._body.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         layout.addWidget(self._body)
 
-        self.update_summary(goal, ok, summary, needs_followup=needs_followup, status=status)
+        self.update_summary(
+            goal,
+            ok,
+            summary,
+            needs_followup=needs_followup,
+            status=status,
+            context_gearbox=context_gearbox,
+        )
 
     def update_summary(
         self,
@@ -205,6 +213,7 @@ class WorkerSummaryCard(QFrame):
         *,
         needs_followup: bool = False,
         status: str | None = None,
+        context_gearbox: dict[str, Any] | None = None,
     ) -> None:
         """Update this card in place for repeated results with the same ID."""
         self._status = status
@@ -250,7 +259,7 @@ class WorkerSummaryCard(QFrame):
             self._summary_line.setVisible(False)
 
         # Rebuild stats chips
-        self._rebuild_stats(file_counts, validation)
+        self._rebuild_stats(file_counts, validation, context_gearbox)
 
         # Footer
         footer_parts: list[str] = []
@@ -260,7 +269,12 @@ class WorkerSummaryCard(QFrame):
         self._footer.setText(" ".join(footer_parts))
         self._footer.setVisible(bool(summary))
 
-    def _rebuild_stats(self, file_counts: dict[str, int], validation: str) -> None:
+    def _rebuild_stats(
+        self,
+        file_counts: dict[str, int],
+        validation: str,
+        context_gearbox: dict[str, Any] | None = None,
+    ) -> None:
         """Rebuild the stats chip row from parsed file counts and validation."""
         # Clear existing chips
         while self._stats_layout.count():
@@ -290,7 +304,24 @@ class WorkerSummaryCard(QFrame):
                 val_short = validation.split("(")[1].rstrip(")")
             self._stats_layout.addWidget(self._build_chip(val_short))
 
+        context_chip = self._context_chip_text(context_gearbox)
+        if context_chip:
+            self._stats_layout.addWidget(self._build_chip(context_chip))
+
         self._stats_layout.addStretch()
+
+    @staticmethod
+    def _context_chip_text(context_gearbox: dict[str, Any] | None) -> str:
+        if not isinstance(context_gearbox, dict):
+            return ""
+        summary = context_gearbox.get("summary")
+        if not isinstance(summary, dict):
+            return ""
+        loaded = summary.get("loaded_count")
+        skipped = summary.get("skipped_count")
+        if not isinstance(loaded, int) or not isinstance(skipped, int):
+            return ""
+        return f"Context {loaded}/{skipped}"
 
     @staticmethod
     def _build_chip(text: str) -> QLabel:

@@ -32,7 +32,7 @@ from aura.config import (
     ThinkingMode,
 )
 from aura.context_gearbox.models import RuntimeRole
-from aura.context_gearbox.runtime import compose_system_prompt
+from aura.context_gearbox.runtime import context_gearbox_metadata, compose_system_prompt
 from aura.conversation import (
     ConversationManager,
     History,
@@ -316,6 +316,7 @@ class _DispatchProxy(QObject):
             task_kind=task_spec.task_shape.task_kind if task_spec.task_shape is not None else None,
             target_files=tuple(task_spec.files),
         )
+        context_gearbox = context_gearbox_metadata(composed_prompt.ledger)
         self._tier1_context = composed_prompt.context_text
         _log.info(
             "worker_context_build_end tool_call_id=%s duration_ms=%.0f",
@@ -762,6 +763,7 @@ class _DispatchProxy(QObject):
             "needs_followup": needs_followup,
             "phase_boundary": relay.phase_boundary_info or {},
             "task_shape": task_shape_summary,
+            "context_gearbox": context_gearbox,
             "limit": (
                 relay.phase_boundary_info
                 if relay.phase_boundary_info and relay.phase_boundary_info.get("limit_reached")

@@ -805,6 +805,24 @@ class TestConversationBridgeModeSync:
         assert "[SINGLE_MARKER]" in bridge.history.system_prompt
         assert "[PLANNER_MARKER]" not in bridge.history.system_prompt
 
+    def test_context_gearbox_metadata_tracks_single_and_planner(self, qapp, tmp_path):
+        from unittest.mock import Mock
+        from aura.bridge.qt_bridge import ConversationBridge
+
+        bridge = ConversationBridge(Mock(), provider="deepseek")
+        bridge.set_workspace_root(tmp_path)
+
+        single_metadata = bridge.context_gearbox_metadata()
+        assert single_metadata["ledger"][0]["role"] == "single"
+
+        single_metadata["summary"]["display"] = "mutated"
+        assert bridge.context_gearbox_metadata()["summary"]["display"] != "mutated"
+
+        bridge.set_planner_worker_mode(True)
+        planner_metadata = bridge.context_gearbox_metadata()
+        assert planner_metadata["ledger"][0]["role"] == "planner"
+        assert planner_metadata["summary"]["display"].startswith("Context: ")
+
 
 class TestConversationBridgeModeSwitchBack:
     """Verify switching single -> planner -> single cleans up correctly."""
@@ -864,4 +882,3 @@ class TestConversationBridgeReadOnlyIndependence:
         tool_names = {t["function"]["name"] for t in bridge.registry.tool_defs()}
         assert "write_file" not in tool_names
         assert "dispatch_to_worker" not in tool_names
-

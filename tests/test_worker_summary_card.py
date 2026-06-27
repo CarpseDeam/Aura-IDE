@@ -253,6 +253,28 @@ def test_card_shows_stats_chips(qapp) -> None:
     assert any("1 new" in t for t in labels)
 
 
+def test_card_shows_context_chip_when_metadata_supplied(qapp) -> None:
+    card = WorkerSummaryCard(
+        tool_call_id="t1",
+        goal="Fix the bug",
+        ok=True,
+        summary=FULL_RECEIPT,
+        context_gearbox={
+            "summary": {
+                "loaded_count": 6,
+                "skipped_count": 2,
+                "loaded": [],
+                "skipped": [],
+                "display": "Context: 6 loaded, 2 skipped",
+            },
+            "ledger": [],
+        },
+    )
+
+    labels = [w.text() for w in card.findChildren(QLabel)]
+    assert any("Context 6/2" in t for t in labels)
+
+
 def test_card_fallback_on_no_summary(qapp) -> None:
     """Receipt without Summary shows fallback, not raw borders."""
     receipt_no_summary = """\
