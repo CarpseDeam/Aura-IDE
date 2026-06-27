@@ -21,6 +21,7 @@ import time
 from pathlib import Path
 
 from aura.conversation.tools._types import ApprovalRequest, ToolExecResult
+from aura.conversation.path_utils import normalize_worker_path as _shared_normalize_worker_path
 from aura.paths import safe_relative_to
 
 # Import the registry module so we can look up functions at call time.
@@ -655,12 +656,7 @@ def _is_new_root_validation_scratch(root: Path, target: Path) -> bool:
 
 
 def _normalize_worker_path(path: str) -> str:
-    normalized = str(path).replace("\\", "/")
-    if normalized.startswith("./"):
-        normalized = normalized[2:]
-    while "//" in normalized:
-        normalized = normalized.replace("//", "/")
-    return normalized
+    return _shared_normalize_worker_path(path)
 
 
 def _is_validation_scratch_path(path: str) -> bool:

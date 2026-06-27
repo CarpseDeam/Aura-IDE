@@ -7,7 +7,12 @@ from typing import Any
 
 from aura.ast_utils import parse_python_ast
 from aura.conversation.tools.fs_read import read_file_snapshot
-from aura.conversation.tools.fs_write import _failure_payload, _rel_path, replace_line_range
+from aura.conversation.tools.fs_write import (
+    _failure_payload,
+    _rel_path,
+    expected_file_hash_matches,
+    replace_line_range,
+)
 
 
 _SYMBOL_NODE_TYPES = {
@@ -699,7 +704,7 @@ def propose_edit_transaction(
         return _failure_payload(workspace_root, target, "failed to read file", "internal_error")
 
     if expected_file_hash is not None:
-        if current_hash != expected_file_hash:
+        if not expected_file_hash_matches(original, current_hash, expected_file_hash):
             return _failure_payload(
                 workspace_root,
                 target,

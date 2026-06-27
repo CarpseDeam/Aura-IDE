@@ -3,12 +3,13 @@ from __future__ import annotations
 
 
 def normalize_worker_path(path: str) -> str:
-    normalized = str(path).replace("\\", "/")
-    if normalized.startswith("./"):
+    normalized = str(path).strip().replace("\\", "/")
+    while normalized.startswith("./"):
         normalized = normalized[2:]
     while "//" in normalized:
         normalized = normalized.replace("//", "/")
-    return normalized
+    parts = [part for part in normalized.split("/") if part and part != "."]
+    return "/".join(parts)
 
 
 def unique_worker_paths(paths: list[str]) -> list[str]:

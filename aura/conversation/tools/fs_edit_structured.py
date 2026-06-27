@@ -10,7 +10,8 @@ from pathlib import Path
 from typing import Any
 
 from aura.ast_utils import parse_python_ast
-from aura.conversation.tools.fs_write import replace_line_range
+from aura.conversation.tools.fs_read import read_file_snapshot
+from aura.conversation.tools.fs_write import _dominant_newline, _normalize_newlines, replace_line_range
 from aura.paths import safe_relative_to
 
 
@@ -197,7 +198,7 @@ def propose_edit_symbol(
         }
 
     try:
-        original = target.read_text(encoding="utf-8")
+        original, _current_hash, _file_size = read_file_snapshot(target)
     except UnicodeDecodeError:
         rel = _rel_path(workspace_root, target)
         return {
@@ -291,11 +292,13 @@ def propose_edit_symbol(
     # If the original file didn't end with a newline and this was the last block,
     # preserve that.
     orig_ends_with_nl = orig_block.endswith("\n")
+    newline = _dominant_newline(original)
 
     if orig_ends_with_nl and not new_definition.endswith("\n"):
         new_definition = new_definition + "\n"
     elif not orig_ends_with_nl and new_definition.endswith("\n"):
         new_definition = new_definition.rstrip("\n")
+    new_definition = _normalize_newlines(new_definition, newline)
 
     new_content = replace_line_range(original, lines_with_nl, start_line, end_line, new_definition)
 

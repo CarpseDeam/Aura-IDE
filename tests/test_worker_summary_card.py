@@ -310,11 +310,10 @@ def test_card_dedupe_still_works(qapp) -> None:
 def test_worker_summary_card_inserted_by_default():
     """WorkerSummaryCard is inserted by add_worker_summary when not disabled."""
     from aura.gui.chat_view import ChatView
-    # Use QLabel as a lightweight stand-in parent to satisfy Qt parenting.
-    parent = QLabel()
-    view = ChatView(parent)
+    view = ChatView()
     assert view.worker_summary_disabled is False
     view.add_worker_summary("tc1", "Test goal", True, "Receipt")
     assert "tc1" in view._worker_summary_cards
     card = view._worker_summary_cards["tc1"]
-    assert card._goal == "Test goal"
+    labels = [w.text() for w in card.findChildren(QLabel)]
+    assert "Test goal" in labels

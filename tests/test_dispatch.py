@@ -1281,6 +1281,16 @@ def test_unrecovered_not_applied_cleared_by_windows_backslash_path():
     assert _unrecovered_not_applied_writes(tool_results) == []
 
 
+def test_unrecovered_not_applied_cleared_by_repeated_dot_segments():
+    tool_results = [
+        {"name": "patch_file", "path": ".gitignore", "applied": False, "ok": False,
+         "failure_class": "patch_file_hash_mismatch"},
+        {"name": "write_file", "path": "././.gitignore", "applied": True, "ok": True},
+    ]
+
+    assert _unrecovered_not_applied_writes(tool_results) == []
+
+
 def test_unrecovered_not_applied_remains_for_different_path():
     """A failed write on .gitignore is NOT cleared by success on README.md."""
     tool_results = [
@@ -1325,6 +1335,42 @@ def test_worker_summary_not_applied_writes_uses_unresolved():
         not_applied_writes=[],  # representing that unresolved list was empty
     )
     assert "Failed writes:" not in summary
+
+
+def test_worker_summary_keeps_unresolved_failed_write_action_visible():
+    summary = _build_worker_summary(
+        WorkerDispatchRequest(goal="Fix", files=[".gitignore"], spec="spec", acceptance=""),
+        History(),
+        [],
+        [],
+        {},
+        [],
+        not_applied_writes=[
+            {"path": ".gitignore", "failure_class": "patch_file_hash_mismatch"},
+        ],
+        status=WorkerOutcomeStatus.edit_mechanics_blocked.value,
+    )
+
+    assert "Failed writes:" in summary
+    assert ".gitignore" in summary
+    assert "Action needed   : Re-dispatch" in summary
+    assert "Action needed   : None" not in summary
+
+
+def test_worker_summary_resolved_failed_write_has_no_failed_section_or_action():
+    summary = _build_worker_summary(
+        WorkerDispatchRequest(goal="Fix", files=[".gitignore"], spec="spec", acceptance=""),
+        History(),
+        [{"tool": "patch_file", "path": ".gitignore", "applied": True, "is_new_file": False}],
+        [],
+        {},
+        [],
+        not_applied_writes=[],
+        status=WorkerOutcomeStatus.completed.value,
+    )
+
+    assert "Failed writes:" not in summary
+    assert "Action needed   : None" in summary
 
 
 def test_craft_rejected_summary_is_not_worker_failed():

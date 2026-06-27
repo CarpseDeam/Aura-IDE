@@ -24,6 +24,34 @@ def _rel_path(workspace_root: Path, target: Path) -> str:
     return str(target)
 
 
+def _dominant_newline(text: str, fallback: str = "\n") -> str:
+    crlf = text.count("\r\n")
+    lf = text.count("\n") - crlf
+    cr = text.count("\r") - crlf
+    if crlf >= lf and crlf >= cr and crlf > 0:
+        return "\r\n"
+    if cr > lf and cr > 0:
+        return "\r"
+    if lf > 0:
+        return "\n"
+    return fallback
+
+
+def _normalize_newlines(text: str, newline: str = "\n") -> str:
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    return normalized.replace("\n", newline)
+
+
+def _logical_text_hash(text: str) -> str:
+    return hashlib.sha256(_normalize_newlines(text, "\n").encode("utf-8")).hexdigest()
+
+
+def expected_file_hash_matches(text: str, raw_hash: str, expected_hash: str | None) -> bool:
+    if expected_hash is None:
+        return True
+    return expected_hash == raw_hash or expected_hash == _logical_text_hash(text)
+
+
 def _failure_payload(
     workspace_root: Path,
     target: Path,
@@ -93,7 +121,7 @@ def propose_write(workspace_root: Path, target: Path, content: str) -> dict[str,
     rel = _rel_path(workspace_root, target)
     if target.exists() and target.is_file():
         try:
-            old_content = target.read_text(encoding="utf-8")
+            old_content, _current_hash, _file_size = read_file_snapshot(target)
         except UnicodeDecodeError:
             return {
                 "ok": False,
@@ -149,7 +177,7 @@ def propose_line_range_edit(
         return _failure_payload(workspace_root, target, f"not a regular file: {rel}", "path_error")
 
     try:
-        original = target.read_text(encoding="utf-8")
+        original, _current_hash, _file_size = read_file_snapshot(target)
     except UnicodeDecodeError:
         return _failure_payload(workspace_root, target, "file is not valid UTF-8 text", "internal_error")
     except OSError:
@@ -158,6 +186,8 @@ def propose_line_range_edit(
     rel = _rel_path(workspace_root, target)
     lines_with_nl = original.splitlines(keepends=True)
     num_lines = len(lines_with_nl)
+    newline = _dominant_newline(original)
+    normalized_new_str = _normalize_newlines(new_str, newline)
 
     # Validate line numbers
     if start_line < 1:
@@ -173,7 +203,11 @@ def propose_line_range_edit(
     start_idx = start_line - 1
     end_idx = end_line - 1
     current_range = "".join(lines_with_nl[start_idx:end_idx])
-    if start_line < end_line and expected_old_str is not None and current_range != expected_old_str:
+    if (
+        start_line < end_line
+        and expected_old_str is not None
+        and current_range != _normalize_newlines(expected_old_str, newline)
+    ):
         return _stale_line_range_payload(
             workspace_root,
             target,
@@ -183,7 +217,7 @@ def propose_line_range_edit(
         )
     if start_line < end_line and expected_old_hash is not None:
         current_hash = hashlib.sha256(current_range.encode("utf-8")).hexdigest()
-        if current_hash != expected_old_hash:
+        if not expected_file_hash_matches(current_range, current_hash, expected_old_hash):
             return _stale_line_range_payload(
                 workspace_root,
                 target,
@@ -191,7 +225,7 @@ def propose_line_range_edit(
                 start_line,
                 end_line,
             )
-    new_content = replace_line_range(original, lines_with_nl, start_idx, end_idx, new_str)
+    new_content = replace_line_range(original, lines_with_nl, start_idx, end_idx, normalized_new_str)
 
     # Validate Python syntax if .py file
     if target.suffix == ".py":
@@ -256,7 +290,7 @@ def propose_patch_file(
         return _failure_payload(workspace_root, target, "failed to read file", "internal_error")
 
     if expected_file_hash is not None:
-        if current_hash != expected_file_hash:
+        if not expected_file_hash_matches(original, current_hash, expected_file_hash):
             return _failure_payload(
                 workspace_root,
                 target,
@@ -403,7 +437,7 @@ def propose_edit(
     if not target.is_file():
         return _failure_payload(workspace_root, target, f"not a regular file: {rel}", "path_error")
     try:
-        original = target.read_text(encoding="utf-8")
+        original, _current_hash, _file_size = read_file_snapshot(target)
     except UnicodeDecodeError:
         return _failure_payload(workspace_root, target, "file is not valid UTF-8 text", "internal_error")
 

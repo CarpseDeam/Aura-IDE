@@ -38,6 +38,44 @@ def test_patch_file_applies_multiple_hunks_atomically(tmp_workspace):
     assert target.read_text(encoding="utf-8") == "alpha = 10\nbeta = 2\ngamma = 30\n"
 
 
+def test_patch_file_matches_lf_hunk_on_crlf_file_and_preserves_crlf(tmp_workspace):
+    target = tmp_workspace / "crlf.py"
+    target.write_bytes(b"alpha = 1\r\nbeta = 2\r\ngamma = 3\r\n")
+    registry = ToolRegistry(tmp_workspace, mode="worker")
+
+    result = registry.execute(
+        "patch_file",
+        {
+            "path": "crlf.py",
+            "edits": [{"old": "beta = 2\n", "new": "beta = 20\n"}],
+        },
+        _approve(),
+        False,
+    )
+
+    assert result.ok is True
+    assert target.read_bytes() == b"alpha = 1\r\nbeta = 20\r\ngamma = 3\r\n"
+
+
+def test_patch_file_preserves_lf_file(tmp_workspace):
+    target = tmp_workspace / "lf.py"
+    target.write_bytes(b"alpha = 1\nbeta = 2\ngamma = 3\n")
+    registry = ToolRegistry(tmp_workspace, mode="worker")
+
+    result = registry.execute(
+        "patch_file",
+        {
+            "path": "lf.py",
+            "edits": [{"old": "beta = 2\n", "new": "beta = 20\n"}],
+        },
+        _approve(),
+        False,
+    )
+
+    assert result.ok is True
+    assert target.read_bytes() == b"alpha = 1\nbeta = 20\ngamma = 3\n"
+
+
 def test_patch_file_leaves_file_unchanged_when_any_hunk_missing(tmp_workspace):
     target = tmp_workspace / "a.py"
     original = "alpha = 1\nbeta = 2\n"
@@ -162,6 +200,22 @@ def test_patch_file_expected_hash_matches_read_file_raw_byte_hash(tmp_workspace)
     )
 
     assert read_result["content_hash"] == hashlib.sha256(target.read_bytes()).hexdigest()
+    assert result["ok"] is True
+    assert result["new_content"] == "alpha = 1\r\nbeta = 20\r\n"
+
+
+def test_patch_file_expected_hash_accepts_logical_lf_hash_for_crlf_file(tmp_workspace):
+    target = tmp_workspace / "a.py"
+    target.write_bytes(b"alpha = 1\r\nbeta = 2\r\n")
+    logical_hash = hashlib.sha256(b"alpha = 1\nbeta = 2\n").hexdigest()
+
+    result = propose_patch_file(
+        tmp_workspace,
+        target,
+        [{"old": "beta = 2\n", "new": "beta = 20\n"}],
+        expected_file_hash=logical_hash,
+    )
+
     assert result["ok"] is True
     assert result["new_content"] == "alpha = 1\r\nbeta = 20\r\n"
 

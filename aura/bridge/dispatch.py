@@ -40,6 +40,7 @@ from aura.conversation import (
     WorkerTaskSpec,
     normalize_worker_task,
 )
+from aura.conversation.path_utils import normalize_worker_path as _shared_normalize_worker_path
 from aura.conversation.persistence import WorkerDispatchRecord
 from aura.conversation.project_profile import detect_project_profile
 from aura.conversation.task_shape import task_shape_contract_lines
@@ -1667,12 +1668,7 @@ def _workspace_file_exists(workspace_root: Path):
 
 
 def _normalize_worker_path(path: str) -> str:
-    normalized = str(path).replace("\\", "/")
-    if normalized.startswith("./"):
-        normalized = normalized[2:]
-    while "//" in normalized:
-        normalized = normalized.replace("//", "/")
-    return normalized
+    return _shared_normalize_worker_path(path)
 
 
 def _is_validation_scratch_path(path: str) -> bool:

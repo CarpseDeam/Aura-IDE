@@ -47,7 +47,7 @@ def test_replace_line_range_no_trailing_newline():
 
 def test_propose_line_range_insert_before_line(tmp_workspace: Path):
     target = tmp_workspace / "insert.py"
-    target.write_text("one = 1\nthree = 3\n", encoding="utf-8")
+    target.write_bytes(b"one = 1\nthree = 3\n")
 
     result = propose_line_range_edit(tmp_workspace, target, 2, 2, "two = 2\n")
 
@@ -59,7 +59,7 @@ def test_propose_line_range_insert_before_line(tmp_workspace: Path):
 
 def test_propose_line_range_append_at_eof(tmp_workspace: Path):
     target = tmp_workspace / "append.py"
-    target.write_text("one = 1\ntwo = 2\n", encoding="utf-8")
+    target.write_bytes(b"one = 1\ntwo = 2\n")
 
     result = propose_line_range_edit(tmp_workspace, target, 3, 3, "three = 3\n")
 
@@ -90,7 +90,7 @@ def test_propose_line_range_rejects_wrong_expected_old_str(tmp_workspace: Path):
 
 def test_propose_line_range_expected_old_str_allows_insert_and_eof_append(tmp_workspace: Path):
     target = tmp_workspace / "insert_append.py"
-    target.write_text("one = 1\nthree = 3\n", encoding="utf-8")
+    target.write_bytes(b"one = 1\nthree = 3\n")
 
     inserted = propose_line_range_edit(
         tmp_workspace,
@@ -103,7 +103,7 @@ def test_propose_line_range_expected_old_str_allows_insert_and_eof_append(tmp_wo
     assert inserted["ok"] is True
     assert inserted["new_content"] == "one = 1\ntwo = 2\nthree = 3\n"
 
-    target.write_text("one = 1\ntwo = 2\n", encoding="utf-8")
+    target.write_bytes(b"one = 1\ntwo = 2\n")
     appended = propose_line_range_edit(
         tmp_workspace,
         target,
@@ -114,6 +114,23 @@ def test_propose_line_range_expected_old_str_allows_insert_and_eof_append(tmp_wo
     )
     assert appended["ok"] is True
     assert appended["new_content"] == "one = 1\ntwo = 2\nthree = 3\n"
+
+
+def test_propose_line_range_preserves_crlf_with_lf_replacement(tmp_workspace: Path):
+    target = tmp_workspace / "range_crlf.py"
+    target.write_bytes(b"one = 1\r\ntwo = 2\r\nthree = 3\r\n")
+
+    result = propose_line_range_edit(
+        tmp_workspace,
+        target,
+        2,
+        3,
+        "two = 22\n",
+        expected_old_str="two = 2\n",
+    )
+
+    assert result["ok"] is True
+    assert result["new_content"] == "one = 1\r\ntwo = 22\r\nthree = 3\r\n"
 
 # propose_write
 
@@ -210,7 +227,7 @@ def test_edit_line_exact_single_line(sample_py_file: Path, tmp_workspace: Path):
 
 def test_edit_line_exact_when_exact_substring_is_not_unique(tmp_workspace: Path):
     f = tmp_workspace / "line_exact.py"
-    f.write_text("target\nprefix target suffix\n", encoding="utf-8")
+    f.write_bytes(b"target\nprefix target suffix\n")
 
     result = propose_edit(tmp_workspace, f, "target", "replacement")
 
@@ -319,12 +336,32 @@ def test_edit_replacement_is_exact(tmp_workspace: Path):
     """Verify the replacement content is placed exactly, with correct line endings."""
     f = tmp_workspace / "exact.py"
     original = "first\nsecond\nthird\nfourth\n"
-    f.write_text(original)
+    f.write_bytes(original.encode("utf-8"))
     old_str = "second\nthird"
     new_str = "2nd\n3rd"
     result = propose_edit(tmp_workspace, f, old_str, new_str)
     assert result["ok"] is True
     assert result["new_content"] == "first\n2nd\n3rd\nfourth\n"
+
+
+def test_edit_matches_lf_search_on_crlf_file_and_preserves_crlf(tmp_workspace: Path):
+    f = tmp_workspace / "edit_crlf.py"
+    f.write_bytes(b"first\r\nsecond\r\nthird\r\n")
+
+    result = propose_edit(tmp_workspace, f, "second\n", "2nd\n")
+
+    assert result["ok"] is True
+    assert result["new_content"] == "first\r\n2nd\r\nthird\r\n"
+
+
+def test_edit_preserves_lf_file(tmp_workspace: Path):
+    f = tmp_workspace / "edit_lf.py"
+    f.write_bytes(b"first\nsecond\nthird\n")
+
+    result = propose_edit(tmp_workspace, f, "second\n", "2nd\n")
+
+    assert result["ok"] is True
+    assert result["new_content"] == "first\n2nd\nthird\n"
 
 
 # _sanitize_edit_strings (tested via propose_edit)
