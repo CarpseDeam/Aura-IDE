@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QSize, QTimer
+from PySide6.QtCore import Qt, QSize, QTimer, Signal
 from PySide6.QtGui import QGuiApplication, QIcon
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QPlainTextEdit,
+    QPushButton,
     QSizePolicy,
     QTabWidget,
     QToolButton,
@@ -38,6 +39,8 @@ class InfoHubPane(QWidget):
         clear() -> None
     """
 
+    stop_worker_requested = Signal()
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setMinimumSize(0, 0)
@@ -53,7 +56,16 @@ class InfoHubPane(QWidget):
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
         self._tabs.setStyleSheet(self._tab_widget_style())
-        # No corner widget; terminal output lives in the floating TerminalWindow.
+
+        # Stop Worker button in tab bar corner (top-right of Worker Log tab)
+        self._stop_worker_btn = QPushButton("Stop Worker")
+        self._stop_worker_btn.setObjectName("danger")
+        self._stop_worker_btn.setMinimumSize(44, 36)
+        self._stop_worker_btn.setVisible(False)
+        self._stop_worker_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._stop_worker_btn.clicked.connect(self._on_stop_worker_clicked)
+        self._tabs.setCornerWidget(self._stop_worker_btn)
+
         layout.addWidget(self._tabs)
 
         # ---- Worker Log tab (permanent, index 0) ----
@@ -224,6 +236,18 @@ class InfoHubPane(QWidget):
             if item and item.widget():
                 item.widget().deleteLater()
 
+    def _on_stop_worker_clicked(self) -> None:
+        """Click handler: disable button, show stopping text, emit signal."""
+        self._stop_worker_btn.setEnabled(False)
+        self._stop_worker_btn.setText("Stopping Worker...")
+        self.stop_worker_requested.emit()
+
+    def set_worker_running(self, running: bool) -> None:
+        """Show/hide the Stop Worker button based on worker running state."""
+        self._stop_worker_btn.setVisible(running)
+        if running:
+            self._stop_worker_btn.setEnabled(True)
+            self._stop_worker_btn.setText("Stop Worker")
 
     # Styling
 

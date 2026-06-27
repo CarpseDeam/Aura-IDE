@@ -10,7 +10,6 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSplitter,
     QStackedWidget,
-    QPushButton,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -56,14 +55,6 @@ class AuraPlayground(QWidget):
 
         header_layout.addStretch(1)
 
-        self._stop_worker_btn = QPushButton("Stop Worker")
-        self._stop_worker_btn.setObjectName("danger")
-        self._stop_worker_btn.setMinimumSize(44, 36)
-        self._stop_worker_btn.setVisible(False)
-        self._stop_worker_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._stop_worker_btn.clicked.connect(self._on_stop_worker_clicked)
-        header_layout.addWidget(self._stop_worker_btn)
-
         self._close_all_btn = QToolButton(self)
         self._close_all_btn.setText("Close All")
         self._close_all_btn.setObjectName("closeAllBtn")
@@ -91,6 +82,7 @@ class AuraPlayground(QWidget):
         self._code_editor.focused_action_requested.connect(
             self.focused_action_requested.emit
         )
+        self._info_hub.stop_worker_requested.connect(self.stop_worker_requested.emit)
 
         self._splitter.addWidget(self._code_editor)
         self._splitter.addWidget(self._info_hub)
@@ -426,7 +418,7 @@ class AuraPlayground(QWidget):
         self._worker_code_tool_names.clear()
         self._pending_worker_code_content.clear()
         self._info_hub.show_final_summary(ok, summary, needs_followup=needs_followup, status=status)
-        self._stop_worker_btn.setVisible(False)
+        self._info_hub.set_worker_running(False)
 
     def worker_cancelled(self):
         self._code_editor.close_all_tabs()
@@ -435,18 +427,10 @@ class AuraPlayground(QWidget):
         self._worker_code_tool_names.clear()
         self._pending_worker_code_content.clear()
         self._info_hub.show_final_summary(False, "Worker stopped by user.", status="cancelled")
-        self._stop_worker_btn.setVisible(False)
-
-    def _on_stop_worker_clicked(self):
-        self._stop_worker_btn.setEnabled(False)
-        self._stop_worker_btn.setText("Stopping Worker...")
-        self.stop_worker_requested.emit()
+        self._info_hub.set_worker_running(False)
 
     def set_worker_running(self, running: bool):
-        self._stop_worker_btn.setVisible(running)
-        if running:
-            self._stop_worker_btn.setEnabled(True)
-            self._stop_worker_btn.setText("Stop Worker")
+        self._info_hub.set_worker_running(running)
 
     def clear(self):
         self._code_editor.close_all_tabs()
