@@ -2,10 +2,36 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from pathlib import Path
+from types import ModuleType
+from typing import Iterator
 from unittest.mock import MagicMock, patch
 
+import aura.browser.runtime as browser_runtime
 from aura.browser.runtime import BrowserChoice, BrowserRuntime, _detect_installed_browsers
+
+
+def _browser_path(base: str, *parts: str) -> str:
+    return browser_runtime.os.path.join(base, *parts)
+
+
+@contextmanager
+def _mock_playwright_module(sync_playwright: MagicMock) -> Iterator[None]:
+    sync_api_module = ModuleType("playwright.sync_api")
+    sync_api_module.sync_playwright = sync_playwright
+    playwright_module = ModuleType("playwright")
+    playwright_module.sync_api = sync_api_module
+
+    with patch.dict(
+        "sys.modules",
+        {
+            "playwright": playwright_module,
+            "playwright.sync_api": sync_api_module,
+        },
+    ):
+        yield
+
 
 # =========================================================================
 # _detect_installed_browsers — Windows detection logic
@@ -27,8 +53,12 @@ class TestDetectInstalledBrowsersWindows:
         path_pf86 = "C:\\Program Files (x86)"
         path_la = "C:\\Users\\user\\AppData\\Local"
 
-        chrome_exe = f"{path_pf}\\Google\\Chrome\\Application\\chrome.exe"
-        edge_exe = f"{path_pf86}\\Microsoft\\Edge\\Application\\msedge.exe"
+        chrome_exe = _browser_path(
+            path_pf, "Google", "Chrome", "Application", "chrome.exe"
+        )
+        edge_exe = _browser_path(
+            path_pf86, "Microsoft", "Edge", "Application", "msedge.exe"
+        )
 
         def isfile_side_effect(p: str) -> bool:
             return p in (chrome_exe, edge_exe)
@@ -55,7 +85,9 @@ class TestDetectInstalledBrowsersWindows:
         path_pf86 = "C:\\Program Files (x86)"
         path_la = "C:\\Users\\user\\AppData\\Local"
 
-        edge_exe = f"{path_pf86}\\Microsoft\\Edge\\Application\\msedge.exe"
+        edge_exe = _browser_path(
+            path_pf86, "Microsoft", "Edge", "Application", "msedge.exe"
+        )
 
         def isfile_side_effect(p: str) -> bool:
             return p == edge_exe
@@ -82,9 +114,15 @@ class TestDetectInstalledBrowsersWindows:
         path_pf86 = "C:\\Program Files (x86)"
         path_la = "C:\\Users\\user\\AppData\\Local"
 
-        chrome_exe = f"{path_pf}\\Google\\Chrome\\Application\\chrome.exe"
-        edge_exe = f"{path_pf86}\\Microsoft\\Edge\\Application\\msedge.exe"
-        brave_exe = f"{path_la}\\BraveSoftware\\Brave-Browser\\Application\\brave.exe"
+        chrome_exe = _browser_path(
+            path_pf, "Google", "Chrome", "Application", "chrome.exe"
+        )
+        edge_exe = _browser_path(
+            path_pf86, "Microsoft", "Edge", "Application", "msedge.exe"
+        )
+        brave_exe = _browser_path(
+            path_la, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"
+        )
 
         def isfile_side_effect(p: str) -> bool:
             return p in (chrome_exe, edge_exe, brave_exe)
@@ -136,7 +174,9 @@ class TestDetectInstalledBrowsersWindows:
         """Regardless of what is detected, last choice is always the
         Playwright Chromium fallback."""
         path_pf = "C:\\Program Files"
-        chrome_exe = f"{path_pf}\\Google\\Chrome\\Application\\chrome.exe"
+        chrome_exe = _browser_path(
+            path_pf, "Google", "Chrome", "Application", "chrome.exe"
+        )
 
         def isfile_side_effect(p: str) -> bool:
             return p == chrome_exe
@@ -207,7 +247,7 @@ class TestBrowserRuntimeLaunchRouting:
         with proper args."""
         mock_pw, mock_chromium, mock_context, _, mock_sync = self._make_mock_playwright()
 
-        with patch("playwright.sync_api.sync_playwright", mock_sync):
+        with _mock_playwright_module(mock_sync):
             with patch(
                 "aura.browser.runtime._detect_installed_browsers",
                 return_value=[
@@ -251,7 +291,7 @@ class TestBrowserRuntimeLaunchRouting:
             self._make_mock_playwright()
         )
 
-        with patch("playwright.sync_api.sync_playwright", mock_sync):
+        with _mock_playwright_module(mock_sync):
             with patch(
                 "aura.browser.runtime._detect_installed_browsers",
                 return_value=[
@@ -292,7 +332,7 @@ class TestBrowserRuntimeLaunchRouting:
         )
         brave_exe = "C:\\BraveSoftware\\Brave-Browser\\Application\\brave.exe"
 
-        with patch("playwright.sync_api.sync_playwright", mock_sync):
+        with _mock_playwright_module(mock_sync):
             with patch(
                 "aura.browser.runtime._detect_installed_browsers",
                 return_value=[
@@ -333,7 +373,7 @@ class TestBrowserRuntimeLaunchRouting:
             mock_browser,
         ]
 
-        with patch("playwright.sync_api.sync_playwright", mock_sync):
+        with _mock_playwright_module(mock_sync):
             with patch(
                 "aura.browser.runtime._detect_installed_browsers",
                 return_value=[
@@ -369,7 +409,7 @@ class TestBrowserRuntimeLaunchRouting:
         )
         mock_chromium.launch.side_effect = RuntimeError("fail")
 
-        with patch("playwright.sync_api.sync_playwright", mock_sync):
+        with _mock_playwright_module(mock_sync):
             with patch(
                 "aura.browser.runtime._detect_installed_browsers",
                 return_value=[
@@ -399,7 +439,7 @@ class TestBrowserRuntimeLaunchRouting:
             self._make_mock_playwright()
         )
 
-        with patch("playwright.sync_api.sync_playwright", mock_sync):
+        with _mock_playwright_module(mock_sync):
             with patch(
                 "aura.browser.runtime._detect_installed_browsers",
                 return_value=[
@@ -429,7 +469,7 @@ class TestBrowserRuntimeLaunchRouting:
         """Persistent profile sets browser_persistent=True."""
         mock_pw, mock_chromium, mock_context, _, mock_sync = self._make_mock_playwright()
 
-        with patch("playwright.sync_api.sync_playwright", mock_sync):
+        with _mock_playwright_module(mock_sync):
             with patch(
                 "aura.browser.runtime._detect_installed_browsers",
                 return_value=[

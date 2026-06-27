@@ -62,12 +62,12 @@ def build_needs_login_artifact(
     action_trace: list[dict[str, Any]],
     browser_profile: str | None = None,
     visible: bool = False,
+    profile_metadata: dict | None = None,
 ) -> dict[str, Any]:
     """Build a produced_artifact dict for a login-required page.
 
     The artifact status is ``needs_login`` with no after_snapshot.
-    Profile metadata (browser_profile, persistent_session, visible)
-    are included directly.
+    Profile metadata is included directly.
 
     When ``browser_profile`` is set, a ``reauth_request`` dict is added
     so the UI can offer structured re-authentication.
@@ -103,6 +103,8 @@ def build_needs_login_artifact(
             "A login refresh requires a named browser_profile. "
             "Set one in the Drone permissions."
         )
+    if profile_metadata:
+        artifact.update(profile_metadata)
     return artifact
 
 

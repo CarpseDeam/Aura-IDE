@@ -354,8 +354,8 @@ def run_browse_drone(
         on_status("failed")
         return
 
+    _browser_meta_success = {}
     try:
-        runtime.context.set_default_navigation_timeout(15000)
         # Capture browser route metadata for artifact enrichment
         _browser_meta = runtime.route_metadata
         _browser_meta_success = {
@@ -365,6 +365,7 @@ def run_browse_drone(
             "browser_persistent": _browser_meta.get("browser_persistent", False),
             "browser_visible": _browser_meta.get("browser_visible", False),
         }
+        runtime.context.set_default_navigation_timeout(15000)
         page = runtime.context.new_page()
         page.goto(start_url, wait_until="domcontentloaded")
 
@@ -405,6 +406,7 @@ def run_browse_drone(
                 action_trace=action_trace,
                 browser_profile=browser_profile,
                 visible=visible,
+                profile_metadata=profile_metadata,
             )
             if monitor_enabled and monitor_key:
                 apply_monitor_to_artifact(
