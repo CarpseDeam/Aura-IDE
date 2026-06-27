@@ -57,7 +57,7 @@ class InfoHubPane(QWidget):
         )
         self._tabs.setStyleSheet(self._tab_widget_style())
 
-        # Stop Worker button in tab bar corner (top-right of Worker Log tab)
+        # Stop Worker button in worker log footer
         self._stop_worker_btn = QPushButton("Stop Worker")
         self._stop_worker_btn.setObjectName("danger")
         self._stop_worker_btn.setMinimumSize(44, 36)
@@ -254,7 +254,11 @@ class InfoHubPane(QWidget):
     def set_worker_running(self, running: bool) -> None:
         """Show/hide the Stop Worker button based on worker running state."""
         self._worker_footer.setVisible(running)
+        self._stop_worker_btn.setVisible(running)
         if running:
+            self._stop_worker_btn.setEnabled(True)
+            self._stop_worker_btn.setText("Stop Worker")
+        else:
             self._stop_worker_btn.setEnabled(True)
             self._stop_worker_btn.setText("Stop Worker")
 
