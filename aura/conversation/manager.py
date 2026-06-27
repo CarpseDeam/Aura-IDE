@@ -157,7 +157,7 @@ PATCH_CANDIDATE_INVALID_SYNTAX_REPEATED_CLASS = "patch_candidate_invalid_syntax_
 
 
 def _is_worker_app_source_path(path: str) -> bool:
-    normalized = _normalize_worker_path(path)
+    normalized = _normalize_worker_path(path).replace("\\", "/")
     if not is_python_path(normalized) or _is_validation_scratch_path(normalized):
         return False
     parts = normalized.split("/")
@@ -627,13 +627,15 @@ class ConversationManager:
                                         self._tools.workspace_root,
                                     )
                                     try:
-                                        if not (fp_dep and fp_dep == last_dependent_ok_fingerprint):
+                                        gating_paths: list[str] = []
+                                        if fp_dep and fp_dep == last_dependent_ok_fingerprint:
+                                            pass
+                                        else:
                                             deps = compute_dependents(
                                                 Path(self._tools.workspace_root),
                                                 product_paths,
                                             )
                                             deps = deps[:15]
-                                            gating_paths: list[str] = []
                                             if deps:
                                                 gating_paths, gating_diag, info_diag = run_dependent_import_check(
                                                     Path(self._tools.workspace_root),
@@ -664,8 +666,8 @@ class ConversationManager:
                                                     self._history.append_user_text(instruction)
                                                     discard_worker_candidate_final()
                                                     continue
-                                            if not gating_paths:
-                                                last_dependent_ok_fingerprint = fp_dep
+                                        if fp_dep and not gating_paths:
+                                            last_dependent_ok_fingerprint = fp_dep
                                     except Exception:
                                         logging.getLogger(__name__).warning(
                                             "Dependent import check failed non-fatally",
@@ -726,7 +728,8 @@ class ConversationManager:
                                     self._history.append_user_text(instruction)
                                     discard_worker_candidate_final()
                                     continue
-                                last_launch_ok_fingerprint = fp
+                                if fp:
+                                    last_launch_ok_fingerprint = fp
                                 emit_auto_launch_result(
                                     command=declared_run_command,
                                     ok=True,
