@@ -13,10 +13,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from browser_search import (
+    BrowserResearchSession,
     PAGE_BLOCKED_ERROR,
     SEARCH_BLOCKED_GAP,
-    create_browser_runtime,
-    discover_with_browser,
     is_captcha_or_verification_page,
     normalize_search_result_url,
 )
@@ -74,26 +73,38 @@ def discover_sources(query: str, tags: list[str]) -> list[SourceTarget]:
     return discover_sources_with_gaps(query, tags).targets
 
 
-def discover_sources_with_gaps(query: str, tags: list[str]) -> SourceDiscovery:
+def discover_sources_with_gaps(
+    query: str,
+    tags: list[str],
+    browser_session: BrowserResearchSession | None = None,
+) -> SourceDiscovery:
     user_targets = _user_provided_url_targets(query)
     scheduled_targets = _schedule_targets(tags)
     discovered_targets: list[SourceTarget] = []
     gaps: list[str] = []
     route_metadata: dict[str, Any] = {}
+    ddg_fallback_enabled = os.environ.get("_AURA_WEB_RESEARCH_ENABLE_DDG_HTML_FALLBACK") == "1"
 
     if _mock_web_research_enabled():
         discovered_targets = _mock_browser_discovered_targets(query, tags)
     elif os.environ.get("_AURA_WEB_RESEARCH_DISABLE_BROWSER_DISCOVERY") == "1":
         gaps.append("Browser-backed source discovery was disabled for this run.")
-        fallback_targets, fallback_gaps = _duckduckgo_html_fallback(query, tags)
-        discovered_targets.extend(fallback_targets)
-        gaps.extend(fallback_gaps)
+        if ddg_fallback_enabled:
+            fallback_targets, fallback_gaps = _duckduckgo_html_fallback(query, tags)
+            discovered_targets.extend(fallback_targets)
+            gaps.extend(fallback_gaps)
     else:
-        browser_result = discover_with_browser(build_search_queries(query, tags), max_targets=6)
-        discovered_targets.extend(browser_result.targets)
-        gaps.extend(browser_result.gaps)
-        route_metadata = dict(getattr(browser_result, "route_metadata", {}) or {})
-        if not browser_result.targets:
+        owns_session = browser_session is None
+        session = browser_session or BrowserResearchSession()
+        try:
+            browser_result = session.discover(build_search_queries(query, tags), max_targets=6)
+            discovered_targets.extend(browser_result.targets)
+            gaps.extend(browser_result.gaps)
+            route_metadata = dict(getattr(browser_result, "route_metadata", {}) or {})
+        finally:
+            if owns_session:
+                session.close()
+        if not discovered_targets and ddg_fallback_enabled:
             fallback_targets, fallback_gaps = _duckduckgo_html_fallback(query, tags)
             discovered_targets.extend(fallback_targets)
             gaps.extend(fallback_gaps)
@@ -436,68 +447,6 @@ def _fetch_source(target: SourceTarget, now: dt.datetime) -> FetchedSource:
     if mocked is not None:
         return mocked
 
-    browser_error = ""
-    runtime = create_browser_runtime()
-    if runtime is not None:
-        try:
-            if runtime.start():
-                page = runtime.context.pages[0] if runtime.context.pages else runtime.context.new_page()
-                page.goto(target.url, wait_until="domcontentloaded", timeout=15000)
-                title = page.title() or target.title
-                text = page.locator("body").inner_text(timeout=5000)
-                links: list[SourceTarget] = []
-                if is_captcha_or_verification_page(title, page.url, text):
-                    return FetchedSource(
-                        target=target,
-                        title=title,
-                        text="",
-                        fetched_at=fetched_at,
-                        ok=False,
-                        error=SEARCH_BLOCKED_GAP if target.kind == "search" else PAGE_BLOCKED_ERROR,
-                        route="browser",
-                    )
-                if target.kind in {"search", "search_fallback"}:
-                    try:
-                        raw_links = page.locator("a").evaluate_all(
-                            "(els) => els.map((a) => ({href: a.href, text: a.innerText || a.textContent || ''}))"
-                        )
-                        seen: set[str] = set()
-                        for raw_link in raw_links:
-                            if not isinstance(raw_link, dict):
-                                continue
-                            url = _normalize_result_url(str(raw_link.get("href") or ""), target.url)
-                            if not url or url in seen:
-                                continue
-                            seen.add(url)
-                            label = re.sub(r"\s+", " ", str(raw_link.get("text") or url)).strip()
-                            links.append(SourceTarget(url=url, title=label[:160] or url, kind="candidate"))
-                            if len(links) >= 10:
-                                break
-                    except Exception:
-                        links = []
-                excerpt = re.sub(r"\s+", " ", text).strip()[:1200]
-                if text.strip():
-                    return FetchedSource(
-                        target=target,
-                        title=title,
-                        text=text,
-                        fetched_at=fetched_at,
-                        ok=True,
-                        excerpt=excerpt,
-                        route="browser",
-                        links=links,
-                    )
-                browser_error = "Browser fetch returned no readable body text."
-            else:
-                browser_error = runtime.unavailable_reason or "Browser runtime did not start."
-        except Exception as exc:
-            browser_error = f"Browser fetch error: {exc}"
-        finally:
-            try:
-                runtime.close()
-            except Exception:
-                pass
-
     req = urllib.request.Request(
         target.url,
         headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Aura/1.0"},
@@ -516,7 +465,7 @@ def _fetch_source(target: SourceTarget, now: dt.datetime) -> FetchedSource:
                 fetched_at=fetched_at,
                 ok=False,
                 error=SEARCH_BLOCKED_GAP if target.kind == "search" else PAGE_BLOCKED_ERROR,
-                route="browser_http_fallback" if browser_error else "http",
+                route="http",
             )
         links = _extract_links_from_html(html, target.url) if target.kind in {"search", "search_fallback"} else []
         return FetchedSource(
@@ -527,13 +476,11 @@ def _fetch_source(target: SourceTarget, now: dt.datetime) -> FetchedSource:
             ok=bool(text),
             error="" if text else "Fetched page had no readable body text.",
             excerpt=text[:1200],
-            route="browser_http_fallback" if browser_error else "http",
+            route="http",
             links=links,
         )
     except Exception as exc:
         error = f"HTTP fetch error: {exc}"
-        if browser_error:
-            error = f"{browser_error}; {error}"
         return FetchedSource(
             target=target,
             title=target.title,
@@ -545,11 +492,22 @@ def _fetch_source(target: SourceTarget, now: dt.datetime) -> FetchedSource:
         )
 
 
-def fetch_sources(targets: list[SourceTarget], now: dt.datetime | None = None) -> list[FetchedSource]:
+def fetch_sources(
+    targets: list[SourceTarget],
+    now: dt.datetime | None = None,
+    browser_session: BrowserResearchSession | None = None,
+) -> list[FetchedSource]:
     now = now or dt.datetime.now().astimezone()
     fetched: list[FetchedSource] = []
     for target in targets[:8]:
-        fetched.append(_fetch_source(target, now))
+        fetched_at = now.isoformat()
+        mocked = _mock_fetch_source(target, fetched_at)
+        if mocked is not None:
+            fetched.append(mocked)
+        elif browser_session is not None:
+            fetched.append(browser_session.fetch_source(target, fetched_at))
+        else:
+            fetched.append(_fetch_source(target, now))
     return fetched
 
 

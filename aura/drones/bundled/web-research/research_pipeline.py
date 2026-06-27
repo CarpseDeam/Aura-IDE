@@ -6,6 +6,7 @@ import datetime as dt
 import json
 import sys
 
+from browser_search import BrowserResearchSession
 from evidence import (
     _answerable_sources,
     _source_conflict_gaps,
@@ -68,13 +69,19 @@ def run_query(query: str, now: dt.datetime | None = None) -> dict:
     now = now or dt.datetime.now().astimezone()
     parsed = parse_research_query(query)
     tags = parsed.tags
-    discovery = discover_sources_with_gaps(query, tags)
-    targets = discovery.targets
-    initial_sources = fetch_sources(targets, now)
-    candidate_targets = discover_candidate_sources(initial_sources, targets)
-    candidate_sources = fetch_sources(candidate_targets, now) if candidate_targets else []
-    targets = targets + candidate_targets
-    fetched_sources = initial_sources + candidate_sources
+    with BrowserResearchSession() as browser_session:
+        discovery = discover_sources_with_gaps(query, tags, browser_session=browser_session)
+        targets = discovery.targets
+        initial_sources = fetch_sources(targets, now, browser_session=browser_session)
+        candidate_targets = discover_candidate_sources(initial_sources, targets)
+        candidate_sources = (
+            fetch_sources(candidate_targets, now, browser_session=browser_session)
+            if candidate_targets
+            else []
+        )
+        targets = targets + candidate_targets
+        fetched_sources = initial_sources + candidate_sources
+        discovery_metadata = discovery.route_metadata or browser_session.route_metadata
     extracted = extract_answer(query, tags, fetched_sources, now)
     for gap in discovery.gaps:
         if gap not in extracted.gaps:
@@ -85,7 +92,7 @@ def run_query(query: str, now: dt.datetime | None = None) -> dict:
         targets,
         fetched_sources,
         extracted,
-        discovery_metadata=discovery.route_metadata,
+        discovery_metadata=discovery_metadata,
     )
 
 

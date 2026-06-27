@@ -90,6 +90,7 @@ class FetchedSource:
     excerpt: str = ""
     route: str = "http"
     links: list[SourceTarget] = field(default_factory=list)
+    final_url: str = ""
 
 
 @dataclass

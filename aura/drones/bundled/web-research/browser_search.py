@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from models import SourceTarget
+from models import FetchedSource, SourceTarget
 
 try:
     from aura.browser.runtime import BrowserRuntime
@@ -225,43 +225,78 @@ def extract_visible_result_links(page, base_url: str, max_targets: int = 8) -> l
     return links
 
 
-def discover_with_browser(search_queries: list[str], max_targets: int = 8) -> BrowserSearchResult:
-    """Use BrowserRuntime to perform normal browser search and extract candidates."""
-    result = BrowserSearchResult()
-    if not search_queries:
-        return result
+class BrowserResearchSession:
+    """One browser-backed research session for discovery and source reads."""
 
-    runtime = create_browser_runtime()
-    if runtime is None:
-        result.gaps.append("Browser search unavailable: BrowserRuntime could not be imported.")
-        return result
+    def __init__(self) -> None:
+        self._runtime = create_browser_runtime()
+        self._context = None
+        self._page = None
+        self._started = False
+        self._closed = False
+        self._route_metadata: dict[str, Any] = {}
+        self.gaps: list[str] = []
 
-    try:
-        if not runtime.start():
-            reason = runtime.unavailable_reason or "Browser runtime did not start."
-            result.gaps.append(f"Browser search unavailable: {reason}")
-            return result
+    @property
+    def route_metadata(self) -> dict[str, Any]:
+        metadata = dict(self._route_metadata)
+        metadata["browser_session_started"] = self._started
+        metadata["browser_session_closed"] = self._closed
+        return metadata
 
-        result.route_metadata = dict(runtime.route_metadata)
-        context = runtime.context
-        if context is None:
-            result.gaps.append("Browser search unavailable: Browser context was not created.")
-            return result
+    def __enter__(self) -> "BrowserResearchSession":
+        return self
+
+    def __exit__(self, _exc_type, _exc, _tb) -> None:
+        self.close()
+
+    def _add_gap(self, gap: str) -> None:
+        if gap not in self.gaps:
+            self.gaps.append(gap)
+
+    def start(self) -> bool:
+        if self._started and self._context is not None and self._page is not None:
+            return True
+        if self._runtime is None:
+            self._add_gap("Browser research unavailable: BrowserRuntime could not be imported.")
+            return False
+        if not self._runtime.start():
+            reason = self._runtime.unavailable_reason or "Browser runtime did not start."
+            self._add_gap(f"Browser research unavailable: {reason}")
+            return False
+
+        self._route_metadata = dict(self._runtime.route_metadata)
+        self._context = self._runtime.context
+        if self._context is None:
+            self._add_gap("Browser research unavailable: Browser context was not created.")
+            return False
         try:
-            context.set_default_navigation_timeout(15000)
+            self._context.set_default_navigation_timeout(12000)
         except Exception:
             pass
-        page = context.pages[0] if context.pages else context.new_page()
+        self._page = self._context.pages[0] if self._context.pages else self._context.new_page()
+        self._started = True
+        return True
 
+    def discover(self, search_queries: list[str], max_targets: int = 8) -> BrowserSearchResult:
+        result = BrowserSearchResult()
+        if not search_queries:
+            return result
+        if not self.start():
+            result.gaps.extend(self.gaps)
+            result.route_metadata = self.route_metadata
+            return result
+
+        page = self._page
         for search_query in search_queries:
             if len(result.targets) >= max_targets:
                 break
             url = _search_url(search_query)
             result.attempted = True
             try:
-                page.goto(url, wait_until="domcontentloaded", timeout=15000)
+                page.goto(url, wait_until="domcontentloaded", timeout=12000)
                 try:
-                    page.wait_for_load_state("networkidle", timeout=3000)
+                    page.wait_for_load_state("networkidle", timeout=2000)
                 except Exception:
                     pass
             except Exception as exc:
@@ -272,8 +307,7 @@ def discover_with_browser(search_queries: list[str], max_targets: int = 8) -> Br
             body_text = _visible_body_text(page)
             if is_captcha_or_verification_page(title, page.url, body_text):
                 result.blocked = True
-                if SEARCH_BLOCKED_GAP not in result.gaps:
-                    result.gaps.append(SEARCH_BLOCKED_GAP)
+                result.gaps.append(SEARCH_BLOCKED_GAP)
                 break
 
             for target in extract_visible_result_links(
@@ -286,12 +320,77 @@ def discover_with_browser(search_queries: list[str], max_targets: int = 8) -> Br
 
         if result.attempted and not result.targets and not result.gaps:
             result.gaps.append("Browser search did not return candidate result links.")
+        result.route_metadata = self.route_metadata
         return result
-    except Exception as exc:
-        result.gaps.append(f"Browser search failed: {exc}")
-        return result
-    finally:
+
+    def fetch_source(self, target: SourceTarget, fetched_at: str) -> FetchedSource:
+        if not self.start():
+            return FetchedSource(
+                target=target,
+                title=target.title,
+                text="",
+                fetched_at=fetched_at,
+                ok=False,
+                error="; ".join(self.gaps) or "Browser research session did not start.",
+                route="browser",
+            )
+
+        page = self._page
         try:
-            runtime.close()
-        except Exception:
-            pass
+            page.goto(target.url, wait_until="domcontentloaded", timeout=12000)
+        except Exception as exc:
+            return FetchedSource(
+                target=target,
+                title=target.title,
+                text="",
+                fetched_at=fetched_at,
+                ok=False,
+                error=f"Browser navigation failed: {exc}",
+                route="browser",
+            )
+
+        title = page.title() or target.title
+        text = _visible_body_text(page)
+        final_url = page.url or target.url
+        if is_captcha_or_verification_page(title, final_url, text):
+            return FetchedSource(
+                target=target,
+                title=title,
+                text="",
+                fetched_at=fetched_at,
+                ok=False,
+                error=SEARCH_BLOCKED_GAP if target.kind == "search" else PAGE_BLOCKED_ERROR,
+                route="browser",
+                final_url=final_url,
+            )
+
+        normalized_text = re.sub(r"\s+", " ", text).strip()
+        links = extract_visible_result_links(page, final_url, max_targets=10)
+        return FetchedSource(
+            target=target,
+            title=title,
+            text=text,
+            fetched_at=fetched_at,
+            ok=bool(normalized_text),
+            error="" if normalized_text else "Browser fetch returned no readable body text.",
+            excerpt=normalized_text[:1200],
+            route="browser",
+            links=links,
+            final_url=final_url,
+        )
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        if self._runtime is not None:
+            try:
+                self._runtime.close()
+            except Exception:
+                pass
+
+
+def discover_with_browser(search_queries: list[str], max_targets: int = 8) -> BrowserSearchResult:
+    """Compatibility helper for direct browser discovery callers."""
+    with BrowserResearchSession() as session:
+        return session.discover(search_queries, max_targets=max_targets)
