@@ -68,7 +68,7 @@ from aura.gui.widgets.aura_glow import AuraWidget
 from aura.gui._screen import clamp_to_screen
 from aura.gui.window_chrome import WindowChromeMixin
 from aura.gui.worker_handler import WorkerEventHandler
-from aura.handoff import extract_handoff_text, generate_handoff_prompt, save_handoff
+from aura.gui.main_window_handoff import MainWindowHandoffController
 from aura.prompts import SINGLE_SYSTEM_PROMPT
 
 class _ShrinkableStack(QStackedWidget):
@@ -287,6 +287,21 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         )
         self._persistence.needs_status_refresh.connect(self._refresh_status_bar)
 
+        # Handoff flow controller
+        self._handoff_controller = MainWindowHandoffController(
+            bridge=self._bridge,
+            send_handler=self._send_handler,
+            chat=self._chat,
+            input_panel=self._input,
+            persistence=self._persistence,
+            get_workspace_root=lambda: self._workspace_root,
+            get_model=self.current_model,
+            get_thinking=self.current_thinking,
+            reset_session_usage=self._reset_session_usage,
+            parent_widget=self,
+            parent=self,
+        )
+
         # Apply default model / thinking from settings.
         if self._settings.planner_worker_mode:
             self.set_model(self._settings.default_planner_model)
@@ -374,7 +389,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._input.stop_requested.connect(self._send_handler.handle_stop)
         self._input.handoff_requested.connect(self._on_handoff_requested)
 
-        self._pending_handoff: bool = False
         self._tree = self._playground.file_tree()
         self._tree.file_activated.connect(self._playground.open_file)
         self._playground.focused_action_requested.connect(self._on_focused_action_requested)
@@ -756,42 +770,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         )
 
         # Check for pending handoff after the response completes (no tool calls)
-        if self._pending_handoff and not tool_calls:
-            self._pending_handoff = False
-            handoff_text = extract_handoff_text(full_message)
-            if not handoff_text.strip():
-                self._chat.add_error(
-                    "Handoff",
-                    "Handoff response was empty. Please try again.",
-                )
-                return
-            if self._workspace_root is None:
-                self._chat.add_error(
-                    "Handoff",
-                    "No workspace root set. Cannot save handoff.",
-                )
-                return
-            try:
-                save_handoff(self._workspace_root, handoff_text)
-            except Exception as exc:
-                self._chat.add_error(
-                    "Handoff",
-                    f"Could not save handoff: {exc}",
-                )
-                return
-            # Start a fresh conversation
-            self._persistence.new_conversation()
-            self._send_handler.clear_queue()
-            self._input.set_queued_messages(0)
-            self._reset_session_usage()
-            # Add handoff to bridge history as prior context (no API call)
-            self._bridge.history.append_user_text(
-                f"[Handoff from previous conversation — use as context for the next user request]\n\n{handoff_text}"
-            )
-            # Show local-only assistant message
-            self._chat.begin_assistant()
-            self._chat.append_content("Context loaded. What do you need?")
-            self._chat.assistant_done()
+        if not tool_calls:
+            self._handoff_controller.finalize_handoff(full_message)
 
     def _on_tool_result(self, tool_id: str, name: str, ok: bool, result: str, extras: dict) -> None:
         self._chat.set_tool_result(tool_id, ok, result)
@@ -846,33 +826,14 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._chat.add_diff_card(tool_call_id, rel_path, old, new, decision, is_new_file)
 
     def _on_api_error(self, status: int, message: str) -> None:
-        self._pending_handoff = False
+        self._handoff_controller.clear_on_error()
         title = f"API Error {status}" if status > 0 else "Error"
         self._chat.add_error(title, message, show_retry=True)
         self._chat.stop_current_aura()
 
     def _on_handoff_requested(self) -> None:
         """Handle Continue in Fresh Chat button click."""
-        if self._bridge.is_running():
-            QMessageBox.information(
-                self,
-                APP_NAME,
-                "Please wait for the current response to finish, or click Stop before generating a handoff.",
-            )
-            return
-        if not self._workspace_root or not self._workspace_root.exists():
-            QMessageBox.information(
-                self,
-                APP_NAME,
-                "Set a workspace root before generating a handoff.",
-            )
-            return
-
-        # Build the handoff generation prompt
-        prompt_text = generate_handoff_prompt()
-        payload = SendPayload(text=prompt_text, attachments=[])
-        self._pending_handoff = True
-        self._send_handler.handle_send(payload, self.current_model(), self.current_thinking())
+        self._handoff_controller.request_handoff()
 
     def _on_retry(self) -> None:
         self._send_handler.handle_retry_last(
