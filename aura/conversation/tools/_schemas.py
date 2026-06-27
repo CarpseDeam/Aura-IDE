@@ -655,10 +655,14 @@ DISPATCH_TOOL_DEF: dict[str, Any] = {
                         },
                     },
                     "description": (
-                        "Use this when the Planner knows the relevant symbol or line range, "
-                        "especially in large files. It lets the Worker use read_file_outline "
-                        "and read_file_range around the target area, then patch with "
-                        "expected_file_hash from the range read."
+                        "Use this when the Planner knows the relevant target, especially in "
+                        "large files. Prefer symbol anchoring over raw start_line/end_line: "
+                        "provide the class, function, method, or nearby stable symbol the "
+                        "Worker should inspect and edit. Include line numbers only when they "
+                        "come from a read_file in this dispatch turn; stale line numbers are "
+                        "worse than no line numbers. This lets the Worker anchor on the symbol, "
+                        "use read_file_outline and read_file_range around the current target "
+                        "area, then patch with expected_file_hash from the range read."
                     ),
                 },
                 "spec": {
@@ -667,14 +671,17 @@ DISPATCH_TOOL_DEF: dict[str, Any] = {
                         "Self-contained Builder Note / implementation handoff. Write concise "
                         "plain English, like a senior engineer handing work to a capable "
                         "builder. Include the important behavior, constraints, and known "
-                        "pitfalls. Do not require or default to formal sections such as Core "
-                        "Behavior, Failure Behavior, Code Shape, File-by-File Implementation "
-                        "Plan, Acceptance Checks, or Non-Goals. A fuller structured spec is "
-                        "optional only for broad, risky, or ambiguous work such as cross-file "
-                        "refactors, auth/security, subprocess/threading/async behavior, "
-                        "persistence/data model changes, destructive file operations, public "
-                        "API/signature changes, or build/release/update system work. The "
-                        "worker has not seen the conversation, so include necessary context."
+                        "pitfalls. For genuinely small, localized single-file edits, keep this "
+                        "lean and direct; formal sections are not required. For any task that "
+                        "touches more than one file, is a refactor, moves or renames symbols, "
+                        "or changes broad/risky behavior, you MUST include a File-by-File "
+                        "Implementation Plan. That plan must describe each target file "
+                        "explicitly, naming the exact symbol or region to change and the "
+                        "intended end state for that file. Base file paths, symbols, regions, "
+                        "and any line numbers on CURRENT read_file results from this dispatch "
+                        "turn for each target, not earlier reads; stale paths and line numbers "
+                        "cause worker thrash. The worker has not seen the conversation, so "
+                        "include necessary context."
                     ),
                 },
                 "acceptance": {
