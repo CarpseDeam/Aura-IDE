@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 from aura.validation.selector import ValidationPlan, select_validation_plan
 
@@ -282,6 +281,30 @@ def test_changed_python_file_produces_focused_compile():
     assert "aura/gui/main_window.py" in compile_cmds[0]
 
 
+def test_changed_python_file_selects_focused_ruff():
+    plan = _plan(
+        target_files=["aura/gui/main_window.py"],
+        changed_files=["aura/gui/main_window.py", "docs/notes.md"],
+    )
+
+    ruff_cmds = [c for c in plan["commands"] if "ruff check" in c]
+
+    assert ruff_cmds == ["python -m ruff check aura/gui/main_window.py"]
+    assert "docs/notes.md" not in ruff_cmds[0]
+    assert all("ruff check ." not in c for c in ruff_cmds)
+
+
+def test_general_python_changed_file_uses_focused_python_validation():
+    plan = _plan(
+        target_files=["aura/utils.py"],
+        changed_files=["aura/utils.py"],
+    )
+
+    assert "python -m py_compile aura/utils.py" in plan["commands"]
+    assert "python -m ruff check aura/utils.py" in plan["commands"]
+    assert "python -m compileall aura" not in plan["commands"]
+
+
 def test_multiple_changed_python_files_produce_focused_compile():
     plan = _plan(
         target_files=["aura/gui/a.py", "aura/gui/b.py"],
@@ -350,6 +373,38 @@ def test_no_raw_command_dump_in_display():
     assert len(plan["display"]) < 200
     assert "python -m" not in plan["display"].lower()
     assert "compileall" not in plan["display"].lower()
+
+
+def test_focused_ruff_command_not_dumped_in_display():
+    plan = _plan(
+        target_files=["aura/gui/main_window.py"],
+        changed_files=["aura/gui/main_window.py"],
+    )
+
+    assert "ruff" not in plan["display"].lower()
+    assert "python -m" not in plan["display"].lower()
+
+
+def test_selector_remains_data_only(monkeypatch):
+    """Selecting a plan must not execute the commands it returns."""
+    import subprocess
+
+    called = False
+
+    def _record_call(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("selector executed a subprocess")
+
+    monkeypatch.setattr(subprocess, "run", _record_call)
+
+    plan = _plan(
+        target_files=["aura/gui/main_window.py"],
+        changed_files=["aura/gui/main_window.py"],
+    )
+
+    assert plan["commands"]
+    assert called is False
 
 
 def test_all_existing_tests_still_pass():

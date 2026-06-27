@@ -5,6 +5,30 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+from aura.bridge.dispatch import (
+    _applied_modified_files,
+    _build_worker_summary,
+    _build_worker_validation_selector_plan,
+    _combine_validation_commands,
+    _compute_outcome_status,
+    _diagnostic_environment_caveats,
+    _filter_scratch_validation_results,
+    _filter_scratch_write_records,
+    _final_report_claims_failure,
+    _final_report_claims_validation,
+    _format_spec_as_user_message,
+    _is_validation_scratch_path,
+    _normalize_worker_path,
+    _parse_continuation_report,
+    _parse_structured_worker_failure,
+    _unrecovered_not_applied_writes,
+    _unrecovered_validation_failures,
+    _validation_results_for_task,
+    _validation_selector_changed_files,
+    _validation_selector_commands,
+    _workspace_file_exists,
+)
+from aura.bridge.event_relay import _is_validation_terminal_record
 from aura.conversation.dispatch import (
     WorkerDispatchRequest,
     WorkerDispatchResult,
@@ -15,29 +39,8 @@ from aura.conversation.dispatch import (
     normalize_outcome_status,
     normalize_worker_task,
 )
-from aura.conversation.task_shape import TaskShape, infer_task_shape
-from aura.bridge.dispatch import (
-    _applied_modified_files,
-    _build_worker_summary,
-    _compute_outcome_status,
-    _diagnostic_environment_caveats,
-    _final_report_claims_failure,
-    _final_report_claims_validation,
-    _filter_scratch_validation_results,
-    _filter_scratch_write_records,
-    _format_spec_as_user_message,
-    _is_validation_scratch_path,
-    _normalize_worker_path,
-    _parse_continuation_report,
-    _parse_structured_worker_failure,
-    _unrecovered_not_applied_writes,
-    _unrecovered_validation_failures,
-    _validation_results_for_task,
-    _workspace_file_exists,
-)
-from aura.bridge.event_relay import _is_validation_terminal_record
 from aura.conversation.history import History
-
+from aura.conversation.task_shape import TaskShape, infer_task_shape
 
 # WorkerDispatchRequest
 
@@ -735,6 +738,124 @@ def test_explicit_validation_command_counts_from_terminal_results():
     ) == terminal_results
 
 
+def test_validation_selector_commands_merge_after_planner_commands():
+    planner_command = "python -m pytest tests/test_info_hub_pane.py -q"
+    selector = _build_worker_validation_selector_plan(
+        changed_files=["aura/gui/info_hub_pane.py"],
+        task_kind="gui_polish",
+        context_gearbox={},
+        workspace_root=None,
+    )
+
+    combined = _combine_validation_commands(
+        [planner_command],
+        _validation_selector_commands(selector),
+    )
+
+    assert combined[0] == planner_command
+    assert combined.count(planner_command) == 1
+    assert "python -m py_compile aura/gui/info_hub_pane.py" in combined
+    assert "python -m ruff check aura/gui/info_hub_pane.py" in combined
+
+
+def test_validation_selector_changed_files_ignore_deleted_writes():
+    relay = SimpleNamespace(
+        write_results=[
+            {
+                "applied": True,
+                "deleted": True,
+                "path": "aura/gui/removed.py",
+            }
+        ],
+        touched_files={"aura/gui/removed.py"},
+    )
+
+    assert _validation_selector_changed_files(relay) == []
+
+
+def test_worker_dispatch_feeds_selector_commands_into_explicit_validation_path(tmp_path):
+    from unittest.mock import Mock, patch
+
+    from aura.bridge.dispatch import _DispatchPending, _DispatchProxy
+    from aura.client import ToolResult
+    from aura.conversation.dispatch import WorkerDispatchRequest
+
+    planner_command = "python -m pytest tests/test_info_hub_pane.py -q"
+    captured: dict[str, list[str]] = {}
+
+    class FakeConversationManager:
+        def __init__(self, history, _registry):
+            self.history = history
+
+        def send(self, **kwargs):
+            commands = kwargs["explicit_validation_commands"]
+            captured["initial"] = list(commands)
+            kwargs["on_event"](
+                ToolResult(
+                    tool_call_id="write1",
+                    name="patch_file",
+                    ok=True,
+                    result=json.dumps(
+                        {
+                            "ok": True,
+                            "applied": True,
+                            "path": "aura/gui/info_hub_pane.py",
+                        }
+                    ),
+                )
+            )
+            captured["after_write"] = list(commands)
+            self.history.append_assistant(
+                {
+                    "role": "assistant",
+                    "content": "Done.",
+                    "reasoning_content": None,
+                }
+            )
+
+    registry = Mock()
+    registry.workspace_root = tmp_path
+    registry.mode = "worker"
+    registry.set_contract = Mock()
+    registry.set_task_shape = Mock()
+
+    proxy = _DispatchProxy(
+        parent_widget=Mock(),
+        registry_factory=lambda _mode: registry,
+        approval_proxy=Mock(),
+        workspace_root=tmp_path,
+    )
+    req = WorkerDispatchRequest(
+        goal="Update info hub validation line",
+        files=["aura/gui/info_hub_pane.py"],
+        spec="Make the change.",
+        acceptance="Run focused validation.",
+        validation_commands=[planner_command],
+    )
+
+    with (
+        patch("aura.bridge.dispatch.ConversationManager", FakeConversationManager),
+        patch("aura.conversation.persistence.save_dispatch_record_to_memory"),
+        patch("aura.hazard.capture.record_hazard"),
+    ):
+        result = proxy._run_worker("selector_call", req, _DispatchPending(req))
+
+    after_write = captured["after_write"]
+    assert captured["initial"] == [planner_command]
+    assert after_write[0] == planner_command
+    assert after_write.count(planner_command) == 1
+    assert "python -m py_compile aura/gui/info_hub_pane.py" in after_write
+    assert "python -m ruff check aura/gui/info_hub_pane.py" in after_write
+
+    selector = result.extras["validation_selector"]
+    assert planner_command in selector["commands"]
+    assert "python -m py_compile aura/gui/info_hub_pane.py" in selector["commands"]
+    assert "python -m ruff check aura/gui/info_hub_pane.py" in selector["commands"]
+    assert selector["display"].startswith("Validation plan:")
+    assert "python -m" not in selector["display"]
+    assert "ruff" not in selector["display"].lower()
+
+
 def test_final_report_partial_suite_with_py_compile_is_not_harness_failure():
     assert _final_report_claims_failure("Could not run full test suite, but py_compile passed")
     assert _final_report_claims_validation("Could not run full test suite, but py_compile passed")
@@ -876,6 +997,7 @@ def test_normalize_worker_task_carries_target_regions():
 
 def test_dispatch_proxy_timeout():
     from unittest.mock import Mock
+
     from aura.bridge.dispatch import _DispatchProxy
     from aura.conversation.dispatch import WorkerDispatchRequest
 
@@ -913,6 +1035,7 @@ def test_dispatch_proxy_timeout():
 
 def test_dispatch_proxy_stale_dispatch():
     from unittest.mock import Mock
+
     from aura.bridge.dispatch import _DispatchProxy
 
     proxy = _DispatchProxy(
@@ -932,9 +1055,10 @@ def test_dispatch_proxy_stale_dispatch():
 
 
 def test_dispatch_proxy_cancel_all_unblocks_and_cancels_active_dialog():
-    from unittest.mock import Mock
     import threading
     import time
+    from unittest.mock import Mock
+
     from aura.bridge.dispatch import _DispatchProxy
     from aura.conversation.dispatch import WorkerDispatchRequest
 
@@ -1048,6 +1172,7 @@ def test_worker_dispatch_metadata_includes_context_gearbox(tmp_path):
 
 def test_approval_proxy_active_dialog_cancellation():
     from unittest.mock import Mock, patch
+
     from aura.bridge.approval_proxy import _ApprovalProxy
     from aura.conversation.tools import ApprovalRequest
 
@@ -1084,10 +1209,11 @@ def test_approval_proxy_active_dialog_cancellation():
 
 
 def test_dispatch_proxy_cancelled_before_start():
-    from unittest.mock import Mock
     import threading
     import time
-    from aura.bridge.dispatch import _DispatchProxy, DISPATCH_TIMEOUT
+    from unittest.mock import Mock
+
+    from aura.bridge.dispatch import DISPATCH_TIMEOUT, _DispatchProxy
     from aura.conversation.dispatch import WorkerDispatchRequest
 
     approval = Mock()

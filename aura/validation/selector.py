@@ -90,7 +90,7 @@ def select_validation_plan(
 
     # 1. GUI validation
     if _any_matches(all_candidates, _GUI_PATTERNS) or "gui_rules" in loaded_sources:
-        _c = _focused_compile_commands(changed_py_files, "python -m compileall aura/gui")
+        _c = _focused_python_commands(changed_py_files, "python -m compileall aura/gui")
         return _plan(
             kind="gui",
             commands=_c + _test_cmds + ["python -m aura --selfcheck"],
@@ -101,7 +101,7 @@ def select_validation_plan(
 
     # 2. Drone validation
     if _any_matches(all_candidates, _DRONE_PATTERNS) or "drone_rules" in loaded_sources:
-        _c = _focused_compile_commands(changed_py_files, "python -m compileall aura/drones")
+        _c = _focused_python_commands(changed_py_files, "python -m compileall aura/drones")
         return _plan(
             kind="drone",
             commands=_c + _test_cmds + ["python -m aura --selfcheck"],
@@ -112,7 +112,7 @@ def select_validation_plan(
 
     # 3. Provider validation
     if _any_matches(all_candidates, _PROVIDER_PATTERNS) or "provider_rules" in loaded_sources:
-        _c = _focused_compile_commands(changed_py_files, "python -m compileall aura/providers aura/backends aura/client")
+        _c = _focused_python_commands(changed_py_files, "python -m compileall aura/providers aura/backends aura/client")
         return _plan(
             kind="provider",
             commands=_c + _test_cmds + ["python -m aura --selfcheck"],
@@ -123,7 +123,7 @@ def select_validation_plan(
 
     # 4. Build validation
     if _any_matches(all_candidates, _BUILD_PATTERNS) or "build_pipeline_rules" in loaded_sources:
-        _c = _focused_compile_commands(changed_py_files, "python -m compileall scripts/")
+        _c = _focused_python_commands(changed_py_files, "python -m compileall scripts/")
         return _plan(
             kind="build",
             commands=_c + _test_cmds + ["python -m aura --selfcheck"],
@@ -137,9 +137,14 @@ def select_validation_plan(
     python_dirs = _collect_python_dirs(all_candidates)
     if python_dirs:
         compile_command = "python -m compileall " + " ".join(sorted(python_dirs))
+        python_commands = (
+            _focused_python_commands(changed_py_files, compile_command)
+            if changed_py_files
+            else [compile_command]
+        )
         return _plan(
             kind="general_python",
-            commands=_test_cmds + [compile_command, "python -m aura --selfcheck"],
+            commands=python_commands + _test_cmds + ["python -m aura --selfcheck"],
             reason="General Python files changed",
             confidence="general",
             test_suggestions_skipped=_test_skipped,
@@ -201,6 +206,29 @@ def _focused_compile_commands(changed_py_files: list[str], fallback_compile_cmd:
     if changed_py_files:
         return ["python -m py_compile " + " ".join(sorted(changed_py_files))]
     return [fallback_compile_cmd]
+
+
+def _focused_ruff_commands(changed_py_files: list[str]) -> list[str]:
+    """Return a focused Ruff check for changed Python files only."""
+    focused = sorted(
+        p.replace("\\", "/")
+        for p in changed_py_files
+        if p.replace("\\", "/").endswith(".py")
+    )
+    if not focused:
+        return []
+    return ["python -m ruff check " + " ".join(focused)]
+
+
+def _focused_python_commands(
+    changed_py_files: list[str],
+    fallback_compile_cmd: str,
+) -> list[str]:
+    """Return focused Python validation when files are known, else fallback."""
+    return _focused_compile_commands(
+        changed_py_files,
+        fallback_compile_cmd,
+    ) + _focused_ruff_commands(changed_py_files)
 
 
 def _suggest_focused_tests(
@@ -273,7 +301,6 @@ def _candidate_test_paths(file_path: str) -> list[str]:
 
     # 2. Strip subdirectory prefix like /cards/ and retry.
     #    e.g. aura/gui/cards/foo.py → aura/gui/foo.py
-    stripped = file_path
     for subdir in ("/cards/", "/widgets/", "/panels/"):
         if subdir in file_path:
             parts = file_path.split(subdir, 1)

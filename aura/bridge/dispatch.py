@@ -16,7 +16,6 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-_log = logging.getLogger(__name__)
 from PySide6.QtCore import (
     QObject,
     Signal,
@@ -32,7 +31,7 @@ from aura.config import (
     ThinkingMode,
 )
 from aura.context_gearbox.models import RuntimeRole
-from aura.context_gearbox.runtime import context_gearbox_metadata, compose_system_prompt
+from aura.context_gearbox.runtime import compose_system_prompt, context_gearbox_metadata
 from aura.conversation import (
     ConversationManager,
     History,
@@ -58,6 +57,9 @@ from aura.conversation.validation_orchestrator import (
     validation_issue_message,
 )
 from aura.dependency_context import build_dependency_stanza
+from aura.validation.selector import ValidationPlan, select_validation_plan
+
+_log = logging.getLogger(__name__)
 
 __all__ = [
     "_DispatchProxy",
@@ -90,6 +92,90 @@ EDIT_TRANSACTION_FAILURE_CLASSES = {
     "edit_transaction_invalid_syntax",
     "edit_transaction_not_applicable",
 }
+
+
+def _combine_validation_commands(
+    planner_commands: list[str] | tuple[str, ...] | None,
+    selector_commands: list[str] | tuple[str, ...] | None,
+) -> list[str]:
+    """Combine Planner and selector validation commands, preserving order."""
+    combined: list[str] = []
+    seen: set[str] = set()
+    for raw in [*(planner_commands or []), *(selector_commands or [])]:
+        command = str(raw or "").strip()
+        if not command or command in seen:
+            continue
+        combined.append(command)
+        seen.add(command)
+    return combined
+
+
+def _validation_selector_commands(plan: ValidationPlan | None) -> list[str]:
+    if not isinstance(plan, dict):
+        return []
+    commands = plan.get("commands")
+    if not isinstance(commands, list):
+        return []
+    return [str(command).strip() for command in commands if str(command).strip()]
+
+
+def _validation_selector_changed_files(relay: Any) -> list[str]:
+    """Return applied Worker write paths for focused selector validation."""
+    write_results = getattr(relay, "write_results", [])
+    raw_files: list[str] = []
+    if isinstance(write_results, list) and write_results:
+        for write in write_results:
+            if not isinstance(write, dict):
+                continue
+            path = write.get("path")
+            if (
+                write.get("applied") is True
+                and not write.get("deleted")
+                and isinstance(path, str)
+                and path
+            ):
+                raw_files.append(path)
+    else:
+        touched = getattr(relay, "touched_files", set())
+        if isinstance(touched, set):
+            raw_files = sorted(str(path) for path in touched)
+        elif isinstance(touched, list):
+            raw_files = [str(path) for path in touched]
+
+    files: list[str] = []
+    seen: set[str] = set()
+    for raw in raw_files:
+        path = _normalize_worker_path(str(raw or ""))
+        if not path or _is_validation_scratch_path(path) or path in seen:
+            continue
+        files.append(path)
+        seen.add(path)
+    return files
+
+
+def _build_worker_validation_selector_plan(
+    *,
+    changed_files: list[str],
+    task_kind: str,
+    context_gearbox: dict[str, Any],
+    workspace_root: Path | None,
+) -> ValidationPlan:
+    """Build the data-only selector plan used by the Worker final gate."""
+    if not changed_files:
+        return select_validation_plan(
+            target_files=[],
+            changed_files=None,
+            task_kind=task_kind,
+            context_gearbox=None,
+            workspace_root=workspace_root,
+        )
+    return select_validation_plan(
+        target_files=changed_files,
+        changed_files=changed_files,
+        task_kind=task_kind,
+        context_gearbox=context_gearbox,
+        workspace_root=workspace_root,
+    )
 
 
 class _DispatchPending:
@@ -371,11 +457,47 @@ class _DispatchProxy(QObject):
         relay.agentProcessOutput.connect(self.workerAgentProcessOutput)
         relay.agentProcessFinished.connect(self.workerAgentProcessFinished)
 
+        task_kind = task_spec.task_shape.task_kind if task_spec.task_shape is not None else "unknown"
+        final_validation_commands = list(task_spec.validation_commands)
+        validation_selector: ValidationPlan | None = None
+        validation_selector_key: tuple[str, ...] | None = None
+        validation_selector_failed = False
+
+        def refresh_validation_selector_plan() -> None:
+            nonlocal validation_selector, validation_selector_key, validation_selector_failed
+            changed_files = _validation_selector_changed_files(relay)
+            key = tuple(changed_files)
+            if validation_selector is not None and key == validation_selector_key:
+                return
+            validation_selector_key = key
+            try:
+                validation_selector = _build_worker_validation_selector_plan(
+                    changed_files=changed_files,
+                    task_kind=task_kind,
+                    context_gearbox=context_gearbox,
+                    workspace_root=self._workspace_root,
+                )
+                final_validation_commands[:] = _combine_validation_commands(
+                    task_spec.validation_commands,
+                    _validation_selector_commands(validation_selector),
+                )
+            except Exception:
+                if not validation_selector_failed:
+                    _log.exception("Failed to build validation selector plan")
+                validation_selector_failed = True
+                final_validation_commands[:] = list(task_spec.validation_commands)
+
+        refresh_validation_selector_plan()
+
+        def relay_worker_event(ev) -> None:
+            relay.relay(tool_call_id, ev)
+            refresh_validation_selector_plan()
+
         internal_error: str | None = None
         scratch_before = _validation_scratch_files(self._workspace_root) if self._workspace_root is not None else set()
         try:
             worker_manager.send(
-                on_event=lambda ev: relay.relay(tool_call_id, ev),
+                on_event=relay_worker_event,
                 approval_cb=self._approval_proxy.request_approval,
                 cancel_event=cancel_event,
                 model=self._worker_model,
@@ -384,7 +506,7 @@ class _DispatchProxy(QObject):
                 temperature=self._worker_temperature,
                 hook_name='generate_worker_code',
                 max_tool_rounds=self._max_tool_rounds,
-                explicit_validation_commands=task_spec.validation_commands,
+                explicit_validation_commands=final_validation_commands,
                 declared_run_command=task_spec.run_command,
             )
         except Exception as exc:
@@ -424,7 +546,7 @@ class _DispatchProxy(QObject):
         validation_results = _validation_results_for_task(
             relay.validation_results,
             getattr(relay, "terminal_results", []),
-            task_spec.validation_commands,
+            final_validation_commands,
         )
         validation_command_issues = _validation_command_issues_for_task(
             getattr(relay, "terminal_results", [])
@@ -781,14 +903,7 @@ class _DispatchProxy(QObject):
 
         # Validation selector
         try:
-            from aura.validation.selector import select_validation_plan
-            validation_selector = select_validation_plan(
-                target_files=task_spec.files,
-                changed_files=list(relay.touched_files) if hasattr(relay, "touched_files") else None,
-                task_kind=task_spec.task_shape.task_kind if task_spec.task_shape is not None else "unknown",
-                context_gearbox=context_gearbox,
-                workspace_root=self._workspace_root,
-            )
+            refresh_validation_selector_plan()
             extras["validation_selector"] = validation_selector
         except Exception:
             _log.exception("Failed to build validation selector plan")
