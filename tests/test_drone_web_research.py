@@ -1,7 +1,9 @@
-"""Tests for the bundled Web Research Drone (Phase 3)."""
+"""Tests for the bundled Web Research Drone (Phase 4)."""
 
 from __future__ import annotations
 
+import datetime as dt
+import importlib.util
 import json
 import subprocess
 import sys
@@ -11,6 +13,23 @@ import pytest
 
 from aura.drones.store import DroneStore
 from aura.drones.sync_runner import run_read_only_drone_sync
+
+
+def _load_web_research_main():
+    path = (
+        Path(__file__).resolve().parent.parent
+        / "aura"
+        / "drones"
+        / "bundled"
+        / "web-research"
+        / "main.py"
+    )
+    spec = importlib.util.spec_from_file_location("web_research_main_for_test", path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 # ---------------------------------------------------------------------------
@@ -256,3 +275,234 @@ class TestOutputShape:
         assert data["confidence"] in ["none", "low"]
         assert len(data["gaps"]) > 0
         assert "HTTP fetch error" in data["gaps"][0]
+
+
+class TestScheduleExtraction:
+    def test_world_cup_query_keeps_world_cup_subject(self) -> None:
+        module = _load_web_research_main()
+        answer, facts, evidence, gaps, confidence = module.extract_schedule_answer(
+            "What time are World Cup matches today?",
+            "World Cup Matches Today: USA vs ENG 8:00 PM GMT",
+            dt.datetime.now(dt.timezone.utc),
+        )
+
+        assert answer == "World Cup matches today: USA vs England at 8:00 PM GMT."
+        assert facts == ["USA vs England is listed at 8:00 PM GMT."]
+        assert evidence
+        assert confidence == "medium"
+
+    def test_generic_schedule_query_does_not_mention_world_cup(self) -> None:
+        module = _load_web_research_main()
+        answer, _, _, _, confidence = module.extract_schedule_answer(
+            "What time are matches today?",
+            "World Cup Matches Today: USA vs ENG 8:00 PM GMT",
+            dt.datetime.now(dt.timezone.utc),
+        )
+
+        assert answer == "Matches today: USA vs England at 8:00 PM GMT."
+        assert "World Cup" not in answer
+        assert confidence == "medium"
+
+    def test_play_next_query_uses_next_match_subject(self) -> None:
+        module = _load_web_research_main()
+        answer, _, _, _, confidence = module.extract_schedule_answer(
+            "Who does the USA play next?",
+            "Upcoming: USA vs ENG 8:00 PM GMT",
+            dt.datetime.now(dt.timezone.utc),
+        )
+
+        assert answer == "Next match: USA vs England at 8:00 PM GMT."
+        assert confidence == "medium"
+
+    def test_team_play_query_uses_team_subject(self) -> None:
+        module = _load_web_research_main()
+        answer, _, _, _, confidence = module.extract_schedule_answer(
+            "What time does Arsenal play tomorrow?",
+            "Fixture: Arsenal vs Chelsea 3:00 PM ET",
+            dt.datetime.now(dt.timezone.utc),
+        )
+
+        assert answer == "Arsenal match tomorrow: Arsenal vs Chelsea at 3:00 PM ET."
+        assert confidence == "medium"
+
+    def test_no_parse_path_returns_gap_and_low_confidence(self) -> None:
+        module = _load_web_research_main()
+        answer, facts, evidence, gaps, confidence = module.extract_schedule_answer(
+            "What time are matches today?",
+            "Schedule information is available but no time appears here.",
+            dt.datetime.now(dt.timezone.utc),
+        )
+
+        assert answer == ""
+        assert facts == []
+        assert evidence
+        assert confidence in {"none", "low"}
+        assert any("No extractable schedule match and time" in gap for gap in gaps)
+
+
+class TestMultiSourcePipeline:
+    def test_world_cup_multiple_matches_return_all_times(self) -> None:
+        module = _load_web_research_main()
+        target = module.SourceTarget("https://www.fifa.com/en/match-center", "FIFA Match Centre")
+        fetched = [
+            module.FetchedSource(
+                target=target,
+                title="FIFA Match Centre",
+                text=(
+                    "World Cup Matches Today: Panama vs England - 5:00 PM ET. "
+                    "Croatia vs Ghana at 8:00 PM ET."
+                ),
+                fetched_at="2026-06-27T12:00:00+00:00",
+                ok=True,
+                excerpt="Panama vs England - 5:00 PM ET. Croatia vs Ghana at 8:00 PM ET.",
+            )
+        ]
+
+        extracted = module.extract_answer(
+            "What time are World Cup matches today?",
+            ["world_cup", "schedule", "today"],
+            fetched,
+            dt.datetime.now(dt.timezone.utc),
+        )
+
+        assert extracted.answer == (
+            "World Cup matches today: Panama vs England at 5:00 PM ET; "
+            "Croatia vs Ghana at 8:00 PM ET."
+        )
+        assert len(extracted.verified_facts) == 2
+        assert len(extracted.evidence) == 2
+        assert extracted.confidence == "medium"
+
+    def test_first_source_failure_second_source_success_returns_answer(self) -> None:
+        module = _load_web_research_main()
+        failed = module.SourceTarget("https://example.test/fail", "Failed Source")
+        good = module.SourceTarget("https://example.test/schedule", "Schedule Source")
+        fetched = [
+            module.FetchedSource(
+                target=failed,
+                title="Failed Source",
+                text="",
+                fetched_at="2026-06-27T12:00:00+00:00",
+                ok=False,
+                error="HTTP fetch error: timeout",
+            ),
+            module.FetchedSource(
+                target=good,
+                title="Schedule Source",
+                text="World Cup Matches Today: USA v England 8:00 PM GMT",
+                fetched_at="2026-06-27T12:00:01+00:00",
+                ok=True,
+                excerpt="World Cup Matches Today: USA v England 8:00 PM GMT",
+            ),
+        ]
+        query = "What time are World Cup matches today?"
+        tags = ["world_cup", "schedule", "today"]
+
+        extracted = module.extract_answer(query, tags, fetched, dt.datetime.now(dt.timezone.utc))
+        result = module.build_result(query, tags, [failed, good], fetched, extracted)
+
+        assert result["answer"] == "World Cup matches today: USA vs England at 8:00 PM GMT."
+        assert result["confidence"] == "medium"
+        assert any("Could not reach https://example.test/fail" in gap for gap in result["gaps"])
+        assert any("another source supplied extractable evidence" in gap for gap in result["gaps"])
+        assert len(result["sources"]) == 2
+
+    def test_all_sources_fail_returns_confidence_none_and_no_answer(self) -> None:
+        module = _load_web_research_main()
+        targets = [
+            module.SourceTarget("https://example.test/one", "One"),
+            module.SourceTarget("https://example.test/two", "Two"),
+        ]
+        fetched = [
+            module.FetchedSource(
+                target=targets[0],
+                title="One",
+                text="",
+                fetched_at="2026-06-27T12:00:00+00:00",
+                ok=False,
+                error="HTTP fetch error: timeout",
+            ),
+            module.FetchedSource(
+                target=targets[1],
+                title="Two",
+                text="",
+                fetched_at="2026-06-27T12:00:01+00:00",
+                ok=False,
+                error="HTTP fetch error: 500",
+            ),
+        ]
+        query = "What time are World Cup matches today?"
+        tags = ["world_cup", "schedule", "today"]
+
+        extracted = module.extract_answer(query, tags, fetched, dt.datetime.now(dt.timezone.utc))
+        result = module.build_result(query, tags, targets, fetched, extracted)
+
+        assert result["answer"] == ""
+        assert result["confidence"] == "none"
+        assert result["evidence"] == []
+        assert any("No useful evidence" in gap for gap in result["gaps"])
+
+    def test_evidence_without_parse_returns_low_confidence_and_gap(self) -> None:
+        module = _load_web_research_main()
+        target = module.SourceTarget("https://example.test/schedule", "Schedule Source")
+        fetched = [
+            module.FetchedSource(
+                target=target,
+                title="Schedule Source",
+                text="Schedule information is available, but no kickoff time appears.",
+                fetched_at="2026-06-27T12:00:00+00:00",
+                ok=True,
+                excerpt="Schedule information is available, but no kickoff time appears.",
+            )
+        ]
+
+        extracted = module.extract_answer(
+            "What time are matches today?",
+            ["schedule", "today"],
+            fetched,
+            dt.datetime.now(dt.timezone.utc),
+        )
+
+        assert extracted.answer == ""
+        assert extracted.confidence == "low"
+        assert extracted.evidence
+        assert any("No extractable schedule match and time" in gap for gap in extracted.gaps)
+
+    def test_generic_current_info_does_not_claim_medium_without_extraction(self) -> None:
+        module = _load_web_research_main()
+        target = module.SourceTarget("https://example.test/current", "Current Source")
+        fetched = [
+            module.FetchedSource(
+                target=target,
+                title="Current Source",
+                text="A current page was fetched, but it does not clearly answer the question.",
+                fetched_at="2026-06-27T12:00:00+00:00",
+                ok=True,
+                excerpt="A current page was fetched, but it does not clearly answer the question.",
+            )
+        ]
+
+        extracted = module.extract_answer(
+            "What is the latest Python version?",
+            ["current_info"],
+            fetched,
+            dt.datetime.now(dt.timezone.utc),
+        )
+
+        assert extracted.answer == ""
+        assert extracted.verified_facts == []
+        assert extracted.confidence == "low"
+
+    def test_retired_research_paths_are_absent(self) -> None:
+        retired = [
+            "run" + "_research",
+            "research" + "_current_info",
+            "_research" + "_mixin",
+            "_research" + "_schemas",
+        ]
+        root = Path(__file__).resolve().parent.parent
+        candidates = list((root / "aura").rglob("*.py"))
+        haystack = "\n".join(path.read_text(encoding="utf-8") for path in candidates)
+
+        for symbol in retired:
+            assert symbol not in haystack
