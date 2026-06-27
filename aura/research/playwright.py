@@ -64,10 +64,11 @@ class PlaywrightResearcher:
 
     # -- Public API ------------------------------------------------------
 
-    def search(self, query: str) -> list[Source]:
+    def search(self, query: str, max_results: int = 5) -> list[Source]:
         """Navigate to the search engine and return result links as Sources.
 
         Returns an empty list when the researcher is not started or on error.
+        ``max_results`` caps the number of returned sources (default 5).
         """
         if self._runtime.context is None:
             return []
@@ -115,7 +116,7 @@ class PlaywrightResearcher:
                 seen.add(href)
                 sources.append(Source(url=href, title=title))
 
-            return sources[: self._limits.max_pages]
+            return sources[:max_results]
         except Exception as exc:
             self._unavailable_reason = str(exc)
             return []

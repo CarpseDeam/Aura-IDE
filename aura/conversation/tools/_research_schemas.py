@@ -26,8 +26,13 @@ RESEARCH_TOOL_DEF: dict[str, Any] = {
                 "constraints": {
                     "type": "object",
                     "description": (
-                        "Optional free-form constraints dict, e.g."
-                        " {'max_pages': 3, 'timeout_seconds': 30}."
+                        "Optional free-form strategy dict guiding how research is performed."
+                        " Supported fields: freshness (str), source_goal (str),"
+                        " answer_shape (str), query_variants (list[str]),"
+                        " allowed_domains (list[str]), blocked_domains (list[str]),"
+                        " avoid (list[str]), max_searches (int), max_search_results (int),"
+                        " max_pages_to_open (int), max_evidence_chars (int)."
+                        " Also accepts legacy max_pages (int) and timeout_seconds (float)."
                     ),
                 },
             },

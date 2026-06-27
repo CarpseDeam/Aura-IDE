@@ -64,7 +64,6 @@ class InfoHubPane(QWidget):
         self._stop_worker_btn.setVisible(False)
         self._stop_worker_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._stop_worker_btn.clicked.connect(self._on_stop_worker_clicked)
-        self._tabs.setCornerWidget(self._stop_worker_btn)
 
         layout.addWidget(self._tabs)
 
@@ -96,6 +95,16 @@ class InfoHubPane(QWidget):
         self._cards_layout.setContentsMargins(8, 0, 8, 8)
         self._cards_layout.setSpacing(6)
         log_layout.addLayout(self._cards_layout)
+
+        # Worker footer bar with Stop Worker button
+        self._worker_footer = QWidget(self._log_tab)
+        footer_layout = QHBoxLayout(self._worker_footer)
+        footer_layout.setContentsMargins(8, 4, 8, 4)
+        footer_layout.setSpacing(0)
+        footer_layout.addWidget(self._stop_worker_btn)
+        footer_layout.addStretch(1)
+        self._worker_footer.setVisible(False)
+        log_layout.addWidget(self._worker_footer)
 
         self._tabs.addTab(self._log_tab, "Worker Log")
 
@@ -244,7 +253,7 @@ class InfoHubPane(QWidget):
 
     def set_worker_running(self, running: bool) -> None:
         """Show/hide the Stop Worker button based on worker running state."""
-        self._stop_worker_btn.setVisible(running)
+        self._worker_footer.setVisible(running)
         if running:
             self._stop_worker_btn.setEnabled(True)
             self._stop_worker_btn.setText("Stop Worker")
