@@ -61,6 +61,14 @@ class WorkerLogStreamBuffer(QObject):
         else:
             self._boundary_pending = False
 
+        # Same-kind content: detect glued prose at event boundary
+        if self._previous_kind == kind and kind in ("content", "reasoning"):
+            tail = current_tail.rstrip()
+            if tail and tail[-1] in ".!?:":
+                head = normalized.lstrip()
+                if head and head[0].isupper():
+                    self._pending += "\n\n"
+
         self._pending += normalized
         self._pending = compact_excess_blank_lines(self._pending)
         self._previous_kind = kind

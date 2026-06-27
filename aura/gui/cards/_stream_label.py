@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import html as _html
+import re as _re
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QLabel, QSizePolicy
 
 from aura.gui.markdown_renderer import _render_markdown_with_code
 from aura.gui.theme import FG, FG_ITALIC
+
+_GLUED_SENTENCE_RE = _re.compile(r'(?<=[.!?:])(?=[A-Z][a-z]{2,}\b)')
 
 
 class _StreamLabel(QLabel):
@@ -55,7 +58,8 @@ class _StreamLabel(QLabel):
             escaped = _html.escape(self._buf)
             self.setText(f"<div style='color:{FG_ITALIC}; font-style:italic; white-space:pre-wrap;'>{escaped}</div>")
         else:
-            self.setText(_render_markdown_with_code(self._buf))
+            buf = _GLUED_SENTENCE_RE.sub('\n\n', self._buf)
+            self.setText(_render_markdown_with_code(buf))
 
 
     def stop_timer(self) -> None:
