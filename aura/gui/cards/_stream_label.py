@@ -8,7 +8,7 @@ from PySide6.QtWidgets import QLabel, QSizePolicy
 
 from aura.gui.markdown_renderer import _render_markdown_with_code
 from aura.gui.theme import FG, FG_ITALIC
-from aura.gui.worker_log_stream.formatter import separate_glued_prose
+from aura.gui.worker_log_stream.formatter import normalize_assistant_display_text
 
 
 class _StreamLabel(QLabel):
@@ -56,7 +56,7 @@ class _StreamLabel(QLabel):
             escaped = _html.escape(self._buf)
             self.setText(f"<div style='color:{FG_ITALIC}; font-style:italic; white-space:pre-wrap;'>{escaped}</div>")
         else:
-            buf = separate_glued_prose(self._buf)
+            buf = normalize_assistant_display_text(self._buf)
             self.setText(_render_markdown_with_code(buf))
 
 

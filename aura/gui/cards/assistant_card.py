@@ -24,6 +24,7 @@ from aura.gui.cards.code_block_card import CodeBlockCard
 from aura.gui.cards.tool_call_card import ToolCallCard
 from aura.gui.markdown_renderer import _render_markdown_with_code
 from aura.gui.theme import BG_RAISED, FG, FG_ITALIC, SUCCESS_DIM, WARN
+from aura.gui.worker_log_stream.formatter import normalize_assistant_display_text
 
 if TYPE_CHECKING:
     from aura.gui.chat_view import ChatView
@@ -231,6 +232,7 @@ class AssistantCard(QFrame):
     def set_content(self, text: str) -> None:
         """Set the assistant response content (non-streaming)."""
         self._stop_thinking_animation()
+        text = normalize_assistant_display_text(text)
         self._content_label.stop_timer()
         self._content_label.reset_buffer()
         self._content_label.append(text)
@@ -329,6 +331,8 @@ class AssistantCard(QFrame):
         text = self._content_label.text_buffer()
         if not text:
             return
+        # Normalize display text to add paragraph breaks between beats.
+        text = normalize_assistant_display_text(text)
 
         # If no fenced code blocks, fall back to the old inline HTML render
         if not _CODE_FENCE_RE.search(text):
