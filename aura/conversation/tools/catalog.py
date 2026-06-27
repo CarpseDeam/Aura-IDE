@@ -11,7 +11,6 @@ from aura.conversation.tools._drone_schemas import (
     REGISTER_DRONE_FOLDER_TOOL_DEF,
     RUN_READ_ONLY_DRONE_TOOL_DEF,
 )
-from aura.conversation.tools._research_schemas import RESEARCH_TOOL_DEF
 from aura.conversation.tools._schemas import (
     DIAGNOSTIC_TOOL_DEF,
     DISPATCH_TOOL_DEF,
@@ -81,7 +80,6 @@ class ToolCatalog:
                 planner_read_tools
                 + planner_git_tools
                 + [dict(DISPATCH_TOOL_DEF)]
-                + [dict(RESEARCH_TOOL_DEF)]
                 + [dict(SUMMON_DRONE_TOOL_DEF)]
                 + [dict(LAUNCH_READ_ONLY_DRONE_TOOL_DEF)]
                 + [dict(RUN_READ_ONLY_DRONE_TOOL_DEF)]

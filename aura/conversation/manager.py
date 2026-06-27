@@ -920,19 +920,6 @@ class ConversationManager:
                         ),
                     }
 
-                if name == "run_research":
-                    ok = self._tool_runner.handle_research(
-                        tool_call_id=tool_call_id,
-                        args=args,
-                        on_event=on_event,
-                        model=model,
-                        cancel_event=cancel_event,
-                        temperature=temperature,
-                    )
-                    if ok:
-                        _terminal_dispatch = True
-                    return {"id": tool_call_id, "skip": True}
-
                 if name == "run_and_watch":
                     loop_info = self._tool_runner.handle_run_and_watch(
                         tool_call_id=tool_call_id,

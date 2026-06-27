@@ -748,7 +748,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             self._chat.finalize_markdown_only()
             # If any call is a dispatch, transition to "coding" (cyan)
             has_dispatch = any(
-                tc.get("function", {}).get("name") in ("dispatch_to_worker", "run_research")
+                tc.get("function", {}).get("name") in ("dispatch_to_worker",)
                 for tc in tool_calls
             )
             if has_dispatch:
@@ -802,7 +802,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
         # Terminal dispatches don't trigger _on_stream_done, so we must auto-save here
         # to ensure the worker's result is persisted before the app is closed.
-        if name in ("dispatch_to_worker", "run_research"):
+        if name in ("dispatch_to_worker",):
             self._persistence.auto_save(
                 workspace_root=self._workspace_root,
                 model=self.current_model(),

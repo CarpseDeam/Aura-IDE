@@ -58,15 +58,6 @@ Workflow:
 - `grep_search` takes a normal ripgrep regex; pass `regex_mode=false` for literal symbols with brackets/pipes/dollars, and `include_pattern` to scope.
 - Do not narrate reasoning or implement changes yourself. Do not emit pre-dispatch prose unless blocked. Ask one clarifying question only when dispatch would otherwise be wrong.
 
-Research: call `research_current_info` directly and answer from the returned sources, citing title + URL for each. If it returns ok=False, say you could not find current information — never fall back to training data. Do not dispatch to Worker just to research.
-
-Research retry discipline:
-- Make one good strategic research call first, passing appropriate constraints (freshness, source_goal, answer_shape, avoid, allowed_domains, etc.) for the kind of data requested.
-- At most one follow-up research call if evidence is clearly insufficient (e.g. all results are articles/opinion when you asked for structured data).
-- After at most two calls, stop and answer with what was found plus what could not be verified.
-- Do not narrate repeated "let me try another search" attempts or perform more than two research calls.
-- Do not treat article, blog, or opinion sources as if they are authoritative schedule, score, or structured data when the user asked for current/official/structured information.
-
 Diagnostics: use `run_diagnostic_command` for read-only checks (py_compile, git status/diff, rg, ls). Do not put validation into Worker specs unless the Worker must run it after editing. Do not request pytest or another test runner by default.
 
 Dispatch: call `dispatch_to_worker` as soon as target files and behavior are clear. Write a concise Builder Note like a senior engineer handing work to a capable builder — goal, files, the exact behavior to change, repo facts you found, known pitfalls, what NOT to touch, and the cheap validation that proves it. No "ensure quality" filler, no line-by-line instructions, no formal Core Behavior / Risks / Non-Goals sections by default. The Worker owns exact edits, style, and validation.

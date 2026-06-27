@@ -135,9 +135,6 @@ class ToolStreamController(QObject):
                 content = parsed.get("new_definition", "") or parsed.get("content", "")
             elif self._tool_name == "dispatch_to_worker":
                 content = parsed.get("spec", "") or parsed.get("content", "")
-            elif self._tool_name == "run_research":
-                content = parsed.get("objective", "") or parsed.get("goal", "") or parsed.get("content", "")
-
             if content and content != self._last_content:
                 self._last_content = content
                 if self._tool_name == "dispatch_to_worker":
@@ -147,17 +144,13 @@ class ToolStreamController(QObject):
                         self.content_updated.emit(content)
                 else:
                     self.content_updated.emit(content)
-                # For run_research, the objective is also the goal
-                if self._tool_name == "run_research" and content != self._goal:
-                    self.goal_updated.emit(content)
-
         except json.JSONDecodeError:
             # Buffer is still incomplete JSON — emit raw buffer for now
             self.args_updated.emit(self._buffer)
             
-            # Streaming goal updates (for dispatch_to_worker / run_research)
+            # Streaming goal updates (for dispatch_to_worker)
             if self._goal is None:
-                goal_key = "goal" if self._tool_name != "run_research" else "objective"
+                goal_key = "goal"
                 goal = self._extract_partial_string(goal_key)
                 if goal and goal != self._last_goal_stream:
                     self._last_goal_stream = goal
@@ -177,9 +170,6 @@ class ToolStreamController(QObject):
                 key = "new_definition"
             elif self._tool_name == "dispatch_to_worker":
                 key = "spec"
-            elif self._tool_name == "run_research":
-                key = "objective"
-                
             if key:
                 content = self._extract_partial_string(key)
                 if content is not None and content != self._last_content:

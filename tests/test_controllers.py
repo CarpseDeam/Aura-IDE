@@ -58,19 +58,6 @@ def test_streaming_goal():
     assert goal_updates[-1] == "Refactor auth logic"
 
 
-def test_run_research_streaming():
-    controller = ToolStreamController("run_research")
-    content_updates = []
-    goal_updates = []
-    controller.content_updated.connect(content_updates.append)
-    controller.goal_updated.connect(goal_updates.append)
-
-    controller.append_fragment('{"objective": "How to use PySide6?')
-    assert content_updates[-1] == "How to use PySide6?"
-    # For research, objective is also the goal
-    assert goal_updates[-1] == "How to use PySide6?"
-
-
 def test_escape_handling():
     controller = ToolStreamController("write_file")
     updates = []

@@ -48,26 +48,6 @@ Each tool call goes through a circuit breaker that tracks consecutive timeouts o
 | `git_stash_list`  | List stash entries                                 | —                               |
 | `git_stash_show`  | Show changes in a stash entry                      | `stash_index`                   |
 
-## Web Tools
-
-| Tool         | Description                           | Parameters |
-|--------------|---------------------------------------|------------|
-| `web_search` | Search the web via Tavily API         | `query`    |
-| `web_fetch`  | Fetch and scrape a URL's text content | `url`      |
-
-Tavily API key is configured in Settings → General or via `TAVILY_API_KEY` environment variable.
-
-## Run Research
-
-`run_research` dispatches an open-ended research task to a background sub-agent. The agent autonomously uses `web_search` and `web_fetch` to gather information, then returns a summarized report. Use this for:
-
-- Looking up documentation or API references
-- Debugging unfamiliar error messages
-- Researching libraries or approaches
-- Any task that needs multiple search/fetch rounds
-
-The research agent runs in the background and returns results when complete. It has its own budget and tools.
-
 ## Terminal
 
 | Tool                    | Description                                  | Parameters                            |

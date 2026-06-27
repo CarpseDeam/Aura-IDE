@@ -13,7 +13,7 @@ from aura.client import (
     ToolResult,
     WorkerDispatchRequested,
 )
-from aura.config import ModelId, load_settings, redact_secrets
+from aura.config import load_settings, redact_secrets
 from aura.conversation.dispatch import (
     DispatchCallback,
     WorkerDispatchRequest,
@@ -47,7 +47,7 @@ _CD_WRAPPER_RE = re.compile(
 
 
 class ToolRunner:
-    """Owns execution of dispatch, disabled research, and terminal tools."""
+    """Owns execution of dispatch and terminal tools."""
 
     def __init__(
         self, history: History, workspace_root: Path, loop_detector: LoopDetector
@@ -172,48 +172,6 @@ class ToolRunner:
             )
         )
         return result
-
-    def handle_research(
-        self,
-        tool_call_id: str,
-        args: dict[str, Any],
-        on_event: Any,
-        model: ModelId,
-        cancel_event: threading.Event,
-        temperature: float = 0.7,
-    ) -> bool:
-        """Return a clean disabled result after removing the old research path."""
-        _ = (model, cancel_event, temperature)
-        objective = args.get("objective") or args.get("goal") or args.get("spec") or ""
-        if not objective:
-            payload_dict = {
-                "ok": False,
-                "error": f"objective is required. Got args: {args}",
-                "research_removed": True,
-            }
-        else:
-            payload_dict = {
-                "ok": False,
-                "error": (
-                    "run_research is disabled while Aura's research substrate is "
-                    "being rebuilt. The old hidden researcher and Tavily web path "
-                    "have been removed."
-                ),
-                "objective": str(objective),
-                "research_removed": True,
-            }
-        payload = json.dumps(payload_dict, ensure_ascii=False)
-        self._history.append_tool_result(tool_call_id, payload)
-        on_event(
-            ToolResult(
-                tool_call_id=tool_call_id,
-                name="run_research",
-                ok=False,
-                result=payload,
-                extras={"research_removed": True},
-            )
-        )
-        return False
 
     def handle_terminal_command(
         self,

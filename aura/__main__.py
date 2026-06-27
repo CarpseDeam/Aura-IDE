@@ -173,21 +173,8 @@ def _run_app(log_path: Path, args: argparse.Namespace, qt_argv: list[str]) -> in
                 dump_ui_tree(win, args.dump_ui_tree)
             except Exception:
                 logger.exception("dump-ui-tree failed")
-        _run_research_smoke()
         logging.shutdown()
         os._exit(0)
-
-
-    def _run_research_smoke() -> None:
-        """Run a quick research smoke test during selfcheck."""
-        try:
-            from aura.research import research_current_info, ResearchResult
-
-            result = research_current_info("test", {"max_pages": 1, "timeout_seconds": 5})
-            assert isinstance(result, ResearchResult), f"Expected ResearchResult, got {type(result)}"
-            print(f"Research smoke: {result.ok} ({len(result.sources)} sources, {len(result.evidence)} evidence)", flush=True)
-        except Exception as exc:
-            print(f"Research smoke: FAILED — {exc}", flush=True)
 
 
     if args.selfcheck:

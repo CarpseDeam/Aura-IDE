@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import logging
 
 from PySide6.QtCore import QEasingCurve, QEvent, QPropertyAnimation, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
@@ -527,7 +526,7 @@ class ChatView(QScrollArea):
             self._current_aura.set_glow_state("coding")
 
         ac = self.current_assistant()
-        if name in ("dispatch_to_worker", "run_research"):
+        if name in ("dispatch_to_worker",):
             # Reuse existing controller if this ID was already started (uncommon but possible in replay/retry)
             controller = self._controllers.get(tool_call_id)
             if controller is None:
@@ -643,36 +642,6 @@ class ChatView(QScrollArea):
                         summary,
                         needs_followup=needs_followup,
                         status=status,
-                    )
-
-                # Close the current assistant turn so the next Planner
-                # continuation starts a fresh card.
-                self.close_current_assistant_for_continuation()
-
-            elif controller.tool_name == "run_research":
-                report = ""
-                needs_followup = False
-                try:
-                    data = json.loads(result_text)
-                    report = data.get("report", "")
-                    needs_followup = data.get("needs_followup", False)
-                except Exception:
-                    pass
-
-                # Suppress transient failure display — planner may retry
-                if not ok:
-                    logging.getLogger(__name__).info(
-                        "run_research failed (suppressed — planner may retry): "
-                        "tool_call_id=%s, result=%s",
-                        tool_call_id, result_text[:200],
-                    )
-                    ok = True
-                controller.finalize(ok, result_text)
-
-                if report:
-                    self.add_worker_summary(
-                        tool_call_id, controller.goal or "Research", ok, report,
-                        needs_followup=needs_followup,
                     )
 
                 # Close the current assistant turn so the next Planner
