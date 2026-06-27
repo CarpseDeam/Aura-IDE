@@ -8,7 +8,27 @@ from typing import Any
 
 from aura.conversation.tools._types import ApprovalRequest, ToolExecResult
 from aura.conversation.tools.consequential import is_consequential
-from aura.mcp_client import MCPClient, _convert_tool_to_openai_schema
+try:
+    from aura.mcp_client import MCPClient, _convert_tool_to_openai_schema
+except ModuleNotFoundError as exc:
+    _MCP_IMPORT_ERROR = exc
+
+    class MCPClient:  # type: ignore[no-redef]
+        def __init__(self, server_command: list[str]) -> None:
+            self._server_command = server_command
+
+        def connect(self) -> None:
+            raise RuntimeError(f"MCP support is unavailable: {_MCP_IMPORT_ERROR}")
+
+    def _convert_tool_to_openai_schema(tool_def: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "type": "function",
+            "function": {
+                "name": tool_def["name"],
+                "description": tool_def.get("description", ""),
+                "parameters": tool_def.get("inputSchema", {"type": "object"}),
+            },
+        }
 
 
 def _make_mcp_handler(mcp_client: MCPClient, tool_name: str):

@@ -67,7 +67,7 @@ def run_folder_drone_sync(
             cancel_event=run.cancel_event,
         )
         _raw_result = result
-        cargo = result.get("cargo", {})
+        cargo = _extract_cargo(result)
         if isinstance(result, dict) and (
             result.get("cancelled") or result.get("status") == "cancelled"
         ):
@@ -163,6 +163,16 @@ def _normalize_result(result: Any) -> dict[str, Any]:
     if result is None:
         return {"ok": True}
     return {"ok": True, "result": result}
+
+
+def _extract_cargo(result: dict[str, Any]) -> Any:
+    if "cargo" in result:
+        return result.get("cargo")
+    return {
+        key: value
+        for key, value in result.items()
+        if not key.startswith("_") and key not in {"returncode", "stderr", "stdout"}
+    }
 
 
 def _evidence_for_status(status: str) -> str:

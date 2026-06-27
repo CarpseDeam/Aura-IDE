@@ -1,7 +1,7 @@
 {
   "name": "Web Research",
-  "description": "Receives a research goal, extracts a query, and returns a structured research receipt. Live browser research is not implemented yet.",
-  "instructions": "This drone receives a goal string from Aura, extracts a research query from it, and returns a structured research receipt. In this skeleton phase, it does not browse the web.\n\nGoal parsing: The drone reads one JSON object from stdin. It supports:\n- plain goal text as the query\n- optional `query:` line\n- optional `freshness:` line\n- optional `source_goal:` line\n- optional `answer_shape:` line\n\nIf `query:` exists, use that as the query. Otherwise use the non-empty goal text.",
+  "description": "Receives a research goal, extracts a query, performs live web research for current-info questions, and returns a structured research receipt with sourced evidence.",
+  "instructions": "This drone receives a goal string from Aura, extracts a research query from it, and performs live web research to answer current-info questions (like schedules, recent events, versions). It returns a structured receipt with sources, evidence, gaps, and confidence.\n\nGoal parsing: The drone reads one JSON object from stdin. It supports:\n- plain goal text as the query\n- optional `query:` line\n\nIf `query:` exists, use that as the query. Otherwise use the non-empty goal text.",
   "kind": "command",
   "write_policy": "read_only",
   "scope": "global",
@@ -29,16 +29,15 @@
           "ok": { "const": true },
           "summary": { "type": "string" },
           "query": { "type": "string" },
-          "live_research_ready": { "const": false },
           "verified_facts": { "type": "array", "items": { "type": "string" } },
           "sources": { "type": "array", "items": { "type": "object" } },
           "evidence": { "type": "array", "items": { "type": "object" } },
           "gaps": { "type": "array", "items": { "type": "string" } },
-          "confidence": { "type": "string", "enum": ["none"] },
+          "confidence": { "type": "string", "enum": ["high", "medium", "low", "none"] },
           "trace": { "type": "array", "items": { "type": "object" } },
           "route_used": { "type": "object" }
         },
-        "required": ["ok", "summary", "query", "live_research_ready", "verified_facts", "sources", "evidence", "gaps", "confidence", "trace", "route_used"]
+        "required": ["ok", "summary", "query", "verified_facts", "sources", "evidence", "gaps", "confidence", "trace", "route_used"]
       },
       {
         "title": "Failure",

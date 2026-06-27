@@ -57,8 +57,13 @@ def run_login_session(
             reason = runtime.unavailable_reason or "Browser runtime failed to start"
             errors.append(reason)
             on_content(f"Failed to start browser session: {reason}")
+            
+            browser_meta = {}
+            if "attempted_routes" in runtime.route_metadata:
+                browser_meta["attempted_routes"] = runtime.route_metadata["attempted_routes"]
+                
             return _login_result(status, browser_profile, start_url, final_url,
-                                 title, errors, started)
+                                 title, errors, started, browser_meta)
 
         page = runtime.context.new_page()
         page.goto(start_url, wait_until="domcontentloaded")
@@ -101,6 +106,15 @@ def run_login_session(
             except Exception:
                 logger.debug("Could not capture final page state after session close")
 
+        browser_meta = {
+            "browser_id": runtime.route_metadata.get("browser_id", ""),
+            "browser_label": runtime.route_metadata.get("browser_label", ""),
+            "browser_source": runtime.route_metadata.get("browser_source", ""),
+            "browser_persistent": runtime.route_metadata.get("browser_persistent", False),
+            "browser_visible": runtime.route_metadata.get("browser_visible", False),
+            "attempted_routes": runtime.route_metadata.get("attempted_routes", []),
+        }
+
     except Exception as exc:
         logger.exception("Login session failed")
         errors.append(str(exc))
@@ -110,7 +124,7 @@ def run_login_session(
         runtime.close()
 
     return _login_result(status, browser_profile, start_url, final_url, title,
-                         errors, started)
+                         errors, started, browser_meta)
 
 
 def _login_result(
@@ -121,10 +135,11 @@ def _login_result(
     title: str,
     errors: list[str],
     started: dt.datetime,
+    browser_meta: dict | None = None,
 ) -> dict:
     """Build the standardised result dict."""
     elapsed = (dt.datetime.now() - started).total_seconds()
-    return {
+    result = {
         "status": status,
         "browser_profile": browser_profile,
         "persistent_session": True,
@@ -136,3 +151,6 @@ def _login_result(
         "waited_seconds": elapsed,
         "errors": errors,
     }
+    if browser_meta:
+        result.update(browser_meta)
+    return result

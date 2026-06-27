@@ -118,3 +118,39 @@ def test_docs_lookup_routes_to_research() -> None:
     route = classify_user_request("look up ComfyUI docs")
 
     assert route.lane == TaskLane.research
+    assert route.action == "research"
+
+
+def test_world_cup_today_routes_to_web_research() -> None:
+    route = classify_user_request("What time are World Cup matches today?")
+
+    assert route.lane == TaskLane.research
+    assert route.action == "web_research"
+
+
+def test_usa_play_next_routes_to_web_research() -> None:
+    route = classify_user_request("Who does the USA play next?")
+
+    assert route.lane == TaskLane.research
+    assert route.action == "web_research"
+
+
+def test_latest_python_release_routes_to_web_research() -> None:
+    route = classify_user_request("What changed in the latest Python release?")
+
+    assert route.lane == TaskLane.research
+    assert route.action == "web_research"
+
+
+def test_weather_weekend_routes_to_web_research() -> None:
+    route = classify_user_request("What is the weather this weekend?")
+
+    assert route.lane == TaskLane.research
+    assert route.action == "web_research"
+
+
+def test_non_current_coding_question_does_not_route_to_web_research() -> None:
+    route = classify_user_request("fix the create variations feature")
+
+    assert route.lane == TaskLane.implementation
+    assert route.action != "web_research"

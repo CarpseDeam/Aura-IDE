@@ -1,4 +1,4 @@
-"""Tests for the bundled Web Research Drone (Phase 2A skeleton)."""
+"""Tests for the bundled Web Research Drone (Phase 3)."""
 
 from __future__ import annotations
 
@@ -19,9 +19,8 @@ from aura.drones.sync_runner import run_read_only_drone_sync
 
 @pytest.fixture(autouse=True)
 def _patch_aura_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Redirect aura.drones.store.aura_root so the bundled drone resolves to a
-    temp folder.  The real source files are copied into the patched path."""
     monkeypatch.setattr("aura.drones.store.aura_root", lambda: tmp_path / "aura_root")
+    monkeypatch.setenv("_AURA_MOCK_WEB_RESEARCH", "1")
 
 
 @pytest.fixture
@@ -33,8 +32,6 @@ def workspace(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def web_research_folder(tmp_path: Path) -> Path:
-    """Copy the bundled web-research drone into the patched aura_root so that
-    DroneStore finds it as a bundled drone."""
     bundled = (
         Path(__file__).resolve().parent.parent
         / "aura"
@@ -65,7 +62,6 @@ def web_research_folder(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def drone(workspace: Path, web_research_folder: Path) -> DroneStore:
-    """Load the Web Research Drone definition via DroneStore."""
     d = DroneStore.load_drone(workspace, "web-research")
     assert d is not None, "web-research drone should be loadable from the store"
     return d
@@ -77,8 +73,6 @@ def drone(workspace: Path, web_research_folder: Path) -> DroneStore:
 
 
 class TestStoreLoading:
-    """Verify the drone can be found and loaded through DroneStore APIs."""
-
     def test_web_research_loads_from_store(self, workspace: Path, drone: DroneStore) -> None:
         assert drone.id == "web-research"
         assert drone.kind == "command"
@@ -107,8 +101,6 @@ class TestStoreLoading:
 
 
 class TestRunWithRunner:
-    """Exercise the drone end-to-end via run_read_only_drone_sync."""
-
     def test_run_with_query_line_goal(
         self, workspace: Path, drone: DroneStore
     ) -> None:
@@ -120,8 +112,7 @@ class TestRunWithRunner:
         )
         assert result["ok"] is True
         assert result["status"] == "completed"
-        assert "World Cup matches today" in result["summary"]
-        assert "Live browser research is not implemented yet" in result["summary"]
+        assert "Completed live web research" in result["summary"]
 
     def test_plain_goal_text_as_query(
         self, workspace: Path, drone: DroneStore
@@ -130,7 +121,7 @@ class TestRunWithRunner:
         result = run_read_only_drone_sync(workspace, "web-research", drone, goal)
         assert result["ok"] is True
         assert result["status"] == "completed"
-        assert "What is the latest Python version?" in result["summary"]
+        assert "Completed live web research" in result["summary"]
 
     def test_empty_goal_returns_failure(
         self, workspace: Path, drone: DroneStore
@@ -138,7 +129,6 @@ class TestRunWithRunner:
         result = run_read_only_drone_sync(workspace, "web-research", drone, "")
         assert result["ok"] is False
         assert result["status"] == "failed"
-        # The drone's summary indicates a missing query
         assert "no query" in result["summary"].lower()
 
     def test_whitespace_only_goal_returns_failure(
@@ -158,13 +148,6 @@ class TestRunWithRunner:
 
 
 class TestOutputShape:
-    """Drone stdout is captured via subprocess to verify the full contract.
-
-    The conftest patches subprocess.run to block accidental subprocess calls.
-    These tests explicitly restore the original run so they can execute the
-    drone entrypoint directly.
-    """
-
     _PAYLOAD = {
         "goal": "What is the capital of France?",
         "workspace_root": "/tmp",
@@ -178,6 +161,7 @@ class TestOutputShape:
     ) -> dict:
         payload = {**self._PAYLOAD, "goal": goal}
         monkeypatch.setattr(subprocess, "run", block_real_subprocess)
+        monkeypatch.setenv("_AURA_MOCK_WEB_RESEARCH", "1")
         proc = subprocess.run(
             [sys.executable, "main.py"],
             cwd=folder,
@@ -197,9 +181,8 @@ class TestOutputShape:
             monkeypatch, block_real_subprocess,
         )
 
-        # All required keys present
         required_keys = {
-            "ok", "summary", "query", "live_research_ready",
+            "ok", "summary", "query",
             "verified_facts", "sources", "evidence", "gaps",
             "confidence", "trace", "route_used",
         }
@@ -207,25 +190,46 @@ class TestOutputShape:
             f"Missing keys: {required_keys - data.keys()}"
         )
 
-        # Type constraints
         assert isinstance(data["verified_facts"], list)
         assert isinstance(data["gaps"], list)
         assert isinstance(data["trace"], list)
         assert isinstance(data["route_used"], dict)
 
-        # Const values
         assert data["ok"] is True
-        assert data["live_research_ready"] is False
-        assert data["confidence"] == "none"
+        assert data["confidence"] == "medium"
         assert data["query"] == "What is the capital of France?"
+        assert "live_research_ready" not in data
 
     def test_empty_goal_direct_output(
         self, web_research_folder: Path, monkeypatch, block_real_subprocess
     ) -> None:
-        """Verify the error field appears in the raw drone output."""
         data = self._run_drone(
             web_research_folder, "", monkeypatch, block_real_subprocess,
         )
         assert data["ok"] is False
         assert "query is required" in data["error"]
         assert "no query" in data["summary"].lower()
+
+    def test_mocked_world_cup_schedule_result(
+        self, web_research_folder: Path, monkeypatch, block_real_subprocess
+    ) -> None:
+        data = self._run_drone(
+            web_research_folder, "What time are World Cup matches today?",
+            monkeypatch, block_real_subprocess,
+        )
+        assert data["ok"] is True
+        assert data["confidence"] != "none"
+        assert any("World Cup Matches Today: USA vs ENG" in ev["excerpt"] for ev in data["evidence"])
+        assert any("fifa.com" in src["url"] for src in data["sources"])
+
+    def test_mocked_no_evidence_result(
+        self, web_research_folder: Path, monkeypatch, block_real_subprocess
+    ) -> None:
+        data = self._run_drone(
+            web_research_folder, "fail query",
+            monkeypatch, block_real_subprocess,
+        )
+        assert data["ok"] is True
+        assert data["confidence"] in ["none", "low"]
+        assert len(data["gaps"]) > 0
+        assert "HTTP fetch error" in data["gaps"][0]

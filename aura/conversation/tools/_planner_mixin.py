@@ -5,6 +5,8 @@ from typing import Any
 from aura.conversation.tools._types import ToolExecResult
 from aura.drones.store import DroneStore
 
+WEB_RESEARCH_DRONE_ID = "web-research"
+
 
 class PlannerHandlersMixin:
     """Mixin for ToolRegistry implementing planner-specific tool handlers."""
@@ -203,6 +205,9 @@ class PlannerHandlersMixin:
                 workspace_root=self._root,
                 drone=drone,
             )
+            if drone_id == WEB_RESEARCH_DRONE_ID:
+                result = dict(result)
+                result["answer_for_chat"] = format_web_research_answer(result)
             return ToolExecResult(ok=True, payload=result)
         except Exception as exc:
             return ToolExecResult(
@@ -391,3 +396,82 @@ class PlannerHandlersMixin:
             )
 
 
+def format_web_research_answer(result: dict[str, Any]) -> str:
+    """Build compact chat prose from a Web Research Drone receipt."""
+    if not result.get("ok"):
+        error = result.get("error") or result.get("summary") or "Unknown error"
+        return f"Web Research Drone failed: {error}"
+
+    artifact = _web_research_artifact(result)
+    if not artifact:
+        return "Web Research Drone completed, but returned no structured evidence."
+
+    confidence = str(artifact.get("confidence") or "").strip().lower()
+    gaps = _string_list(artifact.get("gaps"))
+    sources = artifact.get("sources") if isinstance(artifact.get("sources"), list) else []
+    evidence = artifact.get("evidence") if isinstance(artifact.get("evidence"), list) else []
+
+    if confidence in {"none", ""} or (not sources and not evidence):
+        lines = ["I could not verify an answer from live evidence."]
+        if gaps:
+            lines.append("Gaps: " + "; ".join(gaps[:3]))
+        return "\n".join(lines)
+
+    answer = str(artifact.get("answer") or "").strip()
+    facts = _string_list(artifact.get("verified_facts"))
+    lines: list[str] = []
+    if answer:
+        lines.append(answer)
+    elif facts:
+        lines.append("Verified facts:")
+        lines.extend(f"- {fact}" for fact in facts[:5])
+    else:
+        lines.append("Web Research found evidence, but did not extract a concise answer.")
+
+    source_lines = _format_sources(sources)
+    if source_lines:
+        lines.append("")
+        lines.append("Sources:")
+        lines.extend(source_lines)
+
+    if gaps or confidence == "low":
+        lines.append("")
+        if gaps:
+            lines.append("Not fully verified: " + "; ".join(gaps[:3]))
+        else:
+            lines.append("Confidence is low.")
+    return "\n".join(lines)
+
+
+def _web_research_artifact(result: dict[str, Any]) -> dict[str, Any]:
+    cargo = result.get("cargo")
+    if isinstance(cargo, dict) and cargo:
+        return cargo
+    receipt = result.get("receipt")
+    if isinstance(receipt, dict):
+        produced = receipt.get("produced_artifact")
+        if isinstance(produced, dict) and produced:
+            return produced
+    if any(key in result for key in ("answer", "verified_facts", "sources", "evidence")):
+        return result
+    return {}
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _format_sources(sources: list[Any]) -> list[str]:
+    lines: list[str] = []
+    for source in sources[:5]:
+        if not isinstance(source, dict):
+            continue
+        title = str(source.get("title") or source.get("name") or "Source").strip()
+        url = str(source.get("url") or "").strip()
+        if url:
+            lines.append(f"- {title}: {url}")
+        elif title:
+            lines.append(f"- {title}")
+    return lines

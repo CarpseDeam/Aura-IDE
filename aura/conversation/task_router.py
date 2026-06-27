@@ -46,6 +46,14 @@ def classify_user_request(text: str) -> TaskRoute:
             "matched validation command/request",
         )
 
+    if _looks_like_current_info(normalized):
+        return TaskRoute(
+            TaskLane.research,
+            "web_research",
+            0.9,
+            "matched current-info research request",
+        )
+
     if _looks_like_research(normalized):
         return TaskRoute(
             TaskLane.research,
@@ -121,10 +129,29 @@ def _looks_like_validation(normalized: str) -> bool:
 def _looks_like_research(normalized: str) -> bool:
     return bool(
         re.search(
-            r"\b(?:look up|lookup|research|search for|find docs|docs|documentation)\b",
+            r"\b(?:look up|lookup|research|search for|find docs|docs|documentation|"
+            r"latest|current|recent|today|tomorrow|this week|schedule|schedules|fixture|fixtures|scores?|price|prices|"
+            r"law|laws|rules?|regulations?|releases?|versions?)\b",
             normalized,
         )
     )
+
+
+def _looks_like_current_info(normalized: str) -> bool:
+    if re.search(
+        r"\b(?:latest|current|recent|today|tomorrow|tonight|this week|weekend|"
+        r"schedule|schedules|fixture|fixtures|scores?|price|prices|weather|"
+        r"law|laws|rules?|regulations?|releases?|versions?)\b",
+        normalized,
+    ):
+        return True
+    if re.search(r"\bwho\s+(?:do|does)\b.*\bplay\s+next\b", normalized):
+        return True
+    if re.search(r"\b(?:next|upcoming)\s+(?:match|game|fixture|release)\b", normalized):
+        return True
+    if re.search(r"\b(?:ceo|president|prime minister|mayor|governor)\s+(?:of|for)\b", normalized):
+        return True
+    return False
 
 
 def _looks_like_implementation(normalized: str) -> bool:

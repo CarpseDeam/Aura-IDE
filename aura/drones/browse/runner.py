@@ -104,6 +104,12 @@ def _run_login_session_mode(
     errors: list[str] = result.get("errors", [])
     elapsed = result.get("elapsed_seconds", 0.0)
 
+    browser_metadata = {
+        k: result[k] for k in ["browser_id", "browser_label", "browser_source", 
+                               "browser_persistent", "browser_visible", "attempted_routes"]
+        if k in result
+    }
+
     success = status not in ("login_session_failed",)
     action_trace[0]["success"] = success
 
@@ -120,6 +126,7 @@ def _run_login_session_mode(
             if status == "login_session_timeout"
             else (errors[0] if errors else None)
         ),
+        browser_metadata=browser_metadata,
     )
 
     if status == "login_session_failed":

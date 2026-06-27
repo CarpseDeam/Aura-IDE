@@ -12,7 +12,6 @@ from aura.conversation.dispatch import (
     normalize_worker_task,
 )
 from aura.conversation.history import History
-from aura.conversation.manager import ConversationManager
 from aura.conversation.task_shape import TaskShape, infer_task_shape
 from aura.conversation.workflow_state import (
     ValidationCommandRun,
@@ -20,6 +19,15 @@ from aura.conversation.workflow_state import (
     WorkflowState,
     WorkflowStatus,
 )
+
+
+def __getattr__(name: str):
+    if name == "ConversationManager":
+        from aura.conversation.manager import ConversationManager
+
+        return ConversationManager
+    raise AttributeError(name)
+
 
 __all__ = [
     "History",

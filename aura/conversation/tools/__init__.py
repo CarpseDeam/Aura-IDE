@@ -8,9 +8,14 @@ from aura.conversation.tools._types import (
 from aura.conversation.tools._schemas import (
     DISPATCH_TOOL_DEF,
 )
-from aura.conversation.tools.registry import (
-    ToolRegistry,
-)
+
+
+def __getattr__(name: str):
+    if name == "ToolRegistry":
+        from aura.conversation.tools.registry import ToolRegistry
+
+        return ToolRegistry
+    raise AttributeError(name)
 
 __all__ = [
     "ToolRegistry",

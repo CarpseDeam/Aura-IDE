@@ -55,6 +55,33 @@ def _register_drone(workspace: Path, *, write_policy: str = "read_only") -> str:
     return drone_id
 
 
+def _register_web_research_drone(workspace: Path) -> str:
+    folder = workspace / "build" / "web-research"
+    folder.mkdir(parents=True)
+    (folder / "main.py").write_text(
+        "import json, sys\n"
+        "payload = json.loads(sys.stdin.read())\n"
+        "print(json.dumps({'ok': True, 'summary': payload.get('goal')}))\n",
+        encoding="utf-8",
+    )
+    (folder / "drone.json").write_text(
+        json.dumps(
+            {
+                "id": "web-research",
+                "name": "Web Research",
+                "description": "Researches current-info questions.",
+                "entrypoint": {"kind": "command", "command": ["python", "main.py"], "protocol": "json-stdio"},
+                "instructions": "Run the entrypoint.",
+                "write_policy": "read_only",
+                "output_contract": "Return sourced research.",
+            }
+        ),
+        encoding="utf-8",
+    )
+    DroneStore.register_drone_folder(workspace, folder)
+    return "web-research"
+
+
 class TestRunReadOnlyDroneHandler:
     def test_handler_registered(self):
         assert "run_read_only_drone" in TOOL_HANDLERS
@@ -127,6 +154,111 @@ class TestRunReadOnlyDroneHandler:
         assert result.ok is True
         assert "Found the bug" in str(result.payload)
         mock_runner.assert_called_once()
+
+    @patch("aura.drones.sync_runner.run_read_only_drone_sync")
+    def test_web_research_dispatch_payload_includes_user_question(
+        self, mock_runner, workspace: Path
+    ):
+        _register_web_research_drone(workspace)
+        question = "What time are World Cup matches today?"
+        mock_runner.return_value = {
+            "ok": True,
+            "run_id": "run-web",
+            "drone_id": "web-research",
+            "drone_name": "Web Research",
+            "status": "completed",
+            "summary": "researched",
+            "cargo": {
+                "answer": "USA vs ENG is at 8:00 PM local time.",
+                "verified_facts": ["USA vs ENG is listed at 8:00 PM."],
+                "sources": [{"title": "FIFA Match Centre", "url": "https://www.fifa.com/en/match-centre"}],
+                "evidence": [{"excerpt": "USA vs ENG 8:00 PM"}],
+                "gaps": [],
+                "confidence": "medium",
+            },
+        }
+        registry = ToolRegistry(workspace_root=workspace, read_only=False, mode="planner")
+
+        result = registry.execute(
+            "run_read_only_drone",
+            {"drone_id": "web-research", "goal": question},
+            MagicMock(return_value=ApprovalDecision(action="approve")),
+            False,
+        )
+
+        assert result.ok is True
+        mock_runner.assert_called_once()
+        assert mock_runner.call_args.kwargs["drone_id"] == "web-research"
+        assert mock_runner.call_args.kwargs["goal"] == question
+
+    @patch("aura.drones.sync_runner.run_read_only_drone_sync")
+    def test_web_research_success_adds_sourced_chat_answer(
+        self, mock_runner, workspace: Path
+    ):
+        _register_web_research_drone(workspace)
+        mock_runner.return_value = {
+            "ok": True,
+            "run_id": "run-web",
+            "drone_id": "web-research",
+            "drone_name": "Web Research",
+            "status": "completed",
+            "summary": "researched",
+            "cargo": {
+                "answer": "USA vs ENG is at 8:00 PM local time.",
+                "verified_facts": ["USA vs ENG is listed at 8:00 PM."],
+                "sources": [{"title": "FIFA Match Centre", "url": "https://www.fifa.com/en/match-centre"}],
+                "evidence": [{"excerpt": "USA vs ENG 8:00 PM"}],
+                "gaps": [],
+                "confidence": "medium",
+            },
+        }
+        registry = ToolRegistry(workspace_root=workspace, read_only=False, mode="planner")
+
+        result = registry.execute(
+            "run_read_only_drone",
+            {"drone_id": "web-research", "goal": "What time are World Cup matches today?"},
+            MagicMock(return_value=ApprovalDecision(action="approve")),
+            False,
+        )
+
+        answer = result.payload["answer_for_chat"]
+        assert "8:00 PM" in answer
+        assert "FIFA Match Centre" in answer
+        assert "https://www.fifa.com/en/match-centre" in answer
+
+    @patch("aura.drones.sync_runner.run_read_only_drone_sync")
+    def test_web_research_low_confidence_adds_careful_chat_answer(
+        self, mock_runner, workspace: Path
+    ):
+        _register_web_research_drone(workspace)
+        mock_runner.return_value = {
+            "ok": True,
+            "run_id": "run-web",
+            "drone_id": "web-research",
+            "drone_name": "Web Research",
+            "status": "completed",
+            "summary": "not enough evidence",
+            "cargo": {
+                "answer": "",
+                "verified_facts": [],
+                "sources": [],
+                "evidence": [],
+                "gaps": ["No official schedule source was reachable."],
+                "confidence": "none",
+            },
+        }
+        registry = ToolRegistry(workspace_root=workspace, read_only=False, mode="planner")
+
+        result = registry.execute(
+            "run_read_only_drone",
+            {"drone_id": "web-research", "goal": "What time are World Cup matches today?"},
+            MagicMock(return_value=ApprovalDecision(action="approve")),
+            False,
+        )
+
+        answer = result.payload["answer_for_chat"]
+        assert "could not verify" in answer.lower()
+        assert "No official schedule source was reachable" in answer
 
     def test_per_turn_limit(self, workspace: Path):
         _register_drone(workspace)

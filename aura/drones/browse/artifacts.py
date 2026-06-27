@@ -260,6 +260,8 @@ def build_login_session_artifact(
     action_trace: list[dict[str, Any]],
     errors: list[str],
     skipped_reason: str | None = None,
+    profile_metadata: dict | None = None,
+    browser_metadata: dict | None = None,
 ) -> dict[str, Any]:
     """Build a produced_artifact dict for a login session result.
 
@@ -268,7 +270,7 @@ def build_login_session_artifact(
     ``login_session_failed``).  Snapshots are None because
     no automated candidate extraction occurs in a login session.
     """
-    return {
+    artifact = {
         "kind": "browse",
         "status": status,
         "start_url": start_url,
@@ -284,3 +286,8 @@ def build_login_session_artifact(
         "persistent_session": True,
         "visible": True,
     }
+    if profile_metadata:
+        artifact.update(profile_metadata)
+    if browser_metadata:
+        artifact.update(browser_metadata)
+    return artifact

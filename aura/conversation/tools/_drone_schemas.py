@@ -45,7 +45,9 @@ RUN_READ_ONLY_DRONE_TOOL_DEF: dict[str, Any] = {
         "name": "run_read_only_drone",
         "description": (
             "Run a saved read-only Drone directly in the background to handle a "
-            "focused sub-task. Returns results synchronously."
+            "focused sub-task. Returns results synchronously. For current-info "
+            "questions that need fresh web evidence, call this with "
+            "drone_id='web-research' and pass the user's question as goal text."
         ),
         "parameters": {
             "type": "object",
