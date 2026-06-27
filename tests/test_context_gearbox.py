@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from aura.context_gearbox.models import ComposedContext, ContextLedgerEntry, RuntimeRole
 from aura.context_gearbox.runtime import (
     context_gearbox_metadata,
@@ -34,6 +36,20 @@ CONTRACT_IDS = [
     "receipt_contract",
 ]
 
+SCOPED_PACK_IDS = [
+    "gui_rules",
+    "drone_rules",
+    "provider_rules",
+    "build_pipeline_rules",
+]
+
+SCOPED_PACK_SKIP_REASONS = {
+    "gui_rules": "target files do not match gui scope",
+    "drone_rules": "target files do not match drone scope",
+    "provider_rules": "target files do not match provider scope",
+    "build_pipeline_rules": "target files do not match build scope",
+}
+
 
 def _included_contract_ids(composed: ComposedContext) -> list[str]:
     return [
@@ -41,6 +57,27 @@ def _included_contract_ids(composed: ComposedContext) -> list[str]:
         for entry in composed.ledger
         if entry.kind == "quality_contract" and entry.included
     ]
+
+
+def _included_scoped_pack_ids(composed: ComposedContext) -> list[str]:
+    return [
+        entry.source_id
+        for entry in composed.ledger
+        if entry.kind == "scoped_coding_pack" and entry.included
+    ]
+
+
+def _assert_only_scoped_pack_loaded(composed: ComposedContext, source_id: str) -> None:
+    assert _included_scoped_pack_ids(composed) == [source_id]
+    assert source_id in composed.context_text
+    for scoped_id in SCOPED_PACK_IDS:
+        entry = _entry_by_id(composed, scoped_id)
+        if scoped_id == source_id:
+            assert entry.included is True
+            assert entry.char_count > 0
+        else:
+            assert entry.included is False
+            assert entry.reason == SCOPED_PACK_SKIP_REASONS[scoped_id]
 
 
 def test_prompt_compatibility_exports_work(tmp_path):
@@ -140,6 +177,118 @@ def test_worker_composition_includes_quality_contract_stack(tmp_path):
         assert entry.char_count > 0
 
 
+def test_worker_gui_target_loads_gui_rules_and_skips_unrelated_packs(tmp_path):
+    composed = compose_system_prompt(
+        RuntimeRole.WORKER,
+        "",
+        tmp_path,
+        task_kind="bugfix",
+        target_files=("aura/gui/main_window.py",),
+    )
+
+    _assert_only_scoped_pack_loaded(composed, "gui_rules")
+
+
+def test_worker_drone_target_loads_drone_rules_and_skips_unrelated_packs(tmp_path):
+    composed = compose_system_prompt(
+        RuntimeRole.WORKER,
+        "",
+        tmp_path,
+        task_kind="bugfix",
+        target_files=("aura/drones/runner.py",),
+    )
+
+    _assert_only_scoped_pack_loaded(composed, "drone_rules")
+
+
+@pytest.mark.parametrize(
+    "target_file",
+    (
+        "aura/providers/openai.py",
+        "aura/backends/api_agent.py",
+        "aura/client/events.py",
+    ),
+)
+def test_worker_provider_targets_load_provider_rules_and_skip_unrelated_packs(
+    tmp_path,
+    target_file,
+):
+    composed = compose_system_prompt(
+        RuntimeRole.WORKER,
+        "",
+        tmp_path,
+        task_kind="bugfix",
+        target_files=(target_file,),
+    )
+
+    _assert_only_scoped_pack_loaded(composed, "provider_rules")
+
+
+@pytest.mark.parametrize(
+    "target_file",
+    (
+        "scripts/build_nuitka.py",
+        "installer/aura.iss",
+    ),
+)
+def test_worker_build_targets_load_build_rules_and_skip_unrelated_packs(
+    tmp_path,
+    target_file,
+):
+    composed = compose_system_prompt(
+        RuntimeRole.WORKER,
+        "",
+        tmp_path,
+        task_kind="bugfix",
+        target_files=(target_file,),
+    )
+
+    _assert_only_scoped_pack_loaded(composed, "build_pipeline_rules")
+
+
+def test_single_coding_target_loads_matching_scoped_pack(tmp_path):
+    composed = compose_system_prompt(
+        RuntimeRole.SINGLE,
+        "",
+        tmp_path,
+        task_kind="bugfix",
+        target_files=("aura/gui/playground.py",),
+    )
+
+    _assert_only_scoped_pack_loaded(composed, "gui_rules")
+
+
+def test_single_task_kind_hint_loads_matching_scoped_pack_without_targets(tmp_path):
+    composed = compose_system_prompt(
+        RuntimeRole.SINGLE,
+        "",
+        tmp_path,
+        task_kind="gui_polish",
+    )
+
+    _assert_only_scoped_pack_loaded(composed, "gui_rules")
+
+
+def test_plain_single_mode_does_not_load_scoped_coding_packs(tmp_path):
+    composed = compose_system_prompt(RuntimeRole.SINGLE, "", tmp_path)
+
+    assert _included_scoped_pack_ids(composed) == []
+    for source_id in SCOPED_PACK_IDS:
+        entry = _entry_by_id(composed, source_id)
+        assert entry.included is False
+        assert entry.reason == "single task is not coding-shaped"
+
+
+def test_planner_does_not_load_scoped_coding_packs_by_default(tmp_path):
+    composed = compose_system_prompt(RuntimeRole.PLANNER, "", tmp_path)
+
+    assert _included_scoped_pack_ids(composed) == []
+    for source_id in SCOPED_PACK_IDS:
+        entry = _entry_by_id(composed, source_id)
+        assert entry.included is False
+        assert entry.reason == "not scoped to planner role"
+
+
 def test_contract_ledger_order_is_deterministic_and_records_skips(tmp_path):
     composed = compose_system_prompt(RuntimeRole.PLANNER, "", tmp_path)
 
@@ -150,6 +299,10 @@ def test_contract_ledger_order_is_deterministic_and_records_skips(tmp_path):
         entry for entry in composed.ledger if entry.kind == "quality_contract"
     ]
     assert [entry.source_id for entry in contract_entries] == CONTRACT_IDS
+    scoped_entries = [
+        entry for entry in composed.ledger if entry.kind == "scoped_coding_pack"
+    ]
+    assert [entry.source_id for entry in scoped_entries] == SCOPED_PACK_IDS
     skipped = [
         entry for entry in contract_entries
         if entry.source_id != "planner_dispatch_contract"
@@ -183,7 +336,7 @@ def test_contracts_do_not_appear_in_prompts_py():
     prompts_path = Path(__file__).resolve().parent.parent / "aura" / "prompts.py"
     source = prompts_path.read_text(encoding="utf-8")
 
-    for source_id in CONTRACT_IDS:
+    for source_id in CONTRACT_IDS + SCOPED_PACK_IDS:
         assert source_id not in source
 
 
@@ -231,6 +384,35 @@ def test_context_ledger_serialization_keeps_skips_and_errors(tmp_path):
     assert errored[0]["error"] == "RuntimeError: boom"
 
 
+def test_serialized_metadata_keeps_skipped_scoped_packs_with_reasons(tmp_path):
+    composed = compose_system_prompt(
+        RuntimeRole.WORKER,
+        "",
+        tmp_path,
+        task_kind="bugfix",
+        target_files=("aura/gui/main_window.py",),
+    )
+    metadata = context_gearbox_metadata(composed.ledger)
+    scoped = [
+        entry
+        for entry in metadata["ledger"]
+        if entry["source_id"] in SCOPED_PACK_IDS
+    ]
+
+    assert [entry["source_id"] for entry in scoped] == SCOPED_PACK_IDS
+    skipped_scoped = [entry for entry in scoped if not entry["included"]]
+    assert [entry["source_id"] for entry in skipped_scoped] == [
+        "drone_rules",
+        "provider_rules",
+        "build_pipeline_rules",
+    ]
+    assert [entry["reason"] for entry in skipped_scoped] == [
+        "target files do not match drone scope",
+        "target files do not match provider scope",
+        "target files do not match build scope",
+    ]
+
+
 def test_context_ledger_summary_counts_loaded_and_skipped(tmp_path):
     composed = compose_system_prompt(RuntimeRole.WORKER, "", tmp_path)
     metadata = context_gearbox_metadata(composed.ledger)
@@ -249,6 +431,27 @@ def test_context_ledger_summary_counts_loaded_and_skipped(tmp_path):
         f"Context: {len(loaded)} loaded, {len(skipped)} skipped"
     )
     assert summarize_context_ledger(metadata["ledger"]) == summary
+
+
+def test_context_gearbox_summary_counts_include_scoped_packs(tmp_path):
+    composed = compose_system_prompt(
+        RuntimeRole.WORKER,
+        "",
+        tmp_path,
+        task_kind="bugfix",
+        target_files=("aura/gui/main_window.py",),
+    )
+    metadata = context_gearbox_metadata(composed.ledger)
+    summary = metadata["summary"]
+
+    assert "gui_rules" in summary["loaded"]
+    assert summary["loaded_count"] == 6
+    assert summary["skipped_count"] == 6
+    assert {
+        "source_id": "drone_rules",
+        "reason": "target files do not match drone scope",
+    } in summary["skipped"]
+    assert summary["display"] == "Context: 6 loaded, 6 skipped"
 
 
 def test_context_gearbox_metadata_exposes_no_prompt_or_context_text(tmp_path):

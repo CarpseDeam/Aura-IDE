@@ -1,6 +1,8 @@
 """Initial scoped context source registry."""
 from __future__ import annotations
 
+from dataclasses import dataclass
+from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +51,34 @@ RECEIPT_CONTRACT = """### receipt_contract
 - Keep the final answer compact.
 - Do not ramble beyond the proof the user needs."""
 
+GUI_RULES = """### gui_rules
+- Preserve existing signal wiring and data flow.
+- Use existing theme tokens, styles, and components before adding new UI paths.
+- Keep widget and layout edits narrow; avoid broad rewrites.
+- Validate UI-adjacent changes with focused tests or selfcheck when practical.
+- Do not invent parallel UI paths when an existing seam exists."""
+
+DRONE_RULES = """### drone_rules
+- Keep the run loop owned by the card or harness.
+- Keep runs bounded and preserve structured receipts.
+- Do not create a duplicate canonical drone folder.
+- Preserve run history and existing receipt behavior.
+- Do not mix drone runtime changes with unrelated UI polish."""
+
+PROVIDER_RULES = """### provider_rules
+- Never leak keys, tokens, or provider secrets.
+- Preserve provider selection and settings behavior.
+- Keep BYOK, Aura Credits, and OpenRouter paths distinct.
+- Surface provider errors cleanly without hiding useful diagnostics.
+- Do not hardcode pricing or model lists unless explicitly required."""
+
+BUILD_PIPELINE_RULES = """### build_pipeline_rules
+- Do not break the Nuitka or installer flow.
+- Keep build scripts Windows-safe.
+- Avoid unrelated dependency churn.
+- Validate compile assumptions before packaging assumptions.
+- Preserve bundled resource handling."""
+
 _CONTRACT_TEXT: dict[str, str] = {
     "planner_dispatch_contract": PLANNER_DISPATCH_CONTRACT,
     "worker_execution_contract": WORKER_EXECUTION_CONTRACT,
@@ -57,12 +87,136 @@ _CONTRACT_TEXT: dict[str, str] = {
     "receipt_contract": RECEIPT_CONTRACT,
 }
 
+_SCOPED_PACK_TEXT: dict[str, str] = {
+    "gui_rules": GUI_RULES,
+    "drone_rules": DRONE_RULES,
+    "provider_rules": PROVIDER_RULES,
+    "build_pipeline_rules": BUILD_PIPELINE_RULES,
+}
+
 _CODING_TASK_KINDS = {
-    "new_tool_or_app",
+    "new tool or app",
     "bugfix",
-    "gui_polish",
+    "gui polish",
     "cleanup",
     "refactor",
+}
+
+
+@dataclass(frozen=True)
+class _ScopedPackRule:
+    scope_name: str
+    path_prefixes: tuple[str, ...]
+    path_globs: tuple[str, ...]
+    task_hints: tuple[str, ...]
+
+
+_SCOPED_PACK_RULES: dict[str, _ScopedPackRule] = {
+    "gui_rules": _ScopedPackRule(
+        scope_name="gui",
+        path_prefixes=(
+            "aura/gui/",
+            "aura/assets/",
+        ),
+        path_globs=(
+            "media/ui/**",
+            "media/ui_assets/**",
+            "media/**/ui/**",
+            "media/**/*ui*",
+        ),
+        task_hints=(
+            "gui",
+            "ui",
+            "polish",
+            "window",
+            "widget",
+            "dialog",
+            "button",
+            "layout",
+            "screen",
+            "theme",
+        ),
+    ),
+    "drone_rules": _ScopedPackRule(
+        scope_name="drone",
+        path_prefixes=(
+            "aura/drones/",
+            "aura/gui/drone",
+            "drones/",
+            "bundled_drones/",
+        ),
+        path_globs=(
+            "**/drone_manifest*.json",
+            "**/drone_manifests/**",
+            "**/drone_templates/**",
+            "**/drone*/templates/**",
+        ),
+        task_hints=(
+            "drone",
+            "loop",
+            "capability runner",
+            "runner",
+            "receipt",
+            "bounded run",
+        ),
+    ),
+    "provider_rules": _ScopedPackRule(
+        scope_name="provider",
+        path_prefixes=(
+            "aura/providers/",
+            "aura/backends/",
+            "aura/client/",
+        ),
+        path_globs=(
+            "aura/**/*provider*settings*.py",
+            "aura/**/*settings*provider*.py",
+            "aura/**/*provider*config*.py",
+            "aura/**/*config*provider*.py",
+        ),
+        task_hints=(
+            "model",
+            "provider",
+            "api key",
+            "api keys",
+            "apikey",
+            "credits",
+            "aura credits",
+            "byok",
+            "openrouter",
+            "openai",
+            "deepseek",
+        ),
+    ),
+    "build_pipeline_rules": _ScopedPackRule(
+        scope_name="build",
+        path_prefixes=(
+            "installer/",
+            "packaging/",
+        ),
+        path_globs=(
+            "scripts/build_*.py",
+            "scripts/*nuitka*.py",
+            "scripts/*package*.py",
+            "pyproject.toml",
+            "requirements*.txt",
+            "**/nuitka/**",
+            "**/installer/**",
+            "**/packaging/**",
+        ),
+        task_hints=(
+            "build",
+            "release",
+            "installer",
+            "package",
+            "packaging",
+            "nuitka",
+            "compile",
+            "executable",
+            "pyproject",
+            "requirements",
+            "dependency",
+        ),
+    ),
 }
 
 CONTEXT_SOURCES: tuple[ContextSource, ...] = (
@@ -113,6 +267,30 @@ CONTEXT_SOURCES: tuple[ContextSource, ...] = (
         kind="quality_contract",
         roles=(RuntimeRole.WORKER, RuntimeRole.SINGLE),
         reason="compact final receipt contract",
+    ),
+    ContextSource(
+        source_id="gui_rules",
+        kind="scoped_coding_pack",
+        roles=(RuntimeRole.WORKER, RuntimeRole.SINGLE),
+        reason="target files or task kind match GUI scope",
+    ),
+    ContextSource(
+        source_id="drone_rules",
+        kind="scoped_coding_pack",
+        roles=(RuntimeRole.WORKER, RuntimeRole.SINGLE),
+        reason="target files or task kind match drone scope",
+    ),
+    ContextSource(
+        source_id="provider_rules",
+        kind="scoped_coding_pack",
+        roles=(RuntimeRole.WORKER, RuntimeRole.SINGLE),
+        reason="target files or task kind match provider scope",
+    ),
+    ContextSource(
+        source_id="build_pipeline_rules",
+        kind="scoped_coding_pack",
+        roles=(RuntimeRole.WORKER, RuntimeRole.SINGLE),
+        reason="target files or task kind match build scope",
     ),
 )
 
@@ -173,6 +351,14 @@ def _load_source_text(
         return "", f"not scoped to {role.value} role"
     if source.kind == "quality_contract":
         return _load_quality_contract(source, role, task_kind, target_files)
+    if source.kind == "scoped_coding_pack":
+        return _load_scoped_coding_pack(
+            source,
+            workspace_root,
+            role,
+            task_kind,
+            target_files,
+        )
     if source.source_id == "core_kernel":
         return CORE_KERNEL_TEXT, source.reason
     if workspace_root is None:
@@ -212,14 +398,131 @@ def _load_quality_contract(
     return text, source.reason
 
 
+def _load_scoped_coding_pack(
+    source: ContextSource,
+    workspace_root: Path | None,
+    role: RuntimeRole,
+    task_kind: str | None,
+    target_files: tuple[str, ...] | None,
+) -> tuple[str, str]:
+    text = _SCOPED_PACK_TEXT.get(source.source_id, "")
+    rule = _SCOPED_PACK_RULES.get(source.source_id)
+    if not text or rule is None:
+        return "", "unknown scoped coding pack"
+    normalized_targets = _normalize_target_file_paths(target_files, workspace_root)
+    if role == RuntimeRole.SINGLE and not _single_scoped_pack_applies(
+        task_kind,
+        normalized_targets,
+    ):
+        return "", "single task is not coding-shaped"
+    if not _scoped_pack_matches(rule, normalized_targets, task_kind):
+        return "", f"target files do not match {rule.scope_name} scope"
+    return text, source.reason
+
+
 def _single_contract_applies(
     task_kind: str | None,
     target_files: tuple[str, ...] | None,
 ) -> bool:
-    if _normalize_task_kind(task_kind) in _CODING_TASK_KINDS:
+    if _is_coding_task_kind(task_kind):
         return True
     return bool(target_files)
 
 
+def _single_scoped_pack_applies(
+    task_kind: str | None,
+    normalized_targets: tuple[str, ...],
+) -> bool:
+    if normalized_targets:
+        return True
+    if _is_coding_task_kind(task_kind):
+        return True
+    return _task_kind_matches_any_scoped_hint(task_kind)
+
+
+def _scoped_pack_matches(
+    rule: _ScopedPackRule,
+    normalized_targets: tuple[str, ...],
+    task_kind: str | None,
+) -> bool:
+    if any(_path_matches_rule(path, rule) for path in normalized_targets):
+        return True
+    return _task_kind_has_any_hint(task_kind, rule.task_hints)
+
+
+def _normalize_target_file_paths(
+    target_files: tuple[str, ...] | None,
+    workspace_root: Path | None,
+) -> tuple[str, ...]:
+    root = _normalize_path_string(workspace_root) if workspace_root is not None else ""
+    normalized: list[str] = []
+    for raw_path in target_files or ():
+        path = _normalize_path_string(raw_path)
+        if not path:
+            continue
+        if root:
+            root_prefix = root.rstrip("/") + "/"
+            if path.startswith(root_prefix):
+                path = path[len(root_prefix):]
+        while path.startswith("./"):
+            path = path[2:]
+        path = path.lstrip("/")
+        if path:
+            normalized.append(path)
+    return tuple(normalized)
+
+
+def _normalize_path_string(value: Any) -> str:
+    text = str(value or "").strip().replace("\\", "/").lower()
+    while "//" in text:
+        text = text.replace("//", "/")
+    return text
+
+
+def _path_matches_rule(path: str, rule: _ScopedPackRule) -> bool:
+    return _path_matches_prefixes(path, rule.path_prefixes) or _path_matches_globs(
+        path,
+        rule.path_globs,
+    )
+
+
+def _path_matches_prefixes(path: str, prefixes: tuple[str, ...]) -> bool:
+    return any(path.startswith(prefix) for prefix in prefixes)
+
+
+def _path_matches_globs(path: str, patterns: tuple[str, ...]) -> bool:
+    return any(fnmatchcase(path, pattern) for pattern in patterns)
+
+
+def _task_kind_matches_any_scoped_hint(task_kind: str | None) -> bool:
+    return any(
+        _task_kind_has_any_hint(task_kind, rule.task_hints)
+        for rule in _SCOPED_PACK_RULES.values()
+    )
+
+
+def _task_kind_has_any_hint(task_kind: str | None, hints: tuple[str, ...]) -> bool:
+    normalized = _normalize_task_kind(task_kind)
+    if not normalized:
+        return False
+    compact = normalized.replace(" ", "")
+    return any(
+        hint in normalized or hint.replace(" ", "") in compact
+        for hint in hints
+        if hint
+    )
+
+
+def _is_coding_task_kind(task_kind: str | None) -> bool:
+    return _normalize_task_kind(task_kind) in _CODING_TASK_KINDS
+
+
 def _normalize_task_kind(value: Any) -> str:
-    return str(value or "").strip().lower()
+    return " ".join(
+        str(value or "")
+        .strip()
+        .lower()
+        .replace("-", " ")
+        .replace("_", " ")
+        .split()
+    )
