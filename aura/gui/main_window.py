@@ -212,6 +212,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
         self._chat = ChatView()
         self._chat.setParent(self)
+        self._chat.droneRunFocusRequested.connect(self._drone_controller.on_focus_drone_run)
         if self._settings.planner_worker_mode:
             self._chat.set_compact_tools(True)
         center_layout.addWidget(self._chat, 1)
@@ -256,6 +257,9 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         )
         self._drone_reports_window.geometry_saved.connect(
             self._terminal_controller._on_drone_reports_geometry_saved
+        )
+        self._drone_reports_window.visibility_changed.connect(
+            lambda _visible: self._drone_controller.sync_drone_tab_checked()
         )
 
         self.droneRunFinishedOnUiThread.connect(self._drone_controller.on_drone_finished, Qt.ConnectionType.QueuedConnection)
@@ -779,7 +783,14 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._chat.set_tool_result(tool_id, ok, result)
 
         if ok and name == "summon_drone" and extras.get("summon_drone"):
-            self._drone_controller.handle_summon_drone_result(tool_id, extras)
+            run_id = self._drone_controller.handle_summon_drone_result(tool_id, extras)
+            if run_id:
+                drone_name = str(
+                    extras.get("drone_name")
+                    or extras.get("drone_id")
+                    or "Drone"
+                )
+                self._chat.add_drone_run_badge(run_id, drone_name)
 
         # Normal Drone Bay refresh for successful folder registrations.
         if ok and name == "register_drone_folder" and extras.get("drone_saved"):

@@ -341,15 +341,15 @@ class MainWindowDroneController(QObject):
         drone: DroneDefinition,
         summon_goal: str = "",
         loop_drone_id: str = "",
-    ) -> None:
+    ) -> str | None:
         """Start a Drone run from a saved Drone or an Aura-summoned goal."""
         if self._window._workspace_root is None:
-            return
+            return None
         run_drone = (
             self.drone_for_summoned_goal(drone, summon_goal) if summon_goal else drone
         )
         if not self.can_start_drone(run_drone):
-            return
+            return None
 
         run_card = DroneRunCard(
             run_drone, parent=self._window._drone_reports_window
@@ -446,6 +446,7 @@ class MainWindowDroneController(QObject):
             # Start the thread.
             thread.started.connect(runner.run)
             thread.start()
+            return run_id
         except Exception:
             logger.exception("Failed to start drone run %s", run_id)
             # Clean up state so no stale "already running" record remains
@@ -465,7 +466,7 @@ class MainWindowDroneController(QObject):
                 self._window._position_edge_tabs()
             # Cancel the runner so its worker thread doesn't leak
             runner.cancel()
-            return
+            return None
 
     def can_start_drone(self, drone: DroneDefinition) -> bool:
         active_runs = []
@@ -519,21 +520,20 @@ class MainWindowDroneController(QObject):
 
     # -- summon / confirm / cancel --
 
-    def handle_summon_drone_result(self, tool_id: str, extras: dict) -> None:
+    def handle_summon_drone_result(self, tool_id: str, extras: dict) -> str | None:
         if self._window._workspace_root is None:
-            return
+            return None
         drone_id = str(extras.get("drone_id") or "").strip()
         goal = str(extras.get("goal") or "").strip()
         reason = str(extras.get("reason") or "").strip()
         if not drone_id:
-            return
+            return None
         drone = DroneStore.load_drone(self._window._workspace_root, drone_id)
         if drone is None:
-            return
+            return None
 
         if self._window._settings.auto_summon_drones:
-            self.start_drone_run(drone, summon_goal=goal)
-            return
+            return self.start_drone_run(drone, summon_goal=goal)
 
         request_id = tool_id or drone_id
         self._pending_drone_summons[request_id] = {
@@ -554,6 +554,7 @@ class MainWindowDroneController(QObject):
         self._active_run_card = card
         self.sync_drone_tab_checked()
         self._window._drone_reports_window.add_run_card(f"summon:{request_id}", card)
+        return None
 
     def on_confirm_summon_drone(self, request_id: str) -> None:
         if self._window._workspace_root is None:

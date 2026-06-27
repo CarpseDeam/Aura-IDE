@@ -9,7 +9,19 @@ from PySide6.QtWidgets import QFrame, QToolButton, QVBoxLayout, QWidget
 
 from aura.config import media_path
 from aura.gui.drones.drone_rail_pip import DroneRailPip
-from aura.gui.theme import ACCENT, BG_RAISED, BORDER, DANGER, FG, FG_DIM, SUCCESS, WARN
+from aura.gui.theme import (
+    ACCENT,
+    ACCENT_HOVER,
+    BG_RAISED,
+    BORDER,
+    DANGER,
+    FG,
+    FG_DIM,
+    LABEL_FILES,
+    LABEL_PROJECTS,
+    SUCCESS,
+    WARN,
+)
 
 
 class TerminalTabState(Enum):
@@ -316,12 +328,11 @@ class EdgeTabRail(QFrame):
         )
 
     def _drone_tab_style(self) -> str:
-        gold = "#ffcc4d"
         return (
             "QToolButton#edgeDroneTab {"
-            "  background: #2b220b;"
-            f"  color: {gold};"
-            f"  border: 1px solid {gold};"
+            "  background: #161b33;"
+            f"  color: {LABEL_FILES};"
+            f"  border: 1px solid {ACCENT};"
             "  border-right: none;"
             "  border-top-left-radius: 8px;"
             "  border-bottom-left-radius: 8px;"
@@ -330,8 +341,22 @@ class EdgeTabRail(QFrame):
             "  padding: 0px;"
             "}"
             "QToolButton#edgeDroneTab:hover {"
-            "  background: #3d3312;"
+            "  background: #1d2f55;"
+            f"  color: {ACCENT_HOVER};"
+            f"  border-color: {LABEL_FILES};"
+            "  border-right: none;"
+            "}"
+            "QToolButton#edgeDroneTab:checked {"
+            "  background: #221b44;"
+            f"  color: {LABEL_PROJECTS};"
+            f"  border-color: {LABEL_PROJECTS};"
+            "  border-right: none;"
+            "}"
+            "QToolButton#edgeDroneTab:checked:hover {"
+            "  background: #2a245f;"
             f"  color: {FG};"
+            f"  border-color: {ACCENT_HOVER};"
+            "  border-right: none;"
             "}"
         )
 

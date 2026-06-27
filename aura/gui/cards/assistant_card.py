@@ -1,7 +1,7 @@
 """Assistant message card with reasoning, content, and inline tool cards."""
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from PySide6.QtCore import QSize, Qt, QTimer, QVariantAnimation
 from PySide6.QtGui import QIcon
@@ -23,7 +23,17 @@ from aura.gui.cards._stream_label import _StreamLabel
 from aura.gui.cards.code_block_card import CodeBlockCard
 from aura.gui.cards.tool_call_card import ToolCallCard
 from aura.gui.markdown_renderer import _render_markdown_with_code
-from aura.gui.theme import BG_RAISED, FG, FG_ITALIC, SUCCESS_DIM, WARN
+from aura.gui.theme import (
+    ACCENT,
+    ACCENT_HOVER,
+    BG_RAISED,
+    FG,
+    FG_ITALIC,
+    LABEL_FILES,
+    LABEL_PROJECTS,
+    SUCCESS_DIM,
+    WARN,
+)
 from aura.gui.worker_log_stream.formatter import normalize_assistant_display_text
 
 if TYPE_CHECKING:
@@ -37,6 +47,7 @@ class AssistantCard(QFrame):
         self._compact_tools = compact_tools
         self._compact_tool_active: int = 0
         self._compact_tool_names: list[str] = []
+        self._drone_run_badges: dict[str, QToolButton] = {}
         self._chat_view: ChatView | None = None
         self._assistant_text: str = ""
 
@@ -49,7 +60,8 @@ class AssistantCard(QFrame):
         header_row.setStyleSheet("background: transparent;")
         header_layout = QHBoxLayout(header_row)
         header_layout.setContentsMargins(0, 0, 0, 0)
-        header_layout.setSpacing(0)
+        header_layout.setSpacing(6)
+        self._header_layout = header_layout
 
         header = QLabel("Aura", parent=header_row)
         header.setObjectName("assistantHeader")
@@ -199,6 +211,58 @@ class AssistantCard(QFrame):
 
     # ---- compact tool status --------------------------------------------
 
+    def add_drone_run_badge(
+        self,
+        run_id: str,
+        drone_name: str,
+        on_click: Callable[[str], None],
+    ) -> None:
+        if run_id in self._drone_run_badges:
+            return
+
+        clean_name = " ".join((drone_name or "").split())
+        label = clean_name if 0 < len(clean_name) <= 18 else "Drone"
+        tooltip_name = clean_name or "drone"
+
+        badge = QToolButton(self)
+        badge.setObjectName("assistantDroneRunBadge")
+        badge.setText(label)
+        badge.setIcon(QIcon(str(media_path("drone_bot.svg"))))
+        badge.setIconSize(QSize(13, 13))
+        badge.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        badge.setCursor(Qt.CursorShape.PointingHandCursor)
+        badge.setToolTip(f"Open {tooltip_name} run")
+        badge.setFixedHeight(22)
+        font = badge.font()
+        font.setPointSize(10)
+        font.setBold(True)
+        badge.setFont(font)
+        badge.setStyleSheet(
+            "QToolButton#assistantDroneRunBadge {"
+            "  background: #161b33;"
+            f"  color: {LABEL_FILES};"
+            f"  border: 1px solid {ACCENT};"
+            "  border-radius: 7px;"
+            "  padding: 2px 7px;"
+            "}"
+            "QToolButton#assistantDroneRunBadge:hover {"
+            "  background: #1d2f55;"
+            f"  color: {ACCENT_HOVER};"
+            f"  border-color: {LABEL_FILES};"
+            "}"
+            "QToolButton#assistantDroneRunBadge:pressed {"
+            "  background: #221b44;"
+            f"  color: {FG};"
+            f"  border-color: {LABEL_PROJECTS};"
+            "}"
+        )
+        badge.clicked.connect(lambda _checked=False, rid=run_id: on_click(rid))
+
+        insert_at = self._header_layout.indexOf(self._thinking_label)
+        if insert_at < 0:
+            insert_at = self._header_layout.count()
+        self._header_layout.insertWidget(insert_at, badge)
+        self._drone_run_badges[run_id] = badge
 
     def notify_compact_tool_start(self, name: str) -> None:
         self._compact_tool_active += 1

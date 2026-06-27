@@ -38,6 +38,7 @@ class ChatView(QScrollArea):
 
     retry_requested = Signal()
     mermaid_detected = Signal(str)  # emits the raw mermaid code
+    droneRunFocusRequested = Signal(str)
     _CODE_TOOL_NAMES = {"write_file", "apply_edit_transaction", "edit_file", "edit_symbol", "edit_line_range", "patch_file"}
     _BOTTOM_THRESHOLD_PX = 64
     _BOTTOM_SAFE_MARGIN_PX = 44
@@ -215,6 +216,17 @@ class ChatView(QScrollArea):
 
     def set_compact_tools(self, enabled: bool) -> None:
         self._compact_tools = enabled
+
+    def add_drone_run_badge(self, run_id: str, drone_name: str) -> None:
+        ac = self._current_assistant
+        if ac is None:
+            return
+        ac.add_drone_run_badge(
+            run_id,
+            drone_name,
+            self.droneRunFocusRequested.emit,
+        )
+        self._scroll_to_bottom()
 
     def _scroll_after_bottom_layout_change(self) -> None:
         """Force delayed bottom sync after UI below the chat changes height."""
