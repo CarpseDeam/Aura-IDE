@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from aura.drones.folder_runner import run_folder_drone_sync
+from aura.drones.folder_runner import _resolve_entrypoint_command, run_folder_drone_sync
 from aura.drones.run import DroneRun
 from aura.drones.store import DroneStore, RunHistoryStore
 
@@ -47,6 +47,19 @@ def _register_cancellable_drone(workspace: Path):
         encoding="utf-8",
     )
     return DroneStore.register_drone_folder(workspace, folder)
+
+
+def test_plain_python_entrypoint_uses_current_interpreter(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("aura.drones.folder_runner.sys.executable", r"C:\venv\Scripts\python.exe")
+
+    assert _resolve_entrypoint_command(["python", "main.py"]) == [
+        r"C:\venv\Scripts\python.exe",
+        "main.py",
+    ]
+    assert _resolve_entrypoint_command([r"C:\OtherPython\python.exe", "main.py"]) == [
+        r"C:\OtherPython\python.exe",
+        "main.py",
+    ]
 
 
 def test_folder_drone_cancel_stops_process_and_receipt_is_cancelled(

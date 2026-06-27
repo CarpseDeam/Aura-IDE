@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import subprocess
+import sys
 import time
 import traceback
 from pathlib import Path
@@ -16,6 +17,7 @@ from aura.drones.store import DroneStore, RunHistoryStore
 
 _PROCESS_POLL_SECONDS = 0.05
 _CANCEL_GRACE_SECONDS = 2.0
+_PYTHON_COMMANDS = {"python", "python.exe", "python3", "python3.exe", "py", "py.exe"}
 
 
 def is_folder_backed_drone(drone: DroneDefinition) -> bool:
@@ -185,6 +187,23 @@ def _evidence_for_status(status: str) -> str:
     return ""
 
 
+def _resolve_entrypoint_command(command: list[str]) -> list[str]:
+    """Use Aura's current interpreter for manifest Python shims.
+
+    Folder drones commonly declare ``["python", "main.py"]``. When Aura is
+    launched from an IDE or venv, resolving ``python`` through PATH can run a
+    different environment and miss installed dependencies such as Playwright.
+    Absolute interpreter paths are left untouched.
+    """
+    if not command:
+        return []
+    resolved = list(command)
+    executable = Path(resolved[0])
+    if executable.name.lower() in _PYTHON_COMMANDS and executable.parent == Path("."):
+        resolved[0] = sys.executable
+    return resolved
+
+
 def _run_command_drone(
     folder: Path,
     entrypoint: dict,
@@ -196,6 +215,7 @@ def _run_command_drone(
     command = entrypoint.get("command", [])
     if not command:
         return {"ok": False, "error": "entrypoint.command is empty"}
+    command = _resolve_entrypoint_command(command)
     if cancel_event is not None and cancel_event.is_set():
         return _cancelled_result("", "")
 
