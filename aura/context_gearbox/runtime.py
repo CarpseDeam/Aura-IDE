@@ -45,16 +45,19 @@ def build_context_text(
     task_kind: str | None = None,
     target_files: tuple[str, ...] | None = None,
 ) -> ComposedContext:
-    _ = (model, task_kind, target_files)
+    _ = model
     runtime_role = RuntimeRole.from_value(role)
     parts: list[str] = []
     ledger: list[ContextLedgerEntry] = []
+    normalized_target_files = tuple(target_files or ())
     for source in iter_context_sources(runtime_role):
         text, entry = collect_source_text(
             source,
             runtime_role,
             workspace_root,
             force=force,
+            task_kind=task_kind,
+            target_files=normalized_target_files,
         )
         if text:
             parts.append(text)
