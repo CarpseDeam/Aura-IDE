@@ -48,7 +48,15 @@ def _detect_installed_browsers() -> list[BrowserChoice]:
             or shutil.which("google-chrome-stable") is not None
         )
     elif is_win:
-        chrome_found = shutil.which("chrome") is not None
+        _pf = os.environ.get("ProgramFiles", "C:\\Program Files")
+        _pf86 = os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)")
+        _la = os.environ.get("LocalAppData", "")
+        for _base in (_pf, _pf86, _la):
+            if _base and os.path.isfile(os.path.join(_base, "Google", "Chrome", "Application", "chrome.exe")):
+                chrome_found = True
+                break
+        if not chrome_found:
+            chrome_found = shutil.which("chrome") is not None
 
     if chrome_found:
         choices.append(BrowserChoice(
@@ -68,7 +76,15 @@ def _detect_installed_browsers() -> list[BrowserChoice]:
     elif is_linux:
         edge_found = shutil.which("microsoft-edge") is not None
     elif is_win:
-        edge_found = shutil.which("msedge") is not None
+        _pf = os.environ.get("ProgramFiles", "C:\\Program Files")
+        _pf86 = os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)")
+        _la = os.environ.get("LocalAppData", "")
+        for _base in (_pf86, _pf, _la):
+            if _base and os.path.isfile(os.path.join(_base, "Microsoft", "Edge", "Application", "msedge.exe")):
+                edge_found = True
+                break
+        if not edge_found:
+            edge_found = shutil.which("msedge") is not None
 
     if edge_found:
         choices.append(BrowserChoice(
@@ -88,7 +104,17 @@ def _detect_installed_browsers() -> list[BrowserChoice]:
     elif is_linux:
         brave_path = shutil.which("brave-browser")
     elif is_win:
-        brave_path = shutil.which("brave")
+        _pf = os.environ.get("ProgramFiles", "C:\\Program Files")
+        _pf86 = os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)")
+        _la = os.environ.get("LocalAppData", "")
+        for _base in (_pf, _pf86, _la):
+            if _base:
+                _candidate = os.path.join(_base, "BraveSoftware", "Brave-Browser", "Application", "brave.exe")
+                if os.path.isfile(_candidate):
+                    brave_path = _candidate
+                    break
+        if not brave_path:
+            brave_path = shutil.which("brave")
 
     if brave_path:
         choices.append(BrowserChoice(
@@ -146,9 +172,9 @@ class BrowserRuntime:
         return {
             "browser_id": self._browser_id,
             "browser_label": self._browser_label,
-            "source": self._browser_source,
-            "persistent": self._user_data_dir is not None,
-            "visible": not self._headless,
+            "browser_source": self._browser_source,
+            "browser_persistent": self._user_data_dir is not None,
+            "browser_visible": not self._headless,
             "attempted_routes": list(self._attempted_routes),
         }
 

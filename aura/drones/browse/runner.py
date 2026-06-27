@@ -328,6 +328,7 @@ def run_browse_drone(
             "visible": visible,
             "persistent_session": bool(browser_profile),
         }
+        profile_metadata["attempted_routes"] = runtime.route_metadata.get("attempted_routes", [])
         receipt = build_failed_receipt(
             run=run,
             drone=drone,
@@ -355,6 +356,15 @@ def run_browse_drone(
 
     try:
         runtime.context.set_default_navigation_timeout(15000)
+        # Capture browser route metadata for artifact enrichment
+        _browser_meta = runtime.route_metadata
+        _browser_meta_success = {
+            "browser_id": _browser_meta.get("browser_id", ""),
+            "browser_label": _browser_meta.get("browser_label", ""),
+            "browser_source": _browser_meta.get("browser_source", ""),
+            "browser_persistent": _browser_meta.get("browser_persistent", False),
+            "browser_visible": _browser_meta.get("browser_visible", False),
+        }
         page = runtime.context.new_page()
         page.goto(start_url, wait_until="domcontentloaded")
 
@@ -386,6 +396,7 @@ def run_browse_drone(
                 "visible": visible,
                 "persistent_session": bool(browser_profile),
             }
+            profile_metadata.update(_browser_meta_success)
             produced_artifact = build_needs_login_artifact(
                 start_url=start_url,
                 final_url=page.url,
@@ -528,6 +539,7 @@ def run_browse_drone(
             "visible": visible,
             "persistent_session": bool(browser_profile),
         }
+        profile_metadata.update(_browser_meta_success)
 
         # Receipt-building: branch on policy_block
         if policy_block is not None:
@@ -602,6 +614,7 @@ def run_browse_drone(
             "visible": visible,
             "persistent_session": bool(browser_profile),
         }
+        profile_metadata.update(_browser_meta_success)
         receipt = build_failed_receipt(
             run=run,
             drone=drone,
