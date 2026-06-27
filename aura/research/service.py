@@ -10,9 +10,88 @@ from aura.research.models import Evidence, ResearchResult, Source
 from aura.research.planner import plan_opens, plan_queries, plan_search
 from aura.research.playwright import PlaywrightResearcher
 from aura.research.ranking import deduplicate_sources, rank_sources
-from aura.research.strategy import parse_strategy
+from aura.research.strategy import ResearchStrategy, parse_strategy
 
 _DEFAULT_MAX_EVIDENCE_CHARS = 8000
+
+
+ARTICLE_WORDS = frozenset({
+    "article", "blog", "opinion", "recap", "news", "story", "analysis", "coverage",
+})
+
+
+def _assess_evidence_quality(
+    evidence: list[Evidence],
+    strategy: ResearchStrategy,
+) -> list[str]:
+    """Assess the quality of collected evidence against the strategy.
+
+    Returns a list of quality-note strings (may be empty) describing
+    issues found, such as mismatches between the requested source_goal
+    and the actual opened pages.  Callers append these notes to the
+    result's notes list; they do not replace existing notes.
+    """
+    quality_notes: list[str] = []
+
+    if not evidence:
+        return quality_notes
+
+    # 1. If source_goal is set, check whether all opened sources look
+    #    article/news-like — that suggests weak alignment.
+    if strategy.source_goal:
+        source_goal_lower = strategy.source_goal.lower()
+        article_like_count = 0
+        for ev in evidence:
+            title = (ev.source.title or "").lower()
+            url = (ev.source.url or "").lower()
+            # Check for article/news words in title
+            title_words = set(title.split())
+            if title_words & ARTICLE_WORDS:
+                article_like_count += 1
+                continue
+            # Also check URL segments
+            url_segments = url.replace("/", " ").replace("-", " ").replace("_", " ").split()
+            if set(url_segments) & ARTICLE_WORDS:
+                article_like_count += 1
+
+        if article_like_count == len(evidence):
+            quality_notes.append("evidence_quality: weak_for_requested_source_goal")
+
+        # 2. Check whether any title or url contains words from source_goal
+        source_goal_words = set(source_goal_lower.split())
+        has_goal_match = False
+        for ev in evidence:
+            title = (ev.source.title or "").lower()
+            url = (ev.source.url or "").lower()
+            combined = title + " " + url
+            for w in source_goal_words:
+                if w in combined:
+                    has_goal_match = True
+                    break
+            if has_goal_match:
+                break
+
+        if not has_goal_match:
+            quality_notes.append("evidence_quality: no_source_goal_match")
+
+    # 3. If avoid is non-empty, check whether most top sources have
+    #    an avoid term in their title or url.
+    if strategy.avoid and evidence:
+        avoid_terms = {a.lower() for a in strategy.avoid if a}
+        if avoid_terms:
+            avoid_hits = 0
+            for ev in evidence:
+                title = (ev.source.title or "").lower()
+                url = (ev.source.url or "").lower()
+                combined = title + " " + url
+                for term in avoid_terms:
+                    if term in combined:
+                        avoid_hits += 1
+                        break
+            if avoid_hits > len(evidence) // 2:
+                quality_notes.append("evidence_quality: avoid_terms_present")
+
+    return quality_notes
 
 
 def research_current_info(
@@ -137,6 +216,10 @@ def research_current_info(
             notes.extend(search_notes)
             notes.extend(ranking_notes)
             notes.extend(open_notes)
+
+            # 7b. Evidence quality assessment
+            quality_notes = _assess_evidence_quality(collected, strategy)
+            notes.extend(quality_notes)
 
             max_ec = strategy.max_evidence_chars or _DEFAULT_MAX_EVIDENCE_CHARS
             total_evidence_chars = sum(len(e.text) for e in collected)

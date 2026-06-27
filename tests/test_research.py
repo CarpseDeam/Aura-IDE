@@ -278,3 +278,177 @@ class TestPayloadBackwardCompat:
         assert isinstance(payload["sources"], list)
         assert isinstance(payload["evidence"], list)
         assert isinstance(payload["notes"], list)
+
+
+class TestSchemaGuidance:
+    """Verify the research tool schema constraints description contains concrete examples.
+
+    The concrete guidance lives in the ``constraints`` property description,
+    not in the top-level function description.
+    """
+
+    @property
+    def _constraints_desc(self) -> str:
+        from aura.conversation.tools._research_schemas import RESEARCH_TOOL_DEF
+        return RESEARCH_TOOL_DEF["function"]["parameters"]["properties"]["constraints"]["description"]
+
+    def test_description_mentions_schedules(self) -> None:
+        """Constraints description includes 'schedules / scores / events' example."""
+        desc = self._constraints_desc
+        assert "schedules" in desc.lower()
+
+    def test_description_mentions_stock(self) -> None:
+        """Constraints description includes 'stock / prices' example."""
+        desc = self._constraints_desc
+        assert "stock" in desc.lower()
+        assert "prices" in desc.lower()
+
+    def test_description_mentions_listings(self) -> None:
+        """Constraints description includes 'listings' example."""
+        desc = self._constraints_desc
+        assert "listings" in desc.lower()
+
+    def test_description_mentions_structured(self) -> None:
+        """Constraints description says 'structured'."""
+        desc = self._constraints_desc
+        assert "structured" in desc.lower()
+
+    def test_description_mentions_constraints_not_optional(self) -> None:
+        """Constraints description says 'constraints are not optional decoration'."""
+        desc = self._constraints_desc
+        assert "constraints are not optional decoration" in desc.lower()
+
+
+class TestPlannerPromptResearchDiscipline:
+    """Verify the planner system prompt contains research retry discipline."""
+
+    def test_contains_research_retry_discipline_heading(self) -> None:
+        """Prompt has 'Research retry discipline' block."""
+        from aura.prompts import PLANNER_SYSTEM_PROMPT
+        assert "Research retry discipline" in PLANNER_SYSTEM_PROMPT
+
+    def test_contains_one_good_strategic_call(self) -> None:
+        """Prompt says 'Make one good strategic research call first'."""
+        from aura.prompts import PLANNER_SYSTEM_PROMPT
+        assert "one good strategic research call first" in PLANNER_SYSTEM_PROMPT
+
+    def test_contains_at_most_one_followup(self) -> None:
+        """Prompt says 'At most one follow-up'."""
+        from aura.prompts import PLANNER_SYSTEM_PROMPT
+        assert "At most one follow-up" in PLANNER_SYSTEM_PROMPT
+
+    def test_contains_no_article_blog_opinion_as_authoritative(self) -> None:
+        """Prompt says 'Do not treat article, blog, or opinion sources'."""
+        from aura.prompts import PLANNER_SYSTEM_PROMPT
+        assert "Do not treat article, blog, or opinion sources" in PLANNER_SYSTEM_PROMPT
+
+
+class TestEvidenceQualityNotes:
+    """Tests for the _assess_evidence_quality helper."""
+
+    def test_assess_evidence_quality_importable(self) -> None:
+        """_assess_evidence_quality is importable from aura.research.service."""
+        from aura.research.service import _assess_evidence_quality
+        assert callable(_assess_evidence_quality)
+
+    def test_no_quality_notes_when_source_goal_none(self) -> None:
+        """When source_goal is None, no quality notes are returned."""
+        from aura.research import Evidence, Source
+        from aura.research.service import _assess_evidence_quality
+        from aura.research.strategy import ResearchStrategy
+        evidence = [
+            Evidence(
+                source=Source(url="https://example.com/article", title="Some Article"),
+                text="content",
+                fetched_at="2025-01-01T00:00:00Z",
+            ),
+        ]
+        strategy = ResearchStrategy(objective="test")
+        notes = _assess_evidence_quality(evidence, strategy)
+        assert notes == []
+
+    def test_weak_for_requested_source_goal_when_all_articles(self) -> None:
+        """When all titles contain article words and source_goal is structured data,
+        emits weak_for_requested_source_goal."""
+        from aura.research import Evidence, Source
+        from aura.research.service import _assess_evidence_quality
+        from aura.research.strategy import ResearchStrategy
+        evidence = [
+            Evidence(
+                source=Source(url="https://sports.com/recap", title="Match Recap: Exciting Finish"),
+                text="content",
+                fetched_at="2025-01-01T00:00:00Z",
+            ),
+            Evidence(
+                source=Source(url="https://news.com/story", title="Opinion: Who Will Win?"),
+                text="content",
+                fetched_at="2025-01-01T00:00:00Z",
+            ),
+        ]
+        strategy = ResearchStrategy(
+            objective="latest scores",
+            source_goal="official structured schedule scores fixtures",
+        )
+        notes = _assess_evidence_quality(evidence, strategy)
+        assert "evidence_quality: weak_for_requested_source_goal" in notes
+
+    def test_avoid_terms_present_when_most_titles_contain_avoid(self) -> None:
+        """When avoid terms are in most titles, emits avoid_terms_present."""
+        from aura.research import Evidence, Source
+        from aura.research.service import _assess_evidence_quality
+        from aura.research.strategy import ResearchStrategy
+        evidence = [
+            Evidence(
+                source=Source(url="https://blog.com/opinion", title="Blog Post: My Analysis"),
+                text="content",
+                fetched_at="2025-01-01T00:00:00Z",
+            ),
+            Evidence(
+                source=Source(url="https://news.com/story", title="News Article"),
+                text="content",
+                fetched_at="2025-01-01T00:00:00Z",
+            ),
+            Evidence(
+                source=Source(url="https://official.org/scores", title="Official Scores"),
+                text="content",
+                fetched_at="2025-01-01T00:00:00Z",
+            ),
+        ]
+        strategy = ResearchStrategy(
+            objective="scores",
+            avoid=["blog", "opinion", "article", "analysis"],
+        )
+        notes = _assess_evidence_quality(evidence, strategy)
+        assert "evidence_quality: avoid_terms_present" in notes
+
+    def test_no_source_goal_match_when_goal_terms_absent(self) -> None:
+        """When source_goal terms are absent from all titles/URLs, emits
+        no_source_goal_match."""
+        from aura.research import Evidence, Source
+        from aura.research.service import _assess_evidence_quality
+        from aura.research.strategy import ResearchStrategy
+        evidence = [
+            Evidence(
+                source=Source(url="https://randomblog.com/post", title="Random Thoughts"),
+                text="content",
+                fetched_at="2025-01-01T00:00:00Z",
+            ),
+        ]
+        strategy = ResearchStrategy(
+            objective="find stats",
+            source_goal="structured statistics data tables",
+        )
+        notes = _assess_evidence_quality(evidence, strategy)
+        assert "evidence_quality: no_source_goal_match" in notes
+
+    def test_no_quality_notes_when_evidence_empty(self) -> None:
+        """Empty evidence list returns empty notes regardless of strategy."""
+        from aura.research.service import _assess_evidence_quality
+        from aura.research.strategy import ResearchStrategy
+        strategy = ResearchStrategy(
+            objective="test",
+            source_goal="structured data",
+            avoid=["blog"],
+        )
+        notes = _assess_evidence_quality([], strategy)
+        assert notes == []
