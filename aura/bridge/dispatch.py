@@ -719,7 +719,7 @@ class _DispatchProxy(QObject):
             summary_continuation,
             result_caveats,
             validation_results=validation_results,
-            not_applied_writes=not_applied_writes,
+            not_applied_writes=unrecovered_not_applied_writes,
             status=status,
             internal_error=internal_error,
         )
@@ -1593,12 +1593,17 @@ def _unrecovered_not_applied_writes(tool_results: list[dict[str, Any]]) -> list[
         path = str(result.get("path") or result.get("rel_path") or "")
         if not path:
             continue
-        if result.get("ok") and result.get("applied") is True:
-            pending.pop(path, None)
+        normalized = _normalize_worker_path(path)
+        # A successful applied write/edit/delete clears any earlier
+        # failed write for the same *normalized* path.
+        if result.get("ok") and (
+            result.get("applied") is True or result.get("deleted") is True
+        ):
+            pending.pop(normalized, None)
             continue
         if result.get("applied") is False or str(result.get("write_outcome") or "").startswith("not_applied_"):
             if _is_edit_mechanics_not_applied(result):
-                pending[path] = result
+                pending[normalized] = result
     return list(pending.values())
 
 

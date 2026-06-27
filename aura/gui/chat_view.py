@@ -82,7 +82,7 @@ class ChatView(QScrollArea):
         self._programmatic_scroll_depth = 0
         self._plan_writer_cards: dict[str, PlanWriterCard] = {}
         self._worker_summary_cards: dict[str, WorkerSummaryCard] = {}
-        self._worker_summary_disabled: bool = True
+        self._worker_summary_disabled: bool = False
         self._mismatch_resolution_cards: dict[str, MismatchResolutionCard] = {}
         self._compact_tools: bool = False
         self._compact_tool_names: dict[str, str] = {}

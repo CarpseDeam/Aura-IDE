@@ -27,8 +27,10 @@ from aura.bridge.dispatch import (
     _filter_scratch_write_records,
     _format_spec_as_user_message,
     _is_validation_scratch_path,
+    _normalize_worker_path,
     _parse_continuation_report,
     _parse_structured_worker_failure,
+    _unrecovered_not_applied_writes,
     _unrecovered_validation_failures,
     _validation_results_for_task,
     _workspace_file_exists,
@@ -1254,6 +1256,75 @@ def test_worker_result_needs_followup_not_terminal():
     assert not restored.ok
     assert restored.needs_followup
     assert restored.recoverable
+
+
+# ── _unrecovered_not_applied_writes path normalization ──────────────
+
+
+def test_unrecovered_not_applied_cleared_by_same_normalized_path():
+    """A failed write on .gitignore is cleared by a later success on ./.gitignore."""
+    tool_results = [
+        {"name": "patch_file", "path": ".gitignore", "applied": False, "ok": False,
+         "failure_class": "patch_file_hash_mismatch"},
+        {"name": "write_file", "path": "./.gitignore", "applied": True, "ok": True},
+    ]
+    assert _unrecovered_not_applied_writes(tool_results) == []
+
+
+def test_unrecovered_not_applied_cleared_by_windows_backslash_path():
+    """Windows backslash path .\\.gitignore normalizes to .gitignore and clears failure."""
+    tool_results = [
+        {"name": "patch_file", "path": ".gitignore", "applied": False, "ok": False,
+         "failure_class": "patch_file_hash_mismatch"},
+        {"name": "write_file", "path": ".\\\\.gitignore", "applied": True, "ok": True},
+    ]
+    assert _unrecovered_not_applied_writes(tool_results) == []
+
+
+def test_unrecovered_not_applied_remains_for_different_path():
+    """A failed write on .gitignore is NOT cleared by success on README.md."""
+    tool_results = [
+        {"name": "patch_file", "path": ".gitignore", "applied": False, "ok": False,
+         "failure_class": "patch_file_hash_mismatch"},
+        {"name": "write_file", "path": "README.md", "applied": True, "ok": True},
+    ]
+    result = _unrecovered_not_applied_writes(tool_results)
+    assert len(result) == 1
+    assert _normalize_worker_path(result[0]["path"]) == ".gitignore"
+
+
+def test_unrecovered_not_applied_remains_when_no_later_write():
+    """A failed write stays unresolved when no later write touches its path."""
+    tool_results = [
+        {"name": "patch_file", "path": ".gitignore", "applied": False, "ok": False,
+         "failure_class": "patch_file_hash_mismatch"},
+    ]
+    result = _unrecovered_not_applied_writes(tool_results)
+    assert len(result) == 1
+
+
+def test_unrecovered_not_applied_cleared_by_delete_on_same_path():
+    """A failed write is cleared by a successful delete on the same path."""
+    tool_results = [
+        {"name": "patch_file", "path": "tmp.py", "applied": False, "ok": False,
+         "failure_class": "patch_file_hash_mismatch"},
+        {"name": "delete_file", "path": "tmp.py", "applied": True, "deleted": True, "ok": True},
+    ]
+    assert _unrecovered_not_applied_writes(tool_results) == []
+
+
+def test_worker_summary_not_applied_writes_uses_unresolved():
+    """_build_worker_summary should not show failed writes that were later resolved."""
+    summary = _build_worker_summary(
+        WorkerDispatchRequest(goal="Fix", files=[".gitignore"], spec="spec", acceptance=""),
+        History(),
+        [{"tool": "write_file", "path": ".gitignore", "applied": True, "is_new_file": False}],
+        [],
+        {},
+        [],
+        not_applied_writes=[],  # representing that unresolved list was empty
+    )
+    assert "Failed writes:" not in summary
 
 
 def test_craft_rejected_summary_is_not_worker_failed():
