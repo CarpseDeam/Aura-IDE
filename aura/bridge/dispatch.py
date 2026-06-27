@@ -779,6 +779,20 @@ class _DispatchProxy(QObject):
             extras["mismatch_kind"] = mismatch.kind
             extras["mismatch_question"] = mismatch.question_for_planner
 
+        # Validation selector
+        try:
+            from aura.validation.selector import select_validation_plan
+            validation_selector = select_validation_plan(
+                target_files=task_spec.files,
+                changed_files=list(relay.touched_files) if hasattr(relay, "touched_files") else None,
+                task_kind=task_spec.task_shape.task_kind if task_spec.task_shape is not None else "unknown",
+                context_gearbox=context_gearbox,
+                workspace_root=self._workspace_root,
+            )
+            extras["validation_selector"] = validation_selector
+        except Exception:
+            _log.exception("Failed to build validation selector plan")
+
         spec_dict = req.to_dict()
         spec_dict["task_spec"] = task_spec.to_dict()
         record = WorkerDispatchRecord(
