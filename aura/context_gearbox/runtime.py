@@ -1,8 +1,11 @@
 """Runtime prompt and context composition."""
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any, Iterable
+
+_log = logging.getLogger(__name__)
 
 from aura.context_gearbox.models import ComposedContext, ContextLedgerEntry, RuntimeRole
 from aura.context_gearbox.sources import collect_source_text, iter_registered_sources
@@ -90,13 +93,29 @@ def summarize_context_ledger(
 
 def context_gearbox_metadata(
     entries: Iterable[ContextLedgerEntry],
+    *,
+    workspace_root: Path | None = None,
 ) -> dict[str, Any]:
-    """Return the inspectable Context Gearbox payload without prompt text."""
+    """Return the inspectable Context Gearbox payload without prompt text.
+
+    When *workspace_root* is provided and the resulting utility dict is
+    non-empty, includes a ``"utility"`` key with per-source utility data.
+    """
     ledger = serialize_context_ledger(entries)
-    return {
+    metadata: dict[str, Any] = {
         "summary": summarize_context_ledger(ledger),
         "ledger": ledger,
     }
+    if workspace_root is not None:
+        try:
+            from aura.skills.utility import derive_source_utility
+
+            utility = derive_source_utility(workspace_root)
+            if utility:
+                metadata["utility"] = utility
+        except Exception:
+            _log.exception("Failed to derive source utility (degrading)")
+    return metadata
 
 
 def format_context_gearbox_display(metadata: dict[str, Any]) -> list[str]:
@@ -125,6 +144,26 @@ def format_context_gearbox_display(metadata: dict[str, Any]) -> list[str]:
             formatted.append(f"{source_id} ({reason})" if reason else source_id)
         if formatted:
             lines.append("Skipped: " + ", ".join(formatted))
+
+    # Utility display (inspect-only metadata)
+    utility = metadata.get("utility") if isinstance(metadata, dict) else None
+    if isinstance(utility, dict) and utility:
+        parts: list[str] = []
+        for source_id in sorted(utility):
+            u = utility[source_id]
+            if u.status == "measured" and u.lift is not None:
+                sign = "+" if u.lift >= 0 else ""
+                parts.append(
+                    f"{source_id} {sign}{u.lift:.1%} "
+                    f"(loaded={u.loaded_n}, not_loaded={u.not_loaded_n})"
+                )
+            else:
+                parts.append(
+                    f"{source_id} insufficient "
+                    f"(loaded={u.loaded_n}, not_loaded={u.not_loaded_n})"
+                )
+        if parts:
+            lines.append("Utility: " + " | ".join(parts))
 
     return lines
 

@@ -365,7 +365,9 @@ class ConversationBridge(QObject):
             force=force_repo_map,
             task_kind=self._turn_task_kind,
         )
-        self._context_gearbox_metadata = context_gearbox_metadata(context.ledger)
+        self._context_gearbox_metadata = context_gearbox_metadata(
+            context.ledger, workspace_root=self._registry.workspace_root,
+        )
         self._tier1_context = context.context_text
         self._dispatch_proxy.set_tier1_context(self._tier1_context)
 
@@ -442,7 +444,9 @@ class ConversationBridge(QObject):
             force=force_repo_map,
             task_kind=self._turn_task_kind,
         )
-        self._context_gearbox_metadata = context_gearbox_metadata(composed.ledger)
+        self._context_gearbox_metadata = context_gearbox_metadata(
+            composed.ledger, workspace_root=self._registry.workspace_root,
+        )
         self._tier1_context = composed.context_text
         self._dispatch_proxy.set_tier1_context(self._tier1_context)
         return composed

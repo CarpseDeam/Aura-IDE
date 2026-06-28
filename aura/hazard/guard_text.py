@@ -4,8 +4,28 @@ import logging
 from pathlib import Path
 
 from aura.hazard.reader import GraduatedHazard, read_graduated
+from aura.skills.selection import _paths_related
 
 logger = logging.getLogger(__name__)
+
+
+def format_guard_line(h: GraduatedHazard) -> str:
+    """Format a single graduated hazard as a guard line."""
+    error = h.representative_error or ""
+    if len(error) > 200:
+        error = error[:200] + "..."
+    files = (
+        ", ".join(h.sample_target_files[:5])
+        if h.sample_target_files
+        else "(various files)"
+    )
+    kind = h.task_kind if h.task_kind else "unknown"
+    return (
+        f"{h.model} has burned {h.distinct_dispatch_count}\u00d7 on {kind} terrain "
+        f"with: {error}. "
+        f"This terrain is a known biter; verify the relevant behavior actually runs "
+        f"before calling it done. Surfaces in: {files}."
+    )
 
 
 def format_guards(hazards: list[GraduatedHazard], limit: int = 5) -> str:
@@ -14,38 +34,8 @@ def format_guards(hazards: list[GraduatedHazard], limit: int = 5) -> str:
     top = hazards[:limit]
     lines = ["### Learned Hazard Guards"]
     for h in top:
-        error = h.representative_error or ""
-        if len(error) > 200:
-            error = error[:200] + "..."
-        files = (
-            ", ".join(h.sample_target_files[:5])
-            if h.sample_target_files
-            else "(various files)"
-        )
-        kind = h.task_kind if h.task_kind else "unknown"
-        lines.append(
-            f"{h.model} has burned {h.distinct_dispatch_count}\u00d7 on {kind} terrain "
-            f"with: {error}. "
-            f"This terrain is a known biter; verify the relevant behavior actually runs "
-            f"before calling it done. Surfaces in: {files}."
-        )
+        lines.append(format_guard_line(h))
     return "\n".join(lines)
-
-
-def _paths_related(a: str, b: str) -> bool:
-    """Return True if two workspace paths share a common non-root directory
-    prefix (>=1 component) or one is a parent directory of the other."""
-    a_parts = Path(a).parent.parts
-    b_parts = Path(b).parent.parts
-    if not a_parts or not b_parts:
-        return False
-    common = 0
-    for pa, pb in zip(a_parts, b_parts):
-        if pa == pb:
-            common += 1
-        else:
-            break
-    return common >= 1 or Path(a).parent == Path(b) or Path(b).parent == Path(a)
 
 
 def select_relevant_hazards(

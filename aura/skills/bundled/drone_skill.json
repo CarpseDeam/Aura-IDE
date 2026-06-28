@@ -1,0 +1,6 @@
+{
+  "text": "### Drone Work Skill\nWhen building or modifying drone definitions, keep the run loop owned by the card or harness. Keep runs bounded and preserve structured receipts. Do not create a duplicate canonical drone folder. Preserve run history and existing receipt behavior. Do not mix drone runtime changes with unrelated UI polish.",
+  "task_kinds": ["drone", "capability runner", "runner"],
+  "path_globs": ["aura/drones/", "drones/", "bundled_drones/"],
+  "model": null
+}

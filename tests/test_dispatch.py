@@ -1178,7 +1178,7 @@ def test_dispatch_proxy_cancel_all_unblocks_and_cancels_active_dialog():
 def test_worker_dispatch_metadata_includes_context_gearbox(tmp_path):
     req = WorkerDispatchRequest(
         goal="Inspect context metadata",
-        files=["aura/example.py"],
+        files=["aura/drones/runner.py"],
         spec="Inspect only.",
         acceptance="No validation required.",
     )
@@ -1195,9 +1195,9 @@ def test_worker_dispatch_metadata_includes_context_gearbox(tmp_path):
         for entry in context_gearbox["ledger"]
     )
     assert any(
-        entry["source_id"] == "hazard_guards"
-        and entry["included"] is False
-        and entry["reason"] == "no graduated hazards for this terrain"
+        entry["source_id"] == "skill_pack"
+        and entry["included"] is True
+        and entry["reason"] == "terrain-selected skills for this context"
         for entry in context_gearbox["ledger"]
     )
     assert proxy.result_metadata("context_call")["extras"]["context_gearbox"] == context_gearbox
@@ -1208,7 +1208,7 @@ def test_worker_dispatch_metadata_includes_context_gearbox(tmp_path):
     assert "Done." not in encoded
 
 
-def test_worker_dispatch_metadata_loads_hazard_guards_for_matching_terrain(tmp_path):
+def test_worker_dispatch_metadata_loads_bundled_skills_via_path_overlap(tmp_path):
     _seed_graduated_hazard_for_dispatch(tmp_path)
     req = WorkerDispatchRequest(
         goal="Inspect context metadata",
@@ -1226,11 +1226,11 @@ def test_worker_dispatch_metadata_loads_hazard_guards_for_matching_terrain(tmp_p
 
     context_gearbox = result.extras.get("context_gearbox")
     assert isinstance(context_gearbox, dict)
-    assert "hazard_guards" in context_gearbox["summary"]["loaded"]
+    assert "skill_pack" in context_gearbox["summary"]["loaded"]
     assert any(
-        entry["source_id"] == "hazard_guards"
+        entry["source_id"] == "skill_pack"
         and entry["included"] is True
-        and entry["kind"] == "hazard_guard_pack"
+        and entry["kind"] == "skill_pack"
         for entry in context_gearbox["ledger"]
     )
 

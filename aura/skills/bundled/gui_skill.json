@@ -1,0 +1,6 @@
+{
+  "text": "### GUI Work Skill\nWhen modifying the Aura GUI, preserve existing signal wiring and data flow. Use existing theme tokens, styles, and components before adding new UI paths. Keep widget and layout edits narrow; avoid broad rewrites. Validate UI-adjacent changes with focused tests or selfcheck when practical. Do not invent parallel UI paths when an existing seam exists.",
+  "task_kinds": ["gui", "ui", "polish", "window", "widget", "dialog"],
+  "path_globs": ["aura/gui/", "aura/assets/"],
+  "model": null
+}

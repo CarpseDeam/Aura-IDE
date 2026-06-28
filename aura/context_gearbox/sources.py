@@ -7,8 +7,8 @@ from pathlib import Path
 from typing import Any
 
 from aura.context_gearbox.models import ContextLedgerEntry, ContextSource, RuntimeRole
-from aura.hazard.guard_text import build_hazard_guard_context
 from aura.repo_map import generate_repo_map
+from aura.skills.text import build_skill_context
 
 CORE_KERNEL_TEXT = """Core kernel:
 - Work inside the selected workspace.
@@ -311,10 +311,10 @@ CONTEXT_SOURCES: tuple[ContextSource, ...] = (
         reason="target files or task kind match build scope",
     ),
     ContextSource(
-        source_id="hazard_guards",
-        kind="hazard_guard_pack",
+        source_id="skill_pack",
+        kind="skill_pack",
         roles=(RuntimeRole.PLANNER, RuntimeRole.WORKER),
-        reason="graduated repo failure guards for this terrain",
+        reason="terrain-selected skills for this context",
     ),
 )
 
@@ -385,8 +385,8 @@ def _load_source_text(
             task_kind,
             target_files,
         )
-    if source.kind == "hazard_guard_pack":
-        return _load_hazard_guard_pack(workspace_root, task_kind, target_files)
+    if source.kind == "skill_pack":
+        return _load_skill_pack(workspace_root, task_kind, target_files)
     if source.source_id == "core_kernel":
         return CORE_KERNEL_TEXT, source.reason
     if workspace_root is None:
@@ -463,21 +463,21 @@ def _load_scoped_coding_pack(
     return text, source.reason
 
 
-def _load_hazard_guard_pack(
+def _load_skill_pack(
     workspace_root: Path | None,
     task_kind: str | None,
     target_files: tuple[str, ...] | None,
 ) -> tuple[str, str]:
     if workspace_root is None:
         return "", "no workspace root"
-    text = build_hazard_guard_context(
+    text = build_skill_context(
         workspace_root,
         task_kind=task_kind,
         target_files=tuple(target_files or ()),
     )
     if text:
-        return text, "graduated repo failure guards for this terrain"
-    return "", "no graduated hazards for this terrain"
+        return text, "terrain-selected skills for this context"
+    return "", "no skills matched for this terrain"
 
 
 def _single_contract_applies(

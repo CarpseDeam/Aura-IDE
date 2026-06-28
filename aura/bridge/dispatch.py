@@ -495,6 +495,7 @@ class _DispatchProxy(QObject):
             structured_failure=messages["structured_failure"],
             task_shape_summary=task_shape_summary,
             result_errors=messages["result_errors"],
+            context_gearbox=context_gearbox,
         )
 
         self.workerFinished.emit(
@@ -541,7 +542,9 @@ class _DispatchProxy(QObject):
             task_kind=task_spec.task_shape.task_kind if task_spec.task_shape is not None else None,
             target_files=tuple(task_spec.files),
         )
-        context_gearbox = context_gearbox_metadata(composed_prompt.ledger)
+        context_gearbox = context_gearbox_metadata(
+            composed_prompt.ledger, workspace_root=self._workspace_root,
+        )
         self._tier1_context = composed_prompt.context_text
         _log.info(
             "worker_context_build_end tool_call_id=%s duration_ms=%.0f",

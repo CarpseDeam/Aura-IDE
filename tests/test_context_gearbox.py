@@ -7,8 +7,8 @@ import pytest
 
 from aura.context_gearbox.models import ComposedContext, ContextLedgerEntry, RuntimeRole
 from aura.context_gearbox.runtime import (
-    context_gearbox_metadata,
     compose_system_prompt,
+    context_gearbox_metadata,
     serialize_context_ledger,
     summarize_context_ledger,
 )
@@ -48,8 +48,8 @@ RESEARCH_PACK_IDS = [
     "web_research_rules",
 ]
 
-HAZARD_GUARD_IDS = [
-    "hazard_guards",
+SKILL_PACK_IDS = [
+    "skill_pack",
 ]
 
 SCOPED_PACK_SKIP_REASONS = {
@@ -302,7 +302,7 @@ def test_worker_build_targets_load_build_rules_and_skip_unrelated_packs(
     _assert_only_scoped_pack_loaded(composed, "build_pipeline_rules")
 
 
-def test_hazard_guards_load_for_worker_when_graduated_hazard_matches_terrain(
+def test_skill_pack_loads_for_worker_when_graduated_hazard_matches_terrain(
     tmp_path,
 ):
     _seed_graduated_hazard(tmp_path)
@@ -315,43 +315,60 @@ def test_hazard_guards_load_for_worker_when_graduated_hazard_matches_terrain(
         target_files=("aura/context_gearbox/sources.py",),
     )
     metadata = context_gearbox_metadata(composed.ledger)
-    entry = _entry_by_id(composed, "hazard_guards")
+    entry = _entry_by_id(composed, "skill_pack")
 
     assert entry.included is True
-    assert entry.kind == "hazard_guard_pack"
-    assert entry.reason == "graduated repo failure guards for this terrain"
+    assert entry.kind == "skill_pack"
+    assert entry.reason == "terrain-selected skills for this context"
     assert entry.char_count > 0
     assert "### Learned Hazard Guards" in composed.context_text
     assert "context source was skipped" in composed.context_text
-    assert "hazard_guards" in metadata["summary"]["loaded"]
+    assert "skill_pack" in metadata["summary"]["loaded"]
     assert any(
-        item["source_id"] == "hazard_guards" and item["included"] is True
+        item["source_id"] == "skill_pack" and item["included"] is True
         for item in metadata["ledger"]
     )
 
 
-def test_hazard_guards_skip_clean_worker_terrain_with_no_hazards_reason(tmp_path):
-    composed = compose_system_prompt(
+def test_skill_pack_loads_bundled_skills_on_drone_terrain_skipped_on_unrelated_terrain(
+    tmp_path,
+):
+    """Bundled skills match via directory prefix, not _paths_related's loose
+    prefix collision.  Drone terrain should load the drone bundled skill;
+    unrelated terrain should skip skill_pack entirely (no graduated hazards)."""
+    # --- Direction 1: drone terrain loads bundled skills ---
+    drone_composed = compose_system_prompt(
+        RuntimeRole.WORKER,
+        "",
+        tmp_path,
+        target_files=("aura/drones/runner.py",),
+    )
+    drone_entry = _entry_by_id(drone_composed, "skill_pack")
+
+    assert drone_entry.included is True
+    assert drone_entry.kind == "skill_pack"
+    assert drone_entry.reason == "terrain-selected skills for this context"
+    assert drone_entry.char_count > 0
+    assert "### Bundled Skills" in drone_composed.context_text
+    assert "Drone Work Skill" in drone_composed.context_text
+    assert "### Learned Hazard Guards" not in drone_composed.context_text
+
+    # --- Direction 2: unrelated terrain skips skill_pack ---
+    unrelated_composed = compose_system_prompt(
         RuntimeRole.WORKER,
         "",
         tmp_path,
         task_kind="bugfix",
         target_files=("aura/context_gearbox/sources.py",),
     )
-    metadata = context_gearbox_metadata(composed.ledger)
-    entry = _entry_by_id(composed, "hazard_guards")
+    unrelated_entry = _entry_by_id(unrelated_composed, "skill_pack")
 
-    assert entry.included is False
-    assert entry.kind == "hazard_guard_pack"
-    assert entry.reason == "no graduated hazards for this terrain"
-    assert entry.char_count == 0
-    assert {
-        "source_id": "hazard_guards",
-        "reason": "no graduated hazards for this terrain",
-    } in metadata["summary"]["skipped"]
+    assert unrelated_entry.included is False
+    assert unrelated_entry.reason == "no skills matched for this terrain"
+    assert "skill_pack" not in unrelated_composed.context_text
 
 
-def test_hazard_guards_skip_when_workspace_root_is_missing():
+def test_skill_pack_skip_when_workspace_root_is_missing():
     composed = compose_system_prompt(
         RuntimeRole.WORKER,
         "",
@@ -359,7 +376,7 @@ def test_hazard_guards_skip_when_workspace_root_is_missing():
         task_kind="bugfix",
         target_files=("aura/context_gearbox/sources.py",),
     )
-    entry = _entry_by_id(composed, "hazard_guards")
+    entry = _entry_by_id(composed, "skill_pack")
 
     assert entry.included is False
     assert entry.reason == "no workspace root"
@@ -426,14 +443,14 @@ def test_contract_ledger_order_is_deterministic_and_records_skips(tmp_path):
         entry for entry in composed.ledger if entry.kind == "planner_research_pack"
     ]
     assert [entry.source_id for entry in research_entries] == RESEARCH_PACK_IDS
-    hazard_entries = [
-        entry for entry in composed.ledger if entry.kind == "hazard_guard_pack"
+    skill_entries = [
+        entry for entry in composed.ledger if entry.kind == "skill_pack"
     ]
-    assert [entry.source_id for entry in hazard_entries] == HAZARD_GUARD_IDS
+    assert [entry.source_id for entry in skill_entries] == SKILL_PACK_IDS
     assert research_entries[0].included is False
     assert research_entries[0].reason == "turn is not research-shaped"
-    assert hazard_entries[0].included is False
-    assert hazard_entries[0].reason == "no graduated hazards for this terrain"
+    assert skill_entries[0].included is True
+    assert skill_entries[0].reason == "terrain-selected skills for this context"
     skipped = [
         entry for entry in contract_entries
         if entry.source_id != "planner_dispatch_contract"
@@ -576,17 +593,14 @@ def test_context_gearbox_summary_counts_include_scoped_packs(tmp_path):
     summary = metadata["summary"]
 
     assert "gui_rules" in summary["loaded"]
-    assert summary["loaded_count"] == 6
-    assert summary["skipped_count"] == 8
+    assert summary["loaded_count"] == 7
+    assert summary["skipped_count"] == 7
     assert {
         "source_id": "drone_rules",
         "reason": "target files do not match drone scope",
     } in summary["skipped"]
-    assert {
-        "source_id": "hazard_guards",
-        "reason": "no graduated hazards for this terrain",
-    } in summary["skipped"]
-    assert summary["display"] == "Context: 6 loaded, 8 skipped"
+    assert "skill_pack" in summary["loaded"]
+    assert summary["display"] == "Context: 7 loaded, 7 skipped"
 
 
 def test_context_gearbox_metadata_exposes_no_prompt_or_context_text(tmp_path):

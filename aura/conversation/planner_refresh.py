@@ -70,7 +70,9 @@ class PlannerRefreshState:
                 self._workspace_root,
                 force=True,
             )
-            metadata = context_gearbox_metadata(composed.ledger)
+            metadata = context_gearbox_metadata(
+                composed.ledger, workspace_root=self._workspace_root,
+            )
             logger.info(
                 "planner_context_refresh_summary %s",
                 metadata["summary"]["display"],
