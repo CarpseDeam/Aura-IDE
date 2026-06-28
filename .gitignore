@@ -69,7 +69,7 @@ Thumbs.db
 /.aura/planner.txt
 /.aura/project.json
 /.aura/toolist.txt
-/.aura/drones/runs/
+/.aura/drones/
 /.aura/tools/
 /.aura/**/*.log
 
@@ -83,4 +83,4 @@ Thumbs.db
 /bundles/windows-x86_64-7962dd72bfd58823445234a8b95fb16606a2fedece083dbb7f7b69a032f7ca70.tar.zst
 /.aura/hazards.db
 /.playwright-mcp/
-
+/.aura/drones/runs/

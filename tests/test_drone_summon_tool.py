@@ -4,15 +4,14 @@ import json
 
 import pytest
 
-from aura import paths as aura_paths
 from aura.conversation.tools._types import ApprovalDecision
 from aura.conversation.tools.registry import ToolRegistry
 from aura.drones.store import DroneStore
 
 
 @pytest.fixture(autouse=True)
-def _patch_data_dir(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(aura_paths, "data_dir", lambda: tmp_path / "data")
+def _patch_drones_root(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("aura.drones.store.aura_root", lambda: tmp_path / "aura_root")
 
 
 def _register_drone(tmp_path) -> None:
