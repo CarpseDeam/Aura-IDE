@@ -44,6 +44,30 @@ def test_both_arms_at_min_arm_yields_measured():
     assert u.lift is not None
 
 
+def test_source_reports_terrain_where_it_loads_not_largest_band():
+    rows = [
+        {"status": "completed", "task_kind": "alpha", "included_source_ids": '["s1"]'},
+        {"status": "completed", "task_kind": "alpha", "included_source_ids": '["s1"]'},
+        {"status": "completed", "task_kind": "alpha", "included_source_ids": '["s1"]'},
+        {"status": "completed", "task_kind": "alpha", "included_source_ids": "[]"},
+        {"status": "completed", "task_kind": "alpha", "included_source_ids": "[]"},
+        {"status": "harness_error", "task_kind": "alpha", "included_source_ids": "[]"},
+        {"status": "harness_error", "task_kind": "alpha", "included_source_ids": "[]"},
+        *[
+            {"status": "completed", "task_kind": "beta", "included_source_ids": "[]"}
+            for _ in range(10)
+        ],
+    ]
+    r = _compute_utility_from_rows(rows, min_arm=3)
+    u = r.get("s1")
+    assert u is not None
+    assert u.task_kind == "alpha"
+    assert u.status == "measured"
+    assert u.loaded_n == 3
+    assert u.not_loaded_n == 4
+    assert u.lift == 0.5
+
+
 def test_positive_lift():
     """Source that loads on successful dispatches → positive lift."""
     rows = [

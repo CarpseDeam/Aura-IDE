@@ -99,16 +99,27 @@ def _compute_utility_from_rows(
                 if is_success:
                     band["not_loaded_ok"] += 1
 
-    # For sources that appear in multiple bands, pick the band with the largest
-    # combined sample size.
+    # For sources that appear in multiple bands, pick a band where the source
+    # actually loads. Prefer measurable bands, then fall back to strongest load.
     source_bands: dict[str, tuple[str, dict[str, int]]] = {}
-    for task_kind, sources in band_sources.items():
-        for sid, counts in sources.items():
-            combined = counts["loaded_total"] + counts["not_loaded_total"]
-            if sid not in source_bands or combined > (
-                source_bands[sid][1]["loaded_total"] + source_bands[sid][1]["not_loaded_total"]
-            ):
-                source_bands[sid] = (task_kind, counts)
+    for sid in all_source_ids:
+        exercised_bands = [
+            (task_kind, counts)
+            for task_kind, sources in band_sources.items()
+            if (counts := sources.get(sid)) is not None and counts["loaded_total"] > 0
+        ]
+        measurable_bands = [
+            (task_kind, counts)
+            for task_kind, counts in exercised_bands
+            if counts["loaded_total"] >= min_arm and counts["not_loaded_total"] >= min_arm
+        ]
+        if measurable_bands:
+            source_bands[sid] = max(
+                measurable_bands,
+                key=lambda band: band[1]["loaded_total"] + band[1]["not_loaded_total"],
+            )
+        elif exercised_bands:
+            source_bands[sid] = max(exercised_bands, key=lambda band: band[1]["loaded_total"])
 
     result: dict[str, SourceUtility] = {}
     for sid in sorted(source_bands):
