@@ -9,6 +9,7 @@ from aura.context_gearbox.models import ComposedContext, ContextLedgerEntry, Run
 from aura.context_gearbox.runtime import (
     compose_system_prompt,
     context_gearbox_metadata,
+    format_context_gearbox_display,
     serialize_context_ledger,
     summarize_context_ledger,
 )
@@ -624,6 +625,71 @@ def test_context_gearbox_metadata_exposes_no_prompt_or_context_text(tmp_path):
     assert "Planner role:" not in payload
     assert composed.context_text
     assert composed.system_prompt
+
+
+def test_context_gearbox_metadata_serializes_utility(tmp_path, monkeypatch):
+    from aura.skills.utility import SourceUtility
+
+    monkeypatch.setattr(
+        "aura.skills.utility.derive_source_utility",
+        lambda workspace_root: {
+            "code_quality_contract": SourceUtility(
+                source_id="code_quality_contract",
+                task_kind="bugfix",
+                loaded_n=10,
+                not_loaded_n=12,
+                lift=0.25,
+                status="measured",
+            )
+        },
+    )
+    composed = compose_system_prompt(RuntimeRole.WORKER, "", tmp_path)
+
+    metadata = context_gearbox_metadata(composed.ledger, workspace_root=tmp_path)
+
+    assert metadata["utility"] == {
+        "code_quality_contract": {
+            "source_id": "code_quality_contract",
+            "task_kind": "bugfix",
+            "loaded_n": 10,
+            "not_loaded_n": 12,
+            "lift": 0.25,
+            "status": "measured",
+        }
+    }
+    json.dumps(metadata, sort_keys=True)
+
+
+def test_context_gearbox_display_formats_serialized_utility():
+    metadata = {
+        "summary": {"display": "Context: 1 loaded, 0 skipped"},
+        "utility": {
+            "code_quality_contract": {
+                "source_id": "code_quality_contract",
+                "task_kind": "bugfix",
+                "loaded_n": 10,
+                "not_loaded_n": 12,
+                "lift": 0.25,
+                "status": "measured",
+            },
+            "skill_pack": {
+                "source_id": "skill_pack",
+                "task_kind": "bugfix",
+                "loaded_n": 2,
+                "not_loaded_n": 12,
+                "lift": None,
+                "status": "insufficient",
+            },
+        },
+    }
+
+    lines = format_context_gearbox_display(metadata)
+
+    assert lines[-1] == (
+        "Utility: code_quality_contract +25.0% "
+        "(loaded=10, not_loaded=12) | "
+        "skill_pack insufficient (loaded=2, not_loaded=12)"
+    )
 
 
 def test_planner_refresh_logs_compact_context_summary(tmp_path, caplog):

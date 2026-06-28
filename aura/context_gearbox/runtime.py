@@ -91,6 +91,25 @@ def summarize_context_ledger(
     }
 
 
+def _serialize_source_utility(utility: Any) -> dict[str, Any]:
+    """Return JSON-safe plain data for a SourceUtility-like value."""
+    lift = getattr(utility, "lift")
+    return {
+        "source_id": str(getattr(utility, "source_id")),
+        "task_kind": str(getattr(utility, "task_kind")),
+        "loaded_n": int(getattr(utility, "loaded_n")),
+        "not_loaded_n": int(getattr(utility, "not_loaded_n")),
+        "lift": None if lift is None else float(lift),
+        "status": str(getattr(utility, "status")),
+    }
+
+
+def _source_utility_field(utility: Any, field: str) -> Any:
+    if isinstance(utility, dict):
+        return utility.get(field)
+    return getattr(utility, field, None)
+
+
 def context_gearbox_metadata(
     entries: Iterable[ContextLedgerEntry],
     *,
@@ -112,7 +131,10 @@ def context_gearbox_metadata(
 
             utility = derive_source_utility(workspace_root)
             if utility:
-                metadata["utility"] = utility
+                metadata["utility"] = {
+                    str(source_id): _serialize_source_utility(source_utility)
+                    for source_id, source_utility in utility.items()
+                }
         except Exception:
             _log.exception("Failed to derive source utility (degrading)")
     return metadata
@@ -151,16 +173,21 @@ def format_context_gearbox_display(metadata: dict[str, Any]) -> list[str]:
         parts: list[str] = []
         for source_id in sorted(utility):
             u = utility[source_id]
-            if u.status == "measured" and u.lift is not None:
-                sign = "+" if u.lift >= 0 else ""
+            status = _source_utility_field(u, "status")
+            lift = _source_utility_field(u, "lift")
+            loaded_n = _source_utility_field(u, "loaded_n")
+            not_loaded_n = _source_utility_field(u, "not_loaded_n")
+            if status == "measured" and lift is not None:
+                numeric_lift = float(lift)
+                sign = "+" if numeric_lift >= 0 else ""
                 parts.append(
-                    f"{source_id} {sign}{u.lift:.1%} "
-                    f"(loaded={u.loaded_n}, not_loaded={u.not_loaded_n})"
+                    f"{source_id} {sign}{numeric_lift:.1%} "
+                    f"(loaded={loaded_n}, not_loaded={not_loaded_n})"
                 )
             else:
                 parts.append(
                     f"{source_id} insufficient "
-                    f"(loaded={u.loaded_n}, not_loaded={u.not_loaded_n})"
+                    f"(loaded={loaded_n}, not_loaded={not_loaded_n})"
                 )
         if parts:
             lines.append("Utility: " + " | ".join(parts))
