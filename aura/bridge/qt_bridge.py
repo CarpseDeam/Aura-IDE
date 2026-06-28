@@ -62,8 +62,8 @@ from aura.context_gearbox.runtime import (
     PLANNER_SYSTEM_PROMPT,
     SINGLE_SYSTEM_PROMPT,
     build_context_text,
-    context_gearbox_metadata,
     compose_system_prompt,
+    context_gearbox_metadata,
 )
 from aura.conversation import (
     ConversationManager,
@@ -483,6 +483,7 @@ class ConversationBridge(QObject):
         self._index_to_id.clear()
         self._index_to_name.clear()
         self._dispatch_proxy.clear_records()
+        self._registry.reset_drone_budget()
         # We do NOT reset _approve_all_session here, as it is managed by the 
         # persistent toolbar toggle.
 
@@ -534,6 +535,7 @@ class ConversationBridge(QObject):
     def send(self, model: ModelId, thinking: ThinkingMode, max_tool_rounds: int | None = None) -> None:
         if self.is_running():
             return
+        self._registry.reset_drone_budget()
         self._prepare_turn_context()
         # Capture pre-worker snapshot for reliable /undo
         if self._registry.workspace_root is not None:

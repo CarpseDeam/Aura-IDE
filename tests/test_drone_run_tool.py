@@ -294,41 +294,158 @@ class TestRunReadOnlyDroneHandler:
         assert "could not verify" in answer.lower()
         assert "No official schedule source was reachable" in answer
 
-    def test_per_turn_limit(self, workspace: Path):
+    def test_per_turn_limit_allows_exactly_3_and_blocks_4th(self, workspace: Path):
         _register_drone(workspace)
         registry = ToolRegistry(workspace_root=workspace, read_only=False, mode="planner")
         with patch("aura.drones.sync_runner.run_read_only_drone_sync") as mock_runner:
             mock_runner.return_value = {
-                "ok": True,
-                "run_id": "r1",
-                "drone_id": "bug-scout",
-                "drone_name": "Bug Scout",
-                "status": "completed",
-                "summary": "ok",
-                "tool_calls_made": 0,
-                "tool_errors": 0,
-                "elapsed_seconds": 0.1,
+                "ok": True, "run_id": "r", "drone_id": "bug-scout",
+                "drone_name": "Bug Scout", "status": "completed",
+                "summary": "ok", "tool_calls_made": 0,
+                "tool_errors": 0, "elapsed_seconds": 0.1,
             }
-            assert registry.execute(
-                "run_read_only_drone",
-                {"drone_id": "bug-scout", "goal": "find bugs"},
-                MagicMock(return_value=ApprovalDecision(action="approve")),
-                False,
-            ).ok
-            assert registry.execute(
-                "run_read_only_drone",
-                {"drone_id": "bug-scout", "goal": "find more bugs"},
-                MagicMock(return_value=ApprovalDecision(action="approve")),
-                False,
-            ).ok
-            r3 = registry.execute(
-                "run_read_only_drone",
-                {"drone_id": "bug-scout", "goal": "find even more"},
-                MagicMock(return_value=ApprovalDecision(action="approve")),
-                False,
-            )
-            assert r3.ok is False
-            assert "limit" in str(r3.payload).lower()
+            # Run 1, 2, 3 — all OK
+            assert registry.execute("run_read_only_drone",
+                {"drone_id": "bug-scout", "goal": "g1"},
+                MagicMock(return_value=ApprovalDecision(action="approve")), False).ok
+            assert registry.execute("run_read_only_drone",
+                {"drone_id": "bug-scout", "goal": "g2"},
+                MagicMock(return_value=ApprovalDecision(action="approve")), False).ok
+            assert registry.execute("run_read_only_drone",
+                {"drone_id": "bug-scout", "goal": "g3"},
+                MagicMock(return_value=ApprovalDecision(action="approve")), False).ok
+            # Run 4 — blocked
+            r4 = registry.execute("run_read_only_drone",
+                {"drone_id": "bug-scout", "goal": "g4"},
+                MagicMock(return_value=ApprovalDecision(action="approve")), False)
+            assert r4.ok is False
+            assert r4.payload.get("code") == "drone_budget_exhausted"
+
+    @patch("aura.drones.sync_runner.run_read_only_drone_sync")
+    def test_web_research_allows_6_and_blocks_7th(self, mock_runner, workspace: Path):
+        _register_web_research_drone(workspace)
+        registry = ToolRegistry(workspace_root=workspace, read_only=False, mode="planner")
+        mock_runner.return_value = {
+            "ok": True, "run_id": "r", "drone_id": "web-research",
+            "drone_name": "Web Research", "status": "completed",
+            "summary": "ok", "tool_calls_made": 0,
+            "tool_errors": 0, "elapsed_seconds": 0.1,
+        }
+        # Runs 1–6 OK
+        for i in range(6):
+            assert registry.execute("run_read_only_drone",
+                {"drone_id": "web-research", "goal": f"g{i}"},
+                MagicMock(return_value=ApprovalDecision(action="approve")), False).ok
+        # Run 7 blocked
+        r7 = registry.execute("run_read_only_drone",
+            {"drone_id": "web-research", "goal": "g7"},
+            MagicMock(return_value=ApprovalDecision(action="approve")), False)
+        assert r7.ok is False
+        assert r7.payload.get("code") == "drone_budget_exhausted"
+        assert r7.payload.get("limit") == 6
+
+    @patch("aura.drones.sync_runner.run_read_only_drone_sync")
+    def test_reset_drone_budget_allows_new_runs(self, mock_runner, workspace: Path):
+        _register_drone(workspace)
+        registry = ToolRegistry(workspace_root=workspace, read_only=False, mode="planner")
+        mock_runner.return_value = {
+            "ok": True, "run_id": "r", "drone_id": "bug-scout",
+            "drone_name": "Bug Scout", "status": "completed",
+            "summary": "ok", "tool_calls_made": 0,
+            "tool_errors": 0, "elapsed_seconds": 0.1,
+        }
+        # Exhaust budget
+        for _ in range(3):
+            registry.execute("run_read_only_drone",
+                {"drone_id": "bug-scout", "goal": "g"},
+                MagicMock(return_value=ApprovalDecision(action="approve")), False)
+        assert registry.execute("run_read_only_drone",
+            {"drone_id": "bug-scout", "goal": "g4"},
+            MagicMock(return_value=ApprovalDecision(action="approve")), False).ok is False
+        # Reset and try again
+        registry.reset_drone_budget()
+        assert registry.execute("run_read_only_drone",
+            {"drone_id": "bug-scout", "goal": "g5"},
+            MagicMock(return_value=ApprovalDecision(action="approve")), False).ok
+
+    @patch("aura.drones.sync_runner.run_read_only_drone_sync")
+    def test_fresh_chat_does_not_inherit_budget(self, mock_runner, workspace: Path):
+        """Two registries should have independent budgets."""
+        _register_drone(workspace)
+        registry1 = ToolRegistry(workspace_root=workspace, read_only=False, mode="planner")
+        registry2 = ToolRegistry(workspace_root=workspace, read_only=False, mode="planner")
+        mock_runner.return_value = {
+            "ok": True, "run_id": "r", "drone_id": "bug-scout",
+            "drone_name": "Bug Scout", "status": "completed",
+            "summary": "ok", "tool_calls_made": 0,
+            "tool_errors": 0, "elapsed_seconds": 0.1,
+        }
+        # Exhaust registry1
+        for _ in range(3):
+            registry1.execute("run_read_only_drone",
+                {"drone_id": "bug-scout", "goal": "g"},
+                MagicMock(return_value=ApprovalDecision(action="approve")), False)
+        # registry2 should still have full budget
+        for _ in range(3):
+            assert registry2.execute("run_read_only_drone",
+                {"drone_id": "bug-scout", "goal": "g"},
+                MagicMock(return_value=ApprovalDecision(action="approve")), False).ok
+        assert registry2.execute("run_read_only_drone",
+            {"drone_id": "bug-scout", "goal": "g4"},
+            MagicMock(return_value=ApprovalDecision(action="approve")), False).ok is False
+
+    @patch("aura.drones.sync_runner.run_read_only_drone_sync")
+    def test_exhausted_budget_structured_error(self, mock_runner, workspace: Path):
+        _register_drone(workspace)
+        registry = ToolRegistry(workspace_root=workspace, read_only=False, mode="planner")
+        mock_runner.return_value = {
+            "ok": True, "run_id": "r", "drone_id": "bug-scout",
+            "drone_name": "Bug Scout", "status": "completed",
+            "summary": "ok", "tool_calls_made": 0,
+            "tool_errors": 0, "elapsed_seconds": 0.1,
+        }
+        # Run 3 successful, then check structured error on 4th
+        for _ in range(3):
+            registry.execute("run_read_only_drone",
+                {"drone_id": "bug-scout", "goal": "g"},
+                MagicMock(return_value=ApprovalDecision(action="approve")), False)
+        result = registry.execute("run_read_only_drone",
+            {"drone_id": "bug-scout", "goal": "g4"},
+            MagicMock(return_value=ApprovalDecision(action="approve")), False)
+        assert result.ok is False
+        payload = result.payload
+        assert payload.get("code") == "drone_budget_exhausted"
+        assert payload.get("limit") == 3
+        assert payload.get("used") == 3
+        assert payload.get("drone_id") == "bug-scout"
+        assert "limit" in payload.get("error", "").lower()
+
+    @patch("aura.drones.sync_runner.run_read_only_drone_sync")
+    def test_exhausted_budget_clean_error_has_no_internal_self_talk(self, mock_runner, workspace: Path):
+        """Ensure exhausted-budget error payload does not contain internal self-talk phrases."""
+        _register_drone(workspace)
+        registry = ToolRegistry(workspace_root=workspace, read_only=False, mode="planner")
+        mock_runner.return_value = {
+            "ok": True, "run_id": "r", "drone_id": "bug-scout",
+            "drone_name": "Bug Scout", "status": "completed",
+            "summary": "ok", "tool_calls_made": 0,
+            "tool_errors": 0, "elapsed_seconds": 0.1,
+        }
+        for _ in range(3):
+            registry.execute("run_read_only_drone",
+                {"drone_id": "bug-scout", "goal": "g"},
+                MagicMock(return_value=ApprovalDecision(action="approve")), False)
+        result = registry.execute("run_read_only_drone",
+            {"drone_id": "bug-scout", "goal": "g4"},
+            MagicMock(return_value=ApprovalDecision(action="approve")), False)
+        error_text = str(result.payload).lower()
+        # None of these internal self-talk phrases should appear
+        forbidden = ["actually", "maybe i should", "let me be honest",
+                     "i don't have real-time data access in this environment",
+                     "start a fresh turn"]
+        for phrase in forbidden:
+            assert phrase not in error_text, f"Forbidden phrase found: '{phrase}'"
+
 
 
 class TestToolCatalogSurface:
