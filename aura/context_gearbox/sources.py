@@ -8,7 +8,7 @@ from typing import Any
 
 from aura.context_gearbox.models import ContextLedgerEntry, ContextSource, RuntimeRole
 from aura.repo_map import generate_repo_map
-from aura.skills.text import build_skill_context
+from aura.skills.text import build_skill_context_with_ids
 
 CORE_KERNEL_TEXT = """Core kernel:
 - Work inside the selected workspace.
@@ -331,7 +331,7 @@ def collect_source_text(
     force: bool = False,
     task_kind: str | None = None,
     target_files: tuple[str, ...] | None = None,
-) -> tuple[str, ContextLedgerEntry]:
+) -> tuple[str, ContextLedgerEntry, list[ContextLedgerEntry]]:
     try:
         text, reason = _load_source_text(
             source,
@@ -342,7 +342,7 @@ def collect_source_text(
             target_files=target_files,
         )
         included = bool(text)
-        return text, ContextLedgerEntry(
+        entry = ContextLedgerEntry(
             source_id=source.source_id,
             kind=source.kind,
             role=role,
@@ -350,6 +350,28 @@ def collect_source_text(
             included=included,
             char_count=len(text),
         )
+
+        # For skill_pack, include per-skill ledger entries
+        extra: list[ContextLedgerEntry] = []
+        if source.kind == "skill_pack" and workspace_root is not None:
+            _, skill_ids = build_skill_context_with_ids(
+                workspace_root,
+                task_kind=task_kind,
+                target_files=tuple(target_files or ()),
+            )
+            extra = [
+                ContextLedgerEntry(
+                    source_id=sid,
+                    kind="individual_skill",
+                    role=role,
+                    reason="individual skill in terrain-selected pack",
+                    included=included,
+                    char_count=0,
+                )
+                for sid in skill_ids
+            ]
+
+        return text, entry, extra
     except Exception as exc:
         return "", ContextLedgerEntry(
             source_id=source.source_id,
@@ -359,7 +381,7 @@ def collect_source_text(
             included=False,
             char_count=0,
             error=f"{type(exc).__name__}: {exc}",
-        )
+        ), []
 
 
 def _load_source_text(
@@ -386,7 +408,8 @@ def _load_source_text(
             target_files,
         )
     if source.kind == "skill_pack":
-        return _load_skill_pack(workspace_root, task_kind, target_files)
+        text, reason, _skill_ids = _load_skill_pack(workspace_root, task_kind, target_files)
+        return text, reason
     if source.source_id == "core_kernel":
         return CORE_KERNEL_TEXT, source.reason
     if workspace_root is None:
@@ -467,17 +490,17 @@ def _load_skill_pack(
     workspace_root: Path | None,
     task_kind: str | None,
     target_files: tuple[str, ...] | None,
-) -> tuple[str, str]:
+) -> tuple[str, str, list[str]]:
     if workspace_root is None:
-        return "", "no workspace root"
-    text = build_skill_context(
+        return "", "no workspace root", []
+    text, skill_ids = build_skill_context_with_ids(
         workspace_root,
         task_kind=task_kind,
         target_files=tuple(target_files or ()),
     )
     if text:
-        return text, "terrain-selected skills for this context"
-    return "", "no skills matched for this terrain"
+        return text, "terrain-selected skills for this context", skill_ids
+    return "", "no skills matched for this terrain", []
 
 
 def _single_contract_applies(

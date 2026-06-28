@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from aura.skills.models import Skill, SkillProvenance
+from aura.skills.models import Skill, SkillProvenance, compute_skill_id
 from aura.skills.reader import read_skills
 from aura.skills.selection import select_relevant_skills
 
@@ -35,6 +35,35 @@ def format_skills(skills: list[Skill], limit: int = 5) -> str:
     return "\n".join(parts)
 
 
+def build_skill_context_with_ids(
+    workspace_root: str | Path,
+    *,
+    task_kind: str | None = None,
+    target_files: tuple[str, ...] = (),
+    limit: int = 5,
+) -> tuple[str, list[str]]:
+    """Like build_skill_context but also returns per-skill stable IDs.
+
+    Returns a (text, [skill_id_1, skill_id_2, ...]) tuple.
+    Always returns a tuple (possibly empty). Never propagates exceptions -
+    returns ("", []) on any failure.
+    """
+    try:
+        skills = read_skills(workspace_root)
+        selected = select_relevant_skills(
+            skills,
+            task_kind=task_kind,
+            target_files=target_files,
+            limit=limit,
+        )
+        text = format_skills(selected, limit=limit)
+        skill_ids = [compute_skill_id(s.text) for s in selected]
+        return text, skill_ids
+    except Exception:
+        logger.debug("build_skill_context_with_ids failed", exc_info=True)
+        return "", []
+
+
 def build_skill_context(
     workspace_root: str | Path,
     *,
@@ -47,15 +76,10 @@ def build_skill_context(
     Always returns a string (possibly empty). Never propagates exceptions —
     returns "" on any failure.
     """
-    try:
-        skills = read_skills(workspace_root)
-        selected = select_relevant_skills(
-            skills,
-            task_kind=task_kind,
-            target_files=target_files,
-            limit=limit,
-        )
-        return format_skills(selected, limit=limit)
-    except Exception:
-        logger.debug("build_skill_context failed", exc_info=True)
-        return ""
+    text, _ = build_skill_context_with_ids(
+        workspace_root,
+        task_kind=task_kind,
+        target_files=target_files,
+        limit=limit,
+    )
+    return text

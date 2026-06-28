@@ -183,7 +183,7 @@ def build_context_text(
     ledger: list[ContextLedgerEntry] = []
     normalized_target_files = tuple(target_files or ())
     for source in iter_registered_sources():
-        text, entry = collect_source_text(
+        text, entry, extra_entries = collect_source_text(
             source,
             runtime_role,
             workspace_root,
@@ -194,6 +194,7 @@ def build_context_text(
         if text:
             parts.append(text)
         ledger.append(entry)
+        ledger.extend(extra_entries)
     return ComposedContext(
         role=runtime_role,
         system_prompt="",

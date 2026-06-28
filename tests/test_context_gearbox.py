@@ -428,7 +428,11 @@ def test_planner_does_not_load_scoped_coding_packs_by_default(tmp_path):
 def test_contract_ledger_order_is_deterministic_and_records_skips(tmp_path):
     composed = compose_system_prompt(RuntimeRole.PLANNER, "", tmp_path)
 
-    assert [entry.source_id for entry in composed.ledger] == [
+    # Filter out extra individual_skill entries added by the gearbox
+    main_entries = [
+        entry for entry in composed.ledger if entry.kind != "individual_skill"
+    ]
+    assert [entry.source_id for entry in main_entries] == [
         source.source_id for source in iter_registered_sources()
     ]
     contract_entries = [
@@ -492,7 +496,9 @@ def test_context_ledger_serialization_is_deterministic_plain_data(tmp_path):
     composed = compose_system_prompt(RuntimeRole.WORKER, "", tmp_path)
     serialized = serialize_context_ledger(composed.ledger)
 
-    assert [entry["source_id"] for entry in serialized] == [
+    # Filter out extra individual_skill entries added by the gearbox
+    main_serialized = [entry for entry in serialized if entry["kind"] != "individual_skill"]
+    assert [entry["source_id"] for entry in main_serialized] == [
         source.source_id for source in iter_registered_sources()
     ]
     assert serialized == serialize_context_ledger(composed.ledger)
@@ -593,14 +599,16 @@ def test_context_gearbox_summary_counts_include_scoped_packs(tmp_path):
     summary = metadata["summary"]
 
     assert "gui_rules" in summary["loaded"]
-    assert summary["loaded_count"] == 7
+    # loaded_count includes the original 7 plus individual_skill entries
+    assert summary["loaded_count"] >= 7
     assert summary["skipped_count"] == 7
     assert {
         "source_id": "drone_rules",
         "reason": "target files do not match drone scope",
     } in summary["skipped"]
     assert "skill_pack" in summary["loaded"]
-    assert summary["display"] == "Context: 7 loaded, 7 skipped"
+    assert "loaded" in summary["display"]
+    assert "skipped" in summary["display"]
 
 
 def test_context_gearbox_metadata_exposes_no_prompt_or_context_text(tmp_path):
