@@ -117,6 +117,52 @@ def _read_graduated_skills(
     return skills
 
 
+def _read_refined_skills(workspace_root: str | Path) -> list[Skill]:
+    """Read refined skill JSON files from .aura/skills/refined/."""
+    try:
+        refined_dir = Path(workspace_root) / ".aura" / "skills" / "refined"
+        if not refined_dir.is_dir():
+            return []
+
+        skills: list[Skill] = []
+        for entry in sorted(refined_dir.iterdir()):
+            if entry.suffix != ".json":
+                continue
+            try:
+                raw = entry.read_text(encoding="utf-8")
+                data = json.loads(raw)
+            except Exception:
+                logger.debug("Failed to read refined skill %s", entry, exc_info=True)
+                continue
+            if not isinstance(data, dict):
+                continue
+            text = data.get("text", "")
+            if not text:
+                continue
+            task_kinds = tuple(data.get("task_kinds", []) or [])
+            path_globs = tuple(data.get("path_globs", []) or [])
+            model = data.get("model", None)
+            raw_origin = data.get("origin", [])
+            if isinstance(raw_origin, list):
+                origin = tuple(tuple(pair) for pair in raw_origin)
+            else:
+                origin = ()
+            skills.append(
+                Skill(
+                    text=text,
+                    task_kinds=task_kinds,
+                    path_globs=path_globs,
+                    model=model,
+                    provenance=SkillProvenance.REFLECTION_REFINED,
+                    origin=origin,
+                )
+            )
+        return skills
+    except Exception:
+        logger.debug("Failed to read refined skills", exc_info=True)
+        return []
+
+
 def read_skills(
     workspace_root: str | Path,
     *,
@@ -129,7 +175,8 @@ def read_skills(
     try:
         bundled = _read_bundled_skills()
         graduated = _read_graduated_skills(workspace_root, window_days=window_days)
-        return bundled + graduated
+        refined = _read_refined_skills(workspace_root)
+        return bundled + graduated + refined
     except Exception:
         logger.debug("read_skills failed", exc_info=True)
         return []
