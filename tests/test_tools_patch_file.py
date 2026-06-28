@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from aura.conversation.tools._types import ApprovalDecision, ToolExecResult
+from aura.conversation.tools._types import ApprovalDecision
 from aura.conversation.tools.fs_read import read_file, read_file_range
 from aura.conversation.tools.fs_write import propose_patch_file
 from aura.conversation.tools.registry import ToolRegistry
@@ -296,13 +297,22 @@ def test_patch_file_invalid_python_blocks_before_approval(tmp_workspace, monkeyp
     assert target.read_bytes() == original
 
 
-def test_patch_file_runs_craft_once_for_multiple_hunks(tmp_workspace):
+def test_patch_file_runs_craft_once_for_multiple_hunks(tmp_workspace, monkeypatch):
     target = tmp_workspace / "a.py"
     target.write_text("alpha = 1\nbeta = 2\n", encoding="utf-8")
     registry = ToolRegistry(tmp_workspace, mode="worker")
+    monkeypatch.setenv("AURA_CRAFT", "1")
 
-    with patch("aura.conversation.tools._write_mixin._run_craft_gate") as craft:
-        craft.return_value = None
+    with patch("aura.conversation.tools.craft_gate.CraftEngine") as craft_engine:
+        engine = craft_engine.return_value
+        engine.process_proposal.return_value = SimpleNamespace(
+            approved=True,
+            cleaned_code="alpha = 10\nbeta = 20\n",
+            metadata={},
+            soft_issues=[],
+            hard_issues=[],
+            issues=[],
+        )
         result = registry.execute(
             "patch_file",
             {
@@ -317,28 +327,34 @@ def test_patch_file_runs_craft_once_for_multiple_hunks(tmp_workspace):
         )
 
     assert result.ok is True
-    craft.assert_called_once()
-    assert craft.call_args.args[1] == "patch_file"
+    engine.process_proposal.assert_called_once()
+    assert engine.process_proposal.call_args.args[0].tool_name == "patch_file"
 
 
-def test_patch_file_craft_block_is_not_applied_without_write(tmp_workspace):
+def test_patch_file_craft_block_is_not_applied_without_write(tmp_workspace, monkeypatch):
     target = tmp_workspace / "a.py"
     original = "value = 1\n"
     target.write_text(original, encoding="utf-8")
     registry = ToolRegistry(tmp_workspace, mode="worker")
-    blocked = ToolExecResult(
-        ok=False,
-        payload={
-            "ok": False,
-            "applied": False,
-            "path": "a.py",
-            "failure_class": "craft_blocked",
-            "write_outcome": "not_applied_craft_rejected",
-            "craft_issues": [{"code": "stub-body-pass"}],
-        },
+    monkeypatch.setenv("AURA_CRAFT", "1")
+    issue = SimpleNamespace(
+        line=1,
+        column=None,
+        code="stub-body-pass",
+        message="Stub body blocked",
+        suggestion="Replace stub",
+        severity="hard",
     )
 
-    with patch("aura.conversation.tools._write_mixin._run_craft_gate", return_value=blocked):
+    with patch("aura.conversation.tools.craft_gate.CraftEngine") as craft_engine:
+        craft_engine.return_value.process_proposal.return_value = SimpleNamespace(
+            approved=False,
+            cleaned_code="",
+            metadata={},
+            soft_issues=[],
+            hard_issues=[issue],
+            issues=[issue],
+        )
         result = registry.execute(
             "patch_file",
             {
