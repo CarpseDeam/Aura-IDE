@@ -163,6 +163,59 @@ def _read_refined_skills(workspace_root: str | Path) -> list[Skill]:
         return []
 
 
+def _read_user_authored_skills(workspace_root: str | Path) -> list[Skill]:
+    """Read user-authored skill JSON files from .aura/skills/authored/."""
+    try:
+        authored_dir = Path(workspace_root) / ".aura" / "skills" / "authored"
+        if not authored_dir.is_dir():
+            return []
+
+        skills: list[Skill] = []
+        for entry in sorted(authored_dir.iterdir()):
+            if entry.suffix != ".json":
+                continue
+            try:
+                raw = entry.read_text(encoding="utf-8")
+                data = json.loads(raw)
+            except Exception:
+                logger.debug("Failed to read user-authored skill %s", entry, exc_info=True)
+                continue
+            if isinstance(data, dict):
+                items = (data,)
+            elif isinstance(data, list):
+                items = data
+            else:
+                continue
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                text = item.get("text", "")
+                if not text:
+                    continue
+                task_kinds = tuple(item.get("task_kinds", []) or [])
+                path_globs = tuple(item.get("path_globs", []) or [])
+                model = item.get("model", None)
+                raw_origin = item.get("origin", [])
+                if isinstance(raw_origin, list):
+                    origin = tuple(tuple(pair) for pair in raw_origin)
+                else:
+                    origin = ()
+                skills.append(
+                    Skill(
+                        text=text,
+                        task_kinds=task_kinds,
+                        path_globs=path_globs,
+                        model=model,
+                        provenance=SkillProvenance.USER_AUTHORED,
+                        origin=origin,
+                    )
+                )
+        return skills
+    except Exception:
+        logger.debug("Failed to read user-authored skills", exc_info=True)
+        return []
+
+
 def read_skills(
     workspace_root: str | Path,
     *,
@@ -173,10 +226,11 @@ def read_skills(
     Returns empty list on any failure — never propagates exceptions.
     """
     try:
+        authored = _read_user_authored_skills(workspace_root)
         bundled = _read_bundled_skills()
         graduated = _read_graduated_skills(workspace_root, window_days=window_days)
         refined = _read_refined_skills(workspace_root)
-        return bundled + graduated + refined
+        return authored + bundled + graduated + refined
     except Exception:
         logger.debug("read_skills failed", exc_info=True)
         return []

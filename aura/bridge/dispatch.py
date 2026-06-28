@@ -543,7 +543,13 @@ class _DispatchProxy(QObject):
             target_files=tuple(task_spec.files),
         )
         context_gearbox = context_gearbox_metadata(
-            composed_prompt.ledger, workspace_root=self._workspace_root,
+            composed_prompt.ledger,
+            workspace_root=self._workspace_root,
+            task_kind=(
+                task_spec.task_shape.task_kind
+                if task_spec.task_shape is not None
+                else None
+            ),
         )
         self._tier1_context = composed_prompt.context_text
         _log.info(

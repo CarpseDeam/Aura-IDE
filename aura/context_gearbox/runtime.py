@@ -118,11 +118,12 @@ def context_gearbox_metadata(
     entries: Iterable[ContextLedgerEntry],
     *,
     workspace_root: Path | None = None,
+    task_kind: str | None = None,
 ) -> dict[str, Any]:
     """Return the inspectable Context Gearbox payload without prompt text.
 
-    When *workspace_root* is provided and the resulting utility dict is
-    non-empty, includes a ``"utility"`` key with per-source utility data.
+    When *workspace_root* is provided, may include inspect-only ``"utility"``
+    and ``"eviction"`` keys with per-source utility and dry-run eviction data.
     """
     ledger = serialize_context_ledger(entries)
     metadata: dict[str, Any] = {
@@ -141,6 +142,18 @@ def context_gearbox_metadata(
                 }
         except Exception:
             _log.exception("Failed to derive source utility (degrading)")
+    if workspace_root is not None:
+        try:
+            from aura.skills.eviction import (
+                compute_eviction_verdicts,
+                summarize_eviction_report,
+            )
+
+            verdicts = compute_eviction_verdicts(workspace_root, task_kind=task_kind)
+            if verdicts:
+                metadata["eviction"] = summarize_eviction_report(verdicts)
+        except Exception:
+            _log.exception("Failed to derive skill eviction report (degrading)")
     return metadata
 
 
@@ -195,6 +208,27 @@ def format_context_gearbox_display(metadata: dict[str, Any]) -> list[str]:
                 )
         if parts:
             lines.append("Utility: " + " | ".join(parts))
+
+    eviction = metadata.get("eviction") if isinstance(metadata, dict) else None
+    if isinstance(eviction, dict):
+        would_evict_count = int(eviction.get("would_evict_count") or 0)
+        would_evict = eviction.get("would_evict")
+        if would_evict_count > 0 and isinstance(would_evict, list):
+            parts: list[str] = []
+            for item in would_evict:
+                if not isinstance(item, dict):
+                    continue
+                skill_id = str(item.get("skill_id") or "").strip()
+                task_kind = str(item.get("task_kind") or "").strip()
+                reason = str(item.get("reason") or "").strip()
+                if not skill_id:
+                    continue
+                parts.append(f"{skill_id} terrain={task_kind} reason={reason}")
+            if parts:
+                lines.append(
+                    f"Eviction (dry-run): would withhold {would_evict_count}: "
+                    + " | ".join(parts)
+                )
 
     return lines
 

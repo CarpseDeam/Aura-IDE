@@ -27,11 +27,15 @@ def format_skills(skills: list[Skill], limit: int = 5) -> str:
         return ""
     top = skills[:limit]
 
+    authored = [s for s in top if s.provenance == SkillProvenance.USER_AUTHORED]
     bundled = [s for s in top if s.provenance == SkillProvenance.BUNDLED]
     graduated = [s for s in top if s.provenance == SkillProvenance.FAILURE_GRADUATED]
     refined = [s for s in top if s.provenance == SkillProvenance.REFLECTION_REFINED]
 
     parts: list[str] = []
+    if authored:
+        parts.append("### Project Engineering Standards")
+        parts.extend(s.text for s in authored)
     if graduated:
         parts.append("### Learned Hazard Guards")
         parts.extend(s.text for s in graduated)
