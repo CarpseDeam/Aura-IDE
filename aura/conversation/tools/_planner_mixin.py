@@ -5,7 +5,7 @@ from typing import Any
 from aura.conversation.tools._types import ToolExecResult
 from aura.drones.store import DroneStore
 from aura.research.adapter import WEB_RESEARCH_DRONE_ID
-from aura.research.result import ResearchResult, format_research_answer
+from aura.research.result import format_research_answer
 
 
 class PlannerHandlersMixin:
@@ -207,7 +207,7 @@ class PlannerHandlersMixin:
             )
             if drone_id == WEB_RESEARCH_DRONE_ID:
                 result = dict(result)
-                result["answer_for_chat"] = format_web_research_answer(result)
+                result["answer_for_chat"] = format_research_answer(result)
             return ToolExecResult(ok=True, payload=result)
         except Exception as exc:
             return ToolExecResult(
@@ -398,8 +398,7 @@ class PlannerHandlersMixin:
 
 def format_web_research_answer(result: dict[str, Any]) -> str:
     """Compatibility wrapper for compact Web Research Drone chat prose."""
-    normalized = ResearchResult.from_drone_receipt(result)
-    return format_research_answer(normalized)
+    return format_research_answer(result)
 
 
 __all__ = [
