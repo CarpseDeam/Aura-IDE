@@ -104,6 +104,7 @@ from aura.conversation.worker_final_validation import (
     emit_explicit_validation_result,
     run_explicit_validation_commands,
 )
+from aura.conversation.worker_flow import WorkerFlowHarness
 from aura.conversation.worker_recovery_messages import (
     PATCH_CANDIDATE_INVALID_SYNTAX_ACTION,
     WORKER_AUTO_PY_COMPILE_INSTRUCTION,
@@ -215,6 +216,20 @@ def _fingerprint_paths(paths: set[str], workspace_root) -> str:
     return digest.hexdigest()
 
 
+def _terminal_payload(loop_info: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(loop_info, dict):
+        return {}
+    payload = loop_info.get("_terminal_payload")
+    return payload if isinstance(payload, dict) else {}
+
+
+def _terminal_payload_ok(loop_info: dict[str, Any] | None) -> bool | None:
+    payload = _terminal_payload(loop_info)
+    if "ok" not in payload:
+        return None
+    return bool(payload.get("ok"))
+
+
 class ConversationManager:
     def __init__(
         self,
@@ -277,6 +292,7 @@ class ConversationManager:
         mode = getattr(self._tools, "mode", "single")
         limits = ToolLimitState(mode=mode)
         stream_buffer = WorkerStreamBuffer() if mode == "worker" else None
+        worker_flow = WorkerFlowHarness() if mode == "worker" else None
         candidate_final_message: dict[str, Any] | None = None
         rounds_used = 0
         worker_needs_final_report = False
@@ -393,6 +409,8 @@ class ConversationManager:
                 return
 
             tool_calls = full_message.get("tool_calls") or []
+            if worker_flow is not None:
+                worker_flow.observe_assistant_message(full_message)
             if (
                 not tool_calls
                 and mode in {"planner", "single"}
@@ -846,6 +864,8 @@ class ConversationManager:
                         _worker_phase_boundary_info = limit_info
                     continue
                 limits.record(name)
+                if worker_flow is not None:
+                    worker_flow.observe_tool_call(name, args)
                 tasks.append({"id": tool_call_id, "name": name, "args": args})
 
             if cancel_event.is_set():
@@ -944,6 +964,12 @@ class ConversationManager:
                         "id": tool_call_id,
                         "skip": True,
                         "completed_tool_result_for_final": terminal_result_completed(loop_info),
+                        "flow_result": {
+                            "name": name,
+                            "args": args,
+                            "ok": _terminal_payload_ok(loop_info),
+                            "result_payload": _terminal_payload(loop_info),
+                        },
                     }
 
                 if name == "run_terminal_command":
@@ -970,6 +996,12 @@ class ConversationManager:
                         "id": tool_call_id,
                         "skip": True,
                         "completed_tool_result_for_final": terminal_result_completed(loop_info),
+                        "flow_result": {
+                            "name": name,
+                            "args": args,
+                            "ok": _terminal_payload_ok(loop_info),
+                            "result_payload": _terminal_payload(loop_info),
+                        },
                     }
 
                 if reject_all_for_turn and name in WRITE_TOOLS:
@@ -991,7 +1023,13 @@ class ConversationManager:
                             ok=False,
                             result=payload,
                             extras={"approval": "reject_all"},
-                        )
+                        ),
+                        "flow_result": {
+                            "name": name,
+                            "args": args,
+                            "ok": False,
+                            "result_payload": payload,
+                        },
                     }
 
                 exec_result = self._tools.execute(
@@ -1052,6 +1090,12 @@ class ConversationManager:
                         mode in {"planner", "single"}
                         and tool_result_completes_action(name, exec_result.ok)
                     ),
+                    "flow_result": {
+                        "name": name,
+                        "args": args,
+                        "ok": exec_result.ok,
+                        "result_payload": tool_msg_content,
+                    },
                 }
 
             # Only parallelize read-only tools to avoid race conditions.
@@ -1087,9 +1131,11 @@ class ConversationManager:
             # History is not thread-safe. Reorder results by original tool_call_id order and append.
             results_by_id = {r.get("id"): r for r in results_to_append if r is not None}
 
+            flow_steering_suppressed = False
             if stale_validation_notes:
                 note_text = "\n".join(stale_validation_notes)
                 self._history.append_user_text(note_text)
+                flow_steering_suppressed = True
 
             completed_dispatch_for_final = False
             completed_tool_result_for_final = False
@@ -1118,6 +1164,14 @@ class ConversationManager:
                     completed_dispatch_for_final = True
                 if res.get("completed_tool_result_for_final"):
                     completed_tool_result_for_final = True
+                if worker_flow is not None and res.get("flow_result"):
+                    flow_result = res["flow_result"]
+                    worker_flow.observe_tool_result(
+                        flow_result.get("name", task["name"]),
+                        flow_result.get("args", task["args"]),
+                        flow_result.get("ok"),
+                        flow_result.get("result_payload"),
+                    )
                 if res.get("skip"):
                     continue
 
@@ -1146,6 +1200,11 @@ class ConversationManager:
             # The Research Completed card is the final user-facing result.
             if _terminal_dispatch:
                 return
+
+            if worker_flow is not None and not flow_steering_suppressed:
+                steering = worker_flow.pop_pending_steering()
+                if steering:
+                    self._history.append_user_text(steering)
 
     def _finish_worker_unrecoverable(
         self,
