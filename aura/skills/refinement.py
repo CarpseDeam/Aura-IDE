@@ -223,10 +223,13 @@ def derive_refinement_candidates(
         conn.execute("PRAGMA journal_mode=WAL")
         conn.row_factory = sqlite3.Row
 
-        rows = conn.execute(
-            "SELECT tool_call_id, status, task_kind, target_files "
-            "FROM outcome_joins"
-        ).fetchall()
+        rows = [
+            dict(r)
+            for r in conn.execute(
+                "SELECT tool_call_id, status, task_kind, target_files "
+                "FROM outcome_joins"
+            ).fetchall()
+        ]
 
         # Filter to failures (not-success)
         failed_rows = [r for r in rows if not _is_success_status(r["status"])]

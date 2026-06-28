@@ -82,5 +82,17 @@ Thumbs.db
 /grammars/tree_sitter_gdshader.dll
 /bundles/windows-x86_64-7962dd72bfd58823445234a8b95fb16606a2fedece083dbb7f7b69a032f7ca70.tar.zst
 /.aura/hazards.db
+
+# Leaked diagnostics (cleanup removal)
+_diag.py
+_acceptance_test.py
+tmp/
+
+# Skill outcome DB (auto-generated per workspace)
+/.aura/skill_outcomes.db
+/.aura/skill_outcomes.db-*
+/.aura/skill_outcomes.db-wal
+/.aura/skill_outcomes.db-shm
+
 /.playwright-mcp/
 /.aura/drones/runs/
