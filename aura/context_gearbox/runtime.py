@@ -16,6 +16,10 @@ _ROLE_PROMPTS = {
     RuntimeRole.PLANNER: """Planner role:
 - Identify the user's intent and likely task lane.
 - Inspect minimal repository context when needed.
+- Own intent, target seam, allowed files, constraints, non-goals, and validation expectations.
+- Create a compact Worker task capsule, then stop.
+- Planner must not write code, sketch patches, plan hunks, or do exact implementation/edit reasoning.
+- Worker owns implementation reasoning, exact edits, validation execution, and final code-quality decisions.
 - Dispatch implementation work instead of coding directly.
 - Rely on deterministic router output and tool results when available.""",
     RuntimeRole.WORKER: """Worker role:

@@ -42,8 +42,51 @@ from aura.conversation.dispatch import (
 )
 from aura.conversation.history import History
 from aura.conversation.task_shape import TaskShape, infer_task_shape
+from aura.conversation.tools._schemas import DISPATCH_TOOL_DEF
 
 # WorkerDispatchRequest
+
+
+def _dispatch_schema_text() -> str:
+    return json.dumps(DISPATCH_TOOL_DEF, sort_keys=True)
+
+
+def test_dispatch_to_worker_schema_uses_compact_capsule_not_file_plan():
+    schema_text = _dispatch_schema_text()
+    schema_text_lower = schema_text.lower()
+
+    assert "file-by-file implementation plan" not in schema_text_lower
+    assert "complete implementation handoff" not in schema_text_lower
+    assert "complete, self-contained implementation handoff" not in schema_text_lower
+    assert "compact, self-contained worker task capsule" in schema_text_lower
+
+
+def test_dispatch_to_worker_schema_capsule_stays_self_contained():
+    schema_text = _dispatch_schema_text().lower()
+    properties = DISPATCH_TOOL_DEF["function"]["parameters"]["properties"]
+
+    for phrase in (
+        "target seam",
+        "files allowed",
+        "behavior to preserve",
+        "constraints / non-goals",
+        "validation commands",
+        "summary",
+    ):
+        assert phrase in schema_text
+
+    for field in (
+        "target_regions",
+        "validation_commands",
+        "non_goals",
+        "allowed_responsibilities",
+        "forbidden_responsibilities",
+        "expected_public_symbols",
+        "expected_dataclass_fields",
+        "forbidden_public_methods",
+        "forbidden_calls",
+    ):
+        assert field in properties
 
 
 def _run_worker_dispatch_with_context_metadata(

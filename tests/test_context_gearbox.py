@@ -9,6 +9,7 @@ from aura.context_gearbox.models import ComposedContext, ContextLedgerEntry, Run
 from aura.context_gearbox.runtime import (
     compose_system_prompt,
     context_gearbox_metadata,
+    default_role_prompt,
     format_context_gearbox_display,
     serialize_context_ledger,
     summarize_context_ledger,
@@ -116,6 +117,15 @@ def test_prompt_compatibility_exports_work(tmp_path):
     assert inject_tier1_context("A {TIER1_CONTEXT} B", "ctx") == "A ctx B"
     assert isinstance(build_tier1_context(tmp_path), str)
     assert "worker_execution_contract" in build_tier1_context(tmp_path, mode="worker")
+
+
+def test_planner_prompt_blocks_exact_implementation_edit_reasoning():
+    prompt = default_role_prompt(RuntimeRole.PLANNER)
+
+    assert "target seam, allowed files, constraints, non-goals" in prompt
+    assert "Planner must not write code" in prompt
+    assert "exact implementation/edit reasoning" in prompt
+    assert "Worker owns implementation reasoning, exact edits" in prompt
 
 
 def test_composer_returns_composed_context_with_core_kernel(tmp_path):

@@ -609,11 +609,14 @@ DISPATCH_TOOL_DEF: dict[str, Any] = {
             "Dispatch a coding task to a worker model with file write access. Use this when "
             "the user has agreed to a code change and you have enough information to specify "
             "the change precisely. The worker has tools to read and edit files in the "
-            "workspace. Provide a complete, self-contained implementation handoff — the "
-            "worker does not see this conversation. Include: goal, files involved (use "
-            "exact paths from your earlier read_file calls), a concise Builder Note with "
-            "the specific change and important constraints, acceptance checks, and a self-terminating run_command smoke check for any change that affects whether the app boots or a runnable entry point behaves. The "
-            "worker will return a summary of what it did."
+            "workspace. Provide a compact, self-contained worker task capsule — the worker "
+            "does not see this conversation. Include: goal, target seam, files allowed, "
+            "behavior to preserve, constraints / non-goals, validation commands or checks, "
+            "and a summary. Do not write code, sketch patches, plan hunks, or solve exact "
+            "implementation details here; the worker owns those decisions. Include a "
+            "self-terminating run_command smoke check for any change that affects whether "
+            "the app boots or a runnable entry point behaves. The worker will return a "
+            "summary of what it did."
         ),
         "parameters": {
             "type": "object",
@@ -668,20 +671,18 @@ DISPATCH_TOOL_DEF: dict[str, Any] = {
                 "spec": {
                     "type": "string",
                     "description": (
-                        "Self-contained Builder Note / implementation handoff. Write concise "
-                        "plain English, like a senior engineer handing work to a capable "
-                        "builder. Include the important behavior, constraints, and known "
-                        "pitfalls. For genuinely small, localized single-file edits, keep this "
-                        "lean and direct; formal sections are not required. For any task that "
-                        "touches more than one file, is a refactor, moves or renames symbols, "
-                        "or changes broad/risky behavior, you MUST include a File-by-File "
-                        "Implementation Plan. That plan must describe each target file "
-                        "explicitly, naming the exact symbol or region to change and the "
-                        "intended end state for that file. Base file paths, symbols, regions, "
-                        "and any line numbers on CURRENT read_file results from this dispatch "
-                        "turn for each target, not earlier reads; stale paths and line numbers "
-                        "cause worker thrash. The worker has not seen the conversation, so "
-                        "include necessary context."
+                        "Self-contained worker task capsule. Write concise plain English, "
+                        "like a senior engineer naming the work boundary for a capable "
+                        "builder. Include the target seam, files allowed, behavior to "
+                        "preserve, constraints / non-goals, validation commands or checks, "
+                        "and necessary context. Keep this lean and direct even for multi-file "
+                        "work: identify seams and boundaries, but do not write code, sketch "
+                        "patches, plan hunks, or solve exact implementation details. Base "
+                        "file paths, symbols, regions, and any line numbers on CURRENT "
+                        "read_file results from this dispatch turn for each target, not "
+                        "earlier reads; stale paths and line numbers cause worker thrash. "
+                        "The worker has not seen the conversation, so include necessary "
+                        "context."
                     ),
                 },
                 "acceptance": {
