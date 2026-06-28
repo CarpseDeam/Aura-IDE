@@ -14,6 +14,26 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any
 
+from aura.conversation.worker_flow_helpers import (
+    BROAD_ORIENTATION_TOOLS,
+    TARGETED_READ_TOOLS,
+    WRITE_TOOLS,
+    VALIDATION_TOOLS,
+    _assistant_text,
+    _content_text,
+    _has_full_picture_plus_followup,
+    _inventory_restatement_marker_count,
+    _int_or_none,
+    _parse_payload,
+    _path_mentions,
+    _payload_is_large,
+    _planning_marker_count,
+    _read_payload_items,
+    _tool_call_name_args,
+    _tool_paths,
+    _write_was_applied,
+)
+
 
 WORKER_FLOW_STEERING_TEXT = (
     "Worker Flow: continue from the locked inventory. Stop restating the plan. "
@@ -21,6 +41,13 @@ WORKER_FLOW_STEERING_TEXT = (
     "missing facts. Make the next smallest safe edit now. Preserve protected "
     "control-flow regions and "
     "avoid whole-file reconstruction."
+)
+
+WORKER_FLOW_VALIDATION_REQUIRED_TEXT = (
+    "Worker Flow: files were changed and validation has not run yet. Run the "
+    "focused validation command now. Do not summarize or plan. Use "
+    "run_terminal_command with the smallest relevant py_compile or pytest "
+    "command, then finish only after it passes."
 )
 
 
@@ -174,6 +201,8 @@ class WorkerFlowState:
     exact_targets_named: bool = False
     extraction_or_refactor: bool = False
     protected_large_file_danger_signs: int = 0
+    broad_orientation_restricted: bool = False
+    validation_required_before_final: bool = False
     pending_steering_message: str = ""
     pending_steering_reason: str = ""
 
@@ -217,6 +246,56 @@ class WorkerFlowHarness:
     def should_steer(self) -> bool:
         return bool(self.state.pending_steering_message)
 
+    def filter_tool_defs(self, tool_defs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not self.should_restrict_broad_orientation():
+            return tool_defs
+        return [
+            tool_def
+            for tool_def in tool_defs
+            if _tool_def_name(tool_def) not in BROAD_ORIENTATION_TOOLS
+        ]
+
+    def should_restrict_broad_orientation(self) -> bool:
+        return bool(self.state.broad_orientation_restricted)
+
+    def should_block_tool(self, name: str, args: dict[str, Any] | None = None) -> dict[str, Any] | None:
+        if not self.should_restrict_broad_orientation() or name not in BROAD_ORIENTATION_TOOLS:
+            return None
+        return {
+            "ok": False,
+            "tool": name,
+            "args": args if isinstance(args, dict) else {},
+            "failure_class": "worker_flow_broad_orientation_restricted",
+            "recoverable": True,
+            "internal_recovery_steer": True,
+            "worker_flow_block": True,
+            "error": (
+                "Worker Flow temporarily blocked broad orientation after the "
+                "inventory was locked and re-orientation was detected."
+            ),
+            "suggested_tool": "read_file_range",
+            "suggested_next_tool": "read_file_range",
+            "suggested_next_action": (
+                "Use targeted reads for exact missing facts, patch_file/write_file/delete_file "
+                "for edits, or run_terminal_command/run_and_watch for focused validation."
+            ),
+            "allowed_tool_groups": {
+                "targeted_reads": sorted(TARGETED_READ_TOOLS),
+                "writes": sorted(WRITE_TOOLS),
+                "validation": sorted(VALIDATION_TOOLS),
+            },
+        }
+
+    def requires_validation_before_final(self) -> bool:
+        return bool(self.state.validation_required_before_final)
+
+    def mark_validation_satisfied(self) -> None:
+        self.state.validation_required_before_final = False
+        self._clear_broad_orientation_restriction()
+
+    def mark_non_thrashing(self) -> None:
+        self._clear_broad_orientation_restriction()
+
     def observe_assistant_message(self, full_message: dict[str, Any] | str | None) -> None:
         text = _assistant_text(full_message)
         if text:
@@ -252,6 +331,7 @@ class WorkerFlowHarness:
         if name in VALIDATION_TOOLS:
             self.state.validation_intents += 1
             self._add_evidence("validation_commands")
+            self._clear_broad_orientation_restriction()
 
     def observe_tool_result(
         self,
@@ -279,6 +359,7 @@ class WorkerFlowHarness:
         if name in WRITE_TOOLS:
             if _write_was_applied(name, ok, payload):
                 self.state.write_actions += 1
+                self.state.validation_required_before_final = True
                 self._advance_to(WorkerFlowPhase.editing)
                 self._reduce_orientation_pressure()
             return
@@ -286,6 +367,9 @@ class WorkerFlowHarness:
         if name in VALIDATION_TOOLS:
             self.state.validation_actions += 1
             self._advance_to(WorkerFlowPhase.validating)
+            self._clear_broad_orientation_restriction()
+            if _tool_result_succeeded(ok, payload):
+                self.mark_validation_satisfied()
 
     def pop_pending_steering(self) -> str:
         message = self.state.pending_steering_message
@@ -425,14 +509,20 @@ class WorkerFlowHarness:
     def _reduce_orientation_pressure(self) -> None:
         self.state.planning_restatements_since_write = 0
         self.state.extraction_inventory_restatements_since_write = 0
+        self._clear_broad_orientation_restriction()
         if self.state.pending_steering_reason in {"orientation", "broad_read"}:
             self.state.pending_steering_message = ""
             self.state.pending_steering_reason = ""
 
     def _queue_steering(self, reason: str) -> None:
+        if reason in {"orientation", "broad_read"} and self.state.inventory_locked:
+            self.state.broad_orientation_restricted = True
         if not self.state.pending_steering_message:
             self.state.pending_steering_message = WORKER_FLOW_STEERING_TEXT
             self.state.pending_steering_reason = reason
+
+    def _clear_broad_orientation_restriction(self) -> None:
+        self.state.broad_orientation_restricted = False
 
 
 def _assistant_text(full_message: dict[str, Any] | str | None) -> str:
@@ -596,12 +686,23 @@ def _payload_is_large(payload: dict[str, Any], large_file_bytes: int, large_file
     return isinstance(content, str) and len(content) >= large_file_bytes
 
 
+def _tool_def_name(tool_def: dict[str, Any]) -> str:
+    function = tool_def.get("function")
+    return str(function.get("name") or "") if isinstance(function, dict) else ""
+
+
+def _tool_result_succeeded(ok: bool | None, payload: dict[str, Any]) -> bool:
+    return ok is True or payload.get("ok") is True
+
+
 def _write_was_applied(name: str, ok: bool | None, payload: dict[str, Any]) -> bool:
     if ok is False:
         return False
     if payload.get("applied") is True:
         return True
-    if payload.get("ok") is True and name == "delete_file":
+    if payload.get("applied") is False:
+        return False
+    if payload.get("ok") is True and name in WRITE_TOOLS:
         return True
     return bool(ok and not payload)
 
@@ -617,6 +718,7 @@ __all__ = [
     "BROAD_ORIENTATION_TOOLS",
     "TARGETED_READ_TOOLS",
     "VALIDATION_TOOLS",
+    "WORKER_FLOW_VALIDATION_REQUIRED_TEXT",
     "WORKER_FLOW_STEERING_TEXT",
     "WRITE_TOOLS",
     "WorkerFlowHarness",

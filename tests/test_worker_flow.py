@@ -3,10 +3,19 @@ from __future__ import annotations
 import json
 
 from aura.conversation.worker_flow import (
+    BROAD_ORIENTATION_TOOLS,
     WORKER_FLOW_STEERING_TEXT,
     WorkerFlowHarness,
     WorkerFlowPhase,
 )
+
+
+def _tool_defs(*names: str) -> list[dict]:
+    return [{"type": "function", "function": {"name": name}} for name in names]
+
+
+def _tool_names(tool_defs: list[dict]) -> set[str]:
+    return {tool["function"]["name"] for tool in tool_defs}
 
 
 def _lock_inventory(harness: WorkerFlowHarness) -> None:
@@ -20,6 +29,57 @@ def _lock_inventory(harness: WorkerFlowHarness) -> None:
         }
     )
     assert harness.state.inventory_locked is True
+
+
+def test_normal_first_pass_worker_inspection_exposes_broad_read_tools() -> None:
+    harness = WorkerFlowHarness()
+    tool_defs = _tool_defs("read_file", "grep_search", "read_file_range", "patch_file")
+
+    filtered = harness.filter_tool_defs(tool_defs)
+
+    assert filtered == tool_defs
+    assert {"read_file", "grep_search"}.issubset(_tool_names(filtered))
+
+
+def test_dense_planning_after_inventory_lock_filters_broad_orientation_tools() -> None:
+    harness = WorkerFlowHarness()
+    _lock_inventory(harness)
+    harness.observe_assistant_message(
+        "Let me read the helper again. Now I have the full picture. Let me plan the hunks."
+    )
+
+    filtered = harness.filter_tool_defs(
+        _tool_defs(
+            "read_file",
+            "read_files",
+            "grep_search",
+            "read_file_range",
+            "find_usages",
+            "patch_file",
+            "run_terminal_command",
+        )
+    )
+    names = _tool_names(filtered)
+
+    assert harness.should_restrict_broad_orientation() is True
+    assert not (names & BROAD_ORIENTATION_TOOLS)
+    assert {"read_file_range", "find_usages", "patch_file", "run_terminal_command"}.issubset(names)
+
+
+def test_broad_tool_call_during_ratchet_gets_recoverable_block() -> None:
+    harness = WorkerFlowHarness()
+    _lock_inventory(harness)
+    harness.observe_assistant_message(
+        "Let me read the helper again. Now I have the full picture. Let me plan the hunks."
+    )
+
+    block = harness.should_block_tool("read_file", {"path": "aura/conversation/manager.py"})
+
+    assert block is not None
+    assert block["ok"] is False
+    assert block["recoverable"] is True
+    assert block["failure_class"] == "worker_flow_broad_orientation_restricted"
+    assert "targeted reads" in block["suggested_next_action"]
 
 
 def test_repeated_broad_reads_of_same_large_file_after_inventory_lock_produce_steering() -> None:
@@ -129,6 +189,7 @@ def test_write_action_advances_phase_and_reduces_orientation_pressure() -> None:
 
     assert harness.state.phase == WorkerFlowPhase.editing
     assert harness.state.write_actions == 1
+    assert harness.requires_validation_before_final() is True
     assert harness.state.planning_restatements_since_write == 0
     assert harness.pending_steering_message == ""
 
@@ -157,6 +218,25 @@ def test_validation_action_advances_phase_to_validating() -> None:
 
     assert harness.state.phase == WorkerFlowPhase.validating
     assert harness.state.validation_actions == 1
+
+
+def test_successful_validation_clears_validation_required_state() -> None:
+    harness = WorkerFlowHarness()
+    _lock_inventory(harness)
+    harness.observe_tool_call("patch_file", {"path": "aura/conversation/worker_flow.py", "edits": []})
+    harness.observe_tool_result(
+        "patch_file",
+        {"path": "aura/conversation/worker_flow.py", "edits": []},
+        True,
+        {"ok": True, "path": "aura/conversation/worker_flow.py", "applied": True},
+    )
+    assert harness.requires_validation_before_final() is True
+
+    args = {"command": "python -m py_compile aura/conversation/worker_flow.py"}
+    harness.observe_tool_call("run_terminal_command", args)
+    harness.observe_tool_result("run_terminal_command", args, True, {"ok": True, "command": args["command"]})
+
+    assert harness.requires_validation_before_final() is False
 
 
 def test_normal_first_pass_inspection_does_not_produce_steering() -> None:

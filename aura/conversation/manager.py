@@ -104,7 +104,10 @@ from aura.conversation.worker_final_validation import (
     emit_explicit_validation_result,
     run_explicit_validation_commands,
 )
-from aura.conversation.worker_flow import WorkerFlowHarness
+from aura.conversation.worker_flow import (
+    WORKER_FLOW_VALIDATION_REQUIRED_TEXT,
+    WorkerFlowHarness,
+)
 from aura.conversation.worker_recovery_messages import (
     PATCH_CANDIDATE_INVALID_SYNTAX_ACTION,
     WORKER_AUTO_PY_COMPILE_INSTRUCTION,
@@ -313,6 +316,7 @@ class ConversationManager:
         import_verification_required: set[str] = set()
         write_attempts_by_path: dict[str, int] = {}
         worker_recovery_nudge_sent = False
+        worker_validation_nudge_sent = False
         stale_validation_notes: list[str] = []
         worker_app_writes: set[str] = set()
         last_launch_ok_fingerprint: str | None = None
@@ -348,6 +352,8 @@ class ConversationManager:
 
             full_message: dict[str, Any] | None = None
             tool_defs = [] if worker_needs_final_report else self._tools.tool_defs()
+            if worker_flow is not None:
+                tool_defs = worker_flow.filter_tool_defs(tool_defs)
             if stream_buffer is not None:
                 stream_buffer.begin_round()
 
@@ -626,6 +632,8 @@ class ConversationManager:
                             )
                             if all_ok:
                                 syntax_validation_required.clear()
+                                if worker_flow is not None:
+                                    worker_flow.mark_validation_satisfied()
                                 # --- Import verification rung ---
                                 import_ok, import_diag = run_focused_import_check(
                                     Path(self._tools.workspace_root),
@@ -822,6 +830,36 @@ class ConversationManager:
                             discard_worker_candidate_final()
                             continue
                         explicit_validation_failure_counts.clear()
+                        if worker_flow is not None:
+                            worker_flow.mark_validation_satisfied()
+                    if (
+                        worker_flow is not None
+                        and worker_flow.requires_validation_before_final()
+                    ):
+                        if not worker_validation_nudge_sent:
+                            self._history.append_user_text(
+                                WORKER_FLOW_VALIDATION_REQUIRED_TEXT
+                            )
+                            worker_validation_nudge_sent = True
+                            discard_worker_candidate_final()
+                            continue
+                        discard_worker_candidate_final()
+                        self._finish_worker_recoverable_followup(
+                            on_event,
+                            failure_class="worker_validation_required",
+                            error=(
+                                "Worker stopped after changing files without running "
+                                "focused validation after one validation nudge."
+                            ),
+                            details={
+                                "suggested_next_tool": "run_terminal_command",
+                                "suggested_next_action": (
+                                    "Run the smallest relevant py_compile or pytest "
+                                    "command, then provide the final report."
+                                ),
+                            },
+                        )
+                        return
                     # All gates passed — release candidate final and flush buffer
                     if candidate_final_message is not None:
                         self._history.append_assistant(candidate_final_message)
@@ -857,6 +895,20 @@ class ConversationManager:
                     )
                     continue
 
+                flow_block = (
+                    worker_flow.should_block_tool(name, args)
+                    if worker_flow is not None
+                    else None
+                )
+                if flow_block is not None:
+                    tasks.append({
+                        "id": tool_call_id,
+                        "name": name,
+                        "args": args,
+                        "flow_block": flow_block,
+                    })
+                    continue
+
                 allowed, limit_info = limits.check(name)
                 if not allowed:
                     self._append_limit_tool_result(tool_call_id, name, limit_info, on_event)
@@ -877,6 +929,10 @@ class ConversationManager:
                 tool_call_id = task["id"]
                 name = task["name"]
                 args = task["args"]
+
+                flow_block = task.get("flow_block")
+                if isinstance(flow_block, dict):
+                    return blocked_tool_result(tool_call_id, name, flow_block)
 
                 if mode == "worker":
                     blocked = self._worker_recovery_block(
@@ -1216,6 +1272,33 @@ class ConversationManager:
     ) -> None:
         payload = {
             "ok": False,
+            "failure_class": failure_class,
+            "error": error,
+        }
+        if details:
+            payload["details"] = details
+        content = json.dumps(payload, ensure_ascii=False)
+        full_message = {
+            "role": "assistant",
+            "content": content,
+            "reasoning_content": None,
+        }
+        self._history.append_assistant(full_message)
+        on_event(ContentDelta(text=content))
+        on_event(Done(finish_reason="stop", full_message=full_message))
+
+    def _finish_worker_recoverable_followup(
+        self,
+        on_event: EventCallback,
+        *,
+        failure_class: str,
+        error: str,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        payload = {
+            "ok": False,
+            "recoverable": True,
+            "needs_follow_up": True,
             "failure_class": failure_class,
             "error": error,
         }

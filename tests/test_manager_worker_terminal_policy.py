@@ -44,6 +44,14 @@ def _done_with_tool(
     )
 
 
+def _tool_defs(*names: str) -> list[dict]:
+    return [{"type": "function", "function": {"name": name}} for name in names]
+
+
+def _tool_names(tool_defs: list[dict]) -> set[str]:
+    return {tool["function"]["name"] for tool in tool_defs}
+
+
 @pytest.fixture
 def worker_backend():
     backend = MagicMock()
@@ -576,7 +584,86 @@ def test_worker_structured_read_and_patch_file_are_unaffected(
     worker_backend.side_effect = [
         iter([_done_with_tool("read1", "read_file", {"path": "docs/notes.md"})]),
         iter([_done_with_tool("edit1", "patch_file", {"path": "docs/notes.md", "edits": []})]),
+        iter([_done_with_tool("term1", "run_terminal_command", {"command": "python -m py_compile aura/config.py"})]),
         iter([Done(finish_reason="stop", full_message={"role": "assistant", "content": "Done.", "reasoning_content": None})]),
+    ]
+
+    with (
+        patch("aura.conversation.tool_runner.load_settings") as load_settings,
+        patch("aura.conversation.tool_runner.SandboxExecutor") as sandbox_cls,
+    ):
+        load_settings.return_value = MagicMock(sandbox_mode="host")
+        sandbox = MagicMock()
+        sandbox.run_terminal_command.return_value = SandboxResult(
+            ok=True,
+            stdout="",
+            stderr="",
+            exit_code=0,
+        )
+        sandbox_cls.return_value = sandbox
+
+        manager.send(
+            on_event=events.append,
+            approval_cb=_approval_cb,
+            cancel_event=threading.Event(),
+            model="deepseek-chat",
+            thinking="off",
+            hook_name="generate_worker_code",
+        )
+
+    executed_names = [
+        call.args[0] if call.args else call.kwargs["name"]
+        for call in tools.execute.call_args_list
+    ]
+    assert executed_names == ["read_file", "patch_file"]
+
+
+def test_worker_flow_broad_ratchet_filters_and_blocks_broad_tools(
+    worker_manager: tuple[ConversationManager, MagicMock],
+    worker_backend: MagicMock,
+) -> None:
+    manager, tools = worker_manager
+    tools.tool_defs.return_value = _tool_defs(
+        "read_file",
+        "grep_search",
+        "read_file_range",
+        "find_usages",
+        "patch_file",
+        "run_terminal_command",
+    )
+    events: list[Event] = []
+    worker_backend.side_effect = [
+        iter([
+            _done_with_tool(
+                "range1",
+                "read_file_range",
+                {"path": "aura/conversation/worker_flow.py", "start_line": 1, "end_line": 20},
+                content=(
+                    "I will edit aura/conversation/worker_flow.py and "
+                    "tests/test_worker_flow.py, then run python -m pytest tests/test_worker_flow.py -q."
+                ),
+            ),
+        ]),
+        iter([
+            _done_with_tool(
+                "range2",
+                "read_file_range",
+                {"path": "aura/conversation/worker_flow.py", "start_line": 40, "end_line": 80},
+                content=(
+                    "Let me read the helper again. Now I have the full picture. "
+                    "Let me plan the hunks."
+                ),
+            ),
+        ]),
+        iter([
+            _done_with_tool("read1", "read_file", {"path": "aura/conversation/worker_flow.py"}),
+        ]),
+        iter([
+            Done(
+                finish_reason="stop",
+                full_message={"role": "assistant", "content": "Done.", "reasoning_content": None},
+            ),
+        ]),
     ]
 
     manager.send(
@@ -588,11 +675,105 @@ def test_worker_structured_read_and_patch_file_are_unaffected(
         hook_name="generate_worker_code",
     )
 
+    third_call_tools = worker_backend.call_args_list[2].kwargs["tools"]
+    assert "read_file" not in _tool_names(third_call_tools)
+    assert {"read_file_range", "find_usages", "patch_file", "run_terminal_command"}.issubset(
+        _tool_names(third_call_tools)
+    )
     executed_names = [
         call.args[0] if call.args else call.kwargs["name"]
         for call in tools.execute.call_args_list
     ]
-    assert executed_names == ["read_file", "patch_file"]
+    assert executed_names == ["read_file_range", "read_file_range"]
+    blocked_results = [
+        event for event in events
+        if isinstance(event, ToolResult) and event.name == "read_file"
+    ]
+    assert blocked_results
+    payload = json.loads(blocked_results[-1].result)
+    assert payload["failure_class"] == "worker_flow_broad_orientation_restricted"
+    assert payload["recoverable"] is True
+
+
+def test_worker_write_final_is_held_until_validation_runs(
+    worker_manager: tuple[ConversationManager, MagicMock],
+    worker_backend: MagicMock,
+) -> None:
+    manager, tools = worker_manager
+    events: list[Event] = []
+    tools.execute.return_value = ToolExecResult(
+        ok=True,
+        payload={"ok": True, "path": "docs/notes.md", "applied": True},
+    )
+    worker_backend.side_effect = [
+        iter([_done_with_tool("write1", "write_file", {"path": "docs/notes.md", "content": "ok"})]),
+        iter([
+            ContentDelta("Done before validation."),
+            Done(
+                finish_reason="stop",
+                full_message={
+                    "role": "assistant",
+                    "content": "Done before validation.",
+                    "reasoning_content": None,
+                },
+            ),
+        ]),
+        iter([_done_with_tool("term1", "run_terminal_command", {"command": "python -m py_compile aura/config.py"})]),
+        iter([
+            ContentDelta("Done after validation."),
+            Done(
+                finish_reason="stop",
+                full_message={
+                    "role": "assistant",
+                    "content": "Done after validation.",
+                    "reasoning_content": None,
+                },
+            ),
+        ]),
+    ]
+
+    with (
+        patch("aura.conversation.tool_runner.load_settings") as load_settings,
+        patch("aura.conversation.tool_runner.SandboxExecutor") as sandbox_cls,
+    ):
+        load_settings.return_value = MagicMock(sandbox_mode="host")
+        sandbox = MagicMock()
+        sandbox.run_terminal_command.return_value = SandboxResult(
+            ok=True,
+            stdout="",
+            stderr="",
+            exit_code=0,
+        )
+        sandbox_cls.return_value = sandbox
+
+        manager.send(
+            on_event=events.append,
+            approval_cb=_approval_cb,
+            cancel_event=threading.Event(),
+            model="deepseek-chat",
+            thinking="off",
+            hook_name="generate_worker_code",
+        )
+
+    assert [event.text for event in events if isinstance(event, ContentDelta)] == [
+        "Done after validation."
+    ]
+    assistant_messages = [
+        message.get("content")
+        for message in manager.history.messages
+        if message.get("role") == "assistant"
+    ]
+    assert "Done before validation." not in assistant_messages
+    assert "Done after validation." in assistant_messages
+    user_messages = [
+        message.get("content")
+        for message in manager.history.messages
+        if message.get("role") == "user"
+    ]
+    assert any(
+        "Worker Flow: files were changed and validation has not run yet" in str(message)
+        for message in user_messages
+    )
 
 
 def test_normal_worker_low_level_edit_tools_stay_hidden(tmp_workspace: Path) -> None:
