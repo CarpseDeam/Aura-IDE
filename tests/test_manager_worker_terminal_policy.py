@@ -17,12 +17,18 @@ from aura.hooks import hooks
 from aura.sandbox import SandboxResult
 
 
-def _done_with_tool(tool_call_id: str, name: str, args: dict) -> Done:
+def _done_with_tool(
+    tool_call_id: str,
+    name: str,
+    args: dict,
+    *,
+    content: str = "",
+) -> Done:
     return Done(
         finish_reason="tool_calls",
         full_message={
             "role": "assistant",
-            "content": "",
+            "content": content,
             "reasoning_content": None,
             "tool_calls": [
                 {
@@ -99,6 +105,67 @@ def test_worker_terminal_source_inspection_is_not_executed(
         event for event in events
         if isinstance(event, ToolCallStart) and event.name == "run_terminal_command"
     ]
+
+
+def test_worker_tool_call_preamble_content_is_suppressed(
+    worker_manager: tuple[ConversationManager, MagicMock],
+    worker_backend: MagicMock,
+) -> None:
+    manager, _tools = worker_manager
+    events: list[Event] = []
+    preamble = "Let me read aura/config.py before I make the edit."
+    final_summary = "Done."
+    worker_backend.side_effect = [
+        iter([
+            ContentDelta(preamble),
+            ToolCallStart(index=0, id="read1", name="read_file"),
+            _done_with_tool(
+                "read1",
+                "read_file",
+                {"path": "aura/config.py"},
+                content=preamble,
+            ),
+        ]),
+        iter([
+            ContentDelta(final_summary),
+            Done(
+                finish_reason="stop",
+                full_message={
+                    "role": "assistant",
+                    "content": final_summary,
+                    "reasoning_content": None,
+                },
+            ),
+        ]),
+    ]
+
+    manager.send(
+        on_event=events.append,
+        approval_cb=_approval_cb,
+        cancel_event=threading.Event(),
+        model="deepseek-chat",
+        thinking="off",
+        hook_name="generate_worker_code",
+    )
+
+    assert [event.text for event in events if isinstance(event, ContentDelta)] == [final_summary]
+    assert [
+        event.full_message.get("content") for event in events if isinstance(event, Done)
+    ] == [final_summary]
+    assert any(
+        isinstance(event, ToolCallStart) and event.name == "read_file"
+        for event in events
+    )
+    assert any(
+        isinstance(event, ToolResult) and event.name == "read_file"
+        for event in events
+    )
+    assistant_messages = [
+        message.get("content")
+        for message in manager.history.messages
+        if message.get("role") == "assistant"
+    ]
+    assert assistant_messages == [preamble, final_summary]
 
 
 def test_worker_py_compile_still_executes(

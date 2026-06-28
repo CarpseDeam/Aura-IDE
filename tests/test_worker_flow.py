@@ -56,6 +56,44 @@ def test_repeated_complete_picture_plan_restatements_with_no_writes_produce_stee
     assert harness.pending_steering_message == WORKER_FLOW_STEERING_TEXT
 
 
+def test_single_dense_planning_message_after_inventory_lock_produces_steering() -> None:
+    harness = WorkerFlowHarness()
+    _lock_inventory(harness)
+
+    harness.observe_assistant_message(
+        "Let me read the helper one more time. Now I have the full picture. "
+        "Let me plan the next hunk, then let me verify the imports."
+    )
+
+    assert harness.pending_steering_message == WORKER_FLOW_STEERING_TEXT
+
+
+def test_observed_worker_trace_planning_density_produces_steering() -> None:
+    harness = WorkerFlowHarness()
+    _lock_inventory(harness)
+
+    harness.observe_assistant_message(
+        "Let me read aura/conversation/worker_flow.py. Now I have the full contents. "
+        "Let me check tests/imports. Now I have the full picture. "
+        "Let me analyze imports/constants/regex/helpers and plan helpers module. "
+        "Let me plan the hunks."
+    )
+
+    assert harness.pending_steering_message == WORKER_FLOW_STEERING_TEXT
+
+
+def test_extraction_hunk_mechanics_after_inventory_lock_produce_steering() -> None:
+    harness = WorkerFlowHarness()
+    _lock_inventory(harness)
+
+    harness.observe_assistant_message(
+        "For the extraction, hunk one will remove imports, hunk two will add imports, "
+        "and hunk three will remove helpers."
+    )
+
+    assert harness.pending_steering_message == WORKER_FLOW_STEERING_TEXT
+
+
 def test_whole_file_reconstruction_intent_during_move_only_extraction_produces_steering() -> None:
     harness = WorkerFlowHarness()
 
@@ -95,6 +133,20 @@ def test_write_action_advances_phase_and_reduces_orientation_pressure() -> None:
     assert harness.pending_steering_message == ""
 
 
+def test_write_action_clears_dense_planning_pressure() -> None:
+    harness = WorkerFlowHarness()
+    _lock_inventory(harness)
+    harness.observe_assistant_message(
+        "Let me read the helper again. Now I have the full picture. Let me plan the hunks."
+    )
+    assert harness.pending_steering_message == WORKER_FLOW_STEERING_TEXT
+
+    harness.observe_tool_call("patch_file", {"path": "aura/conversation/worker_flow.py", "edits": []})
+
+    assert harness.state.planning_restatements_since_write == 0
+    assert harness.pending_steering_message == ""
+
+
 def test_validation_action_advances_phase_to_validating() -> None:
     harness = WorkerFlowHarness()
     _lock_inventory(harness)
@@ -117,6 +169,17 @@ def test_normal_first_pass_inspection_does_not_produce_steering() -> None:
         args,
         True,
         {"ok": True, "path": args["path"], "file_size": 2_000, "content": "small"},
+    )
+
+    assert harness.state.inventory_locked is False
+    assert harness.pending_steering_message == ""
+
+
+def test_normal_concise_first_pass_plan_does_not_produce_steering() -> None:
+    harness = WorkerFlowHarness()
+
+    harness.observe_assistant_message(
+        "I will inspect the relevant code, make the smallest focused edit, and run checks."
     )
 
     assert harness.state.inventory_locked is False

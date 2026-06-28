@@ -16,9 +16,10 @@ from typing import Any
 
 
 WORKER_FLOW_STEERING_TEXT = (
-    "Worker Flow: continue from the locked inventory. Do not restart broad "
-    "orientation. Use targeted reads only for exact missing facts. Prefer the "
-    "next smallest safe edit. Preserve protected control-flow regions and "
+    "Worker Flow: continue from the locked inventory. Stop restating the plan. "
+    "Do not restart broad orientation. Use targeted reads only for exact "
+    "missing facts. Make the next smallest safe edit now. Preserve protected "
+    "control-flow regions and "
     "avoid whole-file reconstruction."
 )
 
@@ -97,10 +98,53 @@ _PLANNING_RE = re.compile(
     r"let\s+me\s+plan|plan\s+is)\b",
     re.IGNORECASE | re.DOTALL,
 )
+_PLANNING_MARKER_RES: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\blet\s+me\b", re.IGNORECASE),
+    re.compile(r"\bnow\s+i\s+have\b", re.IGNORECASE),
+    re.compile(r"\bfull\s+picture\b", re.IGNORECASE),
+    re.compile(r"\bcomplete\s+picture\b", re.IGNORECASE),
+    re.compile(r"\blet\s+me\s+plan\b", re.IGNORECASE),
+    re.compile(r"\blet\s+me\s+verify\b", re.IGNORECASE),
+    re.compile(r"\blet\s+me\s+check\b", re.IGNORECASE),
+    re.compile(r"\blet\s+me\s+read\b", re.IGNORECASE),
+    re.compile(r"\blet\s+me\s+think\b", re.IGNORECASE),
+    re.compile(r"\bi\s+need\s+to\s+be\s+careful\b", re.IGNORECASE),
+    re.compile(r"\bi\s+should\s+be\s+careful\b", re.IGNORECASE),
+    re.compile(r"\bactually\b", re.IGNORECASE),
+    re.compile(r"\bwait\b", re.IGNORECASE),
+)
+_FULL_OR_COMPLETE_PICTURE_RE = re.compile(
+    r"\b(?:full|complete)\s+picture\b",
+    re.IGNORECASE,
+)
+_PICTURE_FOLLOWUP_RE = re.compile(
+    r"\b(?:"
+    r"let\s+me\s+(?:read|verify|check|plan|think|analy[sz]e)|"
+    r"i\s+(?:need|should)\s+(?:read|verify|check|plan|think|analy[sz]e)|"
+    r"check\s+(?:tests?|imports?|files?|usages?|references?)|"
+    r"plan\s+(?:helpers?|module|hunks?|edits?|patches?)"
+    r")\b",
+    re.IGNORECASE,
+)
 _EXTRACTION_RE = re.compile(
     r"\b(?:extract|extraction|refactor|move-only|move\s+only|split\s+out|split\s+into|"
     r"move\s+helpers?|re-export|reexport)\b",
     re.IGNORECASE,
+)
+_PLAN_SAYS_RE = re.compile(r"\bplan\s+says\b", re.IGNORECASE)
+_HUNK_MECHANICS_RE = re.compile(r"\bhunks?\b", re.IGNORECASE)
+_PATCH_PLAN_MECHANICS_RE = re.compile(
+    r"\b(?:plan\s+(?:helpers?|module|hunks?|edits?|patches?)|"
+    r"patch\s+hunks?|hunk\s+plan)\b",
+    re.IGNORECASE,
+)
+_IMPORT_HELPER_MECHANICS_RE = re.compile(
+    r"\b(?:remove|add)\s+(?:imports?|regex(?:es)?|helpers?|functions?|constants?)\b",
+    re.IGNORECASE,
+)
+_INVENTORY_LINE_RE = re.compile(
+    r"(?im)^\s*(?:[-*]|\d+[.)])\s+.*\b"
+    r"(?:file|function|helper|import|regex|constant|class|hunk|\.py)\b"
 )
 _WHOLE_FILE_REWRITE_RE = re.compile(
     r"\b(?:reconstruct\s+(?:the\s+)?(?:entire|complete|whole)\s+file|"
@@ -250,6 +294,7 @@ class WorkerFlowHarness:
         return message
 
     def _observe_assistant_text(self, text: str) -> None:
+        was_inventory_locked = self.state.inventory_locked
         paths = _path_mentions(text)
         if paths:
             self._add_evidence("target_files")
@@ -276,15 +321,27 @@ class WorkerFlowHarness:
             if len(paths) >= 2:
                 self._add_evidence("files_or_modules")
 
-        if self.state.inventory_locked and _PLANNING_RE.search(text):
-            self.state.planning_restatements_since_write += 1
-            if self.state.planning_restatements_since_write >= 2:
+        if was_inventory_locked:
+            planning_marker_count = _planning_marker_count(text)
+            inventory_marker_count = _inventory_restatement_marker_count(text)
+            has_planning_restatement = bool(
+                planning_marker_count or _PLANNING_RE.search(text)
+            )
+            if has_planning_restatement:
+                self.state.planning_restatements_since_write += 1
+                if self.state.planning_restatements_since_write >= 2:
+                    self._queue_steering("orientation")
+            if planning_marker_count >= 3:
+                self._queue_steering("orientation")
+            if _has_full_picture_plus_followup(text):
+                self._queue_steering("orientation")
+            if _EXTRACTION_RE.search(text) and inventory_marker_count >= 2:
                 self._queue_steering("orientation")
 
-        if self.state.inventory_locked and extraction_inventory:
-            self.state.extraction_inventory_restatements_since_write += 1
-            if self.state.extraction_inventory_restatements_since_write >= 2:
-                self._queue_steering("orientation")
+            if extraction_inventory:
+                self.state.extraction_inventory_restatements_since_write += 1
+                if self.state.extraction_inventory_restatements_since_write >= 2:
+                    self._queue_steering("orientation")
 
         if self._looks_like_whole_file_rewrite_danger(text):
             self.state.protected_large_file_danger_signs += 1
@@ -401,6 +458,29 @@ def _content_text(content: Any) -> str:
                     parts.append(item["content"])
         return "\n".join(parts)
     return ""
+
+
+def _planning_marker_count(text: str) -> int:
+    return sum(len(pattern.findall(text)) for pattern in _PLANNING_MARKER_RES)
+
+
+def _inventory_restatement_marker_count(text: str) -> int:
+    count = 0
+    count += len(_PLAN_SAYS_RE.findall(text))
+    count += len(_HUNK_MECHANICS_RE.findall(text))
+    count += len(_PATCH_PLAN_MECHANICS_RE.findall(text))
+    count += len(_IMPORT_HELPER_MECHANICS_RE.findall(text))
+    inventory_lines = len(_INVENTORY_LINE_RE.findall(text))
+    if inventory_lines >= 3:
+        count += inventory_lines
+    return count
+
+
+def _has_full_picture_plus_followup(text: str) -> bool:
+    return bool(
+        _FULL_OR_COMPLETE_PICTURE_RE.search(text)
+        and _PICTURE_FOLLOWUP_RE.search(text)
+    )
 
 
 def _tool_call_name_args(tool_call: Any) -> tuple[str, dict[str, Any]]:

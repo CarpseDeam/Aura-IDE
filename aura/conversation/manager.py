@@ -435,7 +435,7 @@ class ConversationManager:
             else:
                 self._history.append_assistant(full_message)
                 if tool_calls and stream_buffer is not None:
-                    stream_buffer.flush(on_event)
+                    stream_buffer.discard()
 
             if worker_needs_final_report:
                 if not tool_calls:
