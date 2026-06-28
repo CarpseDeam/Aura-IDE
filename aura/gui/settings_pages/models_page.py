@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 
-from PySide6.QtCore import QObject, Qt, QThread, Signal
+from PySide6.QtCore import QObject, Qt, QThread, Signal, Slot
 from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
@@ -22,8 +22,8 @@ from aura.config import (
     save_dynamic_catalog,
 )
 from aura.gui.theme import FG_DIM
-from aura.gui.widgets.no_wheel_combo import NoWheelComboBox
 from aura.gui.widgets.glass_switch import GlassSwitch
+from aura.gui.widgets.no_wheel_combo import NoWheelComboBox
 from aura.providers.base import ProviderId
 from aura.providers.registry import provider_registry
 
@@ -245,8 +245,7 @@ class ModelsPage(QWidget):
                         thread.wait()
             except RuntimeError:
                 pass
-        self._discovery_threads.clear()
-        self._discovery_workers.clear()
+            self._forget_discovery_thread(provider_id)
 
     # --- Model discovery ---
 
@@ -262,11 +261,33 @@ class ModelsPage(QWidget):
         worker.finished.connect(self._on_discovery_finished)
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self._on_discovery_thread_finished)
         thread.start()
 
         self._discovery_threads[provider_id] = thread
         self._discovery_workers[provider_id] = worker
+
+    @Slot()
+    def _on_discovery_thread_finished(self) -> None:
+        thread = self.sender()
+        provider_id = None
+        for pid, candidate in list(self._discovery_threads.items()):
+            if candidate is thread:
+                provider_id = pid
+                break
+        if provider_id is None:
+            return
+        self._forget_discovery_thread(provider_id)
+
+    def _forget_discovery_thread(self, provider_id: str) -> None:
+        thread = self._discovery_threads.pop(provider_id, None)
+        self._discovery_workers.pop(provider_id, None)
+        self._discovery_inflight.discard(provider_id)
+        if thread is not None:
+            try:
+                thread.deleteLater()
+            except RuntimeError:
+                pass
 
     def _on_discovery_finished(
         self,
@@ -278,8 +299,6 @@ class ModelsPage(QWidget):
         if self._closing:
             return
         self._discovery_inflight.discard(provider_id)
-        self._discovery_threads.pop(provider_id, None)
-        self._discovery_workers.pop(provider_id, None)
         if error:
             logger.warning("Model discovery failed for %s: %s", provider_id, error)
             return
