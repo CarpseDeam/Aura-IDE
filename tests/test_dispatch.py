@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 from aura.bridge.dispatch import (
@@ -43,6 +44,76 @@ from aura.conversation.history import History
 from aura.conversation.task_shape import TaskShape, infer_task_shape
 
 # WorkerDispatchRequest
+
+
+def _run_worker_dispatch_with_context_metadata(
+    tmp_path: Path,
+    req: WorkerDispatchRequest,
+    *,
+    tool_call_id: str = "context_call",
+):
+    from unittest.mock import Mock
+
+    from aura.bridge.dispatch import _DispatchPending, _DispatchProxy
+    from aura.client.events import Done
+    from aura.conversation.tools import ToolRegistry
+    from aura.hooks import hooks
+
+    def worker_backend(**_kwargs):
+        return iter(
+            [
+                Done(
+                    finish_reason="stop",
+                    full_message={
+                        "role": "assistant",
+                        "content": "Done.",
+                        "reasoning_content": None,
+                    },
+                )
+            ]
+        )
+
+    previous_worker_hook = hooks._handlers.get("generate_worker_code")
+    hooks.unregister("generate_worker_code")
+    hooks.register("generate_worker_code", worker_backend)
+    try:
+        proxy = _DispatchProxy(
+            parent_widget=Mock(),
+            registry_factory=lambda _mode: ToolRegistry(
+                workspace_root=tmp_path,
+                mode="worker",
+            ),
+            approval_proxy=Mock(),
+            workspace_root=tmp_path,
+        )
+        result = proxy._run_worker(tool_call_id, req, _DispatchPending(req))
+        return result, proxy
+    finally:
+        hooks.unregister("generate_worker_code")
+        if previous_worker_hook is not None:
+            hooks.register("generate_worker_code", previous_worker_hook)
+
+
+def _seed_graduated_hazard_for_dispatch(
+    workspace_root: Path,
+    *,
+    task_kind: str = "bugfix",
+    target_file: str = "aura/context_gearbox/sources.py",
+) -> None:
+    from aura.hazard.capture import record_hazard
+
+    for index in range(3):
+        record_hazard(
+            workspace_root=workspace_root,
+            model="test-model",
+            status="validation_failed",
+            structured_failure={"failure_class": "pytest_failure"},
+            target_files=[target_file],
+            task_shape={"task_kind": task_kind},
+            errors=["AssertionError: context source was skipped"],
+            tool_call_id=f"dispatch-{index}",
+        )
+
 
 def test_dispatch_request_to_from_dict_roundtrip():
     original = WorkerDispatchRequest(
@@ -1105,69 +1176,63 @@ def test_dispatch_proxy_cancel_all_unblocks_and_cancels_active_dialog():
 
 
 def test_worker_dispatch_metadata_includes_context_gearbox(tmp_path):
-    from unittest.mock import Mock
+    req = WorkerDispatchRequest(
+        goal="Inspect context metadata",
+        files=["aura/example.py"],
+        spec="Inspect only.",
+        acceptance="No validation required.",
+    )
 
-    from aura.bridge.dispatch import _DispatchPending, _DispatchProxy
-    from aura.client.events import Done
-    from aura.conversation.dispatch import WorkerDispatchRequest
-    from aura.conversation.tools import ToolRegistry
-    from aura.hooks import hooks
+    result, proxy = _run_worker_dispatch_with_context_metadata(tmp_path, req)
 
-    def worker_backend(**_kwargs):
-        return iter(
-            [
-                Done(
-                    finish_reason="stop",
-                    full_message={
-                        "role": "assistant",
-                        "content": "Done.",
-                        "reasoning_content": None,
-                    },
-                )
-            ]
-        )
+    context_gearbox = result.extras.get("context_gearbox")
+    assert isinstance(context_gearbox, dict)
+    assert set(context_gearbox) == {"summary", "ledger"}
+    assert context_gearbox["summary"]["display"].startswith("Context: ")
+    assert any(
+        entry["source_id"] == "planner_dispatch_contract"
+        and entry["included"] is False
+        for entry in context_gearbox["ledger"]
+    )
+    assert any(
+        entry["source_id"] == "hazard_guards"
+        and entry["included"] is False
+        and entry["reason"] == "no graduated hazards for this terrain"
+        for entry in context_gearbox["ledger"]
+    )
+    assert proxy.result_metadata("context_call")["extras"]["context_gearbox"] == context_gearbox
 
-    previous_worker_hook = hooks._handlers.get("generate_worker_code")
-    hooks.unregister("generate_worker_code")
-    hooks.register("generate_worker_code", worker_backend)
-    try:
-        proxy = _DispatchProxy(
-            parent_widget=Mock(),
-            registry_factory=lambda _mode: ToolRegistry(
-                workspace_root=tmp_path,
-                mode="worker",
-            ),
-            approval_proxy=Mock(),
-            workspace_root=tmp_path,
-        )
-        req = WorkerDispatchRequest(
-            goal="Inspect context metadata",
-            files=["aura/example.py"],
-            spec="Inspect only.",
-            acceptance="No validation required.",
-        )
+    encoded = json.dumps(context_gearbox, sort_keys=True)
+    assert "Worker role:" not in encoded
+    assert "Core kernel:" not in encoded
+    assert "Done." not in encoded
 
-        result = proxy._run_worker("context_call", req, _DispatchPending(req))
 
-        context_gearbox = result.extras.get("context_gearbox")
-        assert isinstance(context_gearbox, dict)
-        assert set(context_gearbox) == {"summary", "ledger"}
-        assert context_gearbox["summary"]["display"].startswith("Context: ")
-        assert any(
-            entry["source_id"] == "planner_dispatch_contract"
-            and entry["included"] is False
-            for entry in context_gearbox["ledger"]
-        )
-        assert proxy.result_metadata("context_call")["extras"]["context_gearbox"] == context_gearbox
+def test_worker_dispatch_metadata_loads_hazard_guards_for_matching_terrain(tmp_path):
+    _seed_graduated_hazard_for_dispatch(tmp_path)
+    req = WorkerDispatchRequest(
+        goal="Inspect context metadata",
+        files=["aura/context_gearbox/sources.py"],
+        spec="Inspect only.",
+        acceptance="No validation required.",
+        task_shape=TaskShape(task_kind="bugfix"),
+    )
 
-        encoded = json.dumps(context_gearbox, sort_keys=True)
-        assert "Worker role:" not in encoded
-        assert "Core kernel:" not in encoded
-        assert "Done." not in encoded
-    finally:
-        hooks.unregister("generate_worker_code")
-        if previous_worker_hook is not None:
-            hooks.register("generate_worker_code", previous_worker_hook)
+    result, _proxy = _run_worker_dispatch_with_context_metadata(
+        tmp_path,
+        req,
+        tool_call_id="hazard_context_call",
+    )
+
+    context_gearbox = result.extras.get("context_gearbox")
+    assert isinstance(context_gearbox, dict)
+    assert "hazard_guards" in context_gearbox["summary"]["loaded"]
+    assert any(
+        entry["source_id"] == "hazard_guards"
+        and entry["included"] is True
+        and entry["kind"] == "hazard_guard_pack"
+        for entry in context_gearbox["ledger"]
+    )
 
 
 def test_approval_proxy_active_dialog_cancellation():

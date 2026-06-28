@@ -15,6 +15,7 @@ from aura.context_gearbox.runtime import (
 from aura.context_gearbox.sources import iter_registered_sources
 from aura.conversation.history import History
 from aura.conversation.planner_refresh import PlannerRefreshState
+from aura.hazard.capture import record_hazard
 from aura.prompts import (
     PLANNER_SYSTEM_PROMPT,
     SINGLE_SYSTEM_PROMPT,
@@ -47,6 +48,10 @@ RESEARCH_PACK_IDS = [
     "web_research_rules",
 ]
 
+HAZARD_GUARD_IDS = [
+    "hazard_guards",
+]
+
 SCOPED_PACK_SKIP_REASONS = {
     "gui_rules": "target files do not match gui scope",
     "drone_rules": "target files do not match drone scope",
@@ -69,6 +74,25 @@ def _included_scoped_pack_ids(composed: ComposedContext) -> list[str]:
         for entry in composed.ledger
         if entry.kind == "scoped_coding_pack" and entry.included
     ]
+
+
+def _seed_graduated_hazard(
+    workspace_root: Path,
+    *,
+    task_kind: str = "bugfix",
+    target_file: str = "aura/context_gearbox/sources.py",
+) -> None:
+    for index in range(3):
+        record_hazard(
+            workspace_root=workspace_root,
+            model="test-model",
+            status="validation_failed",
+            structured_failure={"failure_class": "pytest_failure"},
+            target_files=[target_file],
+            task_shape={"task_kind": task_kind},
+            errors=["AssertionError: context source was skipped"],
+            tool_call_id=f"dispatch-{index}",
+        )
 
 
 def _assert_only_scoped_pack_loaded(composed: ComposedContext, source_id: str) -> None:
@@ -278,6 +302,69 @@ def test_worker_build_targets_load_build_rules_and_skip_unrelated_packs(
     _assert_only_scoped_pack_loaded(composed, "build_pipeline_rules")
 
 
+def test_hazard_guards_load_for_worker_when_graduated_hazard_matches_terrain(
+    tmp_path,
+):
+    _seed_graduated_hazard(tmp_path)
+
+    composed = compose_system_prompt(
+        RuntimeRole.WORKER,
+        "",
+        tmp_path,
+        task_kind="bugfix",
+        target_files=("aura/context_gearbox/sources.py",),
+    )
+    metadata = context_gearbox_metadata(composed.ledger)
+    entry = _entry_by_id(composed, "hazard_guards")
+
+    assert entry.included is True
+    assert entry.kind == "hazard_guard_pack"
+    assert entry.reason == "graduated repo failure guards for this terrain"
+    assert entry.char_count > 0
+    assert "### Learned Hazard Guards" in composed.context_text
+    assert "context source was skipped" in composed.context_text
+    assert "hazard_guards" in metadata["summary"]["loaded"]
+    assert any(
+        item["source_id"] == "hazard_guards" and item["included"] is True
+        for item in metadata["ledger"]
+    )
+
+
+def test_hazard_guards_skip_clean_worker_terrain_with_no_hazards_reason(tmp_path):
+    composed = compose_system_prompt(
+        RuntimeRole.WORKER,
+        "",
+        tmp_path,
+        task_kind="bugfix",
+        target_files=("aura/context_gearbox/sources.py",),
+    )
+    metadata = context_gearbox_metadata(composed.ledger)
+    entry = _entry_by_id(composed, "hazard_guards")
+
+    assert entry.included is False
+    assert entry.kind == "hazard_guard_pack"
+    assert entry.reason == "no graduated hazards for this terrain"
+    assert entry.char_count == 0
+    assert {
+        "source_id": "hazard_guards",
+        "reason": "no graduated hazards for this terrain",
+    } in metadata["summary"]["skipped"]
+
+
+def test_hazard_guards_skip_when_workspace_root_is_missing():
+    composed = compose_system_prompt(
+        RuntimeRole.WORKER,
+        "",
+        None,
+        task_kind="bugfix",
+        target_files=("aura/context_gearbox/sources.py",),
+    )
+    entry = _entry_by_id(composed, "hazard_guards")
+
+    assert entry.included is False
+    assert entry.reason == "no workspace root"
+
+
 def test_single_coding_target_loads_matching_scoped_pack(tmp_path):
     composed = compose_system_prompt(
         RuntimeRole.SINGLE,
@@ -339,8 +426,14 @@ def test_contract_ledger_order_is_deterministic_and_records_skips(tmp_path):
         entry for entry in composed.ledger if entry.kind == "planner_research_pack"
     ]
     assert [entry.source_id for entry in research_entries] == RESEARCH_PACK_IDS
+    hazard_entries = [
+        entry for entry in composed.ledger if entry.kind == "hazard_guard_pack"
+    ]
+    assert [entry.source_id for entry in hazard_entries] == HAZARD_GUARD_IDS
     assert research_entries[0].included is False
     assert research_entries[0].reason == "turn is not research-shaped"
+    assert hazard_entries[0].included is False
+    assert hazard_entries[0].reason == "no graduated hazards for this terrain"
     skipped = [
         entry for entry in contract_entries
         if entry.source_id != "planner_dispatch_contract"
@@ -484,12 +577,16 @@ def test_context_gearbox_summary_counts_include_scoped_packs(tmp_path):
 
     assert "gui_rules" in summary["loaded"]
     assert summary["loaded_count"] == 6
-    assert summary["skipped_count"] == 7
+    assert summary["skipped_count"] == 8
     assert {
         "source_id": "drone_rules",
         "reason": "target files do not match drone scope",
     } in summary["skipped"]
-    assert summary["display"] == "Context: 6 loaded, 7 skipped"
+    assert {
+        "source_id": "hazard_guards",
+        "reason": "no graduated hazards for this terrain",
+    } in summary["skipped"]
+    assert summary["display"] == "Context: 6 loaded, 8 skipped"
 
 
 def test_context_gearbox_metadata_exposes_no_prompt_or_context_text(tmp_path):

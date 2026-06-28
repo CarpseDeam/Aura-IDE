@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from aura.context_gearbox.models import ContextLedgerEntry, ContextSource, RuntimeRole
+from aura.hazard.guard_text import build_hazard_guard_context
 from aura.repo_map import generate_repo_map
 
 CORE_KERNEL_TEXT = """Core kernel:
@@ -309,6 +310,12 @@ CONTEXT_SOURCES: tuple[ContextSource, ...] = (
         roles=(RuntimeRole.WORKER, RuntimeRole.SINGLE),
         reason="target files or task kind match build scope",
     ),
+    ContextSource(
+        source_id="hazard_guards",
+        kind="hazard_guard_pack",
+        roles=(RuntimeRole.PLANNER, RuntimeRole.WORKER),
+        reason="graduated repo failure guards for this terrain",
+    ),
 )
 
 
@@ -378,6 +385,8 @@ def _load_source_text(
             task_kind,
             target_files,
         )
+    if source.kind == "hazard_guard_pack":
+        return _load_hazard_guard_pack(workspace_root, task_kind, target_files)
     if source.source_id == "core_kernel":
         return CORE_KERNEL_TEXT, source.reason
     if workspace_root is None:
@@ -452,6 +461,23 @@ def _load_scoped_coding_pack(
     if not _scoped_pack_matches(rule, normalized_targets, task_kind):
         return "", f"target files do not match {rule.scope_name} scope"
     return text, source.reason
+
+
+def _load_hazard_guard_pack(
+    workspace_root: Path | None,
+    task_kind: str | None,
+    target_files: tuple[str, ...] | None,
+) -> tuple[str, str]:
+    if workspace_root is None:
+        return "", "no workspace root"
+    text = build_hazard_guard_context(
+        workspace_root,
+        task_kind=task_kind,
+        target_files=tuple(target_files or ()),
+    )
+    if text:
+        return text, "graduated repo failure guards for this terrain"
+    return "", "no graduated hazards for this terrain"
 
 
 def _single_contract_applies(
