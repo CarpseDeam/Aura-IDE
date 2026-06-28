@@ -329,6 +329,10 @@ def test_skill_pack_loads_for_worker_when_graduated_hazard_matches_terrain(
         item["source_id"] == "skill_pack" and item["included"] is True
         for item in metadata["ledger"]
     )
+    assert any(
+        item["kind"] == "individual_skill" and item["included"] is True
+        for item in metadata["ledger"]
+    )
 
 
 def test_skill_pack_loads_bundled_skills_on_drone_terrain_skipped_on_unrelated_terrain(

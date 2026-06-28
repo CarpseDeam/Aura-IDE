@@ -7,13 +7,15 @@ from pathlib import Path
 import pytest
 
 from aura.skills.eviction import (
+    EvictionMode,
     EvictionVerdict,
+    apply_eviction_mode,
     compute_eviction_verdicts,
     format_eviction_report,
     summarize_eviction_report,
 )
 from aura.skills.models import Skill, SkillProvenance, compute_skill_id
-from aura.skills.text import build_skill_context, build_skill_context_with_ids
+from aura.skills.text import build_skill_context, build_skill_context_with_ids, format_skills
 
 # ---------------------------------------------------------------------------
 # compute_skill_id
@@ -31,6 +33,14 @@ class TestComputeSkillId:
         id_a = compute_skill_id("Do foo.")
         id_b = compute_skill_id("Do bar.")
         assert id_a != id_b
+
+    def test_provenance_participates(self) -> None:
+        """Same text with different provenance produces different IDs."""
+        text = "Keep validation focused."
+        bundled_id = compute_skill_id(text, SkillProvenance.BUNDLED)
+        refined_id = compute_skill_id(text, SkillProvenance.REFLECTION_REFINED)
+
+        assert bundled_id != refined_id
 
     def test_starts_with_skill_prefix(self) -> None:
         """Output starts with 'skill_'."""
@@ -102,6 +112,123 @@ class TestBuildSkillContextWithIds:
         text, ids = build_skill_context_with_ids(tmp_path)
         assert len(ids) == len(skills)
         assert all(isinstance(sid, str) and sid.startswith("skill_") for sid in ids)
+        assert ids == [compute_skill_id(skill) for skill in skills]
+
+    def test_dry_run_does_not_filter_selected_skills(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Dry-run computes verdicts but keeps selected skills in context."""
+        skills = [
+            Skill(
+                text="Graduated negative.",
+                task_kinds=("bugfix",),
+                path_globs=(),
+                model=None,
+                provenance=SkillProvenance.FAILURE_GRADUATED,
+                origin=(),
+            )
+        ]
+        skill_id = compute_skill_id(skills[0])
+        monkeypatch.setattr("aura.skills.text.read_skills", lambda _: skills)
+        monkeypatch.setattr("aura.skills.text.select_relevant_skills", lambda s, **kw: s)
+        monkeypatch.setattr(
+            "aura.skills.text.compute_eviction_verdicts",
+            lambda *_args, **_kwargs: [
+                EvictionVerdict(
+                    skill_id=skill_id,
+                    skill_text_prefix="Graduated negative.",
+                    provenance=SkillProvenance.FAILURE_GRADUATED,
+                    would_evict=True,
+                    reason="negative lift -0.250 on terrain 'bugfix'",
+                    lift=-0.25,
+                    loaded_n=10,
+                    not_loaded_n=10,
+                    task_kind="bugfix",
+                )
+            ],
+        )
+
+        text, ids = build_skill_context_with_ids(
+            tmp_path,
+            task_kind="bugfix",
+            eviction_mode=EvictionMode.DRY_RUN,
+        )
+
+        assert "Graduated negative." in text
+        assert ids == [skill_id]
+
+    def test_enforce_filters_only_as_explicit_helper_path(self) -> None:
+        """ENFORCE is available as a pure helper and is not the runtime default."""
+        keep = Skill(
+            text="Bundled keep.",
+            task_kinds=(),
+            path_globs=(),
+            model=None,
+            provenance=SkillProvenance.BUNDLED,
+            origin=(),
+        )
+        evict = Skill(
+            text="Graduated evict.",
+            task_kinds=("bugfix",),
+            path_globs=(),
+            model=None,
+            provenance=SkillProvenance.FAILURE_GRADUATED,
+            origin=(),
+        )
+        verdicts = [
+            EvictionVerdict(
+                skill_id=compute_skill_id(evict),
+                skill_text_prefix="Graduated evict.",
+                provenance=SkillProvenance.FAILURE_GRADUATED,
+                would_evict=True,
+                reason="negative lift -0.250 on terrain 'bugfix'",
+                lift=-0.25,
+                loaded_n=10,
+                not_loaded_n=10,
+                task_kind="bugfix",
+            )
+        ]
+
+        assert apply_eviction_mode([keep, evict], verdicts) == [keep, evict]
+        assert apply_eviction_mode(
+            [keep, evict],
+            verdicts,
+            mode=EvictionMode.DRY_RUN,
+        ) == [keep, evict]
+        assert apply_eviction_mode(
+            [keep, evict],
+            verdicts,
+            mode=EvictionMode.ENFORCE,
+        ) == [keep]
+
+    def test_runtime_default_eviction_mode_is_off(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        skills = [
+            Skill(
+                text="Graduated default keep.",
+                task_kinds=("bugfix",),
+                path_globs=(),
+                model=None,
+                provenance=SkillProvenance.FAILURE_GRADUATED,
+                origin=(),
+            )
+        ]
+        monkeypatch.setattr("aura.skills.text.read_skills", lambda _: skills)
+        monkeypatch.setattr("aura.skills.text.select_relevant_skills", lambda s, **kw: s)
+        monkeypatch.setattr(
+            "aura.skills.text.compute_eviction_verdicts",
+            lambda *_args, **_kwargs: pytest.fail("default mode should not compute eviction"),
+        )
+
+        text, ids = build_skill_context_with_ids(tmp_path, task_kind="bugfix")
+
+        assert "Graduated default keep." in text
+        assert ids == [compute_skill_id(skills[0])]
 
 
 # ---------------------------------------------------------------------------
@@ -121,6 +248,23 @@ class TestBuildSkillContextBackwardCompat:
             lambda _: [],
         )
         assert build_skill_context(tmp_path) == ""
+
+
+class TestFormatSkills:
+    def test_reflection_refined_skills_render(self) -> None:
+        skill = Skill(
+            text="### Refined Guard\nUse the narrower parser path.",
+            task_kinds=("refactor",),
+            path_globs=("aura/skills/",),
+            model=None,
+            provenance=SkillProvenance.REFLECTION_REFINED,
+            origin=(),
+        )
+
+        text = format_skills([skill])
+
+        assert "### Refined Skill Guards" in text
+        assert "Use the narrower parser path." in text
 
 
 # ---------------------------------------------------------------------------
@@ -201,6 +345,27 @@ def _sample_skills() -> list[Skill]:
     ]
 
 
+def _compute_single_verdict(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    skill: Skill,
+    utility: _FakeSourceUtility | None,
+    *,
+    task_kind: str = "bugfix",
+) -> EvictionVerdict:
+    skill_id = compute_skill_id(skill)
+    monkeypatch.setattr("aura.skills.eviction.read_skills", lambda _: [skill])
+    monkeypatch.setattr(
+        "aura.skills.eviction.derive_source_utility",
+        lambda _ws, min_arm=3: {} if utility is None else {skill_id: utility},
+    )
+
+    verdicts = compute_eviction_verdicts(tmp_path, task_kind=task_kind, min_arm=3)
+
+    assert len(verdicts) == 1
+    return verdicts[0]
+
+
 class TestComputeEvictionVerdictsSticky:
     def test_bundled_never_evicted(self) -> None:
         """BUNDLED skill: would_evict=False, reason='sticky provenance'."""
@@ -217,6 +382,33 @@ class TestComputeEvictionVerdictsSticky:
             not_loaded_n=0,
             task_kind=None,
         )
+        assert verdict.would_evict is False
+        assert verdict.reason == "sticky provenance"
+
+    @pytest.mark.parametrize(
+        "provenance",
+        (SkillProvenance.BUNDLED, SkillProvenance.USER_AUTHORED),
+    )
+    def test_sticky_provenance_never_evicted_by_negative_lift(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        provenance: SkillProvenance,
+    ) -> None:
+        skill = MockSkill.make(provenance=provenance)
+        verdict = _compute_single_verdict(
+            tmp_path,
+            monkeypatch,
+            skill,
+            _FakeSourceUtility(
+                status="measured",
+                lift=-0.75,
+                loaded_n=10,
+                not_loaded_n=10,
+                task_kind="bugfix",
+            ),
+        )
+
         assert verdict.would_evict is False
         assert verdict.reason == "sticky provenance"
 
@@ -254,6 +446,18 @@ class TestComputeEvictionVerdictsNoUtility:
         assert verdict.would_evict is False
         assert verdict.reason == "no utility data yet"
 
+    def test_missing_utility_keeps_skill(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        skill = MockSkill.make(provenance=SkillProvenance.FAILURE_GRADUATED)
+
+        verdict = _compute_single_verdict(tmp_path, monkeypatch, skill, None)
+
+        assert verdict.would_evict is False
+        assert verdict.reason == "no utility data yet"
+
 
 class TestComputeEvictionVerdictsInsufficient:
     def test_insufficient_data(self) -> None:
@@ -269,6 +473,29 @@ class TestComputeEvictionVerdictsInsufficient:
             not_loaded_n=2,
             task_kind="bugfix",
         )
+        assert verdict.would_evict is False
+        assert verdict.reason.startswith("insufficient data")
+
+    def test_insufficient_utility_keeps_skill(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        skill = MockSkill.make(provenance=SkillProvenance.REFLECTION_REFINED)
+
+        verdict = _compute_single_verdict(
+            tmp_path,
+            monkeypatch,
+            skill,
+            _FakeSourceUtility(
+                status="insufficient",
+                lift=None,
+                loaded_n=2,
+                not_loaded_n=10,
+                task_kind="bugfix",
+            ),
+        )
+
         assert verdict.would_evict is False
         assert verdict.reason.startswith("insufficient data")
 
@@ -289,6 +516,62 @@ class TestComputeEvictionVerdictsNegativeLift:
         )
         assert verdict.would_evict is True
         assert "negative lift" in verdict.reason
+
+    @pytest.mark.parametrize(
+        "provenance",
+        (
+            SkillProvenance.FAILURE_GRADUATED,
+            SkillProvenance.REFLECTION_REFINED,
+        ),
+    )
+    def test_same_terrain_measured_negative_lift_can_evict(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        provenance: SkillProvenance,
+    ) -> None:
+        skill = MockSkill.make(provenance=provenance)
+
+        verdict = _compute_single_verdict(
+            tmp_path,
+            monkeypatch,
+            skill,
+            _FakeSourceUtility(
+                status="measured",
+                lift=-0.25,
+                loaded_n=10,
+                not_loaded_n=10,
+                task_kind="bugfix",
+            ),
+            task_kind="bugfix",
+        )
+
+        assert verdict.would_evict is True
+        assert "negative lift" in verdict.reason
+
+    def test_different_terrain_keeps_skill(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        skill = MockSkill.make(provenance=SkillProvenance.FAILURE_GRADUATED)
+
+        verdict = _compute_single_verdict(
+            tmp_path,
+            monkeypatch,
+            skill,
+            _FakeSourceUtility(
+                status="measured",
+                lift=-0.25,
+                loaded_n=10,
+                not_loaded_n=10,
+                task_kind="refactor",
+            ),
+            task_kind="bugfix",
+        )
+
+        assert verdict.would_evict is False
+        assert verdict.reason.startswith("different terrain")
 
 
 class TestComputeEvictionVerdictsNonNegativeLift:
@@ -496,8 +779,8 @@ class TestIntegrationScenario:
 
         monkeypatch.setattr("aura.skills.eviction.read_skills", lambda _: skills)
 
-        negative_id = compute_skill_id(skills[2].text)
-        positive_id = compute_skill_id(skills[3].text)
+        negative_id = compute_skill_id(skills[2])
+        positive_id = compute_skill_id(skills[3])
 
         monkeypatch.setattr(
             "aura.skills.eviction.derive_source_utility",
@@ -511,7 +794,7 @@ class TestIntegrationScenario:
             },
         )
 
-        verdicts = compute_eviction_verdicts(tmp_path, min_arm=3)
+        verdicts = compute_eviction_verdicts(tmp_path, task_kind="bugfix", min_arm=3)
         assert len(verdicts) == 4
 
         bundled_verdicts = [v for v in verdicts if v.provenance == SkillProvenance.BUNDLED]

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any
 
 
 class SkillProvenance(str, Enum):
@@ -21,12 +22,31 @@ class Skill:
     origin: tuple[tuple[str, str], ...]
 
 
-def compute_skill_id(skill_text: str) -> str:
-    """Deterministic stable source ID for a skill based on its text.
+def compute_skill_id(
+    skill: Skill | str,
+    provenance: SkillProvenance | str | None = None,
+) -> str:
+    """Deterministic stable source ID for a skill.
 
-    Returns a "skill_"-prefixed hex string derived from SHA-256[:16].
+    Internal callers should pass a Skill so provenance and text both
+    participate. Passing plain text remains supported for compatibility.
     """
     import hashlib
 
-    suffix = hashlib.sha256(skill_text.encode("utf-8")).hexdigest()[:16]
+    if isinstance(skill, Skill):
+        skill_text = skill.text
+        provenance_value = skill.provenance.value
+    else:
+        skill_text = str(skill)
+        provenance_value = _normalize_provenance_value(provenance)
+    payload = f"{provenance_value}\0{skill_text}"
+    suffix = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
     return f"skill_{suffix}"
+
+
+def _normalize_provenance_value(provenance: Any) -> str:
+    if isinstance(provenance, SkillProvenance):
+        return provenance.value
+    if provenance is None:
+        return "unknown"
+    return str(provenance)

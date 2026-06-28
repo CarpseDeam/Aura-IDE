@@ -333,14 +333,25 @@ def collect_source_text(
     target_files: tuple[str, ...] | None = None,
 ) -> tuple[str, ContextLedgerEntry, list[ContextLedgerEntry]]:
     try:
-        text, reason = _load_source_text(
-            source,
-            workspace_root,
-            force=force,
-            role=role,
-            task_kind=task_kind,
-            target_files=target_files,
-        )
+        skill_ids: list[str] = []
+        if source.kind == "skill_pack":
+            if role not in source.roles:
+                text, reason = "", f"not scoped to {role.value} role"
+            else:
+                text, reason, skill_ids = _load_skill_pack(
+                    workspace_root,
+                    task_kind,
+                    target_files,
+                )
+        else:
+            text, reason = _load_source_text(
+                source,
+                workspace_root,
+                force=force,
+                role=role,
+                task_kind=task_kind,
+                target_files=target_files,
+            )
         included = bool(text)
         entry = ContextLedgerEntry(
             source_id=source.source_id,
@@ -354,11 +365,6 @@ def collect_source_text(
         # For skill_pack, include per-skill ledger entries
         extra: list[ContextLedgerEntry] = []
         if source.kind == "skill_pack" and workspace_root is not None:
-            _, skill_ids = build_skill_context_with_ids(
-                workspace_root,
-                task_kind=task_kind,
-                target_files=tuple(target_files or ()),
-            )
             extra = [
                 ContextLedgerEntry(
                     source_id=sid,

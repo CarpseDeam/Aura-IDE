@@ -3,6 +3,11 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from aura.skills.eviction import (
+    EvictionMode,
+    apply_eviction_mode,
+    compute_eviction_verdicts,
+)
 from aura.skills.models import Skill, SkillProvenance, compute_skill_id
 from aura.skills.reader import read_skills
 from aura.skills.selection import select_relevant_skills
@@ -15,7 +20,7 @@ def format_skills(skills: list[Skill], limit: int = 5) -> str:
 
     Graduated skills are emitted under a "### Learned Hazard Guards" header
     (matching aura.hazard.guard_text.format_guards output), followed by
-    bundled skills under a "### Bundled Skills" header.
+    reflection-refined skills and bundled skills.
     Returns empty string when no skills are provided.
     """
     if not skills:
@@ -24,11 +29,15 @@ def format_skills(skills: list[Skill], limit: int = 5) -> str:
 
     bundled = [s for s in top if s.provenance == SkillProvenance.BUNDLED]
     graduated = [s for s in top if s.provenance == SkillProvenance.FAILURE_GRADUATED]
+    refined = [s for s in top if s.provenance == SkillProvenance.REFLECTION_REFINED]
 
     parts: list[str] = []
     if graduated:
         parts.append("### Learned Hazard Guards")
         parts.extend(s.text for s in graduated)
+    if refined:
+        parts.append("### Refined Skill Guards")
+        parts.extend(s.text for s in refined)
     if bundled:
         parts.append("### Bundled Skills")
         parts.extend(s.text for s in bundled)
@@ -41,6 +50,7 @@ def build_skill_context_with_ids(
     task_kind: str | None = None,
     target_files: tuple[str, ...] = (),
     limit: int = 5,
+    eviction_mode: EvictionMode | str = EvictionMode.OFF,
 ) -> tuple[str, list[str]]:
     """Like build_skill_context but also returns per-skill stable IDs.
 
@@ -56,8 +66,15 @@ def build_skill_context_with_ids(
             target_files=target_files,
             limit=limit,
         )
+        mode = EvictionMode.from_value(eviction_mode)
+        if mode != EvictionMode.OFF:
+            verdicts = compute_eviction_verdicts(
+                Path(workspace_root),
+                task_kind=task_kind,
+            )
+            selected = apply_eviction_mode(selected, verdicts, mode=mode)
         text = format_skills(selected, limit=limit)
-        skill_ids = [compute_skill_id(s.text) for s in selected]
+        skill_ids = [compute_skill_id(s) for s in selected]
         return text, skill_ids
     except Exception:
         logger.debug("build_skill_context_with_ids failed", exc_info=True)
@@ -70,6 +87,7 @@ def build_skill_context(
     task_kind: str | None = None,
     target_files: tuple[str, ...] = (),
     limit: int = 5,
+    eviction_mode: EvictionMode | str = EvictionMode.OFF,
 ) -> str:
     """Read, select, and format skills for the given terrain.
 
@@ -81,5 +99,6 @@ def build_skill_context(
         task_kind=task_kind,
         target_files=target_files,
         limit=limit,
+        eviction_mode=eviction_mode,
     )
     return text
