@@ -862,3 +862,127 @@ def test_build_worker_recoverable_followup_message_with_details():
         "details": {"attempts": 3},
     }
 
+
+# ── Worker patch_file state policy tests ─────────────────────────────────────
+
+
+def test_patch_file_state_block_non_existing_path(tmp_path: Path) -> None:
+    """Non-existing worker path returns None."""
+    from aura.conversation.worker_patch_state_policy import patch_file_state_block
+
+    result = patch_file_state_block(
+        tool_call_id="t1",
+        name="patch_file",
+        path="nonexistent/file.py",
+        args={},
+        worker_file_state={},
+        workspace_root=tmp_path,
+    )
+    assert result is None
+
+
+def test_patch_file_state_block_missing_expected_hash(tmp_path: Path) -> None:
+    """Existing file with missing expected_file_hash returns
+    patch_file_missing_expected_hash."""
+    from aura.conversation.worker_patch_state_policy import patch_file_state_block
+
+    (tmp_path / "existing.py").write_text("ok", encoding="utf-8")
+
+    result = patch_file_state_block(
+        tool_call_id="t1",
+        name="patch_file",
+        path="existing.py",
+        args={},
+        worker_file_state={},
+        workspace_root=tmp_path,
+    )
+    assert result is not None
+    payload = json.loads(result["result_payload"])
+    assert payload["failure_class"] == "patch_file_missing_expected_hash"
+    assert payload["applied"] is False
+    assert payload["write_outcome"] == "not_applied_edit_mechanics_blocked"
+
+
+def test_patch_file_state_block_hash_mismatch(tmp_path: Path) -> None:
+    """Existing file with stale/mismatched hash returns
+    patch_file_hash_mismatch and includes latest_read_content_hash."""
+    from aura.conversation.worker_patch_state_policy import patch_file_state_block
+
+    (tmp_path / "existing.py").write_text("ok", encoding="utf-8")
+    worker_file_state = {
+        "existing.py": {
+            "content_hash": "abc123",
+            "fresh_for_patch": True,
+            "last_read_tool": "read_file",
+        }
+    }
+
+    result = patch_file_state_block(
+        tool_call_id="t1",
+        name="patch_file",
+        path="existing.py",
+        args={"expected_file_hash": "wrong_hash"},
+        worker_file_state=worker_file_state,
+        workspace_root=tmp_path,
+    )
+    assert result is not None
+    payload = json.loads(result["result_payload"])
+    assert payload["failure_class"] == "patch_file_hash_mismatch"
+    assert payload["applied"] is False
+    assert payload["write_outcome"] == "not_applied_edit_mechanics_blocked"
+    assert payload["recoverable"] is True
+    assert payload["stale"] is True
+    assert payload["expected_file_hash"] == "wrong_hash"
+    assert payload["latest_read_content_hash"] == "abc123"
+    assert payload["last_read_tool"] == "read_file"
+
+
+def test_patch_file_state_block_not_fresh_for_patch(tmp_path: Path) -> None:
+    """Existing file with matching hash but not fresh_for_patch still
+    returns patch_file_hash_mismatch."""
+    from aura.conversation.worker_patch_state_policy import patch_file_state_block
+
+    (tmp_path / "existing.py").write_text("ok", encoding="utf-8")
+    worker_file_state = {
+        "existing.py": {
+            "content_hash": "abc123",
+            "fresh_for_patch": False,
+            "last_read_tool": "read_file",
+        }
+    }
+
+    result = patch_file_state_block(
+        tool_call_id="t1",
+        name="patch_file",
+        path="existing.py",
+        args={"expected_file_hash": "abc123"},
+        worker_file_state=worker_file_state,
+        workspace_root=tmp_path,
+    )
+    assert result is not None
+    payload = json.loads(result["result_payload"])
+    assert payload["failure_class"] == "patch_file_hash_mismatch"
+
+
+def test_patch_file_state_block_fresh_hash(tmp_path: Path) -> None:
+    """Existing file with matching fresh hash returns None (allowed)."""
+    from aura.conversation.worker_patch_state_policy import patch_file_state_block
+
+    (tmp_path / "existing.py").write_text("ok", encoding="utf-8")
+    worker_file_state = {
+        "existing.py": {
+            "content_hash": "abc123",
+            "fresh_for_patch": True,
+            "last_read_tool": "read_file",
+        }
+    }
+
+    result = patch_file_state_block(
+        tool_call_id="t1",
+        name="patch_file",
+        path="existing.py",
+        args={"expected_file_hash": "abc123"},
+        worker_file_state=worker_file_state,
+        workspace_root=tmp_path,
+    )
+    assert result is None
