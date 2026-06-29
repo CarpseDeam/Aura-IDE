@@ -108,13 +108,13 @@ def _bundled_path_matches(tf: str, pg: str) -> bool:
     return norm_tf == prefix or norm_tf.startswith(prefix + "/")
 
 
-def _content_tokens(value: str | None) -> set[str]:
+def _content_tokens(value: str | None, *, apply_stopwords: bool = True) -> set[str]:
     if not value:
         return set()
     return {
         token
         for token in re.split(r"[^a-z0-9_]+", value.lower())
-        if len(token) >= 3 and token not in _CONTENT_STOPWORDS
+        if len(token) >= 3 and (not apply_stopwords or token not in _CONTENT_STOPWORDS)
     }
 
 
@@ -158,6 +158,7 @@ def select_relevant_skills(
     arguments are provided, returns the first *limit* skills.
     """
     content_tokens = _content_tokens(content)
+    trigger_query_tokens = _content_tokens(content, apply_stopwords=False)
     has_terrain = (
         model is not None
         or task_kind is not None
@@ -204,6 +205,10 @@ def select_relevant_skills(
 
         # Content relevance
         score += _content_overlap_score(content_tokens, _content_tokens(skill.text))
+        score += _content_overlap_score(
+            trigger_query_tokens,
+            _content_tokens(" ".join(skill.triggers), apply_stopwords=False),
+        )
 
         if score == 0:
             continue

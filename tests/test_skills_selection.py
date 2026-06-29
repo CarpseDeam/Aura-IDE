@@ -7,6 +7,7 @@ def _skill(
     *,
     task_kinds: tuple[str, ...] = (),
     path_globs: tuple[str, ...] = (),
+    triggers: tuple[str, ...] = (),
     provenance: SkillProvenance = SkillProvenance.USER_AUTHORED,
 ) -> Skill:
     return Skill(
@@ -16,6 +17,7 @@ def _skill(
         model=None,
         provenance=provenance,
         origin=(),
+        triggers=triggers,
     )
 
 
@@ -37,3 +39,21 @@ def test_no_terrain_or_content_keeps_existing_first_limit_behavior():
     skills = [_skill("First."), _skill("Second.")]
 
     assert select_relevant_skills(skills, limit=1) == [skills[0]]
+
+
+def test_triggers_select_skill_without_trigger_words_in_prose():
+    relevant = _skill(
+        "Use argument-vector process launches for external tools.",
+        triggers=("subprocess", "shell=True"),
+    )
+    unrelated = _skill(
+        "Keep database writes transactional.",
+        triggers=("sqlite3", "cursor.execute"),
+    )
+
+    selected = select_relevant_skills(
+        [unrelated, relevant],
+        content="Audit this command runner for shell=True subprocess usage.",
+    )
+
+    assert selected == [relevant]

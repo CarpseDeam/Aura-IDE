@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+from typing import Any
 
 from aura.skills.models import Skill, SkillProvenance
 
@@ -163,6 +164,70 @@ def _read_refined_skills(workspace_root: str | Path) -> list[Skill]:
         return []
 
 
+def _metadata_list(data: dict[str, Any], key: str) -> tuple[str, ...]:
+    raw = data.get(key, [])
+    if not isinstance(raw, list):
+        return ()
+    return tuple(item.strip() for item in raw if isinstance(item, str) and item.strip())
+
+
+def _metadata_model(data: dict[str, Any]) -> str | None:
+    raw = data.get("model", None)
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    return text or None
+
+
+def _parse_front_matter_value(value: str) -> Any:
+    text = value.strip()
+    if text == "":
+        return ""
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return text.strip("\"'")
+
+
+def _parse_skill_markdown(raw: str, skill_path: Path) -> tuple[str, dict[str, Any]]:
+    text = raw.strip()
+    if not text:
+        return "", {}
+    lines = raw.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return text, {}
+
+    end_index: int | None = None
+    for index, line in enumerate(lines[1:], start=1):
+        stripped = line.strip()
+        if len(stripped) >= 3 and set(stripped) == {"-"}:
+            end_index = index
+            break
+    if end_index is None:
+        logger.debug("Malformed authored skill metadata in %s: missing closing delimiter", skill_path)
+        return "", {}
+
+    metadata: dict[str, Any] = {}
+    try:
+        for line in lines[1:end_index]:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if ":" not in stripped:
+                raise ValueError(f"metadata line missing ':' in {skill_path}")
+            key, value = stripped.split(":", 1)
+            key = key.strip()
+            if key not in {"task_kinds", "path_globs", "model", "triggers"}:
+                continue
+            metadata[key] = _parse_front_matter_value(value)
+    except Exception:
+        logger.debug("Failed to parse authored skill metadata %s", skill_path, exc_info=True)
+        metadata = {}
+
+    body = "\n".join(lines[end_index + 1:]).strip()
+    return body, metadata
+
+
 def _read_user_authored_skills(workspace_root: str | Path) -> list[Skill]:
     """Read user-authored skills from .aura/skills/authored/.
 
@@ -181,7 +246,8 @@ def _read_user_authored_skills(workspace_root: str | Path) -> list[Skill]:
                 if not skill_path.is_file():
                     continue
                 try:
-                    text = skill_path.read_text(encoding="utf-8").strip()
+                    raw = skill_path.read_text(encoding="utf-8")
+                    text, metadata = _parse_skill_markdown(raw, skill_path)
                 except Exception:
                     logger.debug("Failed to read user-authored skill %s", skill_path, exc_info=True)
                     continue
@@ -190,11 +256,12 @@ def _read_user_authored_skills(workspace_root: str | Path) -> list[Skill]:
                 skills.append(
                     Skill(
                         text=text,
-                        task_kinds=(),
-                        path_globs=(),
-                        model=None,
+                        task_kinds=_metadata_list(metadata, "task_kinds"),
+                        path_globs=_metadata_list(metadata, "path_globs"),
+                        model=_metadata_model(metadata),
                         provenance=SkillProvenance.USER_AUTHORED,
                         origin=(("skill_id", entry.name),),
+                        triggers=_metadata_list(metadata, "triggers"),
                     )
                 )
                 continue
@@ -222,6 +289,7 @@ def _read_user_authored_skills(workspace_root: str | Path) -> list[Skill]:
                 task_kinds = tuple(item.get("task_kinds", []) or [])
                 path_globs = tuple(item.get("path_globs", []) or [])
                 model = item.get("model", None)
+                triggers = tuple(item.get("triggers", []) or [])
                 raw_origin = item.get("origin", [])
                 if isinstance(raw_origin, list):
                     origin = tuple(tuple(pair) for pair in raw_origin)
@@ -235,6 +303,7 @@ def _read_user_authored_skills(workspace_root: str | Path) -> list[Skill]:
                         model=model,
                         provenance=SkillProvenance.USER_AUTHORED,
                         origin=origin,
+                        triggers=triggers,
                     )
                 )
         return skills

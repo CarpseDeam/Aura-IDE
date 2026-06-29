@@ -20,6 +20,7 @@ class Skill:
     model: str | None
     provenance: SkillProvenance
     origin: tuple[tuple[str, str], ...]
+    triggers: tuple[str, ...] = ()
 
 
 def compute_skill_id(
