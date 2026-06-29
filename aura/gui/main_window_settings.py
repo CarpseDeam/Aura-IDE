@@ -1,14 +1,13 @@
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
-import logging
 from PySide6.QtCore import QObject
 from PySide6.QtWidgets import QMessageBox
 
 from aura.config import AppSettings, save_settings
 from aura.gui.settings_dialog import SettingsDialog
-
 
 if TYPE_CHECKING:
     from aura.gui.main_window import MainWindow
@@ -38,7 +37,6 @@ class MainWindowSettingsController(QObject):
                 parent=window,
                 on_live_settings_applied=self._apply_settings,
             )
-            dlg.set_companion_manager(window._companion_controller.companion_manager)
             dlg.credits_claimed.connect(lambda: window._balance_controller.refresh(window._settings))
             dlg.credits_claimed.connect(window._refresh_status_bar)
             if dlg.exec() == SettingsDialog.DialogCode.Accepted:
@@ -59,7 +57,6 @@ class MainWindowSettingsController(QObject):
                 open_api_keys_tab=True,
                 on_live_settings_applied=self._apply_settings,
             )
-            dlg.set_companion_manager(window._companion_controller.companion_manager)
             dlg.credits_claimed.connect(lambda: window._balance_controller.refresh(window._settings))
             dlg.credits_claimed.connect(window._refresh_status_bar)
             if dlg.exec() == SettingsDialog.DialogCode.Accepted:
@@ -80,7 +77,6 @@ class MainWindowSettingsController(QObject):
                 open_aura_tab=True,
                 on_live_settings_applied=self._apply_settings,
             )
-            dlg.set_companion_manager(window._companion_controller.companion_manager)
             dlg.credits_claimed.connect(lambda: window._balance_controller.refresh(window._settings))
             dlg.credits_claimed.connect(window._refresh_status_bar)
             if dlg.exec() == SettingsDialog.DialogCode.Accepted:

@@ -25,6 +25,7 @@ class MainWindowCompanionController(QObject):
 
         self._companion = CompanionManager(window._settings)
         self._companion.connection_status_changed.connect(self._on_companion_status)
+        self._companion.connection_error.connect(self._on_companion_error)
         self._companion.message_received.connect(self._on_companion_message)
         self._companion.conversation_selected_by_companion.connect(self._on_companion_thread_selected)
         self._companion.set_bridge(window._bridge)
@@ -60,6 +61,14 @@ class MainWindowCompanionController(QObject):
 
     def _on_companion_status(self, status: str) -> None:
         logger.info("[MainWindow] Companion status: %s", status)
+        window = self._window
+        if hasattr(window, '_edge_rail') and window._edge_rail is not None:
+            window._edge_rail.set_companion_status(status)
+
+    def _on_companion_error(self, error: str) -> None:
+        window = self._window
+        if hasattr(window, '_edge_rail') and window._edge_rail is not None:
+            window._edge_rail.set_companion_status("error", error)
 
     def _on_companion_message(self, msg: dict) -> None:
         logger.debug("[MainWindow] Companion msg: %s", msg.get("type"))

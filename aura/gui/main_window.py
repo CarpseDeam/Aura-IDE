@@ -1,26 +1,18 @@
 """Main application window: three-pane splitter, toolbar, chat + input."""
 from __future__ import annotations
 
-import difflib
 import logging
 import os
-import sys
-from datetime import datetime
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 from PySide6.QtCore import QByteArray, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QIcon
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QDesktopServices, QIcon
 from PySide6.QtWidgets import (
     QDialog,
-    QDialogButtonBox,
-    QFileDialog,
-    QLabel,
     QMainWindow,
     QMessageBox,
-    QPlainTextEdit,
     QSplitter,
     QStackedWidget,
     QVBoxLayout,
@@ -35,41 +27,40 @@ from aura.config import (
     AppSettings,
     ThinkingMode,
     get_api_key,
-    get_provider,
     icon_path,
     load_settings,
     load_workspace_root,
     save_settings,
 )
-from aura.conversation.tools._types import ApprovalRequest
 from aura.git_ops import is_git_repo
-from aura.gui.main_window_drones import MainWindowDroneController
-from aura.gui.main_window_companion import MainWindowCompanionController
-from aura.gui.main_window_workspace import MainWindowWorkspaceController
+from aura.gui._screen import clamp_to_screen
 from aura.gui.chat_view import ChatView
 from aura.gui.checkpoint_dialog import CheckpointDialog
 from aura.gui.conv_persistence import ConversationPersistence
+from aura.gui.debug_report_handler import DebugReportHandler
 from aura.gui.drones.drone_reports_window import DroneReportsWindow
 from aura.gui.edge_rails import EdgeTabRail
 from aura.gui.input_panel import InputPanel, SendPayload
 from aura.gui.left_pane import LeftPane
+from aura.gui.main_window_balance import MainWindowBalanceController
+from aura.gui.main_window_companion import MainWindowCompanionController
+from aura.gui.main_window_drones import MainWindowDroneController
+from aura.gui.main_window_handoff import MainWindowHandoffController
+from aura.gui.main_window_settings import MainWindowSettingsController
+from aura.gui.main_window_terminal import MainWindowTerminalController
 from aura.gui.main_window_toolbar import MainWindowToolbar
+from aura.gui.main_window_update import MainWindowUpdateController
+from aura.gui.main_window_workspace import MainWindowWorkspaceController
 from aura.gui.onboarding_dialog import OnboardingDialog
 from aura.gui.playground import AuraPlayground
 from aura.gui.send_handler import SendHandler
-from aura.gui.debug_report_handler import DebugReportHandler
-from aura.gui.main_window_balance import MainWindowBalanceController
-from aura.gui.main_window_settings import MainWindowSettingsController
-from aura.gui.main_window_terminal import MainWindowTerminalController
-from aura.gui.main_window_update import MainWindowUpdateController
 from aura.gui.status_bar import AuraStatusBar
 from aura.gui.update_dialog import UpdateDialog
 from aura.gui.widgets.aura_glow import AuraWidget
-from aura.gui._screen import clamp_to_screen
 from aura.gui.window_chrome import WindowChromeMixin
 from aura.gui.worker_handler import WorkerEventHandler
-from aura.gui.main_window_handoff import MainWindowHandoffController
 from aura.prompts import SINGLE_SYSTEM_PROMPT
+
 
 class _ShrinkableStack(QStackedWidget):
     """QStackedWidget that only considers the current (visible) page for
@@ -371,6 +362,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._edge_rail.droneBayRequested.connect(self._drone_controller.on_drone_bay_requested)
         self._edge_rail.droneRunFocusRequested.connect(self._drone_controller.on_focus_drone_run)
         self._drone_controller.sync_drone_tab_checked()
+        self._edge_rail.companionRequested.connect(self._on_open_companion_popout)
 
         # Frameless window — no native title bar unless explicitly disabled.
         if not self._use_native_chrome:
@@ -709,6 +701,16 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._checkpoint_dialog.raise_()
         self._checkpoint_dialog.activateWindow()
         self._tree.set_root(self._workspace_root)
+
+    def _on_open_companion_popout(self) -> None:
+        from aura.gui.companion_popout import CompanionPopoutDialog
+        dlg = CompanionPopoutDialog(
+            settings=self._settings,
+            manager=self._companion_controller.companion_manager,
+            on_apply=self._settings_controller._apply_settings,
+            parent=self,
+        )
+        dlg.exec()
 
     def _apply_planner_worker_mode_to_bridge(self, enabled: bool) -> None:
         # HACK: Force planner/worker mode to always be enabled. The user is

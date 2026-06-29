@@ -37,6 +37,7 @@ class EdgeTabRail(QFrame):
     terminalTabToggled = Signal(bool)  # True=expanded, False=collapsed
     droneBayRequested = Signal()
     droneRunFocusRequested = Signal(str)
+    companionRequested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -46,6 +47,7 @@ class EdgeTabRail(QFrame):
         self._checkpoint_tab: QToolButton | None = None
         self._terminal_container: QWidget | None = None
         self._drone_tab: QToolButton | None = None
+        self._companion_tab: QToolButton | None = None
         self._drone_run_pips: dict[str, DroneRailPip] = {}
         self._summon_animations: dict[str, tuple[QToolButton, QPropertyAnimation]] = {}
         self._corner_widget: QWidget | None = None
@@ -111,6 +113,18 @@ class EdgeTabRail(QFrame):
         self._drone_tab.setStyleSheet(self._drone_tab_style())
         self._rail_layout.addWidget(self._drone_tab)
 
+        # Companion phone badge
+        self._companion_tab = QToolButton(self)
+        self._companion_tab.setObjectName("edgeCompanionTab")
+        self._companion_tab.setToolTip("Aura Companion")
+        self._companion_tab.setIcon(QIcon(str(media_path("phone_24.svg"))))
+        self._companion_tab.setIconSize(QSize(22, 22))
+        self._companion_tab.setFixedSize(40, 44)
+        self._companion_tab.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._companion_tab.clicked.connect(lambda: self.companionRequested.emit())
+        self._companion_tab.setStyleSheet(self._companion_tab_style())
+        self._rail_layout.addWidget(self._companion_tab)
+
         self.adjustSize()
         self.set_state("dim")
         self.raise_()
@@ -141,6 +155,10 @@ class EdgeTabRail(QFrame):
         return self._drone_tab
 
     @property
+    def companion_tab(self) -> QToolButton | None:
+        return self._companion_tab
+
+    @property
     def terminal_container(self) -> QWidget | None:
         return self._terminal_container
 
@@ -152,6 +170,23 @@ class EdgeTabRail(QFrame):
         """Notify the rail whether the terminal window is open, so the
         'dim' state can show the active variant."""
         self._is_terminal_open = is_open
+
+    def set_companion_status(self, status: str, error: str = "") -> None:
+        tab = self._companion_tab
+        if tab is None:
+            return
+        if status == "connected":
+            tab.setStyleSheet(self._companion_tab_style(accent="#39ff88", bg="#0b2514"))
+            tab.setToolTip("Companion — Connected")
+        elif status in ("connecting", "starting_local_relay"):
+            tab.setStyleSheet(self._companion_tab_style(accent="#7dcfff", bg="#14303a"))
+            tab.setToolTip("Companion — Connecting…")
+        elif status == "error" or status == "disconnected":
+            tab.setStyleSheet(self._companion_tab_style(accent=DANGER, bg="#1a1111"))
+            tab.setToolTip(f"Companion — {error or 'Connection error'}")
+        else:  # "disabled" or other
+            tab.setStyleSheet(self._companion_tab_style(accent=FG_DIM, bg="#161b33"))
+            tab.setToolTip("Companion — Disabled")
 
     def add_drone_run_pip(self, run_id: str, drone_name: str) -> None:
         if run_id in self._drone_run_pips:
@@ -379,5 +414,26 @@ class EdgeTabRail(QFrame):
             "QToolButton#edgeCheckpointTab:hover {"
             "  background: #123d22;"
             f"  color: {FG};"
+            "}"
+        )
+
+    def _companion_tab_style(self, accent: str = FG_DIM, bg: str = "#161b33") -> str:
+        return (
+            "QToolButton#edgeCompanionTab {"
+            f"  background: {bg};"
+            f"  color: {accent};"
+            f"  border: 1px solid {accent};"
+            "  border-right: none;"
+            "  border-top-left-radius: 8px;"
+            "  border-bottom-left-radius: 8px;"
+            "  border-top-right-radius: 0px;"
+            "  border-bottom-right-radius: 0px;"
+            "  padding: 0px;"
+            "}"
+            "QToolButton#edgeCompanionTab:hover {"
+            f"  background: #1d2f55;"
+            f"  color: {ACCENT_HOVER};"
+            f"  border-color: {ACCENT_HOVER};"
+            "  border-right: none;"
             "}"
         )
