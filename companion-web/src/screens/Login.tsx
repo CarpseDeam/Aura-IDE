@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import CompanionSocket, { socket } from '../api/socket';
 import { tokens, glassCard, primaryButton, ghostButton, inputBase, statusPillStyle } from '../ui/theme';
-import { isLocalRelayUrl, isLocalOrigin, resolveRelayUrl, HOSTED_RELAY_DEFAULT } from '../lib/relay';
+import { isLocalOrigin, resolveRelayUrl } from '../lib/relay';
 
 type Phase = 'idle' | 'checking' | 'connecting' | 'connected' | 'pairing' | 'paired' | 'error' | 'unavailable';
 

@@ -313,6 +313,57 @@ function ChatScreen() {
             <MessageBubble key={m.id} message={m} previous={messages[idx - 1]} />
           ))
         )}
+
+        {/* Quick prompt chips */}
+        {(messages.length > 0 || (phase === 'connected' && projectId && conversationId)) && (
+          <div style={{
+            display: 'flex',
+            gap: '0.5rem',
+            padding: '0.5rem 0 0.25rem',
+            overflow: 'auto',
+            flexShrink: 0,
+            scrollbarWidth: 'none',
+          }}>
+            {[
+              { label: "What's new?", text: "What's new?" },
+              { label: 'Status', text: 'What is the current status?' },
+              { label: 'Help', text: 'Help me with a coding task' },
+            ].map((chip) => (
+              <button
+                key={chip.label}
+                onClick={() => {
+                  if (streaming || !desktopId || !projectId || !conversationId) return;
+                  setInput(chip.text);
+                  // Wait for React state update then send
+                  setTimeout(() => {
+                    const el = taRef.current;
+                    if (el) {
+                      el.focus();
+                      el.style.height = 'auto';
+                      el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+                    }
+                    sendMessage();
+                  }, 0);
+                }}
+                style={{
+                  background: 'rgba(255,255,255,0.04)',
+                  border: `1px solid ${tokens.border}`,
+                  borderRadius: 999,
+                  padding: '0.35rem 0.9rem',
+                  color: tokens.fgDim,
+                  fontSize: '0.8rem',
+                  fontWeight: 500,
+                  whiteSpace: 'nowrap',
+                  cursor: 'pointer',
+                  transition: 'background 120ms ease, border-color 120ms ease',
+                }}
+              >
+                {chip.label}
+              </button>
+            ))}
+          </div>
+        )}
+
         <div ref={bottomRef} />
       </main>
 

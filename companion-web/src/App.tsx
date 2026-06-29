@@ -10,10 +10,10 @@ import ReceiptsScreen from './screens/Receipts'
 import LoginScreen from './screens/Login'
 
 const navItems = [
-  { path: '/chat', label: 'Chat', icon: '◐' },
-  { path: '/projects', label: 'Projects', icon: '▤' },
-  { path: '/runs', label: 'Runs', icon: '▷', comingSoon: true },
-  { path: '/receipts', label: 'History', icon: '⌗', comingSoon: true },
+  { path: '/chat', label: 'Command', icon: '◐' },
+  { path: '/projects', label: 'Switch', icon: '▤' },
+  { path: '/runs', label: 'Activity', icon: '▷' },
+  { path: '/receipts', label: 'Receipts', icon: '⌗' },
 ];
 
 function BottomNav() {
@@ -33,12 +33,10 @@ function BottomNav() {
     }}>
       {navItems.map((item) => {
         const active = currentPath === item.path;
-        const disabled = !!item.comingSoon;
         return (
           <button
             key={item.path}
-            onClick={() => { if (!disabled) navigate(item.path); }}
-            disabled={disabled}
+            onClick={() => navigate(item.path)}
             style={{
               background: 'transparent',
               border: 'none',
@@ -51,14 +49,11 @@ function BottomNav() {
               padding: '0.35rem 0.6rem',
               fontWeight: active ? 600 : 500,
               transition: 'color 120ms ease',
-              opacity: disabled ? 0.4 : 1,
-              cursor: disabled ? 'not-allowed' : 'pointer',
-              pointerEvents: disabled ? 'none' : 'auto',
+              cursor: 'pointer',
             }}
           >
             <span style={{ fontSize: '1.15rem', lineHeight: 1 }}>{item.icon}</span>
             <span>{item.label}</span>
-            {disabled && <span style={{ fontSize: '0.55rem', opacity: 0.6 }}>soon</span>}
           </button>
         );
       })}

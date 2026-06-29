@@ -1,0 +1,8 @@
+{
+  "name": "aura-harness",
+  "private": true,
+  "scripts": {
+    "build": "npm --prefix companion-web run build",
+    "dev": "npm --prefix companion-web run dev"
+  }
+}
