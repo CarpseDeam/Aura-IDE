@@ -341,11 +341,11 @@ function LoginScreen() {
   useEffect(() => {
     if (!qrTicket) return;
     if (autoStartedRef.current) return;
-    const configuredRelay = import.meta.env.VITE_AURA_RELAY_WS_URL || 'ws://localhost:8765';
-    setRelayUrl(configuredRelay);
-    autoPairWithTicket(qrTicket, configuredRelay);
+    const effectiveRelay = qrRelay || import.meta.env.VITE_AURA_RELAY_WS_URL || 'ws://localhost:8765';
+    setRelayUrl(effectiveRelay);
+    autoPairWithTicket(qrTicket, effectiveRelay);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [qrTicket]);
+  }, [qrTicket, qrRelay]);
 
 
 

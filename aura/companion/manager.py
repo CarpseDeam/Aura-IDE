@@ -6,6 +6,7 @@ import logging
 import os
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
 from PySide6.QtCore import QObject, Signal
 
@@ -216,13 +217,16 @@ class CompanionManager(QObject):
             "conversation_id": self._current_conversation_id,
         }))
 
-        pair_url = f"{web_url}/pair?ticket={ticket}"
+        runtime_relay_url = self._active_relay_url or normalize_relay_url(self._settings.companion_relay_url)
+        params = urlencode({"ticket": ticket, "relay": runtime_relay_url})
+        pair_url = f"{web_url}/pair?{params}"
         return {
             "code": code,
             "expires_at": expires_at,
             "ticket": ticket,
             "desktop_name": desktop_name,
             "pair_url": pair_url,
+            "relay_url": runtime_relay_url,
         }
 
     def cancel_pairing(self) -> None:
