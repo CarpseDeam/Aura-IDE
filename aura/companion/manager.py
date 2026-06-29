@@ -21,6 +21,7 @@ from aura.companion.auth import (
     validate_pairing_code,
 )
 from aura.companion.client import CompanionWsClient
+from aura.companion.defaults import DEFAULT_HOSTED_COMPANION_WEB_URL
 from aura.companion.local_relay import (
     LocalRelayError,
     ensure_local_relay,
@@ -218,7 +219,13 @@ class CompanionManager(QObject):
         }))
 
         runtime_relay_url = self._active_relay_url or normalize_relay_url(self._settings.companion_relay_url)
-        params = urlencode({"ticket": ticket, "relay": runtime_relay_url})
+
+        # Hosted web + localhost relay → phones can't reach localhost, skip relay param
+        is_hosted_web = web_url.rstrip("/") == DEFAULT_HOSTED_COMPANION_WEB_URL.rstrip("/")
+        if is_hosted_web and is_local_relay_url(runtime_relay_url):
+            params = urlencode({"ticket": ticket})
+        else:
+            params = urlencode({"ticket": ticket, "relay": runtime_relay_url})
         pair_url = f"{web_url}/pair?{params}"
         return {
             "code": code,

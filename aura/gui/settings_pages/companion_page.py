@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
 )
 
 from aura.companion.auth import get_device_display_name, get_device_id
+from aura.companion.defaults import DEFAULT_HOSTED_COMPANION_RELAY_URL, DEFAULT_HOSTED_COMPANION_WEB_URL
 from aura.gui.cards._collapsible import _CollapsibleSection
 from aura.gui.theme import (
     ACCENT,
@@ -260,7 +261,8 @@ class CompanionPage(QWidget):
 
         advanced_body_layout.addLayout(adv_form)
 
-        note = QLabel("Configure these for custom relay deployments")
+        note = QLabel("Aura Companion uses Aura's hosted relay by default. "
+              "Advanced URLs are only for self-hosting or local development.")
         note.setStyleSheet(f"color: {FG_MUTED}; font-size: 10px; padding: 2px 0;")
         note.setWordWrap(True)
         advanced_body_layout.addWidget(note)
@@ -401,8 +403,8 @@ class CompanionPage(QWidget):
     def collect_settings(self, settings: AppSettings) -> None:
         settings.companion_enabled = self._enabled_switch.isChecked()
         settings.companion_display_name = self._display_name_edit.text().strip()
-        settings.companion_relay_url = self._relay_url_edit.text().strip() or "ws://localhost:8765"
-        settings.companion_web_url = self._web_url_edit.text().strip() or "http://localhost:5173"
+        settings.companion_relay_url = self._relay_url_edit.text().strip() or DEFAULT_HOSTED_COMPANION_RELAY_URL
+        settings.companion_web_url = self._web_url_edit.text().strip() or DEFAULT_HOSTED_COMPANION_WEB_URL
 
     # ── Style helpers ────────────────────────────────────────
 

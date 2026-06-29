@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, cast
@@ -18,6 +19,13 @@ from aura.models import (
 )
 from aura.paths import config_dir
 from aura.providers.registry import provider_registry
+
+# Companion hosted defaults — kept inline to avoid circular import through
+# aura.companion.__init__ (which eagerly imports CompanionManager).
+DEFAULT_HOSTED_COMPANION_RELAY_URL = "wss://aura-companion-relay.carpsedema.workers.dev/ws"
+DEFAULT_HOSTED_COMPANION_WEB_URL = "https://aura-companion.pages.dev"
+DEFAULT_LOCAL_COMPANION_RELAY_URL = "ws://localhost:8765"
+DEFAULT_LOCAL_COMPANION_WEB_URL = "http://localhost:5173"
 
 DEFAULT_PROVIDER: ProviderId = "deepseek"
 DEFAULT_SANDBOX_MODE: str = "host"
@@ -91,9 +99,9 @@ class AppSettings:
 
     # Companion (mobile control plane)
     companion_enabled: bool = False
-    companion_relay_url: str = "ws://localhost:8765"
+    companion_relay_url: str = DEFAULT_HOSTED_COMPANION_RELAY_URL
     companion_display_name: str = ""
-    companion_web_url: str = "http://localhost:5173"
+    companion_web_url: str = DEFAULT_HOSTED_COMPANION_WEB_URL
 
     @classmethod
     def from_dict(cls, data: dict) -> "AppSettings":
@@ -196,12 +204,28 @@ class AppSettings:
         # companion_enabled is session-only: Aura must never auto-start remote
         # control on launch, so it is always forced False regardless of what was saved.
         s.companion_enabled = False
-        if isinstance(data.get("companion_relay_url"), str):
+
+        # Companion URL migration: old localhost defaults → hosted defaults
+        migrated_relay = data.get("companion_relay_url", "")
+        migrated_web = data.get("companion_web_url", "")
+        if migrated_relay in ("", "ws://localhost:8765"):
+            migrated_relay = DEFAULT_HOSTED_COMPANION_RELAY_URL
+        if migrated_web in ("", "http://localhost:5173"):
+            migrated_web = DEFAULT_HOSTED_COMPANION_WEB_URL
+        s.companion_relay_url = migrated_relay
+        s.companion_web_url = migrated_web
+
+        if isinstance(data.get("companion_relay_url"), str) and data["companion_relay_url"] not in ("", "ws://localhost:8765"):
             s.companion_relay_url = data["companion_relay_url"]
         if isinstance(data.get("companion_display_name"), str):
             s.companion_display_name = data["companion_display_name"]
-        if isinstance(data.get("companion_web_url"), str):
+        if isinstance(data.get("companion_web_url"), str) and data["companion_web_url"] not in ("", "http://localhost:5173"):
             s.companion_web_url = data["companion_web_url"]
+
+        # Dev override: AURA_COMPANION_DEV_LOCAL=1 → localhost defaults
+        if os.environ.get("AURA_COMPANION_DEV_LOCAL") == "1":
+            s.companion_relay_url = DEFAULT_LOCAL_COMPANION_RELAY_URL
+            s.companion_web_url = DEFAULT_LOCAL_COMPANION_WEB_URL
         # Onboarding fields (backward-compatible)
         if isinstance(data.get("onboarding_checklist"), dict):
             s.onboarding_checklist = data["onboarding_checklist"]
