@@ -7,9 +7,12 @@ from typing import Any
 
 from aura.conversation._parse_helpers import (
     _clean_token,
+    _extract_cd_wrapper,
+    _extract_package_manager_cwd,
     _contains_timeout,
     _is_missing_dependency,
     _is_missing_executable,
+    _is_package_manifest_missing,
     _is_pytest_tokens,
     _is_shell_syntax_error,
     _looks_like_command,
@@ -34,6 +37,8 @@ POLICY_BLOCKED = "policy_blocked"
 TIMEOUT = "timeout"
 ENVIRONMENT_ERROR = "environment_error"
 UNKNOWN_FAILURE = "unknown_failure"
+VALIDATION_COMMAND_UNRUNNABLE = "validation_command_unrunnable"
+VALIDATION_WRONG_WORKING_DIRECTORY = "validation_wrong_working_directory"
 
 ACTION_NONE = "none"
 ACTION_FIX_CODE = "fix_code"
@@ -46,6 +51,7 @@ ACTION_RETRY = "retry"
 class ValidationCommand:
     raw_text: str
     command: str
+    cwd: str = ""
     expected_outcome: str = ""
     source: str = "worker_command"
     normalized: bool = False
@@ -61,6 +67,8 @@ class ValidationCommand:
             "raw_text": self.raw_text,
             "expected_outcome": self.expected_outcome,
             "validation_source": self.source,
+            "cwd": self.cwd,
+            "working_directory": self.cwd,
             "validation_command_normalized": self.normalized,
             "normalized": self.normalized,
         }
@@ -74,6 +82,7 @@ class ValidationRunResult:
     command: str
     raw_text: str
     exit_code: int | None
+    cwd: str = ""
     output: str = ""
     classification: str = UNKNOWN_FAILURE
     counts_as_validation: bool = False
@@ -98,10 +107,23 @@ class ValidationRunResult:
             "validation_raw_text": self.raw_text,
             "raw_text": self.raw_text,
             "validation_source": self.source,
+            "cwd": self.cwd,
+            "working_directory": self.cwd,
             "expected_outcome": self.expected_outcome,
             "validation_command_normalized": self.normalized,
             "normalized": self.normalized,
         }
+        if self.classification in {VALIDATION_COMMAND_UNRUNNABLE, VALIDATION_WRONG_WORKING_DIRECTORY}:
+            payload.update(
+                {
+                    "recoverable": True,
+                    "suggested_next_tool": "run_terminal_command",
+                    "suggested_next_action": (
+                        "Rerun the package-manager validation command from the "
+                        "subproject/package root using cwd or working_directory."
+                    ),
+                }
+            )
         if self.normalization_reason:
             payload["normalization_reason"] = self.normalization_reason
         return payload
@@ -128,6 +150,38 @@ def parse_validation_command(raw_text: str, *, source: str = "worker_command") -
             normalization_reason="validation text is prose, not a runnable command",
         )
 
+    command_cwd = ""
+    cd_normalized = _extract_cd_wrapper(command)
+    if cd_normalized is not None:
+        command_cwd, command = cd_normalized
+        reason = _append_reason(reason, "cd wrapper")
+        if not _looks_like_command(command):
+            return ValidationCommand(
+                raw_text=raw,
+                command="",
+                cwd=command_cwd,
+                expected_outcome=expected,
+                source=source,
+                normalized=True,
+                normalization_reason="cd wrapper did not contain a runnable command",
+            )
+
+    package_cwd = _extract_package_manager_cwd(command)
+    if package_cwd is not None:
+        extracted_cwd, command = package_cwd
+        if command_cwd and _normalize_cwd(command_cwd) != _normalize_cwd(extracted_cwd):
+            return ValidationCommand(
+                raw_text=raw,
+                command="",
+                cwd=command_cwd,
+                expected_outcome=expected,
+                source=source,
+                normalized=True,
+                normalization_reason="conflicting command working directories",
+            )
+        command_cwd = command_cwd or extracted_cwd
+        reason = _append_reason(reason, "package manager working directory flag")
+
     tokens = _split_tokens(command)
     if _is_pytest_tokens(tokens):
         stripped = _strip_trailing_outcome_token(command, tokens)
@@ -136,6 +190,7 @@ def parse_validation_command(raw_text: str, *, source: str = "worker_command") -
             return ValidationCommand(
                 raw_text=raw,
                 command=stripped_command,
+                cwd=command_cwd,
                 expected_outcome=outcome,
                 source=source,
                 normalized=True,
@@ -145,9 +200,10 @@ def parse_validation_command(raw_text: str, *, source: str = "worker_command") -
     return ValidationCommand(
         raw_text=raw,
         command=command,
+        cwd=command_cwd,
         expected_outcome=expected,
         source=source,
-        normalized=bool(expected or reason),
+        normalized=bool(command_cwd or expected or reason),
         normalization_reason=reason,
     )
 
@@ -174,6 +230,16 @@ def classify_validation_run(
 
     if failure_class in {"source_inspection_command_blocked", "worker_terminal_not_validation"}:
         return _result(validation_command, exit_code, output_text, POLICY_BLOCKED, user_action=ACTION_FIX_VALIDATION_COMMAND)
+    if failure_class == VALIDATION_COMMAND_UNRUNNABLE:
+        return _result(
+            validation_command,
+            exit_code,
+            output_text,
+            VALIDATION_COMMAND_UNRUNNABLE,
+            counts_as_validation=False,
+            counts_as_product_failure=False,
+            user_action=ACTION_FIX_VALIDATION_COMMAND,
+        )
 
     if exit_code == -1 or _contains_timeout(output_text):
         return _result(validation_command, exit_code, output_text, TIMEOUT, user_action=ACTION_RETRY)
@@ -190,6 +256,18 @@ def classify_validation_run(
         )
 
     lowered = output_text.lower()
+    tokens = _split_tokens(validation_command.command)
+    if _is_package_manifest_missing(tokens, lowered):
+        return _result(
+            validation_command,
+            exit_code,
+            output_text,
+            VALIDATION_WRONG_WORKING_DIRECTORY,
+            counts_as_validation=False,
+            counts_as_product_failure=False,
+            user_action=ACTION_FIX_VALIDATION_COMMAND,
+        )
+
     if _is_missing_executable(lowered):
         return _result(validation_command, exit_code, output_text, MISSING_EXECUTABLE, user_action=ACTION_INSTALL_DEPENDENCY)
     if _is_missing_dependency(lowered):
@@ -203,7 +281,6 @@ def classify_validation_run(
             user_action=ACTION_FIX_VALIDATION_COMMAND,
         )
 
-    tokens = _split_tokens(validation_command.command)
     if _is_pytest_tokens(tokens):
         missing_path = _pytest_missing_path(output_text)
         if missing_path:
@@ -253,6 +330,7 @@ def classify_validation_payload(payload: dict[str, Any]) -> ValidationRunResult:
         parsed = ValidationCommand(
             raw_text=parsed.raw_text or raw_text,
             command=command_text,
+            cwd=str(payload.get("cwd") or payload.get("working_directory") or parsed.cwd),
             expected_outcome=str(payload.get("expected_outcome") or parsed.expected_outcome),
             source=parsed.source,
             normalized=bool(payload.get("validation_command_normalized") or payload.get("normalized") or parsed.normalized),
@@ -301,6 +379,12 @@ def validation_issue_message(record: dict[str, Any]) -> str:
         return f"Requested command had trailing prose token `{expected}`; runnable command was `{command}`."
     if classification == MALFORMED_VALIDATION_COMMAND:
         return f"Requested validation command was malformed: `{raw}`."
+    if classification == VALIDATION_COMMAND_UNRUNNABLE:
+        return f"Requested validation command is not runnable as specified: `{raw or command}`."
+    if classification == VALIDATION_WRONG_WORKING_DIRECTORY:
+        cwd = str(record.get("cwd") or record.get("working_directory") or "").strip()
+        target = f" from `{cwd}`" if cwd else " from the subproject/package root"
+        return f"Validation command must be rerun{target}: `{command or raw}`."
     if classification in {NO_TESTS_COLLECTED, TEST_SELECTION_EMPTY}:
         return f"Validation command selected no tests: `{command or raw}`."
     if classification in {MISSING_DEPENDENCY, MISSING_EXECUTABLE}:
@@ -328,6 +412,7 @@ def _result(
         command=command.command,
         raw_text=command.raw_text,
         exit_code=exit_code,
+        cwd=command.cwd,
         output=output,
         classification=classification,
         counts_as_validation=counts_as_validation,
@@ -357,6 +442,8 @@ __all__ = [
     "TEST_SELECTION_EMPTY",
     "TIMEOUT",
     "UNKNOWN_FAILURE",
+    "VALIDATION_COMMAND_UNRUNNABLE",
+    "VALIDATION_WRONG_WORKING_DIRECTORY",
     "ValidationCommand",
     "ValidationRunResult",
     "classify_validation_payload",
@@ -365,3 +452,13 @@ __all__ = [
     "parse_validation_command",
     "validation_issue_message",
 ]
+
+
+def _append_reason(current: str, reason: str) -> str:
+    if not current:
+        return reason
+    return f"{current}; {reason}"
+
+
+def _normalize_cwd(cwd: str) -> str:
+    return str(cwd or "").strip().replace("\\", "/").strip("/")

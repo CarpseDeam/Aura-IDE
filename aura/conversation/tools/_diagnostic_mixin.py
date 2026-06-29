@@ -17,8 +17,9 @@ class DiagnosticHandlersMixin:
 
         command = args.get("command", "")
         timeout = int(args.get("timeout", 30))
+        cwd = str(args.get("cwd") or args.get("working_directory") or "")
         try:
-            result = run_diagnostic_command(command, timeout=timeout, workspace_root=self._root)
+            result = run_diagnostic_command(command, timeout=timeout, workspace_root=self._root, cwd=cwd)
             return ToolExecResult(ok=result["ok"], payload=result)
         except Exception:
             import sys

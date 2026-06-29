@@ -26,19 +26,21 @@ def is_py_compile_command(command: str) -> bool:
 def matches_explicit_validation(
     command: str,
     explicit_validation_commands: list[str] | None,
+    *,
+    cwd: str = "",
 ) -> bool:
     """Return True when *command* is identical to an explicit validation command."""
     normalized = " ".join(str(command or "").strip().lower().split())
+    normalized_cwd = _normalize_cwd(cwd)
     return any(
         normalized
         == " ".join(
-            parse_validation_command(
-                str(explicit or ""), source="explicit_task_command"
-            )
+            (parsed := parse_validation_command(str(explicit or ""), source="explicit_task_command"))
             .command.strip()
             .lower()
             .split()
         )
+        and normalized_cwd == _normalize_cwd(parsed.cwd)
         for explicit in explicit_validation_commands or []
     )
 
@@ -62,3 +64,7 @@ def resolve_terminal_timeout(command: str, timeout_arg: Any, /) -> int:
         return DEFAULT_TERMINAL_TIMEOUT_SECONDS
 
     return max(1, min(timeout, MAX_TERMINAL_TIMEOUT_SECONDS))
+
+
+def _normalize_cwd(cwd: str) -> str:
+    return str(cwd or "").strip().replace("\\", "/").strip("/")

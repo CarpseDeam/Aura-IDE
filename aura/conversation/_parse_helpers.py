@@ -38,6 +38,8 @@ _KNOWN_COMMANDS = {
     "dotnet",
     "mvn",
     "gradle",
+    "cd",
+    "chdir",
 }
 
 
@@ -111,6 +113,59 @@ def _strip_trailing_outcome_token(command: str, tokens: list[str]) -> tuple[str,
     return command[: match.start()].rstrip(), last
 
 
+def _extract_cd_wrapper(command: str) -> tuple[str, str] | None:
+    match = re.match(
+        r"^\s*(?:cd|chdir)\s+(?P<cwd>\"[^\"]+\"|'[^']+'|[^&;]+?)\s*(?:&&|;)\s*(?P<command>.+?)\s*$",
+        command,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return None
+    cwd = _clean_token(match.group("cwd"))
+    inner_command = match.group("command").strip()
+    if not cwd or not inner_command:
+        return None
+    return cwd, inner_command
+
+
+def _extract_package_manager_cwd(command: str) -> tuple[str, str] | None:
+    tokens = _split_tokens(command)
+    if len(tokens) < 3:
+        return None
+    cleaned = [_clean_token(token) for token in tokens]
+    manager = cleaned[0].lower()
+    if manager.endswith(".cmd") or manager.endswith(".exe"):
+        manager = manager.rsplit(".", 1)[0]
+    if manager not in {"npm", "pnpm", "yarn"}:
+        return None
+
+    cwd_index: int | None = None
+    if manager == "npm":
+        for index, token in enumerate(cleaned[1:], start=1):
+            if token in {"--prefix", "-C"}:
+                cwd_index = index
+                break
+    elif manager == "pnpm":
+        for index, token in enumerate(cleaned[1:], start=1):
+            if token == "-C":
+                cwd_index = index
+                break
+    elif manager == "yarn":
+        for index, token in enumerate(cleaned[1:], start=1):
+            if token == "--cwd":
+                cwd_index = index
+                break
+
+    if cwd_index is None or cwd_index + 1 >= len(cleaned):
+        return None
+
+    cwd = cleaned[cwd_index + 1]
+    rewritten = tokens[:cwd_index] + tokens[cwd_index + 2 :]
+    if len(rewritten) < 2:
+        return None
+    return cwd, _join_tokens(rewritten)
+
+
 def _looks_like_command(command: str) -> bool:
     tokens = _split_tokens(command)
     if not tokens:
@@ -126,6 +181,13 @@ def _split_tokens(command: str) -> list[str]:
         return shlex.split(command, posix=False)
     except ValueError:
         return command.split()
+
+
+def _join_tokens(tokens: list[str]) -> str:
+    try:
+        return shlex.join([_clean_token(token) for token in tokens])
+    except Exception:
+        return " ".join(_clean_token(token) for token in tokens)
 
 
 def _clean_token(token: str) -> str:
@@ -168,6 +230,27 @@ def _is_missing_dependency(lowered_output: str) -> bool:
 
 def _is_shell_syntax_error(lowered_output: str) -> bool:
     return "syntax error" in lowered_output and ("shell" in lowered_output or "unexpected" in lowered_output)
+
+
+def _is_package_manifest_missing(tokens: list[str], lowered_output: str) -> bool:
+    if not tokens:
+        return False
+    executable = _clean_token(tokens[0]).lower().replace("\\", "/").rsplit("/", 1)[-1]
+    if executable.endswith((".cmd", ".exe")):
+        executable = executable.rsplit(".", 1)[0]
+    if executable not in {"npm", "pnpm", "yarn"}:
+        return False
+    markers = (
+        "package.json",
+        "no importer manifest",
+        "enoent",
+        "no package.json found",
+        "couldn't find a package.json",
+        "could not find a package.json",
+    )
+    if "package.json" not in lowered_output:
+        return False
+    return any(marker in lowered_output for marker in markers)
 
 
 def _pytest_missing_path(output: str) -> str:

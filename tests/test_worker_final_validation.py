@@ -36,11 +36,40 @@ def test_explicit_validation_runs_corrected_pytest_command(tmp_workspace) -> Non
         "python -m pytest tests/test_worker_summary_card.py "
         "-k worker_summary_card_inserted_by_default -x",
         window_seconds=20,
+        working_directory=tmp_workspace.resolve(),
     )
     assert result.runs
     assert result.runs[0].classification == PASSED
     assert result.runs[0].normalized is True
     assert result.runs[0].expected_outcome == "passes"
+
+
+def test_explicit_validation_runs_subproject_command_from_cwd(tmp_workspace) -> None:
+    (tmp_workspace / "companion-web").mkdir()
+    sandbox = MagicMock()
+    sandbox.run_and_watch.return_value = WatchResult(
+        ok=True,
+        survived_window=False,
+        exited_early=True,
+        error_detected=False,
+        exit_code=0,
+        output="built\n",
+    )
+
+    with patch("aura.conversation.worker_final_validation.SandboxExecutor", return_value=sandbox):
+        result = run_explicit_validation_commands(
+            workspace_root=tmp_workspace,
+            commands=["cd companion-web && npm run build"],
+        )
+
+    assert result.ok is True
+    sandbox.run_and_watch.assert_called_once_with(
+        "npm run build",
+        window_seconds=20,
+        working_directory=(tmp_workspace / "companion-web").resolve(),
+    )
+    assert result.runs
+    assert result.runs[0].cwd == "companion-web"
 
 
 def test_explicit_validation_malformed_prose_does_not_run(tmp_workspace) -> None:

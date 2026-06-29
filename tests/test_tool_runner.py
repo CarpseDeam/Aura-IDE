@@ -100,6 +100,88 @@ def test_terminal_timeout_is_clamped_to_300_seconds(tmp_path: Path):
     assert sandbox.run_terminal_command.call_args.kwargs["timeout"] == 300
 
 
+def test_terminal_command_runs_from_workspace_relative_cwd(tmp_path: Path):
+    runner = _make_runner(tmp_path)
+    (tmp_path / "companion-web").mkdir()
+    sandbox = MagicMock()
+    sandbox.run_terminal_command.return_value = SandboxResult(
+        ok=True,
+        stdout="built\n",
+        stderr="",
+        exit_code=0,
+    )
+
+    with (
+        patch("aura.conversation.tool_runner.SandboxExecutor", return_value=sandbox),
+        patch("aura.conversation.tool_runner.load_settings") as load_settings,
+    ):
+        load_settings.return_value.sandbox_mode = "host"
+        runner.handle_terminal_command(
+            tool_call_id="term-cwd",
+            args={"command": "npm run build", "cwd": "companion-web"},
+            on_event=lambda ev: None,
+            cancel_event=threading.Event(),
+            mode="single",
+        )
+
+    call_kwargs = sandbox.run_terminal_command.call_args.kwargs
+    assert call_kwargs["command"] == "npm run build"
+    assert call_kwargs["working_directory"] == (tmp_path / "companion-web").resolve()
+
+
+def test_terminal_command_normalizes_cd_wrapper_to_cwd(tmp_path: Path):
+    runner = _make_runner(tmp_path)
+    (tmp_path / "companion-web").mkdir()
+    events = []
+    sandbox = MagicMock()
+    sandbox.run_terminal_command.return_value = SandboxResult(
+        ok=True,
+        stdout="built\n",
+        stderr="",
+        exit_code=0,
+    )
+
+    with (
+        patch("aura.conversation.tool_runner.SandboxExecutor", return_value=sandbox),
+        patch("aura.conversation.tool_runner.load_settings") as load_settings,
+    ):
+        load_settings.return_value.sandbox_mode = "host"
+        runner.handle_terminal_command(
+            tool_call_id="term-cd",
+            args={"command": "cd companion-web && npm run build"},
+            on_event=events.append,
+            cancel_event=threading.Event(),
+            mode="single",
+        )
+
+    call_kwargs = sandbox.run_terminal_command.call_args.kwargs
+    assert call_kwargs["command"] == "npm run build"
+    assert call_kwargs["working_directory"] == (tmp_path / "companion-web").resolve()
+    payload = json.loads([ev for ev in events if isinstance(ev, ToolResult)][-1].result)
+    assert payload["cwd"] == "companion-web"
+    assert payload["validation_command_normalized"] is True
+
+
+def test_terminal_command_rejects_cwd_outside_workspace(tmp_path: Path):
+    runner = _make_runner(tmp_path)
+    events = []
+    sandbox = MagicMock()
+
+    with patch("aura.conversation.tool_runner.SandboxExecutor", return_value=sandbox):
+        runner.handle_terminal_command(
+            tool_call_id="term-escape",
+            args={"command": "npm run build", "cwd": "../outside"},
+            on_event=events.append,
+            cancel_event=threading.Event(),
+            mode="worker",
+        )
+
+    sandbox.run_terminal_command.assert_not_called()
+    payload = json.loads([ev for ev in events if isinstance(ev, ToolResult)][-1].result)
+    assert payload["ok"] is False
+    assert payload["failure_class"] == "validation_command_unrunnable"
+
+
 def test_terminal_output_events_stream_chunks(tmp_path: Path):
     runner = _make_runner(tmp_path)
     events = []

@@ -231,7 +231,7 @@ class TestRunTerminalCommand:
                 on_output=None,
             )
         assert result.ok is True
-        mock_method.assert_called_once_with("echo hello", 30, None, None, ANY)
+        mock_method.assert_called_once_with("echo hello", 30, None, None, ANY, Path.cwd())
 
     def test_docker_mode_available_dispatches_to_docker_method(self):
         executor = SandboxExecutor(mode="docker")
@@ -247,7 +247,7 @@ class TestRunTerminalCommand:
                 on_output=None,
             )
         assert result.ok is True
-        mock_method.assert_called_once_with("ls", 60, None, None, ANY)
+        mock_method.assert_called_once_with("ls", 60, None, None, ANY, Path.cwd())
 
     def test_docker_mode_unavailable_returns_error(self):
         executor = SandboxExecutor(mode="docker")
@@ -400,6 +400,37 @@ class TestRunHostTerminal:
             cancel_event=None,
             on_output=None,
         )
+
+    def test_uses_working_directory(self, tmp_path: Path):
+        subdir = tmp_path / "companion-web"
+        subdir.mkdir()
+        executor = SandboxExecutor(workspace_root=tmp_path)
+        mock_proc = MagicMock()
+        expected = SandboxResult(ok=True, stdout="ok\n", stderr="", exit_code=0)
+
+        with (
+            patch("aura.sandbox.subprocess.Popen", return_value=mock_proc) as mock_popen,
+            patch("aura.config.get_subprocess_kwargs", return_value={}),
+            patch.object(executor, "_stream_subprocess_output", return_value=expected),
+        ):
+            result = executor.run_terminal_command(
+                command="npm run build",
+                timeout=30,
+                working_directory=subdir,
+            )
+
+        assert result.ok is True
+        assert mock_popen.call_args.kwargs["cwd"] == str(subdir.resolve())
+
+    def test_rejects_working_directory_outside_workspace(self, tmp_path: Path):
+        executor = SandboxExecutor(workspace_root=tmp_path)
+
+        with pytest.raises(ValueError, match="working_directory"):
+            executor.run_terminal_command(
+                command="npm run build",
+                timeout=30,
+                working_directory=tmp_path.parent,
+            )
 
     def test_passes_input_data_to_stdin(self):
         executor = SandboxExecutor()

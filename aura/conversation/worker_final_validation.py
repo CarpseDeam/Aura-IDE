@@ -10,10 +10,12 @@ from typing import Callable
 
 from aura.client import Event, ToolResult
 from aura.conversation.validation_orchestrator import (
+    VALIDATION_COMMAND_UNRUNNABLE,
     ValidationRunResult,
     classify_validation_run,
     parse_validation_command,
 )
+from aura.project_env import resolve_workspace_cwd
 from aura.sandbox import SandboxExecutor
 
 EventCallback = Callable[[Event], None]
@@ -69,7 +71,23 @@ def run_explicit_validation_commands(
             continue
         command = validation_command.command
         try:
-            watch = sandbox.run_and_watch(command, window_seconds=window_seconds)
+            working_directory = resolve_workspace_cwd(workspace_root, validation_command.cwd)
+        except ValueError as exc:
+            run = classify_validation_run(
+                validation_command,
+                exit_code=None,
+                output=str(exc),
+                ok=False,
+                failure_class=VALIDATION_COMMAND_UNRUNNABLE,
+            )
+            runs.append(run)
+            continue
+        try:
+            watch = sandbox.run_and_watch(
+                command,
+                window_seconds=window_seconds,
+                working_directory=working_directory,
+            )
         except Exception as exc:
             diagnostics = f"Exception running command: {type(exc).__name__}: {exc}"
             run = classify_validation_run(

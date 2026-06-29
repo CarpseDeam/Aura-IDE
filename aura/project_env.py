@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from aura import python_env
+from aura.paths import safe_is_relative_to, safe_relative_to
 from aura.python_env import quote_command_arg
 
 
@@ -156,6 +157,29 @@ def preferred_python_for_compile(workspace_root: Path) -> Path:
     return env.python_for_compile
 
 
+def resolve_workspace_cwd(workspace_root: Path, cwd: str | Path | None) -> Path:
+    """Resolve a user-supplied workspace-relative cwd inside *workspace_root*."""
+    root = Path(workspace_root).resolve()
+    if cwd is None or str(cwd).strip() == "":
+        return root
+
+    raw = str(cwd).strip().strip("'\"")
+    candidate = Path(raw)
+    if candidate.is_absolute() or raw.startswith(("/", "\\")):
+        raise ValueError("cwd must be workspace-relative, not absolute")
+
+    resolved = (root / candidate).resolve()
+    if not safe_is_relative_to(resolved, root):
+        raise ValueError("cwd must not escape the workspace")
+    return resolved
+
+
+def workspace_relative_cwd(workspace_root: Path, cwd: Path) -> str:
+    rel = safe_relative_to(Path(cwd).resolve(), Path(workspace_root).resolve())
+    text = rel.as_posix()
+    return "" if text == "." else text
+
+
 
 
 def missing_external_tool_for_command(command: str) -> str | None:
@@ -227,4 +251,6 @@ __all__ = [
     "preferred_python_for_compile",
     "project_environment_missing_payload",
     "quote_command_arg",
+    "resolve_workspace_cwd",
+    "workspace_relative_cwd",
 ]

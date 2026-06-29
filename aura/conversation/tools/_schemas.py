@@ -1086,11 +1086,11 @@ TERMINAL_TOOL_DEF: dict[str, Any] = {
     "function": {
         "name": "run_terminal_command",
         "description": (
-            "Execute a shell command in the workspace directory and stream its output. "
+            "Execute a shell command in the workspace or an optional workspace-relative cwd and stream its output. "
             "Use this to run project validation/build commands: linters, type checkers, "
             "test suites explicitly requested by the user, or other validation/build "
             "commands. The command runs with the workspace as its working "
-            "directory. Stdout and stderr are both captured and streamed in real-time, "
+            "directory unless cwd/working_directory is provided. Stdout and stderr are both captured and streamed in real-time, "
             "including periodic status heartbeats if the command is quiet. Returns the "
             "exit code and complete output on completion. Use focused one-shot commands, "
             "not long-running watchers, dev servers, REPLs, or commands that wait for "
@@ -1117,6 +1117,14 @@ TERMINAL_TOOL_DEF: dict[str, Any] = {
                     "type": "integer",
                     "description": "Maximum seconds to wait before killing the command. Default: 45. Prefer short focused runs; very large values may be reduced for safety.",
                     "default": 45,
+                },
+                "cwd": {
+                    "type": "string",
+                    "description": "Optional workspace-relative working directory for the command, e.g. 'companion-web'. Absolute paths and '..' escapes are rejected.",
+                },
+                "working_directory": {
+                    "type": "string",
+                    "description": "Alias for cwd. Must be workspace-relative and stay inside the workspace.",
                 },
             },
             "required": ["command"],
@@ -1165,7 +1173,7 @@ DIAGNOSTIC_TOOL_DEF: dict[str, Any] = {
     "function": {
         "name": "run_diagnostic_command",
         "description": (
-            "Execute a short, read-only diagnostic command in the workspace. "
+            "Execute a short, read-only diagnostic command in the workspace or an optional workspace-relative cwd. "
             "Use this to validate code with project-specific read-only commands, inspect git state (status, diff, log), "
             "or search the filesystem (rg, ls, cat). "
             "Rejects mutating, installing, or dangerous commands. "
@@ -1192,6 +1200,14 @@ DIAGNOSTIC_TOOL_DEF: dict[str, Any] = {
                     "type": "integer",
                     "description": "Maximum seconds to wait. Default: 30.",
                     "default": 30,
+                },
+                "cwd": {
+                    "type": "string",
+                    "description": "Optional workspace-relative working directory for the diagnostic command. Absolute paths and '..' escapes are rejected.",
+                },
+                "working_directory": {
+                    "type": "string",
+                    "description": "Alias for cwd. Must be workspace-relative and stay inside the workspace.",
                 },
             },
             "required": ["command"],

@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+from aura.paths import safe_is_relative_to
+
 logger = logging.getLogger(__name__)
 
 SandboxMode = Literal["host", "docker", "wasm"]
@@ -180,6 +182,7 @@ class SandboxExecutor:
         cancel_event: Any = None,
         on_output: Any = None,
         input_data: str | None = None,
+        working_directory: Path | str | None = None,
     ) -> SandboxResult:
         """Execute a shell command in the sandbox, with optional streaming.
 
@@ -189,12 +192,14 @@ class SandboxExecutor:
             cancel_event: Optional threading.Event for cancellation.
             on_output: Optional callable(str) for streaming output chunks.
             input_data: Optional string to pass to stdin.
+            working_directory: Optional resolved directory inside workspace_root.
 
         Returns:
             SandboxResult with ok, stdout, stderr, exit_code.
         """
+        cwd = self._resolve_working_directory(working_directory)
         if self._mode == "host":
-            return self._run_host_terminal(command, timeout, cancel_event, on_output, input_data)
+            return self._run_host_terminal(command, timeout, cancel_event, on_output, input_data, cwd)
         elif self._mode == "docker":
             if not self.docker_available:
                 return SandboxResult(
@@ -203,7 +208,7 @@ class SandboxExecutor:
                     stderr="Docker is not available. Install Docker or switch sandbox_mode to 'host'.",
                     exit_code=-1,
                 )
-            return self._run_docker_terminal(command, timeout, cancel_event, on_output, input_data)
+            return self._run_docker_terminal(command, timeout, cancel_event, on_output, input_data, cwd)
         elif self._mode == "wasm":
             return SandboxResult(
                 ok=False,
@@ -220,6 +225,7 @@ class SandboxExecutor:
         on_output: Any = None,
         *,
         require_survive_window: bool = False,
+        working_directory: Path | str | None = None,
     ) -> WatchResult:
         """Run a command in host mode and watch it for a time window.
 
@@ -230,9 +236,10 @@ class SandboxExecutor:
         """
         from aura.config import get_subprocess_kwargs
 
+        cwd = self._resolve_working_directory(working_directory)
         popen_kwargs: dict[str, Any] = {
             "shell": True,
-            "cwd": str(self._workspace_root),
+            "cwd": str(cwd),
             "stdin": None,
             "stdout": subprocess.PIPE,
             "stderr": subprocess.STDOUT,
@@ -395,13 +402,15 @@ class SandboxExecutor:
         cancel_event: Any = None,
         on_output: Any = None,
         input_data: str | None = None,
+        working_directory: Path | None = None,
     ) -> SandboxResult:
         """Direct Popen execution (current behavior, no sandbox)."""
         from aura.config import get_subprocess_kwargs
 
+        cwd = working_directory or self._workspace_root
         popen_kwargs: dict[str, Any] = {
             "shell": True,
-            "cwd": str(self._workspace_root),
+            "cwd": str(cwd),
             "stdin": subprocess.PIPE if input_data else None,
             "stdout": subprocess.PIPE,
             "stderr": subprocess.STDOUT,
@@ -486,6 +495,7 @@ class SandboxExecutor:
     def _build_docker_base_args(
         self,
         read_only_rootfs: bool = False,
+        working_directory: Path | None = None,
     ) -> list[str]:
         """Build the base `docker run` arguments.
 
@@ -494,6 +504,7 @@ class SandboxExecutor:
                 (with /tmp as tmpfs for dynamic tools that need temporary scratch space).
         """
         ws = str(self._workspace_root.resolve())
+        docker_cwd = str((working_directory or self._workspace_root).resolve())
 
         args = [
             "docker", "run",
@@ -505,7 +516,7 @@ class SandboxExecutor:
             "--security-opt=no-new-privileges",
             "--stop-timeout=5",              # Fast kill on timeout
             "-v", f"{ws}:{ws}:{'ro' if read_only_rootfs else 'rw'}",
-            "-w", ws,
+            "-w", docker_cwd,
         ]
 
         if read_only_rootfs:
@@ -579,6 +590,7 @@ class SandboxExecutor:
         cancel_event: Any = None,
         on_output: Any = None,
         input_data: str | None = None,
+        working_directory: Path | None = None,
     ) -> SandboxResult:
         """Run a terminal command inside a Docker container with streaming.
 
@@ -586,7 +598,10 @@ class SandboxExecutor:
         """
         self._ensure_docker_image()
 
-        docker_args = self._build_docker_base_args(read_only_rootfs=False)
+        docker_args = self._build_docker_base_args(
+            read_only_rootfs=False,
+            working_directory=working_directory,
+        )
         # Run the command via bash -c inside the container
         cmd = docker_args + ["bash", "-c", command]
 
@@ -628,6 +643,15 @@ class SandboxExecutor:
                 stderr="",
                 exit_code=-1,
             )
+
+    def _resolve_working_directory(self, working_directory: Path | str | None) -> Path:
+        if working_directory is None or str(working_directory).strip() == "":
+            return self._workspace_root
+        resolved = Path(working_directory).resolve()
+        root = self._workspace_root.resolve()
+        if not safe_is_relative_to(resolved, root):
+            raise ValueError("working_directory must stay inside workspace_root")
+        return resolved
 
     def _stream_subprocess_output(
         self,

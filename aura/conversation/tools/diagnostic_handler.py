@@ -3,7 +3,7 @@ import shlex
 import subprocess
 from pathlib import Path
 
-from aura.project_env import build_project_command
+from aura.project_env import build_project_command, resolve_workspace_cwd, workspace_relative_cwd
 
 ALLOWED_EXECUTABLES = {
     "python",
@@ -123,12 +123,19 @@ def _is_project_venv_python(executable: str) -> bool:
     )
 
 
-def run_diagnostic_command(command: str, timeout: int = 30, workspace_root: Path | None = None) -> dict:
+def run_diagnostic_command(
+    command: str,
+    timeout: int = 30,
+    workspace_root: Path | None = None,
+    cwd: str | Path | None = None,
+) -> dict:
     if workspace_root is None:
         raise ValueError("workspace_root is required")
     workspace_root = Path(workspace_root).resolve()
+    working_directory = resolve_workspace_cwd(workspace_root, cwd)
+    relative_cwd = workspace_relative_cwd(workspace_root, working_directory)
 
-    command_plan = build_project_command(workspace_root, command, explicit=True)
+    command_plan = build_project_command(working_directory, command, explicit=True)
     if command_plan.missing_tool:
         missing_text = (
             f"Project environment is missing dependency '{command_plan.missing_tool}'. "
@@ -146,6 +153,8 @@ def run_diagnostic_command(command: str, timeout: int = 30, workspace_root: Path
             "exit_code": -1,
             "timed_out": False,
             "command": command,
+            "cwd": relative_cwd,
+            "working_directory": relative_cwd,
             "failure_class": command_plan.failure_class,
             "missing_tool": command_plan.missing_tool,
             "environment_setup_needed": True,
@@ -161,7 +170,7 @@ def run_diagnostic_command(command: str, timeout: int = 30, workspace_root: Path
                 raise ValueError(f"Command rejected: path '{token}' escapes the workspace root.")
 
     try:
-        proc = subprocess.run(tokens, capture_output=True, timeout=timeout, cwd=workspace_root, text=True, shell=False)
+        proc = subprocess.run(tokens, capture_output=True, timeout=timeout, cwd=working_directory, text=True, shell=False)
         stdout = proc.stdout or ""
         stderr = proc.stderr or ""
         exit_code = proc.returncode
@@ -191,6 +200,8 @@ def run_diagnostic_command(command: str, timeout: int = 30, workspace_root: Path
             "exit_code": -1,
             "timed_out": False,
             "command": command,
+            "cwd": relative_cwd,
+            "working_directory": relative_cwd,
         }
 
     limit = 100 * 1024
@@ -209,4 +220,6 @@ def run_diagnostic_command(command: str, timeout: int = 30, workspace_root: Path
         "exit_code": exit_code,
         "timed_out": timed_out,
         "command": command,
+        "cwd": relative_cwd,
+        "working_directory": relative_cwd,
     }

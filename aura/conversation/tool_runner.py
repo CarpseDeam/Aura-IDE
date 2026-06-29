@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import threading
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -23,12 +24,12 @@ from aura.conversation.loop_detection import LoopDetector
 from aura.conversation.spec_quality import validate_worker_dispatch_spec
 from aura.conversation.terminal_policy import worker_terminal_command_allowed
 from aura.conversation.tool_runner_terminal_policy import (
-    _CD_WRAPPER_RE,
     matches_explicit_validation,
     resolve_terminal_timeout,
 )
 from aura.conversation.validation_orchestrator import (
     MALFORMED_VALIDATION_COMMAND,
+    VALIDATION_COMMAND_UNRUNNABLE,
     classify_validation_run,
     looks_like_validation_command,
     parse_validation_command,
@@ -38,6 +39,8 @@ from aura.project_env import (
     build_project_command,
     build_project_command_rewrite,
     project_environment_missing_payload,
+    resolve_workspace_cwd,
+    workspace_relative_cwd,
 )
 from aura.sandbox import SandboxExecutor, SandboxResult, WatchResult
 
@@ -202,6 +205,57 @@ class ToolRunner:
             requested_command,
             source="worker_command" if mode == "worker" else "single_command",
         )
+        requested_cwd = str(args.get("cwd") or args.get("working_directory") or "").strip()
+        try:
+            if requested_cwd and validation_command.cwd:
+                parsed_resolved = resolve_workspace_cwd(self._workspace_root, validation_command.cwd)
+                requested_resolved = resolve_workspace_cwd(self._workspace_root, requested_cwd)
+                if parsed_resolved != requested_resolved:
+                    raise ValueError("cwd conflicts with command working directory")
+                resolved_cwd = requested_resolved
+            else:
+                resolved_cwd = resolve_workspace_cwd(
+                    self._workspace_root,
+                    requested_cwd or validation_command.cwd,
+                )
+            relative_cwd = workspace_relative_cwd(self._workspace_root, resolved_cwd)
+        except ValueError as exc:
+            payload_dict = {
+                "ok": False,
+                "exit_code": None,
+                "output": "",
+                "command": validation_command.command,
+                "requested_command": requested_command,
+                "original_command": requested_command,
+                "cwd": requested_cwd or validation_command.cwd,
+                "working_directory": requested_cwd or validation_command.cwd,
+                "failure_class": VALIDATION_COMMAND_UNRUNNABLE,
+                "error": str(exc),
+                "recoverable": True,
+                "suggested_next_tool": "run_terminal_command",
+                "suggested_next_action": (
+                    "Use a workspace-relative cwd/working_directory that stays inside the workspace."
+                ),
+            }
+            payload = json.dumps(payload_dict, ensure_ascii=False)
+            self._history.append_tool_result(tool_call_id, payload)
+            on_event(
+                ToolResult(
+                    tool_call_id=tool_call_id,
+                    name="run_terminal_command",
+                    ok=False,
+                    result=payload,
+                )
+            )
+            return {"_terminal_payload": payload_dict}
+
+        if relative_cwd != validation_command.cwd:
+            validation_command = replace(
+                validation_command,
+                cwd=relative_cwd,
+                normalized=validation_command.normalized or bool(relative_cwd),
+            )
+
         if mode == "worker" and validation_command.malformed:
             run_result = classify_validation_run(
                 validation_command,
@@ -216,6 +270,8 @@ class ToolRunner:
                 "command": "",
                 "requested_command": requested_command,
                 "original_command": requested_command,
+                "cwd": relative_cwd,
+                "working_directory": relative_cwd,
                 "failure_class": MALFORMED_VALIDATION_COMMAND,
             }
             payload_dict.update(run_result.metadata())
@@ -237,6 +293,7 @@ class ToolRunner:
             explicit = matches_explicit_validation(
                 str(command),
                 explicit_validation_commands,
+                cwd=relative_cwd,
             )
             decision = worker_terminal_command_allowed(
                 str(command),
@@ -263,7 +320,7 @@ class ToolRunner:
                 }
 
             command_plan = build_project_command(
-                self._workspace_root,
+                resolved_cwd,
                 str(command),
                 explicit=explicit,
             )
@@ -295,13 +352,12 @@ class ToolRunner:
             original_command = command_plan.original_command or requested_command
         else:
             command_plan = build_project_command_rewrite(
-                self._workspace_root,
+                resolved_cwd,
                 str(command),
             )
             command = command_plan.command
             original_command = command_plan.original_command or requested_command
 
-        command = _CD_WRAPPER_RE.sub('', command, count=1).lstrip()
         timeout = resolve_terminal_timeout(
             command,
             args.get("timeout"),
@@ -327,6 +383,7 @@ class ToolRunner:
             timeout=timeout,
             cancel_event=cancel_event,
             on_output=on_output_chunk,
+            working_directory=resolved_cwd,
         )
 
         full_output = result.stdout
@@ -343,7 +400,11 @@ class ToolRunner:
             "command": command,
             "requested_command": requested_command,
             "original_command": original_command,
+            "cwd": relative_cwd,
+            "working_directory": relative_cwd,
         }
+        if validation_command.normalized:
+            payload_dict.update(validation_command.metadata())
         should_classify_validation = (
             mode == "worker"
             and (
