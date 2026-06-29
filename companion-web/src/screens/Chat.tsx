@@ -123,11 +123,11 @@ function ChatScreen() {
     };
   }, [phase, desktopId, projectId, conversationId]);
 
-  const sendMessage = useCallback(() => {
-    const text = input.trim();
+  const sendMessage = useCallback((explicitText?: string) => {
+    const text = explicitText !== undefined ? explicitText.trim() : input.trim();
     if (!text || streaming || !desktopId || !projectId || !conversationId) return;
     setMessages(prev => [...prev, { id: `msg_${Date.now()}`, role: 'user', text, final: true }]);
-    setInput('');
+    if (explicitText === undefined) setInput('');
     setStreaming(true);
     setChatError('');
     socket.send('chat.send', { text }, desktopId, projectId, conversationId);
@@ -333,17 +333,7 @@ function ChatScreen() {
                 key={chip.label}
                 onClick={() => {
                   if (streaming || !desktopId || !projectId || !conversationId) return;
-                  setInput(chip.text);
-                  // Wait for React state update then send
-                  setTimeout(() => {
-                    const el = taRef.current;
-                    if (el) {
-                      el.focus();
-                      el.style.height = 'auto';
-                      el.style.height = Math.min(el.scrollHeight, 120) + 'px';
-                    }
-                    sendMessage();
-                  }, 0);
+                  sendMessage(chip.text);
                 }}
                 style={{
                   background: 'rgba(255,255,255,0.04)',
@@ -434,7 +424,7 @@ function ChatScreen() {
             </button>
           ) : (
             <button
-              onClick={sendMessage}
+              onClick={() => sendMessage()}
               disabled={!input.trim() || !desktopId || !projectId || !conversationId}
               aria-label="Send"
               style={{
