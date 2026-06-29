@@ -158,6 +158,19 @@ function ProjectsScreen() {
     );
   }
 
+  function createNewChat(projectId: string) {
+    if (creatingProjectId) return;
+
+    const desktopId =
+      sessionStorage.getItem('companion_desktop_id') ||
+      CompanionSocket.getStoredSafeContext().desktop_id ||
+      '';
+    if (!desktopId) return;
+
+    setCreatingProjectId(projectId);
+    socket.send('conversation.create', { project_id: projectId }, desktopId);
+  }
+
   function formatDate(dateStr: string): string {
     if (!dateStr) return '';
     try {
@@ -446,6 +459,44 @@ function ProjectsScreen() {
                     </div>
                   )}
 
+                  {!loadingThreads && !threadError && selectedProjectId === project.id && (
+                    <div style={{ marginBottom: '0.5rem' }}>
+                      {creatingProjectId === project.id ? (
+                        <div
+                          style={{
+                            padding: '0.5rem 1rem',
+                            textAlign: 'center',
+                            fontSize: '0.85rem',
+                            color: tokens.accent,
+                          }}
+                        >
+                          Creating…
+                        </div>
+                      ) : (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            createNewChat(project.id);
+                          }}
+                          style={{
+                            width: '100%',
+                            padding: '0.5rem 1rem',
+                            background: tokens.accent,
+                            color: '#0a0f1f',
+                            border: 'none',
+                            borderRadius: 10,
+                            fontSize: '0.85rem',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            boxShadow: `0 6px 22px -8px ${tokens.accentGlow}`,
+                          }}
+                        >
+                          + New Chat
+                        </button>
+                      )}
+                    </div>
+                  )}
+
                   {!loadingThreads && threads.length === 0 && !threadError && (
                     <div
                       style={{
@@ -459,35 +510,6 @@ function ProjectsScreen() {
                       <div style={{ fontSize: '0.78rem', marginBottom: 12 }}>
                         Start a new chat from your phone.
                       </div>
-                      {creatingProjectId === project.id ? (
-                        <div style={{ fontSize: '0.85rem', color: tokens.accent }}>Creating…</div>
-                      ) : (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            const desktopId =
-                              sessionStorage.getItem('companion_desktop_id') ||
-                              CompanionSocket.getStoredSafeContext().desktop_id ||
-                              '';
-                            if (!desktopId) return;
-                            setCreatingProjectId(project.id);
-                            socket.send('conversation.create', { project_id: project.id }, desktopId);
-                          }}
-                          style={{
-                            padding: '0.5rem 1rem',
-                            background: tokens.accent,
-                            color: '#0a0f1f',
-                            border: 'none',
-                            borderRadius: 10,
-                            fontSize: '0.85rem',
-                            fontWeight: 600,
-                            cursor: 'pointer',
-                            boxShadow: `0 6px 22px -8px ${tokens.accentGlow}`,
-                          }}
-                        >
-                          New Chat
-                        </button>
-                      )}
                     </div>
                   )}
 
@@ -527,50 +549,6 @@ function ProjectsScreen() {
                       >
                         Retry
                       </button>
-                    </div>
-                  )}
-
-                  {!loadingThreads && !threadError && selectedProjectId && (
-                    <div style={{ marginBottom: '0.5rem' }}>
-                      {creatingProjectId === selectedProjectId ? (
-                        <div
-                          style={{
-                            padding: '0.5rem 1rem',
-                            textAlign: 'center',
-                            fontSize: '0.85rem',
-                            color: tokens.accent,
-                          }}
-                        >
-                          Creating…
-                        </div>
-                      ) : (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            const desktopId =
-                              sessionStorage.getItem('companion_desktop_id') ||
-                              CompanionSocket.getStoredSafeContext().desktop_id ||
-                              '';
-                            if (!desktopId) return;
-                            setCreatingProjectId(selectedProjectId);
-                            socket.send('conversation.create', { project_id: selectedProjectId }, desktopId);
-                          }}
-                          style={{
-                            width: '100%',
-                            padding: '0.5rem 1rem',
-                            background: tokens.accent,
-                            color: '#0a0f1f',
-                            border: 'none',
-                            borderRadius: 10,
-                            fontSize: '0.85rem',
-                            fontWeight: 600,
-                            cursor: 'pointer',
-                            boxShadow: `0 6px 22px -8px ${tokens.accentGlow}`,
-                          }}
-                        >
-                          + New Chat
-                        </button>
-                      )}
                     </div>
                   )}
 
