@@ -13,7 +13,12 @@ def _format_footer_cost(known_cost: float, unknown_count: int, total_models: int
         return "$—"
     if unknown_count == total_models:
         return "$—"
-    cost_str = f"${known_cost:.2f}" if known_cost >= 0.01 else "< $0.01"
+    if known_cost <= 0:
+        cost_str = "$0.0000"
+    elif known_cost < 0.0001:
+        cost_str = "< $0.0001"
+    else:
+        cost_str = f"${known_cost:.4f}"
     if unknown_count > 0:
         cost_str += " *"
     return cost_str

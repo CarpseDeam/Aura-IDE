@@ -849,6 +849,15 @@ class ConversationManager:
                             },
                         )
                         return
+                    flow_steering_action = self._handle_worker_flow_steering(
+                        state,
+                        on_event,
+                    )
+                    if flow_steering_action != "none":
+                        state.discard_worker_candidate_final()
+                        if flow_steering_action == "finished":
+                            return
+                        continue
                     # All gates passed — release candidate final and flush buffer
                     if state.candidate_final_message is not None:
                         if _worker_final_report_missing_proof(
@@ -1182,12 +1191,19 @@ class ConversationManager:
                     completed_tool_result_for_final = True
                 if state.worker_flow is not None and res.get("flow_result"):
                     flow_result = res["flow_result"]
+                    before_write_actions = int(state.worker_flow.state.write_actions)
+                    before_validation_actions = int(state.worker_flow.state.validation_actions)
                     state.worker_flow.observe_tool_result(
                         flow_result.get("name", task["name"]),
                         flow_result.get("args", task["args"]),
                         flow_result.get("ok"),
                         flow_result.get("result_payload"),
                     )
+                    if (
+                        state.worker_flow.state.write_actions > before_write_actions
+                        or state.worker_flow.state.validation_actions > before_validation_actions
+                    ):
+                        state.worker_flow_nudge_sent = False
                 if res.get("skip"):
                     continue
 
@@ -1218,9 +1234,12 @@ class ConversationManager:
                 return
 
             if state.worker_flow is not None and not flow_steering_suppressed:
-                steering = state.worker_flow.pop_pending_steering()
-                if steering:
-                    self._history.append_user_text(steering)
+                flow_steering_action = self._handle_worker_flow_steering(
+                    state,
+                    on_event,
+                )
+                if flow_steering_action == "finished":
+                    return
 
     def _finish_worker_unrecoverable(
         self,
@@ -1256,6 +1275,44 @@ class ConversationManager:
         on_event(ContentDelta(text=content))
         on_event(Done(finish_reason="stop", full_message=full_message))
 
+    def _handle_worker_flow_steering(
+        self,
+        state: _SendState,
+        on_event: EventCallback,
+    ) -> str:
+        """Apply one worker-flow nudge, then stop repeated flow thrash."""
+        if state.worker_flow is None:
+            return "none"
+        reason = str(
+            getattr(state.worker_flow.state, "pending_steering_reason", "")
+            or "worker_flow"
+        )
+        steering = state.worker_flow.pop_pending_steering()
+        if not steering:
+            return "none"
+        if state.worker_flow_nudge_sent:
+            self._finish_worker_recoverable_followup(
+                on_event,
+                failure_class="worker_flow_thrash",
+                error=(
+                    "Worker kept re-orienting after a Worker Flow nudge instead "
+                    "of making progress with an edit or validation action."
+                ),
+                details={
+                    "reason": reason,
+                    "steering": steering,
+                    "counts": state.limits.to_dict(),
+                    "suggested_next_tool": "dispatch_to_worker",
+                    "suggested_next_action": (
+                        "Redispatch with a narrower target, exact edit region, "
+                        "or explicit blocker resolution."
+                    ),
+                },
+            )
+            return "finished"
+        self._history.append_user_text(steering)
+        state.worker_flow_nudge_sent = True
+        return "nudged"
 
     def _worker_recovery_block(
         self,

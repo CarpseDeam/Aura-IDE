@@ -709,6 +709,82 @@ def test_worker_flow_broad_ratchet_filters_and_blocks_broad_tools(
     assert payload["recoverable"] is True
 
 
+def test_worker_flow_repeated_plan_only_thrash_stops_after_one_nudge(
+    worker_manager: tuple[ConversationManager, MagicMock],
+    worker_backend: MagicMock,
+) -> None:
+    manager, _tools = worker_manager
+    events: list[Event] = []
+    worker_backend.side_effect = [
+        iter([
+            _done_with_tool(
+                "range1",
+                "read_file_range",
+                {"path": "aura/conversation/worker_flow.py", "start_line": 1, "end_line": 20},
+                content=(
+                    "I will edit aura/conversation/worker_flow.py and "
+                    "tests/test_worker_flow.py, then run python -m pytest tests/test_worker_flow.py -q."
+                ),
+            ),
+        ]),
+        iter([
+            Done(
+                finish_reason="stop",
+                full_message={
+                    "role": "assistant",
+                    "content": (
+                        "Let me read the helper again. Now I have the full picture. "
+                        "Let me plan the hunks."
+                    ),
+                    "reasoning_content": None,
+                },
+            ),
+        ]),
+        iter([
+            Done(
+                finish_reason="stop",
+                full_message={
+                    "role": "assistant",
+                    "content": (
+                        "Let me plan this again now that I have the complete picture. "
+                        "Let me verify the hunks."
+                    ),
+                    "reasoning_content": None,
+                },
+            ),
+        ]),
+    ]
+
+    manager.send(
+        on_event=events.append,
+        approval_cb=_approval_cb,
+        cancel_event=threading.Event(),
+        model="deepseek-chat",
+        thinking="off",
+        hook_name="generate_worker_code",
+    )
+
+    payloads = [
+        json.loads(event.text)
+        for event in events
+        if isinstance(event, ContentDelta) and event.text.startswith("{")
+    ]
+    assert payloads
+    payload = payloads[-1]
+    assert payload["failure_class"] == "worker_flow_thrash"
+    assert payload["recoverable"] is True
+    assert payload["needs_follow_up"] is True
+    assert payload["details"]["reason"] == "orientation"
+    assert worker_backend.call_count == 3
+    assert sum(
+        1
+        for message in manager.history.messages
+        if message.get("role") == "user"
+        and isinstance(message.get("content"), str)
+        and message["content"].startswith("Worker Flow:")
+    ) == 1
+
+
 def test_worker_flow_blocks_initial_full_read_of_known_large_source(
     worker_manager: tuple[ConversationManager, MagicMock],
     worker_backend: MagicMock,

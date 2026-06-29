@@ -51,6 +51,7 @@ class _SendState:
     worker_recovery_nudge_sent: bool = False
     worker_validation_nudge_sent: bool = False
     worker_final_report_proof_nudge_sent: bool = False
+    worker_flow_nudge_sent: bool = False
     stale_validation_notes: list[str] = field(default_factory=list)
 
     # --- dispatch ---
