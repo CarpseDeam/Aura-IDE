@@ -13,6 +13,7 @@ dependencies = [
     "google-genai>=1.0",
     "httpx",
     "mcp>=1.0",
+    "numpy>=1.26",
     "openai>=1.40",
     "packaging",
     "pillow>=10.0",

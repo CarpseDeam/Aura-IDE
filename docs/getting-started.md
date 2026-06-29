@@ -4,7 +4,7 @@
 
 - Python 3.10+ (only needed for pip install — the Windows installer bundles it)
 - An API key from at least one provider — or use Aura Credits to skip key management (see "Model Access Setup" below)
-- Optional: Git, Docker, Ollama (for vision)
+- Optional: Git, Docker
 
 ## Install
 

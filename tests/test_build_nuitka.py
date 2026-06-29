@@ -14,9 +14,12 @@ from scripts.build_nuitka import (
     OUTPUT_DIR,
     PACKAGE_NAME,
     REQUIRED_MEDIA_FILES,
+    TESSERACT_DIST_DIR,
     UPDATER_HELPER_DIST_NAME,
     UPDATER_HELPER_SOURCE,
+    bundle_tesseract,
     create_nuitka_command,
+    find_tesseract_install,
     grammar_prewarm_script,
     normalize_version,
     parse_args,
@@ -71,6 +74,7 @@ def test_create_nuitka_command_defaults_to_low_memory_single_job() -> None:
     assert "--low-memory" in cmd
     assert f"--jobs={DEFAULT_NUITKA_JOBS}" in cmd
     assert cmd[-1] == PACKAGE_NAME
+    assert "--nofollow-import-to=numpy" not in cmd
 
 
 def test_create_nuitka_command_can_disable_low_memory() -> None:
@@ -106,6 +110,79 @@ def test_prewarm_grammars_invokes_python_snippet(monkeypatch: pytest.MonkeyPatch
     assert calls
     assert calls[0].cmd[0:2] == ["python", "-c"]
     assert calls[0].cmd[2] == grammar_prewarm_script()
+
+
+def _make_tesseract_install(root: Path, *, include_eng: bool = True) -> Path:
+    root.mkdir(parents=True)
+    (root / "tesseract.exe").write_text("exe", encoding="utf-8")
+    (root / "liblept.dll").write_text("dll", encoding="utf-8")
+    (root / "unins000.exe").write_text("uninstall", encoding="utf-8")
+    (root / "docs").mkdir()
+    (root / "docs" / "manual.pdf").write_text("manual", encoding="utf-8")
+    tessdata = root / "tessdata"
+    tessdata.mkdir()
+    if include_eng:
+        (tessdata / "eng.traineddata").write_text("eng", encoding="utf-8")
+    return root
+
+
+def test_find_tesseract_install_prefers_env_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    env_root = _make_tesseract_install(tmp_path / "env-root")
+    cmd_root = _make_tesseract_install(tmp_path / "cmd-root")
+    path_root = _make_tesseract_install(tmp_path / "path-root")
+
+    monkeypatch.setenv("AURA_TESSERACT_ROOT", str(env_root))
+    monkeypatch.setenv("AURA_TESSERACT_CMD", str(cmd_root / "tesseract.exe"))
+    monkeypatch.setattr("scripts.build_nuitka.DEFAULT_TESSERACT_ROOT", tmp_path / "missing-default")
+    monkeypatch.setattr("scripts.build_nuitka.shutil.which", lambda _name: str(path_root / "tesseract.exe"))
+
+    assert find_tesseract_install() == env_root.resolve()
+
+
+def test_find_tesseract_install_uses_env_cmd_parent(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    cmd_root = _make_tesseract_install(tmp_path / "cmd-root")
+    monkeypatch.delenv("AURA_TESSERACT_ROOT", raising=False)
+    monkeypatch.setenv("AURA_TESSERACT_CMD", str(cmd_root / "tesseract.exe"))
+    monkeypatch.setattr("scripts.build_nuitka.DEFAULT_TESSERACT_ROOT", tmp_path / "missing-default")
+    monkeypatch.setattr("scripts.build_nuitka.shutil.which", lambda _name: None)
+
+    assert find_tesseract_install() == cmd_root.resolve()
+
+
+def test_bundle_tesseract_copies_runtime_and_excludes_junk(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    source = _make_tesseract_install(tmp_path / "Tesseract-OCR")
+    final_dist = tmp_path / OUTPUT_DIR / FINAL_DIST_NAME
+    final_dist.mkdir(parents=True)
+    monkeypatch.setenv("AURA_TESSERACT_ROOT", str(source))
+    monkeypatch.delenv("AURA_TESSERACT_CMD", raising=False)
+    monkeypatch.setattr("scripts.build_nuitka.DEFAULT_TESSERACT_ROOT", tmp_path / "missing-default")
+    monkeypatch.setattr("scripts.build_nuitka.shutil.which", lambda _name: None)
+
+    bundled = bundle_tesseract(final_dist)
+
+    assert bundled == final_dist / TESSERACT_DIST_DIR
+    assert (bundled / "tesseract.exe").is_file()
+    assert (bundled / "liblept.dll").is_file()
+    assert (bundled / "tessdata" / "eng.traineddata").is_file()
+    assert not (bundled / "unins000.exe").exists()
+    assert not (bundled / "docs").exists()
+
+
+def test_bundle_tesseract_fails_when_required_data_missing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    source = _make_tesseract_install(tmp_path / "Tesseract-OCR", include_eng=False)
+    final_dist = tmp_path / OUTPUT_DIR / FINAL_DIST_NAME
+    final_dist.mkdir(parents=True)
+    monkeypatch.setenv("AURA_TESSERACT_ROOT", str(source))
+    monkeypatch.delenv("AURA_TESSERACT_CMD", raising=False)
+    monkeypatch.setattr("scripts.build_nuitka.DEFAULT_TESSERACT_ROOT", tmp_path / "missing-default")
+    monkeypatch.setattr("scripts.build_nuitka.shutil.which", lambda _name: None)
+
+    with pytest.raises(SystemExit, match="eng.traineddata"):
+        bundle_tesseract(final_dist)
 
 
 def test_validate_project_paths_requires_all_media_files(tmp_path: Path) -> None:
@@ -166,3 +243,11 @@ def test_zip_distribution_flattens_dist_contents(tmp_path: Path) -> None:
     assert "media/test.txt" in names
     assert "runtime.dll" in names
     assert "Aura.dist/Aura.exe" not in names
+
+
+def test_installer_script_installs_full_dist_tree() -> None:
+    root = Path(__file__).resolve().parents[1]
+    content = (root / "scripts" / "installer" / "Aura.iss").read_text(encoding="utf-8")
+    file_lines = [line for line in content.splitlines() if line.startswith("Source:")]
+
+    assert any("{#SourceDir}\\*" in line and "recursesubdirs" in line for line in file_lines)

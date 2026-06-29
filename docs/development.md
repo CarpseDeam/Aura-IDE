@@ -57,7 +57,6 @@ aura/
 ├── startup_logging.py       # Early logging configuration
 ├── updater.py               # Windows self-updater (GitHub Releases)
 ├── version.py               # __version__ = "1.7.0"
-├── vision.py                # Ollama vision client
 ├── windows_updater.cmd      # Windows update helper script
 │
 ├── backends/                # Agent backend abstraction
@@ -180,6 +179,13 @@ aura/
 ├── projects/                # Project store
 │   └── store.py
 │
+├── perception/              # Deterministic screenshot decompiler
+│   ├── decompiler.py
+│   ├── ocr.py
+│   ├── reconstruct.py
+│   ├── segment.py
+│   └── serialize.py
+│
 ├── providers/               # Provider registry & catalog
 │   ├── base.py
 │   ├── catalog.py
@@ -222,7 +228,7 @@ pip install -e .[dev]
 | `scripts/smoke_planner_worker.py`    | Planner/Worker two-agent cycle              |
 | `scripts/smoke_research.py`          | Web research sub-agent                      |
 | `scripts/smoke_tools.py`             | All tool implementations                    |
-| `scripts/smoke_vision.py`            | Vision preprocessing                        |
+| `scripts/smoke_vision.py`            | Native multimodal image smoke               |
 
 ## Build Options
 
@@ -263,6 +269,6 @@ Produces `dist/Aura-Setup-<version>.exe` — a per-user NSIS installer built fro
 | httpx           | Async HTTP client                        |
 | cryptography    | Fernet key encryption                    |
 | platformdirs    | Config/data directory resolution          |
-| Pillow          | Image handling (vision)                  |
+| Pillow          | Image attachments and screenshot decompile |
 | Pygments        | Syntax highlighting                      |
 | mcp             | Model Context Protocol client            |

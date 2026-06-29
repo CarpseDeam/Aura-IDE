@@ -34,9 +34,6 @@ Settings are stored in `~/.config/Aura/config.json` (platform-specific via platf
 | `sandbox_mode`                | str     | `"host"`                 | Execution sandbox: `"host"`, `"docker"`, `"wasm"`        |
 | `max_tool_rounds`             | int     | `50`                     | Maximum tool call rounds per conversation                 |
 | `tavily_api_key`              | str     | `""`                     | Tavily search API key                                     |
-| `vision_enabled`              | bool    | `true`                   | Enable vision preprocessing                               |
-| `vision_model`                | str     | `"llama3.2-vision"`      | Ollama vision model                                       |
-| `vision_endpoint`             | str     | `"http://localhost:11434/v1"` | Ollama vision endpoint                               |
 | `companion_enabled`           | bool    | `false`                  | Enable mobile companion (session-only, never persisted)   |
 | `companion_relay_url`         | str     | `"ws://localhost:8765"`  | WebSocket relay URL                                       |
 | `companion_display_name`      | str     | `""`                     | Display name for this desktop                             |

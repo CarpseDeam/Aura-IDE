@@ -25,6 +25,12 @@ FINAL_EXE_NAME = f"{APP_NAME}.exe"
 ZIP_NAME = "Aura-Windows-x64.zip"
 UPDATER_HELPER_SOURCE = Path(PACKAGE_NAME) / "windows_updater.cmd"
 UPDATER_HELPER_DIST_NAME = "AuraUpdater.cmd"
+TESSERACT_DIST_DIR = "tesseract"
+DEFAULT_TESSERACT_ROOT = Path(r"C:\Program Files\Tesseract-OCR")
+TESSERACT_REQUIRED_FILES = (
+    Path("tesseract.exe"),
+    Path("tessdata") / "eng.traineddata",
+)
 
 DRONES_SOURCE_REL = Path(".aura") / "drones"
 DRONES_DEST_REL = Path(".aura") / "drones"
@@ -229,6 +235,113 @@ def normalize_dist_dir(root: Path, created_dist_dir: Path) -> Path:
             shutil.rmtree(final_dist_dir, ignore_errors=True)
         created_dist_dir.rename(final_dist_dir)
     return final_dist_dir
+
+
+def _missing_tesseract_files(root: Path) -> list[Path]:
+    """Return required Tesseract runtime files missing under *root*."""
+    missing: list[Path] = []
+    for rel_path in TESSERACT_REQUIRED_FILES:
+        if not (root / rel_path).is_file():
+            missing.append(rel_path)
+    return missing
+
+
+def _tesseract_root_candidates() -> list[tuple[str, Path]]:
+    """Return Tesseract install candidates in release-build priority order."""
+    candidates: list[tuple[str, Path]] = []
+
+    env_root = os.environ.get("AURA_TESSERACT_ROOT")
+    if env_root:
+        candidates.append(("AURA_TESSERACT_ROOT", Path(env_root).expanduser()))
+
+    env_cmd = os.environ.get("AURA_TESSERACT_CMD")
+    if env_cmd:
+        candidates.append(("AURA_TESSERACT_CMD parent", Path(env_cmd).expanduser().parent))
+
+    candidates.append(("default Windows install", DEFAULT_TESSERACT_ROOT))
+
+    path_cmd = shutil.which("tesseract")
+    if path_cmd:
+        candidates.append(("PATH tesseract parent", Path(path_cmd).expanduser().parent))
+
+    return candidates
+
+
+def find_tesseract_install() -> Path | None:
+    """Locate a Tesseract install folder for release bundling."""
+    seen: set[str] = set()
+    for _label, candidate in _tesseract_root_candidates():
+        try:
+            root = candidate.resolve(strict=False)
+        except OSError:
+            root = candidate
+        key = str(root).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        if root.is_dir() and (root / "tesseract.exe").is_file():
+            return root
+    return None
+
+
+def _ignore_tesseract_runtime(dirpath: str, names: list[str]) -> set[str]:
+    """Exclude obvious non-runtime junk while preserving DLLs and tessdata."""
+    ignored: set[str] = set()
+    junk_dirs = {"doc", "docs", "documentation", "html", "man", "tmp", "temp", "cache", "__pycache__"}
+    junk_suffixes = {".bak", ".cache", ".chm", ".htm", ".html", ".log", ".pdb", ".pdf", ".tmp"}
+
+    for name in names:
+        lower = name.lower()
+        path = Path(dirpath) / name
+        if path.is_dir() and lower in junk_dirs:
+            ignored.add(name)
+        elif lower.startswith(("unins", "uninstall")):
+            ignored.add(name)
+        elif Path(lower).suffix in junk_suffixes:
+            ignored.add(name)
+
+    return ignored
+
+
+def _assert_child_path(parent: Path, child: Path) -> None:
+    """Protect recursive removal by ensuring *child* is under *parent*."""
+    try:
+        child.resolve(strict=False).relative_to(parent.resolve(strict=False))
+    except ValueError as exc:
+        raise SystemExit(f"Refusing to remove path outside {parent}: {child}") from exc
+
+
+def bundle_tesseract(final_dist_dir: Path) -> Path:
+    """Copy Tesseract into the dist folder and validate required OCR assets."""
+    source = find_tesseract_install()
+    if source is None:
+        tried = "\n".join(f"  - {label}: {path}" for label, path in _tesseract_root_candidates())
+        raise SystemExit(
+            "Tesseract runtime not found for release build.\n"
+            "Install Tesseract OCR or set AURA_TESSERACT_ROOT/AURA_TESSERACT_CMD.\n"
+            f"Tried:\n{tried}"
+        )
+
+    source_missing = _missing_tesseract_files(source)
+    if source_missing:
+        details = "\n".join(f"  - {source / rel_path}" for rel_path in source_missing)
+        raise SystemExit(f"Tesseract install is missing required release files:\n{details}")
+
+    dest = final_dist_dir / TESSERACT_DIST_DIR
+    if dest.exists():
+        _assert_child_path(final_dist_dir, dest)
+        shutil.rmtree(dest)
+
+    print(f"Bundling Tesseract runtime: {source} -> {dest}")
+    shutil.copytree(source, dest, ignore=_ignore_tesseract_runtime)
+
+    dest_missing = _missing_tesseract_files(dest)
+    if dest_missing:
+        details = "\n".join(f"  - {dest / rel_path}" for rel_path in dest_missing)
+        raise SystemExit(f"Tesseract bundle validation failed; missing files:\n{details}")
+
+    print(f"Tesseract bundled at {dest}")
+    return dest
 
 
 def bundle_drones(root: Path, final_dist_dir: Path) -> None:
@@ -606,7 +719,6 @@ def create_nuitka_command(
         "--python-flag=-m",
         "--nofollow-import-to=google",
         "--nofollow-import-to=libcst",
-        "--nofollow-import-to=numpy",
         "--nofollow-import-to=scipy",
         "--nofollow-import-to=pytest",
         "--nofollow-import-to=charset_normalizer",
@@ -766,6 +878,8 @@ def build(
         print("Warning: click is not installed in the clean environment, skipping manual bundle.")
 
 
+    # Bundle Tesseract OCR so screenshot decompilation works without PATH setup.
+    bundle_tesseract(final_dist_dir)
 
     # Bundle .aura/drones into the dist for DroneStore runtime loading
     bundle_drones(root, final_dist_dir)
