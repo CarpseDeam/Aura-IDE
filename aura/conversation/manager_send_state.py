@@ -80,6 +80,8 @@ class _SendState:
 
     def __post_init__(self) -> None:
         self.limits = ToolLimitState(mode=self.mode)
+        self.stream_buffer = None
+        self.worker_flow = None
         if self.mode == "worker":
             self.stream_buffer = WorkerStreamBuffer()
             self.worker_flow = WorkerFlowHarness()
