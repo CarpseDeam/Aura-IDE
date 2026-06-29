@@ -140,8 +140,8 @@ def test_event_relay_synthesizes_todo_progress_from_worker_events():
     assert {"description": "Deliver final report", "status": "done"} in emitted_tasks[-1]
 
 
-def test_event_relay_preserves_model_todo_while_showing_current_activity():
-    """Model-authored TODO stays ordered while one harness activity row moves."""
+def test_event_relay_preserves_model_todo_order_while_edit_activity_is_active():
+    """Model-authored TODO order stays stable while edit progress is active."""
     class MockApprovalProxy:
         def consume_last_event(self):
             return None
@@ -150,8 +150,11 @@ def test_event_relay_preserves_model_todo_while_showing_current_activity():
     emitted_tasks = []
     relay.todoListUpdated.connect(lambda tool_call_id, tasks: emitted_tasks.append(tasks))
 
-    relay.relay("parent_tc", ToolCallStart(index=0, id="read1", name="read_file"))
-    model_tasks = [{"description": "Make focused fix", "status": "active"}]
+    model_tasks = [
+        {"description": "Inspect existing code", "status": "done"},
+        {"description": "Update aura/gui/playground.py", "status": "pending"},
+        {"description": "Run validation", "status": "pending"},
+    ]
     relay.relay(
         "parent_tc",
         ToolResult(
@@ -163,25 +166,161 @@ def test_event_relay_preserves_model_todo_while_showing_current_activity():
         ),
     )
 
+    relay.relay("parent_tc", ToolCallStart(index=0, id="patch1", name="patch_file"))
+
+    assert [task["description"] for task in emitted_tasks[-1]] == [
+        "Inspect existing code",
+        "Update aura/gui/playground.py",
+        "Run validation",
+    ]
+    assert emitted_tasks[-1][1]["status"] == "active"
+    assert not any(
+        task["description"].startswith("Worker activity:")
+        for task in emitted_tasks[-1]
+    )
     assert emitted_tasks[-1] == [
-        {"description": "Worker activity: inspecting files", "status": "active"},
-        {"description": "Make focused fix", "status": "active"},
+        {"description": "Inspect existing code", "status": "done"},
+        {"description": "Update aura/gui/playground.py", "status": "active"},
+        {"description": "Run validation", "status": "pending"},
     ]
     assert relay.todo_used is True
+
+
+def test_event_relay_write_result_marks_matching_model_todo_done_in_place():
+    """A write result uses path matching to complete the right model TODO row."""
+    class MockApprovalProxy:
+        def consume_last_event(self):
+            return None
+
+    relay = WorkerEventRelay(MockApprovalProxy())
+    emitted_tasks = []
+    relay.todoListUpdated.connect(lambda tool_call_id, tasks: emitted_tasks.append(tasks))
+
+    model_tasks = [
+        {"description": "Update aura/bridge/event_relay.py", "status": "pending"},
+        {"description": "Update aura/gui/playground.py", "status": "pending"},
+        {"description": "Run validation", "status": "pending"},
+    ]
+    relay.relay(
+        "parent_tc",
+        ToolResult(
+            tool_call_id="todo1",
+            name="update_todo_list",
+            ok=True,
+            result=json.dumps({"ok": True, "tasks": model_tasks}),
+            extras={"tasks": model_tasks},
+        ),
+    )
 
     relay.relay(
         "parent_tc",
         ToolResult(
-            tool_call_id="read1",
-            name="read_file",
+            tool_call_id="patch1",
+            name="patch_file",
             ok=True,
-            result=json.dumps({"ok": True, "path": "a.py"}),
+            result=json.dumps(
+                {"ok": True, "path": "aura/gui/playground.py", "applied": True}
+            ),
         ),
     )
-    relay.relay("parent_tc", ToolCallStart(index=1, id="patch1", name="patch_file"))
+
     assert emitted_tasks[-1] == [
-        {"description": "Worker activity: applying changes", "status": "active"},
-        {"description": "Make focused fix", "status": "active"},
+        {"description": "Update aura/bridge/event_relay.py", "status": "pending"},
+        {"description": "Update aura/gui/playground.py", "status": "done"},
+        {"description": "Run validation", "status": "pending"},
+    ]
+
+
+def test_event_relay_validation_start_marks_model_todo_active_in_place():
+    """Validation progress activates the validation TODO without moving rows."""
+    class MockApprovalProxy:
+        def consume_last_event(self):
+            return None
+
+    relay = WorkerEventRelay(MockApprovalProxy())
+    emitted_tasks = []
+    relay.todoListUpdated.connect(lambda tool_call_id, tasks: emitted_tasks.append(tasks))
+
+    model_tasks = [
+        {"description": "Update aura/bridge/event_relay.py", "status": "done"},
+        {"description": "Run validation", "status": "pending"},
+        {"description": "Deliver final report", "status": "pending"},
+    ]
+    relay.relay(
+        "parent_tc",
+        ToolResult(
+            tool_call_id="todo1",
+            name="update_todo_list",
+            ok=True,
+            result=json.dumps({"ok": True, "tasks": model_tasks}),
+            extras={"tasks": model_tasks},
+        ),
+    )
+
+    relay.relay("parent_tc", ToolCallStart(index=1, id="term1", name="run_terminal_command"))
+
+    assert emitted_tasks[-1] == [
+        {"description": "Update aura/bridge/event_relay.py", "status": "done"},
+        {"description": "Run validation", "status": "active"},
+        {"description": "Deliver final report", "status": "pending"},
+    ]
+
+
+def test_event_relay_stale_model_todo_update_cannot_downgrade_runtime_done():
+    """Later pending model updates do not regress runtime-completed TODO rows."""
+    class MockApprovalProxy:
+        def consume_last_event(self):
+            return None
+
+    relay = WorkerEventRelay(MockApprovalProxy())
+    emitted_tasks = []
+    relay.todoListUpdated.connect(lambda tool_call_id, tasks: emitted_tasks.append(tasks))
+
+    initial_tasks = [
+        {"description": "Update aura/bridge/event_relay.py", "status": "pending"},
+        {"description": "Run validation", "status": "pending"},
+    ]
+    relay.relay(
+        "parent_tc",
+        ToolResult(
+            tool_call_id="todo1",
+            name="update_todo_list",
+            ok=True,
+            result=json.dumps({"ok": True, "tasks": initial_tasks}),
+            extras={"tasks": initial_tasks},
+        ),
+    )
+    relay.relay(
+        "parent_tc",
+        ToolResult(
+            tool_call_id="patch1",
+            name="patch_file",
+            ok=True,
+            result=json.dumps(
+                {"ok": True, "path": "aura/bridge/event_relay.py", "applied": True}
+            ),
+        ),
+    )
+    assert emitted_tasks[-1][0]["status"] == "done"
+
+    stale_tasks = [
+        {"description": "Update aura/bridge/event_relay.py", "status": "pending"},
+        {"description": "Run validation", "status": "pending"},
+    ]
+    relay.relay(
+        "parent_tc",
+        ToolResult(
+            tool_call_id="todo2",
+            name="update_todo_list",
+            ok=True,
+            result=json.dumps({"ok": True, "tasks": stale_tasks}),
+            extras={"tasks": stale_tasks},
+        ),
+    )
+
+    assert emitted_tasks[-1] == [
+        {"description": "Update aura/bridge/event_relay.py", "status": "done"},
+        {"description": "Run validation", "status": "pending"},
     ]
 
 

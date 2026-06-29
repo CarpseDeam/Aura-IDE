@@ -24,16 +24,18 @@ from PySide6.QtCore import (
 from aura.bridge.approval_proxy import _ApprovalProxy
 from aura.bridge.event_relay import WorkerEventRelay
 from aura.bridge.worker_recording import _record_worker_completion
-from aura.bridge.worker_report import (
-    _build_worker_summary,
-    _dedupe_summary_writes,
+from aura.bridge._summary_formatters import (
     _final_report_claims_failure,
     _final_report_claims_validation,
     _format_recoverable_write_failure,
-    _format_spec_as_user_message,
     _format_structured_worker_failure,
     _format_worker_write_failure,
     _parse_structured_worker_failure,
+)
+from aura.bridge.worker_report import (
+    _build_worker_summary,
+    _dedupe_summary_writes,
+    _format_spec_as_user_message,
 )
 from aura.config import (
     DEFAULT_WORKER_MODEL,

@@ -2,10 +2,26 @@
 from __future__ import annotations
 
 import re
-import shlex
 from dataclasses import dataclass
 from typing import Any
 
+from aura.conversation._parse_helpers import (
+    _clean_token,
+    _contains_timeout,
+    _is_missing_dependency,
+    _is_missing_executable,
+    _is_pytest_tokens,
+    _is_shell_syntax_error,
+    _looks_like_command,
+    _pytest_missing_path,
+    _pytest_no_tests_collected,
+    _pytest_selection_empty,
+    _select_command_line,
+    _split_tokens,
+    _strip_prompt_prefix,
+    _strip_shell_comment_outcome,
+    _strip_trailing_outcome_token,
+)
 
 PASSED = "passed"
 PRODUCT_VALIDATION_FAILED = "product_validation_failed"
@@ -24,42 +40,6 @@ ACTION_FIX_CODE = "fix_code"
 ACTION_FIX_VALIDATION_COMMAND = "fix_validation_command"
 ACTION_INSTALL_DEPENDENCY = "install_dependency"
 ACTION_RETRY = "retry"
-
-_OUTCOME_TOKENS = {
-    "pass",
-    "passed",
-    "passes",
-    "success",
-    "succeeds",
-    "succeed",
-    "green",
-}
-
-_KNOWN_COMMANDS = {
-    "python",
-    "python3",
-    "python.exe",
-    "py",
-    "pytest",
-    "unittest",
-    "ruff",
-    "mypy",
-    "npm",
-    "npx",
-    "pnpm",
-    "yarn",
-    "node",
-    "cargo",
-    "go",
-    "tox",
-    "make",
-    "uv",
-    "poetry",
-    "pipenv",
-    "dotnet",
-    "mvn",
-    "gradle",
-}
 
 
 @dataclass(frozen=True)
@@ -358,148 +338,6 @@ def _result(
         normalized=command.normalized,
         normalization_reason=command.normalization_reason,
     )
-
-
-def _select_command_line(text: str) -> str:
-    fenced = re.search(r"```(?:[A-Za-z0-9_-]+)?\s*\n(.*?)```", text, flags=re.DOTALL)
-    source = fenced.group(1) if fenced else text
-    for raw_line in source.splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        if line.startswith(("#", "//")):
-            continue
-        return line
-    return ""
-
-
-def _strip_prompt_prefix(line: str) -> str:
-    line = line.strip()
-    if line.startswith(("-", "*")):
-        line = line[1:].strip()
-    if line.startswith("$ "):
-        line = line[2:].strip()
-    return line
-
-
-def _strip_shell_comment_outcome(command: str) -> tuple[str, str, str]:
-    index = _unquoted_hash_index(command)
-    if index < 0:
-        return command.strip(), "", ""
-    before = command[:index].rstrip()
-    after = command[index + 1:].strip()
-    tokens = _split_tokens(after)
-    if len(tokens) == 1 and _clean_token(tokens[0]).lower() in _OUTCOME_TOKENS:
-        return before, _clean_token(tokens[0]).lower(), "trailing comment outcome prose"
-    return before, after, "trailing shell comment"
-
-
-def _unquoted_hash_index(text: str) -> int:
-    quote = ""
-    escaped = False
-    for index, char in enumerate(text):
-        if escaped:
-            escaped = False
-            continue
-        if char == "\\":
-            escaped = True
-            continue
-        if quote:
-            if char == quote:
-                quote = ""
-            continue
-        if char in {"'", '"'}:
-            quote = char
-            continue
-        if char == "#" and (index == 0 or text[index - 1].isspace()):
-            return index
-    return -1
-
-
-def _strip_trailing_outcome_token(command: str, tokens: list[str]) -> tuple[str, str] | None:
-    if not tokens:
-        return None
-    last = _clean_token(tokens[-1]).lower()
-    if last not in _OUTCOME_TOKENS:
-        return None
-    match = re.search(r"\s+(\S+)\s*$", command)
-    if not match:
-        return None
-    if _clean_token(match.group(1)).lower() != last:
-        return None
-    return command[: match.start()].rstrip(), last
-
-
-def _looks_like_command(command: str) -> bool:
-    tokens = _split_tokens(command)
-    if not tokens:
-        return False
-    first = _clean_token(tokens[0]).lower().replace("\\", "/").rsplit("/", 1)[-1]
-    if first.endswith(".exe"):
-        first = first[:-4]
-    return first in _KNOWN_COMMANDS
-
-
-def _split_tokens(command: str) -> list[str]:
-    try:
-        return shlex.split(command, posix=False)
-    except ValueError:
-        return command.split()
-
-
-def _clean_token(token: str) -> str:
-    return str(token).strip().strip("'\"").strip()
-
-
-def _is_pytest_tokens(tokens: list[str]) -> bool:
-    cleaned = [_clean_token(token).lower().replace("\\", "/").rsplit("/", 1)[-1] for token in tokens]
-    if not cleaned:
-        return False
-    if cleaned[0] in {"pytest", "pytest.exe"}:
-        return True
-    return len(cleaned) >= 3 and cleaned[1] == "-m" and cleaned[2] == "pytest"
-
-
-def _contains_timeout(output: str) -> bool:
-    lowered = output.lower()
-    return "timed out" in lowered or "timeout" in lowered
-
-
-def _is_missing_executable(lowered_output: str) -> bool:
-    return any(
-        marker in lowered_output
-        for marker in (
-            "command not found",
-            "not recognized as an internal or external command",
-            "is not recognized as the name of",
-            "no such file or directory",
-        )
-    )
-
-
-def _is_missing_dependency(lowered_output: str) -> bool:
-    return (
-        "no module named" in lowered_output
-        or "modulenotfounderror" in lowered_output
-        or "cannot find module" in lowered_output
-    )
-
-
-def _is_shell_syntax_error(lowered_output: str) -> bool:
-    return "syntax error" in lowered_output and ("shell" in lowered_output or "unexpected" in lowered_output)
-
-
-def _pytest_missing_path(output: str) -> str:
-    match = re.search(r"ERROR:\s*file or directory not found:\s*([^\r\n]+)", output, flags=re.IGNORECASE)
-    return match.group(1).strip() if match else ""
-
-
-def _pytest_no_tests_collected(lowered_output: str) -> bool:
-    return "collected 0 items" in lowered_output or "no tests ran" in lowered_output
-
-
-def _pytest_selection_empty(lowered_output: str) -> bool:
-    return "0 selected" in lowered_output or "deselected" in lowered_output and "collected" in lowered_output
 
 
 __all__ = [
