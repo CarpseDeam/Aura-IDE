@@ -75,6 +75,9 @@ def test_create_nuitka_command_defaults_to_low_memory_single_job() -> None:
     assert f"--jobs={DEFAULT_NUITKA_JOBS}" in cmd
     assert cmd[-1] == PACKAGE_NAME
     assert "--nofollow-import-to=numpy" not in cmd
+    assert "--include-package=relay" in cmd
+    assert "--include-package=fastapi" in cmd
+    assert "--include-package=uvicorn" in cmd
 
 
 def test_create_nuitka_command_can_disable_low_memory() -> None:

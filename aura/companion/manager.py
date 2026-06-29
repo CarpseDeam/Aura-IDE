@@ -4,9 +4,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+from pathlib import Path
 from typing import Any
-
-from aura.version import __version__
 
 from PySide6.QtCore import QObject, Signal
 
@@ -21,8 +20,14 @@ from aura.companion.auth import (
     validate_pairing_code,
 )
 from aura.companion.client import CompanionWsClient
-from pathlib import Path
-
+from aura.companion.local_relay import (
+    LocalRelayError,
+    ensure_local_relay,
+    is_local_relay_url,
+    normalize_relay_url,
+    relay_port,
+    stop_managed_relay,
+)
 from aura.companion.protocol import (
     ActiveRunSummary,
     CompanionProject,
@@ -30,10 +35,11 @@ from aura.companion.protocol import (
     ReceiptSummary,
     make_envelope,
 )
-from aura.drones.store import RunHistoryStore
 from aura.conversation.persistence import load_conversation
+from aura.drones.store import RunHistoryStore
 from aura.projects.store import ProjectStore
 from aura.settings import AppSettings, resolve_role_default_model
+from aura.version import __version__
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +76,7 @@ class CompanionManager(QObject):
         self._current_pairing_code: str = ""
         self._paired_context: dict = {}
         self._paired_project_name: str = ""
+        self._active_relay_url: str = ""
 
     # ── Lifecycle ────────────────────────────────────────────
 
@@ -85,6 +92,7 @@ class CompanionManager(QObject):
         if self._ws_client:
             self._ws_client.close()
             self._ws_client = None
+        stop_managed_relay()
         self.connection_status_changed.emit("disabled")
         logger.info("[Companion] stopped")
 
@@ -308,14 +316,21 @@ class CompanionManager(QObject):
         url = self._settings.companion_relay_url
         if not url:
             logger.warning("[Companion] no relay URL configured")
+            self.connection_error.emit("Companion relay URL is missing.")
             self.connection_status_changed.emit("error")
             return
-        # Ensure ws:// prefix
-        if not url.startswith("ws"):
-            url = f"ws://{url}"
-        # Ensure /ws path
-        if not url.endswith("/ws"):
-            url = url.rstrip("/") + "/ws"
+        url = normalize_relay_url(url)
+        self._active_relay_url = url
+        if is_local_relay_url(url):
+            self.connection_status_changed.emit("starting_local_relay")
+            try:
+                url = ensure_local_relay(url)
+            except LocalRelayError as exc:
+                logger.warning("[Companion] local relay unavailable: %s", exc)
+                self.connection_error.emit(str(exc))
+                self.connection_status_changed.emit("error")
+                return
+            self.connection_status_changed.emit("connecting")
 
         device_id = get_device_id()
         desktop_secret = os.environ.get("AURA_COMPANION_DESKTOP_SECRET", "")
@@ -331,7 +346,7 @@ class CompanionManager(QObject):
     def _on_client_error(self, client: CompanionWsClient, error_str: str) -> None:
         if client is not self._ws_client:
             return
-        self.connection_error.emit(error_str)
+        self.connection_error.emit(self._friendly_connection_error(error_str))
 
     def _on_connected(self, client: CompanionWsClient | None = None) -> None:
         if client is not None and client is not self._ws_client:
@@ -350,6 +365,18 @@ class CompanionManager(QObject):
             return
         self.connection_status_changed.emit("error")
         logger.warning("[Companion] disconnected from Relay")
+
+    def _friendly_connection_error(self, error_str: str) -> str:
+        lowered = error_str.lower()
+        if is_local_relay_url(self._active_relay_url) and "invalidstatus" in lowered and "404" in lowered:
+            port = relay_port(self._active_relay_url)
+            return (
+                f"Port {port} is already in use by another service. Close that service or change the "
+                "Companion relay port in Advanced / Self-hosting."
+            )
+        if "invalidstatus" in lowered:
+            return "Could not connect to the Companion relay. Check the relay URL in Advanced / Self-hosting."
+        return error_str
 
     def _on_raw_message(self, raw: str) -> None:
         """Handle an incoming message from Relay."""

@@ -18,6 +18,7 @@ sessions = SessionManager()
 @app.get("/health")
 async def health():
     return {
+        "service": "aura-relay",
         "status": "ok",
         "online_desktops": len(sessions.list_online("desktop")),
         "online_phones": len(sessions.list_online("phone")),

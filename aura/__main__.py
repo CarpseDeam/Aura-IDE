@@ -1,11 +1,11 @@
 """Entry point: `python -m aura`."""
 from __future__ import annotations
 
+import argparse
 import logging
 import os
 import platform
 import sys
-import argparse
 from pathlib import Path
 
 from aura.startup_logging import configure_startup_logging
@@ -39,6 +39,9 @@ def _run_app(log_path: Path, args: argparse.Namespace, qt_argv: list[str]) -> in
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
+    if args.companion_relay_only:
+        return _run_companion_relay(args.host, args.port)
+
     if args.profile_dir is not None:
         profile_dir = Path(args.profile_dir).expanduser()
         os.environ["AURA_CONFIG_DIR"] = str(profile_dir)
@@ -56,7 +59,7 @@ def _run_app(log_path: Path, args: argparse.Namespace, qt_argv: list[str]) -> in
     logger.info("data path: %s", data_dir())
     logger.info("startup log path: %s", log_path)
 
-    from PySide6.QtCore import QCoreApplication, QTimer, Qt
+    from PySide6.QtCore import QCoreApplication, Qt, QTimer
     from PySide6.QtGui import QGuiApplication, QIcon
     from PySide6.QtWidgets import QApplication, QMessageBox
 
@@ -75,7 +78,14 @@ def _run_app(log_path: Path, args: argparse.Namespace, qt_argv: list[str]) -> in
     app = QApplication(qt_argv)
     logger.info("QApplication creation end")
 
-    from aura.config import APP_NAME, PROVIDERS, has_usable_provider_configuration, get_provider_kind, icon_path, load_settings
+    from aura.config import (
+        APP_NAME,
+        PROVIDERS,
+        get_provider_kind,
+        has_usable_provider_configuration,
+        icon_path,
+        load_settings,
+    )
     from aura.gui.theme import apply_theme
 
     app.setWindowIcon(QIcon(str(icon_path())))
@@ -200,8 +210,23 @@ def _parse_args(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument("--dump-ui-tree", type=str, default=None, metavar="PATH",
         help="(Honored only alongside --selfcheck.) Write an accessibility-tree snapshot as JSON to PATH.",
     )
+    parser.add_argument("--companion-relay-only", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--host", default="127.0.0.1", help=argparse.SUPPRESS)
+    parser.add_argument("--port", type=int, default=8765, help=argparse.SUPPRESS)
     args, qt_args = parser.parse_known_args(argv)
     return args, [sys.argv[0], *qt_args]
+
+
+def _run_companion_relay(host: str, port: int) -> int:
+    logger.info("starting Companion relay only on %s:%s", host, port)
+    try:
+        import uvicorn
+
+        uvicorn.run("relay.main:app", host=host, port=port, log_level="info")
+    except Exception:
+        logger.exception("Companion relay failed")
+        return 1
+    return 0
 
 
 def _show_crash_dialog(log_path: Path, exc: Exception) -> None:

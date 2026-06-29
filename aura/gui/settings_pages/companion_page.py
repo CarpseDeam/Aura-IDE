@@ -53,12 +53,12 @@ from aura.gui.widgets.glass_switch import GlassSwitch
 from aura.gui.widgets.qr_widget import QrCodeLabel
 from aura.settings import AppSettings
 
-
 _STATUS_STYLES = {
-    "disabled":   ("Disabled",   FG_MUTED),
-    "connecting": ("Connecting", WARN),
-    "connected":  ("Connected",  SUCCESS),
-    "error":      ("Offline",    DANGER),
+    "disabled":             ("Disabled", FG_MUTED),
+    "starting_local_relay": ("Starting local relay", WARN),
+    "connecting":           ("Connecting", WARN),
+    "connected":            ("Connected", SUCCESS),
+    "error":                ("Offline", DANGER),
 }
 
 
@@ -330,7 +330,11 @@ class CompanionPage(QWidget):
         self.apply_requested.emit()
 
     def _on_connection_error(self, error_str: str) -> None:
-        self._error_label.setText(f"Connection error: {error_str}")
+        if "InvalidStatus" in error_str:
+            error_str = "Could not connect to the Companion relay. Check the relay URL in Advanced / Self-hosting."
+        elif not error_str:
+            error_str = "Could not connect to relay."
+        self._error_label.setText(error_str)
         self._error_label.setVisible(True)
 
     def _on_url_or_name_edited(self) -> None:

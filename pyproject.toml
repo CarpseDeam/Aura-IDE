@@ -10,6 +10,7 @@ requires-python = ">=3.10"
 dependencies = [
     "certifi>=2024.0",
     "cryptography>=41.0",
+    "fastapi>=0.110.0",
     "google-genai>=1.0",
     "httpx",
     "mcp>=1.0",
@@ -26,6 +27,7 @@ dependencies = [
     "tomli>=2.0; python_version < '3.11'",
     "tree_sitter",
     "tree-sitter-language-pack>=1.10.8",
+    "uvicorn[standard]>=0.29.0",
     "websockets>=12.0",
     "PyJWT>=2.8.0",
     "qrcode[pil]>=7.4",
@@ -50,7 +52,7 @@ relay = [
 aura = "aura.__main__:main"
 
 [tool.setuptools.packages.find]
-include = ["aura*"]
+include = ["aura*", "relay*"]
 exclude = ["scripts*", "tests*"]
 
 [tool.pytest.ini_options]
@@ -70,5 +72,5 @@ select = ["F", "I"]
 "tests/test_tool_registry.py" = ["F841"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["aura"]
+known-first-party = ["aura", "relay"]
 extra-standard-library = ["__future__"]
