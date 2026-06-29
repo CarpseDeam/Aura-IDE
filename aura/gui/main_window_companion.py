@@ -30,10 +30,11 @@ class MainWindowCompanionController(QObject):
         self._companion.conversation_selected_by_companion.connect(self._on_companion_thread_selected)
         self._companion.set_bridge(window._bridge)
         self._companion.set_workspace_root(str(window._workspace_root))
-        self._companion.start()
 
         self._last_status: str = ""
         self._last_error: str = ""
+
+        self._companion.start()
 
     @property
     def companion_manager(self):

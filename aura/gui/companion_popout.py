@@ -4,7 +4,7 @@ from __future__ import annotations
 import copy
 from typing import Callable
 
-from PySide6.QtWidgets import QDialog, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QDialog, QHBoxLayout, QPushButton, QVBoxLayout, QWidget
 
 from aura.gui.settings_pages.companion_page import CompanionPage
 from aura.settings import AppSettings
@@ -33,6 +33,22 @@ class CompanionPopoutDialog(QDialog):
         self._page.set_manager(manager)
         layout.addWidget(self._page)
 
+        # Bottom button row
+        button_layout = QHBoxLayout()
+        button_layout.setContentsMargins(0, 12, 0, 0)
+        button_layout.setSpacing(8)
+
+        apply_btn = QPushButton("Apply")
+        apply_btn.clicked.connect(self._apply_live)
+        button_layout.addWidget(apply_btn)
+
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.close_with_save)
+        button_layout.addWidget(close_btn)
+
+        button_layout.addStretch()
+        layout.addLayout(button_layout)
+
         self._page.apply_requested.connect(self._apply_live)
 
         self._on_apply = on_apply
@@ -49,5 +65,11 @@ class CompanionPopoutDialog(QDialog):
         return result
 
     def accept(self) -> None:
+        self.close()
+
+    def close_with_save(self) -> None:
+        self.close()
+
+    def closeEvent(self, event) -> None:
         self._apply_live()
-        super().accept()
+        super().closeEvent(event)
