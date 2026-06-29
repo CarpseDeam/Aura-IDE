@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 from aura.companion.commands import CommandContext
 from aura.companion.commands.conversations import (
+    handle_conversation_create,
     handle_conversation_list,
     handle_conversation_select,
 )
@@ -312,3 +313,148 @@ class TestHandleReceiptListRecent:
         assert receipts[0]["run_id"] == "r1"
         assert receipts[0]["kind"] == "drone"
         assert receipts[0]["summary"] == "All good"
+
+
+# ── conversation.create ────────────────────────────────────
+
+
+class TestHandleConversationCreate:
+    def test_missing_project_id_returns_error(self) -> None:
+        ctx, sent = _make_context()
+        handle_conversation_create(_msg("conversation.create", payload={}), ctx)
+        assert sent[0]["type"] == "conversation.selected"
+        assert sent[0]["payload"]["error"] == "Missing project_id"
+
+    def test_missing_project_returns_error(self) -> None:
+        ctx, sent = _make_context()
+        with patch("aura.companion.commands.conversations.ProjectStore") as MockStore:
+            store = MagicMock()
+            MockStore.return_value = store
+            store.load_project.return_value = None
+
+            handle_conversation_create(
+                _msg("conversation.create", payload={"project_id": "p1"}),
+                ctx,
+            )
+
+        assert sent[0]["type"] == "conversation.selected"
+        assert sent[0]["payload"]["error"] == "Project not found"
+
+    def test_busy_bridge_returns_error(self) -> None:
+        bridge = MagicMock()
+        bridge.is_running.return_value = True
+        ctx, sent = _make_context(bridge=bridge)
+
+        fake_project = MagicMock()
+        fake_project.root_path = Path("/tmp/fake/project")
+
+        with patch("aura.companion.commands.conversations.ProjectStore") as MockStore:
+            store = MagicMock()
+            MockStore.return_value = store
+            store.load_project.return_value = fake_project
+
+            handle_conversation_create(
+                _msg("conversation.create", payload={"project_id": "p1"}),
+                ctx,
+            )
+
+        assert sent[0]["type"] == "conversation.selected"
+        assert sent[0]["payload"]["error"] == "Desktop is busy"
+
+    def test_success_creates_thread_and_triggers_selection(self) -> None:
+        bridge = MagicMock()
+        bridge.is_running.return_value = False
+        ctx, sent = _make_context(bridge=bridge)
+        ctx.settings.provider = "deepseek"
+        ctx.settings.planner_provider = "deepseek"
+        ctx.settings.worker_provider = "deepseek"
+
+        fake_project = MagicMock()
+        fake_project.root_path = Path("/tmp/fake/project")
+        fake_project.last_thread_id = None
+
+        fake_thread = MagicMock()
+        fake_thread.id = "new_thread_1"
+        fake_thread.conversation_path = None
+
+        captured_args = []
+
+        def on_selected(root: Path, conv_path: Path) -> None:
+            captured_args.append((root, conv_path))
+
+        ctx.on_conversation_selected = on_selected
+
+        with (
+            patch("aura.companion.commands.conversations.ProjectStore") as MockStore,
+            patch("aura.companion.commands.conversations.save_conversation") as mock_save,
+        ):
+            store = MagicMock()
+            MockStore.return_value = store
+            store.load_project.return_value = fake_project
+            store.create_thread.return_value = fake_thread
+
+            fake_conv_path = Path("/tmp/fake/project/.aura/conversations/2025-01-01-new-chat.json")
+            mock_save.return_value = fake_conv_path
+
+            handle_conversation_create(
+                _msg("conversation.create", payload={"project_id": "p1"}),
+                ctx,
+            )
+
+        # Verify save_conversation was called
+        mock_save.assert_called_once()
+
+        # Verify thread was created with title
+        store.create_thread.assert_called_once_with(fake_project, title="New chat")
+
+        # Verify thread.conversation_path was set and saved
+        assert fake_thread.conversation_path == fake_conv_path
+        store.save_thread.assert_called_once_with(fake_project, fake_thread)
+
+        # Verify project.last_thread_id was set
+        assert fake_project.last_thread_id == "new_thread_1"
+        store.save_project.assert_called_once_with(fake_project)
+
+        # Verify on_conversation_selected was called
+        assert len(captured_args) == 1
+        assert captured_args[0][0] == fake_project.root_path
+        assert captured_args[0][1] == fake_conv_path
+
+        # Verify no error was sent
+        assert len(sent) == 0
+
+    def test_pending_select_msg_contains_new_ids(self) -> None:
+        bridge = MagicMock()
+        bridge.is_running.return_value = False
+        ctx, sent = _make_context(bridge=bridge)
+        ctx.settings.provider = "deepseek"
+        ctx.settings.planner_provider = "deepseek"
+        ctx.settings.worker_provider = "deepseek"
+
+        fake_project = MagicMock()
+        fake_project.root_path = Path("/tmp/fake/project")
+        fake_project.last_thread_id = None
+
+        fake_thread = MagicMock()
+        fake_thread.id = "new_thread_1"
+        fake_thread.conversation_path = None
+
+        with (
+            patch("aura.companion.commands.conversations.ProjectStore") as MockStore,
+            patch("aura.companion.commands.conversations.save_conversation") as mock_save,
+        ):
+            store = MagicMock()
+            MockStore.return_value = store
+            store.load_project.return_value = fake_project
+            store.create_thread.return_value = fake_thread
+            mock_save.return_value = Path("/tmp/fake/project/.aura/conversations/chat.json")
+
+            msg = _msg("conversation.create", payload={"project_id": "p1"})
+            handle_conversation_create(msg, ctx)
+
+        pending = ctx.state.pending_select_msg
+        assert pending is not None
+        assert pending["id"] == msg["id"]
+        assert pending["sender_device_id"] == msg["sender_device_id"]
+        assert pending["payload"]["project_id"] == "p1"
+        assert pending["payload"]["thread_id"] == "new_thread_1"

@@ -24,6 +24,7 @@ from aura.companion.auth import (
 from aura.companion.client import CompanionWsClient
 from aura.companion.commands import CommandContext
 from aura.companion.commands.conversations import (
+    handle_conversation_create,
     handle_conversation_history,
     handle_conversation_list,
     handle_conversation_select,
@@ -107,6 +108,10 @@ class CompanionManager(QObject):
         self._router.register(
             "conversation.list",
             lambda msg: handle_conversation_list(msg, self._make_command_context()),
+        )
+        self._router.register(
+            "conversation.create",
+            lambda msg: handle_conversation_create(msg, self._make_command_context()),
         )
         self._router.register(
             "conversation.select",

@@ -6,7 +6,8 @@ import logging
 from aura.companion.commands import CommandContext
 from aura.companion.protocol import CompanionThread
 from aura.companion.replies import build_reply_envelope
-from aura.conversation.persistence import load_conversation
+from aura.conversation.history import History
+from aura.conversation.persistence import load_conversation, save_conversation
 from aura.projects.store import ProjectStore
 
 logger = logging.getLogger(__name__)
@@ -88,6 +89,71 @@ def handle_conversation_select(msg: dict, ctx: CommandContext) -> None:
             ctx.on_conversation_selected(project.root_path, thread.conversation_path)
     except Exception as exc:
         logger.error("[Companion] conversation.select error: %s", exc)
+        env = build_reply_envelope(msg, "conversation.selected", {"error": str(exc)})
+        if env:
+            ctx.send_fn(env)
+
+
+def handle_conversation_create(msg: dict, ctx: CommandContext) -> None:
+    """Create a new empty conversation thread on the phone."""
+    payload = msg.get("payload", {})
+    project_id = payload.get("project_id", "")
+    if not project_id:
+        env = build_reply_envelope(msg, "conversation.selected", {"error": "Missing project_id"})
+        if env:
+            ctx.send_fn(env)
+        return
+    try:
+        store = ProjectStore()
+        project = store.load_project(project_id)
+        if not project:
+            env = build_reply_envelope(msg, "conversation.selected", {"error": "Project not found"})
+            if env:
+                ctx.send_fn(env)
+            return
+        if ctx.bridge is not None and ctx.bridge.is_running():
+            env = build_reply_envelope(msg, "conversation.selected", {"error": "Desktop is busy"})
+            if env:
+                ctx.send_fn(env)
+            return
+
+        settings = ctx.settings
+        conv_path = save_conversation(
+            History(),
+            project.root_path,
+            model=settings.default_model,
+            thinking=settings.default_thinking,
+            title="New chat",
+            provider=settings.provider,
+            planner_provider=settings.planner_provider,
+            worker_provider=settings.worker_provider,
+            planner_model=settings.default_planner_model,
+            planner_thinking=settings.default_planner_thinking,
+            worker_model=settings.default_worker_model,
+            worker_thinking=settings.default_worker_thinking,
+            planner_worker_mode=settings.planner_worker_mode,
+        )
+
+        thread = store.create_thread(project, title="New chat")
+        thread.conversation_path = conv_path
+        store.save_thread(project, thread)
+
+        project.last_thread_id = thread.id
+        store.save_project(project)
+
+        ctx.state.pending_select_msg = {
+            "id": msg.get("id", ""),
+            "sender_device_id": msg.get("sender_device_id", ""),
+            "payload": {
+                "project_id": project_id,
+                "thread_id": thread.id,
+            },
+        }
+
+        if ctx.on_conversation_selected is not None:
+            ctx.on_conversation_selected(project.root_path, conv_path)
+    except Exception as exc:
+        logger.error("[Companion] conversation.create error: %s", exc)
         env = build_reply_envelope(msg, "conversation.selected", {"error": str(exc)})
         if env:
             ctx.send_fn(env)

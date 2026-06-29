@@ -30,6 +30,7 @@ function ProjectsScreen() {
   const [loadingThreads, setLoadingThreads] = useState(false);
   const [projectError, setProjectError] = useState('');
   const [selectingThreadId, setSelectingThreadId] = useState<string | null>(null);
+  const [creatingProjectId, setCreatingProjectId] = useState<string | null>(null);
   const [threadError, setThreadError] = useState('');
 
   // Early redirect for unpaired / missing desktop
@@ -94,9 +95,11 @@ function ProjectsScreen() {
         if (payload.status === 'error' || payload.error) {
           setProjectError(payload.error || payload.status || 'Failed to select conversation');
           setSelectingThreadId(null);
+          setCreatingProjectId(null);
           return;
         }
         setSelectingThreadId(null);
+        setCreatingProjectId(null);
         const safeCtx = {
           ...CompanionSocket.getStoredSafeContext(),
           project_id: payload.project_id,
@@ -114,6 +117,7 @@ function ProjectsScreen() {
       unsubProjectList();
       unsubConversationList();
       unsubConversationSelected();
+      setCreatingProjectId(null);
     };
   }, [phase, navigate]);
 
@@ -448,10 +452,42 @@ function ProjectsScreen() {
                         padding: '0.75rem 0.5rem',
                         color: tokens.fgMuted,
                         fontSize: '0.85rem',
+                        textAlign: 'center',
                       }}
                     >
-                      No conversations in this project yet. Start one on
-                      desktop, then refresh.
+                      <div style={{ fontSize: '0.9rem', marginBottom: 4 }}>No conversations yet.</div>
+                      <div style={{ fontSize: '0.78rem', marginBottom: 12 }}>
+                        Start a new chat from your phone.
+                      </div>
+                      {creatingProjectId === project.id ? (
+                        <div style={{ fontSize: '0.85rem', color: tokens.accent }}>Creating…</div>
+                      ) : (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const desktopId =
+                              sessionStorage.getItem('companion_desktop_id') ||
+                              CompanionSocket.getStoredSafeContext().desktop_id ||
+                              '';
+                            if (!desktopId) return;
+                            setCreatingProjectId(project.id);
+                            socket.send('conversation.create', { project_id: project.id }, desktopId);
+                          }}
+                          style={{
+                            padding: '0.5rem 1rem',
+                            background: tokens.accent,
+                            color: '#0a0f1f',
+                            border: 'none',
+                            borderRadius: 10,
+                            fontSize: '0.85rem',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            boxShadow: `0 6px 22px -8px ${tokens.accentGlow}`,
+                          }}
+                        >
+                          New Chat
+                        </button>
+                      )}
                     </div>
                   )}
 
@@ -491,6 +527,50 @@ function ProjectsScreen() {
                       >
                         Retry
                       </button>
+                    </div>
+                  )}
+
+                  {!loadingThreads && !threadError && selectedProjectId && (
+                    <div style={{ marginBottom: '0.5rem' }}>
+                      {creatingProjectId === selectedProjectId ? (
+                        <div
+                          style={{
+                            padding: '0.5rem 1rem',
+                            textAlign: 'center',
+                            fontSize: '0.85rem',
+                            color: tokens.accent,
+                          }}
+                        >
+                          Creating…
+                        </div>
+                      ) : (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const desktopId =
+                              sessionStorage.getItem('companion_desktop_id') ||
+                              CompanionSocket.getStoredSafeContext().desktop_id ||
+                              '';
+                            if (!desktopId) return;
+                            setCreatingProjectId(selectedProjectId);
+                            socket.send('conversation.create', { project_id: selectedProjectId }, desktopId);
+                          }}
+                          style={{
+                            width: '100%',
+                            padding: '0.5rem 1rem',
+                            background: tokens.accent,
+                            color: '#0a0f1f',
+                            border: 'none',
+                            borderRadius: 10,
+                            fontSize: '0.85rem',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            boxShadow: `0 6px 22px -8px ${tokens.accentGlow}`,
+                          }}
+                        >
+                          + New Chat
+                        </button>
+                      )}
                     </div>
                   )}
 

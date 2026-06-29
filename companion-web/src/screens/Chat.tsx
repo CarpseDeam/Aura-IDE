@@ -299,6 +299,22 @@ function ChatScreen() {
           )}
         </div>
         <button
+          onClick={() => navigate('/projects')}
+          aria-label="New Chat"
+          title="New Chat"
+          style={{
+            background: 'transparent',
+            border: 'none',
+            color: tokens.accent,
+            fontSize: '1.15rem',
+            padding: '0.1rem 0.3rem',
+            cursor: 'pointer',
+            opacity: 0.8,
+          }}
+        >
+          +
+        </button>
+        <button
           onClick={() => refreshHistory()}
           aria-label="Refresh"
           title="Refresh messages"
