@@ -1,4 +1,4 @@
-"""Modal Settings dialog — tabbed shell with 7 page widgets."""
+"""Modal Settings dialog — tabbed shell with settings pages."""
 from __future__ import annotations
 
 import copy

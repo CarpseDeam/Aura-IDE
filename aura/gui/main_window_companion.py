@@ -32,6 +32,9 @@ class MainWindowCompanionController(QObject):
         self._companion.set_workspace_root(str(window._workspace_root))
         self._companion.start()
 
+        self._last_status: str = ""
+        self._last_error: str = ""
+
     @property
     def companion_manager(self):
         return self._companion
@@ -60,18 +63,29 @@ class MainWindowCompanionController(QObject):
         self._companion.set_current_conversation(thread_id or "")
 
     def _on_companion_status(self, status: str) -> None:
+        self._last_status = status
         logger.info("[MainWindow] Companion status: %s", status)
         window = self._window
         if hasattr(window, '_edge_rail') and window._edge_rail is not None:
             window._edge_rail.set_companion_status(status)
 
     def _on_companion_error(self, error: str) -> None:
+        self._last_status = "error"
+        self._last_error = error
         window = self._window
         if hasattr(window, '_edge_rail') and window._edge_rail is not None:
             window._edge_rail.set_companion_status("error", error)
 
     def _on_companion_message(self, msg: dict) -> None:
         logger.debug("[MainWindow] Companion msg: %s", msg.get("type"))
+
+    def sync_edge_rail_status(self) -> None:
+        window = self._window
+        if hasattr(window, '_edge_rail') and window._edge_rail is not None:
+            if self._last_status == "error":
+                window._edge_rail.set_companion_status("error", self._last_error)
+            else:
+                window._edge_rail.set_companion_status(self._last_status)
 
     def _on_companion_thread_selected(self, project_root: Path, conversation_path: Path) -> None:
         if self._window._bridge.is_running():

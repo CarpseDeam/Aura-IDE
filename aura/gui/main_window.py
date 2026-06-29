@@ -364,6 +364,9 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._drone_controller.sync_drone_tab_checked()
         self._edge_rail.companionRequested.connect(self._on_open_companion_popout)
 
+        # Sync companion badge after rail exists (status may have fired before rail was created)
+        self._companion_controller.sync_edge_rail_status()
+
         # Frameless window — no native title bar unless explicitly disabled.
         if not self._use_native_chrome:
             self.setWindowFlags(self.windowFlags() | Qt.WindowType.FramelessWindowHint)
