@@ -6,13 +6,12 @@ All Qt dependencies are mocked; no QApplication needed.
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import Mock, patch, ANY
+from unittest.mock import ANY, Mock, patch
 
 import pytest
 
 from aura.gui.input_panel import Attachment, SendPayload
 from aura.gui.send_handler import SendHandler
-
 
 # Fixtures
 
@@ -44,9 +43,6 @@ def settings() -> Mock:
     s = Mock()
     s.provider = "deepseek"
     s.planner_provider = "deepseek"
-    s.vision_enabled = False
-    s.vision_endpoint = "http://localhost:5000"
-    s.vision_model = "local-vision"
     s.max_tool_rounds = 10
     return s
 
@@ -342,10 +338,9 @@ class TestVisionRouting:
     """Verify vision fallback vs native vision routing."""
 
     def test_native_vision_bypasses_fallback(
-        self, handler: SendHandler, bridge: Mock, settings: Mock
+        self, handler: SendHandler, bridge: Mock
     ) -> None:
         """When model supports vision natively, no vision thread is spawned."""
-        settings.vision_enabled = True
         with patch.dict(
             "aura.gui.send_handler.PROVIDERS",
             {
@@ -389,56 +384,10 @@ class TestVisionRouting:
         )
         mock_thread.assert_not_called()
 
-    def test_no_vision_when_disabled(
-        self, handler: SendHandler, bridge: Mock, settings: Mock, chat: Mock
+    def test_decompiler_spawned_when_no_native_vision(
+        self, handler: SendHandler, bridge: Mock, input_panel: Mock
     ) -> None:
-        """When vision is disabled, images are not sent to non-vision models."""
-        settings.vision_enabled = False
-        with patch.dict(
-            "aura.gui.send_handler.PROVIDERS",
-            {
-                "deepseek": Mock(
-                    models={
-                        "no-vision-model": Mock(
-                            supports_vision=False,
-                            id="no-vision-model",
-                            label="No Vision",
-                            input_per_m_usd=1.0,
-                            output_per_m_usd=2.0,
-                            cache_hit_per_m_usd=0.5,
-                        )
-                    }
-                )
-            },
-        ):
-            handler.handle_send(
-                SendPayload(
-                    text="what is this?",
-                    attachments=[
-                        Attachment(
-                            kind="image",
-                            name="pic.png",
-                            b64="abcdef",
-                            text_ref=None,
-                        )
-                    ],
-                ),
-                "no-vision-model",
-                "off",
-            )
-
-        bridge.history.append_user_multimodal.assert_not_called()
-        bridge.send.assert_not_called()
-        chat.add_error.assert_called_once_with(
-            "Images not supported",
-            "The selected model cannot read images. Enable local vision fallback or choose a vision-capable model.",
-        )
-
-    def test_vision_fallback_thread_spawned(
-        self, handler: SendHandler, settings: Mock, input_panel: Mock
-    ) -> None:
-        """When model doesn't support vision but vision is enabled, thread should spawn."""
-        settings.vision_enabled = True
+        """When model doesn't support vision, decompiler thread should spawn."""
         with patch.dict(
             "aura.gui.send_handler.PROVIDERS",
             {
@@ -477,7 +426,56 @@ class TestVisionRouting:
                 )
 
         input_panel.set_placeholder.assert_called_once_with(
-            "Analyzing images (local fallback)..."
+            "Decompiling image (structural)..."
+        )
+        input_panel.setEnabled.assert_called_once_with(False)
+        bridge.send.assert_not_called()
+        mock_thread.assert_called_once()
+        mock_thread_instance.start.assert_called_once()
+
+    def test_vision_fallback_thread_spawned(
+        self, handler: SendHandler, input_panel: Mock
+    ) -> None:
+        """When model doesn't support vision, decompiler thread should spawn."""
+        with patch.dict(
+            "aura.gui.send_handler.PROVIDERS",
+            {
+                "deepseek": Mock(
+                    models={
+                        "no-vision-model": Mock(
+                            supports_vision=False,
+                            id="no-vision-model",
+                            label="No Vision",
+                            input_per_m_usd=1.0,
+                            output_per_m_usd=2.0,
+                            cache_hit_per_m_usd=0.5,
+                        )
+                    }
+                )
+            },
+        ):
+            with patch("aura.gui.send_handler.threading.Thread") as mock_thread:
+                mock_thread_instance = Mock()
+                mock_thread.return_value = mock_thread_instance
+
+                handler.handle_send(
+                    SendPayload(
+                        text="what is this?",
+                        attachments=[
+                            Attachment(
+                                kind="image",
+                                name="pic.png",
+                                b64="abcdef",
+                                text_ref=None,
+                            )
+                        ],
+                    ),
+                    "no-vision-model",
+                    "off",
+                )
+
+        input_panel.set_placeholder.assert_called_once_with(
+            "Decompiling image (structural)..."
         )
         input_panel.setEnabled.assert_called_once_with(False)
         mock_thread.assert_called_once()
@@ -586,7 +584,7 @@ class TestMultimodalAssembly:
         )
 
         call_args = bridge.history.append_user_text.call_args[0][0]
-        assert "Image 1 description" in call_args
+        assert "Image 1 structural decompile:" in call_args
         assert "A cat sitting on a chair." in call_args
         assert "what is in this image" in call_args
 
@@ -623,10 +621,9 @@ class TestMultimodalAssembly:
         assert "Note" in call_args
 
     def test_vision_disabled_with_images_uses_multimodal(
-        self, handler: SendHandler, bridge: Mock, settings: Mock, chat: Mock
+        self, handler: SendHandler, bridge: Mock, chat: Mock
     ) -> None:
-        """When vision is disabled, do not send multimodal to an unknown model."""
-        settings.vision_enabled = False
+        """When no vision descriptions and no native vision, images with unknown model fall through to no-images path."""
         handler._finalize_send(
             SendPayload(
                 text="describe this",
@@ -646,11 +643,8 @@ class TestMultimodalAssembly:
         )
 
         bridge.history.append_user_multimodal.assert_not_called()
-        bridge.send.assert_not_called()
-        chat.add_error.assert_called_once_with(
-            "Images not supported",
-            "The selected model cannot read images. Enable local vision fallback or choose a vision-capable model.",
-        )
+        bridge.history.append_user_text.assert_called_once()
+        bridge.send.assert_called_once()
 
     def test_model_info_uses_planner_provider(self, handler: SendHandler, settings: Mock) -> None:
         settings.provider = "deepseek"
@@ -672,7 +666,6 @@ class TestMultimodalAssembly:
     ) -> None:
         new_settings = Mock()
         new_settings.planner_provider = "deepseek"
-        new_settings.vision_enabled = False
         new_settings.max_tool_rounds = 123
 
         handler.update_settings(new_settings)
@@ -773,6 +766,7 @@ class TestConversationBridgeModeSync:
 
     def test_planner_mode_sets_registry_and_prompt(self, qapp, tmp_path):
         from unittest.mock import Mock
+
         from aura.bridge.qt_bridge import ConversationBridge
         parent = Mock()
         bridge = ConversationBridge(parent, provider="deepseek")
@@ -789,6 +783,7 @@ class TestConversationBridgeModeSync:
 
     def test_single_mode_sets_registry_and_prompt(self, qapp, tmp_path):
         from unittest.mock import Mock
+
         from aura.bridge.qt_bridge import ConversationBridge
         parent = Mock()
         bridge = ConversationBridge(parent, provider="deepseek")
@@ -807,6 +802,7 @@ class TestConversationBridgeModeSync:
 
     def test_context_gearbox_metadata_tracks_single_and_planner(self, qapp, tmp_path):
         from unittest.mock import Mock
+
         from aura.bridge.qt_bridge import ConversationBridge
 
         bridge = ConversationBridge(Mock(), provider="deepseek")
@@ -829,6 +825,7 @@ class TestConversationBridgeModeSwitchBack:
 
     def test_single_after_planner_has_single_prompt(self, qapp, tmp_path):
         from unittest.mock import Mock
+
         from aura.bridge.qt_bridge import ConversationBridge
         parent = Mock()
         bridge = ConversationBridge(parent, provider="deepseek")
@@ -856,6 +853,7 @@ class TestConversationBridgeReadOnlyIndependence:
 
     def test_read_only_blocks_write_tools(self, qapp, tmp_path):
         from unittest.mock import Mock
+
         from aura.bridge.qt_bridge import ConversationBridge
         parent = Mock()
         bridge = ConversationBridge(parent, provider="deepseek")
@@ -870,6 +868,7 @@ class TestConversationBridgeReadOnlyIndependence:
 
     def test_planner_mode_does_not_change_read_only(self, qapp, tmp_path):
         from unittest.mock import Mock
+
         from aura.bridge.qt_bridge import ConversationBridge
         parent = Mock()
         bridge = ConversationBridge(parent, provider="deepseek")

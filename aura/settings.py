@@ -21,11 +21,6 @@ from aura.providers.registry import provider_registry
 
 DEFAULT_PROVIDER: ProviderId = "deepseek"
 DEFAULT_SANDBOX_MODE: str = "host"
-DEFAULT_VISION_ENABLED = True
-DEFAULT_VISION_MODEL = "llama3.2-vision"
-DEFAULT_VISION_ENDPOINT = "http://localhost:11434/v1"
-
-
 def resolve_role_default_model(provider_id: ProviderId | None, role: str) -> str:
     """Return the default model for a given provider + role combo.
 
@@ -67,9 +62,6 @@ class AppSettings:
     default_worker_model: str = DEFAULT_WORKER_MODEL
     default_planner_thinking: ThinkingMode = DEFAULT_PLANNER_THINKING
     default_worker_thinking: ThinkingMode = DEFAULT_WORKER_THINKING
-    vision_enabled: bool = DEFAULT_VISION_ENABLED
-    vision_model: str = DEFAULT_VISION_MODEL
-    vision_endpoint: str = DEFAULT_VISION_ENDPOINT
     temperature: float = 0.7
     worker_temperature: float = 0.1
     system_prompt: str = ""
@@ -176,12 +168,6 @@ class AppSettings:
             s.default_planner_thinking = data["default_planner_thinking"]  # type: ignore[assignment]
         if isinstance(data.get("default_worker_thinking"), str) and data["default_worker_thinking"] in ("off", "high", "max"):
             s.default_worker_thinking = data["default_worker_thinking"]  # type: ignore[assignment]
-        if isinstance(data.get("vision_enabled"), bool):
-            s.vision_enabled = data["vision_enabled"]
-        if isinstance(data.get("vision_model"), str):
-            s.vision_model = data["vision_model"]
-        if isinstance(data.get("vision_endpoint"), str):
-            s.vision_endpoint = data["vision_endpoint"]
         # Temperature
         if "temperature" in data:
             raw = data["temperature"]

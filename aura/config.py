@@ -13,11 +13,11 @@ from typing import Any
 from aura.key_manager import get_key as _stored_get_key
 from aura.key_manager import has_key as _stored_has_key
 from aura.key_manager import set_key as _stored_set_key
-from aura.models import PROVIDERS, cost_usd, get_pricing
-from aura.paths import APP_AUTHOR, APP_NAME, config_dir, data_dir
-from aura.providers.base import ModelId, ModelInfo, ProviderId, ThinkingMode
+from aura.models import PROVIDERS, cost_usd, get_pricing  # noqa: F401
+from aura.paths import APP_AUTHOR, APP_NAME, config_dir, data_dir  # noqa: F401
+from aura.providers.base import ModelId, ModelInfo, ProviderId, ThinkingMode  # noqa: F401
 from aura.providers.base import ProviderSpec as ProviderConfig
-from aura.providers.catalog import (
+from aura.providers.catalog import (  # noqa: F401
     DEFAULT_MODEL,
     DEFAULT_PLANNER_MODEL,
     DEFAULT_PLANNER_THINKING,
@@ -26,12 +26,8 @@ from aura.providers.catalog import (
     DEFAULT_WORKER_THINKING,
 )
 from aura.providers.registry import provider_registry
-from aura.settings import (
+from aura.settings import (  # noqa: F401
     DEFAULT_PROVIDER,
-    DEFAULT_SANDBOX_MODE,
-    DEFAULT_VISION_ENABLED,
-    DEFAULT_VISION_ENDPOINT,
-    DEFAULT_VISION_MODEL,
     AppSettings,
     load_settings,
     resolve_role_default_model,

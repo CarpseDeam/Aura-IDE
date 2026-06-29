@@ -16,6 +16,7 @@ dependencies = [
     "openai>=1.40",
     "packaging",
     "pillow>=10.0",
+    "pytesseract>=0.3.10",
     "platformdirs>=4.0",
     "playwright>=1.40",
     "pygments>=2.17",

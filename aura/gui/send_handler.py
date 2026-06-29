@@ -31,7 +31,7 @@ class SendHandler(QObject):
     """Handles send/stop/undo logic extracted from MainWindow.
 
     Owns the message queue for queuing payloads while the bridge is busy,
-    orchestrates vision fallback (local model image description), and
+    orchestrates screenshot decompiler for image attachments, and
     processes the /undo git command.
 
     Signals:
@@ -138,17 +138,9 @@ class SendHandler(QObject):
         vision_descriptions: list[str] = []
         vision_error: str | None = None
 
-        if image_atts and not native_vision and not self._settings.vision_enabled:
-            self._chat.add_error(
-                "Images not supported",
-                "The selected model cannot read images. Enable local vision fallback or choose a vision-capable model.",
-            )
-            self._input.restore_payload(payload)
-            return
-
-        if image_atts and not native_vision and self._settings.vision_enabled:
-            # Fall back to local vision model for descriptive middleman
-            self._input.set_placeholder("Analyzing images (local fallback)...")
+        if image_atts and not native_vision:
+            # Screenshot decompiler for non-vision models
+            self._input.set_placeholder("Decompiling image (structural)...")
             self._input.setEnabled(False)
 
             self._pending_model = model
@@ -157,19 +149,14 @@ class SendHandler(QObject):
             def _run_vision():
                 nonlocal vision_error
                 try:
-                    from aura.vision import VisionClient
+                    from aura.perception.decompiler import describe
 
-                    client = VisionClient(
-                        endpoint=self._settings.vision_endpoint,
-                        model=self._settings.vision_model,
-                    )
                     for a in image_atts:
-                        desc = client.describe(a.b64, context=payload.text)
+                        desc = describe(a.b64, context=payload.text)
                         vision_descriptions.append(desc)
                 except Exception as exc:
                     vision_error = (
-                        f"Local vision model unavailable "
-                        f"({self._settings.vision_model}): {exc}"
+                        f"Screenshot decompiler failed: {exc}"
                     )
 
                 # Marshal back to GUI thread to actually send the message
@@ -178,7 +165,7 @@ class SendHandler(QObject):
             threading.Thread(target=_run_vision, daemon=True).start()
             return  # Wait for _on_vision_done
 
-        # Either no images, native vision supported, or local vision disabled
+        # Either no images or native vision supported
         self._finalize_send(payload, model, thinking, vision_descriptions, vision_error)
 
     def handle_stop(self) -> None:
@@ -382,7 +369,7 @@ class SendHandler(QObject):
             vision_block_parts = []
             for i, desc in enumerate(vision_descriptions):
                 vision_block_parts.append(
-                    f"[Image {i + 1} description via local vision model:]\n{desc}"
+                    f"[Image {i + 1} structural decompile:]\n{desc}"
                 )
             vision_block = "\n\n---\n\n".join(vision_block_parts)
 
@@ -403,17 +390,10 @@ class SendHandler(QObject):
             history_text = final_text
             self._bridge.history.append_user_text(history_text)
         else:
-            # No images or vision disabled
-            if image_atts:
-                self._chat.add_error(
-                    "Images not supported",
-                    "The selected model cannot read images. Enable local vision fallback or choose a vision-capable model.",
-                )
-                return
-            else:
-                display_text = text
-                history_text = text
-                self._bridge.history.append_user_text(history_text)
+            # No images
+            display_text = text
+            history_text = text
+            self._bridge.history.append_user_text(history_text)
 
         self._chat.add_user(display_text, [a.b64 for a in image_atts] or None)
         self._chat.scroll_to_bottom(force=True)
