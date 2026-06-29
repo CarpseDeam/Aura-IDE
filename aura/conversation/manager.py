@@ -146,40 +146,7 @@ from aura.verify import run_dependent_import_check, run_focused_import_check
 
 EventCallback = Callable[[Event], None]
 
-EDIT_MECHANICS_FAILURE_CLASSES = {
-    "edit_mechanics_symbol_not_found",
-    "edit_mechanics_old_str_not_found",
-    "edit_mechanics_ambiguous_match",
-    "patch_hunk_not_found",
-    "patch_hunk_ambiguous",
-    "patch_file_hash_mismatch",
-}
 
-EDIT_TRANSACTION_FAILURE_CLASSES = {
-    "edit_transaction_hash_mismatch",
-    "edit_transaction_symbol_not_found",
-    "edit_transaction_ambiguous_symbol",
-    "edit_transaction_invalid_operation",
-    "edit_transaction_invalid_syntax",
-    "edit_transaction_not_applicable",
-}
-
-PATCH_CANDIDATE_INVALID_SYNTAX_FAILURE_CLASS = "patch_candidate_invalid_syntax"
-PATCH_CANDIDATE_INVALID_SYNTAX_REPEATED_CLASS = "patch_candidate_invalid_syntax_repeated"
-
-
-def _is_worker_app_source_path(path: str) -> bool:
-    normalized = _normalize_worker_path(path).replace("\\", "/")
-    if not is_python_path(normalized) or _is_validation_scratch_path(normalized):
-        return False
-    parts = normalized.split("/")
-    if "tests" in parts:
-        return False
-    name = parts[-1]
-    return not (
-        (name.startswith("test_") and name.endswith(".py"))
-        or name.endswith("_test.py")
-    )
 
 
 def _fingerprint_paths(paths: set[str], workspace_root) -> str:

@@ -16,8 +16,8 @@ from typing import Any
 from aura.conversation.worker_flow_helpers import (
     BROAD_ORIENTATION_TOOLS,
     TARGETED_READ_TOOLS,
-    WRITE_TOOLS,
     VALIDATION_TOOLS,
+    WRITE_TOOLS,
     _assistant_text,
     _has_full_picture_plus_followup,
     _inventory_restatement_marker_count,
@@ -33,13 +33,20 @@ from aura.conversation.worker_flow_helpers import (
     _write_was_applied,
 )
 
-
 WORKER_FLOW_STEERING_TEXT = (
     "Worker Flow: continue from the locked inventory. Stop restating the plan. "
     "Do not restart broad orientation. Use targeted reads only for exact "
     "missing facts. Make the next smallest safe edit now. Preserve protected "
     "control-flow regions and "
     "avoid whole-file reconstruction."
+)
+
+WORKER_FLOW_LARGE_FILE_SEAM_TEXT = (
+    "Worker Flow: large-file seam work is drifting into line-number archaeology. "
+    "Stop calculating method boundaries by repeated reads. Use read_file_outline "
+    "or code_intel_outline to anchor symbols, then one or two read_file_range calls "
+    "around the current symbols. Patch one seam only, or return "
+    "needs_planner_resolution if the seam cannot be located quickly."
 )
 
 WORKER_FLOW_VALIDATION_REQUIRED_TEXT = (
@@ -107,6 +114,14 @@ _WHOLE_FILE_REWRITE_RE = re.compile(
     r"rewrite\s+(?:the\s+)?(?:whole|entire|complete)\s+.+?file)\b",
     re.IGNORECASE | re.DOTALL,
 )
+_LINE_NUMBER_ARCHAEOLOGY_RE = re.compile(
+    r"\b(?:exact\s+line\s+numbers?|line\s+numbers?\s+(?:for|i\s+need)|"
+    r"exact\s+(?:method\s+)?boundar(?:y|ies)|find\s+the\s+exact\s+boundar(?:y|ies)|"
+    r"calculate\s+exact\s+line\s+ranges?|trace\s+line\s+by\s+line|"
+    r"starts?\s+(?:at|around)\s+line\s+\d+|ends?\s+(?:at|around)\s+line\s+\d+|"
+    r"read\s+(?:known\s+)?ranges?|read\s+around\s+lines?)\b",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -123,6 +138,7 @@ class WorkerFlowState:
     validation_actions: int = 0
     planning_restatements_since_write: int = 0
     extraction_inventory_restatements_since_write: int = 0
+    line_number_archaeology_mentions: int = 0
     large_read_paths: set[str] = field(default_factory=set)
     exact_targets_named: bool = False
     extraction_or_refactor: bool = False
@@ -357,6 +373,12 @@ class WorkerFlowHarness:
             self.state.protected_large_file_danger_signs += 1
             self._queue_steering("whole_file_rewrite")
 
+        line_archaeology_count = len(_LINE_NUMBER_ARCHAEOLOGY_RE.findall(text))
+        if line_archaeology_count and self._looks_like_large_file_seam_work(text, paths):
+            self.state.line_number_archaeology_mentions += line_archaeology_count
+            if line_archaeology_count >= 2 or self.state.line_number_archaeology_mentions >= 2:
+                self._queue_steering("line_number_archaeology")
+
     def _observe_tool_call_evidence(self, name: str, args: dict[str, Any]) -> None:
         if name in BROAD_ORIENTATION_TOOLS or name in TARGETED_READ_TOOLS or name in WRITE_TOOLS:
             if _tool_paths(name, args):
@@ -404,6 +426,14 @@ class WorkerFlowHarness:
             or "move only" in lower
         )
 
+    def _looks_like_large_file_seam_work(self, text: str, paths: list[str]) -> bool:
+        lower = text.lower()
+        if any(path.endswith(("manager.py", "dispatch.py")) for path in paths):
+            return True
+        if "manager.py" in lower or "dispatch.py" in lower:
+            return True
+        return self.state.extraction_or_refactor or bool(_EXTRACTION_RE.search(text))
+
     def _maybe_steer_for_broad_read(self, path: str) -> None:
         if not self.state.inventory_locked:
             return
@@ -435,16 +465,21 @@ class WorkerFlowHarness:
     def _reduce_orientation_pressure(self) -> None:
         self.state.planning_restatements_since_write = 0
         self.state.extraction_inventory_restatements_since_write = 0
+        self.state.line_number_archaeology_mentions = 0
         self._clear_broad_orientation_restriction()
-        if self.state.pending_steering_reason in {"orientation", "broad_read"}:
+        if self.state.pending_steering_reason in {"orientation", "broad_read", "line_number_archaeology"}:
             self.state.pending_steering_message = ""
             self.state.pending_steering_reason = ""
 
     def _queue_steering(self, reason: str) -> None:
-        if reason in {"orientation", "broad_read"} and self.state.inventory_locked:
+        if reason in {"orientation", "broad_read", "line_number_archaeology"} and self.state.inventory_locked:
             self.state.broad_orientation_restricted = True
         if not self.state.pending_steering_message:
-            self.state.pending_steering_message = WORKER_FLOW_STEERING_TEXT
+            self.state.pending_steering_message = (
+                WORKER_FLOW_LARGE_FILE_SEAM_TEXT
+                if reason == "line_number_archaeology"
+                else WORKER_FLOW_STEERING_TEXT
+            )
             self.state.pending_steering_reason = reason
 
     def _clear_broad_orientation_restriction(self) -> None:
@@ -457,6 +492,7 @@ __all__ = [
     "VALIDATION_TOOLS",
     "WORKER_FLOW_VALIDATION_REQUIRED_TEXT",
     "WORKER_FLOW_STEERING_TEXT",
+    "WORKER_FLOW_LARGE_FILE_SEAM_TEXT",
     "WRITE_TOOLS",
     "WorkerFlowHarness",
     "WorkerFlowPhase",

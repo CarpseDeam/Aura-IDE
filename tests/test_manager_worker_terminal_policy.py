@@ -626,6 +626,7 @@ def test_worker_flow_broad_ratchet_filters_and_blocks_broad_tools(
     tools.tool_defs.return_value = _tool_defs(
         "read_file",
         "grep_search",
+        "read_file_outline",
         "read_file_range",
         "find_usages",
         "patch_file",
@@ -677,9 +678,13 @@ def test_worker_flow_broad_ratchet_filters_and_blocks_broad_tools(
 
     third_call_tools = worker_backend.call_args_list[2].kwargs["tools"]
     assert "read_file" not in _tool_names(third_call_tools)
-    assert {"read_file_range", "find_usages", "patch_file", "run_terminal_command"}.issubset(
-        _tool_names(third_call_tools)
-    )
+    assert {
+        "read_file_outline",
+        "read_file_range",
+        "find_usages",
+        "patch_file",
+        "run_terminal_command",
+    }.issubset(_tool_names(third_call_tools))
     executed_names = [
         call.args[0] if call.args else call.kwargs["name"]
         for call in tools.execute.call_args_list

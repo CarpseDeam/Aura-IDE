@@ -10,14 +10,12 @@ import json
 import re
 from typing import Any
 
-
 # ── Tool classification sets ──────────────────────────────────────────
 
 BROAD_ORIENTATION_TOOLS: frozenset[str] = frozenset(
     {
         "read_file",
         "read_files",
-        "read_file_outline",
         "list_directory",
         "glob",
         "grep_search",
@@ -28,6 +26,7 @@ BROAD_ORIENTATION_TOOLS: frozenset[str] = frozenset(
 TARGETED_READ_TOOLS: frozenset[str] = frozenset(
     {
         "read_file_range",
+        "read_file_outline",
         "find_usages",
         "code_intel_outline",
         "code_intel_references",

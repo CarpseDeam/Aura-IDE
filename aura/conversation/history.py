@@ -382,8 +382,8 @@ class History:
                     f"{content[:actual_max]}\n\n"
                     f"[... result truncated: {original_len} chars -> {actual_max} chars "
                     f"(tool: {tool_name or 'unknown'}). "
-                    f"Use grep_search or read_file_outline to find exact line numbers, "
-                    f"then use read_file_range with those line numbers to read the missing section ...]"
+                    f"Use read_file_outline or grep_search to anchor the relevant symbol or seam, "
+                    f"then use one narrow read_file_range around that current target ...]"
                 )
 
     # ---- API view -----------------------------------------------------------

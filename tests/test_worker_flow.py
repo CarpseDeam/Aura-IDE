@@ -4,6 +4,7 @@ import json
 
 from aura.conversation.worker_flow import (
     BROAD_ORIENTATION_TOOLS,
+    WORKER_FLOW_LARGE_FILE_SEAM_TEXT,
     WORKER_FLOW_STEERING_TEXT,
     WorkerFlowHarness,
     WorkerFlowPhase,
@@ -53,6 +54,7 @@ def test_dense_planning_after_inventory_lock_filters_broad_orientation_tools() -
             "read_file",
             "read_files",
             "grep_search",
+            "read_file_outline",
             "read_file_range",
             "find_usages",
             "patch_file",
@@ -63,7 +65,13 @@ def test_dense_planning_after_inventory_lock_filters_broad_orientation_tools() -
 
     assert harness.should_restrict_broad_orientation() is True
     assert not (names & BROAD_ORIENTATION_TOOLS)
-    assert {"read_file_range", "find_usages", "patch_file", "run_terminal_command"}.issubset(names)
+    assert {
+        "read_file_outline",
+        "read_file_range",
+        "find_usages",
+        "patch_file",
+        "run_terminal_command",
+    }.issubset(names)
 
 
 def test_broad_tool_call_during_ratchet_gets_recoverable_block() -> None:
@@ -80,6 +88,7 @@ def test_broad_tool_call_during_ratchet_gets_recoverable_block() -> None:
     assert block["recoverable"] is True
     assert block["failure_class"] == "worker_flow_broad_orientation_restricted"
     assert "targeted reads" in block["suggested_next_action"]
+    assert "read_file_outline" in block["allowed_tool_groups"]["targeted_reads"]
 
 
 def test_repeated_broad_reads_of_same_large_file_after_inventory_lock_produce_steering() -> None:
@@ -140,6 +149,48 @@ def test_observed_worker_trace_planning_density_produces_steering() -> None:
     )
 
     assert harness.pending_steering_message == WORKER_FLOW_STEERING_TEXT
+
+
+def test_large_file_line_number_archaeology_produces_outline_steering() -> None:
+    harness = WorkerFlowHarness()
+
+    harness.observe_assistant_message(
+        "Let me extract helpers from aura/conversation/manager.py. "
+        "I need to find the exact line numbers and calculate exact line ranges. "
+        "The method starts at line 1267 and ends at line 1497."
+    )
+    filtered = harness.filter_tool_defs(
+        _tool_defs(
+            "read_file",
+            "grep_search",
+            "read_file_outline",
+            "read_file_range",
+            "patch_file",
+        )
+    )
+    names = _tool_names(filtered)
+
+    assert harness.pending_steering_message == WORKER_FLOW_LARGE_FILE_SEAM_TEXT
+    assert harness.state.pending_steering_reason == "line_number_archaeology"
+    assert harness.should_restrict_broad_orientation() is True
+    assert not (names & BROAD_ORIENTATION_TOOLS)
+    assert {"read_file_outline", "read_file_range", "patch_file"}.issubset(names)
+
+
+def test_repeated_large_file_line_number_archaeology_accumulates() -> None:
+    harness = WorkerFlowHarness()
+
+    harness.observe_assistant_message(
+        "I will extract helpers from aura/conversation/manager.py and need exact line numbers."
+    )
+    assert harness.pending_steering_message == ""
+
+    harness.observe_assistant_message(
+        "Now I need line numbers for _run_worker so I can read around lines."
+    )
+
+    assert harness.pending_steering_message == WORKER_FLOW_LARGE_FILE_SEAM_TEXT
+    assert harness.state.pending_steering_reason == "line_number_archaeology"
 
 
 def test_extraction_hunk_mechanics_after_inventory_lock_produce_steering() -> None:
