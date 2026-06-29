@@ -95,12 +95,14 @@ function ChatScreen() {
         return updated;
       });
       streamingRef.current = false;
+      setStreaming(false);
       setTimeout(() => { if (mountedRef.current) refreshHistory(); }, 300);
     });
     const unsubChatErr = socket.on('chat.error', (msg: any) => {
       clearWatchdog();
       setChatError(msg.payload?.message || 'An error occurred');
       streamingRef.current = false;
+      setStreaming(false);
       setTimeout(() => { if (mountedRef.current) refreshHistory(); }, 300);
     });
     return () => {
