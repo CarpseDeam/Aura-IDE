@@ -24,6 +24,7 @@ class PlanWriterCard(QFrame):
     STATE_FAILED = "failed"
     STATE_PHASE = "phase"
     STATE_INCOMPLETE = "incomplete"
+    STATE_NOT_STARTED = "not_started"
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -60,6 +61,7 @@ class PlanWriterCard(QFrame):
             self.STATE_FAILED: DANGER,
             self.STATE_PHASE: WARN,
             self.STATE_INCOMPLETE: WARN,
+            self.STATE_NOT_STARTED: WARN,
         }[self._state]
 
         text = {
@@ -70,6 +72,7 @@ class PlanWriterCard(QFrame):
             self.STATE_FAILED: "⚡ Plan failed ✗",
             self.STATE_PHASE: "⚡ Phase complete — preparing follow-up",
             self.STATE_INCOMPLETE: self._incomplete_text,
+            self.STATE_NOT_STARTED: self._incomplete_text,
         }[self._state]
 
         metrics = QFontMetrics(self._status.font())
@@ -132,6 +135,11 @@ class PlanWriterCard(QFrame):
                     self._state = self.STATE_INCOMPLETE
                     self._refresh()
                     return
+                if parsed.get("dispatch_not_started") or extras.get("dispatch_not_started"):
+                    self._incomplete_text = self._format_not_started_text(parsed, extras)
+                    self._state = self.STATE_NOT_STARTED
+                    self._refresh()
+                    return
                 if parsed.get("phase_boundary"):
                     self._state = self.STATE_PHASE
                     self._refresh()
@@ -150,3 +158,13 @@ class PlanWriterCard(QFrame):
                 text = text[: -len(" is required")]
             missing.append(text)
         return "⚡ Plan incomplete — missing " + ", ".join(missing)
+
+    @staticmethod
+    def _format_not_started_text(parsed: dict, extras: dict) -> str:
+        if extras.get("pure_research"):
+            return "⚡ Plan blocked — research only"
+        if extras.get("dispatch_approval_timeout"):
+            return "⚡ Plan expired"
+        if extras.get("dispatch_cancelled"):
+            return "⚡ Plan cancelled"
+        return "⚡ Plan not dispatched"

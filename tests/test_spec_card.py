@@ -6,6 +6,7 @@ import pytest
 from PySide6.QtWidgets import QApplication
 
 from aura.conversation.dispatch import WorkerOutcomeStatus
+from aura.gui.cards.plan_writer_card import PlanWriterCard
 from aura.gui.cards.spec_card import SpecCard
 
 
@@ -196,3 +197,27 @@ class TestDispatchExpired:
             status=WorkerOutcomeStatus.approval_rejected.value,
         )
         assert spec_card._status_label.text() == "Approval rejected"
+
+
+class TestPlanWriterCard:
+    def test_dispatch_not_started_is_not_shown_as_plan_ready(self, qapp):
+        card = PlanWriterCard()
+        card.set_result(
+            True,
+            '{"ok": false, "recoverable": true, '
+            '"extras": {"dispatch_not_started": true, "pure_research": true}}',
+        )
+
+        assert card._state == PlanWriterCard.STATE_NOT_STARTED
+        assert card._incomplete_text == "⚡ Plan blocked — research only"
+
+    def test_dispatch_timeout_is_not_shown_as_plan_ready(self, qapp):
+        card = PlanWriterCard()
+        card.set_result(
+            True,
+            '{"ok": false, "recoverable": true, '
+            '"extras": {"dispatch_not_started": true, "dispatch_approval_timeout": true}}',
+        )
+
+        assert card._state == PlanWriterCard.STATE_NOT_STARTED
+        assert card._incomplete_text == "⚡ Plan expired"

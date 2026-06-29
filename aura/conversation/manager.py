@@ -136,6 +136,13 @@ WORKER_FINAL_REPORT_PROOF_REQUIRED_TEXT = (
     "validation command/result, and acceptance verification."
 )
 
+_LOCAL_CODE_INTENT_RE = re.compile(
+    r"\b(?:fix|add|update|change|modify|edit|patch|refactor|extract|move|"
+    r"create|remove|delete|rename|implement|test|py_compile|pytest|import|"
+    r"module|function|class|file)\b",
+    re.IGNORECASE,
+)
+
 _FINAL_REPORT_INCOMPLETE_PROOF_RE = re.compile(
     r"\b(?:not\s+(?:tested|validated|verified)|validation\s+(?:did\s+not|didn't|"
     r"not)\s+run|failed\s+(?:validation|acceptance)|(?:validation|acceptance)\s+failed|"
@@ -1353,22 +1360,23 @@ class ConversationManager:
         self,
         tool_call_id: str,
         on_event: EventCallback,
-    ) -> None:
+    ) -> WorkerDispatchResult:
         summary = (
             "Worker was not started because this turn is a pure external "
             "research request. Run web research and answer from sourced evidence."
         )
-        payload = json.dumps(
-            {
-                "ok": False,
-                "summary": summary,
-                "recoverable": True,
-                "extras": {
-                    "dispatch_not_started": True,
-                    "pure_research": True,
-                    "research_route": "answer_only",
-                },
+        result = WorkerDispatchResult(
+            ok=False,
+            summary=summary,
+            recoverable=True,
+            extras={
+                "dispatch_not_started": True,
+                "pure_research": True,
+                "research_route": "answer_only",
             },
+        )
+        payload = json.dumps(
+            result.to_tool_payload(),
             ensure_ascii=False,
         )
         self._history.append_tool_result(tool_call_id, payload)
@@ -1386,6 +1394,7 @@ class ConversationManager:
                 },
             )
         )
+        return result
 
     def _append_dispatch_blocker_message(
         self,
@@ -1413,11 +1422,31 @@ class ConversationManager:
         dispatch_cb: DispatchCallback | None,
         on_event: EventCallback,
     ) -> dict[str, Any]:
-        if state.research_policy.route == ANSWER_ONLY:
-            self._append_pure_research_dispatch_block(
+        if (
+            state.research_policy.route == ANSWER_ONLY
+            and not _dispatch_args_look_like_local_code_work(args)
+        ):
+            result = self._append_pure_research_dispatch_block(
                 tool_call_id=tool_call_id,
                 on_event=on_event,
             )
+            action = classify_failed_worker_dispatch(
+                args=args,
+                result=result,
+                failures=state.worker_dispatch_failures,
+                failed_attempts=state.worker_redispatches,
+            )
+            if action["counts_as_attempt"]:
+                state.worker_redispatches += 1
+            blocker_reason = action["blocker_reason"]
+            if blocker_reason:
+                return {
+                    "id": tool_call_id,
+                    "blocker": True,
+                    "result": result,
+                    "blocker_reason": blocker_reason,
+                    "terminal_dispatch": False,
+                }
             return {
                 "id": tool_call_id,
                 "skip": True,
@@ -1548,6 +1577,70 @@ def _latest_user_text(history: History) -> str:
                     parts.append(str(item.get("text") or ""))
             return "\n".join(part for part in parts if part)
     return ""
+
+
+def _dispatch_args_look_like_local_code_work(args: dict[str, Any]) -> bool:
+    """Detect concrete local code dispatches despite a bad research route."""
+    if not isinstance(args, dict):
+        return False
+
+    if not any(_looks_like_local_path(path) for path in _dispatch_local_path_candidates(args)):
+        return False
+
+    intent_text = " ".join(
+        str(args.get(key) or "")
+        for key in ("spec", "goal", "acceptance")
+    )
+    return bool(_LOCAL_CODE_INTENT_RE.search(intent_text))
+
+
+def _dispatch_local_path_candidates(args: dict[str, Any]) -> list[Any]:
+    candidates: list[Any] = []
+
+    files = args.get("files")
+    if isinstance(files, list):
+        candidates.extend(files)
+
+    target_regions = args.get("target_regions")
+    if isinstance(target_regions, list):
+        for region in target_regions:
+            if isinstance(region, dict):
+                candidates.append(region.get("path"))
+
+    required_outputs = args.get("required_outputs")
+    if isinstance(required_outputs, list):
+        candidates.extend(required_outputs)
+
+    for key in ("spec", "goal", "acceptance", "summary"):
+        candidates.extend(_extract_local_path_mentions(str(args.get(key) or "")))
+
+    return candidates
+
+
+def _extract_local_path_mentions(text: str) -> list[str]:
+    mentions: list[str] = []
+    for match in re.finditer(r"(?<![\w:/.-])([A-Za-z0-9_.-]+(?:[/\\][A-Za-z0-9_.-]+)+)(?![\w.-])", text):
+        mentions.append(match.group(1))
+    for match in re.finditer(r"(?<![\w.-])([A-Za-z0-9_.-]+\.(?:py|pyw|ts|tsx|js|jsx|json|toml|yaml|yml|md|txt|css|scss|html|gd|cs|java|go|rs|cpp|c|h|hpp))(?![\w.-])", text):
+        mentions.append(match.group(1))
+    return mentions
+
+
+def _looks_like_local_path(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    path = value.strip()
+    if not path or "\n" in path or "\r" in path:
+        return False
+    lowered = path.lower()
+    if "://" in lowered or lowered.startswith(("www.", "http:", "https:")):
+        return False
+    return (
+        "/" in path
+        or "\\" in path
+        or "." in Path(path).name
+        or path.startswith(".")
+    )
 
 
 __all__ = [

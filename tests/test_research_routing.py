@@ -54,6 +54,15 @@ def _valid_dispatch_args() -> dict:
     }
 
 
+def _pure_research_dispatch_args() -> dict:
+    return {
+        "goal": "Answer the current-info question",
+        "files": [],
+        "spec": "Research the current CEO and answer from sourced evidence.",
+        "acceptance": "Answer the user with citations.",
+    }
+
+
 @pytest.mark.parametrize(
     "text",
     [
@@ -196,7 +205,7 @@ def test_pure_research_dispatch_to_worker_is_blocked(tmp_path: Path) -> None:
     )
     backend = MagicMock(
         side_effect=[
-            iter([_done(tool_calls=[_tool_call("dispatch1", "dispatch_to_worker", _valid_dispatch_args())])]),
+            iter([_done(tool_calls=[_tool_call("dispatch1", "dispatch_to_worker", _pure_research_dispatch_args())])]),
             iter([ContentDelta("Use web research instead."), _done("Use web research instead.")]),
         ]
     )
@@ -224,3 +233,207 @@ def test_pure_research_dispatch_to_worker_is_blocked(tmp_path: Path) -> None:
     payload = json.loads(result.result)
     assert payload["extras"]["pure_research"] is True
     assert history.messages[-1]["content"] == "Use web research instead."
+
+
+def test_screenshot_decompile_research_terms_do_not_block_local_dispatch(tmp_path: Path) -> None:
+    history = History()
+    user_text = (
+        "[Image 1 structural decompile:]\n"
+        "A panel mentions current version, release docs, and latest status.\n\n"
+        "[User's question:]\n"
+        "Dispatch is not working. The planner writes a spec and passes it to the worker."
+    )
+    assert decide_research_policy(user_text).route == ANSWER_ONLY
+    history.append_user_text(user_text)
+
+    tools = MagicMock(spec=ToolRegistry)
+    tools.tool_defs.return_value = []
+    type(tools).workspace_root = PropertyMock(return_value=tmp_path)
+    type(tools).mode = PropertyMock(return_value="planner")
+
+    manager = ConversationManager(history, tools)
+    events = []
+    dispatch_cb = MagicMock(
+        return_value=WorkerDispatchResult(ok=True, summary="worker ran")
+    )
+    args = {
+        "goal": "Fix planner dispatch gate",
+        "files": ["aura/conversation/manager.py"],
+        "spec": "Update dispatch gating so local code work is not blocked by research classification.",
+        "acceptance": "Run python -m py_compile aura/conversation/manager.py.",
+    }
+    backend = MagicMock(
+        return_value=iter([
+            _done(tool_calls=[_tool_call("dispatch1", "dispatch_to_worker", args)])
+        ])
+    )
+
+    hooks.register("generate_planner_code", backend)
+    try:
+        manager.send(
+            on_event=events.append,
+            approval_cb=MagicMock(return_value=ApprovalDecision("approve")),
+            cancel_event=threading.Event(),
+            model="deepseek-chat",
+            thinking="off",
+            dispatch_cb=dispatch_cb,
+        )
+    finally:
+        hooks.unregister("generate_planner_code")
+
+    dispatch_cb.assert_called_once()
+    assert any(isinstance(event, WorkerDispatchRequested) for event in events)
+    dispatch_results = [
+        event for event in events
+        if isinstance(event, ToolResult) and event.name == "dispatch_to_worker"
+    ]
+    assert dispatch_results
+    assert not any(event.extras.get("pure_research") for event in dispatch_results)
+
+
+def test_screenshot_decompile_allows_local_dispatch_when_path_is_only_in_spec(tmp_path: Path) -> None:
+    history = History()
+    user_text = (
+        "[Image 1 structural decompile:]\n"
+        "The panel says current version, release docs, and latest status.\n\n"
+        "[User's question:]\n"
+        "Dispatch is looping instead of reaching the worker."
+    )
+    assert decide_research_policy(user_text).route == ANSWER_ONLY
+    history.append_user_text(user_text)
+
+    tools = MagicMock(spec=ToolRegistry)
+    tools.tool_defs.return_value = []
+    type(tools).workspace_root = PropertyMock(return_value=tmp_path)
+    type(tools).mode = PropertyMock(return_value="planner")
+
+    manager = ConversationManager(history, tools)
+    events = []
+    dispatch_cb = MagicMock(
+        return_value=WorkerDispatchResult(ok=True, summary="worker ran")
+    )
+    args = {
+        "goal": "Fix planner dispatch gate",
+        "files": [],
+        "spec": "Update aura/conversation/manager.py so local code dispatch is allowed.",
+        "acceptance": "Run python -m py_compile aura/conversation/manager.py.",
+    }
+    backend = MagicMock(
+        return_value=iter([
+            _done(tool_calls=[_tool_call("dispatch1", "dispatch_to_worker", args)])
+        ])
+    )
+
+    hooks.register("generate_planner_code", backend)
+    try:
+        manager.send(
+            on_event=events.append,
+            approval_cb=MagicMock(return_value=ApprovalDecision("approve")),
+            cancel_event=threading.Event(),
+            model="deepseek-chat",
+            thinking="off",
+            dispatch_cb=dispatch_cb,
+        )
+    finally:
+        hooks.unregister("generate_planner_code")
+
+    dispatch_cb.assert_called_once()
+    assert any(isinstance(event, WorkerDispatchRequested) for event in events)
+
+
+def test_normal_local_extract_helper_dispatch_is_allowed(tmp_path: Path) -> None:
+    history = History()
+    history.append_user_text("Extract the dispatch gate helper into a clearer local function.")
+
+    tools = MagicMock(spec=ToolRegistry)
+    tools.tool_defs.return_value = []
+    type(tools).workspace_root = PropertyMock(return_value=tmp_path)
+    type(tools).mode = PropertyMock(return_value="planner")
+
+    manager = ConversationManager(history, tools)
+    events = []
+    dispatch_cb = MagicMock(
+        return_value=WorkerDispatchResult(ok=True, summary="worker ran")
+    )
+    args = {
+        "goal": "Extract helper",
+        "files": ["aura/conversation/manager.py"],
+        "spec": "Extract the local dispatch gate logic into a helper function.",
+        "acceptance": "Run python -m py_compile aura/conversation/manager.py.",
+    }
+    backend = MagicMock(
+        return_value=iter([
+            _done(tool_calls=[_tool_call("dispatch1", "dispatch_to_worker", args)])
+        ])
+    )
+
+    hooks.register("generate_planner_code", backend)
+    try:
+        manager.send(
+            on_event=events.append,
+            approval_cb=MagicMock(return_value=ApprovalDecision("approve")),
+            cancel_event=threading.Event(),
+            model="deepseek-chat",
+            thinking="off",
+            dispatch_cb=dispatch_cb,
+        )
+    finally:
+        hooks.unregister("generate_planner_code")
+
+    dispatch_cb.assert_called_once()
+    assert any(isinstance(event, WorkerDispatchRequested) for event in events)
+
+
+def test_repeated_pure_research_dispatch_block_stops_loop(tmp_path: Path) -> None:
+    history = History()
+    history.append_user_text("Who is the current CEO of Microsoft?")
+
+    tools = MagicMock(spec=ToolRegistry)
+    tools.tool_defs.return_value = []
+    type(tools).workspace_root = PropertyMock(return_value=tmp_path)
+    type(tools).mode = PropertyMock(return_value="planner")
+
+    manager = ConversationManager(history, tools)
+    events = []
+    dispatch_cb = MagicMock(
+        return_value=WorkerDispatchResult(ok=True, summary="should not run")
+    )
+    dispatch_call = _tool_call(
+        "dispatch1",
+        "dispatch_to_worker",
+        _pure_research_dispatch_args(),
+    )
+    repeated_dispatch_call = _tool_call(
+        "dispatch2",
+        "dispatch_to_worker",
+        _pure_research_dispatch_args(),
+    )
+    backend = MagicMock(
+        side_effect=[
+            iter([_done(tool_calls=[dispatch_call])]),
+            iter([_done(tool_calls=[repeated_dispatch_call])]),
+            iter([ContentDelta("Should not be reached"), _done("Should not be reached")]),
+        ]
+    )
+
+    hooks.register("generate_planner_code", backend)
+    try:
+        manager.send(
+            on_event=events.append,
+            approval_cb=MagicMock(return_value=ApprovalDecision("approve")),
+            cancel_event=threading.Event(),
+            model="deepseek-chat",
+            thinking="off",
+            dispatch_cb=dispatch_cb,
+        )
+    finally:
+        hooks.unregister("generate_planner_code")
+
+    dispatch_cb.assert_not_called()
+    assert backend.call_count == 2
+    dispatch_results = [
+        event for event in events
+        if isinstance(event, ToolResult) and event.name == "dispatch_to_worker"
+    ]
+    assert len(dispatch_results) == 2
+    assert all(event.extras.get("pure_research") for event in dispatch_results)
