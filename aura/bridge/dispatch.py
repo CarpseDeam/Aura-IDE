@@ -532,6 +532,7 @@ class _DispatchProxy(QObject):
     ) -> tuple[History, WorkerTaskSpec, dict[str, Any], ConversationManager]:
         worker_history = History()
         task_spec = normalize_worker_task(req)
+        skill_content = _format_spec_as_user_message(task_spec)
         _log.info("worker_context_build_start tool_call_id=%s", tool_call_id)
         t1 = time.monotonic()
         composed_prompt = compose_system_prompt(
@@ -541,6 +542,7 @@ class _DispatchProxy(QObject):
             model=str(self._worker_model),
             task_kind=task_spec.task_shape.task_kind if task_spec.task_shape is not None else None,
             target_files=tuple(task_spec.files),
+            content=skill_content,
         )
         context_gearbox = context_gearbox_metadata(
             composed_prompt.ledger,

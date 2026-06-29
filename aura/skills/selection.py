@@ -1,9 +1,73 @@
 from __future__ import annotations
 
+import re
 from fnmatch import fnmatchcase
 from pathlib import Path
 
 from aura.skills.models import Skill, SkillProvenance
+
+_CONTENT_STOPWORDS = {
+    "about",
+    "acceptance",
+    "after",
+    "again",
+    "against",
+    "allowed",
+    "also",
+    "and",
+    "any",
+    "are",
+    "before",
+    "builder",
+    "but",
+    "can",
+    "cannot",
+    "change",
+    "changes",
+    "code",
+    "context",
+    "done",
+    "for",
+    "forbidden",
+    "from",
+    "goal",
+    "has",
+    "have",
+    "implementation",
+    "into",
+    "kind",
+    "listed",
+    "make",
+    "must",
+    "need",
+    "needs",
+    "none",
+    "not",
+    "note",
+    "only",
+    "output",
+    "outputs",
+    "required",
+    "responsibilities",
+    "risk",
+    "shape",
+    "should",
+    "spec",
+    "task",
+    "that",
+    "the",
+    "this",
+    "to",
+    "update",
+    "use",
+    "validate",
+    "validation",
+    "verified",
+    "verify",
+    "when",
+    "with",
+    "worker",
+}
 
 
 def _paths_related(a: str, b: str) -> bool:
@@ -44,12 +108,47 @@ def _bundled_path_matches(tf: str, pg: str) -> bool:
     return norm_tf == prefix or norm_tf.startswith(prefix + "/")
 
 
+def _content_tokens(value: str | None) -> set[str]:
+    if not value:
+        return set()
+    return {
+        token
+        for token in re.split(r"[^a-z0-9_]+", value.lower())
+        if len(token) >= 3 and token not in _CONTENT_STOPWORDS
+    }
+
+
+def _tokens_match(left: str, right: str) -> bool:
+    if left == right:
+        return True
+    if len(left) < 4 or len(right) < 4:
+        return False
+    return left.startswith(right) or right.startswith(left)
+
+
+def _content_overlap_score(query_tokens: set[str], skill_tokens: set[str]) -> int:
+    if not query_tokens or not skill_tokens:
+        return 0
+    matched_skill_tokens: set[str] = set()
+    score = 0
+    for query_token in sorted(query_tokens):
+        for skill_token in sorted(skill_tokens):
+            if skill_token in matched_skill_tokens:
+                continue
+            if _tokens_match(query_token, skill_token):
+                matched_skill_tokens.add(skill_token)
+                score += 1
+                break
+    return min(score, 3)
+
+
 def select_relevant_skills(
     skills: list[Skill],
     *,
     model: str | None = None,
     task_kind: str | None = None,
     target_files: tuple[str, ...] = (),
+    content: str | None = None,
     limit: int = 5,
 ) -> list[Skill]:
     """Select skills relevant to the given terrain context.
@@ -58,7 +157,13 @@ def select_relevant_skills(
     relevance signal are returned, scored and ranked.  When no terrain
     arguments are provided, returns the first *limit* skills.
     """
-    has_terrain = model is not None or task_kind is not None or bool(target_files)
+    content_tokens = _content_tokens(content)
+    has_terrain = (
+        model is not None
+        or task_kind is not None
+        or bool(target_files)
+        or bool(content_tokens)
+    )
 
     if not has_terrain:
         return skills[:limit]
@@ -96,6 +201,9 @@ def select_relevant_skills(
                     if overlap >= 2:
                         break
             score += min(overlap, 2)
+
+        # Content relevance
+        score += _content_overlap_score(content_tokens, _content_tokens(skill.text))
 
         if score == 0:
             continue

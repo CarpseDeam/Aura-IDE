@@ -383,6 +383,40 @@ def test_skill_pack_loads_bundled_skills_on_drone_terrain_skipped_on_unrelated_t
     assert "skill_pack" not in unrelated_composed.context_text
 
 
+def test_skill_pack_loads_user_authored_skill_by_content(tmp_path):
+    authored_dir = tmp_path / ".aura" / "skills" / "authored"
+    authored_dir.mkdir(parents=True)
+    (authored_dir / "auth.json").write_text(
+        json.dumps(
+            {
+                "text": (
+                    "When editing authentication token refresh, "
+                    "validate session renewal behavior."
+                )
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    composed = compose_system_prompt(
+        RuntimeRole.WORKER,
+        "",
+        tmp_path,
+        task_kind="bugfix",
+        content="Fix the auth token refresh regression in the login flow.",
+    )
+    entry = _entry_by_id(composed, "skill_pack")
+
+    assert entry.included is True
+    assert entry.kind == "skill_pack"
+    assert "### Project Engineering Standards" in composed.context_text
+    assert "validate session renewal behavior" in composed.context_text
+    assert any(
+        item.kind == "individual_skill" and item.included is True
+        for item in composed.ledger
+    )
+
+
 def test_skill_pack_skip_when_workspace_root_is_missing():
     composed = compose_system_prompt(
         RuntimeRole.WORKER,

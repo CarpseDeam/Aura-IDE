@@ -241,6 +241,7 @@ def build_context_text(
     model: str | None = None,
     task_kind: str | None = None,
     target_files: tuple[str, ...] | None = None,
+    content: str | None = None,
 ) -> ComposedContext:
     _ = model
     runtime_role = RuntimeRole.from_value(role)
@@ -255,6 +256,7 @@ def build_context_text(
             force=force,
             task_kind=task_kind,
             target_files=normalized_target_files,
+            content=content,
         )
         if text:
             parts.append(text)
@@ -277,6 +279,7 @@ def compose_system_prompt(
     model: str | None = None,
     task_kind: str | None = None,
     target_files: tuple[str, ...] | None = None,
+    content: str | None = None,
 ) -> ComposedContext:
     runtime_role = RuntimeRole.from_value(role)
     context = build_context_text(
@@ -286,6 +289,7 @@ def compose_system_prompt(
         model=model,
         task_kind=task_kind,
         target_files=target_files,
+        content=content,
     )
     custom = (custom_prompt or "").strip()
     prompt_template = custom if custom else default_role_prompt(runtime_role)

@@ -1230,7 +1230,8 @@ def test_worker_dispatch_metadata_includes_context_gearbox(tmp_path):
 
     context_gearbox = result.extras.get("context_gearbox")
     assert isinstance(context_gearbox, dict)
-    assert set(context_gearbox) == {"summary", "ledger"}
+    assert {"summary", "ledger"}.issubset(context_gearbox)
+    assert context_gearbox["eviction"]["would_evict_count"] == 0
     assert context_gearbox["summary"]["display"].startswith("Context: ")
     assert any(
         entry["source_id"] == "planner_dispatch_contract"
@@ -1249,6 +1250,43 @@ def test_worker_dispatch_metadata_includes_context_gearbox(tmp_path):
     assert "Worker role:" not in encoded
     assert "Core kernel:" not in encoded
     assert "Done." not in encoded
+
+
+def test_worker_dispatch_metadata_loads_user_authored_skill_by_task_content(tmp_path):
+    authored_dir = tmp_path / ".aura" / "skills" / "authored"
+    authored_dir.mkdir(parents=True)
+    (authored_dir / "auth.json").write_text(
+        json.dumps(
+            {
+                "text": (
+                    "When editing authentication token refresh, "
+                    "validate session renewal behavior."
+                )
+            }
+        ),
+        encoding="utf-8",
+    )
+    req = WorkerDispatchRequest(
+        goal="Fix auth token refresh regression",
+        files=["app.py"],
+        spec="Repair the login flow.",
+        acceptance="Session renewal still works.",
+        task_shape=TaskShape(task_kind="bugfix"),
+    )
+
+    result, _proxy = _run_worker_dispatch_with_context_metadata(
+        tmp_path,
+        req,
+        tool_call_id="authored_context_call",
+    )
+
+    context_gearbox = result.extras.get("context_gearbox")
+    assert isinstance(context_gearbox, dict)
+    assert "skill_pack" in context_gearbox["summary"]["loaded"]
+    assert any(
+        entry["kind"] == "individual_skill" and entry["included"] is True
+        for entry in context_gearbox["ledger"]
+    )
 
 
 def test_worker_dispatch_metadata_loads_bundled_skills_via_path_overlap(tmp_path):

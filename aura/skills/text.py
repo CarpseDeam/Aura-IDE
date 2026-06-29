@@ -53,6 +53,7 @@ def build_skill_context_with_ids(
     *,
     task_kind: str | None = None,
     target_files: tuple[str, ...] = (),
+    content: str | None = None,
     limit: int = 5,
     eviction_mode: EvictionMode | str = EvictionMode.OFF,
 ) -> tuple[str, list[str]]:
@@ -68,6 +69,7 @@ def build_skill_context_with_ids(
             skills,
             task_kind=task_kind,
             target_files=target_files,
+            content=content,
             limit=limit,
         )
         mode = EvictionMode.from_value(eviction_mode)
@@ -90,6 +92,7 @@ def build_skill_context(
     *,
     task_kind: str | None = None,
     target_files: tuple[str, ...] = (),
+    content: str | None = None,
     limit: int = 5,
     eviction_mode: EvictionMode | str = EvictionMode.OFF,
 ) -> str:
@@ -102,6 +105,7 @@ def build_skill_context(
         workspace_root,
         task_kind=task_kind,
         target_files=target_files,
+        content=content,
         limit=limit,
         eviction_mode=eviction_mode,
     )

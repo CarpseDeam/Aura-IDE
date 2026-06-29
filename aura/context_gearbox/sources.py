@@ -331,6 +331,7 @@ def collect_source_text(
     force: bool = False,
     task_kind: str | None = None,
     target_files: tuple[str, ...] | None = None,
+    content: str | None = None,
 ) -> tuple[str, ContextLedgerEntry, list[ContextLedgerEntry]]:
     try:
         skill_ids: list[str] = []
@@ -342,6 +343,7 @@ def collect_source_text(
                     workspace_root,
                     task_kind,
                     target_files,
+                    content,
                 )
         else:
             text, reason = _load_source_text(
@@ -351,6 +353,7 @@ def collect_source_text(
                 role=role,
                 task_kind=task_kind,
                 target_files=target_files,
+                content=content,
             )
         included = bool(text)
         entry = ContextLedgerEntry(
@@ -398,6 +401,7 @@ def _load_source_text(
     role: RuntimeRole,
     task_kind: str | None,
     target_files: tuple[str, ...] | None,
+    content: str | None,
 ) -> tuple[str, str]:
     if role not in source.roles:
         return "", f"not scoped to {role.value} role"
@@ -414,7 +418,12 @@ def _load_source_text(
             target_files,
         )
     if source.kind == "skill_pack":
-        text, reason, _skill_ids = _load_skill_pack(workspace_root, task_kind, target_files)
+        text, reason, _skill_ids = _load_skill_pack(
+            workspace_root,
+            task_kind,
+            target_files,
+            content,
+        )
         return text, reason
     if source.source_id == "core_kernel":
         return CORE_KERNEL_TEXT, source.reason
@@ -496,6 +505,7 @@ def _load_skill_pack(
     workspace_root: Path | None,
     task_kind: str | None,
     target_files: tuple[str, ...] | None,
+    content: str | None,
 ) -> tuple[str, str, list[str]]:
     if workspace_root is None:
         return "", "no workspace root", []
@@ -503,6 +513,7 @@ def _load_skill_pack(
         workspace_root,
         task_kind=task_kind,
         target_files=tuple(target_files or ()),
+        content=content,
     )
     if text:
         return text, "terrain-selected skills for this context", skill_ids
