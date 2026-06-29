@@ -186,6 +186,63 @@ def test_event_relay_preserves_model_todo_order_while_edit_activity_is_active():
     assert relay.todo_used is True
 
 
+def test_event_relay_generic_edit_progress_uses_next_pending_fix_before_later_update_task():
+    """Generic edit progress should not jump to a later row just because it says update."""
+    class MockApprovalProxy:
+        def consume_last_event(self):
+            return None
+
+    relay = WorkerEventRelay(MockApprovalProxy())
+    emitted_tasks = []
+    relay.todoListUpdated.connect(lambda tool_call_id, tasks: emitted_tasks.append(tasks))
+
+    model_tasks = [
+        {"description": "Read all relevant source files", "status": "done"},
+        {"description": "Fix 1: Deduplicate companion defaults", "status": "done"},
+        {"description": "Fix 2: Strengthen old localhost migration", "status": "done"},
+        {"description": "Fix 3: Make dev override apply through load_settings too", "status": "pending"},
+        {"description": "Fix 4: Tighten companion-web relay selection", "status": "pending"},
+        {"description": "Fix 5: Expand is_local_relay_url", "status": "pending"},
+        {"description": "Fix 6: Update tests", "status": "pending"},
+        {"description": "Validate: compile and run pytest", "status": "pending"},
+    ]
+    relay.relay(
+        "parent_tc",
+        ToolResult(
+            tool_call_id="todo1",
+            name="update_todo_list",
+            ok=True,
+            result=json.dumps({"ok": True, "tasks": model_tasks}),
+            extras={"tasks": model_tasks},
+        ),
+    )
+
+    relay.relay("parent_tc", ToolCallStart(index=0, id="patch1", name="patch_file"))
+
+    assert emitted_tasks[-1][3]["status"] == "active"
+    assert emitted_tasks[-1][3]["description"].startswith("Fix 3:")
+    assert emitted_tasks[-1][6] == {"description": "Fix 6: Update tests", "status": "pending"}
+
+    relay.relay(
+        "parent_tc",
+        ToolResult(
+            tool_call_id="patch1",
+            name="patch_file",
+            ok=True,
+            result=json.dumps(
+                {
+                    "ok": True,
+                    "path": "tests/test_companion_settings.py",
+                    "applied": True,
+                }
+            ),
+        ),
+    )
+
+    assert emitted_tasks[-1][3]["status"] == "done"
+    assert emitted_tasks[-1][6] == {"description": "Fix 6: Update tests", "status": "pending"}
+
+
 def test_event_relay_write_result_marks_matching_model_todo_done_in_place():
     """A write result uses path matching to complete the right model TODO row."""
     class MockApprovalProxy:

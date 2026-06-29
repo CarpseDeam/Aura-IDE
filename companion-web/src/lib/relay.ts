@@ -26,10 +26,10 @@ export function isLocalOrigin(): boolean {
 /**
  * Resolve the effective relay URL, applying hosted-origin safety.
  *
- * Rules:
- *  1. envRelay (VITE_AURA_RELAY_WS_URL) always wins when set.
- *  2. On non-local origins, localhost qrRelay values are rejected.
- *  3. qrRelay is accepted on local origins or when it's non-local.
+ * Priority:
+ *  1. Non-local qrRelay always wins — trusted regardless of origin (self-hosted/custom relay).
+ *  2. envRelay (VITE_AURA_RELAY_WS_URL) — baked at build time for hosted deploy.
+ *  3. Local qrRelay accepted on local origins for port fallback.
  *  4. Falls back to the hosted or local default based on origin.
  */
 export function resolveRelayUrl(
@@ -37,10 +37,12 @@ export function resolveRelayUrl(
   envRelay: string,
   originIsLocal: boolean,
 ): string {
+  // Non-local qrRelay always wins — trusted on any origin
+  if (qrRelay && !isLocalRelayUrl(qrRelay)) return qrRelay;
+  // Env var override
   if (envRelay) return envRelay;
-  if (!originIsLocal && qrRelay && isLocalRelayUrl(qrRelay)) {
-    return HOSTED_RELAY_DEFAULT;
-  }
-  if (qrRelay) return qrRelay;
+  // Local origin accepts local qrRelay (supports port fallback)
+  if (qrRelay && originIsLocal) return qrRelay;
+  // Fallback to origin-appropriate default
   return originIsLocal ? 'ws://localhost:8765' : HOSTED_RELAY_DEFAULT;
 }

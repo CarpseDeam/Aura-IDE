@@ -25,6 +25,7 @@ from aura.client import (
 )
 from aura.conversation.tool_limits import WRITE_TOOLS
 from aura.conversation.validation_orchestrator import classify_validation_payload
+from aura.todo_state import todo_signature, todo_task_description, todo_task_status
 
 TERMINAL_OUTPUT_CAPTURE_CHARS = 4000
 TERMINAL_OUTPUT_PREVIEW_CHARS = 200
@@ -616,7 +617,7 @@ class WorkerEventRelay(QObject):
 
     def _emit_todo_progress(self, tool_call_id: str, *, force: bool = False) -> None:
         tasks = self._combined_todo_tasks()
-        signature = _todo_signature(tasks)
+        signature = todo_signature(tasks)
         if not force and signature == self._last_emitted_todo_signature:
             return
         self._last_emitted_todo_signature = signature
@@ -657,12 +658,12 @@ class WorkerEventRelay(QObject):
         statuses = [self._runtime_todo_status.get(key) for key in keys]
         if "done" in statuses:
             return "done"
-        if "active" in statuses and _todo_task_status(task) != "done":
+        if "active" in statuses and todo_task_status(task) != "done":
             return "active"
         return ""
 
     def _effective_status_for_task(self, task: Any) -> str:
-        return self._runtime_status_for_task(task) or _todo_task_status(task)
+        return self._runtime_status_for_task(task) or todo_task_status(task)
 
     def _activate_model_todo_phase(
         self,
@@ -711,6 +712,12 @@ class WorkerEventRelay(QObject):
             path_index = self._find_path_matched_model_todo_index(details)
             if path_index is not None:
                 return path_index
+            active_index = self._find_active_model_todo_index(phase)
+            if active_index is not None:
+                return active_index
+            ordered_index = self._find_next_ordered_edit_todo_index()
+            if ordered_index is not None:
+                return ordered_index
         return self._find_action_matched_model_todo_index(phase, details)
 
     def _find_path_matched_model_todo_index(
@@ -774,6 +781,25 @@ class WorkerEventRelay(QObject):
             if pending_match is None:
                 pending_match = index
         return active_match if active_match is not None else pending_match
+
+    def _find_next_ordered_edit_todo_index(self) -> int | None:
+        fallback: int | None = None
+        for index, task in enumerate(self._model_todo_tasks):
+            if self._effective_status_for_task(task) == "done":
+                continue
+            text = _normalized_todo_text(task)
+            if any(word in text for word in PHASE_ACTION_WORDS["validate"]):
+                continue
+            if any(word in text for word in PHASE_ACTION_WORDS["finish"]):
+                continue
+            if any(word in text for word in PHASE_ACTION_WORDS["recover"]):
+                continue
+            if any(word in text for word in PHASE_ACTION_WORDS["inspect"]):
+                if fallback is None:
+                    fallback = index
+                continue
+            return index
+        return fallback
 
     def _find_active_model_todo_index(self, phase: str) -> int | None:
         for index, task in enumerate(self._model_todo_tasks):
@@ -924,26 +950,11 @@ def _phase_action_words(phase: str, details: dict[str, Any]) -> tuple[str, ...]:
 
 
 def _todo_task_description(task: Any) -> str:
-    if isinstance(task, dict):
-        for key in ("description", "content", "text", "task"):
-            if key in task:
-                return str(task.get(key) or "")
-        return ""
-    return str(task)
+    return todo_task_description(task)
 
 
 def _todo_task_status(task: Any) -> str:
-    raw_status = ""
-    if isinstance(task, dict):
-        for key in ("status", "state"):
-            if key in task:
-                raw_status = str(task.get(key) or "").lower().strip()
-                break
-    if raw_status in {"done", "completed", "complete"}:
-        return "done"
-    if raw_status in {"active", "in_progress", "doing", "current"}:
-        return "active"
-    return "pending"
+    return todo_task_status(task)
 
 
 def _todo_task_overlay_keys(task: Any) -> list[str]:
@@ -1021,24 +1032,6 @@ def _progress_key_for_tool(name: str) -> str:
     if name in VALIDATION_PROGRESS_TOOLS:
         return "validate"
     return ""
-
-
-def _todo_signature(tasks: list[Any]) -> tuple[tuple[str, str], ...]:
-    signature: list[tuple[str, str]] = []
-    for task in tasks:
-        if not isinstance(task, dict):
-            signature.append((str(task), ""))
-            continue
-        description = str(
-            task.get("description")
-            or task.get("content")
-            or task.get("text")
-            or task.get("task")
-            or ""
-        )
-        status = str(task.get("status") or task.get("state") or "")
-        signature.append((description, status))
-    return tuple(signature)
 
 
 def _is_validation_terminal_record(record: dict[str, Any]) -> bool:

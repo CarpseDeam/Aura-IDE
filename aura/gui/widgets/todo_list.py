@@ -7,52 +7,7 @@ from PySide6.QtWidgets import QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabe
 
 from aura.config import media_path
 from aura.gui.theme import BG, BORDER, FG_DIM, SUCCESS, WARN
-
-
-def normalize_todo_tasks(tasks: list[Any]) -> list[dict[str, Any]]:
-    """Normalize user-provided task lists into a standard format.
-
-    Supports description/content/text/task fields and maps various status
-    aliases to pending, active, or done. Clamps descriptions to 220 chars.
-    Does not mutate the input list.
-    """
-    normalized: list[dict[str, Any]] = []
-    if not isinstance(tasks, list):
-        return normalized
-
-    for t in tasks:
-        if isinstance(t, dict):
-            desc: str = ""
-            for key in ("description", "content", "text", "task"):
-                if key in t:
-                    desc = str(t[key])
-                    break
-
-            if len(desc) > 220:
-                desc = desc[:217] + "..."
-
-            raw_status: str = ""
-            for key in ("status", "state"):
-                if key in t:
-                    raw_status = str(t[key]).lower().strip()
-                    break
-
-            status: str = "pending"
-            if raw_status in ("done", "completed", "complete"):
-                status = "done"
-            elif raw_status in ("active", "in_progress", "doing", "current"):
-                status = "active"
-            else:
-                status = "pending"
-
-            normalized.append({"description": desc, "status": status})
-        elif isinstance(t, str):
-            desc_str: str = t
-            if len(desc_str) > 220:
-                desc_str = desc_str[:217] + "..."
-            normalized.append({"description": desc_str, "status": "pending"})
-
-    return normalized
+from aura.todo_state import normalize_todo_tasks, todo_signature
 
 
 class TodoListWidget(QFrame):
@@ -113,7 +68,7 @@ class TodoListWidget(QFrame):
         normalized = normalize_todo_tasks(tasks)
 
         # 1. Signature caching to avoid redundant widget updates
-        sig = tuple((t["description"], t["status"]) for t in normalized)
+        sig = todo_signature(normalized)
         if self._last_sig == sig:
             return
         self._last_sig = sig
