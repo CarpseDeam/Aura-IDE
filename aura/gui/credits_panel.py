@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import os
 
-from PySide6.QtCore import QThread, QTimer, QUrl, Signal
+from PySide6.QtCore import Qt, QThread, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QFrame,
@@ -27,7 +27,7 @@ from aura.config import (
 )
 from aura.gui.balance_fetcher import BalanceWorker
 from aura.gui.credits_worker import CreditsCheckoutWorker, CreditsClaimWorker
-from aura.gui.theme import FG, FG_DIM, FG_MUTED, SUCCESS, WARN
+from aura.gui.theme import ACCENT, ACCENT_HOVER, BG, BG_ALT, BORDER, FG, FG_DIM, FG_MUTED, SUCCESS, WARN
 
 logger = logging.getLogger(__name__)
 
@@ -55,13 +55,23 @@ class AuraCreditsPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
-        hero = QLabel("The easiest way to run Aura. No API keys, no provider setup.")
-        hero.setWordWrap(True)
-        hero.setStyleSheet(f"color: {FG}; font-size: 15px; font-weight: 600;")
-        layout.addWidget(hero)
+        # 1. Trust row
+        trust_label = QLabel(
+            "No provider setup  \u00b7  Pay as you go  \u00b7  Bring your own key anytime"
+        )
+        trust_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        trust_label.setStyleSheet(
+            f"color: {FG_MUTED}; font-size: 12px; padding: 4px 0;"
+        )
+        layout.addWidget(trust_label)
 
-        self._build_balance_card(layout)
+        # 2. Buy Credits card (main visual focus)
         self._build_buy_card(layout)
+
+        # 3. Balance card (secondary)
+        self._build_balance_card(layout)
+
+        # 4. Advanced: Aura Key card (subdued)
         self._build_key_card(layout)
         layout.addStretch()
 
@@ -115,53 +125,65 @@ class AuraCreditsPanel(QWidget):
         self._add_section_title(buy_card_layout, "Buy Credits")
 
         buy_desc = QLabel(
-            "For normal coding chats and small repo tasks, $10 can last weeks. "
+            "$10 can last weeks for normal coding chats and small repo tasks. "
             "Heavy autonomous runs and long drone loops use more."
         )
         buy_desc.setStyleSheet(f"color: {FG_MUTED}; font-size: 12px;")
         buy_desc.setWordWrap(True)
         buy_card_layout.addWidget(buy_desc)
 
+        # Email row
         email_row = QHBoxLayout()
         email_row.setSpacing(6)
-        email_label = QLabel("Email:")
+        email_label = QLabel("Email for receipt")
+        email_label.setStyleSheet(f"color: {FG_MUTED};")
         self._email_input = QLineEdit()
-        self._email_input.setPlaceholderText("Your email address...")
+        self._email_input.setPlaceholderText("your@email.com")
         email_row.addWidget(email_label)
         email_row.addWidget(self._email_input, 1)
         buy_card_layout.addLayout(email_row)
 
+        # Credit pack buttons \u2014 2x2 grid
         self._buy_buttons: dict[str, QPushButton] = {}
-        packs = [
-            ("5", "Buy $5"),
-            ("10", "Buy $10"),
-            ("20", "Buy $20"),
-            ("50", "Buy $50"),
-        ]
+        packs = ["5", "10", "20", "50"]
 
-        for i in range(0, 4, 2):
+        for row_idx in range(2):
             row = QHBoxLayout()
             row.setSpacing(6)
-            for pid, label in packs[i : i + 2]:
-                btn = QPushButton(label)
+            for col_idx in range(2):
+                pid = packs[row_idx * 2 + col_idx]
                 if pid == "10":
-                    btn.setObjectName("primary")
-                    btn.setText("Buy $10 - Recommended")
+                    btn = QPushButton("$10  Recommended")
+                    btn.setStyleSheet(
+                        "QPushButton {"
+                        f"background: {ACCENT}; color: {BG}; border: 1px solid {ACCENT}; "
+                        "border-radius: 8px; padding: 12px 8px; "
+                        "font-size: 16px; font-weight: 700;"
+                        "}"
+                        "QPushButton:hover {"
+                        f"background: {ACCENT_HOVER};"
+                        "}"
+                        "QPushButton:disabled {"
+                        f"background: {BG_ALT}; color: {FG_MUTED}; border-color: {BORDER};"
+                        "}"
+                    )
+                else:
+                    btn = QPushButton(f"${pid}")
+                    btn.setStyleSheet(
+                        "QPushButton {"
+                        f"background: {BG_ALT}; border: 1px solid {BORDER}; "
+                        "border-radius: 8px; padding: 12px 8px; "
+                        "font-size: 16px; font-weight: 600;"
+                        "}"
+                    )
                 btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+                btn.setFixedHeight(48)
                 self._buy_buttons[pid] = btn
                 btn.clicked.connect(lambda checked, pid=pid: self._on_buy_credits(pid))
                 row.addWidget(btn)
             buy_card_layout.addLayout(row)
 
-        trust_note = QLabel(
-            "Aura Credits include a small service margin that helps fund hosting, "
-            "Stripe fees, relay infrastructure, and Aura development. Prefer raw "
-            "provider pricing? Use your own API key in Provider Settings."
-        )
-        trust_note.setWordWrap(True)
-        trust_note.setStyleSheet(f"color: {FG_MUTED}; font-size: 11px;")
-        buy_card_layout.addWidget(trust_note)
-
+        # Pending purchase card
         self._pending_card = QFrame()
         self._pending_card.setStyleSheet(
             "QFrame {"
@@ -194,14 +216,27 @@ class AuraCreditsPanel(QWidget):
         self._purchase_status.setWordWrap(True)
         buy_card_layout.addWidget(self._purchase_status)
 
+        # Service margin trust note
+        trust_note = QLabel(
+            "Aura Credits include a small service margin that helps fund hosting, "
+            "Stripe fees, relay infrastructure, and Aura development."
+        )
+        trust_note.setWordWrap(True)
+        trust_note.setStyleSheet(f"color: {FG_MUTED}; font-size: 11px;")
+        buy_card_layout.addWidget(trust_note)
+
         layout.addWidget(buy_card)
 
     def _build_key_card(self, layout: QVBoxLayout) -> None:
         key_card, key_card_layout = self._build_card()
-        self._add_section_title(key_card_layout, "Advanced: Aura Key")
+
+        # Subdued section title
+        title = QLabel("Advanced: Aura Key")
+        title.setStyleSheet(f"color: {FG_MUTED}; font-size: 11px; font-weight: bold;")
+        key_card_layout.addWidget(title)
 
         key_desc = QLabel("Already have an Aura key? Paste it here.")
-        key_desc.setStyleSheet(f"color: {FG_MUTED}; font-size: 12px;")
+        key_desc.setStyleSheet(f"color: {FG_MUTED}; font-size: 11px;")
         key_desc.setWordWrap(True)
         key_card_layout.addWidget(key_desc)
 
@@ -215,11 +250,13 @@ class AuraCreditsPanel(QWidget):
 
         save_btn = QPushButton("Save")
         save_btn.setToolTip("Encrypt and store this key on disk")
+        save_btn.setStyleSheet("padding: 4px 10px; font-size: 12px;")
         save_btn.clicked.connect(self._on_save_key)
         key_row.addWidget(save_btn)
 
         clear_btn = QPushButton("Clear")
         clear_btn.setToolTip("Remove stored key")
+        clear_btn.setStyleSheet("padding: 4px 10px; font-size: 12px;")
         clear_btn.clicked.connect(self._on_clear_key)
         key_row.addWidget(clear_btn)
 
@@ -289,7 +326,7 @@ class AuraCreditsPanel(QWidget):
         if get_api_key("aura"):
             self._balance_label.setText("Balance not loaded")
         else:
-            self._balance_label.setText("No Aura Credits key yet")
+            self._balance_label.setText("Add Aura Credits")
 
     def _update_balance_status_text(self) -> None:
         has_key = bool(get_api_key("aura"))
@@ -308,7 +345,7 @@ class AuraCreditsPanel(QWidget):
             self._balance_status.setStyleSheet(f"color: {WARN}; font-size: 12px;")
         else:
             self._balance_status.setText(
-                "Buy credits to create an Aura key automatically, or paste an existing key below."
+                "Run Aura without API keys or provider setup."
             )
             self._balance_status.setStyleSheet(f"color: {FG_MUTED}; font-size: 12px;")
 
@@ -330,7 +367,7 @@ class AuraCreditsPanel(QWidget):
             color = SUCCESS
         else:
             text = f"No {cfg.label} key found. Buy credits or save an existing key here."
-            color = WARN
+            color = FG_MUTED
         self._key_status.setText(text)
         self._key_status.setStyleSheet(f"color: {color};")
 
@@ -354,7 +391,7 @@ class AuraCreditsPanel(QWidget):
         self._update_balance_status_text()
         self._balance_timer.stop()
         self._balance_micros = None
-        self._balance_label.setText("No Aura Credits key yet")
+        self._balance_label.setText("Add Aura Credits")
         self.credits_changed.emit()
 
     def _sync_pending_purchase_card(self) -> None:
