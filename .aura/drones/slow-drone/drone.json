@@ -1,1 +1,0 @@
-{"id": "slow-drone", "name": "Slow Drone", "description": "Sleeps until cancelled.", "entrypoint": {"kind": "command", "command": ["C:\\Projects\\Aura-Harness2\\.venv\\Scripts\\python.exe", "main.py"], "protocol": "json-stdio"}, "instructions": "Sleep.", "write_policy": "read_only", "output_contract": "Return cargo."}

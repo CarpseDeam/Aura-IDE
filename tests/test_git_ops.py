@@ -623,6 +623,16 @@ class TestEnsureAuraGitignored:
         for e in _AURA_GITIGNORE_ENTRIES:
             assert e in content
 
+    def test_broad_drones_slash_removed(self, tmp_path: Path) -> None:
+        """Ignoring all `.aura/drones/` would hide user-authored Drone definitions."""
+        gitignore = tmp_path / ".gitignore"
+        gitignore.write_text("/.aura/drones/\n", encoding="utf-8")
+        ensure_aura_gitignored(tmp_path)
+        content = gitignore.read_text(encoding="utf-8")
+        lines = content.splitlines()
+        assert "/.aura/drones/" not in lines
+        assert "/.aura/drones/runs/" in lines
+
     def test_aura_star_removed(self, tmp_path: Path) -> None:
         """.gitignore with `.aura/*` gets broad line removed and entries added."""
         gitignore = tmp_path / ".gitignore"

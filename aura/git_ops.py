@@ -655,6 +655,14 @@ def _is_broad_aura_ignore(line: str) -> bool:
         ".aura/**",
         "/.aura/*",
         "/.aura/**",
+        ".aura/drones",
+        ".aura/drones/",
+        "/.aura/drones",
+        "/.aura/drones/",
+        ".aura/drones/*",
+        ".aura/drones/**",
+        "/.aura/drones/*",
+        "/.aura/drones/**",
     }
     return stripped in broad_patterns
 
