@@ -94,7 +94,7 @@ def is_local_relay_url(url: str) -> bool:
     """Return True for the default local Companion relay mode."""
     parsed = urlparse(normalize_relay_url(url))
     host = (parsed.hostname or "").lower()
-    return parsed.scheme == "ws" and host in {"localhost", "127.0.0.1"}
+    return parsed.scheme == "ws" and host in {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
 
 
 def relay_port(url: str) -> int:

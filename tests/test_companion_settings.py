@@ -1,6 +1,7 @@
 """Tests for Companion settings — defaults, migration, dev override, and pairing."""
 
 import os
+from pathlib import Path
 from unittest.mock import patch
 
 from aura.companion.defaults import (
@@ -184,3 +185,69 @@ class TestNormalizeRelayUrl:
 
     def test_is_local_relay_url_true_for_localhost(self):
         assert is_local_relay_url(DEFAULT_LOCAL_COMPANION_RELAY_URL) is True
+
+    def test_is_local_relay_url_true_for_ipv6(self):
+        assert is_local_relay_url("ws://[::1]:8765") is True
+
+    def test_is_local_relay_url_true_for_0_0_0_0(self):
+        assert is_local_relay_url("ws://0.0.0.0:8765") is True
+
+
+class TestMigrationExpanded:
+    """Strengthened migration captures all old localhost variants."""
+
+    def test_old_127_0_0_1_relay_migrates(self):
+        s = AppSettings.from_dict({"companion_relay_url": "ws://127.0.0.1:8765"})
+        assert s.companion_relay_url == DEFAULT_HOSTED_COMPANION_RELAY_URL
+
+    def test_old_ipv6_relay_migrates(self):
+        s = AppSettings.from_dict({"companion_relay_url": "ws://[::1]:8765"})
+        assert s.companion_relay_url == DEFAULT_HOSTED_COMPANION_RELAY_URL
+
+    def test_old_relay_with_ws_path_migrates(self):
+        s = AppSettings.from_dict({"companion_relay_url": "ws://localhost:8765/ws"})
+        assert s.companion_relay_url == DEFAULT_HOSTED_COMPANION_RELAY_URL
+
+    def test_old_scheme_less_localhost_migrates(self):
+        s = AppSettings.from_dict({"companion_relay_url": "localhost:8765"})
+        assert s.companion_relay_url == DEFAULT_HOSTED_COMPANION_RELAY_URL
+
+    def test_custom_local_port_is_preserved(self):
+        s = AppSettings.from_dict({"companion_relay_url": "ws://localhost:9999"})
+        assert s.companion_relay_url == "ws://localhost:9999"
+
+    def test_custom_relay_path_is_preserved(self):
+        s = AppSettings.from_dict({"companion_relay_url": "wss://my-relay.example.com/custom/path"})
+        assert s.companion_relay_url == "wss://my-relay.example.com/custom/path"
+
+    def test_custom_web_domain_is_preserved(self):
+        s = AppSettings.from_dict({"companion_web_url": "https://companion.example.com"})
+        assert s.companion_web_url == "https://companion.example.com"
+
+
+class TestLoadSettingsDevOverride:
+    """load_settings() honors AURA_COMPANION_DEV_LOCAL in all code paths."""
+
+    def test_load_settings_missing_config_honors_dev_override(self):
+        with patch.dict(os.environ, {"AURA_COMPANION_DEV_LOCAL": "1"}):
+            with patch("aura.settings.settings_path", return_value=Path("/nonexistent/config.json")):
+                from aura.settings import load_settings
+                s = load_settings()
+                assert s.companion_relay_url == DEFAULT_LOCAL_COMPANION_RELAY_URL
+                assert s.companion_web_url == DEFAULT_LOCAL_COMPANION_WEB_URL
+
+    def test_load_settings_invalid_json_honors_dev_override(self):
+        import tempfile
+        tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8")
+        tmp.write("not valid json")
+        tmp.close()
+        p = Path(tmp.name)
+        try:
+            with patch.dict(os.environ, {"AURA_COMPANION_DEV_LOCAL": "1"}):
+                with patch("aura.settings.settings_path", return_value=p):
+                    from aura.settings import load_settings
+                    s = load_settings()
+                    assert s.companion_relay_url == DEFAULT_LOCAL_COMPANION_RELAY_URL
+                    assert s.companion_web_url == DEFAULT_LOCAL_COMPANION_WEB_URL
+        finally:
+            p.unlink(missing_ok=True)

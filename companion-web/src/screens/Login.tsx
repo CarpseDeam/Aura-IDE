@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import CompanionSocket, { socket } from '../api/socket';
 import { tokens, glassCard, primaryButton, ghostButton, inputBase, statusPillStyle } from '../ui/theme';
+import { isLocalRelayUrl, isLocalOrigin, resolveRelayUrl, HOSTED_RELAY_DEFAULT } from '../lib/relay';
 
 type Phase = 'idle' | 'checking' | 'connecting' | 'connected' | 'pairing' | 'paired' | 'error' | 'unavailable';
 
@@ -16,21 +17,11 @@ function LoginScreen() {
   const qrCode = searchParams.get('code') || '';
   const qrTicket = searchParams.get('ticket') || '';
 
-  // Hosted origin constants
-  const HOSTED_RELAY_DEFAULT = 'wss://aura-companion-relay.carpsedema.workers.dev/ws';
-  const HOSTED_ORIGIN = 'aura-companion.pages.dev';
-  const isHostedOrigin = window.location.hostname === HOSTED_ORIGIN;
-
-  // Helper to check if a URL points to localhost
-  const isLocalUrl = (url: string): boolean => {
-    try {
-      const u = new URL(url.startsWith('ws') ? url : `ws://${url}`);
-      return ['localhost', '127.0.0.1', '::1', '0.0.0.0'].includes(u.hostname);
-    } catch { return false; }
-  };
+  const originIsLocal = isLocalOrigin();
+  const VITE_RELAY = import.meta.env.VITE_AURA_RELAY_WS_URL || '';
 
   const [relayUrl, setRelayUrl] = useState(
-    qrRelay || import.meta.env.VITE_AURA_RELAY_WS_URL || (isHostedOrigin ? HOSTED_RELAY_DEFAULT : 'ws://localhost:8765')
+    resolveRelayUrl(qrRelay, VITE_RELAY, originIsLocal)
   );
   const [pairingCode, setPairingCode] = useState(qrCode);
   const [desktopId, setDesktopId] = useState(qrDesktop);
@@ -78,7 +69,7 @@ function LoginScreen() {
   useEffect(() => {
     if (alreadyPaired || qrCode || qrTicket) return;
     if (socket.connected || socket.connecting) return;
-    const defaultRelay = import.meta.env.VITE_AURA_RELAY_WS_URL || (isHostedOrigin ? HOSTED_RELAY_DEFAULT : 'ws://localhost:8765');
+    const defaultRelay = resolveRelayUrl('', VITE_RELAY, originIsLocal);
     setRelayUrl(defaultRelay);
     handleConnect().catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -356,9 +347,7 @@ function LoginScreen() {
   useEffect(() => {
     if (!qrTicket) return;
     if (autoStartedRef.current) return;
-    const effectiveRelay = (!isHostedOrigin || !isLocalUrl(qrRelay))
-      ? (qrRelay || import.meta.env.VITE_AURA_RELAY_WS_URL || HOSTED_RELAY_DEFAULT)
-      : (import.meta.env.VITE_AURA_RELAY_WS_URL || HOSTED_RELAY_DEFAULT);
+    const effectiveRelay = resolveRelayUrl(qrRelay, VITE_RELAY, originIsLocal);
     setRelayUrl(effectiveRelay);
     autoPairWithTicket(qrTicket, effectiveRelay);
     // eslint-disable-next-line react-hooks/exhaustive-deps

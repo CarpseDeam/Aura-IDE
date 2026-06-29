@@ -7,6 +7,12 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
+from aura.companion.defaults import (
+    DEFAULT_HOSTED_COMPANION_RELAY_URL,
+    DEFAULT_HOSTED_COMPANION_WEB_URL,
+    DEFAULT_LOCAL_COMPANION_RELAY_URL,
+    DEFAULT_LOCAL_COMPANION_WEB_URL,
+)
 from aura.models import (
     DEFAULT_MODEL,
     DEFAULT_PLANNER_MODEL,
@@ -20,12 +26,23 @@ from aura.models import (
 from aura.paths import config_dir
 from aura.providers.registry import provider_registry
 
-# Companion hosted defaults — kept inline to avoid circular import through
-# aura.companion.__init__ (which eagerly imports CompanionManager).
-DEFAULT_HOSTED_COMPANION_RELAY_URL = "wss://aura-companion-relay.carpsedema.workers.dev/ws"
-DEFAULT_HOSTED_COMPANION_WEB_URL = "https://aura-companion.pages.dev"
-DEFAULT_LOCAL_COMPANION_RELAY_URL = "ws://localhost:8765"
-DEFAULT_LOCAL_COMPANION_WEB_URL = "http://localhost:5173"
+# Default-ish old localhost variants that should migrate to hosted
+_RELAY_DEFAULT_VARIANTS = frozenset({
+    "",
+    "ws://localhost:8765",
+    "ws://localhost:8765/ws",
+    "ws://127.0.0.1:8765",
+    "ws://127.0.0.1:8765/ws",
+    "ws://[::1]:8765",
+    "localhost:8765",
+})
+_WEB_DEFAULT_VARIANTS = frozenset({
+    "",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://[::1]:5173",
+    "localhost:5173",
+})
 
 DEFAULT_PROVIDER: ProviderId = "deepseek"
 DEFAULT_SANDBOX_MODE: str = "host"
@@ -208,18 +225,19 @@ class AppSettings:
         # Companion URL migration: old localhost defaults → hosted defaults
         migrated_relay = data.get("companion_relay_url", "")
         migrated_web = data.get("companion_web_url", "")
-        if migrated_relay in ("", "ws://localhost:8765"):
+        if migrated_relay in _RELAY_DEFAULT_VARIANTS:
             migrated_relay = DEFAULT_HOSTED_COMPANION_RELAY_URL
-        if migrated_web in ("", "http://localhost:5173"):
+        if migrated_web in _WEB_DEFAULT_VARIANTS:
             migrated_web = DEFAULT_HOSTED_COMPANION_WEB_URL
         s.companion_relay_url = migrated_relay
         s.companion_web_url = migrated_web
 
-        if isinstance(data.get("companion_relay_url"), str) and data["companion_relay_url"] not in ("", "ws://localhost:8765"):
+        # Preserve explicit custom values (not matching any default variant)
+        if isinstance(data.get("companion_relay_url"), str) and data["companion_relay_url"] not in _RELAY_DEFAULT_VARIANTS:
             s.companion_relay_url = data["companion_relay_url"]
         if isinstance(data.get("companion_display_name"), str):
             s.companion_display_name = data["companion_display_name"]
-        if isinstance(data.get("companion_web_url"), str) and data["companion_web_url"] not in ("", "http://localhost:5173"):
+        if isinstance(data.get("companion_web_url"), str) and data["companion_web_url"] not in _WEB_DEFAULT_VARIANTS:
             s.companion_web_url = data["companion_web_url"]
 
         # Dev override: AURA_COMPANION_DEV_LOCAL=1 → localhost defaults
@@ -303,13 +321,13 @@ def settings_path() -> Path:
 def load_settings() -> AppSettings:
     p = settings_path()
     if not p.exists():
-        return AppSettings()
+        return AppSettings.from_dict({})  # Will migrate → hosted; honor AURA_COMPANION_DEV_LOCAL
     try:
         data = json.loads(p.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return AppSettings()
+        return AppSettings.from_dict({})
     if not isinstance(data, dict):
-        return AppSettings()
+        return AppSettings.from_dict({})
     return AppSettings.from_dict(data)
 
 
