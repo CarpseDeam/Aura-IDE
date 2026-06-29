@@ -8,10 +8,10 @@ from typing import Any
 from PySide6.QtCore import QObject, Signal
 
 from aura.client import (
-    ApiError,
     AgentProcessFinished,
     AgentProcessOutput,
     AgentProcessStarted,
+    ApiError,
     ContentDelta,
     Done,
     Event,
@@ -28,6 +28,39 @@ from aura.conversation.validation_orchestrator import classify_validation_payloa
 
 TERMINAL_OUTPUT_CAPTURE_CHARS = 4000
 TERMINAL_OUTPUT_PREVIEW_CHARS = 200
+
+READ_PROGRESS_TOOLS = frozenset(
+    {
+        "read_file",
+        "read_files",
+        "read_file_range",
+        "read_file_outline",
+        "grep_search",
+        "search_codebase",
+        "glob",
+        "find_usages",
+        "code_intel_outline",
+        "code_intel_references",
+        "code_intel_dependents",
+    }
+)
+VALIDATION_PROGRESS_TOOLS = frozenset({"run_terminal_command", "run_and_watch"})
+PROGRESS_TODO_LABELS = {
+    "inspect": "Inspect relevant files",
+    "edit": "Apply changes",
+    "validate": "Run validation",
+    "recover": "Handle recovery",
+    "finish": "Deliver final report",
+}
+PROGRESS_TODO_ORDER = ("inspect", "edit", "validate", "recover", "finish")
+ACTIVITY_TODO_LABELS = {
+    "inspect": "Worker activity: inspecting files",
+    "edit": "Worker activity: applying changes",
+    "validate": "Worker activity: running validation",
+    "recover": "Worker activity: handling recovery",
+    "finish": "Worker activity: complete",
+}
+ACTIVITY_TODO_PRIORITY = ("recover", "validate", "edit", "inspect")
 
 
 class WorkerEventRelay(QObject):
@@ -75,6 +108,9 @@ class WorkerEventRelay(QObject):
         self.edited_existing_files: list[str] = []  # paths of existing files that were edited
         self.todo_used: bool = False              # whether update_todo_list was called
         self.final_report_text: str = ""          # last assistant content after Done event
+        self._model_todo_tasks: list[Any] = []
+        self._progress_todo_status: dict[str, str] = {}
+        self._last_emitted_todo_signature: tuple[tuple[str, str], ...] = ()
 
     def relay(self, tool_call_id: str, ev: Event) -> None:
         """Emit the appropriate signal for the event type and track side effects."""
@@ -85,6 +121,7 @@ class WorkerEventRelay(QObject):
         elif isinstance(ev, ToolCallStart):
             self.index_to_id[ev.index] = ev.id
             self.toolCallStart.emit(tool_call_id, ev.id, ev.name)
+            self._mark_progress_tool_started(tool_call_id, ev.name)
         elif isinstance(ev, ToolCallArgsDelta):
             wid = self.index_to_id.get(ev.index, "")
             if wid:
@@ -108,6 +145,8 @@ class WorkerEventRelay(QObject):
                 content = ev.full_message.get("content")
                 if isinstance(content, str):
                     self.final_report_text = content
+            if ev.finish_reason == "stop":
+                self._mark_progress_finished(tool_call_id)
         elif isinstance(ev, ApiError):
             from aura.config import redact_secrets
             msg = f"{ev.status_code}: {ev.message}" if ev.status_code is not None else ev.message
@@ -145,7 +184,8 @@ class WorkerEventRelay(QObject):
                 if not isinstance(tasks, list):
                     tasks = []
                 self.todo_used = True
-                self.todoListUpdated.emit(tool_call_id, tasks)
+                self._model_todo_tasks = list(tasks)
+                self._emit_todo_progress(tool_call_id, force=True)
             if (
                 isinstance(parsed, dict)
                 and parsed.get("recoverable")
@@ -256,6 +296,7 @@ class WorkerEventRelay(QObject):
             # Track TODO usage
             if ev.ok and ev.name == "update_todo_list":
                 self.todo_used = True
+            self._mark_progress_tool_result(tool_call_id, ev.name, ev.ok, parsed)
             # Track all tool results
             tr = self._tool_result_record(ev, parsed)
             self.tool_results.append(tr)
@@ -332,6 +373,9 @@ class WorkerEventRelay(QObject):
         self.edited_existing_files.clear()
         self.todo_used = False
         self.final_report_text = ""
+        self._model_todo_tasks.clear()
+        self._progress_todo_status.clear()
+        self._last_emitted_todo_signature = ()
 
     def _tool_result_record(self, ev: ToolResult, parsed: Any) -> dict[str, Any]:
         record: dict[str, Any] = {
@@ -410,6 +454,131 @@ class WorkerEventRelay(QObject):
             record["error"] = (ev.result or "")[:500]
         record["payload"] = parsed
         return record
+
+    def _mark_progress_tool_started(self, tool_call_id: str, name: str) -> None:
+        key = _progress_key_for_tool(name)
+        if not key:
+            return
+        if key == "edit":
+            self._mark_progress_done("inspect")
+        elif key == "validate":
+            self._mark_progress_done("inspect")
+            self._mark_progress_done("edit")
+        self._set_progress_status(key, "active")
+        self._emit_todo_progress(tool_call_id)
+
+    def _mark_progress_tool_result(
+        self,
+        tool_call_id: str,
+        name: str,
+        ok: bool,
+        parsed: Any,
+    ) -> None:
+        if name == "update_todo_list":
+            return
+        if isinstance(parsed, dict) and parsed.get("internal_recovery_steer"):
+            self._set_progress_status("recover", "active")
+            self._emit_todo_progress(tool_call_id)
+            return
+
+        key = _progress_key_for_tool(name)
+        if not key:
+            return
+
+        if ok and isinstance(parsed, dict):
+            if name in WRITE_TOOLS and parsed.get("applied") is False:
+                self._set_progress_status("recover", "active")
+            elif name in VALIDATION_PROGRESS_TOOLS and parsed.get("ok") is False:
+                self._set_progress_status("recover", "active")
+            else:
+                self._set_progress_status(key, "done")
+        elif ok:
+            self._set_progress_status(key, "done")
+        else:
+            self._set_progress_status("recover", "active")
+        self._emit_todo_progress(tool_call_id)
+
+    def _mark_progress_finished(self, tool_call_id: str) -> None:
+        for key, status in list(self._progress_todo_status.items()):
+            if status == "active":
+                self._progress_todo_status[key] = "done"
+        self._set_progress_status("finish", "done")
+        self._emit_todo_progress(tool_call_id)
+
+    def _mark_progress_done(self, key: str) -> None:
+        if key in self._progress_todo_status:
+            self._progress_todo_status[key] = "done"
+
+    def _set_progress_status(self, key: str, status: str) -> None:
+        if key in PROGRESS_TODO_LABELS and status in {"pending", "active", "done"}:
+            self._progress_todo_status[key] = status
+
+    def _emit_todo_progress(self, tool_call_id: str, *, force: bool = False) -> None:
+        tasks = self._combined_todo_tasks()
+        signature = _todo_signature(tasks)
+        if not force and signature == self._last_emitted_todo_signature:
+            return
+        self._last_emitted_todo_signature = signature
+        self.todoListUpdated.emit(tool_call_id, tasks)
+
+    def _combined_todo_tasks(self) -> list[Any]:
+        tasks = list(self._model_todo_tasks)
+        if tasks:
+            activity = self._current_activity_task()
+            return [activity, *tasks] if activity is not None else tasks
+
+        existing_descriptions = {
+            str(task.get("description") or task.get("content") or task.get("text") or task.get("task") or "")
+            for task in tasks
+            if isinstance(task, dict)
+        }
+        for key in PROGRESS_TODO_ORDER:
+            status = self._progress_todo_status.get(key)
+            if not status:
+                continue
+            description = PROGRESS_TODO_LABELS[key]
+            if description in existing_descriptions:
+                continue
+            tasks.append({"description": description, "status": status})
+        return tasks
+
+    def _current_activity_task(self) -> dict[str, str] | None:
+        for key in ACTIVITY_TODO_PRIORITY:
+            if self._progress_todo_status.get(key) == "active":
+                return {"description": ACTIVITY_TODO_LABELS[key], "status": "active"}
+        if self._progress_todo_status.get("finish") == "done":
+            return {"description": ACTIVITY_TODO_LABELS["finish"], "status": "done"}
+        return None
+
+
+def _progress_key_for_tool(name: str) -> str:
+    if name == "update_todo_list":
+        return ""
+    if name in READ_PROGRESS_TOOLS:
+        return "inspect"
+    if name in WRITE_TOOLS:
+        return "edit"
+    if name in VALIDATION_PROGRESS_TOOLS:
+        return "validate"
+    return ""
+
+
+def _todo_signature(tasks: list[Any]) -> tuple[tuple[str, str], ...]:
+    signature: list[tuple[str, str]] = []
+    for task in tasks:
+        if not isinstance(task, dict):
+            signature.append((str(task), ""))
+            continue
+        description = str(
+            task.get("description")
+            or task.get("content")
+            or task.get("text")
+            or task.get("task")
+            or ""
+        )
+        status = str(task.get("status") or task.get("state") or "")
+        signature.append((description, status))
+    return tuple(signature)
 
 
 def _is_validation_terminal_record(record: dict[str, Any]) -> bool:

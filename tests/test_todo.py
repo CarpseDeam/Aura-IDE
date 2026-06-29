@@ -1,9 +1,11 @@
 import json
+
 import pytest
 from PySide6.QtWidgets import QApplication
-from aura.gui.controllers import ToolStreamController
+
 from aura.bridge.event_relay import WorkerEventRelay
-from aura.client import ToolResult
+from aura.client import Done, ToolCallStart, ToolResult
+from aura.gui.controllers import ToolStreamController
 from aura.gui.widgets.todo_list import TodoListWidget, normalize_todo_tasks
 
 
@@ -68,6 +70,119 @@ def test_event_relay_emits_todo_list_updated():
     assert len(emitted_tasks) == 1
     assert emitted_tasks[0] == [{"task": "Do homework", "status": "active"}]
     assert relay.todo_used is True  # still True after second relay
+
+
+def test_event_relay_synthesizes_todo_progress_from_worker_events():
+    """Worker progress updates the TODO UI even when the model never calls update_todo_list."""
+    class MockApprovalProxy:
+        def consume_last_event(self):
+            return None
+
+    relay = WorkerEventRelay(MockApprovalProxy())
+    emitted_tasks = []
+    relay.todoListUpdated.connect(lambda tool_call_id, tasks: emitted_tasks.append(tasks))
+
+    relay.relay("parent_tc", ToolCallStart(index=0, id="read1", name="read_file_range"))
+    assert emitted_tasks[-1] == [{"description": "Inspect relevant files", "status": "active"}]
+    assert relay.todo_used is False
+
+    relay.relay(
+        "parent_tc",
+        ToolResult(
+            tool_call_id="read1",
+            name="read_file_range",
+            ok=True,
+            result=json.dumps({"ok": True, "path": "a.py", "content_hash": "abc"}),
+        ),
+    )
+    assert {"description": "Inspect relevant files", "status": "done"} in emitted_tasks[-1]
+
+    relay.relay("parent_tc", ToolCallStart(index=1, id="patch1", name="patch_file"))
+    assert {"description": "Apply changes", "status": "active"} in emitted_tasks[-1]
+
+    relay.relay(
+        "parent_tc",
+        ToolResult(
+            tool_call_id="patch1",
+            name="patch_file",
+            ok=True,
+            result=json.dumps({"ok": True, "path": "a.py", "applied": True}),
+        ),
+    )
+    assert {"description": "Apply changes", "status": "done"} in emitted_tasks[-1]
+
+    relay.relay("parent_tc", ToolCallStart(index=2, id="term1", name="run_terminal_command"))
+    assert {"description": "Run validation", "status": "active"} in emitted_tasks[-1]
+
+    relay.relay(
+        "parent_tc",
+        ToolResult(
+            tool_call_id="term1",
+            name="run_terminal_command",
+            ok=True,
+            result=json.dumps({
+                "ok": True,
+                "command": "python -m py_compile a.py",
+                "exit_code": 0,
+                "output": "",
+            }),
+        ),
+    )
+    assert {"description": "Run validation", "status": "done"} in emitted_tasks[-1]
+
+    relay.relay(
+        "parent_tc",
+        Done(
+            finish_reason="stop",
+            full_message={"role": "assistant", "content": "Done.", "reasoning_content": None},
+        ),
+    )
+    assert {"description": "Deliver final report", "status": "done"} in emitted_tasks[-1]
+
+
+def test_event_relay_preserves_model_todo_while_showing_current_activity():
+    """Model-authored TODO stays ordered while one harness activity row moves."""
+    class MockApprovalProxy:
+        def consume_last_event(self):
+            return None
+
+    relay = WorkerEventRelay(MockApprovalProxy())
+    emitted_tasks = []
+    relay.todoListUpdated.connect(lambda tool_call_id, tasks: emitted_tasks.append(tasks))
+
+    relay.relay("parent_tc", ToolCallStart(index=0, id="read1", name="read_file"))
+    model_tasks = [{"description": "Make focused fix", "status": "active"}]
+    relay.relay(
+        "parent_tc",
+        ToolResult(
+            tool_call_id="todo1",
+            name="update_todo_list",
+            ok=True,
+            result=json.dumps({"ok": True, "tasks": model_tasks}),
+            extras={"tasks": model_tasks},
+        ),
+    )
+
+    assert emitted_tasks[-1] == [
+        {"description": "Worker activity: inspecting files", "status": "active"},
+        {"description": "Make focused fix", "status": "active"},
+    ]
+    assert relay.todo_used is True
+
+    relay.relay(
+        "parent_tc",
+        ToolResult(
+            tool_call_id="read1",
+            name="read_file",
+            ok=True,
+            result=json.dumps({"ok": True, "path": "a.py"}),
+        ),
+    )
+    relay.relay("parent_tc", ToolCallStart(index=1, id="patch1", name="patch_file"))
+    assert emitted_tasks[-1] == [
+        {"description": "Worker activity: applying changes", "status": "active"},
+        {"description": "Make focused fix", "status": "active"},
+    ]
 
 
 def test_todo_widget_ignores_identical_updates(qapp):

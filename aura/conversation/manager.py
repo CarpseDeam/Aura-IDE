@@ -947,55 +947,16 @@ class ConversationManager:
                         return blocked
 
                 if name == "dispatch_to_worker":
-                    if state.research_policy.route == ANSWER_ONLY:
-                        self._append_pure_research_dispatch_block(
-                            tool_call_id=tool_call_id,
-                            on_event=on_event,
-                        )
-                        return {
-                            "id": tool_call_id,
-                            "skip": True,
-                            "completed_dispatch_for_final": False,
-                        }
-                    result = self._tool_runner.handle_dispatch(
+                    res = self._handle_dispatch_to_worker(
                         tool_call_id=tool_call_id,
                         args=args,
-                        on_event=on_event,
+                        state=state,
                         dispatch_cb=dispatch_cb,
+                        on_event=on_event,
                     )
-                    if result is not None and not result.cancelled:
-                        if result.ok:
-                            _terminal_dispatch = True
-                        else:
-                            action = classify_failed_worker_dispatch(
-                                args=args,
-                                result=result,
-                                failures=state.worker_dispatch_failures,
-                                failed_attempts=state.worker_redispatches,
-                            )
-                            if action["counts_as_attempt"]:
-                                state.worker_redispatches += 1
-                            blocker_reason = action["blocker_reason"]
-                            if blocker_reason:
-                                return {
-                                    "id": tool_call_id,
-                                    "blocker": True,
-                                    "result": result,
-                                    "blocker_reason": blocker_reason,
-                                    "planner_stale_read_files": (
-                                        list(result.modified_files)
-                                        if result.modified_files
-                                        else []
-                                    ),
-                                }
-                    return {
-                        "id": tool_call_id,
-                        "skip": True,
-                        "completed_dispatch_for_final": worker_dispatch_is_terminal(result),
-                        "planner_stale_read_files": (
-                            list(result.modified_files) if result and result.modified_files else []
-                        ),
-                    }
+                    if res.pop("terminal_dispatch", False):
+                        _terminal_dispatch = True
+                    return res
 
                 if name == "run_and_watch":
                     loop_info = self._tool_runner.handle_run_and_watch(
@@ -1442,6 +1403,69 @@ class ConversationManager:
                 "reasoning_content": None,
             },
         ))
+
+    def _handle_dispatch_to_worker(
+        self,
+        *,
+        tool_call_id: str,
+        args: dict[str, Any],
+        state: _SendState,
+        dispatch_cb: DispatchCallback | None,
+        on_event: EventCallback,
+    ) -> dict[str, Any]:
+        if state.research_policy.route == ANSWER_ONLY:
+            self._append_pure_research_dispatch_block(
+                tool_call_id=tool_call_id,
+                on_event=on_event,
+            )
+            return {
+                "id": tool_call_id,
+                "skip": True,
+                "completed_dispatch_for_final": False,
+                "terminal_dispatch": False,
+            }
+        result = self._tool_runner.handle_dispatch(
+            tool_call_id=tool_call_id,
+            args=args,
+            on_event=on_event,
+            dispatch_cb=dispatch_cb,
+        )
+        terminal_dispatch = False
+        if result is not None and not result.cancelled:
+            if result.ok:
+                terminal_dispatch = True
+            else:
+                action = classify_failed_worker_dispatch(
+                    args=args,
+                    result=result,
+                    failures=state.worker_dispatch_failures,
+                    failed_attempts=state.worker_redispatches,
+                )
+                if action["counts_as_attempt"]:
+                    state.worker_redispatches += 1
+                blocker_reason = action["blocker_reason"]
+                if blocker_reason:
+                    return {
+                        "id": tool_call_id,
+                        "blocker": True,
+                        "result": result,
+                        "blocker_reason": blocker_reason,
+                        "planner_stale_read_files": (
+                            list(result.modified_files)
+                            if result.modified_files
+                            else []
+                        ),
+                        "terminal_dispatch": False,
+                    }
+        return {
+            "id": tool_call_id,
+            "skip": True,
+            "completed_dispatch_for_final": worker_dispatch_is_terminal(result),
+            "planner_stale_read_files": (
+                list(result.modified_files) if result and result.modified_files else []
+            ),
+            "terminal_dispatch": terminal_dispatch,
+        }
 
     def _apply_loop_detection(
         self,
