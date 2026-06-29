@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import os
 
-from PySide6.QtCore import Qt, QThread, QTimer, QUrl, Signal
+from PySide6.QtCore import QThread, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QFrame,
@@ -27,7 +27,7 @@ from aura.config import (
 )
 from aura.gui.balance_fetcher import BalanceWorker
 from aura.gui.credits_worker import CreditsCheckoutWorker, CreditsClaimWorker
-from aura.gui.theme import ACCENT, ACCENT_HOVER, BG, BG_ALT, BORDER, FG, FG_DIM, FG_MUTED, SUCCESS, WARN
+from aura.gui.theme import ACCENT_HOVER, BG, BG_ALT, BORDER, FG, FG_DIM, FG_MUTED, SUCCESS, WARN
 
 logger = logging.getLogger(__name__)
 
@@ -55,23 +55,8 @@ class AuraCreditsPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
-        # 1. Trust row
-        trust_label = QLabel(
-            "No provider setup  \u00b7  Pay as you go  \u00b7  Bring your own key anytime"
-        )
-        trust_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        trust_label.setStyleSheet(
-            f"color: {FG_MUTED}; font-size: 12px; padding: 4px 0;"
-        )
-        layout.addWidget(trust_label)
-
-        # 2. Buy Credits card (main visual focus)
+        self._build_hero_card(layout)
         self._build_buy_card(layout)
-
-        # 3. Balance card (secondary)
-        self._build_balance_card(layout)
-
-        # 4. Advanced: Aura Key card (subdued)
         self._build_key_card(layout)
         layout.addStretch()
 
@@ -96,29 +81,65 @@ class AuraCreditsPanel(QWidget):
         layout.addWidget(title)
         return title
 
-    def _build_balance_card(self, layout: QVBoxLayout) -> None:
-        balance_card, balance_card_layout = self._build_card()
-        self._add_section_title(balance_card_layout, "Aura Credits")
+    def _build_hero_card(self, layout: QVBoxLayout) -> None:
+        hero_card, hero_layout = self._build_card()
+        hero_card.setStyleSheet(
+            "QFrame#card {"
+            "background: rgba(18, 24, 35, 0.76);"
+            f"border: 1px solid rgba(122, 162, 247, 0.34);"
+            "border-radius: 10px;"
+            "}"
+        )
+
+        self._add_section_title(hero_layout, "Aura Credits")
+
+        self._headline_label = QLabel("Add credits to run Aura instantly")
+        self._headline_label.setWordWrap(True)
+        self._headline_label.setStyleSheet(f"color: {FG}; font-size: 18px; font-weight: 700;")
+        hero_layout.addWidget(self._headline_label)
+
+        copy = QLabel("No API keys. No provider setup. Just add credits and start building.")
+        copy.setWordWrap(True)
+        copy.setStyleSheet(f"color: {FG_DIM}; font-size: 12px;")
+        hero_layout.addWidget(copy)
+
+        trust_label = QLabel(
+            "No provider setup  \u00b7  Pay as you go  \u00b7  Bring your own key anytime"
+        )
+        trust_label.setStyleSheet(
+            f"color: {ACCENT_HOVER}; font-size: 11px; padding: 4px 0 2px 0;"
+        )
+        hero_layout.addWidget(trust_label)
+
+        state_row = QHBoxLayout()
+        state_row.setSpacing(8)
 
         self._balance_label = QLabel("")
-        self._balance_label.setStyleSheet(f"color: {FG}; font-size: 28px; font-weight: 700;")
-        balance_card_layout.addWidget(self._balance_label)
+        self._balance_label.setStyleSheet(f"color: {FG}; font-size: 14px; font-weight: 700;")
+        state_row.addWidget(self._balance_label, 1)
+
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.setToolTip("Check current balance")
+        refresh_btn.setStyleSheet(
+            "QPushButton {"
+            f"background: rgba(122, 162, 247, 0.08); color: {FG_DIM}; "
+            f"border: 1px solid rgba(122, 162, 247, 0.22); "
+            "border-radius: 5px; padding: 3px 9px; font-size: 11px;"
+            "}"
+            "QPushButton:hover {"
+            "background: rgba(122, 162, 247, 0.14);"
+            "}"
+        )
+        refresh_btn.clicked.connect(self._refresh_balance)
+        state_row.addWidget(refresh_btn)
+        hero_layout.addLayout(state_row)
 
         self._balance_status = QLabel("")
         self._balance_status.setWordWrap(True)
         self._balance_status.setStyleSheet("font-size: 12px;")
-        balance_card_layout.addWidget(self._balance_status)
+        hero_layout.addWidget(self._balance_status)
 
-        refresh_row = QHBoxLayout()
-        refresh_row.setSpacing(6)
-        refresh_btn = QPushButton("Refresh")
-        refresh_btn.setToolTip("Check current balance")
-        refresh_btn.clicked.connect(self._refresh_balance)
-        refresh_row.addWidget(refresh_btn)
-        refresh_row.addStretch()
-        balance_card_layout.addLayout(refresh_row)
-
-        layout.addWidget(balance_card)
+        layout.addWidget(hero_card)
 
     def _build_buy_card(self, layout: QVBoxLayout) -> None:
         buy_card, buy_card_layout = self._build_card()
@@ -135,10 +156,10 @@ class AuraCreditsPanel(QWidget):
         # Email row
         email_row = QHBoxLayout()
         email_row.setSpacing(6)
-        email_label = QLabel("Email for receipt")
-        email_label.setStyleSheet(f"color: {FG_MUTED};")
+        email_label = QLabel("Receipt email")
+        email_label.setStyleSheet(f"color: {FG_DIM}; font-weight: 600;")
         self._email_input = QLineEdit()
-        self._email_input.setPlaceholderText("your@email.com")
+        self._email_input.setPlaceholderText("you@example.com")
         email_row.addWidget(email_label)
         email_row.addWidget(self._email_input, 1)
         buy_card_layout.addLayout(email_row)
@@ -153,12 +174,13 @@ class AuraCreditsPanel(QWidget):
             for col_idx in range(2):
                 pid = packs[row_idx * 2 + col_idx]
                 if pid == "10":
-                    btn = QPushButton("$10  Recommended")
+                    btn = QPushButton("$10\nRecommended")
                     btn.setStyleSheet(
                         "QPushButton {"
-                        f"background: {ACCENT}; color: {BG}; border: 1px solid {ACCENT}; "
-                        "border-radius: 8px; padding: 12px 8px; "
-                        "font-size: 16px; font-weight: 700;"
+                        f"background: rgba(122, 162, 247, 0.92); color: {BG}; "
+                        f"border: 1px solid {ACCENT_HOVER}; "
+                        "border-radius: 8px; padding: 8px 8px; "
+                        "font-size: 15px; font-weight: 800;"
                         "}"
                         "QPushButton:hover {"
                         f"background: {ACCENT_HOVER};"
@@ -171,13 +193,18 @@ class AuraCreditsPanel(QWidget):
                     btn = QPushButton(f"${pid}")
                     btn.setStyleSheet(
                         "QPushButton {"
-                        f"background: {BG_ALT}; border: 1px solid {BORDER}; "
-                        "border-radius: 8px; padding: 12px 8px; "
-                        "font-size: 16px; font-weight: 600;"
+                        "background: rgba(28, 28, 34, 0.72);"
+                        f"border: 1px solid {BORDER}; color: {FG}; "
+                        "border-radius: 8px; padding: 8px 8px; "
+                        "font-size: 15px; font-weight: 700;"
+                        "}"
+                        "QPushButton:hover {"
+                        "background: rgba(49, 55, 66, 0.86);"
+                        f"border-color: rgba(122, 162, 247, 0.36);"
                         "}"
                     )
                 btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-                btn.setFixedHeight(48)
+                btn.setFixedHeight(52)
                 self._buy_buttons[pid] = btn
                 btn.clicked.connect(lambda checked, pid=pid: self._on_buy_credits(pid))
                 row.addWidget(btn)
@@ -222,17 +249,24 @@ class AuraCreditsPanel(QWidget):
             "Stripe fees, relay infrastructure, and Aura development."
         )
         trust_note.setWordWrap(True)
-        trust_note.setStyleSheet(f"color: {FG_MUTED}; font-size: 11px;")
+        trust_note.setStyleSheet(f"color: {FG_MUTED}; font-size: 11px; padding-top: 2px;")
         buy_card_layout.addWidget(trust_note)
 
         layout.addWidget(buy_card)
 
     def _build_key_card(self, layout: QVBoxLayout) -> None:
         key_card, key_card_layout = self._build_card()
+        key_card.setStyleSheet(
+            "QFrame#card {"
+            "background: rgba(20, 20, 24, 0.42);"
+            f"border: 1px solid rgba(75, 83, 105, 0.50);"
+            "border-radius: 10px;"
+            "}"
+        )
 
         # Subdued section title
-        title = QLabel("Advanced: Aura Key")
-        title.setStyleSheet(f"color: {FG_MUTED}; font-size: 11px; font-weight: bold;")
+        title = QLabel("Advanced: Use an existing Aura key")
+        title.setStyleSheet(f"color: {FG_DIM}; font-size: 12px; font-weight: bold;")
         key_card_layout.addWidget(title)
 
         key_desc = QLabel("Already have an Aura key? Paste it here.")
@@ -274,7 +308,7 @@ class AuraCreditsPanel(QWidget):
 
         api_key = get_api_key("aura")
         if not api_key:
-            self._balance_label.setText("Add Aura Credits")
+            self._balance_label.setText("No Aura Credits balance yet")
             self._balance_micros = None
             self._update_balance_status_text()
             return
@@ -315,7 +349,7 @@ class AuraCreditsPanel(QWidget):
             self._balance_micros = balance_micros
             if balance_micros >= 0:
                 dollars = balance_micros / 1_000_000
-                self._balance_label.setText(f"${dollars:.2f}")
+                self._balance_label.setText(f"Balance: ${dollars:.2f}")
             else:
                 self._balance_label.setText("Balance unavailable")
 
@@ -324,9 +358,9 @@ class AuraCreditsPanel(QWidget):
 
     def _set_balance_placeholder(self) -> None:
         if get_api_key("aura"):
-            self._balance_label.setText("Balance not loaded")
+            self._balance_label.setText("Balance unavailable")
         else:
-            self._balance_label.setText("Add Aura Credits")
+            self._balance_label.setText("No Aura Credits balance yet")
 
     def _update_balance_status_text(self) -> None:
         has_key = bool(get_api_key("aura"))
@@ -336,14 +370,17 @@ class AuraCreditsPanel(QWidget):
         )
 
         if has_key and is_aura_active:
+            self._headline_label.setText("Aura Credits are ready")
             self._balance_status.setText("Aura Credits are active.")
             self._balance_status.setStyleSheet(f"color: {SUCCESS}; font-size: 12px;")
         elif has_key and not is_aura_active:
+            self._headline_label.setText("Aura Credits key saved")
             self._balance_status.setText(
                 "Aura key saved. Select Aura as Planner or Worker provider to use credits."
             )
-            self._balance_status.setStyleSheet(f"color: {WARN}; font-size: 12px;")
+            self._balance_status.setStyleSheet(f"color: {FG_MUTED}; font-size: 12px;")
         else:
+            self._headline_label.setText("Add credits to run Aura instantly")
             self._balance_status.setText(
                 "Run Aura without API keys or provider setup."
             )
@@ -366,7 +403,7 @@ class AuraCreditsPanel(QWidget):
             text = f"{cfg.label} key is stored locally."
             color = SUCCESS
         else:
-            text = f"No {cfg.label} key found. Buy credits or save an existing key here."
+            text = "No Aura Credits key saved. Add credits above or paste an existing key here."
             color = FG_MUTED
         self._key_status.setText(text)
         self._key_status.setStyleSheet(f"color: {color};")
@@ -391,7 +428,7 @@ class AuraCreditsPanel(QWidget):
         self._update_balance_status_text()
         self._balance_timer.stop()
         self._balance_micros = None
-        self._balance_label.setText("Add Aura Credits")
+        self._balance_label.setText("No Aura Credits balance yet")
         self.credits_changed.emit()
 
     def _sync_pending_purchase_card(self) -> None:
@@ -574,7 +611,7 @@ class AuraCreditsPanel(QWidget):
         self._balance_micros = balance_micros
         if balance_micros >= 0:
             dollars = balance_micros / 1_000_000
-            self._balance_label.setText(f"${dollars:.2f}")
+            self._balance_label.setText(f"Balance: ${dollars:.2f}")
         else:
             self._set_balance_placeholder()
 
