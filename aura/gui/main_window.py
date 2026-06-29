@@ -149,7 +149,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
         self._balance_controller = MainWindowBalanceController(self)
         self._balance_controller.balance_changed.connect(self._refresh_status_bar)
-        self._status_bar.credits_chip_clicked.connect(self._settings_controller.open_aura_settings)
+        self._status_bar.credits_chip_clicked.connect(self._settings_controller.open_credits_popout)
 
         self._drone_controller = MainWindowDroneController(self)
         self._terminal_controller = MainWindowTerminalController(self)
@@ -591,6 +591,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
     def _refresh_status_bar(self) -> None:
         ws = str(self._workspace_root) if self._workspace_root else "(none)"
         has_aura_key = bool(get_api_key("aura"))
+        has_provider = bool(get_api_key(self._settings.provider))
         self._status_bar.refresh(
             workspace_root=ws,
             model_id=self.current_model(),
@@ -598,6 +599,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             session_usage=self._worker_handler.session_usage,
             has_aura_key=has_aura_key,
             balance_micros=self._balance_controller.balance_micros,
+            has_provider=has_provider,
         )
 
     def _reset_session_usage(self) -> None:
@@ -652,7 +654,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._settings_controller.open_api_settings()
 
     def open_aura_settings(self) -> None:
-        """Open settings dialog directly to the Credits & Account tab."""
+        """Open the standalone Aura Credits popout."""
         self._settings_controller.open_aura_settings()
 
 

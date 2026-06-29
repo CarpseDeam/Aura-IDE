@@ -34,7 +34,7 @@ class SetupDialog(QDialog):
         label = QLabel(
             f"{APP_NAME} needs at least one AI provider configured before Planner/Worker can run.\n\n"
             "The easiest way to start is with <b>Aura Credits</b> — buy credits or paste an Aura API key\n"
-            "in Settings → Credits & Account.\n\n"
+            "from the Aura Credits popout.\n\n"
             "You can also bring your own API key (DeepSeek, OpenAI, Anthropic, OpenRouter, Gemini,\n"
             "Claude Code, or Codex)."
         )

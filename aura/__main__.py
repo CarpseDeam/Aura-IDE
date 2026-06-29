@@ -148,8 +148,8 @@ def _run_app(log_path: Path, args: argparse.Namespace, qt_argv: list[str]) -> in
                         None,
                         APP_NAME,
                         f"{cfg.label} is selected, but no API key is configured.\n\n"
-                        "Choose one of these options in Settings → Credits & Account:\n"
-                        "  • Set up Aura Credits (easiest — no API key needed)\n"
+                        "Choose one of these options:\n"
+                        "  • Set up Aura Credits (easiest — no provider setup)\n"
                         "  • Bring your own API key in Settings → API Keys\n\n"
                         "The app will open, but chat will fail until a provider is configured.",
                     )

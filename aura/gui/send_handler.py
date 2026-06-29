@@ -103,7 +103,7 @@ class SendHandler(QObject):
         if not has_usable_provider_configuration():
             self._chat.add_error(
                 "No AI provider configured",
-                "Set up a provider in Settings → Credits & Account or API Keys to start chatting. "
+                "Set up Aura Credits or add a provider key in Settings → API Keys to start chatting. "
                 "Aura Credits is the easiest way to start — no API key needed.\n\n"
                 "You can also open/browse a project folder before configuring AI.",
             )

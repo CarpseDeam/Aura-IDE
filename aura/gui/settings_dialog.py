@@ -5,7 +5,6 @@ import copy
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -16,12 +15,6 @@ from PySide6.QtWidgets import (
 
 from aura.config import APP_NAME, AppSettings, save_settings
 
-AURA_CREDITS_TAB_LABEL = "Credits & Account"
-
-
-def _qt_tab_label(label: str) -> str:
-    return label.replace("&", "&&")
-
 
 class SettingsDialog(QDialog):
     """Modal settings.
@@ -31,8 +24,6 @@ class SettingsDialog(QDialog):
     elsewhere; we don't fork that logic here.
     """
 
-    credits_claimed = Signal()
-
     def __init__(
         self,
         settings: AppSettings,
@@ -40,7 +31,6 @@ class SettingsDialog(QDialog):
         on_change_root: Callable[[], None],
         parent: QWidget | None = None,
         open_api_keys_tab: bool = False,
-        open_aura_tab: bool = False,
         on_live_settings_applied: Callable[[AppSettings], None] | None = None,
     ) -> None:
         super().__init__(parent)
@@ -58,15 +48,11 @@ class SettingsDialog(QDialog):
         self._tabs = QTabWidget(self)
 
         from aura.gui.settings_pages.api_keys_page import ApiKeysPage
-        from aura.gui.settings_pages.aura_page import AuraPage
         from aura.gui.settings_pages.automation_page import AutomationPage
         from aura.gui.settings_pages.models_page import ModelsPage
         from aura.gui.settings_pages.prompts_page import PromptsPage
         from aura.gui.settings_pages.sandbox_page import SandboxPage
         self._models_page = ModelsPage(self._settings)
-
-        self._aura_page = AuraPage(self._settings)
-        self._aura_page.credits_claimed.connect(self.credits_claimed)
 
         self._api_keys_page = ApiKeysPage(self._settings)
 
@@ -78,7 +64,6 @@ class SettingsDialog(QDialog):
 
         self._pages = [
             (self._models_page, "Models"),
-            (self._aura_page, _qt_tab_label(AURA_CREDITS_TAB_LABEL)),
             (self._api_keys_page, "API Keys"),
             (self._automation_page, "Automation"),
             (self._sandbox_page, "Sandbox / Workspace"),
@@ -103,12 +88,7 @@ class SettingsDialog(QDialog):
         buttons.rejected.connect(self.reject)
         outer.addWidget(buttons)
 
-        if open_aura_tab:
-            for i in range(self._tabs.count()):
-                if self._tabs.tabText(i).replace("&&", "&") == AURA_CREDITS_TAB_LABEL:
-                    self._tabs.setCurrentIndex(i)
-                    break
-        elif open_api_keys_tab:
+        if open_api_keys_tab:
             for i in range(self._tabs.count()):
                 if self._tabs.tabText(i) == "API Keys":
                     self._tabs.setCurrentIndex(i)
@@ -142,7 +122,6 @@ class SettingsDialog(QDialog):
         """
         result = copy.deepcopy(self._settings)
         self._models_page.collect_settings(result)
-        self._aura_page.collect_settings(result)
         self._api_keys_page.collect_settings(result)
         self._automation_page.collect_settings(result)
         self._sandbox_page.collect_settings(result)

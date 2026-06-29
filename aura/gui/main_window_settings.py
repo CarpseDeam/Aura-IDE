@@ -37,8 +37,6 @@ class MainWindowSettingsController(QObject):
                 parent=window,
                 on_live_settings_applied=self._apply_settings,
             )
-            dlg.credits_claimed.connect(lambda: window._balance_controller.refresh(window._settings))
-            dlg.credits_claimed.connect(window._refresh_status_bar)
             if dlg.exec() == SettingsDialog.DialogCode.Accepted:
                 self._apply_settings(dlg.result_settings())
         except Exception:
@@ -57,33 +55,36 @@ class MainWindowSettingsController(QObject):
                 open_api_keys_tab=True,
                 on_live_settings_applied=self._apply_settings,
             )
-            dlg.credits_claimed.connect(lambda: window._balance_controller.refresh(window._settings))
-            dlg.credits_claimed.connect(window._refresh_status_bar)
             if dlg.exec() == SettingsDialog.DialogCode.Accepted:
                 self._apply_settings(dlg.result_settings())
         except Exception:
             logger.exception("Failed to open API Settings dialog")
             QMessageBox.critical(window, "Settings Error", "Could not open the API Settings dialog. See the log for details.")
 
-    def open_aura_settings(self) -> None:
-        """Open settings dialog directly to the Credits & Account tab."""
+    def open_credits_popout(self) -> None:
+        """Open the standalone Aura Credits popout."""
         window = self._window
         try:
-            dlg = SettingsDialog(
+            from aura.gui.credits_popout import AuraCreditsPopoutDialog
+
+            dlg = AuraCreditsPopoutDialog(
                 settings=window._settings,
-                workspace_root=window._workspace_root,
-                on_change_root=window._workspace_controller.on_change_root,
                 parent=window,
-                open_aura_tab=True,
-                on_live_settings_applied=self._apply_settings,
             )
             dlg.credits_claimed.connect(lambda: window._balance_controller.refresh(window._settings))
             dlg.credits_claimed.connect(window._refresh_status_bar)
-            if dlg.exec() == SettingsDialog.DialogCode.Accepted:
-                self._apply_settings(dlg.result_settings())
+            dlg.credits_changed.connect(lambda: window._balance_controller.refresh(window._settings))
+            dlg.credits_changed.connect(window._refresh_status_bar)
+            dlg.exec()
+            window._balance_controller.refresh(window._settings)
+            window._refresh_status_bar()
         except Exception:
-            logger.exception("Failed to open Credits & Account Settings dialog")
-            QMessageBox.critical(window, "Settings Error", "Could not open the Credits & Account Settings dialog. See the log for details.")
+            logger.exception("Failed to open Aura Credits popout")
+            QMessageBox.critical(window, "Aura Credits Error", "Could not open Aura Credits. See the log for details.")
+
+    def open_aura_settings(self) -> None:
+        """Backward-compatible route for callers that used to open the Aura settings tab."""
+        self.open_credits_popout()
 
     def _apply_settings(self, settings: AppSettings) -> None:
         window = self._window

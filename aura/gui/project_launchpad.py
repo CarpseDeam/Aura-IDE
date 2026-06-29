@@ -168,7 +168,7 @@ class ProjectLaunchpad(QWidget):
         hint2.setAlignment(Qt.AlignmentFlag.AlignLeft)
         hints_layout.addWidget(hint2)
 
-        hint3 = QLabel("\u2699\ufe0f No AI provider yet? You can browse first, then set up Aura Credits in Settings.")
+        hint3 = QLabel("\u2699\ufe0f No AI provider yet? You can browse first, then set up Aura Credits from the bottom bar.")
         hint3.setStyleSheet(
             f"font-size: 12px; color: {FG_MUTED}; background: transparent;"
         )

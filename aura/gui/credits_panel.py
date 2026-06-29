@@ -1,0 +1,570 @@
+from __future__ import annotations
+
+import logging
+import os
+
+from PySide6.QtCore import QThread, QTimer, QUrl, Signal
+from PySide6.QtGui import QDesktopServices
+from PySide6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
+)
+
+from aura.config import (
+    APP_NAME,
+    AppSettings,
+    get_api_key,
+    get_provider,
+    save_settings,
+    set_api_key,
+)
+from aura.gui.balance_fetcher import BalanceWorker
+from aura.gui.credits_worker import CreditsCheckoutWorker, CreditsClaimWorker
+from aura.gui.theme import FG, FG_DIM, FG_MUTED, SUCCESS, WARN
+
+logger = logging.getLogger(__name__)
+
+
+class AuraCreditsPanel(QWidget):
+    credits_claimed = Signal()
+    credits_changed = Signal()
+
+    def __init__(self, settings: AppSettings, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._settings = settings
+
+        self._credit_threads: list[QThread] = []
+        self._credit_workers: list = []
+
+        self._balance_micros: int | None = None
+        self._balance_inflight = False
+        self._balance_thread: QThread | None = None
+        self._balance_worker: BalanceWorker | None = None
+        self._balance_timer = QTimer(self)
+        self._balance_timer.setInterval(60000)
+        self._balance_timer.timeout.connect(self._refresh_balance)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+
+        hero = QLabel("The easiest way to run Aura. No API keys, no provider setup.")
+        hero.setWordWrap(True)
+        hero.setStyleSheet(f"color: {FG}; font-size: 15px; font-weight: 600;")
+        layout.addWidget(hero)
+
+        self._build_balance_card(layout)
+        self._build_buy_card(layout)
+        self._build_key_card(layout)
+        layout.addStretch()
+
+        self._refresh_key_status()
+        self._update_balance_status_text()
+        self._set_balance_placeholder()
+        self._sync_pending_purchase_card()
+
+        QTimer.singleShot(0, self._maybe_start_balance_refresh)
+
+    def _build_card(self) -> tuple[QFrame, QVBoxLayout]:
+        card = QFrame()
+        card.setObjectName("card")
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(14, 14, 14, 14)
+        card_layout.setSpacing(8)
+        return card, card_layout
+
+    def _add_section_title(self, layout: QVBoxLayout, text: str) -> QLabel:
+        title = QLabel(text)
+        title.setStyleSheet(f"color: {FG_DIM}; font-weight: bold; font-size: 13px;")
+        layout.addWidget(title)
+        return title
+
+    def _build_balance_card(self, layout: QVBoxLayout) -> None:
+        balance_card, balance_card_layout = self._build_card()
+        self._add_section_title(balance_card_layout, "Aura Credits")
+
+        self._balance_label = QLabel("")
+        self._balance_label.setStyleSheet(f"color: {FG}; font-size: 28px; font-weight: 700;")
+        balance_card_layout.addWidget(self._balance_label)
+
+        self._balance_status = QLabel("")
+        self._balance_status.setWordWrap(True)
+        self._balance_status.setStyleSheet("font-size: 12px;")
+        balance_card_layout.addWidget(self._balance_status)
+
+        refresh_row = QHBoxLayout()
+        refresh_row.setSpacing(6)
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.setToolTip("Check current balance")
+        refresh_btn.clicked.connect(self._refresh_balance)
+        refresh_row.addWidget(refresh_btn)
+        refresh_row.addStretch()
+        balance_card_layout.addLayout(refresh_row)
+
+        layout.addWidget(balance_card)
+
+    def _build_buy_card(self, layout: QVBoxLayout) -> None:
+        buy_card, buy_card_layout = self._build_card()
+        self._add_section_title(buy_card_layout, "Buy Credits")
+
+        buy_desc = QLabel(
+            "For normal coding chats and small repo tasks, $10 can last weeks. "
+            "Heavy autonomous runs and long drone loops use more."
+        )
+        buy_desc.setStyleSheet(f"color: {FG_MUTED}; font-size: 12px;")
+        buy_desc.setWordWrap(True)
+        buy_card_layout.addWidget(buy_desc)
+
+        email_row = QHBoxLayout()
+        email_row.setSpacing(6)
+        email_label = QLabel("Email:")
+        self._email_input = QLineEdit()
+        self._email_input.setPlaceholderText("Your email address...")
+        email_row.addWidget(email_label)
+        email_row.addWidget(self._email_input, 1)
+        buy_card_layout.addLayout(email_row)
+
+        self._buy_buttons: dict[str, QPushButton] = {}
+        packs = [
+            ("5", "Buy $5"),
+            ("10", "Buy $10"),
+            ("20", "Buy $20"),
+            ("50", "Buy $50"),
+        ]
+
+        for i in range(0, 4, 2):
+            row = QHBoxLayout()
+            row.setSpacing(6)
+            for pid, label in packs[i : i + 2]:
+                btn = QPushButton(label)
+                if pid == "10":
+                    btn.setObjectName("primary")
+                    btn.setText("Buy $10 - Recommended")
+                btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+                self._buy_buttons[pid] = btn
+                btn.clicked.connect(lambda checked, pid=pid: self._on_buy_credits(pid))
+                row.addWidget(btn)
+            buy_card_layout.addLayout(row)
+
+        trust_note = QLabel(
+            "Aura Credits include a small service margin that helps fund hosting, "
+            "Stripe fees, relay infrastructure, and Aura development. Prefer raw "
+            "provider pricing? Use your own API key in Provider Settings."
+        )
+        trust_note.setWordWrap(True)
+        trust_note.setStyleSheet(f"color: {FG_MUTED}; font-size: 11px;")
+        buy_card_layout.addWidget(trust_note)
+
+        self._pending_card = QFrame()
+        self._pending_card.setStyleSheet(
+            "QFrame {"
+            f"background: rgba(224, 175, 104, 0.10); border: 1px solid {WARN}; "
+            "border-radius: 8px;"
+            "}"
+        )
+        pending_layout = QVBoxLayout(self._pending_card)
+        pending_layout.setContentsMargins(12, 10, 12, 10)
+        pending_layout.setSpacing(8)
+
+        pending_title = QLabel("Pending purchase")
+        pending_title.setStyleSheet(f"color: {WARN}; font-weight: 700;")
+        pending_layout.addWidget(pending_title)
+
+        pending_desc = QLabel(
+            "Complete payment in the browser, then click Check Purchase to claim "
+            "credits on this device."
+        )
+        pending_desc.setWordWrap(True)
+        pending_desc.setStyleSheet(f"color: {FG_DIM}; font-size: 12px;")
+        pending_layout.addWidget(pending_desc)
+
+        self._check_btn = QPushButton("Check Purchase")
+        self._check_btn.clicked.connect(self._on_check_purchase)
+        pending_layout.addWidget(self._check_btn)
+        buy_card_layout.addWidget(self._pending_card)
+
+        self._purchase_status = QLabel("")
+        self._purchase_status.setWordWrap(True)
+        buy_card_layout.addWidget(self._purchase_status)
+
+        layout.addWidget(buy_card)
+
+    def _build_key_card(self, layout: QVBoxLayout) -> None:
+        key_card, key_card_layout = self._build_card()
+        self._add_section_title(key_card_layout, "Advanced: Aura Key")
+
+        key_desc = QLabel("Already have an Aura key? Paste it here.")
+        key_desc.setStyleSheet(f"color: {FG_MUTED}; font-size: 12px;")
+        key_desc.setWordWrap(True)
+        key_card_layout.addWidget(key_desc)
+
+        key_row = QHBoxLayout()
+        key_row.setSpacing(6)
+
+        self._key_input = QLineEdit()
+        self._key_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self._key_input.setPlaceholderText("Paste Aura key here...")
+        key_row.addWidget(self._key_input, 1)
+
+        save_btn = QPushButton("Save")
+        save_btn.setToolTip("Encrypt and store this key on disk")
+        save_btn.clicked.connect(self._on_save_key)
+        key_row.addWidget(save_btn)
+
+        clear_btn = QPushButton("Clear")
+        clear_btn.setToolTip("Remove stored key")
+        clear_btn.clicked.connect(self._on_clear_key)
+        key_row.addWidget(clear_btn)
+
+        key_card_layout.addLayout(key_row)
+
+        self._key_status = QLabel("")
+        self._key_status.setWordWrap(True)
+        key_card_layout.addWidget(self._key_status)
+
+        layout.addWidget(key_card)
+
+    def _refresh_balance(self) -> None:
+        if self._balance_inflight:
+            return
+
+        api_key = get_api_key("aura")
+        if not api_key:
+            self._balance_label.setText("Add Aura Credits")
+            self._balance_micros = None
+            self._update_balance_status_text()
+            return
+
+        self._balance_inflight = True
+        self._balance_label.setText("Checking balance...")
+
+        base_url = get_provider("aura").base_url
+
+        thread = QThread(self)
+        worker = BalanceWorker(base_url=base_url, api_key=api_key)
+        worker.moveToThread(thread)
+        self._balance_worker = worker
+        self._balance_thread = thread
+
+        thread.started.connect(worker.run)
+        worker.finished.connect(self._on_balance_fetched)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+
+        _thread = thread
+
+        def _cleanup() -> None:
+            if self._balance_thread is _thread:
+                self._balance_thread = None
+                self._balance_worker = None
+            self._balance_inflight = False
+
+        thread.finished.connect(_cleanup)
+        thread.start()
+
+    def _on_balance_fetched(self, balance_micros: int, error_msg: str) -> None:
+        if error_msg:
+            self._balance_label.setText("Balance unavailable")
+            self._balance_micros = None
+        else:
+            self._balance_micros = balance_micros
+            if balance_micros >= 0:
+                dollars = balance_micros / 1_000_000
+                self._balance_label.setText(f"${dollars:.2f}")
+            else:
+                self._balance_label.setText("Balance unavailable")
+
+        self._update_balance_status_text()
+        self.credits_changed.emit()
+
+    def _set_balance_placeholder(self) -> None:
+        if get_api_key("aura"):
+            self._balance_label.setText("Balance not loaded")
+        else:
+            self._balance_label.setText("No Aura Credits key yet")
+
+    def _update_balance_status_text(self) -> None:
+        has_key = bool(get_api_key("aura"))
+        is_aura_active = (
+            self._settings.planner_provider == "aura"
+            or self._settings.worker_provider == "aura"
+        )
+
+        if has_key and is_aura_active:
+            self._balance_status.setText("Aura Credits are active.")
+            self._balance_status.setStyleSheet(f"color: {SUCCESS}; font-size: 12px;")
+        elif has_key and not is_aura_active:
+            self._balance_status.setText(
+                "Aura key saved. Select Aura as Planner or Worker provider to use credits."
+            )
+            self._balance_status.setStyleSheet(f"color: {WARN}; font-size: 12px;")
+        else:
+            self._balance_status.setText(
+                "Buy credits to create an Aura key automatically, or paste an existing key below."
+            )
+            self._balance_status.setStyleSheet(f"color: {FG_MUTED}; font-size: 12px;")
+
+    def _maybe_start_balance_refresh(self) -> None:
+        self._balance_timer.stop()
+        if get_api_key("aura"):
+            self._refresh_balance()
+            self._balance_timer.start()
+        elif self._balance_micros is None:
+            self._set_balance_placeholder()
+
+    def _refresh_key_status(self) -> None:
+        cfg = get_provider("aura")
+        if os.environ.get(cfg.env_key):
+            text = f"{cfg.label} key loaded from {cfg.env_key}."
+            color = SUCCESS
+        elif get_api_key("aura"):
+            text = f"{cfg.label} key is stored locally."
+            color = SUCCESS
+        else:
+            text = f"No {cfg.label} key found. Buy credits or save an existing key here."
+            color = WARN
+        self._key_status.setText(text)
+        self._key_status.setStyleSheet(f"color: {color};")
+
+    def _on_save_key(self) -> None:
+        key = self._key_input.text().strip()
+        if not key:
+            QMessageBox.information(self, APP_NAME, "Paste an API key before saving.")
+            return
+        set_api_key("aura", key)
+        self._key_input.clear()
+        self._refresh_key_status()
+        self._update_balance_status_text()
+        self._maybe_start_balance_refresh()
+        self.credits_changed.emit()
+
+    def _on_clear_key(self) -> None:
+        from aura.key_manager import get_key_manager
+
+        get_key_manager().delete_key("aura")
+        self._refresh_key_status()
+        self._update_balance_status_text()
+        self._balance_timer.stop()
+        self._balance_micros = None
+        self._balance_label.setText("No Aura Credits key yet")
+        self.credits_changed.emit()
+
+    def _sync_pending_purchase_card(self) -> None:
+        has_pending = bool(
+            self._settings.aura_pending_session_id
+            and self._settings.aura_pending_claim_secret
+        )
+        self._pending_card.setVisible(has_pending)
+        self._check_btn.setVisible(has_pending)
+        self._check_btn.setEnabled(True)
+        if has_pending and not self._purchase_status.text():
+            self._purchase_status.setText(
+                "A checkout is waiting to be claimed on this device."
+            )
+            self._purchase_status.setStyleSheet(f"color: {WARN};")
+
+    def _set_buy_buttons_enabled(self, enabled: bool) -> None:
+        for btn in self._buy_buttons.values():
+            btn.setEnabled(enabled)
+
+    def _on_buy_credits(self, pack_id: str) -> None:
+        email = self._email_input.text().strip()
+        if not email:
+            self._purchase_status.setText("Enter your email address to buy credits.")
+            self._purchase_status.setStyleSheet(f"color: {WARN};")
+            return
+
+        self._set_buy_buttons_enabled(False)
+        self._purchase_status.setText("Starting checkout...")
+        self._purchase_status.setStyleSheet(f"color: {FG_MUTED};")
+
+        base_url = get_provider("aura").base_url
+
+        thread = QThread(self)
+        worker = CreditsCheckoutWorker(base_url=base_url, email=email, pack_id=pack_id)
+        worker.moveToThread(thread)
+        self._credit_workers.append(worker)
+
+        thread.started.connect(worker.run)
+        worker.finished.connect(
+            lambda url, sid, secret, err: self._on_checkout_completed(
+                url, sid, secret, err, pack_id
+            )
+        )
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        self._credit_threads.append(thread)
+
+        _thread = thread
+        _worker = worker
+
+        def _cleanup() -> None:
+            if _worker in self._credit_workers:
+                self._credit_workers.remove(_worker)
+            if _thread in self._credit_threads:
+                self._credit_threads.remove(_thread)
+
+        thread.finished.connect(_cleanup)
+        thread.start()
+
+    def _on_checkout_completed(
+        self,
+        checkout_url: str,
+        session_id: str,
+        claim_secret: str,
+        error: str,
+        pack_id: str,
+    ) -> None:
+        self._set_buy_buttons_enabled(True)
+
+        if error:
+            self._purchase_status.setText(f"Checkout failed: {error}")
+            self._purchase_status.setStyleSheet(f"color: {WARN};")
+            return
+
+        if not checkout_url or not session_id or not claim_secret:
+            self._purchase_status.setText("Checkout response was incomplete. Try again.")
+            self._purchase_status.setStyleSheet(f"color: {WARN};")
+            return
+
+        self._settings.aura_pending_session_id = session_id
+        self._settings.aura_pending_claim_secret = claim_secret
+        save_settings(self._settings)
+        self.credits_changed.emit()
+
+        self._purchase_status.setText(
+            "Opening checkout in your browser... Complete payment, then click Check Purchase."
+        )
+        self._purchase_status.setStyleSheet(f"color: {FG_DIM};")
+        self._sync_pending_purchase_card()
+
+        QDesktopServices.openUrl(QUrl(checkout_url))
+
+    def _on_check_purchase(self) -> None:
+        session_id = self._settings.aura_pending_session_id
+        claim_secret = self._settings.aura_pending_claim_secret
+
+        if not session_id or not claim_secret:
+            self._purchase_status.setText("No pending purchase found.")
+            self._purchase_status.setStyleSheet(f"color: {WARN};")
+            self._sync_pending_purchase_card()
+            return
+
+        self._check_btn.setEnabled(False)
+        self._set_buy_buttons_enabled(False)
+        self._purchase_status.setText("Checking payment status...")
+        self._purchase_status.setStyleSheet(f"color: {FG_MUTED};")
+
+        base_url = get_provider("aura").base_url
+
+        thread = QThread(self)
+        worker = CreditsClaimWorker(
+            base_url=base_url, session_id=session_id, claim_secret=claim_secret
+        )
+        worker.moveToThread(thread)
+        self._credit_workers.append(worker)
+
+        thread.started.connect(worker.run)
+        worker.finished.connect(
+            lambda aid, bal, tok, err, tok_req: self._on_claim_completed(
+                aid, bal, tok, err, tok_req
+            )
+        )
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        self._credit_threads.append(thread)
+
+        _thread = thread
+        _worker = worker
+
+        def _cleanup() -> None:
+            if _worker in self._credit_workers:
+                self._credit_workers.remove(_worker)
+            if _thread in self._credit_threads:
+                self._credit_threads.remove(_thread)
+
+        thread.finished.connect(_cleanup)
+        thread.start()
+
+    def _on_claim_completed(
+        self,
+        account_id: str,
+        balance_micros: int,
+        token: str,
+        error: str,
+        token_required: bool,
+    ) -> None:
+        self._check_btn.setEnabled(True)
+        self._set_buy_buttons_enabled(True)
+
+        if error:
+            self._purchase_status.setText(error)
+            self._purchase_status.setStyleSheet(f"color: {WARN};")
+            return
+
+        if token:
+            set_api_key("aura", token)
+            message = "Credits claimed! Aura key has been saved. Balance will refresh."
+        elif token_required:
+            message = "Credits claimed! Your existing Aura key is still valid. Balance will refresh."
+        else:
+            message = "Credits claimed successfully!"
+
+        self._settings.aura_pending_session_id = ""
+        self._settings.aura_pending_claim_secret = ""
+        save_settings(self._settings)
+        self._sync_pending_purchase_card()
+        self._refresh_key_status()
+        self._purchase_status.setText(message)
+        self._purchase_status.setStyleSheet(f"color: {SUCCESS};")
+        self.credits_claimed.emit()
+        self.credits_changed.emit()
+        self._show_claimed_balance(balance_micros)
+        self._update_balance_status_text()
+        self._maybe_start_balance_refresh()
+
+    def _show_claimed_balance(self, balance_micros: int) -> None:
+        self._balance_micros = balance_micros
+        if balance_micros >= 0:
+            dollars = balance_micros / 1_000_000
+            self._balance_label.setText(f"${dollars:.2f}")
+        else:
+            self._set_balance_placeholder()
+
+    def cleanup_threads(self) -> None:
+        self._balance_timer.stop()
+
+        if self._balance_thread is not None:
+            try:
+                if self._balance_thread.isRunning():
+                    self._balance_thread.quit()
+                    if not self._balance_thread.wait(5000):
+                        logger.warning("Balance thread did not stop cleanly")
+                        self._balance_thread.wait()
+            except RuntimeError:
+                pass
+            self._balance_thread = None
+            self._balance_worker = None
+            self._balance_inflight = False
+
+        for thread in list(self._credit_threads):
+            try:
+                if thread.isRunning():
+                    thread.quit()
+                    if not thread.wait(5000):
+                        logger.warning("Credit thread did not stop cleanly")
+                        thread.wait()
+            except RuntimeError:
+                pass
+        self._credit_threads.clear()
+        self._credit_workers.clear()
