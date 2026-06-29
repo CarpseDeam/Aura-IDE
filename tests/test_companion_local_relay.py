@@ -7,6 +7,8 @@ from io import BytesIO
 import pytest
 
 import aura.companion.local_relay as lr
+import aura.companion.manager as manager_mod
+from aura.settings import AppSettings
 
 
 class _Response:
@@ -88,6 +90,18 @@ def test_health_ok_means_no_process_start(monkeypatch: pytest.MonkeyPatch) -> No
     assert lr.ensure_local_relay("ws://localhost:8765") == "ws://localhost:8765/ws"
 
 
+def test_default_local_relay_returns_normalized_ws_when_healthy(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(lr, "_managed_process", None)
+    monkeypatch.setattr(lr, "probe_relay_health", lambda _url: lr.RelayHealthResult(True, "ok"))
+    monkeypatch.setattr(
+        lr,
+        "_start_relay_process",
+        lambda _port: (_ for _ in ()).throw(AssertionError("should not start process")),
+    )
+
+    assert lr.ensure_local_relay("ws://localhost:8765") == "ws://localhost:8765/ws"
+
+
 def test_connection_refused_attempts_process_start(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
     process = _FakeProcess()
@@ -110,17 +124,64 @@ def test_connection_refused_attempts_process_start(monkeypatch: pytest.MonkeyPat
     assert calls == ["start:8765"]
 
 
-def test_wrong_server_health_returns_friendly_port_collision(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_wrong_server_falls_back_to_next_healthy_port(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(lr, "_managed_process", None)
-    monkeypatch.setattr(lr, "probe_relay_health", lambda _url: lr.RelayHealthResult(False, "wrong_server", 404))
+    seen: list[str] = []
 
-    with pytest.raises(lr.LocalRelayPortCollisionError) as excinfo:
-        lr.ensure_local_relay("ws://localhost:8765")
+    def fake_probe(url: str) -> lr.RelayHealthResult:
+        seen.append(url)
+        if url == "ws://localhost:8765/ws":
+            return lr.RelayHealthResult(False, "wrong_server", 404)
+        if url == "ws://localhost:8766/ws":
+            return lr.RelayHealthResult(True, "ok")
+        raise AssertionError(f"unexpected candidate: {url}")
 
-    assert str(excinfo.value) == (
-        "Port 8765 is already in use by another service. Close that service or change the "
-        "Companion relay port in Advanced / Self-hosting."
+    monkeypatch.setattr(lr, "probe_relay_health", fake_probe)
+    monkeypatch.setattr(
+        lr,
+        "_start_relay_process",
+        lambda _port: (_ for _ in ()).throw(AssertionError("should not start process")),
     )
+
+    assert lr.ensure_local_relay("ws://localhost:8765") == "ws://localhost:8766/ws"
+    assert seen == ["ws://localhost:8765/ws", "ws://localhost:8766/ws"]
+
+
+def test_wrong_server_then_unreachable_starts_relay_on_next_port(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+    process = _FakeProcess()
+    probe_counts: dict[str, int] = {}
+
+    def fake_probe(url: str) -> lr.RelayHealthResult:
+        probe_counts[url] = probe_counts.get(url, 0) + 1
+        if url == "ws://localhost:8765/ws":
+            return lr.RelayHealthResult(False, "wrong_server", 404)
+        if url == "ws://localhost:8766/ws" and probe_counts[url] == 1:
+            return lr.RelayHealthResult(False, "unreachable", error="connection refused")
+        if url == "ws://localhost:8766/ws":
+            return lr.RelayHealthResult(True, "ok")
+        raise AssertionError(f"unexpected candidate: {url}")
+
+    def fake_start(port: int) -> None:
+        calls.append(f"start:{port}")
+        monkeypatch.setattr(lr, "_managed_process", process)
+
+    monkeypatch.setattr(lr, "_managed_process", None)
+    monkeypatch.setattr(lr.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(lr, "probe_relay_health", fake_probe)
+    monkeypatch.setattr(lr, "_start_relay_process", fake_start)
+
+    assert lr.ensure_local_relay("ws://localhost:8765") == "ws://localhost:8766/ws"
+    assert calls == ["start:8766"]
+
+
+def test_fallback_candidates_do_not_duplicate_configured_port() -> None:
+    candidates = lr.iter_local_relay_candidates("ws://localhost:8766")
+
+    assert candidates[0] == "ws://localhost:8766/ws"
+    assert len(candidates) == len(set(candidates))
+    assert candidates.count("ws://localhost:8766/ws") == 1
+    assert "ws://localhost:8765/ws" in candidates
 
 
 def test_remote_relay_url_does_not_auto_start_local_process(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -129,3 +190,39 @@ def test_remote_relay_url_does_not_auto_start_local_process(monkeypatch: pytest.
     monkeypatch.setattr(lr, "_start_relay_process", lambda _port: (_ for _ in ()).throw(AssertionError("no start")))
 
     assert lr.ensure_local_relay("wss://relay.example") == "wss://relay.example/ws"
+
+
+def test_manager_connect_uses_returned_runtime_relay_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    created_urls: list[str] = []
+    connected_urls: list[str] = []
+
+    class _Signal:
+        def connect(self, _callback):
+            return None
+
+    class _Client:
+        connected = _Signal()
+        disconnected = _Signal()
+        error = _Signal()
+        message_received = _Signal()
+
+        def __init__(self, url: str, _device_id: str, _desktop_secret: str, _parent) -> None:
+            created_urls.append(url)
+            self.url = url
+
+        def connect_to_relay(self) -> None:
+            connected_urls.append(self.url)
+
+    settings = AppSettings(companion_enabled=True, companion_relay_url="ws://localhost:8765")
+    manager = manager_mod.CompanionManager(settings)
+
+    monkeypatch.setattr(manager_mod, "ensure_local_relay", lambda _url: "ws://localhost:8766/ws")
+    monkeypatch.setattr(manager_mod, "get_device_id", lambda: "desktop-id")
+    monkeypatch.setattr(manager_mod, "CompanionWsClient", _Client)
+
+    manager._connect()
+
+    assert manager._active_relay_url == "ws://localhost:8766/ws"
+    assert created_urls == ["ws://localhost:8766/ws"]
+    assert connected_urls == ["ws://localhost:8766/ws"]
+    assert settings.companion_relay_url == "ws://localhost:8765"

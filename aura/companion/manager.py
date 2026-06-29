@@ -330,6 +330,7 @@ class CompanionManager(QObject):
                 self.connection_error.emit(str(exc))
                 self.connection_status_changed.emit("error")
                 return
+            self._active_relay_url = url
             self.connection_status_changed.emit("connecting")
 
         device_id = get_device_id()

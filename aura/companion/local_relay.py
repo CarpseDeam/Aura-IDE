@@ -16,13 +16,18 @@ from urllib.parse import urlparse, urlunparse
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_LOCAL_RELAY_PORT = 8765
+LOCAL_RELAY_PORT_MIN = 8765
+LOCAL_RELAY_PORT_MAX = 8799
+DEFAULT_LOCAL_RELAY_PORT = LOCAL_RELAY_PORT_MIN
 AURA_RELAY_SERVICE = "aura-relay"
 PORT_COLLISION_MESSAGE = (
     "Port {port} is already in use by another service. Close that service or change the "
     "Companion relay port in Advanced / Self-hosting."
 )
-STARTUP_FAILURE_MESSAGE = "Aura could not start the local Companion relay. Send logs or reinstall Aura."
+STARTUP_FAILURE_MESSAGE = (
+    "Aura could not find an available local Companion port. Close other local services or "
+    "change the Companion relay URL in Advanced / Self-hosting."
+)
 
 _managed_process: subprocess.Popen | None = None
 _atexit_registered = False
@@ -99,6 +104,40 @@ def relay_port(url: str) -> int:
     return DEFAULT_LOCAL_RELAY_PORT
 
 
+def relay_host(url: str) -> str:
+    """Return the normalized relay hostname."""
+    parsed = urlparse(normalize_relay_url(url))
+    return parsed.hostname or "localhost"
+
+
+def with_relay_port(url: str, port: int) -> str:
+    """Return a normalized relay URL using the given port."""
+    normalized = normalize_relay_url(url)
+    parsed = urlparse(normalized)
+    host = relay_host(normalized)
+    if ":" in host and not host.startswith("["):
+        netloc = f"[{host}]:{port}"
+    else:
+        netloc = f"{host}:{port}"
+    return urlunparse((parsed.scheme, netloc, parsed.path, "", parsed.query, ""))
+
+
+def iter_local_relay_candidates(url: str) -> list[str]:
+    """Return bounded localhost relay candidates, starting with the configured port."""
+    normalized = normalize_relay_url(url)
+    if not is_local_relay_url(normalized):
+        return [normalized]
+
+    configured_port = relay_port(normalized)
+    ports = [configured_port]
+    ports.extend(
+        port
+        for port in range(LOCAL_RELAY_PORT_MIN, LOCAL_RELAY_PORT_MAX + 1)
+        if port != configured_port
+    )
+    return [with_relay_port(normalized, port) for port in ports]
+
+
 def probe_relay_health(url: str, *, timeout: float = 1.0) -> RelayHealthResult:
     """Probe `/health` and identify whether the server is Aura Relay."""
     health_url = relay_health_url(url)
@@ -141,34 +180,43 @@ def ensure_local_relay(url: str, *, startup_timeout: float = 5.0) -> str:
     if not is_local_relay_url(normalized):
         return normalized
 
-    port = relay_port(normalized)
-    health = probe_relay_health(normalized)
-    if health.ok:
-        return normalized
-    if health.kind == "wrong_server":
-        raise LocalRelayPortCollisionError(PORT_COLLISION_MESSAGE.format(port=port))
+    for candidate in iter_local_relay_candidates(normalized):
+        port = relay_port(candidate)
+        health = probe_relay_health(candidate)
+        if health.ok:
+            return candidate
+        if health.kind == "wrong_server":
+            logger.info("[Companion] local relay candidate %s is owned by another service", candidate)
+            continue
 
-    if _managed_process is None or _managed_process.poll() is not None:
+        if _managed_process is not None and _managed_process.poll() is None:
+            stop_managed_relay()
         try:
             _start_relay_process(port)
-        except Exception as exc:
-            logger.exception("[Companion] failed to start local relay process")
-            raise LocalRelayStartupError(STARTUP_FAILURE_MESSAGE) from exc
+        except Exception:
+            logger.exception("[Companion] failed to start local relay process on port %s", port)
+            stop_managed_relay()
+            continue
 
-    deadline = time.monotonic() + startup_timeout
-    last_health = health
-    while time.monotonic() < deadline:
-        time.sleep(0.15)
-        if _managed_process is not None and _managed_process.poll() is not None:
-            logger.error("[Companion] local relay exited with code %s", _managed_process.returncode)
-            raise LocalRelayStartupError(STARTUP_FAILURE_MESSAGE)
-        last_health = probe_relay_health(normalized)
-        if last_health.ok:
-            return normalized
-        if last_health.kind == "wrong_server":
-            raise LocalRelayPortCollisionError(PORT_COLLISION_MESSAGE.format(port=port))
+        deadline = time.monotonic() + startup_timeout
+        last_health = health
+        while time.monotonic() < deadline:
+            time.sleep(0.15)
+            if _managed_process is not None and _managed_process.poll() is not None:
+                logger.error("[Companion] local relay exited with code %s", _managed_process.returncode)
+                _clear_managed_process()
+                break
+            last_health = probe_relay_health(candidate)
+            if last_health.ok:
+                return candidate
+            if last_health.kind == "wrong_server":
+                logger.info("[Companion] local relay candidate %s became owned by another service", candidate)
+                stop_managed_relay()
+                break
+        else:
+            logger.error("[Companion] local relay did not become healthy on port %s: %s", port, last_health)
+            stop_managed_relay()
 
-    logger.error("[Companion] local relay did not become healthy: %s", last_health)
     raise LocalRelayStartupError(STARTUP_FAILURE_MESSAGE)
 
 
@@ -207,6 +255,11 @@ def _is_connection_refused(exc: object) -> bool:
     if isinstance(exc, OSError):
         return exc.errno in {errno.ECONNREFUSED, 10061}
     return "connection refused" in str(exc).lower() or "actively refused" in str(exc).lower()
+
+
+def _clear_managed_process() -> None:
+    global _managed_process
+    _managed_process = None
 
 
 def _start_relay_process(port: int) -> None:
