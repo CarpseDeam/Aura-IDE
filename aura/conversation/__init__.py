@@ -21,6 +21,7 @@ from aura.conversation.dispatch_plan import (
     WorkerStepSpec,
     plan_from_request,
     request_for_step,
+    todo_tasks_from_plan,
 )
 from aura.conversation.history import History
 from aura.conversation.task_shape import TaskShape, infer_task_shape
@@ -65,6 +66,7 @@ __all__ = [
     "normalize_worker_task",
     "plan_from_request",
     "request_for_step",
+    "todo_tasks_from_plan",
     "ValidationCommandRun",
     "ValidationStatus",
     "WorkflowState",

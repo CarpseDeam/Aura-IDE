@@ -315,6 +315,46 @@ def _fallback_step_spec(plan: WorkerDispatchPlan, step: WorkerStepSpec) -> str:
     return "\n".join(part for part in parts if part is not None)
 
 
+def todo_tasks_from_plan(
+    plan: WorkerDispatchPlan,
+    *,
+    active_step_id: str | None = None,
+    completed_step_ids: set[str] | None = None,
+    blocked_step_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Convert a WorkerDispatchPlan into canonical TODO tasks for the UI.
+
+    Each task dict uses the stable fields the existing TodoListWidget expects:
+    description, status (pending/active/done), plus step_id, id, and files.
+    """
+    completed: set[str] = completed_step_ids or set()
+    tasks: list[dict[str, Any]] = []
+    for step in plan.steps:
+        task: dict[str, Any] = {
+            "id": step.id,
+            "step_id": step.id,
+            "description": step.title or step.goal or "Worker step",
+            "status": "pending",
+        }
+        if step.files:
+            task["files"] = list(step.files)
+        if step.acceptance:
+            task["acceptance"] = step.acceptance[:200] if len(step.acceptance) > 200 else step.acceptance
+
+        if step.id in completed:
+            task["status"] = "done"
+        elif step.id == active_step_id:
+            task["status"] = "active"
+            if step.id == blocked_step_id:
+                task["blocked"] = True
+        elif step.id == blocked_step_id:
+            task["status"] = "active"
+            task["blocked"] = True
+
+        tasks.append(task)
+    return tasks
+
+
 def _dedupe(values: list[str]) -> list[str]:
     result: list[str] = []
     seen: set[str] = set()
@@ -357,4 +397,5 @@ __all__ = [
     "WorkerStepSpec",
     "plan_from_request",
     "request_for_step",
+    "todo_tasks_from_plan",
 ]

@@ -18,6 +18,7 @@ from aura.conversation.dispatch_plan import (
     WorkerDispatchPlan,
     WorkerStepSpec,
     request_for_step,
+    todo_tasks_from_plan,
 )
 
 RunWorkerStep = Callable[[str, WorkerDispatchRequest, Any], WorkerDispatchResult]
@@ -63,14 +64,27 @@ class DispatchSession:
         plan: WorkerDispatchPlan,
         run_worker_step: RunWorkerStep,
         pending: Any,
+        emit_todo_update: Callable[[str, list[dict[str, Any]]], None] | None = None,
     ) -> None:
         self.tool_call_id = tool_call_id
         self.original_request = original_request
         self.plan = plan
         self._run_worker_step = run_worker_step
         self._pending = pending
+        self._emit_todo_update = emit_todo_update
         self.cursor = DispatchStepCursor()
         self.step_results: list[StepResult] = []
+
+    def _emit_plan_todos(self, *, active_step_id: str | None = None) -> None:
+        if self._emit_todo_update is None:
+            return
+        tasks = todo_tasks_from_plan(
+            self.plan,
+            active_step_id=active_step_id,
+            completed_step_ids=self.cursor.completed_set,
+            blocked_step_id=self.cursor.blocked_step_id,
+        )
+        self._emit_todo_update(self.tool_call_id, tasks)
 
     def run(self) -> WorkerDispatchResult:
         """Run the current compatibility session and return one aggregate result."""
@@ -90,6 +104,7 @@ class DispatchSession:
         # Worker path. Multi-step sequencing lands on this cursor in the next
         # phase without changing the visible dispatch lifecycle.
         step = self.plan.steps[0]
+        self._emit_plan_todos(active_step_id=step.id)
         worker_result = self._run_one_step(step)
         step_result = StepResult.from_worker_result(step.id, worker_result)
         self.step_results.append(step_result)
@@ -97,7 +112,10 @@ class DispatchSession:
             self.cursor.completed_step_ids.append(step.id)
         else:
             self.cursor.blocked_step_id = step.id
-        return self._aggregate_from_worker_result(worker_result)
+        self._emit_plan_todos(active_step_id=None)
+        result = self._aggregate_from_worker_result(worker_result)
+        self._emit_plan_todos(active_step_id=None)
+        return result
 
     def _run_one_step(self, step: WorkerStepSpec) -> WorkerDispatchResult:
         step_request = request_for_step(self.plan, step, self.original_request)

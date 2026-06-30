@@ -30,6 +30,7 @@ from aura.bridge._summary_formatters import (
     _parse_structured_worker_failure,
 )
 from aura.bridge.approval_proxy import _ApprovalProxy
+from aura.bridge.dispatch_session import DispatchSession
 from aura.bridge.event_relay import WorkerEventRelay
 from aura.bridge.worker_recording import _record_worker_completion
 from aura.bridge.worker_report import (
@@ -56,6 +57,7 @@ from aura.conversation import (
     normalize_worker_task,
 )
 from aura.conversation.critic_dispatch import CriticCallback, CriticRequest, run_critic_dispatch
+from aura.conversation.dispatch_plan import plan_from_request
 from aura.conversation.path_utils import normalize_worker_path as _shared_normalize_worker_path
 from aura.conversation.persistence import WorkerDispatchRecord
 from aura.conversation.project_profile import detect_project_profile
@@ -71,8 +73,6 @@ from aura.conversation.validation_orchestrator import (
 )
 from aura.dependency_context import build_dependency_stanza
 from aura.validation.selector import ValidationPlan, select_validation_plan
-from aura.bridge.dispatch_session import DispatchSession
-from aura.conversation.dispatch_plan import plan_from_request
 
 _log = logging.getLogger(__name__)
 
@@ -343,6 +343,7 @@ class _DispatchProxy(QObject):
             plan=plan,
             run_worker_step=self._run_worker,
             pending=pending,
+            emit_todo_update=self.workerTodoListUpdated.emit,
         )
         result = session.run()
         with self._lock:
