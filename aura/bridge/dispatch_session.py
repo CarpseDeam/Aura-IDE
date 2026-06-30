@@ -35,6 +35,7 @@ from aura.conversation.dispatch_plan import (
     WorkerDispatchPlan,
     WorkerStepSpec,
     compact_todo_label,
+    request_for_campaign_validation,
     request_for_step,
 )
 
@@ -269,6 +270,30 @@ class DispatchSession:
             )
             self._emit_lifecycle_finished(result)
             return result
+
+        # ------------------------------------------------------------------
+        # Campaign composition-validation gate (all-green path only)
+        # ------------------------------------------------------------------
+        if self.cursor.blocked_step_id is None:
+            commands = self.plan.campaign_validation_commands()
+            if commands:
+                modified_files_union = _collect_modified_files(self.step_results)
+                validation_request = request_for_campaign_validation(
+                    self.plan,
+                    self.original_request,
+                    commands,
+                    modified_files_union,
+                )
+                validation_result = self._run_worker_step(
+                    self.tool_call_id,
+                    validation_request,
+                    self._pending,
+                )
+                if not validation_result.ok:
+                    self.cursor.blocked_step_id = "campaign-validation"
+                    validation_result.extras["composition_failure"] = True
+                    validation_result.extras["planner_resolution_needed"] = True
+                    final_worker_result = validation_result
 
         aggregate = self._aggregate_from_worker_result(final_worker_result)
 

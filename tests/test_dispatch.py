@@ -42,8 +42,11 @@ from aura.conversation.dispatch import (
     normalize_worker_task,
 )
 from aura.conversation.dispatch_plan import (
+    StepValidationPolicy,
+    WorkerDispatchPlan,
     WorkerStepSpec,
     plan_from_request,
+    request_for_campaign_validation,
     todo_tasks_from_plan,
     validate_dispatch_campaign,
 )
@@ -3452,3 +3455,212 @@ def test_failure_constraint_empty_when_quiet():
     )
     assert action["counts_as_attempt"] is False
     assert action["failure_constraint"] == ""
+
+
+# ── Campaign composition validation tests ─────────────────────────────
+
+
+def test_campaign_validation_commands_returns_flagged_step_commands():
+    """campaign_validation_commands returns the flagged step's commands and [] when unflagged."""
+    # Flagged step — last step (reverse order) with run_full_campaign_validation=True
+    plan = WorkerDispatchPlan(
+        overall_goal="Test campaign",
+        steps=[
+            WorkerStepSpec(id="s1", title="Step 1", goal="Do step 1"),
+            WorkerStepSpec(
+                id="s2",
+                title="Step 2",
+                goal="Do step 2",
+                validation_commands=["pytest -x", "ruff check ."],
+                validation_policy=StepValidationPolicy(
+                    commands=["pytest -x", "ruff check ."],
+                    run_full_campaign_validation=True,
+                    reason="full campaign check",
+                ),
+            ),
+        ],
+    )
+    assert plan.campaign_validation_commands() == ["pytest -x", "ruff check ."]
+
+    # Falls back to validation_policy.commands when validation_commands is empty
+    plan2 = WorkerDispatchPlan(
+        overall_goal="Test campaign",
+        steps=[
+            WorkerStepSpec(id="s1", title="Step 1", goal="Do step 1"),
+            WorkerStepSpec(
+                id="s2",
+                title="Step 2",
+                goal="Do step 2",
+                validation_policy=StepValidationPolicy(
+                    commands=["python -m compileall ."],
+                    run_full_campaign_validation=True,
+                ),
+            ),
+        ],
+    )
+    assert plan2.campaign_validation_commands() == ["python -m compileall ."]
+
+    # Unflagged steps — returns []
+    plan3 = WorkerDispatchPlan(
+        overall_goal="Test campaign",
+        steps=[
+            WorkerStepSpec(id="s1", title="Step 1", goal="Do step 1"),
+            WorkerStepSpec(id="s2", title="Step 2", goal="Do step 2"),
+        ],
+    )
+    assert plan3.campaign_validation_commands() == []
+
+
+def test_campaign_validation_failing_command_produces_composition_failure():
+    """A 2-step all-green campaign with a failing campaign validation command
+    produces an aggregate with ok=False, composition_failure=True, and
+    planner_resolution_needed=True."""
+    steps = [
+        WorkerStepSpec(
+            id="s1",
+            title="Step 1",
+            goal="Do step 1",
+            files=["a.py"],
+        ),
+        WorkerStepSpec(
+            id="s2",
+            title="Step 2",
+            goal="Do step 2",
+            files=["b.py"],
+            validation_policy=StepValidationPolicy(
+                run_full_campaign_validation=True,
+                commands=["python -c 'exit(1)'"],
+            ),
+        ),
+    ]
+    req = WorkerDispatchRequest(
+        goal="Campaign",
+        files=["a.py", "b.py"],
+        spec="",
+        acceptance="",
+        steps=steps,
+    )
+    plan = plan_from_request(req)
+
+    call_count = 0
+
+    def run_worker_step(_tid, step_req, _pending):
+        nonlocal call_count
+        call_count += 1
+        if call_count <= 2:
+            # Steps 1 and 2 succeed
+            return WorkerDispatchResult(
+                ok=True,
+                summary=f"done {step_req.goal}",
+                modified_files=list(step_req.files),
+            )
+        else:
+            # Campaign validation fails
+            return WorkerDispatchResult(
+                ok=False,
+                summary="Composition check failed: step ordering violated",
+                validation="python -c 'exit(1)' returned exit code 1",
+            )
+
+    result = DispatchSession(
+        tool_call_id="tc-cv-fail",
+        original_request=req,
+        plan=plan,
+        run_worker_step=run_worker_step,
+        pending=SimpleNamespace(),
+    ).run()
+
+    assert result.ok is False
+    assert result.extras.get("composition_failure") is True
+    assert result.extras.get("planner_resolution_needed") is True
+    assert call_count == 3  # two steps + one validation dispatch
+
+
+def test_unflagged_campaign_unchanged_from_current_behavior():
+    """An unflagged 2-step campaign produces the same result as current behavior
+    (no campaign validation dispatch occurs)."""
+    steps = [
+        WorkerStepSpec(
+            id="s1",
+            title="Step 1",
+            goal="Do step 1",
+            files=["a.py"],
+        ),
+        WorkerStepSpec(
+            id="s2",
+            title="Step 2",
+            goal="Do step 2",
+            files=["b.py"],
+        ),
+    ]
+    req = WorkerDispatchRequest(
+        goal="Campaign",
+        files=["a.py", "b.py"],
+        spec="",
+        acceptance="",
+        steps=steps,
+    )
+    plan = plan_from_request(req)
+
+    call_count = 0
+
+    def run_worker_step(_tid, step_req, _pending):
+        nonlocal call_count
+        call_count += 1
+        return WorkerDispatchResult(
+            ok=True,
+            summary=f"done {step_req.goal}",
+            modified_files=list(step_req.files),
+        )
+
+    result = DispatchSession(
+        tool_call_id="tc-cv-unchanged",
+        original_request=req,
+        plan=plan,
+        run_worker_step=run_worker_step,
+        pending=SimpleNamespace(),
+    ).run()
+
+    assert result.ok is True
+    assert call_count == 2  # Only the 2 steps, no campaign validation dispatch
+    assert "composition_failure" not in result.extras
+
+
+def test_request_for_campaign_validation_produces_verification_only_request():
+    """request_for_campaign_validation returns a WorkerDispatchRequest with
+    verification-only fields: empty spec, acceptance of joined commands,
+    empty steps, and a non-goal forbidding file mutations."""
+    original = WorkerDispatchRequest(
+        goal="Original goal",
+        files=["a.py", "b.py"],
+        spec="Original spec",
+        acceptance="Original acceptance",
+        summary="Original summary",
+        non_goals=["no rewrites"],
+        steps=[
+            WorkerStepSpec(id="s1", title="S1", goal="Do S1"),
+        ],
+    )
+    plan = WorkerDispatchPlan(
+        overall_goal="Original goal",
+        steps=[],
+    )
+
+    result = request_for_campaign_validation(
+        plan,
+        original,
+        commands=["pytest -x", "ruff check ."],
+        files=["a.py", "b.py"],
+    )
+
+    assert result.files == ["a.py", "b.py"]
+    assert result.spec == ""
+    assert result.acceptance == "pytest -x\nruff check ."
+    assert result.validation_commands == ["pytest -x", "ruff check ."]
+    assert result.steps == []
+    assert "no rewrites" in result.non_goals
+    assert any("DO NOT create" in ng for ng in result.non_goals)
+    assert any("verification-only" in ng for ng in result.non_goals)
+    # Routing fields preserved from original
+    assert result.goal == "Original goal"
+    assert result.summary == "Original summary"
