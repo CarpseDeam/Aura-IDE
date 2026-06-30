@@ -1,4 +1,4 @@
-"""Track repeated validation failure fingerprints across worker edits."""
+"""Track repeated validation failure fingerprints and churn across worker edits."""
 from __future__ import annotations
 
 import hashlib
@@ -16,11 +16,13 @@ _TRACEBACK_LINE_RE = re.compile(r":\d+:")
 
 
 class VerificationProgressTracker:
-    """Detect validation runs that keep failing on the same normalized set."""
+    """Detect validation runs that keep failing across worker edits."""
 
-    def __init__(self, *, threshold: int = 3) -> None:
+    def __init__(self, *, threshold: int = 3, churn_threshold: int = 6) -> None:
         self.threshold = threshold
+        self.churn_threshold = churn_threshold
         self._failures: dict[str, tuple[frozenset[str], int]] = {}
+        self._churn_failures: dict[str, int] = {}
 
     def observe(
         self,
@@ -33,6 +35,7 @@ class VerificationProgressTracker:
 
         if classification == "passed":
             self._failures.pop(key, None)
+            self._churn_failures.pop(key, None)
             return None
 
         if classification != "product_validation_failed":
@@ -42,9 +45,34 @@ class VerificationProgressTracker:
         last_fingerprint, count = self._failures.get(key, (frozenset(), 0))
         count = count + 1 if fingerprint == last_fingerprint else 1
         self._failures[key] = (fingerprint, count)
+        churn_count = self._churn_failures.get(key, 0) + 1
+        self._churn_failures[key] = churn_count
 
         if count < self.threshold:
-            return None
+            if churn_count < self.churn_threshold:
+                return None
+
+            items = sorted(fingerprint)
+            return {
+                "ok": False,
+                "recoverable": True,
+                "phase_boundary": True,
+                "reason": "verification_churn_budget_exceeded",
+                "tool": "run_terminal_command",
+                "message": (
+                    "Verification churn budget exceeded: validation failed "
+                    f"{churn_count} times for `{key}` without reaching green. "
+                    "Stop calling tools and report completed work, current blocker, "
+                    "latest failing items, and what changed across attempts so the "
+                    "planner can choose a narrower repair or different approach: "
+                    f"{_format_items(items)}."
+                ),
+                "verification_churn": {
+                    "failed_runs": churn_count,
+                    "threshold": self.churn_threshold,
+                    "latest_fingerprint": items,
+                },
+            }
 
         items = sorted(fingerprint)
         return {
