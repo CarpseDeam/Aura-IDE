@@ -593,12 +593,23 @@ class ChatView(QScrollArea):
                 approval_timeout = False
                 cancelled = False
                 recoverable = False
+                suppress_user_followup_card = False
+                user_visible_blocker = False
                 try:
                     data = json.loads(result_text)
                     extras = data.get("extras", {})
+                    if not isinstance(extras, dict):
+                        extras = {}
                     recoverable = bool(
                         data.get("recoverable")
                         or extras.get("recoverable")
+                    )
+                    suppress_user_followup_card = bool(
+                        extras.get("suppress_user_followup_card")
+                    )
+                    user_visible_blocker = bool(
+                        extras.get("user_visible_blocker")
+                        or extras.get("user_only_blocker")
                     )
                     dispatch_not_started = bool(
                         data.get("dispatch_not_started")
@@ -617,7 +628,10 @@ class ChatView(QScrollArea):
                     pass
 
                 # Recoverable failures are planner control-flow — don't show transient failure
-                if not ok and recoverable and not cancelled:
+                if not ok and (
+                    (recoverable and not cancelled)
+                    or (suppress_user_followup_card and not user_visible_blocker)
+                ):
                     ok = True
                 # Finalize controller FIRST (updates planner/spec UI above)
                 controller.finalize(ok, result_text)
@@ -641,7 +655,12 @@ class ChatView(QScrollArea):
                 # Failed state, remove it so it doesn't appear as the final item.
                 self._cleanup_failed_code_cards(tool_call_id)
 
-                if summary and not dispatch_not_started and not (needs_followup and recoverable):
+                if (
+                    summary
+                    and not dispatch_not_started
+                    and not (needs_followup and recoverable)
+                    and not (suppress_user_followup_card and not user_visible_blocker)
+                ):
                     context_gearbox = extras.get("context_gearbox") if isinstance(extras, dict) else None
                     goal = (
                         controller.goal

@@ -238,6 +238,13 @@ class DispatchSession:
         """
         worker_extras = worker_result.extras if isinstance(worker_result.extras, dict) else {}
         modified_files = _collect_modified_files(self.step_results) or _dedupe(worker_result.modified_files)
+        session_metadata = _session_metadata(
+            self.plan,
+            self.cursor,
+            self.step_results,
+            is_explicit_campaign=bool(self.original_request.steps),
+            worker_result=worker_result,
+        )
         return WorkerDispatchResult(
             ok=worker_result.ok,
             summary=worker_result.summary,
@@ -254,7 +261,7 @@ class DispatchSession:
             suggested_next_spec=worker_result.suggested_next_spec,
             extras={
                 **worker_extras,
-                **_session_metadata(self.plan, self.cursor, self.step_results),
+                **session_metadata,
             },
             mismatch=worker_result.mismatch,
         )
@@ -321,26 +328,27 @@ def _collect_modified_files(step_results: list[StepResult]) -> list[str]:
     return files
 
 
-def _compute_session_ids(
-    step_results: list[StepResult],
-) -> tuple[list[str], str | None]:
-    """Return (completed_step_ids, blocked_step_id) derived from step results."""
-    completed: list[str] = []
-    blocked: str | None = None
-    for sr in step_results:
-        if sr.ok:
-            completed.append(sr.step_id)
-        elif blocked is None:
-            blocked = sr.step_id
-    return completed, blocked
-
-
 def _session_metadata(
     plan: WorkerDispatchPlan,
     cursor: DispatchStepCursor,
     step_results: list[StepResult],
+    *,
+    is_explicit_campaign: bool,
+    worker_result: WorkerDispatchResult,
 ) -> dict[str, Any]:
     """Build session-level extras for the aggregate result."""
+    user_visible_blocker = _user_visible_blocker(worker_result, step_results)
+    internal_campaign_continuation = bool(
+        is_explicit_campaign
+        and not user_visible_blocker
+        and (
+            worker_result.needs_followup
+            or worker_result.phase_boundary
+            or worker_result.recoverable
+            or worker_result.mismatch is not None
+            or any(step.needs_planner_resolution for step in step_results)
+        )
+    )
     return {
         "dispatch_session": True,
         "dispatch_plan": plan.to_dict(),
@@ -350,8 +358,9 @@ def _session_metadata(
             "blocked_step_id": cursor.blocked_step_id,
         },
         "dispatch_step_results": [sr.to_dict() for sr in step_results],
-        "completed_step_ids": list(cursor.completed_step_ids),
-        "blocked_step_id": cursor.blocked_step_id,
+        "internal_campaign_continuation": internal_campaign_continuation,
+        "user_visible_blocker": user_visible_blocker,
+        "suppress_user_followup_card": internal_campaign_continuation,
     }
 
 
@@ -365,6 +374,31 @@ def _dedupe(values: list[str]) -> list[str]:
         result.append(item)
         seen.add(item)
     return result
+
+
+def _user_visible_blocker(
+    worker_result: WorkerDispatchResult,
+    step_results: list[StepResult],
+) -> bool:
+    extras = worker_result.extras if isinstance(worker_result.extras, dict) else {}
+    status = worker_result.status or ""
+    failure_class = str(extras.get("failure_class") or "")
+    if worker_result.cancelled:
+        return True
+    if status == "approval_rejected" or failure_class == "approval_rejected":
+        return True
+    if extras.get("user_only_blocker") or extras.get("user_visible_blocker"):
+        return True
+    if any(step.user_only_blocker for step in step_results):
+        return True
+    if not worker_result.ok and not (
+        worker_result.recoverable
+        or worker_result.needs_followup
+        or worker_result.phase_boundary
+        or worker_result.mismatch is not None
+    ):
+        return True
+    return False
 
 
 __all__ = [

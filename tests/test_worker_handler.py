@@ -710,6 +710,54 @@ class TestMismatchResolutionWiring:
         )
         assert handler._active_mismatch_card_id == "tc1"
 
+    def test_internal_campaign_continuation_suppresses_mismatch_and_summary(
+        self, handler: WorkerEventHandler, bridge: Mock, chat: Mock,
+    ) -> None:
+        bridge.worker_result_metadata.return_value = {
+            "extras": {
+                "dispatch_session": True,
+                "planner_resolution_needed": True,
+                "internal_campaign_continuation": True,
+                "suppress_user_followup_card": True,
+                "user_visible_blocker": False,
+            }
+        }
+
+        handler._on_worker_finished(
+            "tc1", False, "Needs another internal pass.", needs_followup=True,
+            status="needs_planner_resolution",
+        )
+
+        chat.add_mismatch_resolution_card.assert_not_called()
+        chat.add_worker_summary.assert_not_called()
+        assert handler._active_mismatch_card_id is None
+
+    def test_user_visible_campaign_blocker_still_surfaces_mismatch(
+        self, handler: WorkerEventHandler, bridge: Mock, chat: Mock,
+    ) -> None:
+        bridge.worker_result_metadata.return_value = {
+            "extras": {
+                "dispatch_session": True,
+                "planner_resolution_needed": True,
+                "mismatch_kind": "user_decision",
+                "mismatch_question": "Which behavior should win?",
+                "internal_campaign_continuation": False,
+                "suppress_user_followup_card": False,
+                "user_visible_blocker": True,
+            }
+        }
+
+        handler._on_worker_finished(
+            "tc1", False, "User decision required.", needs_followup=True,
+            status="needs_planner_resolution",
+        )
+
+        chat.add_mismatch_resolution_card.assert_called_once_with(
+            "tc1", "user_decision", "Which behavior should win?"
+        )
+        chat.add_worker_summary.assert_not_called()
+        assert handler._active_mismatch_card_id == "tc1"
+
     def test_normal_needs_followup_does_not_add_mismatch_card(
         self, handler: WorkerEventHandler, bridge: Mock, chat: Mock,
     ) -> None:

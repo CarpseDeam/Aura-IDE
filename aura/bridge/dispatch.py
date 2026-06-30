@@ -372,6 +372,7 @@ class _DispatchProxy(QObject):
             result = session.run()
         finally:
             self._end_canonical_dispatch_todos(tool_call_id)
+        self._merge_session_result_metadata(tool_call_id, result)
         with self._lock:
             self._pending.pop(tool_call_id, None)
         return result
@@ -404,6 +405,22 @@ class _DispatchProxy(QObject):
         pending.cancelled = False
         pending.decision_event.set()
         return True
+
+    def _merge_session_result_metadata(
+        self,
+        tool_call_id: str,
+        result: WorkerDispatchResult,
+    ) -> None:
+        if not isinstance(result.extras, dict) or not result.extras.get("dispatch_session"):
+            return
+        metadata = dict(self._result_metadata.get(tool_call_id, {}))
+        extras = metadata.get("extras") if isinstance(metadata.get("extras"), dict) else {}
+        metadata["extras"] = {**extras, **result.extras}
+        if result.modified_files:
+            metadata["modified_files"] = list(result.modified_files)
+        if result.validation is not None:
+            metadata["validation"] = result.validation
+        self._result_metadata[tool_call_id] = metadata
 
     def user_cancelled(self, tool_call_id: str) -> bool:
         with self._lock:

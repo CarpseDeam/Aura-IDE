@@ -291,7 +291,14 @@ class WorkerEventHandler(QObject):
             needs_followup=bool(needs_followup),
             metadata=metadata,
         )
-        is_mismatch = self._is_planner_resolution_result(status, metadata)
+        user_visible_blocker = self._is_user_visible_blocker(metadata)
+        suppress_user_followup_card = self._suppress_user_followup_card(metadata)
+        if suppress_user_followup_card and not user_visible_blocker:
+            suppress_main_summary = True
+        is_mismatch = (
+            self._is_planner_resolution_result(status, metadata)
+            and not (suppress_user_followup_card and not user_visible_blocker)
+        )
         if is_mismatch:
             kind, question = self._mismatch_display(metadata)
             self._chat.add_mismatch_resolution_card(tool_call_id, kind, question)
@@ -356,6 +363,16 @@ class WorkerEventHandler(QObject):
         return bool(extras.get("planner_resolution_needed"))
 
     @staticmethod
+    def _is_user_visible_blocker(metadata: dict) -> bool:
+        extras = metadata.get("extras") if isinstance(metadata.get("extras"), dict) else {}
+        return bool(extras.get("user_visible_blocker") or extras.get("user_only_blocker"))
+
+    @staticmethod
+    def _suppress_user_followup_card(metadata: dict) -> bool:
+        extras = metadata.get("extras") if isinstance(metadata.get("extras"), dict) else {}
+        return bool(extras.get("suppress_user_followup_card"))
+
+    @staticmethod
     def _mismatch_display(metadata: dict) -> tuple[str, str]:
         extras = metadata.get("extras") if isinstance(metadata.get("extras"), dict) else {}
         return (
@@ -378,9 +395,16 @@ class WorkerEventHandler(QObject):
     ) -> bool:
         extras = metadata.get("extras") if isinstance(metadata.get("extras"), dict) else {}
         return bool(
-            not ok
-            and needs_followup
-            and extras.get("recoverable")
+            (
+                extras.get("suppress_user_followup_card")
+                or (
+                    not ok
+                    and needs_followup
+                    and extras.get("recoverable")
+                )
+            )
+            and not extras.get("user_visible_blocker")
+            and not extras.get("user_only_blocker")
             and not extras.get("worker_internal_error")
             and not extras.get("internal_error")
         )

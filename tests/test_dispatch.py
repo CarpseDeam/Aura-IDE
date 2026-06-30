@@ -29,6 +29,7 @@ from aura.bridge.dispatch import (
     _validation_selector_commands,
     _workspace_file_exists,
 )
+from aura.bridge.dispatch_session import DispatchSession
 from aura.bridge.event_relay import _is_validation_terminal_record
 from aura.conversation.dispatch import (
     WorkerDispatchRequest,
@@ -188,6 +189,79 @@ def test_worker_dispatch_request_from_dict_accepts_explicit_steps():
 
     assert [step.id for step in req.steps] == ["one", "two", "three"]
     assert [step.goal for step in plan.steps] == ["First step", "Second step", "Third step"]
+
+
+def test_dispatch_session_marks_internal_campaign_continuation():
+    req = WorkerDispatchRequest(
+        goal="Complete campaign",
+        files=["shared.py"],
+        spec="",
+        acceptance="",
+        steps=[
+            WorkerStepSpec(id="one", title="One", goal="First step", files=["one.py"]),
+            WorkerStepSpec(id="two", title="Two", goal="Second step", files=["two.py"]),
+        ],
+    )
+    plan = plan_from_request(req)
+
+    def run_worker_step(_tool_call_id, _step_request, _pending):
+        return WorkerDispatchResult(
+            ok=False,
+            summary="Needs another internal pass.",
+            needs_followup=True,
+            recoverable=True,
+            status=WorkerOutcomeStatus.needs_followup.value,
+            extras={"recoverable": True},
+        )
+
+    result = DispatchSession(
+        tool_call_id="tc1",
+        original_request=req,
+        plan=plan,
+        run_worker_step=run_worker_step,
+        pending=SimpleNamespace(),
+    ).run()
+
+    assert result.extras["dispatch_session"] is True
+    assert result.extras["internal_campaign_continuation"] is True
+    assert result.extras["suppress_user_followup_card"] is True
+    assert result.extras["user_visible_blocker"] is False
+
+
+def test_dispatch_session_user_only_blocker_stays_visible():
+    req = WorkerDispatchRequest(
+        goal="Complete campaign",
+        files=["shared.py"],
+        spec="",
+        acceptance="",
+        steps=[
+            WorkerStepSpec(id="one", title="One", goal="First step", files=["one.py"]),
+            WorkerStepSpec(id="two", title="Two", goal="Second step", files=["two.py"]),
+        ],
+    )
+    plan = plan_from_request(req)
+
+    def run_worker_step(_tool_call_id, _step_request, _pending):
+        return WorkerDispatchResult(
+            ok=False,
+            summary="User decision required.",
+            needs_followup=True,
+            recoverable=True,
+            status=WorkerOutcomeStatus.needs_followup.value,
+            extras={"user_only_blocker": True},
+        )
+
+    result = DispatchSession(
+        tool_call_id="tc1",
+        original_request=req,
+        plan=plan,
+        run_worker_step=run_worker_step,
+        pending=SimpleNamespace(),
+    ).run()
+
+    assert result.extras["internal_campaign_continuation"] is False
+    assert result.extras["suppress_user_followup_card"] is False
+    assert result.extras["user_visible_blocker"] is True
 
 
 def test_dispatch_to_worker_schema_uses_compact_capsule_not_file_plan():
