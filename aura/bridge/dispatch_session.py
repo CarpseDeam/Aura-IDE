@@ -13,7 +13,6 @@ from typing import Any
 
 from aura.conversation.dispatch import WorkerDispatchRequest, WorkerDispatchResult
 from aura.conversation.dispatch_plan import (
-    AggregatedDispatchResult,
     StepResult,
     WorkerDispatchPlan,
     WorkerStepSpec,
@@ -107,7 +106,7 @@ class DispatchSession:
         step = self.plan.steps[0]
         self._emit_plan_todos(active_step_id=step.id)
         worker_result = self._run_one_step(step)
-        step_result = StepResult.from_worker_result(step.id, worker_result)
+        step_result = _step_result_for(step, worker_result)
         self.step_results.append(step_result)
         if step_result.ok:
             self.cursor.completed_step_ids.append(step.id)
@@ -125,41 +124,26 @@ class DispatchSession:
         self,
         worker_result: WorkerDispatchResult,
     ) -> WorkerDispatchResult:
-        extras = worker_result.extras if isinstance(worker_result.extras, dict) else {}
-        aggregate = AggregatedDispatchResult(
+        worker_extras = worker_result.extras if isinstance(worker_result.extras, dict) else {}
+        modified_files = _collect_modified_files(self.step_results) or _dedupe(worker_result.modified_files)
+        return WorkerDispatchResult(
             ok=worker_result.ok,
             summary=worker_result.summary,
-            status=worker_result.status,
-            modified_files=_dedupe(worker_result.modified_files),
-            validation=worker_result.validation,
-            step_results=list(self.step_results),
-            extras={
-                **extras,
-                "dispatch_session": True,
-                "dispatch_plan": self.plan.to_dict(),
-                "dispatch_cursor": {
-                    "index": self.cursor.index,
-                    "completed_step_ids": list(self.cursor.completed_step_ids),
-                    "blocked_step_id": self.cursor.blocked_step_id,
-                },
-            },
-        )
-        result = aggregate.to_worker_result()
-        return WorkerDispatchResult(
-            ok=result.ok,
-            summary=result.summary,
             cancelled=worker_result.cancelled,
             needs_followup=worker_result.needs_followup,
             phase_boundary=worker_result.phase_boundary,
             followup_reason=worker_result.followup_reason,
             recoverable=worker_result.recoverable,
-            status=result.status,
+            status=worker_result.status,
             completed=list(worker_result.completed),
             remaining=list(worker_result.remaining),
-            modified_files=list(result.modified_files),
-            validation=result.validation,
+            modified_files=modified_files,
+            validation=worker_result.validation,
             suggested_next_spec=worker_result.suggested_next_spec,
-            extras=result.extras,
+            extras={
+                **worker_extras,
+                **_session_metadata(self.plan, self.cursor, self.step_results),
+            },
             mismatch=worker_result.mismatch,
         )
 
@@ -179,6 +163,61 @@ class DispatchSession:
         """
         return None
 
+
+# ---------------------------------------------------------------------------
+# Module-level helpers — inert building blocks for Phase 3C multi-step loop
+# ---------------------------------------------------------------------------
+
+def _step_result_for(step: WorkerStepSpec, worker_result: WorkerDispatchResult) -> StepResult:
+    """Convert a WorkerDispatchResult to a StepResult for the given step."""
+    return StepResult.from_worker_result(step.id, worker_result)
+
+
+def _collect_modified_files(step_results: list[StepResult]) -> list[str]:
+    """Dedupe modified files across step results, preserving first-seen order."""
+    seen: set[str] = set()
+    files: list[str] = []
+    for sr in step_results:
+        for path in sr.modified_files:
+            p = str(path or "").strip()
+            if p and p not in seen:
+                files.append(p)
+                seen.add(p)
+    return files
+
+
+def _compute_session_ids(
+    step_results: list[StepResult],
+) -> tuple[list[str], str | None]:
+    """Return (completed_step_ids, blocked_step_id) derived from step results."""
+    completed: list[str] = []
+    blocked: str | None = None
+    for sr in step_results:
+        if sr.ok:
+            completed.append(sr.step_id)
+        elif blocked is None:
+            blocked = sr.step_id
+    return completed, blocked
+
+
+def _session_metadata(
+    plan: WorkerDispatchPlan,
+    cursor: DispatchStepCursor,
+    step_results: list[StepResult],
+) -> dict[str, Any]:
+    """Build session-level extras for the aggregate result."""
+    return {
+        "dispatch_session": True,
+        "dispatch_plan": plan.to_dict(),
+        "dispatch_cursor": {
+            "index": cursor.index,
+            "completed_step_ids": list(cursor.completed_step_ids),
+            "blocked_step_id": cursor.blocked_step_id,
+        },
+        "dispatch_step_results": [sr.to_dict() for sr in step_results],
+        "completed_step_ids": list(cursor.completed_step_ids),
+        "blocked_step_id": cursor.blocked_step_id,
+    }
 
 
 def _dedupe(values: list[str]) -> list[str]:
