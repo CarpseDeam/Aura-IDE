@@ -7,10 +7,13 @@ for a tool_call_id, only the controller may emit visible TODO snapshots.
 Rules:
 - IDs and order never change after begin().
 - Descriptions never change after begin().
-- Unknown Worker objective IDs are ignored.
+- Unknown Worker objective IDs with status other than "done"/"active"
+  are ignored.
+- A Worker "done"/"active" update with an unknown ID is routed to the
+  single active non-blocked canonical objective (the step currently being
+  executed). If there is zero or more than one active row, it is ignored.
 - Worker-local TODOs with unknown IDs, ad-hoc descriptions, or replacement
   task lists are ignored during canonical dispatch.
-- Worker updates may only update status for known objective IDs.
 - Worker cannot add, remove, reorder, or rename visible rows.
 - Final checklist remains visible after dispatch finish.
 - Clear canonical state only when a new dispatch begins for that tool ID,
@@ -215,12 +218,38 @@ class DispatchTodoController:
             task_id = str(task.get("id") or task.get("step_id") or "")
             if not task_id:
                 continue
+            worker_status = _normalize_status(task.get("status") or task.get("state") or "")
+
             obj = ordered.get(task_id)
             if obj is None:
-                # Unknown ID — ignore, do not add
+                # Unknown ID — the worker is reporting on its own task
+                # identifiers which do not match the planner's step IDs.
+                # But exactly one canonical step is active at a time, so
+                # route a "done"/"active" update to the currently-active
+                # objective instead of discarding it.
+                if worker_status not in ("done", "active"):
+                    continue
+                active_obj = _find_single_active(ordered)
+                if active_obj is None:
+                    continue
+                if active_obj.status == "done":
+                    continue
+                active_obj.status = worker_status
+                changed = True
+                # Enforce one active row when routing to active
+                if worker_status == "active" and not active_obj.blocked:
+                    for other in ordered.values():
+                        if other is active_obj:
+                            continue
+                        if other.status == "done":
+                            continue
+                        if other.blocked:
+                            continue
+                        if other.status == "active":
+                            other.status = "pending"
                 continue
+
             # Known ID — absorb status only
-            worker_status = _normalize_status(task.get("status") or task.get("state") or "")
             if worker_status in ("done", "active") and obj.status != "done":
                 if obj.status != worker_status:
                     obj.status = worker_status
@@ -253,6 +282,24 @@ class DispatchTodoController:
         if ordered is None:
             return None
         return ordered.get(objective_id)
+
+
+def _find_single_active(
+    ordered: dict[str, TodoObjective],
+) -> TodoObjective | None:
+    """Return the single active, non-blocked objective, or None.
+
+    Returns None when there are zero or more than one active non-blocked
+    rows — the fallback routing is only safe when the target is unambiguous.
+    """
+    found: TodoObjective | None = None
+    for obj in ordered.values():
+        if obj.status == "active" and not obj.blocked:
+            if found is not None:
+                # More than one active → ambiguous, abort
+                return None
+            found = obj
+    return found
 
 
 def _str_list(raw: Any) -> list[str]:

@@ -92,6 +92,45 @@ class ToolRunner:
                 campaign.errors,
             )
 
+        if not campaign.ok and campaign.requires_steps:
+            error_message = (
+                "Plan incomplete - broad/multi-file/refactor work must be dispatched "
+                "as an ordered steps campaign of bounded objectives. "
+                "The Worker was not started. Re-call dispatch_to_worker with a "
+                "populated steps array. Campaign errors:\n"
+                + "\n".join(f"- {item}" for item in campaign.errors)
+            )
+            result = WorkerDispatchResult(
+                ok=False,
+                summary=error_message,
+                recoverable=True,
+                extras={
+                    "dispatch_not_started": True,
+                    "dispatch_spec_rejected": True,
+                    "planner_resolution_needed": True,
+                    "campaign_errors": list(campaign.errors),
+                },
+            )
+            payload = json.dumps(result.to_tool_payload(), ensure_ascii=False)
+            self._history.append_tool_result(tool_call_id, payload)
+            on_event(
+                ToolResult(
+                    tool_call_id=tool_call_id,
+                    name="dispatch_to_worker",
+                    ok=True,
+                    result=payload,
+                    extras={
+                        "dispatch_not_started": True,
+                        "dispatch_spec_rejected": True,
+                        "planner_resolution_needed": True,
+                        "recoverable": True,
+                        "summary": error_message,
+                        "campaign_errors": list(campaign.errors),
+                    },
+                )
+            )
+            return result
+
         quality = validate_worker_dispatch_spec(req.spec, req.acceptance, goal=req.goal)
         if not quality.ok:
             missing = [

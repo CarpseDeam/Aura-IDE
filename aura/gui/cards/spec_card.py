@@ -595,7 +595,7 @@ class SpecCard(QFrame):
             WorkflowStatus.editing: ("Editing", ACCENT),
             WorkflowStatus.validating: ("Validating", WARN),
             WorkflowStatus.blocked: ("Blocked", WARN),
-            WorkflowStatus.failed_retryable: ("Failed", WARN),
+            WorkflowStatus.failed_retryable: ("Retrying", WARN),
             WorkflowStatus.failed_nonrecoverable: ("Failed", DANGER),
             WorkflowStatus.done: ("Done", SUCCESS),
             WorkflowStatus.cancelled: ("Cancelled", DANGER),

@@ -257,7 +257,7 @@ class WorkflowState:
         }:
             final_status = WorkflowStatus.failed_nonrecoverable
         else:
-            final_status = WorkflowStatus.failed_retryable
+            final_status = WorkflowStatus.planner_resolving
 
         # Compute blocker/failure reason specially for planner_resolving
         if final_status == WorkflowStatus.planner_resolving and isinstance(extras, dict):
