@@ -723,6 +723,9 @@ class _DispatchProxy(QObject):
 
     def _build_critic_callback(self, *, cancel_event: threading.Event) -> CriticCallback:
         def critic(tool_call_id: str, request: CriticRequest):
+            # The hook registry currently wires provider streams as planner/worker.
+            # Reuse the worker backend for model plumbing only; the critic gets no
+            # tools and its events are never relayed to the user-facing worker stream.
             return run_critic_dispatch(
                 tool_call_id,
                 request,

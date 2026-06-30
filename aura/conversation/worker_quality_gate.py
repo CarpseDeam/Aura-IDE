@@ -85,6 +85,8 @@ def handle_worker_quality_gate(
             critic_cb=critic_cb,
             dispatch_tool_call_id=dispatch_tool_call_id,
             worker_request=worker_request,
+            workspace_root=root,
+            changed_files=changed_files,
             diff_text=diff_text,
         )
         state.last_quality_findings = _critic_findings_to_receipt(verdict.findings)
@@ -163,6 +165,8 @@ def _invoke_critic(
     critic_cb: CriticCallback,
     dispatch_tool_call_id: str,
     worker_request: WorkerDispatchRequest,
+    workspace_root: Path,
+    changed_files: list[str],
     diff_text: str,
 ) -> CriticVerdict:
     state.critic_pass_attempted = True
@@ -172,6 +176,8 @@ def _invoke_critic(
             CriticRequest(
                 original_request=worker_request,
                 diff_text=diff_text,
+                workspace_root=workspace_root,
+                changed_files=changed_files,
             ),
         )
     except Exception:
