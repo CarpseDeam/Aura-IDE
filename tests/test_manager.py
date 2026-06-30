@@ -1229,10 +1229,7 @@ def test_campaign_dispatch_cb_exception_routes_to_internal_continuation(
     def _raising_cb(tool_call_id, req):
         raise RuntimeError("boom")
 
-    mock_client.side_effect = [
-        iter([_make_done(content="", tool_calls=[tc])]),
-        iter([ContentDelta(text="Continuing internally"), _make_done(content="Continuing internally")]),
-    ]
+    mock_client.side_effect = [iter([_make_done(content="", tool_calls=[tc])])]
 
     manager.send(
         on_event=on_event,
@@ -1260,7 +1257,12 @@ def test_campaign_dispatch_cb_exception_routes_to_internal_continuation(
     assert parsed["extras"]["internal_campaign_continuation"] is True
     assert parsed["extras"]["suppress_user_followup_card"] is True
     assert parsed["extras"]["user_visible_blocker"] is False
-    assert history.messages[-1]["content"] == "Continuing internally"
+    assert mock_client.call_count == 1
+    assert all(
+        msg.get("content") != "Continuing internally"
+        for msg in history.messages
+        if msg.get("role") == "assistant"
+    )
 
 
 def test_dispatch_spec_rejection_is_plan_incomplete_not_worker_started(
@@ -1300,8 +1302,8 @@ def test_dispatch_spec_rejection_is_plan_incomplete_not_worker_started(
     assert history.messages[-1]["content"] == "Plan fixed"
 
 
-def test_broad_flat_dispatch_rejected_before_spec_card(
-    manager, mock_client, mock_tools, on_event, captured_events, cancel_event, history
+def test_broad_flat_dispatch_reaches_spec_card_without_campaign_rejection(
+    manager, mock_client, mock_tools, on_event, captured_events, cancel_event
 ):
     type(mock_tools).mode = PropertyMock(return_value="planner")
     args = _valid_dispatch_args(
@@ -1311,11 +1313,8 @@ def test_broad_flat_dispatch_rejected_before_spec_card(
     )
     args["summary"] = "Build behavioral verification rung"
     tc = _tool_call("dispatch1", "dispatch_to_worker", args)
-    dispatch_cb = MagicMock()
-    mock_client.side_effect = [
-        iter([_make_done(content="", tool_calls=[tc])]),
-        iter([ContentDelta(text="Replanning"), _make_done(content="Replanning")]),
-    ]
+    dispatch_cb = MagicMock(return_value=WorkerDispatchResult(ok=True, summary="done"))
+    mock_client.side_effect = [iter([_make_done(content="", tool_calls=[tc])])]
 
     manager.send(
         on_event=on_event,
@@ -1326,21 +1325,17 @@ def test_broad_flat_dispatch_rejected_before_spec_card(
         dispatch_cb=dispatch_cb,
     )
 
-    dispatch_cb.assert_not_called()
-    assert not any(isinstance(e, WorkerDispatchRequested) for e in captured_events)
+    dispatch_cb.assert_called_once()
+    assert any(isinstance(e, WorkerDispatchRequested) for e in captured_events)
     dispatch_result = next(
         e for e in captured_events
         if isinstance(e, ToolResult) and e.name == "dispatch_to_worker"
     )
     assert dispatch_result.ok is True
     parsed = json.loads(dispatch_result.result)
-    assert parsed["ok"] is False
-    assert parsed["recoverable"] is True
-    assert parsed["extras"]["dispatch_not_started"] is True
-    assert parsed["extras"]["dispatch_campaign_rejected"] is True
-    assert parsed["extras"]["requires_campaign_steps"] is True
-    assert "decomposed steps campaign" in parsed["summary"]
-    assert history.messages[-1]["content"] == "Replanning"
+    assert parsed["ok"] is True
+    assert "dispatch_campaign_rejected" not in parsed.get("extras", {})
+    assert "Plan incomplete" not in parsed["summary"]
 
 
 def test_broad_campaign_dispatch_reaches_spec_card_with_steps(

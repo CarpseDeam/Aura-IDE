@@ -390,6 +390,43 @@ def test_handle_dispatch_without_steps_keeps_flat_request_empty_steps(tmp_path: 
     assert dispatch_events[0].steps == []
 
 
+def test_handle_dispatch_broad_without_steps_proceeds_via_compatibility_plan(tmp_path: Path):
+    runner = _make_runner(tmp_path)
+    captured = {}
+    events = []
+
+    def dispatch_cb(tool_call_id, req):
+        captured["tool_call_id"] = tool_call_id
+        captured["request"] = req
+        return WorkerDispatchResult(ok=True, summary="done")
+
+    result = runner.handle_dispatch(
+        tool_call_id="dispatch-broad-flat",
+        args={
+            "goal": "Build behavioral verification rung",
+            "files": ["a.py", "b.py", "c.py"],
+            "spec": "Add a validation rung across the dispatch subsystem.",
+            "acceptance": "Run compileall and focused dispatch tests.",
+            "summary": "Build behavioral verification rung",
+        },
+        on_event=events.append,
+        dispatch_cb=dispatch_cb,
+    )
+
+    assert result is not None
+    assert result.ok is True
+    assert captured["tool_call_id"] == "dispatch-broad-flat"
+    assert captured["request"].steps == []
+    dispatch_events = [ev for ev in events if isinstance(ev, WorkerDispatchRequested)]
+    assert len(dispatch_events) == 1
+    assert dispatch_events[0].steps == []
+    tool_results = [ev for ev in events if isinstance(ev, ToolResult)]
+    assert len(tool_results) == 1
+    payload = json.loads(tool_results[0].result)
+    assert payload["ok"] is True
+    assert "dispatch_campaign_rejected" not in payload.get("extras", {})
+
+
 def test_recoverable_dispatch_spec_rejection_emits_nonfailed_tool_event(tmp_path: Path):
     runner = _make_runner(tmp_path)
     events = []

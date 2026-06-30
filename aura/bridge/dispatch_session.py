@@ -144,7 +144,7 @@ class DispatchSession:
                 ok=False,
                 summary=(
                     "Aura paused the campaign because it had no executable steps. "
-                    "Planner is rebuilding the dispatch plan."
+                    "No user action is required."
                 ),
                 status=WorkerOutcomeStatus.needs_followup.value,
                 needs_followup=True,
@@ -200,7 +200,7 @@ class DispatchSession:
                 ok=False,
                 summary=(
                     "Aura paused the campaign before executing a step. "
-                    "Planner is rebuilding the dispatch plan."
+                    "No user action is required."
                 ),
                 status=WorkerOutcomeStatus.needs_followup.value,
                 needs_followup=True,
@@ -537,11 +537,11 @@ def _calm_campaign_recovery_summary(blocked_step: Any, classification: str) -> s
     if classification == INTERNAL_RECOVERABLE_ERROR:
         return (
             f"Aura paused the campaign{step_text} for internal recovery. "
-            "Planner is selecting the next bounded action."
+            "No user action is required."
         )
     return (
-        f"Aura paused the campaign{step_text} to continue planning. "
-        "Planner is selecting the next bounded action."
+        f"Aura paused the campaign{step_text} before completion. "
+        "No user action is required."
     )
 
 

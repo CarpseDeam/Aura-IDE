@@ -100,6 +100,14 @@ def worker_dispatch_is_terminal(result: WorkerDispatchResult | None) -> bool:
     """
     if result is None:
         return False
+    extras = result.extras if isinstance(result.extras, dict) else {}
+    if (
+        extras.get("internal_campaign_continuation")
+        and extras.get("suppress_user_followup_card")
+        and not extras.get("user_visible_blocker")
+        and not extras.get("user_only_blocker")
+    ):
+        return True
 
     # Explicit boolean signals always win (fast path).
     if result.needs_followup:

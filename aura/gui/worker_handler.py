@@ -352,7 +352,8 @@ class WorkerEventHandler(QObject):
                     extras=metadata.get("extras"),
                 )
             )
-        self._clear_active_spec_card(tool_call_id)
+        if not (suppress_user_followup_card and not user_visible_blocker):
+            self._clear_active_spec_card(tool_call_id)
         self.worker_running_changed.emit(False)
 
     @staticmethod

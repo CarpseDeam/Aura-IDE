@@ -468,6 +468,81 @@ def test_dispatch_session_environment_blocker_stays_user_visible():
     assert result.extras["terminal_environment_blocker"] is True
 
 
+def test_dispatch_session_explicit_campaign_emits_one_started_and_finished():
+    req = WorkerDispatchRequest(
+        goal="Complete campaign",
+        files=["shared.py"],
+        spec="",
+        acceptance="",
+        steps=[
+            WorkerStepSpec(
+                id="one",
+                title="One",
+                goal="First step",
+                spec="Edit one.py.",
+                files=["one.py"],
+            ),
+            WorkerStepSpec(
+                id="two",
+                title="Two",
+                goal="Second step",
+                spec="Edit two.py.",
+                files=["two.py"],
+            ),
+        ],
+    )
+    plan = plan_from_request(req)
+    started = []
+    finished = []
+    run_goals = []
+
+    def run_worker_step(_tool_call_id, step_request, _pending):
+        run_goals.append(step_request.goal)
+        return WorkerDispatchResult(ok=True, summary=f"done {step_request.goal}")
+
+    result = DispatchSession(
+        tool_call_id="tc1",
+        original_request=req,
+        plan=plan,
+        run_worker_step=run_worker_step,
+        pending=SimpleNamespace(),
+        emit_worker_started=started.append,
+        emit_worker_finished=lambda *args: finished.append(args),
+    ).run()
+
+    assert result.ok is True
+    assert run_goals == ["First step", "Second step"]
+    assert started == ["tc1"]
+    assert len(finished) == 1
+    assert finished[0][0] == "tc1"
+    assert finished[0][1] is True
+
+
+def test_canonical_dispatch_todos_suppress_worker_local_updates():
+    from unittest.mock import Mock
+
+    from aura.bridge.dispatch import _DispatchProxy
+
+    proxy = _DispatchProxy(
+        parent_widget=Mock(),
+        registry_factory=Mock(),
+        approval_proxy=Mock(),
+        workspace_root=None,
+    )
+    emitted = []
+    proxy.workerTodoListUpdated.connect(lambda tool_call_id, tasks: emitted.append((tool_call_id, tasks)))
+
+    canonical = [{"description": "Campaign step", "status": "active"}]
+    worker_local = [{"description": "Worker-local TODO", "status": "active"}]
+
+    proxy._begin_canonical_dispatch_todos("tc1")
+    proxy.workerTodoListUpdated.emit("tc1", canonical)
+    proxy._relay_worker_todo_update("tc1", worker_local)
+    proxy._end_canonical_dispatch_todos("tc1")
+
+    assert emitted == [("tc1", canonical)]
+
+
 def test_dispatch_to_worker_schema_uses_compact_capsule_not_file_plan():
     schema_text = _dispatch_schema_text()
     schema_text_lower = schema_text.lower()

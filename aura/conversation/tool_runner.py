@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 from dataclasses import replace
 from pathlib import Path
@@ -47,6 +48,8 @@ from aura.project_env import (
 )
 from aura.sandbox import SandboxExecutor, SandboxResult, WatchResult
 
+_log = logging.getLogger(__name__)
+
 
 class ToolRunner:
     """Owns execution of dispatch and terminal tools."""
@@ -82,44 +85,12 @@ class ToolRunner:
         req = enrich_worker_dispatch_contract(req)
         campaign = validate_dispatch_campaign(req)
         if not campaign.ok:
-            error_message = (
-                "Plan incomplete - dispatch_to_worker requires a decomposed steps campaign "
-                "for this implementation. The Worker was not started. Call dispatch_to_worker "
-                "again with real ordered steps; each step needs id, title, goal, spec, files "
-                "when known, acceptance when knowable, and validation_commands when knowable. "
-                "Campaign errors:\n"
-                + "\n".join(f"- {item}" for item in campaign.errors)
+            _log.debug(
+                "dispatch_campaign_shape_warning tool_call_id=%s requires_steps=%s errors=%s",
+                tool_call_id,
+                campaign.requires_steps,
+                campaign.errors,
             )
-            result = WorkerDispatchResult(
-                ok=False,
-                summary=error_message,
-                recoverable=True,
-                extras={
-                    "dispatch_not_started": True,
-                    "dispatch_campaign_rejected": True,
-                    "requires_campaign_steps": campaign.requires_steps,
-                    "campaign_errors": list(campaign.errors),
-                },
-            )
-            payload = json.dumps(result.to_tool_payload(), ensure_ascii=False)
-            self._history.append_tool_result(tool_call_id, payload)
-            on_event(
-                ToolResult(
-                    tool_call_id=tool_call_id,
-                    name="dispatch_to_worker",
-                    ok=True,
-                    result=payload,
-                    extras={
-                        "dispatch_not_started": True,
-                        "dispatch_campaign_rejected": True,
-                        "recoverable": True,
-                        "summary": error_message,
-                        "requires_campaign_steps": campaign.requires_steps,
-                        "campaign_errors": list(campaign.errors),
-                    },
-                )
-            )
-            return result
 
         quality = validate_worker_dispatch_spec(req.spec, req.acceptance, goal=req.goal)
         if not quality.ok:
@@ -197,7 +168,7 @@ class ToolRunner:
                     ok=False,
                     summary=(
                         "Aura paused the campaign for internal recovery. "
-                        "Planner is selecting the next bounded action."
+                        "No user action is required."
                     ),
                     needs_followup=True,
                     recoverable=True,

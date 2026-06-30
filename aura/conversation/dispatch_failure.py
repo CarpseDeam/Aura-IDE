@@ -21,6 +21,8 @@ def classify_failed_worker_dispatch(
     failed_attempts: int,
 ) -> dict[str, Any]:
     """Record a failed dispatch and decide whether the planner may continue."""
+    if _is_quiet_internal_campaign_result(result):
+        return {"counts_as_attempt": False, "blocker_reason": ""}
     if _is_worker_internal_error(result):
         return {"counts_as_attempt": False, "blocker_reason": "internal"}
 
@@ -62,6 +64,15 @@ def _is_worker_internal_error(result: WorkerDispatchResult) -> bool:
     return bool(
         result.extras.get("worker_internal_error")
         or result.extras.get("dispatch_internal_error")
+    )
+
+
+def _is_quiet_internal_campaign_result(result: WorkerDispatchResult) -> bool:
+    return bool(
+        result.extras.get("internal_campaign_continuation")
+        and result.extras.get("suppress_user_followup_card")
+        and not result.extras.get("user_visible_blocker")
+        and not result.extras.get("user_only_blocker")
     )
 
 

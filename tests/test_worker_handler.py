@@ -730,6 +730,7 @@ class TestMismatchResolutionWiring:
 
         chat.add_mismatch_resolution_card.assert_not_called()
         chat.add_worker_summary.assert_not_called()
+        chat.remove_spec_card.assert_not_called()
         assert handler._active_mismatch_card_id is None
 
     def test_internal_campaign_harness_error_metadata_suppresses_summary(
@@ -754,6 +755,7 @@ class TestMismatchResolutionWiring:
 
         chat.add_mismatch_resolution_card.assert_not_called()
         chat.add_worker_summary.assert_not_called()
+        chat.remove_spec_card.assert_not_called()
         assert handler._active_mismatch_card_id is None
 
     def test_user_visible_campaign_blocker_still_surfaces_mismatch(
