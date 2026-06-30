@@ -289,6 +289,7 @@ class _DispatchProxy(QObject):
 
     def clear_records(self) -> None:
         self._records.clear()
+        self._todo_controller.clear_all()
 
     def result_metadata(self, tool_call_id: str) -> dict[str, Any]:
         return dict(self._result_metadata.get(tool_call_id, {}))

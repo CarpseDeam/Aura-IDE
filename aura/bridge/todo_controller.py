@@ -104,12 +104,31 @@ class DispatchTodoController:
     def set_active(
         self, tool_call_id: str, objective_id: str
     ) -> list[dict[str, Any]]:
-        """Mark one objective as active. Returns the full snapshot."""
+        """Mark one objective as active. Returns the full snapshot.
+
+        Enforces one-active-row: any other non-done, non-blocked active
+        row is returned to pending. Done rows and blocked rows are
+        never touched.
+        """
         obj = self._get(tool_call_id, objective_id)
         if obj is None:
             return self.snapshot(tool_call_id)
-        if obj.status not in ("done",):
-            obj.status = "active"
+        if obj.status in ("done",):
+            return self.snapshot(tool_call_id)
+
+        ordered = self._canonical.get(tool_call_id)
+        if ordered is not None:
+            for other_id, other in ordered.items():
+                if other_id == objective_id:
+                    continue
+                if other.status == "done":
+                    continue
+                if other.blocked:
+                    continue
+                if other.status == "active":
+                    other.status = "pending"
+
+        obj.status = "active"
         return self.snapshot(tool_call_id)
 
     def mark_done(
@@ -155,6 +174,14 @@ class DispatchTodoController:
         """Remove canonical state for a tool_call_id."""
         self._canonical.pop(tool_call_id, None)
 
+    def clear_all(self) -> None:
+        """Remove all canonical state across every tool_call_id.
+
+        Called on conversation reset / new-chat to prevent stale TODO
+        checklists from surviving into a fresh conversation.
+        """
+        self._canonical.clear()
+
     def has_canonical(self, tool_call_id: str) -> bool:
         """Return True if canonical objectives exist for this tool_call_id."""
         return tool_call_id in self._canonical
@@ -172,6 +199,9 @@ class DispatchTodoController:
 
         Returns the canonical snapshot if any status was absorbed, or None
         if the worker update should be completely suppressed (no emission).
+
+        Enforces one-active-row: when a known objective is set to active,
+        any other non-done, non-blocked active row is returned to pending.
         """
         if not self.has_canonical(tool_call_id):
             return None
@@ -195,6 +225,17 @@ class DispatchTodoController:
                 if obj.status != worker_status:
                     obj.status = worker_status
                     changed = True
+                    # Enforce one active row when setting a known ID to active
+                    if worker_status == "active" and not obj.blocked:
+                        for other_id, other in ordered.items():
+                            if other_id == task_id:
+                                continue
+                            if other.status == "done":
+                                continue
+                            if other.blocked:
+                                continue
+                            if other.status == "active":
+                                other.status = "pending"
 
         # Only re-emit if something actually changed
         if changed:
