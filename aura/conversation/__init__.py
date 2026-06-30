@@ -13,6 +13,15 @@ from aura.conversation.dispatch import (
     normalize_outcome_status,
     normalize_worker_task,
 )
+from aura.conversation.dispatch_plan import (
+    AggregatedDispatchResult,
+    StepResult,
+    StepValidationPolicy,
+    WorkerDispatchPlan,
+    WorkerStepSpec,
+    plan_from_request,
+    request_for_step,
+)
 from aura.conversation.history import History
 from aura.conversation.task_shape import TaskShape, infer_task_shape
 from aura.conversation.workflow_state import (
@@ -39,6 +48,11 @@ __all__ = [
     "WorkerMismatch",
     "WorkerOutcomeStatus",
     "WorkerTaskSpec",
+    "WorkerDispatchPlan",
+    "WorkerStepSpec",
+    "StepResult",
+    "StepValidationPolicy",
+    "AggregatedDispatchResult",
     "TaskShape",
     "DispatchCallback",
     "CriticCallback",
@@ -49,6 +63,8 @@ __all__ = [
     "infer_outcome_status",
     "normalize_outcome_status",
     "normalize_worker_task",
+    "plan_from_request",
+    "request_for_step",
     "ValidationCommandRun",
     "ValidationStatus",
     "WorkflowState",
