@@ -1277,7 +1277,8 @@ class ConversationManager:
                         self._history, planner_stale_read_files
                     )
                     self._append_dispatch_blocker_message(
-                        res["result"], str(res.get("blocker_reason", "")), on_event
+                        res["result"], str(res.get("blocker_reason", "")), on_event,
+                        res.get("failure_constraint", ""),
                     )
                     return
                 if res.get("completed_dispatch_for_final"):
@@ -1672,7 +1673,10 @@ class ConversationManager:
         result: WorkerDispatchResult,
         reason: str,
         on_event: EventCallback,
+        failure_constraint: str = "",
     ) -> None:
+        if failure_constraint:
+            self._history.append_user_text(failure_constraint)
         # Suppress visible card. Still emit Done with empty content so the
         # planner stream closes cleanly. No ContentDelta, no history append.
         on_event(Done(
@@ -1717,6 +1721,7 @@ class ConversationManager:
                     "result": result,
                     "blocker_reason": blocker_reason,
                     "terminal_dispatch": False,
+                    "failure_constraint": action.get("failure_constraint", ""),
                 }
             return {
                 "id": tool_call_id,
@@ -1750,6 +1755,7 @@ class ConversationManager:
                         "blocker": True,
                         "result": result,
                         "blocker_reason": blocker_reason,
+                        "failure_constraint": action.get("failure_constraint", ""),
                         "planner_stale_read_files": (
                             list(result.modified_files)
                             if result.modified_files

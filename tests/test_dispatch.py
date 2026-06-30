@@ -3152,3 +3152,303 @@ class TestWorkerTodoIsolation:
 
         assert proxy._todo_controller.has_canonical("tc1") is False
         assert proxy._todo_controller.snapshot("tc1") == []
+
+
+# ── Campaign recovery classification tests ──────────────────────────
+
+
+def test_untagged_not_ok_campaign_classifies_as_planner_resolution():
+    """An untagged not-ok campaign result must classify as PLANNER_RESOLUTION_NEEDED,
+    not USER_VISIBLE_BLOCKER."""
+    req = WorkerDispatchRequest(
+        goal="Complete campaign",
+        files=["shared.py"],
+        spec="",
+        acceptance="",
+        steps=[
+            WorkerStepSpec(id="one", title="One", goal="First step", files=["one.py"]),
+        ],
+    )
+    plan = plan_from_request(req)
+
+    def run_worker_step(_tool_call_id, _step_request, _pending):
+        return WorkerDispatchResult(
+            ok=False,
+            summary="Something went wrong.",
+        )
+
+    result = DispatchSession(
+        tool_call_id="tc1",
+        original_request=req,
+        plan=plan,
+        run_worker_step=run_worker_step,
+        pending=SimpleNamespace(),
+    ).run()
+
+    assert result.extras["campaign_recovery_classification"] == "planner_resolution_needed"
+    assert result.extras["user_visible_blocker"] is False
+
+
+def test_user_only_blocker_campaign_still_user_facing():
+    """A result with user_only_blocker=True still classifies as user-facing."""
+    req = WorkerDispatchRequest(
+        goal="Complete campaign",
+        files=["shared.py"],
+        spec="",
+        acceptance="",
+        steps=[
+            WorkerStepSpec(id="one", title="One", goal="First step", files=["one.py"]),
+        ],
+    )
+    plan = plan_from_request(req)
+
+    def run_worker_step(_tool_call_id, _step_request, _pending):
+        return WorkerDispatchResult(
+            ok=False,
+            summary="User decision required.",
+            needs_followup=True,
+            recoverable=True,
+            status=WorkerOutcomeStatus.needs_followup.value,
+            extras={"user_only_blocker": True},
+        )
+
+    result = DispatchSession(
+        tool_call_id="tc1",
+        original_request=req,
+        plan=plan,
+        run_worker_step=run_worker_step,
+        pending=SimpleNamespace(),
+    ).run()
+
+    assert result.extras["campaign_recovery_classification"] == "user_only_blocker"
+    assert result.extras["user_visible_blocker"] is True
+    assert result.extras["user_only_blocker"] is True
+
+
+def test_untagged_not_ok_suppresses_user_followup_card():
+    """An untagged campaign failure ends up with suppress_user_followup_card=True
+    in its session metadata."""
+    req = WorkerDispatchRequest(
+        goal="Complete campaign",
+        files=["shared.py"],
+        spec="",
+        acceptance="",
+        steps=[
+            WorkerStepSpec(id="one", title="One", goal="First step", files=["one.py"]),
+        ],
+    )
+    plan = plan_from_request(req)
+
+    def run_worker_step(_tool_call_id, _step_request, _pending):
+        return WorkerDispatchResult(
+            ok=False,
+            summary="Something went wrong.",
+        )
+
+    result = DispatchSession(
+        tool_call_id="tc1",
+        original_request=req,
+        plan=plan,
+        run_worker_step=run_worker_step,
+        pending=SimpleNamespace(),
+    ).run()
+
+    assert result.extras["suppress_user_followup_card"] is True
+    assert result.extras["internal_campaign_continuation"] is True
+
+
+# ── Failure constraint tests ──────────────────────────────────────────
+
+
+def test_failure_constraint_mismatch():
+    """A mismatch result yields a non-empty specific failure_constraint."""
+    from aura.conversation.dispatch_failure import classify_failed_worker_dispatch
+
+    result = WorkerDispatchResult(
+        ok=False,
+        summary="Worker found a conflict",
+        needs_followup=True,
+        recoverable=True,
+        mismatch=WorkerMismatch(
+            kind="missing_symbol",
+            file_paths=["a.py"],
+            requested="Add func",
+            observed="Symbol already exists in b.py",
+            worker_recommendation="Rename",
+            question_for_planner="Should I rename?",
+        ),
+    )
+    action = classify_failed_worker_dispatch(
+        args={"goal": "Add func", "files": ["a.py"]},
+        result=result,
+        failures={},
+        failed_attempts=0,
+    )
+    assert action["failure_constraint"]
+    assert "CONSTRAINT FOR NEXT ATTEMPT:" in action["failure_constraint"]
+    assert "Symbol already exists" in action["failure_constraint"]
+
+
+def test_failure_constraint_validation():
+    """A plain validation failure yields a non-empty constraint."""
+    from aura.conversation.dispatch_failure import classify_failed_worker_dispatch
+
+    result = WorkerDispatchResult(
+        ok=False,
+        summary="Validation errors",
+        needs_followup=True,
+        recoverable=True,
+        status=WorkerOutcomeStatus.needs_followup.value,
+        validation="pytest failed: test_a.py AssertionError",
+        extras={"errors": ["test_a.py failed"]},
+    )
+    action = classify_failed_worker_dispatch(
+        args={"goal": "Test", "files": ["a.py"]},
+        result=result,
+        failures={},
+        failed_attempts=0,
+    )
+    assert action["failure_constraint"]
+    assert "CONSTRAINT FOR NEXT ATTEMPT:" in action["failure_constraint"]
+    assert "pytest failed" in action["failure_constraint"]
+
+
+def test_failure_constraint_composition():
+    """A composition_failure result yields a non-empty constraint with files/validation."""
+    from aura.conversation.dispatch_failure import classify_failed_worker_dispatch
+
+    result = WorkerDispatchResult(
+        ok=False,
+        summary="Composition check failed",
+        needs_followup=True,
+        recoverable=True,
+        status=WorkerOutcomeStatus.needs_followup.value,
+        validation="Step ordering violated dependency constraint",
+        modified_files=["a.py", "b.py"],
+        extras={
+            "planner_resolution_needed": True,
+            "composition_failure": True,
+        },
+    )
+    action = classify_failed_worker_dispatch(
+        args={"goal": "Refactor", "files": ["a.py", "b.py"]},
+        result=result,
+        failures={},
+        failed_attempts=0,
+    )
+    assert action["failure_constraint"]
+    assert "CONSTRAINT FOR NEXT ATTEMPT:" in action["failure_constraint"]
+    assert "composition" in action["failure_constraint"].lower()
+    assert "a.py" in action["failure_constraint"] or "b.py" in action["failure_constraint"]
+
+
+def test_failure_constraint_repeated():
+    """A repeated-signature stop yields an escalation constraint."""
+    from aura.conversation.dispatch_failure import classify_failed_worker_dispatch
+
+    result = WorkerDispatchResult(
+        ok=False,
+        summary="Repeated failure",
+        needs_followup=True,
+        recoverable=True,
+        status=WorkerOutcomeStatus.needs_followup.value,
+    )
+    # First call to establish the signature
+    failures: dict[str, int] = {}
+    for _ in range(2):
+        action = classify_failed_worker_dispatch(
+            args={"goal": "Same approach", "files": ["a.py"]},
+            result=result,
+            failures=failures,
+            failed_attempts=0,
+        )
+    # Second call (repeated_count >= 2)
+    assert action["blocker_reason"] == "repeated"
+    assert action["failure_constraint"]
+    assert "CONSTRAINT FOR NEXT ATTEMPT:" in action["failure_constraint"]
+    assert "not repeat" in action["failure_constraint"].lower()
+
+
+def test_failure_constraint_in_payload():
+    """A counted failed attempt returns failure_constraint in the dict."""
+    from aura.conversation.dispatch_failure import classify_failed_worker_dispatch
+
+    result = WorkerDispatchResult(
+        ok=False,
+        summary="Needs followup",
+        needs_followup=True,
+        recoverable=True,
+    )
+    action = classify_failed_worker_dispatch(
+        args={"goal": "Fix", "files": ["x.py"]},
+        result=result,
+        failures={},
+        failed_attempts=0,
+    )
+    assert "failure_constraint" in action
+    assert action["counts_as_attempt"] is True
+
+
+def test_failure_constraint_appended_to_history():
+    """_append_dispatch_blocker_message appends the constraint to history
+    with the marker leading."""
+    from unittest.mock import Mock
+
+    from aura.conversation.dispatch import WorkerDispatchResult
+    from aura.conversation.history import History
+    from aura.conversation.manager import ConversationManager
+
+    history = History()
+    mgr = ConversationManager(history=history, tool_registry=Mock())
+
+    result = WorkerDispatchResult(
+        ok=False,
+        summary="Validation errors found",
+        needs_followup=True,
+        recoverable=True,
+        validation="test_x failed",
+        extras={"errors": ["test_x.py"]},
+    )
+
+    constraint = (
+        "CONSTRAINT FOR NEXT ATTEMPT: Previous attempt failed validation: test_x failed"
+    )
+    mgr._append_dispatch_blocker_message(
+        result=result,
+        reason="",
+        on_event=Mock(),
+        failure_constraint=constraint,
+    )
+
+    # history should contain the constraint text
+    messages = history.messages
+    assert any(constraint in msg.get("content", "") for msg in messages), (
+        f"Constraint {constraint!r} not found in history messages"
+    )
+
+
+def test_failure_constraint_empty_when_quiet():
+    """A quiet internal campaign result yields empty failure_constraint."""
+    from aura.conversation.dispatch_failure import classify_failed_worker_dispatch
+
+    result = WorkerDispatchResult(
+        ok=False,
+        summary="Internal continuation",
+        needs_followup=True,
+        recoverable=True,
+        status=WorkerOutcomeStatus.needs_followup.value,
+        extras={
+            "internal_campaign_continuation": True,
+            "suppress_user_followup_card": True,
+            "user_visible_blocker": False,
+            "user_only_blocker": False,
+        },
+    )
+    action = classify_failed_worker_dispatch(
+        args={"goal": "Campaign", "files": ["a.py"]},
+        result=result,
+        failures={},
+        failed_attempts=0,
+    )
+    assert action["counts_as_attempt"] is False
+    assert action["failure_constraint"] == ""

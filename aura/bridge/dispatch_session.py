@@ -514,7 +514,7 @@ def _campaign_recovery_classification(
         or worker_result.phase_boundary
         or worker_result.mismatch is not None
     ):
-        return USER_VISIBLE_BLOCKER
+        return PLANNER_RESOLUTION_NEEDED
     return NO_RECOVERY_NEEDED
 
 
