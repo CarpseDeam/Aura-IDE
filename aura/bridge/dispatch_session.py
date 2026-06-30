@@ -1,9 +1,15 @@
 """Internal Worker dispatch session orchestration seam.
 
 DispatchSession is the engine boundary between the visible GUI dispatch bridge
-and the step-sized Worker execution model. In this foundation pass it runs the
-one-step compatibility plan through the existing Worker path so visible behavior
-stays unchanged while the architecture gets a real cursor owner.
+and the step-sized Worker execution model. It executes every WorkerDispatchPlan
+step in order through the existing Worker path, stopping at the first failure,
+while the same tool_call_id and visible dispatch identity are preserved throughout.
+
+Lifecycle ownership (Phase 3D):
+DispatchSession owns the outer workerStarted / workerFinished emission for the
+whole campaign. _run_worker is a pure execution function that no longer emits
+visible lifecycle signals, so a multi-step plan produces exactly one started and
+one finished event regardless of how many internal steps run.
 """
 from __future__ import annotations
 
@@ -22,10 +28,17 @@ from aura.conversation.dispatch_plan import (
 
 RunWorkerStep = Callable[[str, WorkerDispatchRequest, Any], WorkerDispatchResult]
 
+# Callback types for the outer campaign lifecycle signals.
+# Signatures match the Qt signals on _DispatchProxy:
+#   workerStarted  → (tool_call_id: str)
+#   workerFinished → (tool_call_id: str, ok: bool, summary: str, needs_followup: bool, status: str)
+_EmitStarted = Callable[[str], None]
+_EmitFinished = Callable[[str, bool, str, bool, str], None]
+
 
 @dataclass
 class DispatchStepCursor:
-    """Mutable cursor for one visible dispatch campaign."""
+    """Mutable cursor tracking progress across one visible dispatch campaign."""
 
     index: int = 0
     completed_step_ids: list[str] = field(default_factory=list)
@@ -37,22 +50,27 @@ class DispatchStepCursor:
 
 
 class DispatchSession:
-    """Orchestrates one visible dispatch as one or more Worker steps.
+    """Orchestrates one visible dispatch as one or more sequential Worker steps.
 
     Product invariant:
     The user expressed intent. That intent is durable until completed,
     cancelled, or truly blocked by a user-only decision.
 
-    Step terminal outcomes allowed by the session model:
-    1. completed with concrete write or validation proof,
-    2. concrete planner-resolvable blocker,
-    3. concrete user-only blocker,
-    4. user cancelled/rejected,
-    5. tool/environment failure.
+    Visible lifecycle:
+    - workerStarted fires once, before the first step.
+    - workerFinished fires once, after the last/blocking step, with the
+      aggregate campaign outcome.
+    - Internal steps execute silently inside _run_worker_step without
+      re-emitting started/finished to the UI.
 
-    Invalid user-facing outcomes this boundary is meant to absorb in later
-    phases: zero-write orientation/thrash, "redispatch narrower" after no work,
-    and final receipts with no changed files and no real blocker.
+    TODO rail:
+    - All steps start as pending.
+    - The active step becomes active while it runs.
+    - Completed steps become done before the next step activates.
+    - A blocked/failed step shows as active+blocked in the final emission.
+    - One final TODO emission happens after the loop ends.
+    - Worker-local TODO updates from inside _run_worker_step are blocked for
+      canonical dispatch tool_call_ids by _DispatchProxy._relay_worker_todo_update.
     """
 
     def __init__(
@@ -64,6 +82,8 @@ class DispatchSession:
         run_worker_step: RunWorkerStep,
         pending: Any,
         emit_todo_update: Callable[[str, list[dict[str, Any]]], None] | None = None,
+        emit_worker_started: _EmitStarted | None = None,
+        emit_worker_finished: _EmitFinished | None = None,
     ) -> None:
         self.tool_call_id = tool_call_id
         self.original_request = original_request
@@ -71,8 +91,14 @@ class DispatchSession:
         self._run_worker_step = run_worker_step
         self._pending = pending
         self._emit_todo_update = emit_todo_update
+        self._emit_worker_started = emit_worker_started
+        self._emit_worker_finished = emit_worker_finished
         self.cursor = DispatchStepCursor()
         self.step_results: list[StepResult] = []
+
+    # ------------------------------------------------------------------
+    # TODO emission
+    # ------------------------------------------------------------------
 
     def _emit_plan_todos(self, *, active_step_id: str | None = None) -> None:
         if self._emit_todo_update is None:
@@ -85,10 +111,24 @@ class DispatchSession:
         )
         self._emit_todo_update(self.tool_call_id, tasks)
 
+    # ------------------------------------------------------------------
+    # Main entry point
+    # ------------------------------------------------------------------
+
     def run(self) -> WorkerDispatchResult:
-        """Run the current compatibility session and return one aggregate result."""
+        """Execute every plan step in order and return the aggregate result.
+
+        workerStarted is emitted once before the first step.
+        workerFinished is emitted once after the last/blocking step with the
+        aggregate ok/summary/needs_followup/status — never per internal step.
+
+        Steps run sequentially under the same tool_call_id. The first step that
+        triggers _step_should_stop halts the campaign; that step's id is recorded
+        as blocked_step_id. Steps completed before the halt contribute their
+        modified files to the aggregate and appear as done in the final TODO state.
+        """
         if not self.plan.steps:
-            return WorkerDispatchResult(
+            result = WorkerDispatchResult(
                 ok=False,
                 summary="Worker dispatch plan contained no executable steps.",
                 status="harness_error",
@@ -98,32 +138,104 @@ class DispatchSession:
                     "planner_resolution_needed": True,
                 },
             )
+            self._emit_lifecycle_pair(result)
+            return result
 
-        # Foundation pass: run exactly one compatibility step through today's
-        # Worker path. Multi-step sequencing lands on this cursor in the next
-        # phase without changing the visible dispatch lifecycle.
+        # Emit initial TODO state: all steps pending.
         self._emit_plan_todos(active_step_id=None)
-        step = self.plan.steps[0]
-        self._emit_plan_todos(active_step_id=step.id)
-        worker_result = self._run_one_step(step)
-        step_result = _step_result_for(step, worker_result)
-        self.step_results.append(step_result)
-        if step_result.ok:
+
+        # Campaign starts — one visible Worker start event for the whole run.
+        if self._emit_worker_started is not None:
+            self._emit_worker_started(self.tool_call_id)
+
+        final_worker_result: WorkerDispatchResult | None = None
+
+        for i, step in enumerate(self.plan.steps):
+            self.cursor.index = i
+
+            # Activate this step in the TODO rail.
+            self._emit_plan_todos(active_step_id=step.id)
+
+            worker_result = self._run_one_step(step)
+            final_worker_result = worker_result
+
+            step_result = _step_result_for(step, worker_result)
+            self.step_results.append(step_result)
+
+            if _step_should_stop(step_result, worker_result):
+                # Record as blocked; final TODO emit below shows active+blocked.
+                self.cursor.blocked_step_id = step.id
+                break
+
+            # Step completed — advance cursor; next iteration activates next step.
             self.cursor.completed_step_ids.append(step.id)
-        else:
-            self.cursor.blocked_step_id = step.id
-        result = self._aggregate_from_worker_result(worker_result)
+
+        # Emit final TODO state once: completed=done, blocked=active+blocked, rest=pending.
         self._emit_plan_todos(active_step_id=None)
-        return result
+
+        if final_worker_result is None:
+            # Guard — can't happen: plan.steps was verified non-empty above.
+            result = WorkerDispatchResult(
+                ok=False,
+                summary="Internal session error: no steps were executed.",
+                status="harness_error",
+                recoverable=False,
+                extras={"dispatch_session_error": "no_steps_executed"},
+            )
+            self._emit_lifecycle_finished(result)
+            return result
+
+        aggregate = self._aggregate_from_worker_result(final_worker_result)
+
+        # Campaign ends — one visible Worker finish event with the aggregate outcome.
+        self._emit_lifecycle_finished(aggregate)
+
+        return aggregate
+
+    # ------------------------------------------------------------------
+    # Lifecycle helpers
+    # ------------------------------------------------------------------
+
+    def _emit_lifecycle_pair(self, result: WorkerDispatchResult) -> None:
+        """Emit started then finished immediately (for error/empty plan exits)."""
+        if self._emit_worker_started is not None:
+            self._emit_worker_started(self.tool_call_id)
+        self._emit_lifecycle_finished(result)
+
+    def _emit_lifecycle_finished(self, result: WorkerDispatchResult) -> None:
+        if self._emit_worker_finished is not None:
+            self._emit_worker_finished(
+                self.tool_call_id,
+                result.ok,
+                result.summary,
+                result.needs_followup,
+                result.status or "",
+            )
+
+    # ------------------------------------------------------------------
+    # Step execution
+    # ------------------------------------------------------------------
 
     def _run_one_step(self, step: WorkerStepSpec) -> WorkerDispatchResult:
         step_request = request_for_step(self.plan, step, self.original_request)
         return self._run_worker_step(self.tool_call_id, step_request, self._pending)
 
+    # ------------------------------------------------------------------
+    # Aggregation
+    # ------------------------------------------------------------------
+
     def _aggregate_from_worker_result(
         self,
         worker_result: WorkerDispatchResult,
     ) -> WorkerDispatchResult:
+        """Build the aggregate WorkerDispatchResult from the blocking/final step.
+
+        modified_files is the union of files touched across all completed and
+        attempted steps (first-seen order, no duplicates). All outcome fields
+        — ok, status, cancelled, needs_followup, phase_boundary, followup_reason,
+        recoverable, mismatch, suggested_next_spec — come from the final Worker
+        result so the Planner sees the real terminal state.
+        """
         worker_extras = worker_result.extras if isinstance(worker_result.extras, dict) else {}
         modified_files = _collect_modified_files(self.step_results) or _dedupe(worker_result.modified_files)
         return WorkerDispatchResult(
@@ -147,6 +259,10 @@ class DispatchSession:
             mismatch=worker_result.mismatch,
         )
 
+    # ------------------------------------------------------------------
+    # Future seams (inert)
+    # ------------------------------------------------------------------
+
     def _resolve_step_blocker_with_planner(
         self,
         *,
@@ -154,18 +270,12 @@ class DispatchSession:
         result: WorkerDispatchResult,
         changed_files_so_far: list[str],
     ) -> WorkerDispatchPlan | None:
-        """Future seam for private Planner clarification.
-
-        A planner-resolvable blocker belongs inside DispatchSession. Later this
-        method should ask the Planner for a clarified/split/reordered step before
-        surfacing anything user-visible. This foundation pass intentionally keeps
-        the seam inert.
-        """
+        """Phase 3E+ seam: ask the Planner to clarify/split/reorder before surfacing a user blocker."""
         return None
 
 
 # ---------------------------------------------------------------------------
-# Module-level helpers — inert building blocks for Phase 3C multi-step loop
+# Module-level helpers
 # ---------------------------------------------------------------------------
 
 def _step_result_for(step: WorkerStepSpec, worker_result: WorkerDispatchResult) -> StepResult:
@@ -173,8 +283,33 @@ def _step_result_for(step: WorkerStepSpec, worker_result: WorkerDispatchResult) 
     return StepResult.from_worker_result(step.id, worker_result)
 
 
+def _step_should_stop(
+    step_result: StepResult,
+    worker_result: WorkerDispatchResult,
+) -> bool:
+    """Return True if this step's outcome should halt the multi-step campaign.
+
+    Stop conditions (any one is sufficient):
+    - cancelled: user or harness stopped the Worker
+    - not ok: any failure classification (validation, edit mechanics, no-progress,
+      harness error, unverified acceptance, recoverable blocker, etc.)
+    - phase_boundary: Worker hit its context/tool limit; not safe to continue
+    - mismatch: Worker surfaced a planner-resolution request; stop so the
+      Planner can update the plan before retrying
+    """
+    if worker_result.cancelled:
+        return True
+    if not step_result.ok:
+        return True
+    if worker_result.phase_boundary:
+        return True
+    if worker_result.mismatch is not None:
+        return True
+    return False
+
+
 def _collect_modified_files(step_results: list[StepResult]) -> list[str]:
-    """Dedupe modified files across step results, preserving first-seen order."""
+    """Dedupe modified files across all step results, preserving first-seen order."""
     seen: set[str] = set()
     files: list[str] = []
     for sr in step_results:

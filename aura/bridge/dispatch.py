@@ -358,6 +358,8 @@ class _DispatchProxy(QObject):
             run_worker_step=self._run_worker,
             pending=pending,
             emit_todo_update=self.workerTodoListUpdated.emit,
+            emit_worker_started=self.workerStarted.emit,
+            emit_worker_finished=self.workerFinished.emit,
         )
         self._begin_canonical_dispatch_todos(tool_call_id)
         try:
@@ -437,7 +439,6 @@ class _DispatchProxy(QObject):
             tool_call_id,
             req,
         )
-        self.workerStarted.emit(tool_call_id)
         cancel_event = threading.Event()
         pending.cancel_event = cancel_event
 
@@ -530,13 +531,6 @@ class _DispatchProxy(QObject):
             context_gearbox=context_gearbox,
         )
 
-        self.workerFinished.emit(
-            tool_call_id,
-            outcome["ok"],
-            summary,
-            outcome["needs_followup"],
-            outcome["status"],
-        )
         return WorkerDispatchResult(
             ok=outcome["ok"],
             summary=summary,
