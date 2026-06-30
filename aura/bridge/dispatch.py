@@ -71,6 +71,8 @@ from aura.conversation.validation_orchestrator import (
 )
 from aura.dependency_context import build_dependency_stanza
 from aura.validation.selector import ValidationPlan, select_validation_plan
+from aura.bridge.dispatch_session import DispatchSession
+from aura.conversation.dispatch_plan import plan_from_request
 
 _log = logging.getLogger(__name__)
 
@@ -334,7 +336,15 @@ class _DispatchProxy(QObject):
             if stanza:
                 edited = replace(edited, spec=edited.spec + stanza)
 
-        result = self._run_worker(tool_call_id, edited, pending)
+        plan = plan_from_request(edited)
+        session = DispatchSession(
+            tool_call_id=tool_call_id,
+            original_request=edited,
+            plan=plan,
+            run_worker_step=self._run_worker,
+            pending=pending,
+        )
+        result = session.run()
         with self._lock:
             self._pending.pop(tool_call_id, None)
         return result

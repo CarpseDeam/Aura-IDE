@@ -17,7 +17,6 @@ from aura.conversation.dispatch_plan import (
     StepResult,
     WorkerDispatchPlan,
     WorkerStepSpec,
-    plan_from_request,
     request_for_step,
 )
 
@@ -160,84 +159,7 @@ class DispatchSession:
         surfacing anything user-visible. This foundation pass intentionally keeps
         the seam inert.
         """
-        return None
 
-
-def install_dispatch_session_bridge(dispatch_proxy_cls: type[Any]) -> None:
-    """Route _DispatchProxy.request_dispatch through DispatchSession.
-
-    This is a compatibility adapter so Phase 1 can land without rewriting the
-    large GUI bridge module. The existing _run_worker path still owns the Worker
-    lifecycle signals; DispatchSession only owns the campaign/step seam.
-    """
-    if getattr(dispatch_proxy_cls, "_dispatch_session_bridge_installed", False):
-        return
-
-    def request_dispatch(
-        self: Any,
-        tool_call_id: str,
-        req: WorkerDispatchRequest,
-    ) -> WorkerDispatchResult:
-        from dataclasses import replace
-
-        from aura.bridge.dispatch import DISPATCH_TIMEOUT, _DispatchPending
-        from aura.dependency_context import build_dependency_stanza
-
-        pending = _DispatchPending(request=req)
-        with self._lock:
-            self._pending[tool_call_id] = pending
-
-        self.showSpecCard.emit(
-            tool_call_id,
-            req.goal,
-            list(req.files),
-            req.spec,
-            req.acceptance,
-            req.summary,
-        )
-
-        signaled = pending.decision_event.wait(timeout=DISPATCH_TIMEOUT)
-        if not signaled:
-            with self._lock:
-                self._pending.pop(tool_call_id, None)
-            return WorkerDispatchResult(
-                ok=False,
-                recoverable=True,
-                summary="Plan expired — click Dispatch again or Cancel",
-                extras={"dispatch_not_started": True, "dispatch_approval_timeout": True},
-            )
-
-        if pending.cancelled:
-            with self._lock:
-                self._pending.pop(tool_call_id, None)
-            return WorkerDispatchResult(
-                ok=False,
-                summary="Cancelled",
-                cancelled=True,
-                extras={"dispatch_not_started": True, "dispatch_cancelled": True},
-            )
-
-        edited = pending.edited_request or req
-        if self._workspace_root is not None and edited.files:
-            stanza = build_dependency_stanza(self._workspace_root, edited.files)
-            if stanza:
-                edited = replace(edited, spec=edited.spec + stanza)
-
-        plan = plan_from_request(edited)
-        session = DispatchSession(
-            tool_call_id=tool_call_id,
-            original_request=edited,
-            plan=plan,
-            run_worker_step=self._run_worker,
-            pending=pending,
-        )
-        result = session.run()
-        with self._lock:
-            self._pending.pop(tool_call_id, None)
-        return result
-
-    dispatch_proxy_cls.request_dispatch = request_dispatch
-    dispatch_proxy_cls._dispatch_session_bridge_installed = True
 
 
 def _dedupe(values: list[str]) -> list[str]:
@@ -256,5 +178,4 @@ __all__ = [
     "DispatchSession",
     "DispatchStepCursor",
     "RunWorkerStep",
-    "install_dispatch_session_bridge",
 ]
