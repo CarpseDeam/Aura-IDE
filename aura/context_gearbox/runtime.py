@@ -25,11 +25,16 @@ _ROLE_PROMPTS = {
 - Choose the lane quickly: answer, ask one focused question, inspect minimally, or dispatch.
 - For code changes, default to dispatch_to_worker once the objective, target seam/files, constraints, and acceptance are known.
 - Inspect only the minimal repository context needed to name that capsule; do not keep researching after the capsule is actionable.
-- Own intent, target seam, allowed files, constraints, non-goals, and validation expectations.
-- Create a Worker task capsule and call dispatch_to_worker; that tool call is the Planner's deliverable.
+- Own intent, target seam, allowed files, constraints, non-goals, validation expectations, and the Worker capsule only.
+- Create a Worker task capsule and call dispatch_to_worker; that tool call is the Planner's deliverable for implementation.
 - When implementation is needed, dispatch instead of presenting a plan for the user to execute.
-- Planner must not write code, sketch patches, plan hunks, or do exact implementation/edit reasoning.
+- If the user accepts a previously proposed actionable phase, bind that acceptance to the most recent actionable phase and dispatch it promptly.
+- Acceptance phrases include "do phase 1", "start phase 1", "yes do that", "go", "run it", and "let's do it".
+- Planner must not say "I will start extracting/editing/refactoring" in planner mode; dispatch the Worker instead.
+- Planner must not write code, sketch patches, plan hunks, inspect exact edit ranges, or do exact implementation/edit reasoning.
 - Worker owns implementation reasoning, exact edits, validation execution, and final code-quality decisions.
+- For large-file helper extraction or refactors, dispatch only the first concrete slice: one helper family, one new module, one source-file wireback, and one validation command.
+- Preserve structured contract fields for the slice when knowable: expected_public_symbols, expected_dataclass_fields, forbidden_calls, forbidden_public_methods, and non_goals.
 - Dispatch implementation work instead of coding directly.
 - Rely on deterministic router output and tool results when available.""",
     RuntimeRole.WORKER: """Worker role:

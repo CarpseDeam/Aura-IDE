@@ -1009,8 +1009,18 @@ class _DispatchProxy(QObject):
                 _log.exception("Post-edit structural audit failed")
 
         # No-work detection
-        if completion["is_implementation"] and not relay.touched_files and not relay.failed_tool_results and not internal_error and not relay.api_errors:
-            result_caveats.append("Worker made no changes, reported no blocker, and ran no meaningful validation.")
+        if (
+            completion["is_implementation"]
+            and not structured_failure
+            and not relay.touched_files
+            and not relay.failed_tool_results
+            and not internal_error
+            and not relay.api_errors
+        ):
+            result_errors.append(
+                "Harness no-progress: Worker made no changes, reported no blocker, "
+                "and ran no meaningful validation."
+            )
 
         return {
             "structured_failure": structured_failure,
@@ -1056,7 +1066,16 @@ class _DispatchProxy(QObject):
 
         # Severity-based classification
         has_hard_failure = bool(result_errors)
-        has_internal_failure = bool(internal_error or relay.api_errors)
+        structured_failure_class = str(structured_failure.get("failure_class") or "")
+        has_harness_no_progress_failure = structured_failure_class in {
+            "harness_no_progress",
+            "worker_flow_zero_work_no_progress",
+        }
+        has_internal_failure = bool(
+            internal_error
+            or relay.api_errors
+            or has_harness_no_progress_failure
+        )
         has_validation_failure = bool(failed_validation)
         structured_recovery_exhausted = structured_failure.get("failure_class") == "worker_recovery_exhausted"
         has_recoverable_edit_blocker = (
@@ -1075,6 +1094,9 @@ class _DispatchProxy(QObject):
         has_environment_setup_blocker = bool(environment_setup_blockers)
         has_diagnostic_environment_blocker = bool(diagnostic_environment_caveats) and not relay.write_results
         has_no_work = not relay.touched_files and not relay.failed_tool_results and not internal_error and not relay.api_errors
+        has_no_progress_failure = has_harness_no_progress_failure or (
+            has_no_work and is_implementation and not structured_failure
+        )
         has_unverified_acceptance = acceptance_unverified or validation_not_run
 
         # Determine severity
@@ -1083,6 +1105,10 @@ class _DispatchProxy(QObject):
             ok = False
             needs_followup = True
             recoverable = True
+        elif has_no_progress_failure:
+            ok = False
+            needs_followup = False
+            recoverable = False
         elif has_hard_failure:
             ok = False
             needs_followup = not has_internal_failure
@@ -1115,6 +1141,11 @@ class _DispatchProxy(QObject):
 
         summary_continuation = dict(continuation)
 
+        if has_no_progress_failure:
+            summary_continuation["status"] = "harness_no_progress"
+            summary_continuation["reason"] = (
+                "Worker made no changes and no concrete external blocker was found."
+            )
         if has_recoverable_edit_blocker:
             if not summary_continuation.get("status"):
                 summary_continuation["status"] = "needs_followup"
@@ -1141,6 +1172,7 @@ class _DispatchProxy(QObject):
             is_implementation=is_implementation,
             has_unverified_acceptance=has_unverified_acceptance,
             has_hard_failure=has_hard_failure,
+            has_no_progress_failure=has_no_progress_failure,
             has_applied_writes=bool(relay.write_results),
             result_errors=result_errors,
             result_caveats=result_caveats,
@@ -1174,6 +1206,7 @@ class _DispatchProxy(QObject):
     ) -> tuple[str, list[str], dict[str, Any], dict[str, Any]]:
         result_errors = messages["result_errors"]
         result_caveats = messages["result_caveats"]
+        structured_failure = messages["structured_failure"]
         validation_results = completion["validation_results"]
         validation_command_issues = completion["validation_command_issues"]
         unrecovered_not_applied_writes = completion["unrecovered_not_applied_writes"]
@@ -1248,6 +1281,35 @@ class _DispatchProxy(QObject):
         if isinstance(task_shape_ms, (int, float)):
             extras["task_shape_ms"] = task_shape_ms
 
+        if structured_failure.get("failure_class") in {
+            "harness_no_progress",
+            "worker_flow_zero_work_no_progress",
+        }:
+            details = structured_failure.get("details")
+            extras["failure_class"] = structured_failure.get("failure_class")
+            extras["harness_no_progress"] = details if isinstance(details, dict) else {}
+        elif (
+            status == "harness_error"
+            and completion["is_implementation"]
+            and not relay.write_results
+        ):
+            extras["failure_class"] = "harness_no_progress"
+            extras["harness_no_progress"] = {
+                "failure_class": "worker_zero_work_no_progress",
+                "worker_flow_reason": "",
+                "tool_counts": {
+                    "tool_results": len(relay.tool_results),
+                    "failed_tool_results": len(relay.failed_tool_results),
+                    "terminal_results": len(relay.terminal_results),
+                    "validation_results": len(validation_results),
+                },
+                "zero_work_recovery_attempted": False,
+                "last_steering_message": "",
+                "internal_recovery_steer_count": len(internal_recovery_steers),
+                "phase_boundary": relay.phase_boundary_info or {},
+                "errors": list(result_errors),
+            }
+
         # mismatch was parsed once above for the severity branch; reuse it.
         if mismatch is not None:
             extras["planner_resolution_needed"] = True
@@ -1270,6 +1332,7 @@ def _compute_outcome_status(
     is_implementation: bool,
     has_unverified_acceptance: bool,
     has_hard_failure: bool,
+    has_no_progress_failure: bool,
     result_errors: list[str],
     result_caveats: list[str],
     continuation: dict[str, Any],
@@ -1312,7 +1375,21 @@ def _compute_outcome_status(
         return S.edit_mechanics_blocked.value
     if has_validation_failure or any(fc.startswith("validation_") for fc in failure_classes):
         return S.validation_failed.value
-    if has_internal_failure or any(fc in {"internal_error", "worker_internal_error", "harness_error"} for fc in failure_classes):
+    if (
+        has_internal_failure
+        or has_no_progress_failure
+        or any(
+            fc
+            in {
+                "harness_error",
+                "harness_no_progress",
+                "internal_error",
+                "worker_flow_zero_work_no_progress",
+                "worker_internal_error",
+            }
+            for fc in failure_classes
+        )
+    ):
         return S.harness_error.value
     if has_source_inspection_blocker or "source_inspection_command_blocked" in failure_classes:
         return S.needs_followup.value

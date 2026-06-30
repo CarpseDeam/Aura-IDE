@@ -104,6 +104,7 @@ from aura.conversation.worker_finish import (
 )
 from aura.conversation.worker_flow import (
     WORKER_FLOW_VALIDATION_REQUIRED_TEXT,
+    WORKER_FLOW_ZERO_WORK_RECOVERY_TEXT,
 )
 from aura.conversation.worker_quality_gate import handle_worker_quality_gate
 from aura.conversation.worker_recovery_messages import (
@@ -165,6 +166,48 @@ _FINAL_REPORT_ACCEPTANCE_PROOF_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
+_ALLOWED_ZERO_WORK_FAILURE_CLASSES = frozenset(
+    {
+        "approval_rejected",
+        "cancelled",
+        "conflicting_spec",
+        "dispatch_blocked",
+        "dispatch_not_started",
+        "external_validation_runtime_missing",
+        "file_not_found",
+        "impossible_spec",
+        "missing_file",
+        "missing_path",
+        "missing_required_file",
+        "path_not_found",
+        "permission_denied",
+        "required_path_missing",
+        "runtime_environment_missing",
+        "source_inspection_command_blocked",
+        "tool_failure",
+        "tool_permission_denied",
+        "user_cancelled",
+        "validation_environment_missing",
+        "write_rejected",
+    }
+)
+
+_ALLOWED_ZERO_WORK_FAILURE_PREFIXES = (
+    "project_environment_missing_",
+    "permission_",
+)
+
+_ALLOWED_ZERO_WORK_BLOCKER_RE = re.compile(
+    r"\b(?:required\s+)?(?:file|path|directory)\b.{0,80}\b"
+    r"(?:missing|not\s+found|does\s+not\s+exist|unavailable)\b|"
+    r"\b(?:permission|access)\s+denied\b|"
+    r"\b(?:cannot|can't|could\s+not|couldn't|unable\s+to)\s+(?:read|write|access)\b|"
+    r"\b(?:missing|unavailable)\s+(?:runtime|environment|tool|dependency|executable)\b|"
+    r"\b(?:conflicting|impossible)\s+(?:spec|requirements?)\b|"
+    r"\bneeds_planner_resolution\b",
+    re.IGNORECASE | re.DOTALL,
+)
+
 
 
 
@@ -207,6 +250,49 @@ def _worker_final_report_missing_proof(state: _SendState, full_message: dict[str
     return not _worker_final_report_claims_validation_or_acceptance(
         assistant_message_text(full_message)
     )
+
+
+def _worker_has_zero_applied_writes(state: _SendState) -> bool:
+    flow = state.worker_flow
+    write_actions = int(getattr(flow.state, "write_actions", 0) or 0) if flow else 0
+    return write_actions == 0 and not state.worker_app_writes
+
+
+def _worker_has_attempted_write(state: _SendState) -> bool:
+    flow = state.worker_flow
+    write_intents = int(getattr(flow.state, "write_intents", 0) or 0) if flow else 0
+    return write_intents > 0 or bool(state.write_attempts_by_path)
+
+
+def _candidate_final_payload(full_message: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(full_message, dict):
+        return {}
+    try:
+        parsed = json.loads(assistant_message_text(full_message))
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _candidate_final_has_real_zero_work_blocker(
+    full_message: dict[str, Any] | None,
+) -> bool:
+    payload = _candidate_final_payload(full_message)
+    if payload.get("status") == "needs_planner_resolution":
+        return bool(
+            payload.get("mismatch")
+            or payload.get("question")
+            or payload.get("question_for_planner")
+            or payload.get("error")
+        )
+    failure_class = str(payload.get("failure_class") or "")
+    if failure_class in _ALLOWED_ZERO_WORK_FAILURE_CLASSES:
+        return True
+    if any(failure_class.startswith(prefix) for prefix in _ALLOWED_ZERO_WORK_FAILURE_PREFIXES):
+        return True
+    if payload.get("reject") or payload.get("dispatch_not_started"):
+        return True
+    return bool(_ALLOWED_ZERO_WORK_BLOCKER_RE.search(assistant_message_text(full_message or {})))
 
 
 class ConversationManager:
@@ -825,6 +911,15 @@ class ConversationManager:
                         if flow_steering_action == "finished":
                             return
                         continue
+                    zero_work_action = self._handle_worker_zero_work_final(
+                        state,
+                        on_event,
+                    )
+                    if zero_work_action != "none":
+                        state.discard_worker_candidate_final()
+                        if zero_work_action == "finished":
+                            return
+                        continue
                     quality_action = handle_worker_quality_gate(
                         state=state,
                         workspace_root=self._tools.workspace_root,
@@ -1261,7 +1356,7 @@ class ConversationManager:
         state: _SendState,
         on_event: EventCallback,
     ) -> str:
-        """Apply one worker-flow nudge, then stop repeated flow thrash."""
+        """Steer Worker Flow without turning zero-work orientation into follow-up."""
         if state.worker_flow is None:
             return "none"
         reason = str(
@@ -1271,7 +1366,26 @@ class ConversationManager:
         steering = state.worker_flow.pop_pending_steering()
         if not steering:
             return "none"
+        state.worker_flow_last_reason = reason
+        state.worker_flow_last_steering = steering
         if state.worker_flow_nudge_sent:
+            if _worker_has_zero_applied_writes(state) and not _worker_has_attempted_write(state):
+                if _candidate_final_has_real_zero_work_blocker(state.candidate_final_message):
+                    return "none"
+                if not state.worker_flow_zero_work_recovery_sent:
+                    self._append_worker_zero_work_recovery(
+                        state,
+                        reason=reason,
+                        steering=steering,
+                    )
+                    return "nudged"
+                self._finish_worker_harness_no_progress(
+                    state,
+                    on_event,
+                    reason=reason,
+                    steering=steering,
+                )
+                return "finished"
             self._finish_worker_recoverable_followup(
                 on_event,
                 failure_class="worker_flow_thrash",
@@ -1294,6 +1408,103 @@ class ConversationManager:
         self._history.append_user_text(steering)
         state.worker_flow_nudge_sent = True
         return "nudged"
+
+    def _handle_worker_zero_work_final(
+        self,
+        state: _SendState,
+        on_event: EventCallback,
+    ) -> str:
+        """Recover or fail internally when Worker tries to finish with no work."""
+        if not _worker_has_zero_applied_writes(state):
+            return "none"
+        if _worker_has_attempted_write(state):
+            return "none"
+        if state.reject_all_for_turn:
+            return "none"
+        if _candidate_final_has_real_zero_work_blocker(state.candidate_final_message):
+            return "none"
+        if not state.worker_flow_zero_work_recovery_sent:
+            self._append_worker_zero_work_recovery(
+                state,
+                reason=state.worker_flow_last_reason or "zero_work_final",
+                steering=state.worker_flow_last_steering,
+            )
+            return "nudged"
+        self._finish_worker_harness_no_progress(
+            state,
+            on_event,
+            reason=state.worker_flow_last_reason or "zero_work_final",
+            steering=state.worker_flow_last_steering,
+        )
+        return "finished"
+
+    def _append_worker_zero_work_recovery(
+        self,
+        state: _SendState,
+        *,
+        reason: str,
+        steering: str,
+    ) -> None:
+        details = [
+            WORKER_FLOW_ZERO_WORK_RECOVERY_TEXT,
+            "",
+            "Internal recovery context:",
+            f"- worker_flow_reason: {reason}",
+        ]
+        if steering:
+            details.append(f"- last_steering: {steering}")
+        self._history.append_user_text("\n".join(details))
+        state.worker_flow_zero_work_recovery_sent = True
+        state.worker_flow_nudge_sent = True
+        state.worker_flow_last_reason = reason
+        state.worker_flow_last_steering = steering
+
+    def _finish_worker_harness_no_progress(
+        self,
+        state: _SendState,
+        on_event: EventCallback,
+        *,
+        reason: str,
+        steering: str,
+    ) -> None:
+        self._finish_worker_unrecoverable(
+            on_event,
+            failure_class="harness_no_progress",
+            error=(
+                "Worker made no changes after internal zero-work recovery. "
+                "This is an Aura harness no-progress failure, not a user-actionable follow-up."
+            ),
+            details=self._worker_zero_work_debug_details(
+                state,
+                reason=reason,
+                steering=steering,
+            ),
+        )
+
+    def _worker_zero_work_debug_details(
+        self,
+        state: _SendState,
+        *,
+        reason: str,
+        steering: str,
+    ) -> dict[str, Any]:
+        flow_state = state.worker_flow.state if state.worker_flow is not None else None
+        candidate_text = assistant_message_text(state.candidate_final_message or {})
+        return {
+            "failure_class": "worker_flow_zero_work_no_progress",
+            "worker_flow_reason": reason,
+            "tool_counts": state.limits.to_dict(),
+            "zero_work_recovery_attempted": bool(
+                state.worker_flow_zero_work_recovery_sent
+            ),
+            "last_steering_message": steering or state.worker_flow_last_steering,
+            "write_actions": int(getattr(flow_state, "write_actions", 0) or 0),
+            "write_intents": int(getattr(flow_state, "write_intents", 0) or 0),
+            "validation_actions": int(getattr(flow_state, "validation_actions", 0) or 0),
+            "worker_app_writes": sorted(state.worker_app_writes),
+            "worker_flow_phase": str(getattr(flow_state, "phase", "")),
+            "candidate_final_preview": candidate_text[:500],
+        }
 
     def _worker_recovery_block(
         self,

@@ -35,10 +35,21 @@ from aura.conversation.worker_flow_helpers import (
 
 WORKER_FLOW_STEERING_TEXT = (
     "Worker Flow: continue from the locked inventory. Stop restating the plan. "
-    "Do not restart broad orientation. Use targeted reads only for exact "
-    "missing facts. Make the next smallest safe edit now. Preserve protected "
-    "control-flow regions and "
-    "avoid whole-file reconstruction."
+    "Do not restart broad orientation. For large refactors, use the existing "
+    "outline plus at most one or two targeted ranges for exact missing facts. "
+    "Make the next smallest safe edit now: create the first module, patch the "
+    "first seam, or wire back one helper family. Preserve protected control-flow "
+    "regions and avoid whole-file reconstruction."
+)
+
+WORKER_FLOW_ZERO_WORK_RECOVERY_TEXT = (
+    "Worker Flow zero-work recovery: use the context already gathered and make "
+    "one smallest safe edit now. Do not broaden orientation, do not restate the "
+    "plan, and do not produce a final report with zero changes. You may perform "
+    "one targeted read only if a specific missing fact is required for the first "
+    "edit. If no safe edit is possible, return a real blocker with the exact "
+    "missing fact, file/path, permission/tool failure, or planner-resolution "
+    "question."
 )
 
 WORKER_FLOW_LARGE_FILE_SEAM_TEXT = (
@@ -489,7 +500,7 @@ class WorkerFlowHarness:
         if is_large and count >= 2:
             self._queue_steering("broad_read")
             return
-        if self.state.exact_targets_named and is_large:
+        if self.state.exact_targets_named and is_large and count >= 2:
             self._queue_steering("broad_read")
             return
         if count >= 3:
@@ -497,7 +508,11 @@ class WorkerFlowHarness:
 
     def _add_evidence(self, kind: str) -> None:
         self.state.inventory_evidence.add(kind)
-        if not self.state.inventory_locked and len(self.state.inventory_evidence) >= 2:
+        required_evidence = 3 if self.state.extraction_or_refactor else 2
+        if (
+            not self.state.inventory_locked
+            and len(self.state.inventory_evidence) >= required_evidence
+        ):
             self.state.inventory_locked = True
             self.state.locked_inventory = tuple(sorted(self.state.inventory_evidence))
             if self.state.phase == WorkerFlowPhase.orienting:
@@ -561,6 +576,7 @@ __all__ = [
     "WORKER_FLOW_LARGE_SOURCE_READ_TEXT",
     "WORKER_FLOW_VALIDATION_REQUIRED_TEXT",
     "WORKER_FLOW_STEERING_TEXT",
+    "WORKER_FLOW_ZERO_WORK_RECOVERY_TEXT",
     "WORKER_FLOW_LARGE_FILE_SEAM_TEXT",
     "WRITE_TOOLS",
     "WorkerFlowHarness",

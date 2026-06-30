@@ -52,6 +52,9 @@ class _SendState:
     worker_validation_nudge_sent: bool = False
     worker_final_report_proof_nudge_sent: bool = False
     worker_flow_nudge_sent: bool = False
+    worker_flow_zero_work_recovery_sent: bool = False
+    worker_flow_last_steering: str = ""
+    worker_flow_last_reason: str = ""
     worker_quality_nudge_sent: bool = False
     worker_quality_cleanup_attempted: bool = False
     critic_pass_attempted: bool = False
