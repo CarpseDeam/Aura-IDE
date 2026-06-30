@@ -519,9 +519,12 @@ def test_dispatch_session_explicit_campaign_emits_one_started_and_finished():
 
 
 def test_canonical_dispatch_todos_suppress_worker_local_updates():
+    """During canonical dispatch, worker-local TODO updates are absorbed,
+    not forwarded to the GUI. Only canonical snapshots reach the GUI."""
     from unittest.mock import Mock
 
     from aura.bridge.dispatch import _DispatchProxy
+    from aura.bridge.todo_controller import DispatchTodoController
 
     proxy = _DispatchProxy(
         parent_widget=Mock(),
@@ -532,15 +535,26 @@ def test_canonical_dispatch_todos_suppress_worker_local_updates():
     emitted = []
     proxy.workerTodoListUpdated.connect(lambda tool_call_id, tasks: emitted.append((tool_call_id, tasks)))
 
-    canonical = [{"description": "Campaign step", "status": "active"}]
+    # Initialize canonical state and emit the initial snapshot
+    proxy._todo_controller.begin("tc1", [
+        {"id": "step-1", "description": "Campaign step"},
+    ])
+    # Emit the initial canonical snapshot (simulating what DispatchSession does)
+    proxy._emit_canonical_dispatch_todos("tc1", proxy._todo_controller.snapshot("tc1"))
+
+    # Worker-local update with unknown IDs should be absorbed, not forwarded
     worker_local = [{"description": "Worker-local TODO", "status": "active"}]
-
-    proxy._begin_canonical_dispatch_todos("tc1")
-    proxy.workerTodoListUpdated.emit("tc1", canonical)
+    emitted_before = len(emitted)
     proxy._relay_worker_todo_update("tc1", worker_local)
-    proxy._end_canonical_dispatch_todos("tc1")
 
-    assert emitted == [("tc1", canonical)]
+    # No new emission for unknown worker-local tasks
+    assert len(emitted) == emitted_before
+
+    # The only emitted tasks are canonical
+    for _, tasks in emitted:
+        for task in tasks:
+            assert task.get("description") != "Worker-local TODO"
+            assert task.get("id") == "step-1"
 
 
 def test_dispatch_to_worker_schema_uses_compact_capsule_not_file_plan():
@@ -2765,3 +2779,237 @@ class TestMismatchParsing:
         assert result["remaining"] == ["Fix test_c.py"]
         assert result["recommended_next_step"] == "Run tests again"
         assert result["mismatch"] is None
+
+
+# ── Validation success override tests ──────────────────────────────────
+
+
+class TestValidationSuccessOverride:
+    """Passing validation with applied writes must not become needs_followup
+    due to weak final wording."""
+
+    def test_passing_validation_with_writes_is_completed_with_caveats(self):
+        """Applied writes + passing validation → completed_with_caveats, not needs_followup."""
+        assert _status_for(
+            ok=True,
+            needs_followup=False,
+            recoverable=False,
+            has_hard_failure=False,
+            result_errors=[],
+            result_caveats=[
+                "Worker final report did not clearly mention validation or acceptance verification."
+            ],
+            has_applied_writes=True,
+            has_unverified_acceptance=True,
+        ) == WorkerOutcomeStatus.completed_with_caveats.value
+
+    def test_no_writes_unverified_acceptance_is_needs_followup(self):
+        """No writes + unverified acceptance → needs_followup."""
+        assert _status_for(
+            ok=False,
+            needs_followup=True,
+            recoverable=True,
+            has_hard_failure=False,
+            result_errors=[],
+            result_caveats=[
+                "Worker final report did not clearly mention validation or acceptance verification."
+            ],
+            has_applied_writes=False,
+            has_unverified_acceptance=True,
+        ) == WorkerOutcomeStatus.needs_followup.value
+
+    def test_validation_never_ran_is_needs_followup_even_with_writes(self):
+        """Files changed but validation never ran → needs_followup."""
+        assert _status_for(
+            ok=False,
+            needs_followup=True,
+            recoverable=True,
+            has_hard_failure=False,
+            result_errors=[],
+            result_caveats=["Files changed but validation did not run."],
+            has_applied_writes=True,
+            has_unverified_acceptance=True,
+        ) == WorkerOutcomeStatus.needs_followup.value
+
+    def test_passing_validation_with_writes_no_caveats_is_completed(self):
+        """Applied writes + passing validation + no caveats → completed."""
+        assert _status_for(
+            ok=True,
+            needs_followup=False,
+            recoverable=False,
+            has_hard_failure=False,
+            result_errors=[],
+            result_caveats=[],
+            has_applied_writes=True,
+            has_unverified_acceptance=False,
+        ) == WorkerOutcomeStatus.completed.value
+
+
+# ── Worker TODO isolation tests ────────────────────────────────────────
+
+
+class TestWorkerTodoIsolation:
+    """Worker-local TODO updates must not replace the canonical checklist."""
+
+    def test_worker_update_todo_list_during_canonical_cannot_replace_checklist(self):
+        """Worker calling update_todo_list during canonical dispatch cannot
+        replace the visible checklist rows."""
+        from unittest.mock import Mock
+
+        from aura.bridge.dispatch import _DispatchProxy
+        from aura.bridge.todo_controller import DispatchTodoController
+
+        proxy = _DispatchProxy(
+            parent_widget=Mock(),
+            registry_factory=Mock(),
+            approval_proxy=Mock(),
+            workspace_root=None,
+        )
+
+        # Set up canonical state
+        proxy._todo_controller.begin("tc1", [
+            {"id": "plan-a", "description": "Planned task A"},
+            {"id": "plan-b", "description": "Planned task B"},
+        ])
+
+        emitted = []
+        proxy.workerTodoListUpdated.connect(lambda tid, tasks: emitted.append((tid, list(tasks))))
+
+        # Worker emits a completely different TODO list
+        worker_tasks = [
+            {"id": "worker-x", "description": "Worker's own task X", "status": "active"},
+            {"id": "worker-y", "description": "Worker's own task Y", "status": "pending"},
+        ]
+        proxy._relay_worker_todo_update("tc1", worker_tasks)
+
+        # Only the canonical snapshot should be visible (emitted if status changed)
+        for _, tasks in emitted:
+            ids = [t["id"] for t in tasks]
+            assert ids == ["plan-a", "plan-b"]
+            for task in tasks:
+                assert task["id"] in ("plan-a", "plan-b")
+                assert task["description"] in ("Planned task A", "Planned task B")
+
+    def test_worker_progress_known_id_updates_status_only(self):
+        """Worker update for a known objective ID may update status only."""
+        from unittest.mock import Mock
+
+        from aura.bridge.dispatch import _DispatchProxy
+
+        proxy = _DispatchProxy(
+            parent_widget=Mock(),
+            registry_factory=Mock(),
+            approval_proxy=Mock(),
+            workspace_root=None,
+        )
+
+        proxy._todo_controller.begin("tc1", [
+            {"id": "step-1", "description": "Step 1"},
+        ])
+
+        emitted = []
+        proxy.workerTodoListUpdated.connect(lambda tid, tasks: emitted.append((tid, list(tasks))))
+
+        # Worker marks step-1 as done
+        proxy._relay_worker_todo_update("tc1", [
+            {"id": "step-1", "status": "done"},
+        ])
+
+        assert len(emitted) >= 1
+        _, tasks = emitted[-1]
+        assert tasks[0]["status"] == "done"
+        assert tasks[0]["description"] == "Step 1"
+
+    def test_no_canonical_state_worker_update_passes_through(self):
+        """When no canonical state exists, worker TODO updates pass through normally."""
+        from unittest.mock import Mock
+
+        from aura.bridge.dispatch import _DispatchProxy
+
+        proxy = _DispatchProxy(
+            parent_widget=Mock(),
+            registry_factory=Mock(),
+            approval_proxy=Mock(),
+            workspace_root=None,
+        )
+
+        emitted = []
+        proxy.workerTodoListUpdated.connect(lambda tid, tasks: emitted.append((tid, list(tasks))))
+
+        worker_tasks = [{"description": "Worker task", "status": "active"}]
+        proxy._relay_worker_todo_update("tc-no-canonical", worker_tasks)
+
+        assert len(emitted) == 1
+        assert emitted[0][1] == worker_tasks
+
+    def test_canonical_survives_after_session_run(self):
+        """After session.run() returns, the canonical TODO state stays visible
+        so late Worker-local events cannot repaint the rail."""
+        from types import SimpleNamespace
+
+        from aura.bridge.dispatch_session import DispatchSession
+        from aura.bridge.todo_controller import DispatchTodoController
+        from aura.conversation.dispatch import WorkerDispatchRequest, WorkerDispatchResult
+        from aura.conversation.dispatch_plan import WorkerStepSpec, plan_from_request
+
+        steps = [
+            WorkerStepSpec(id="s1", title="Step 1", goal="First step", files=["a.py"]),
+        ]
+        req = WorkerDispatchRequest(
+            goal="Campaign", files=["a.py"], spec="", acceptance="", steps=steps,
+        )
+        plan = plan_from_request(req)
+        controller = DispatchTodoController()
+
+        def run_worker_step(_tid, _req, _pending):
+            return WorkerDispatchResult(ok=True, summary="done")
+
+        session = DispatchSession(
+            tool_call_id="tc1",
+            original_request=req,
+            plan=plan,
+            run_worker_step=run_worker_step,
+            pending=SimpleNamespace(),
+            todo_controller=controller,
+        )
+        session.run()
+
+        # After session.run(), canonical state still exists
+        assert controller.has_canonical("tc1") is True
+        snapshot = controller.snapshot("tc1")
+        assert len(snapshot) == 1
+        assert snapshot[0]["status"] == "done"
+
+        # A late worker-local update cannot replace the checklist
+        result = controller.absorb_worker_update("tc1", [
+            {"id": "worker-adhoc", "description": "Late worker task", "status": "active"},
+        ])
+        assert result is None  # nothing changed, no emission
+        snapshot = controller.snapshot("tc1")
+        assert len(snapshot) == 1
+        assert snapshot[0]["id"] == "s1"
+
+    def test_new_dispatch_clears_prior_canonical(self):
+        """Starting a new dispatch for the same tool_call_id clears prior canonical state."""
+        from unittest.mock import Mock
+
+        from aura.bridge.dispatch import _DispatchProxy
+
+        proxy = _DispatchProxy(
+            parent_widget=Mock(),
+            registry_factory=Mock(),
+            approval_proxy=Mock(),
+            workspace_root=None,
+        )
+
+        # Set up prior canonical state
+        proxy._todo_controller.begin("tc1", [
+            {"id": "old-step", "description": "Old step"},
+        ])
+
+        # The clear happens at the start of request_dispatch.
+        # Simulate that behavior:
+        proxy._todo_controller.clear("tc1")
+
+        assert proxy._todo_controller.has_canonical("tc1") is False
+        assert proxy._todo_controller.snapshot("tc1") == []

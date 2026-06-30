@@ -465,7 +465,597 @@ def test_normalize_todo_tasks_clamps_long_descriptions():
     long_desc = "a" * 300
     input_tasks = [{"description": long_desc, "status": "pending"}]
     normalized = normalize_todo_tasks(input_tasks)
-    
+
     assert len(normalized[0]["description"]) == 220
     assert normalized[0]["description"].endswith("...")
     assert normalized[0]["description"].startswith("aaa")
+
+
+# ── DispatchTodoController tests ──────────────────────────────────────
+
+
+class TestDispatchTodoController:
+    """Tests for the unified canonical TODO controller."""
+
+    def test_begin_creates_stable_checklist(self):
+        from aura.bridge.todo_controller import DispatchTodoController
+
+        ctrl = DispatchTodoController()
+        objectives = [
+            {"id": "one", "description": "First task"},
+            {"id": "two", "description": "Second task"},
+            {"id": "three", "description": "Third task"},
+        ]
+        snapshot = ctrl.begin("tc1", objectives)
+
+        assert len(snapshot) == 3
+        assert [t["id"] for t in snapshot] == ["one", "two", "three"]
+        assert [t["description"] for t in snapshot] == [
+            "First task", "Second task", "Third task",
+        ]
+        assert all(t["status"] == "pending" for t in snapshot)
+
+    def test_ids_and_order_never_change(self):
+        from aura.bridge.todo_controller import DispatchTodoController
+
+        ctrl = DispatchTodoController()
+        ctrl.begin("tc1", [
+            {"id": "a", "description": "Alpha"},
+            {"id": "b", "description": "Beta"},
+        ])
+
+        ctrl.set_active("tc1", "a")
+        ctrl.mark_done("tc1", "a")
+        ctrl.mark_blocked("tc1", "b")
+
+        snapshot = ctrl.snapshot("tc1")
+        assert [t["id"] for t in snapshot] == ["a", "b"]
+        assert [t["description"] for t in snapshot] == ["Alpha", "Beta"]
+
+    def test_rows_check_off_in_place(self):
+        from aura.bridge.todo_controller import DispatchTodoController
+
+        ctrl = DispatchTodoController()
+        ctrl.begin("tc1", [
+            {"id": "one", "description": "Task 1"},
+            {"id": "two", "description": "Task 2"},
+        ])
+
+        # Mark first done, second active
+        ctrl.mark_done("tc1", "one")
+        ctrl.set_active("tc1", "two")
+
+        snapshot = ctrl.snapshot("tc1")
+        assert snapshot[0]["status"] == "done"
+        assert snapshot[1]["status"] == "active"
+
+        # Mark second done — first stays done
+        ctrl.mark_done("tc1", "two")
+        snapshot = ctrl.snapshot("tc1")
+        assert snapshot[0]["status"] == "done"
+        assert snapshot[1]["status"] == "done"
+
+    def test_final_checklist_visible_after_finish(self):
+        from aura.bridge.todo_controller import DispatchTodoController
+
+        ctrl = DispatchTodoController()
+        ctrl.begin("tc1", [
+            {"id": "one", "description": "Task 1"},
+            {"id": "two", "description": "Task 2"},
+        ])
+        ctrl.mark_done("tc1", "one")
+        ctrl.mark_done("tc1", "two")
+        ctrl.finish("tc1")
+
+        # Checklist still visible after finish
+        snapshot = ctrl.snapshot("tc1")
+        assert len(snapshot) == 2
+        assert all(t["status"] == "done" for t in snapshot)
+
+    def test_blocked_campaign_shows_done_and_blocked_and_pending(self):
+        from aura.bridge.todo_controller import DispatchTodoController
+
+        ctrl = DispatchTodoController()
+        ctrl.begin("tc1", [
+            {"id": "one", "description": "Step 1"},
+            {"id": "two", "description": "Step 2"},
+            {"id": "three", "description": "Step 3"},
+        ])
+
+        ctrl.mark_done("tc1", "one")
+        ctrl.mark_blocked("tc1", "two")
+
+        snapshot = ctrl.snapshot("tc1")
+        assert snapshot[0]["status"] == "done"
+        assert snapshot[1]["status"] == "active"
+        assert snapshot[1].get("blocked") is True
+        assert snapshot[2]["status"] == "pending"
+
+    def test_worker_local_unknown_ids_ignored(self):
+        from aura.bridge.todo_controller import DispatchTodoController
+
+        ctrl = DispatchTodoController()
+        ctrl.begin("tc1", [
+            {"id": "plan-step", "description": "Planned step"},
+        ])
+
+        # Worker sends update with unknown ID
+        result = ctrl.absorb_worker_update("tc1", [
+            {"id": "worker-adhoc", "description": "Ad-hoc task", "status": "active"},
+        ])
+
+        # Should return None (no emission needed — nothing changed)
+        assert result is None
+
+        # The canonical list is unchanged
+        snapshot = ctrl.snapshot("tc1")
+        assert len(snapshot) == 1
+        assert snapshot[0]["id"] == "plan-step"
+        assert snapshot[0]["status"] == "pending"
+
+    def test_worker_cannot_add_remove_or_reorder_rows(self):
+        from aura.bridge.todo_controller import DispatchTodoController
+
+        ctrl = DispatchTodoController()
+        ctrl.begin("tc1", [
+            {"id": "a", "description": "Task A"},
+            {"id": "b", "description": "Task B"},
+        ])
+
+        # Worker tries to add a new row, remove one, and reorder
+        ctrl.absorb_worker_update("tc1", [
+            {"id": "c", "description": "Injected task", "status": "pending"},
+            {"id": "b", "status": "active"},
+            # "a" is missing → worker tried to remove it
+        ])
+
+        snapshot = ctrl.snapshot("tc1")
+        assert len(snapshot) == 2
+        ids = [t["id"] for t in snapshot]
+        assert ids == ["a", "b"]  # order unchanged
+        assert "c" not in ids      # worker can't add
+
+    def test_worker_may_update_status_for_known_id(self):
+        from aura.bridge.todo_controller import DispatchTodoController
+
+        ctrl = DispatchTodoController()
+        ctrl.begin("tc1", [
+            {"id": "step-1", "description": "Step 1"},
+        ])
+
+        result = ctrl.absorb_worker_update("tc1", [
+            {"id": "step-1", "status": "done"},
+        ])
+
+        assert result is not None
+        assert result[0]["status"] == "done"
+
+    def test_worker_cannot_rename_known_row(self):
+        from aura.bridge.todo_controller import DispatchTodoController
+
+        ctrl = DispatchTodoController()
+        ctrl.begin("tc1", [
+            {"id": "step-1", "description": "Original name"},
+        ])
+
+        ctrl.absorb_worker_update("tc1", [
+            {"id": "step-1", "description": "Renamed by worker", "status": "active"},
+        ])
+
+        snapshot = ctrl.snapshot("tc1")
+        assert snapshot[0]["description"] == "Original name"
+
+    def test_has_canonical_returns_false_for_unknown_id(self):
+        from aura.bridge.todo_controller import DispatchTodoController
+
+        ctrl = DispatchTodoController()
+        assert ctrl.has_canonical("nonexistent") is False
+
+        ctrl.begin("tc1", [{"id": "s1", "description": "Step"}])
+        assert ctrl.has_canonical("tc1") is True
+
+    def test_clear_removes_canonical_state(self):
+        from aura.bridge.todo_controller import DispatchTodoController
+
+        ctrl = DispatchTodoController()
+        ctrl.begin("tc1", [{"id": "s1", "description": "Step"}])
+        assert ctrl.has_canonical("tc1") is True
+
+        ctrl.clear("tc1")
+        assert ctrl.has_canonical("tc1") is False
+        assert ctrl.snapshot("tc1") == []
+
+    def test_no_canonical_then_absorb_returns_none(self):
+        from aura.bridge.todo_controller import DispatchTodoController
+
+        ctrl = DispatchTodoController()
+        # No canonical state exists — absorb should return None
+        result = ctrl.absorb_worker_update("tc1", [
+            {"id": "x", "description": "Task", "status": "active"},
+        ])
+        assert result is None
+
+    def test_non_dict_tasks_are_ignored(self):
+        from aura.bridge.todo_controller import DispatchTodoController
+
+        ctrl = DispatchTodoController()
+        ctrl.begin("tc1", [{"id": "a", "description": "Task A"}])
+
+        result = ctrl.absorb_worker_update("tc1", [
+            "just a string",
+            42,
+            None,
+            {"id": "a", "status": "done"},
+        ])
+        assert result is not None
+        assert result[0]["status"] == "done"
+
+
+# ── compact_todo_label tests ───────────────────────────────────────────
+
+
+class TestCompactTodoLabel:
+    def test_uses_first_meaningful_line(self):
+        from aura.conversation.dispatch_plan import compact_todo_label
+
+        result = compact_todo_label("Step 1: Do the thing\nThen do more\nAnd more")
+        assert result == "Do the thing"
+        assert "\n" not in result
+
+    def test_strips_markdown_headings(self):
+        from aura.conversation.dispatch_plan import compact_todo_label
+
+        assert compact_todo_label("### Implement the feature") == "Implement the feature"
+        assert compact_todo_label("# Top-level heading") == "Top-level heading"
+
+    def test_strips_bullet_and_checkbox_prefixes(self):
+        from aura.conversation.dispatch_plan import compact_todo_label
+
+        assert compact_todo_label("- Do the thing") == "Do the thing"
+        assert compact_todo_label("* Another task") == "Another task"
+        assert compact_todo_label("[ ] Unchecked") == "Unchecked"
+        assert compact_todo_label("[x] Checked") == "Checked"
+
+    def test_strips_numeric_prefixes(self):
+        from aura.conversation.dispatch_plan import compact_todo_label
+
+        assert compact_todo_label("1. First step") == "First step"
+        assert compact_todo_label("2) Second step") == "Second step"
+
+    def test_strips_prefix_labels(self):
+        from aura.conversation.dispatch_plan import compact_todo_label
+
+        assert compact_todo_label("Step 1: Implement feature") == "Implement feature"
+        assert compact_todo_label("Objective: Complete the work") == "Complete the work"
+        assert compact_todo_label("Summary: This is a summary") == "This is a summary"
+        assert compact_todo_label("Goal: Fix the bug") == "Fix the bug"
+        assert compact_todo_label("Acceptance: Tests pass") == "Tests pass"
+
+    def test_collapses_whitespace(self):
+        from aura.conversation.dispatch_plan import compact_todo_label
+
+        assert compact_todo_label("   Too   many    spaces   ") == "Too many spaces"
+
+    def test_limits_length_to_90_chars(self):
+        from aura.conversation.dispatch_plan import compact_todo_label
+
+        long_text = "A" * 200
+        result = compact_todo_label(long_text)
+        assert len(result) <= 90
+        assert result.endswith("...")
+
+    def test_preserves_explicit_step_title(self):
+        from aura.conversation.dispatch_plan import compact_todo_label
+
+        assert compact_todo_label("Tighten schema validation") == "Tighten schema validation"
+        assert compact_todo_label("Reject bad dispatches") == "Reject bad dispatches"
+
+    def test_fallback_for_empty_value(self):
+        from aura.conversation.dispatch_plan import compact_todo_label
+
+        assert compact_todo_label("") == "Worker step"
+        assert compact_todo_label("", fallback="Custom fallback") == "Custom fallback"
+
+    def test_does_not_display_giant_spec_or_acceptance_text(self):
+        from aura.conversation.dispatch_plan import compact_todo_label
+
+        giant_spec = (
+            "### Implementation\n\n"
+            "This is a very long specification that describes in detail "
+            "everything the worker should do including edge cases, "
+            "error handling, validation steps, and extensive acceptance criteria "
+            "that spans multiple paragraphs and would look terrible as a TODO row.\n\n"
+            "## Acceptance\n"
+            "- pytest passes\n"
+            "- py_compile clean\n"
+        )
+
+        result = compact_todo_label(giant_spec)
+        # Only first line should be used
+        assert len(result) <= 90
+        assert "error handling" not in result
+        assert "pytest" not in result
+
+
+# ── dispatch session TODO integration tests ───────────────────────────
+
+
+class TestDispatchSessionTodoIntegration:
+    """Verify DispatchSession properly routes TODO updates through the controller."""
+
+    def test_multi_step_emits_same_ids_in_order_throughout(self):
+        from types import SimpleNamespace
+
+        from aura.bridge.dispatch_session import DispatchSession
+        from aura.bridge.todo_controller import DispatchTodoController
+        from aura.conversation.dispatch import WorkerDispatchRequest, WorkerDispatchResult
+        from aura.conversation.dispatch_plan import WorkerStepSpec, plan_from_request
+
+        steps = [
+            WorkerStepSpec(id="one", title="Step One", goal="First step", files=["a.py"]),
+            WorkerStepSpec(id="two", title="Step Two", goal="Second step", files=["b.py"]),
+            WorkerStepSpec(id="three", title="Step Three", goal="Third step", files=["c.py"]),
+        ]
+        req = WorkerDispatchRequest(
+            goal="Campaign", files=["a.py", "b.py", "c.py"],
+            spec="", acceptance="", steps=steps,
+        )
+        plan = plan_from_request(req)
+        controller = DispatchTodoController()
+        emitted: list[list[dict]] = []
+
+        def emit(tool_call_id, tasks):
+            emitted.append(list(tasks))
+
+        def run_worker_step(_tid, _req, _pending):
+            return WorkerDispatchResult(ok=True, summary="done")
+
+        DispatchSession(
+            tool_call_id="tc1",
+            original_request=req,
+            plan=plan,
+            run_worker_step=run_worker_step,
+            pending=SimpleNamespace(),
+            emit_todo_update=emit,
+            todo_controller=controller,
+        ).run()
+
+        # Every emission should have the same 3 IDs in order
+        for snapshot in emitted:
+            ids = [t["id"] for t in snapshot]
+            assert ids == ["one", "two", "three"]
+
+    def test_completed_step_stays_done_when_next_active(self):
+        from types import SimpleNamespace
+
+        from aura.bridge.dispatch_session import DispatchSession
+        from aura.bridge.todo_controller import DispatchTodoController
+        from aura.conversation.dispatch import WorkerDispatchRequest, WorkerDispatchResult
+        from aura.conversation.dispatch_plan import WorkerStepSpec, plan_from_request
+
+        steps = [
+            WorkerStepSpec(id="one", title="One", goal="First", files=["a.py"]),
+            WorkerStepSpec(id="two", title="Two", goal="Second", files=["b.py"]),
+        ]
+        req = WorkerDispatchRequest(
+            goal="Campaign", files=["a.py", "b.py"], spec="", acceptance="", steps=steps,
+        )
+        plan = plan_from_request(req)
+        controller = DispatchTodoController()
+        emitted: list[list[dict]] = []
+
+        def emit(tool_call_id, tasks):
+            emitted.append(list(tasks))
+
+        def run_worker_step(_tid, _req, _pending):
+            return WorkerDispatchResult(ok=True, summary="done")
+
+        DispatchSession(
+            tool_call_id="tc1",
+            original_request=req,
+            plan=plan,
+            run_worker_step=run_worker_step,
+            pending=SimpleNamespace(),
+            emit_todo_update=emit,
+            todo_controller=controller,
+        ).run()
+
+        # Final snapshot should have both steps done
+        final = emitted[-1]
+        assert final[0]["status"] == "done"
+        assert final[1]["status"] == "done"
+
+    def test_final_successful_campaign_shows_all_done(self):
+        from types import SimpleNamespace
+
+        from aura.bridge.dispatch_session import DispatchSession
+        from aura.bridge.todo_controller import DispatchTodoController
+        from aura.conversation.dispatch import WorkerDispatchRequest, WorkerDispatchResult
+        from aura.conversation.dispatch_plan import WorkerStepSpec, plan_from_request
+
+        steps = [
+            WorkerStepSpec(id="a", title="A", goal="Task A", files=["a.py"]),
+            WorkerStepSpec(id="b", title="B", goal="Task B", files=["b.py"]),
+        ]
+        req = WorkerDispatchRequest(
+            goal="All done", files=["a.py", "b.py"], spec="", acceptance="", steps=steps,
+        )
+        plan = plan_from_request(req)
+        controller = DispatchTodoController()
+        emitted: list[list[dict]] = []
+
+        def emit(tool_call_id, tasks):
+            emitted.append(list(tasks))
+
+        def run_worker_step(_tid, _req, _pending):
+            return WorkerDispatchResult(ok=True, summary="done")
+
+        DispatchSession(
+            tool_call_id="tc1",
+            original_request=req,
+            plan=plan,
+            run_worker_step=run_worker_step,
+            pending=SimpleNamespace(),
+            emit_todo_update=emit,
+            todo_controller=controller,
+        ).run()
+
+        final = emitted[-1]
+        assert all(t["status"] == "done" for t in final)
+
+    def test_blocked_campaign_shows_done_blocked_pending(self):
+        from types import SimpleNamespace
+
+        from aura.bridge.dispatch_session import DispatchSession
+        from aura.bridge.todo_controller import DispatchTodoController
+        from aura.conversation.dispatch import WorkerDispatchRequest, WorkerDispatchResult
+        from aura.conversation.dispatch_plan import WorkerStepSpec, plan_from_request
+
+        steps = [
+            WorkerStepSpec(id="s1", title="S1", goal="First", files=["a.py"]),
+            WorkerStepSpec(id="s2", title="S2", goal="Second", files=["b.py"]),
+            WorkerStepSpec(id="s3", title="S3", goal="Third", files=["c.py"]),
+        ]
+        req = WorkerDispatchRequest(
+            goal="Campaign", files=["a.py", "b.py", "c.py"], spec="", acceptance="", steps=steps,
+        )
+        plan = plan_from_request(req)
+        controller = DispatchTodoController()
+        emitted: list[list[dict]] = []
+
+        def emit(tool_call_id, tasks):
+            emitted.append(list(tasks))
+
+        call_count = [0]
+
+        def run_worker_step(_tid, _req, _pending):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return WorkerDispatchResult(ok=True, summary="step 1 done")
+            else:
+                return WorkerDispatchResult(ok=False, summary="blocked", needs_followup=True)
+
+        DispatchSession(
+            tool_call_id="tc1",
+            original_request=req,
+            plan=plan,
+            run_worker_step=run_worker_step,
+            pending=SimpleNamespace(),
+            emit_todo_update=emit,
+            todo_controller=controller,
+        ).run()
+
+        final = emitted[-1]
+        assert final[0]["status"] == "done"
+        assert final[1]["status"] == "active"
+        assert final[1].get("blocked") is True
+        assert final[2]["status"] == "pending"
+
+    def test_one_meaningful_objective_allows_one_row(self):
+        """A flat dispatch with one meaningful objective should produce one row."""
+        from types import SimpleNamespace
+
+        from aura.bridge.dispatch_session import DispatchSession
+        from aura.bridge.todo_controller import DispatchTodoController
+        from aura.conversation.dispatch import WorkerDispatchRequest, WorkerDispatchResult
+        from aura.conversation.dispatch_plan import plan_from_request
+
+        req = WorkerDispatchRequest(
+            goal="Fix one typo",
+            files=["README.md"],
+            spec="Fix a typo.",
+            acceptance="Verify the fix.",
+        )
+        plan = plan_from_request(req)
+        controller = DispatchTodoController()
+        emitted: list[list[dict]] = []
+
+        def emit(tool_call_id, tasks):
+            emitted.append(list(tasks))
+
+        def run_worker_step(_tid, _req, _pending):
+            return WorkerDispatchResult(ok=True, summary="done")
+
+        DispatchSession(
+            tool_call_id="tc1",
+            original_request=req,
+            plan=plan,
+            run_worker_step=run_worker_step,
+            pending=SimpleNamespace(),
+            emit_todo_update=emit,
+            todo_controller=controller,
+        ).run()
+
+        # Should have exactly 1 row (not padded, not split)
+        for snapshot in emitted:
+            assert len(snapshot) == 1
+
+    def test_labels_are_compacted_not_giant_specs(self):
+        from types import SimpleNamespace
+
+        from aura.bridge.dispatch_session import DispatchSession
+        from aura.bridge.todo_controller import DispatchTodoController
+        from aura.conversation.dispatch import WorkerDispatchRequest, WorkerDispatchResult
+        from aura.conversation.dispatch_plan import WorkerStepSpec, plan_from_request
+
+        # A step with a giant spec-like title
+        steps = [
+            WorkerStepSpec(
+                id="step-1",
+                title="### Step 1: Refactor authentication subsystem to use token-based auth\n\n"
+                       "This involves changing the login flow, updating the middleware, "
+                       "adding token validation, and migrating existing sessions.",
+                goal="Refactor auth",
+                files=["auth.py"],
+            ),
+        ]
+        req = WorkerDispatchRequest(
+            goal="Refactor auth", files=["auth.py"], spec="", acceptance="", steps=steps,
+        )
+        plan = plan_from_request(req)
+        controller = DispatchTodoController()
+        emitted: list[list[dict]] = []
+
+        def emit(tool_call_id, tasks):
+            emitted.append(list(tasks))
+
+        def run_worker_step(_tid, _req, _pending):
+            return WorkerDispatchResult(ok=True, summary="done")
+
+        DispatchSession(
+            tool_call_id="tc1",
+            original_request=req,
+            plan=plan,
+            run_worker_step=run_worker_step,
+            pending=SimpleNamespace(),
+            emit_todo_update=emit,
+            todo_controller=controller,
+        ).run()
+
+        for snapshot in emitted:
+            for task in snapshot:
+                desc = task["description"]
+                assert len(desc) <= 90
+                assert "middleware" not in desc
+                assert "token validation" not in desc
+                assert "migrating" not in desc
+
+    def test_no_hardcoded_objective_count(self):
+        """The controller does not enforce or pad to any specific count."""
+        from aura.bridge.todo_controller import DispatchTodoController
+
+        # 0 objectives is valid (empty plan)
+        ctrl = DispatchTodoController()
+        snapshot = ctrl.begin("tc1", [])
+        assert snapshot == []
+
+        # 1 objective is valid
+        ctrl2 = DispatchTodoController()
+        snapshot2 = ctrl2.begin("tc2", [{"id": "a", "description": "Task"}])
+        assert len(snapshot2) == 1
+
+        # 12 objectives is valid (no upper bound enforced by controller)
+        ctrl3 = DispatchTodoController()
+        objectives = [{"id": str(i), "description": f"Task {i}"} for i in range(12)]
+        snapshot3 = ctrl3.begin("tc3", objectives)
+        assert len(snapshot3) == 12

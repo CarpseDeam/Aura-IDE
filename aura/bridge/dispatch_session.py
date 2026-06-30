@@ -10,12 +10,20 @@ DispatchSession owns the outer workerStarted / workerFinished emission for the
 whole campaign. _run_worker is a pure execution function that no longer emits
 visible lifecycle signals, so a multi-step plan produces exactly one started and
 one finished event regardless of how many internal steps run.
+
+TODO rail:
+- All steps start as pending via todo_controller.begin().
+- The active step becomes active while it runs (todo_controller.set_active).
+- Completed steps become done before the next step activates.
+- A blocked/failed step shows as active+blocked in the final emission.
+- One final TODO emission happens after the loop ends.
+- Worker-local TODO updates are blocked by the controller.
 """
 from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from aura.conversation.dispatch import (
     WorkerDispatchRequest,
@@ -26,9 +34,12 @@ from aura.conversation.dispatch_plan import (
     StepResult,
     WorkerDispatchPlan,
     WorkerStepSpec,
+    compact_todo_label,
     request_for_step,
-    todo_tasks_from_plan,
 )
+
+if TYPE_CHECKING:
+    from aura.bridge.todo_controller import DispatchTodoController
 
 RunWorkerStep = Callable[[str, WorkerDispatchRequest, Any], WorkerDispatchResult]
 CAMPAIGN_RECOVERY_BUDGET_PER_STEP = 1
@@ -96,6 +107,7 @@ class DispatchSession:
         emit_todo_update: Callable[[str, list[dict[str, Any]]], None] | None = None,
         emit_worker_started: _EmitStarted | None = None,
         emit_worker_finished: _EmitFinished | None = None,
+        todo_controller: DispatchTodoController | None = None,
     ) -> None:
         self.tool_call_id = tool_call_id
         self.original_request = original_request
@@ -105,6 +117,7 @@ class DispatchSession:
         self._emit_todo_update = emit_todo_update
         self._emit_worker_started = emit_worker_started
         self._emit_worker_finished = emit_worker_finished
+        self._todo_controller = todo_controller
         self.cursor = DispatchStepCursor()
         self.step_results: list[StepResult] = []
 
@@ -112,16 +125,53 @@ class DispatchSession:
     # TODO emission
     # ------------------------------------------------------------------
 
-    def _emit_plan_todos(self, *, active_step_id: str | None = None) -> None:
+    def _begin_canonical_todos(self) -> None:
+        """Initialize canonical TODO objectives from the plan."""
+        if self._todo_controller is None:
+            return
+        objectives: list[dict[str, Any]] = []
+        for step in self.plan.steps:
+            raw_label = step.title or step.goal or ""
+            description = compact_todo_label(raw_label, fallback=step.id or "Worker step")
+            objectives.append({
+                "id": step.id,
+                "description": description,
+                "files": list(step.files),
+            })
+        self._todo_controller.begin(self.tool_call_id, objectives)
+
+    def _emit_canonical_snapshot(self) -> None:
+        """Emit the current canonical snapshot to the GUI."""
         if self._emit_todo_update is None:
             return
-        tasks = todo_tasks_from_plan(
-            self.plan,
-            active_step_id=active_step_id,
-            completed_step_ids=self.cursor.completed_set,
-            blocked_step_id=self.cursor.blocked_step_id,
-        )
+        if self._todo_controller is None:
+            return
+        tasks = self._todo_controller.snapshot(self.tool_call_id)
         self._emit_todo_update(self.tool_call_id, tasks)
+
+    def _canonical_set_active(self, step_id: str) -> None:
+        if self._todo_controller is None:
+            return
+        self._todo_controller.set_active(self.tool_call_id, step_id)
+        self._emit_canonical_snapshot()
+
+    def _canonical_mark_done(self, step_id: str) -> None:
+        if self._todo_controller is None:
+            return
+        self._todo_controller.mark_done(self.tool_call_id, step_id)
+        self._emit_canonical_snapshot()
+
+    def _canonical_mark_blocked(self, step_id: str) -> None:
+        if self._todo_controller is None:
+            return
+        self._todo_controller.mark_blocked(self.tool_call_id, step_id)
+        self._emit_canonical_snapshot()
+
+    def _canonical_finish(self) -> None:
+        if self._todo_controller is None:
+            return
+        self._todo_controller.finish(self.tool_call_id)
+        self._emit_canonical_snapshot()
 
     # ------------------------------------------------------------------
     # Main entry point
@@ -161,8 +211,9 @@ class DispatchSession:
             self._emit_lifecycle_pair(result)
             return result
 
-        # Emit initial TODO state: all steps pending.
-        self._emit_plan_todos(active_step_id=None)
+        # Initialize canonical TODO state: all steps pending.
+        self._begin_canonical_todos()
+        self._emit_canonical_snapshot()
 
         # Campaign starts — one visible Worker start event for the whole run.
         if self._emit_worker_started is not None:
@@ -174,7 +225,7 @@ class DispatchSession:
             self.cursor.index = i
 
             # Activate this step in the TODO rail.
-            self._emit_plan_todos(active_step_id=step.id)
+            self._canonical_set_active(step.id)
 
             worker_result = self._run_one_step(step)
             final_worker_result = worker_result
@@ -185,13 +236,15 @@ class DispatchSession:
             if _step_should_stop(step_result, worker_result):
                 # Record as blocked; final TODO emit below shows active+blocked.
                 self.cursor.blocked_step_id = step.id
+                self._canonical_mark_blocked(step.id)
                 break
 
-            # Step completed — advance cursor; next iteration activates next step.
+            # Step completed — advance cursor; mark done.
             self.cursor.completed_step_ids.append(step.id)
+            self._canonical_mark_done(step.id)
 
         # Emit final TODO state once: completed=done, blocked=active+blocked, rest=pending.
-        self._emit_plan_todos(active_step_id=None)
+        self._canonical_finish()
 
         if final_worker_result is None:
             # Guard — can't happen: plan.steps was verified non-empty above.

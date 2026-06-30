@@ -380,6 +380,67 @@ def _fallback_step_spec(plan: WorkerDispatchPlan, step: WorkerStepSpec) -> str:
     return "\n".join(part for part in parts if part is not None)
 
 
+def compact_todo_label(value: str, fallback: str = "Worker step") -> str:
+    """Return a compact, display-safe label for one TODO rail row.
+
+    Rules:
+    - First meaningful line only.
+    - Strip markdown bullets, numeric prefixes, checkbox prefixes, and headings.
+    - Strip prefixes like ``Step 1:``, ``Objective:``, ``Summary:``,
+      ``Acceptance:``, ``Goal:``.
+    - Collapse whitespace.
+    - Limit around 90 chars.
+    - Preserve explicit Planner step titles, just cleaned.
+    - Do not display whole specs or acceptance paragraphs.
+    """
+    if not value or not value.strip():
+        return fallback
+
+    # Take first meaningful line
+    lines = [line.strip() for line in value.strip().splitlines() if line.strip()]
+    if not lines:
+        return fallback
+    text = lines[0]
+
+    # Strip markdown headings (###, ##, #)
+    text = re.sub(r"^#{1,6}\s+", "", text)
+
+    # Strip markdown bullet / checkbox prefixes
+    text = re.sub(r"^[\-\*\+]\s+", "", text)
+    text = re.sub(r"^\[[ xX]\]\s*", "", text)
+    text = re.sub(r"^\d+[\.\)]\s*", "", text)
+
+    # Strip common prefix labels
+    for prefix in (
+        "Step",
+        "Objective",
+        "Summary",
+        "Acceptance",
+        "Goal",
+        "Task",
+        "Phase",
+        "Milestone",
+    ):
+        text = re.sub(
+            rf"^{re.escape(prefix)}\s*\d*\s*[:\.\-—–]\s*",
+            "",
+            text,
+            flags=re.IGNORECASE,
+        )
+
+    # Collapse whitespace
+    text = re.sub(r"\s+", " ", text).strip()
+
+    if not text:
+        return fallback
+
+    # Limit length
+    if len(text) > 90:
+        text = text[:87] + "..."
+
+    return text
+
+
 def todo_tasks_from_plan(
     plan: WorkerDispatchPlan,
     *,
@@ -395,16 +456,16 @@ def todo_tasks_from_plan(
     completed: set[str] = completed_step_ids or set()
     tasks: list[dict[str, Any]] = []
     for step in plan.steps:
+        raw_label = step.title or step.goal or ""
+        description = compact_todo_label(raw_label, fallback=step.id or "Worker step")
         task: dict[str, Any] = {
             "id": step.id,
             "step_id": step.id,
-            "description": step.title or step.goal or "Worker step",
+            "description": description,
             "status": "pending",
         }
         if step.files:
             task["files"] = list(step.files)
-        if step.acceptance:
-            task["acceptance"] = step.acceptance[:200] if len(step.acceptance) > 200 else step.acceptance
 
         if step.id in completed:
             task["status"] = "done"
@@ -652,6 +713,7 @@ __all__ = [
     "StepValidationPolicy",
     "WorkerDispatchPlan",
     "WorkerStepSpec",
+    "compact_todo_label",
     "plan_from_request",
     "request_for_step",
     "todo_tasks_from_plan",

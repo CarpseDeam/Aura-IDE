@@ -32,6 +32,7 @@ from aura.bridge._summary_formatters import (
 from aura.bridge.approval_proxy import _ApprovalProxy
 from aura.bridge.dispatch_session import DispatchSession
 from aura.bridge.event_relay import WorkerEventRelay
+from aura.bridge.todo_controller import DispatchTodoController
 from aura.bridge.worker_recording import _record_worker_completion
 from aura.bridge.worker_report import (
     _build_worker_summary,
@@ -252,7 +253,7 @@ class _DispatchProxy(QObject):
         # Records of each completed dispatch for persistence.
         self._records: list[WorkerDispatchRecord] = []
         self._result_metadata: dict[str, dict[str, Any]] = {}
-        self._canonical_todo_tool_ids: set[str] = set()
+        self._todo_controller: DispatchTodoController = DispatchTodoController()
 
     # ---- config -----------------------------------------------------------
 
@@ -292,17 +293,32 @@ class _DispatchProxy(QObject):
     def result_metadata(self, tool_call_id: str) -> dict[str, Any]:
         return dict(self._result_metadata.get(tool_call_id, {}))
 
-    # ---- canonical TODO guard --------------------------------------------
+    # ---- canonical TODO controller ---------------------------------------
 
-    def _begin_canonical_dispatch_todos(self, tool_call_id: str) -> None:
-        self._canonical_todo_tool_ids.add(tool_call_id)
+    def _emit_canonical_dispatch_todos(
+        self, tool_call_id: str, tasks: list[dict[str, Any]]
+    ) -> None:
+        """Emit a canonical TODO snapshot to the GUI.
 
-    def _end_canonical_dispatch_todos(self, tool_call_id: str) -> None:
-        self._canonical_todo_tool_ids.discard(tool_call_id)
+        This is the only path through which DispatchSession emits TODO updates
+        during a canonical dispatch. It replaces raw Worker-local emissions.
+        """
+        self.workerTodoListUpdated.emit(tool_call_id, tasks)
 
     def _relay_worker_todo_update(self, tool_call_id: str, tasks: list) -> None:
-        if tool_call_id in self._canonical_todo_tool_ids:
+        """Relay or absorb a Worker-local TODO update.
+
+        During canonical dispatch, only status updates for known objective IDs
+        are absorbed. Unknown IDs, ad-hoc descriptions, and replacement task
+        lists are ignored. The canonical snapshot is re-emitted only if status
+        actually changed.
+        """
+        if self._todo_controller.has_canonical(tool_call_id):
+            updated = self._todo_controller.absorb_worker_update(tool_call_id, tasks)
+            if updated is not None:
+                self.workerTodoListUpdated.emit(tool_call_id, updated)
             return
+        # No canonical state: pass through as before (non-dispatch worker runs).
         self.workerTodoListUpdated.emit(tool_call_id, tasks)
 
     # ---- planner-thread side ---------------------------------------------
@@ -356,6 +372,10 @@ class _DispatchProxy(QObject):
             if stanza:
                 edited = replace(edited, spec=edited.spec + stanza)
 
+        # Clear any prior canonical TODO state for this tool_call_id before
+        # starting a new dispatch (new SpecCard → fresh checklist).
+        self._todo_controller.clear(tool_call_id)
+
         plan = plan_from_request(edited)
         session = DispatchSession(
             tool_call_id=tool_call_id,
@@ -363,15 +383,16 @@ class _DispatchProxy(QObject):
             plan=plan,
             run_worker_step=self._run_worker,
             pending=pending,
-            emit_todo_update=self.workerTodoListUpdated.emit,
+            emit_todo_update=self._emit_canonical_dispatch_todos,
             emit_worker_started=self.workerStarted.emit,
             emit_worker_finished=self.workerFinished.emit,
+            todo_controller=self._todo_controller,
         )
-        self._begin_canonical_dispatch_todos(tool_call_id)
-        try:
-            result = session.run()
-        finally:
-            self._end_canonical_dispatch_todos(tool_call_id)
+        # Run the session. The canonical TODO checklist survives after finish
+        # so late Worker-local TODO events cannot repaint the rail. It is
+        # cleared only on the next dispatch for this tool_call_id, cancellation,
+        # or conversation reset.
+        result = session.run()
         self._merge_session_result_metadata(tool_call_id, result)
         with self._lock:
             self._pending.pop(tool_call_id, None)
@@ -1099,6 +1120,7 @@ class _DispatchProxy(QObject):
         result_caveats = messages["result_caveats"]
         structured_failure = messages["structured_failure"]
         recoverable_write_failures = messages["recoverable_write_failures"]
+        validation_results = completion["validation_results"]
         failed_validation = completion["failed_validation"]
         not_applied_writes = completion["not_applied_writes"]
         unrecovered_not_applied_writes = completion["unrecovered_not_applied_writes"]
@@ -1470,17 +1492,27 @@ def _compute_outcome_status(
         return S.needs_followup.value
     if has_unverified_acceptance:
         # Success override: deterministic success beats weak final-report wording.
+        # Only applies when validation actually ran and passed — if validation
+        # never ran after files changed, that is needs_followup regardless of
+        # the Worker's final report phrasing.
+        validation_never_ran = any(
+            "validation did not run" in str(caveat).lower()
+            for caveat in result_caveats
+        )
         if (has_applied_writes
             and not has_validation_failure
             and not result_errors
             and not has_recoverable_edit_blocker
-            and not has_internal_failure):
+            and not has_internal_failure
+            and not validation_never_ran):
             pass  # fall through to completed/completed_with_caveats
         else:
             return S.needs_followup.value
     if ok and result_caveats:
         return S.completed_with_caveats.value
-    return S.completed.value
+    if ok:
+        return S.completed.value
+    return S.needs_followup.value
 
 
 def _last_assistant_content(history: History) -> str:
