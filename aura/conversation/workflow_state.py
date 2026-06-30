@@ -313,11 +313,11 @@ def _pending_action(status: WorkflowStatus, needs_followup: bool) -> str:
     if status == WorkflowStatus.planner_resolving:
         return "Planner is resolving the Worker mismatch."
     if status == WorkflowStatus.failed_retryable:
-        return "Review the blocker, then dispatch a follow-up or revise the plan."
+        return "Review the blocker, then continue or revise the plan."
     if status == WorkflowStatus.failed_nonrecoverable:
         return "Review the failure before retrying."
     if needs_followup:
-        return "Review the remaining work and dispatch a follow-up."
+        return "Review the remaining work and continue."
     return ""
 
 

@@ -172,7 +172,7 @@ class InfoHubPane(QWidget):
             status_labels = {
                 WorkerOutcomeStatus.completed.value: "✅ Worker completed successfully.",
                 WorkerOutcomeStatus.completed_with_caveats.value: "✅ Worker completed with caveats.",
-                WorkerOutcomeStatus.needs_followup.value: "⚠️ Worker needs follow-up.",
+                WorkerOutcomeStatus.needs_followup.value: "ℹ️ Worker Log details below.",
                 WorkerOutcomeStatus.validation_failed.value: "❌ Worker validation failed.",
                 WorkerOutcomeStatus.edit_mechanics_blocked.value: "⚠️ Worker edit mechanics blocked.",
                 WorkerOutcomeStatus.craft_blocked.value: "❌ Worker craft blocked.",
@@ -186,7 +186,7 @@ class InfoHubPane(QWidget):
         elif ok:
             prefix = "✅ Worker completed successfully."
         elif needs_followup:
-            prefix = "⚠️ Worker needs follow-up."
+            prefix = "ℹ️ Worker Log details below."
         else:
             prefix = "Harness error."
         block = f"\n\n{'─' * 40}\n{prefix}\n{summary}\n{'─' * 40}\n"

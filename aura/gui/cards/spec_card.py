@@ -539,7 +539,7 @@ class SpecCard(QFrame):
             mapping = {
                 WorkerOutcomeStatus.completed.value: ("Completed", SUCCESS),
                 WorkerOutcomeStatus.completed_with_caveats.value: ("Completed with caveats", WARN),
-                WorkerOutcomeStatus.needs_followup.value: ("Needs follow-up", WARN),
+                WorkerOutcomeStatus.needs_followup.value: ("Completed with caveats", WARN),
                 WorkerOutcomeStatus.validation_failed.value: ("Validation failed", DANGER),
                 WorkerOutcomeStatus.edit_mechanics_blocked.value: ("Edit mechanics blocked", WARN),
                 WorkerOutcomeStatus.craft_blocked.value: ("Craft blocked", DANGER),
@@ -553,7 +553,7 @@ class SpecCard(QFrame):
             normalized = normalize_outcome_status(status)
             if normalized in mapping:
                 return mapping[normalized]
-        return ("Completed", SUCCESS) if ok else ("Needs follow-up", WARN)
+        return ("Completed", SUCCESS) if ok else ("Blocked", WARN)
 
     def worker_cancelled(self) -> None:
         """Update status when worker is cancelled during execution."""

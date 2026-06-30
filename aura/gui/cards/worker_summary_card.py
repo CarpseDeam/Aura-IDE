@@ -375,10 +375,15 @@ class WorkerSummaryCard(QFrame):
         if status is not None:
             from aura.conversation.dispatch import WorkerOutcomeStatus
 
+            # needs_followup is internal Planner continuation machinery.
+            # Never show a scary yellow card for it — resolve contextually
+            # from the summary receipt instead.
+            if status == WorkerOutcomeStatus.needs_followup.value:
+                return WorkerSummaryCard._resolve_needs_followup_label(ok, summary)
+
             mapping = {
                 WorkerOutcomeStatus.completed.value: ("✅ Done", SUCCESS),
                 WorkerOutcomeStatus.completed_with_caveats.value: ("✅ Done", SUCCESS),
-                WorkerOutcomeStatus.needs_followup.value: ("⚠️ Needs follow-up", WARN),
                 WorkerOutcomeStatus.validation_failed.value: ("❌ Failed validation", DANGER),
                 WorkerOutcomeStatus.edit_mechanics_blocked.value: ("⚠️ Edit mechanics blocked", WARN),
                 WorkerOutcomeStatus.craft_blocked.value: ("❌ Craft blocked", DANGER),
@@ -387,6 +392,7 @@ class WorkerSummaryCard(QFrame):
                 WorkerOutcomeStatus.approval_rejected.value: ("❌ Approval rejected", DANGER),
                 WorkerOutcomeStatus.cancelled.value: ("🔶 Cancelled", "#6b7280"),
                 WorkerOutcomeStatus.harness_error.value: ("❌ Harness error", DANGER),
+                WorkerOutcomeStatus.needs_planner_resolution.value: ("⚠️ Planner resolving mismatch", WARN),
             }
             return mapping.get(status, ("Unknown", "#6b7280"))
         # Fallback to legacy inference
@@ -402,11 +408,29 @@ class WorkerSummaryCard(QFrame):
             return "❌ Harness error", DANGER
         if summary.startswith("Validation failed"):
             return "❌ Failed validation", WARN
-        if summary.startswith("Worker needs follow-up"):
-            return "⚠️ Worker needs follow-up", WARN
-        if needs_followup:
-            return "⚠️ Worker needs follow-up", WARN
-        return "⚠️ Worker needs follow-up", WARN
+        # needs_followup without explicit status → neutral, not scary
+        return "ℹ️ Details in Worker Log", FG_MUTED
+
+    @staticmethod
+    def _resolve_needs_followup_label(ok: bool, summary: str) -> tuple[str, str]:
+        """Resolve a ``needs_followup`` status into a user-facing label.
+
+        If the Worker made changes and validation passed the card shows
+        *Completed* or *Completed with caveats*.  Otherwise a neutral info
+        label directs the user to the Worker Log.
+        """
+        parsed = parse_worker_summary_receipt(summary)
+        files_total = parsed["file_counts"].get("total", 0)
+        validation = parsed.get("validation", "")
+
+        if files_total > 0:
+            if validation and "✓" in validation:
+                return "✅ Completed", SUCCESS
+            return "✅ Completed with caveats", WARN
+        if ok:
+            return "✅ Completed", SUCCESS
+        # No files changed and not ok — neutral, not a scary warning
+        return "ℹ️ Details in Worker Log", FG_MUTED
 
     @staticmethod
     def _sanitize_summary(summary: str) -> str:

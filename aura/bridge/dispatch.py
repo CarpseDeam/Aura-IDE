@@ -1209,14 +1209,18 @@ class _DispatchProxy(QObject):
             recoverable = True
         elif has_unverified_acceptance:
             # Success override: deterministic validation results beat weak
-            # final-report wording. If edits applied, validation ran and passed,
+            # final-report wording. If edits applied, validation passed,
             # and there are no real errors, classify as success.
+            validation_never_ran = any(
+                "validation did not run" in str(c).lower()
+                for c in result_caveats
+            )
             if (bool(relay.write_results)
-                and bool(validation_results)
                 and not failed_validation
                 and not result_errors
-                and not unrecovered_not_applied_writes
-                and not internal_error):
+                and not has_recoverable_edit_blocker
+                and not internal_error
+                and not validation_never_ran):
                 ok = True
                 needs_followup = False
                 recoverable = False
@@ -1506,7 +1510,9 @@ def _compute_outcome_status(
             and not has_recoverable_edit_blocker
             and not has_internal_failure
             and not validation_never_ran):
-            pass  # fall through to completed/completed_with_caveats
+            if result_caveats:
+                return S.completed_with_caveats.value
+            return S.completed.value
         else:
             return S.needs_followup.value
     if ok and result_caveats:

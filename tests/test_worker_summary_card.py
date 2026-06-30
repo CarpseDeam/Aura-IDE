@@ -156,7 +156,7 @@ def test_worker_followup_header_is_not_harness_error() -> None:
         "Worker needs follow-up \u2014 blocked by missing dependency (worker_blocked).",
     )
 
-    assert label == "⚠️ Worker needs follow-up"
+    assert label == "ℹ️ Details in Worker Log"
 
 
 def test_status_driven_labels() -> None:
@@ -167,12 +167,12 @@ def test_status_driven_labels() -> None:
         (WorkerOutcomeStatus.validation_failed.value, "❌ Failed validation", DANGER),
         (WorkerOutcomeStatus.harness_error.value, "❌ Harness error", DANGER),
         (WorkerOutcomeStatus.cancelled.value, "🔶 Cancelled", "#6b7280"),
-        (WorkerOutcomeStatus.needs_followup.value, "⚠️ Needs follow-up", WARN),
         (WorkerOutcomeStatus.edit_mechanics_blocked.value, "⚠️ Edit mechanics blocked", WARN),
         (WorkerOutcomeStatus.craft_blocked.value, "❌ Craft blocked", DANGER),
         (WorkerOutcomeStatus.craft_rejected.value, "❌ Craft rejected", DANGER),
         (WorkerOutcomeStatus.scope_mismatch.value, "⚠️ Scope mismatch", WARN),
         (WorkerOutcomeStatus.approval_rejected.value, "❌ Approval rejected", DANGER),
+        (WorkerOutcomeStatus.needs_planner_resolution.value, "⚠️ Planner resolving mismatch", WARN),
     ]
     for status_val, expected_label, expected_color in tests:
         label, color = WorkerSummaryCard._status_label(ok=True, needs_followup=False, status=status_val)
@@ -194,11 +194,10 @@ def test_legacy_fallback() -> None:
     """Without status, should use legacy inference from ok/needs_followup/summary."""
     label, _ = WorkerSummaryCard._status_label(ok=True, needs_followup=False)
     assert label == "✅ Done"
-    # Without status and without summary text, ok=False falls through to
-    # "⚠️ Worker needs follow-up" (legacy code cannot detect harness error
-    # without the "Harness error" prefix in the summary text)
+    # Without status and without summary text, ok=False now returns a neutral
+    # label instead of the old scary "⚠️ Worker needs follow-up".
     label, _ = WorkerSummaryCard._status_label(ok=False, needs_followup=False)
-    assert label == "⚠️ Worker needs follow-up"
+    assert label == "ℹ️ Details in Worker Log"
     # With summary starting with "Harness error", legacy code detects it
     label, _ = WorkerSummaryCard._status_label(
         ok=False,
@@ -206,6 +205,118 @@ def test_legacy_fallback() -> None:
         summary="Harness error \u2014 something failed",
     )
     assert label == "❌ Harness error"
+
+
+def test_needs_followup_status_resolves_to_completed_when_files_and_validation_ok() -> None:
+    """Files changed + validation passed → Completed, never Needs follow-up."""
+    receipt = """\
+══════════════════════════════════════
+ ℹ️  Worker Log details below
+──────────────────────────────────────
+ Files changed   : 1 (1 edited)
+ Validation      : ✓ py_compile (3/3 passed)
+ Action needed   : Review Worker Log for details
+──────────────────────────────────────
+
+ Modified files:
+  • src/app.py   (edit)
+
+ Validated:
+  • python -m py_compile src/app.py  →  passed
+  • python -m py_compile tests/test_app.py  →  passed
+  • python -m py_compile src/utils.py  →  passed
+
+ Summary:
+  Updated the validation logic.
+
+══════════════════════════════════════
+"""
+    label, color = WorkerSummaryCard._status_label(
+        ok=False,
+        needs_followup=True,
+        summary=receipt,
+        status=WorkerOutcomeStatus.needs_followup.value,
+    )
+    assert label == "✅ Completed"
+    assert color == SUCCESS
+
+
+def test_needs_followup_with_files_but_no_validation_shows_caveats() -> None:
+    """Files changed but no validation → Completed with caveats, not Needs follow-up."""
+    receipt = """\
+══════════════════════════════════════
+ ℹ️  Worker Log details below
+──────────────────────────────────────
+ Files changed   : 2 (2 edited)
+ Validation      : — (not yet verified)
+ Action needed   : Review Worker Log for details
+──────────────────────────────────────
+
+ Modified files:
+  • src/a.py   (edit)
+  • src/b.py   (edit)
+
+ Summary:
+  Made some changes.
+
+══════════════════════════════════════
+"""
+    label, color = WorkerSummaryCard._status_label(
+        ok=False,
+        needs_followup=True,
+        summary=receipt,
+        status=WorkerOutcomeStatus.needs_followup.value,
+    )
+    assert label == "✅ Completed with caveats"
+    assert color == WARN
+
+
+def test_needs_followup_with_no_files_and_not_ok_shows_neutral() -> None:
+    """No files changed and not ok → neutral info label, never scary."""
+    label, color = WorkerSummaryCard._status_label(
+        ok=False,
+        needs_followup=True,
+        summary="",
+        status=WorkerOutcomeStatus.needs_followup.value,
+    )
+    assert label == "ℹ️ Details in Worker Log"
+    assert color != WARN
+    assert color != DANGER
+
+
+def test_real_blockers_still_render_as_blocked_or_failed() -> None:
+    """Validation failures and other real blockers must still surface."""
+    # Validation failed
+    label, color = WorkerSummaryCard._status_label(
+        ok=False, needs_followup=False,
+        status=WorkerOutcomeStatus.validation_failed.value,
+    )
+    assert label == "❌ Failed validation"
+    assert color == DANGER
+
+    # Craft blocked
+    label, color = WorkerSummaryCard._status_label(
+        ok=False, needs_followup=False,
+        status=WorkerOutcomeStatus.craft_blocked.value,
+    )
+    assert label == "❌ Craft blocked"
+    assert color == DANGER
+
+    # Harness error
+    label, color = WorkerSummaryCard._status_label(
+        ok=False, needs_followup=False,
+        status=WorkerOutcomeStatus.harness_error.value,
+    )
+    assert label == "❌ Harness error"
+    assert color == DANGER
+
+    # Edit mechanics blocked
+    label, color = WorkerSummaryCard._status_label(
+        ok=False, needs_followup=False,
+        status=WorkerOutcomeStatus.edit_mechanics_blocked.value,
+    )
+    assert label == "⚠️ Edit mechanics blocked"
+    assert color == WARN
 
 
 # ── Card rendering tests (need qapp) ───────────────────────────────────────

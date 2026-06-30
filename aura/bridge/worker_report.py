@@ -215,7 +215,7 @@ def _build_worker_summary(
     STATUS_LABELS = {
         "completed": "\u2705  Worker completed successfully",
         "completed_with_caveats": "\u2705  Worker completed with caveats",
-        "needs_followup": "\u26a0\ufe0f  Worker needs follow-up",
+        "needs_followup": "\u2139\ufe0f  Worker Log details below",
         "needs_planner_resolution": "\u26a0\ufe0f  Worker needs Planner resolution",
         "validation_failed": "\u274c  Validation failed",
         "edit_mechanics_blocked": "\u26a0\ufe0f  Edit mechanics blocked",
@@ -229,7 +229,7 @@ def _build_worker_summary(
     ACTION_LABELS = {
         "completed": "None \u2014 ready for review",
         "completed_with_caveats": "Review caveats below",
-        "needs_followup": "Re-dispatch with follow-up",
+        "needs_followup": "Review Worker Log for details",
         "needs_planner_resolution": "Planner will revise the handoff",
         "validation_failed": "Fix validation failure \u2014 see below",
         "edit_mechanics_blocked": "Re-dispatch \u2014 edit tool failure",

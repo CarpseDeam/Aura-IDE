@@ -518,6 +518,145 @@ def test_dispatch_session_explicit_campaign_emits_one_started_and_finished():
     assert finished[0][1] is True
 
 
+def test_validated_success_completes_todo_and_is_not_needs_followup():
+    """Single-step dispatch with applied writes, passing validation, and weak
+    Worker wording must complete the TODO objective as done and must NOT
+    classify as needs_followup."""
+    req = WorkerDispatchRequest(
+        goal="Edit test file",
+        files=["tests/test_todo.py"],
+        spec="",
+        acceptance="All tests must pass.",
+        steps=[
+            WorkerStepSpec(
+                id="step-1",
+                title="Edit test",
+                goal="Edit test_todo.py",
+                spec="Update tests.",
+                files=["tests/test_todo.py"],
+            ),
+        ],
+    )
+    plan = plan_from_request(req)
+    todo_snapshots: list[list[dict]] = []
+
+    def emit_todo(_tool_call_id: str, tasks: list[dict]) -> None:
+        todo_snapshots.append(list(tasks))
+
+    def run_worker_step(_tool_call_id, _step_request, _pending):
+        return WorkerDispatchResult(
+            ok=True,
+            summary="Updated tests, all 47 pass.",
+            needs_followup=False,
+            recoverable=False,
+            status=WorkerOutcomeStatus.completed_with_caveats.value,
+            modified_files=["tests/test_todo.py"],
+            extras={
+                "writes": [{"path": "tests/test_todo.py", "is_new_file": False}],
+                "validation_results": [
+                    {"command": "python -m compileall tests/test_todo.py", "ok": True},
+                    {"command": "pytest tests/test_todo.py", "ok": True},
+                ],
+                "caveats": [
+                    "Worker final report did not clearly mention validation or acceptance verification."
+                ],
+            },
+        )
+
+    from aura.bridge.todo_controller import DispatchTodoController
+    result = DispatchSession(
+        tool_call_id="tc1",
+        original_request=req,
+        plan=plan,
+        run_worker_step=run_worker_step,
+        pending=SimpleNamespace(),
+        emit_todo_update=emit_todo,
+        todo_controller=DispatchTodoController(),
+    ).run()
+
+    # 1. Final result is NOT needs_followup
+    assert result.needs_followup is False, \
+        f"Expected needs_followup=False, got {result.needs_followup}"
+    assert result.status != WorkerOutcomeStatus.needs_followup.value, \
+        f"Expected status != needs_followup, got {result.status!r}"
+    assert result.status in (
+        WorkerOutcomeStatus.completed.value,
+        WorkerOutcomeStatus.completed_with_caveats.value,
+    ), f"Expected completed or completed_with_caveats, got {result.status!r}"
+
+    # 2. Final TODO snapshot has the objective as done
+    assert len(todo_snapshots) >= 1, "Expected at least one TODO snapshot"
+    final_tasks = todo_snapshots[-1]
+    assert len(final_tasks) == 1, f"Expected 1 objective, got {len(final_tasks)}"
+    obj = final_tasks[0]
+    assert obj["status"] == "done", \
+        f"Expected objective status 'done', got {obj['status']!r}"
+    assert not obj.get("blocked"), \
+        f"Expected objective not blocked, got blocked={obj.get('blocked')!r}"
+
+    # 3. Final snapshot has no active/yellow row
+    for task in final_tasks:
+        assert task.get("status") in ("done", "pending"), \
+            f"Expected no active/blocked rows in final snapshot, found {task!r}"
+
+
+def test_validated_success_status_override_in_compute_outcome():
+    """_compute_outcome_status must return completed or completed_with_caveats
+    when has_unverified_acceptance=True but writes applied and validation passed."""
+    from aura.bridge.dispatch import _compute_outcome_status
+
+    # Simulates: has_unverified_acceptance=True, writes applied, validation passed,
+    # no errors, but weak Worker final wording generated a caveat.
+    status = _compute_outcome_status(
+        ok=False,              # classify set ok=False due to stricter old logic
+        needs_followup=True,
+        recoverable=True,
+        has_internal_failure=False,
+        has_validation_failure=False,
+        has_recoverable_edit_blocker=False,
+        has_source_inspection_blocker=False,
+        has_no_work=False,
+        is_implementation=True,
+        has_unverified_acceptance=True,
+        has_hard_failure=False,
+        has_no_progress_failure=False,
+        result_errors=[],
+        result_caveats=[
+            "Worker final report did not clearly mention validation or acceptance verification.",
+        ],
+        continuation={},
+        has_applied_writes=True,
+        structured_failure=None,
+        write_failures=[],
+    )
+    assert status == WorkerOutcomeStatus.completed_with_caveats.value, \
+        f"Expected completed_with_caveats, got {status!r}"
+
+    # Same scenario without caveats → completed
+    status = _compute_outcome_status(
+        ok=False,
+        needs_followup=True,
+        recoverable=True,
+        has_internal_failure=False,
+        has_validation_failure=False,
+        has_recoverable_edit_blocker=False,
+        has_source_inspection_blocker=False,
+        has_no_work=False,
+        is_implementation=True,
+        has_unverified_acceptance=True,
+        has_hard_failure=False,
+        has_no_progress_failure=False,
+        result_errors=[],
+        result_caveats=[],
+        continuation={},
+        has_applied_writes=True,
+        structured_failure=None,
+        write_failures=[],
+    )
+    assert status == WorkerOutcomeStatus.completed.value, \
+        f"Expected completed, got {status!r}"
+
+
 def test_canonical_dispatch_todos_suppress_worker_local_updates():
     """During canonical dispatch, worker-local TODO updates are absorbed,
     not forwarded to the GUI. Only canonical snapshots reach the GUI."""
@@ -1534,7 +1673,7 @@ def test_structured_worker_failure_summary_is_not_harness_error():
         [],
     )
 
-    assert "Worker needs follow-up" in summary
+    assert "Worker Log details below" in summary
     assert not summary.startswith("Harness error")
 
 

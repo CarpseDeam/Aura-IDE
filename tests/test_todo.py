@@ -691,6 +691,78 @@ class TestDispatchTodoController:
         assert result[0]["status"] == "done"
 
 
+    def test_clear_all_removes_all_canonical_state(self):
+        from aura.bridge.todo_controller import DispatchTodoController
+
+        ctrl = DispatchTodoController()
+        ctrl.begin("tc1", [{"id": "s1", "description": "Step 1"}])
+        ctrl.begin("tc2", [{"id": "s2", "description": "Step 2"}])
+        assert ctrl.has_canonical("tc1") is True
+        assert ctrl.has_canonical("tc2") is True
+
+        ctrl.clear_all()
+
+        assert ctrl.has_canonical("tc1") is False
+        assert ctrl.has_canonical("tc2") is False
+        assert ctrl.snapshot("tc1") == []
+        assert ctrl.snapshot("tc2") == []
+
+    def test_set_active_one_row_at_a_time(self):
+        from aura.bridge.todo_controller import DispatchTodoController
+
+        ctrl = DispatchTodoController()
+        ctrl.begin("tc1", [
+            {"id": "one", "description": "First"},
+            {"id": "two", "description": "Second"},
+            {"id": "three", "description": "Third"},
+        ])
+
+        result = ctrl.set_active("tc1", "one")
+        assert result[0]["status"] == "active"
+        assert result[1]["status"] == "pending"
+        assert result[2]["status"] == "pending"
+
+        result = ctrl.set_active("tc1", "two")
+        assert result[0]["status"] == "pending"
+        assert result[1]["status"] == "active"
+        assert result[2]["status"] == "pending"
+
+        ctrl.mark_done("tc1", "two")
+        snapshot = ctrl.snapshot("tc1")
+        assert snapshot[1]["status"] == "done"
+
+        result = ctrl.set_active("tc1", "three")
+        assert result[1]["status"] == "done"
+        assert result[2]["status"] == "active"
+
+    def test_absorb_worker_update_one_active_row(self):
+        from aura.bridge.todo_controller import DispatchTodoController
+
+        ctrl = DispatchTodoController()
+        ctrl.begin("tc1", [
+            {"id": "one", "description": "First"},
+            {"id": "two", "description": "Second"},
+            {"id": "three", "description": "Third"},
+        ])
+
+        ctrl.set_active("tc1", "one")
+        snapshot = ctrl.snapshot("tc1")
+        assert snapshot[0]["status"] == "active"
+
+        result = ctrl.absorb_worker_update("tc1", [
+            {"id": "two", "status": "active"},
+        ])
+        assert result is not None
+        assert result[0]["status"] == "pending"
+        assert result[1]["status"] == "active"
+        assert len(result) == 3
+        assert [t["id"] for t in result] == ["one", "two", "three"]
+        assert [t["description"] for t in result] == ["First", "Second", "Third"]
+
+        # Also verify via snapshot
+        assert ctrl.snapshot("tc1") == result
+
+
 # ── compact_todo_label tests ───────────────────────────────────────────
 
 

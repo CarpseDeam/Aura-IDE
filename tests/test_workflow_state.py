@@ -48,7 +48,7 @@ def test_workflow_finish_maps_retryable_failure() -> None:
 
     assert finished.status == WorkflowStatus.failed_retryable
     assert finished.follow_up_required is True
-    assert "follow-up" in finished.pending_user_action
+    assert "continue" in finished.pending_user_action
 
 
 def test_workflow_finish_maps_nonrecoverable_failure() -> None:
