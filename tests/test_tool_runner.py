@@ -5,7 +5,12 @@ import threading
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from aura.client.events import TerminalOutput, ToolCallStart, ToolResult
+from aura.client.events import (
+    TerminalOutput,
+    ToolCallStart,
+    ToolResult,
+    WorkerDispatchRequested,
+)
 from aura.conversation.dispatch import WorkerDispatchResult
 from aura.conversation.history import History
 from aura.conversation.loop_detection import LoopDetector
@@ -311,6 +316,7 @@ def test_recoverable_dispatch_result_emits_nonfailed_tool_event(tmp_path: Path):
 def test_handle_dispatch_parses_steps_from_tool_args(tmp_path: Path):
     runner = _make_runner(tmp_path)
     captured = {}
+    events = []
 
     def dispatch_cb(tool_call_id, req):
         captured["tool_call_id"] = tool_call_id
@@ -331,7 +337,7 @@ def test_handle_dispatch_parses_steps_from_tool_args(tmp_path: Path):
                 {"id": "three", "title": "Three", "goal": "Third step", "files": ["three.py"]},
             ],
         },
-        on_event=lambda ev: None,
+        on_event=events.append,
         dispatch_cb=dispatch_cb,
     )
 
@@ -343,11 +349,15 @@ def test_handle_dispatch_parses_steps_from_tool_args(tmp_path: Path):
     assert [step.goal for step in req.steps] == ["First step", "Second step", "Third step"]
     assert req.files == ["shared.py"]
     assert req.spec == "Use the listed steps to complete the campaign."
+    dispatch_events = [ev for ev in events if isinstance(ev, WorkerDispatchRequested)]
+    assert len(dispatch_events) == 1
+    assert [step["id"] for step in dispatch_events[0].steps] == ["one", "two", "three"]
 
 
 def test_handle_dispatch_without_steps_keeps_flat_request_empty_steps(tmp_path: Path):
     runner = _make_runner(tmp_path)
     captured = {}
+    events = []
 
     def dispatch_cb(_tool_call_id, req):
         captured["request"] = req
@@ -362,7 +372,7 @@ def test_handle_dispatch_without_steps_keeps_flat_request_empty_steps(tmp_path: 
             "acceptance": "Run python -m py_compile a.py.",
             "summary": "Flat fix",
         },
-        on_event=lambda ev: None,
+        on_event=events.append,
         dispatch_cb=dispatch_cb,
     )
 
@@ -375,6 +385,9 @@ def test_handle_dispatch_without_steps_keeps_flat_request_empty_steps(tmp_path: 
     assert req.spec == "Change the implementation in a.py."
     assert req.acceptance == "Run python -m py_compile a.py."
     assert req.summary == "Flat fix"
+    dispatch_events = [ev for ev in events if isinstance(ev, WorkerDispatchRequested)]
+    assert len(dispatch_events) == 1
+    assert dispatch_events[0].steps == []
 
 
 def test_recoverable_dispatch_spec_rejection_emits_nonfailed_tool_event(tmp_path: Path):

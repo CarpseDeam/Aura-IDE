@@ -143,6 +143,7 @@ class ToolRunner:
                 spec=req.spec,
                 acceptance=req.acceptance,
                 summary=req.summary,
+                steps=[step.to_dict() for step in req.steps],
             )
         )
         try:

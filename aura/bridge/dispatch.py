@@ -203,7 +203,7 @@ class _DispatchPending:
 
 
 class _DispatchProxy(QObject):
-    showSpecCard = Signal(str, str, list, str, str, str)  # tool_id, goal, files, spec, acceptance, summary
+    showSpecCard = Signal(str, str, list, str, str, str, list)  # tool_id, goal, files, spec, acceptance, summary, steps
     workerStarted = Signal(str)  # tool_id
     workerFinished = Signal(str, bool, str, bool, str)  # tool_id, ok, summary, needs_followup, status
     workerCancelled = Signal(str)
@@ -318,7 +318,13 @@ class _DispatchProxy(QObject):
         # Tell GUI thread to render the spec card; user will call user_dispatched
         # or user_cancelled, which will set decision_event.
         self.showSpecCard.emit(
-            tool_call_id, req.goal, list(req.files), req.spec, req.acceptance, req.summary
+            tool_call_id,
+            req.goal,
+            list(req.files),
+            req.spec,
+            req.acceptance,
+            req.summary,
+            [step.to_dict() for step in req.steps],
         )
 
         signaled = pending.decision_event.wait(timeout=DISPATCH_TIMEOUT)

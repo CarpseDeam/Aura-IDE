@@ -116,6 +116,7 @@ class WorkerEventHandler(QObject):
         spec: str,
         acceptance: str,
         summary: str,
+        steps: list | None = None,
     ) -> None:
         """Always show the SpecCard; auto-dispatch or wait for card interaction."""
         _log.info(
@@ -129,6 +130,7 @@ class WorkerEventHandler(QObject):
             self._chat.stop_current_aura()
 
         file_list = list(files)
+        step_list = list(steps or [])
         self._set_active_workflow(
             WorkflowState.intent_captured(
                 tool_call_id,
@@ -142,9 +144,20 @@ class WorkerEventHandler(QObject):
         try:
             if hasattr(self._chat, "prepare_spec_card"):
                 self._chat.prepare_spec_card(tool_call_id)
-            card = self._chat.add_spec_card(
-                tool_call_id, goal, file_list, spec, acceptance, summary
-            )
+            if step_list:
+                card = self._chat.add_spec_card(
+                    tool_call_id,
+                    goal,
+                    file_list,
+                    spec,
+                    acceptance,
+                    summary,
+                    steps=step_list,
+                )
+            else:
+                card = self._chat.add_spec_card(
+                    tool_call_id, goal, file_list, spec, acceptance, summary
+                )
         except Exception as exc:
             logging.exception("Failed to render worker dispatch spec card")
             try:

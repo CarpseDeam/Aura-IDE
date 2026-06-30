@@ -192,7 +192,7 @@ class HarnessLapBridge(QObject):
 
             # Auto-dispatch: connect showSpecCard to user_dispatched
             self._dispatch_proxy.showSpecCard.connect(
-                lambda tool_id, goal, files, spec, acceptance, summary: (
+                lambda tool_id, goal, files, spec, acceptance, summary, steps: (
                     self._dispatch_proxy.user_dispatched(
                         tool_id, goal, list(files), spec, acceptance, summary
                     )

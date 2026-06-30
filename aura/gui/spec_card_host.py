@@ -38,17 +38,27 @@ class SpecCardHost(QWidget):
         spec: str,
         acceptance: str,
         summary: str = "",
+        steps: list | None = None,
     ) -> SpecCard:
         existing = self._cards.get(tool_call_id)
         if existing is not None:
-            existing.update_spec(goal, files, spec, acceptance, summary)
+            existing.update_spec(goal, files, spec, acceptance, summary, steps=steps)
             self.setVisible(True)
             return existing
 
         for existing_id in list(self._cards):
             self.remove_spec_card(existing_id)
 
-        card = SpecCard(tool_call_id, goal, files, spec, acceptance, summary=summary, parent=self)
+        card = SpecCard(
+            tool_call_id,
+            goal,
+            files,
+            spec,
+            acceptance,
+            summary=summary,
+            steps=steps,
+            parent=self,
+        )
         self._cards[tool_call_id] = card
         self._layout.addWidget(card)
         self.setVisible(True)

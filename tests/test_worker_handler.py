@@ -350,6 +350,25 @@ class TestDispatch:
         bridge.user_dispatched.assert_not_called()
         bridge.user_cancelled_dispatch.assert_not_called()
 
+    def test_multi_step_dispatch_passes_steps_to_spec_card(
+        self, handler: WorkerEventHandler, bridge: Mock, chat: Mock,
+    ) -> None:
+        bridge.auto_dispatch = False
+        steps = [
+            {"id": "one", "title": "One", "goal": "First step"},
+            {"id": "two", "title": "Two", "goal": "Second step"},
+        ]
+
+        handler._on_worker_dispatch_requested(
+            "tc1", "goal", ["f.py"], "spec", "acc", "", steps
+        )
+
+        chat.add_spec_card.assert_called_once_with(
+            "tc1", "goal", ["f.py"], "spec", "acc", "", steps=steps
+        )
+        bridge.user_dispatched.assert_not_called()
+        bridge.user_cancelled_dispatch.assert_not_called()
+
     def test_non_auto_dispatch_then_dispatch_clicked(
         self, handler: WorkerEventHandler, chat: Mock, bridge: Mock,
     ) -> None:

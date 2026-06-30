@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton
 
 from aura.conversation.dispatch import WorkerOutcomeStatus
 from aura.gui.cards.plan_writer_card import PlanWriterCard
@@ -143,6 +143,48 @@ class TestFullSpecCollapsed:
         card = SpecCard("tid", "goal", ["f.py"], spec, "acc", summary="")
 
         assert card.current_spec()[2] == spec
+
+
+class TestCampaignRendering:
+    def test_flat_dispatch_keeps_edit_button(self, qapp):
+        card = SpecCard("tid", "goal", ["f.py"], "spec", "acc", summary="")
+
+        button_texts = [button.text() for button in card.findChildren(QPushButton)]
+
+        assert "Dispatch" in button_texts
+        assert "Edit Spec" in button_texts
+        assert "Cancel" in button_texts
+        assert card._edit_btn is not None
+
+    def test_campaign_dispatch_shows_steps_and_no_edit_button(self, qapp):
+        card = SpecCard(
+            "tid",
+            "goal",
+            ["shared.py"],
+            "flat spec ignored for campaign rendering",
+            "flat acceptance ignored for campaign rendering",
+            summary="campaign",
+            steps=[
+                {"id": "one", "title": "Prepare helper", "files": ["a.py"]},
+                {"id": "two", "title": "Wire call site", "files": ["b.py", "c.py"]},
+            ],
+        )
+
+        button_texts = [button.text() for button in card.findChildren(QPushButton)]
+        header_texts = [label.text() for label in card.findChildren(QLabel)]
+        campaign_text = card._campaign_label.toPlainText()
+
+        assert "Dispatch" in button_texts
+        assert "Cancel" in button_texts
+        assert "Edit Spec" not in button_texts
+        assert card._edit_btn is None
+        assert "CAMPAIGN" in header_texts
+        assert "STRATEGY" not in header_texts
+        assert "VALIDATION" not in header_texts
+        assert campaign_text.index("Prepare helper") < campaign_text.index("Wire call site")
+        assert "a.py" in campaign_text
+        assert "b.py" in campaign_text
+        assert "c.py" in campaign_text
 
 
 class TestToolCallId:
