@@ -1399,11 +1399,27 @@ class ConversationManager:
                         steering=steering,
                     )
                     return "nudged"
-                self._finish_worker_harness_no_progress(
-                    state,
+                self._finish_worker_recoverable_followup(
                     on_event,
-                    reason=reason,
-                    steering=steering,
+                    failure_class="worker_flow_zero_work_no_progress",
+                    error=(
+                        "Worker could not make progress after internal zero-work "
+                        "recovery. Handing step back for planner resolution."
+                    ),
+                    details={
+                        "reason": reason,
+                        "steering": steering,
+                        "suggested_next_tool": "dispatch_to_worker",
+                        "suggested_next_action": (
+                            "Redispatch with a narrower target, exact edit region, "
+                            "or explicit blocker resolution."
+                        ),
+                        "planner_resolution_needed": True,
+                        "worker_confusion_question": (
+                            f"Worker could not identify a safe first edit for: "
+                            f"{steering}"
+                        ),
+                    },
                 )
                 return "finished"
             self._finish_worker_recoverable_followup(
@@ -1450,11 +1466,27 @@ class ConversationManager:
                 steering=state.worker_flow_last_steering,
             )
             return "nudged"
-        self._finish_worker_harness_no_progress(
-            state,
+        self._finish_worker_recoverable_followup(
             on_event,
-            reason=state.worker_flow_last_reason or "zero_work_final",
-            steering=state.worker_flow_last_steering,
+            failure_class="worker_flow_zero_work_no_progress",
+            error=(
+                "Worker could not make progress after internal zero-work "
+                "recovery. Handing step back for planner resolution."
+            ),
+            details={
+                "reason": state.worker_flow_last_reason or "zero_work_final",
+                "steering": state.worker_flow_last_steering,
+                "suggested_next_tool": "dispatch_to_worker",
+                "suggested_next_action": (
+                    "Redispatch with a narrower target, exact edit region, "
+                    "or explicit blocker resolution."
+                ),
+                "planner_resolution_needed": True,
+                "worker_confusion_question": (
+                    f"Worker could not identify a safe first edit for: "
+                    f"{state.worker_flow_last_steering}"
+                ),
+            },
         )
         return "finished"
 
@@ -1478,53 +1510,6 @@ class ConversationManager:
         state.worker_flow_nudge_sent = True
         state.worker_flow_last_reason = reason
         state.worker_flow_last_steering = steering
-
-    def _finish_worker_harness_no_progress(
-        self,
-        state: _SendState,
-        on_event: EventCallback,
-        *,
-        reason: str,
-        steering: str,
-    ) -> None:
-        self._finish_worker_unrecoverable(
-            on_event,
-            failure_class="harness_no_progress",
-            error=(
-                "Worker made no changes after internal zero-work recovery. "
-                "This is an Aura harness no-progress failure, not a user-actionable follow-up."
-            ),
-            details=self._worker_zero_work_debug_details(
-                state,
-                reason=reason,
-                steering=steering,
-            ),
-        )
-
-    def _worker_zero_work_debug_details(
-        self,
-        state: _SendState,
-        *,
-        reason: str,
-        steering: str,
-    ) -> dict[str, Any]:
-        flow_state = state.worker_flow.state if state.worker_flow is not None else None
-        candidate_text = assistant_message_text(state.candidate_final_message or {})
-        return {
-            "failure_class": "worker_flow_zero_work_no_progress",
-            "worker_flow_reason": reason,
-            "tool_counts": state.limits.to_dict(),
-            "zero_work_recovery_attempted": bool(
-                state.worker_flow_zero_work_recovery_sent
-            ),
-            "last_steering_message": steering or state.worker_flow_last_steering,
-            "write_actions": int(getattr(flow_state, "write_actions", 0) or 0),
-            "write_intents": int(getattr(flow_state, "write_intents", 0) or 0),
-            "validation_actions": int(getattr(flow_state, "validation_actions", 0) or 0),
-            "worker_app_writes": sorted(state.worker_app_writes),
-            "worker_flow_phase": str(getattr(flow_state, "phase", "")),
-            "candidate_final_preview": candidate_text[:500],
-        }
 
     def _worker_recovery_block(
         self,
