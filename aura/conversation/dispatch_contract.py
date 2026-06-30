@@ -37,6 +37,10 @@ def enrich_worker_dispatch_contract(
             req.forbidden_calls,
             _extract_forbidden_calls(texts),
         ),
+        forbidden_public_methods=_merge_list(
+            req.forbidden_public_methods,
+            _extract_forbidden_public_methods(texts),
+        ),
     )
 
 
@@ -80,6 +84,15 @@ def _extract_forbidden_calls(texts: Iterable[str]) -> list[str]:
             if _DOTTED_CALL_RE.fullmatch(item):
                 calls.append(item)
     return _dedupe(calls)
+
+
+def _extract_forbidden_public_methods(texts: Iterable[str]) -> list[str]:
+    methods: list[str] = []
+    for line in _iter_signal_lines(texts, _line_has_forbidden_public_method_signal):
+        for item in _backticked_items(line):
+            if _is_identifier(item):
+                methods.append(item)
+    return _dedupe(methods)
 
 
 def _iter_lines(texts: Iterable[str]) -> Iterable[str]:
@@ -157,6 +170,24 @@ def _line_has_forbidden_call_signal(line: str) -> bool:
         or re.search(r"\bmust\s+not\s+call\b", text)
         or re.search(r"\bmust\s+not\s+use\b", text)
         or re.search(r"\bdo\s+not\s+(?:call|use)\b", text)
+    )
+
+
+def _line_has_forbidden_public_method_signal(line: str) -> bool:
+    text = line.lower()
+    return bool(
+        re.search(r"\bforbidden\s+public\s+methods?\b", text)
+        or re.search(
+            r"\bmust\s+not\s+(?:add|introduce)\s+"
+            r"(?:a\s+|an\s+)?public\s+method\b",
+            text,
+        )
+        or re.search(
+            r"\bdo\s+not\s+(?:add|introduce)\s+"
+            r"(?:a\s+|an\s+)?public\s+method\b",
+            text,
+        )
+        or re.search(r"\bno\s+public\s+method\b", text)
     )
 
 

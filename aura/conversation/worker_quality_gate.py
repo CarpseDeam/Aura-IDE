@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import subprocess
 from pathlib import Path, PurePosixPath
 from typing import Callable
@@ -20,6 +21,7 @@ from aura.conversation.worker_quality import (
 )
 
 EventCallback = Callable[[Event], None]
+_log = logging.getLogger(__name__)
 
 
 def handle_worker_quality_gate(
@@ -181,6 +183,7 @@ def _invoke_critic(
             ),
         )
     except Exception:
+        _log.debug("worker_quality_critic_callback_failed_open", exc_info=True)
         return CriticVerdict.release()
 
 
