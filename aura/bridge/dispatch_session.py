@@ -103,6 +103,7 @@ class DispatchSession:
         # Foundation pass: run exactly one compatibility step through today's
         # Worker path. Multi-step sequencing lands on this cursor in the next
         # phase without changing the visible dispatch lifecycle.
+        self._emit_plan_todos(active_step_id=None)
         step = self.plan.steps[0]
         self._emit_plan_todos(active_step_id=step.id)
         worker_result = self._run_one_step(step)
@@ -112,7 +113,6 @@ class DispatchSession:
             self.cursor.completed_step_ids.append(step.id)
         else:
             self.cursor.blocked_step_id = step.id
-        self._emit_plan_todos(active_step_id=None)
         result = self._aggregate_from_worker_result(worker_result)
         self._emit_plan_todos(active_step_id=None)
         return result
@@ -177,6 +177,7 @@ class DispatchSession:
         surfacing anything user-visible. This foundation pass intentionally keeps
         the seam inert.
         """
+        return None
 
 
 

@@ -252,6 +252,7 @@ class _DispatchProxy(QObject):
         # Records of each completed dispatch for persistence.
         self._records: list[WorkerDispatchRecord] = []
         self._result_metadata: dict[str, dict[str, Any]] = {}
+        self._canonical_todo_tool_ids: set[str] = set()
 
     # ---- config -----------------------------------------------------------
 
@@ -290,6 +291,19 @@ class _DispatchProxy(QObject):
 
     def result_metadata(self, tool_call_id: str) -> dict[str, Any]:
         return dict(self._result_metadata.get(tool_call_id, {}))
+
+    # ---- canonical TODO guard --------------------------------------------
+
+    def _begin_canonical_dispatch_todos(self, tool_call_id: str) -> None:
+        self._canonical_todo_tool_ids.add(tool_call_id)
+
+    def _end_canonical_dispatch_todos(self, tool_call_id: str) -> None:
+        self._canonical_todo_tool_ids.discard(tool_call_id)
+
+    def _relay_worker_todo_update(self, tool_call_id: str, tasks: list) -> None:
+        if tool_call_id in self._canonical_todo_tool_ids:
+            return
+        self.workerTodoListUpdated.emit(tool_call_id, tasks)
 
     # ---- planner-thread side ---------------------------------------------
 
@@ -345,7 +359,11 @@ class _DispatchProxy(QObject):
             pending=pending,
             emit_todo_update=self.workerTodoListUpdated.emit,
         )
-        result = session.run()
+        self._begin_canonical_dispatch_todos(tool_call_id)
+        try:
+            result = session.run()
+        finally:
+            self._end_canonical_dispatch_todos(tool_call_id)
         with self._lock:
             self._pending.pop(tool_call_id, None)
         return result
@@ -613,7 +631,7 @@ class _DispatchProxy(QObject):
         relay.apiError.connect(self.workerApiError)
         relay.toolResult.connect(self.workerToolResult)
         relay.diffDecided.connect(self.workerDiffDecided)
-        relay.todoListUpdated.connect(self.workerTodoListUpdated)
+        relay.todoListUpdated.connect(self._relay_worker_todo_update)
         relay.terminalOutput.connect(self.workerTerminalOutput)
         relay.agentProcessStarted.connect(self.workerAgentProcessStarted)
         relay.agentProcessOutput.connect(self.workerAgentProcessOutput)
