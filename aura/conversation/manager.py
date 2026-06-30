@@ -572,10 +572,28 @@ class ConversationManager:
                             state.worker_recovery_nudge_sent = True
                             state.discard_worker_candidate_final()
                             continue
-                        self._finish_worker_unrecoverable(
+                        failing_paths = sorted(
+                            p for p, s in state.syntax_repair_required.items()
+                            if s.get("repair_failed")
+                        )
+                        self._finish_worker_recoverable_followup(
                             on_event,
                             failure_class="syntax_invalid",
                             error="Python syntax still fails after two repair attempts.",
+                            details={
+                                "failing_files": failing_paths,
+                                "suggested_next_tool": "dispatch_to_worker",
+                                "suggested_next_action": (
+                                    "Redispatch with a narrower edit target or "
+                                    "different approach to the failing file."
+                                ),
+                                "planner_resolution_needed": True,
+                                "worker_confusion_question": (
+                                    "Worker could not repair Python syntax errors "
+                                    "after two repair attempts"
+                                    + (": " + ", ".join(failing_paths) if failing_paths else ".")
+                                ),
+                            },
                         )
                         return
                     # Carry import-verification paths forward for re-check
@@ -663,7 +681,19 @@ class ConversationManager:
                                 details["patch_invalid_syntax_paths"] = sorted(
                                     state.patch_invalid_syntax_required
                                 )
-                        self._finish_worker_unrecoverable(
+                        details.update({
+                            "suggested_next_tool": "dispatch_to_worker",
+                            "suggested_next_action": (
+                                "Redispatch with exact edit regions for "
+                                "the files that failed to apply."
+                            ),
+                            "planner_resolution_needed": True,
+                            "worker_confusion_question": (
+                                "Worker exhausted edit-mechanics recovery; "
+                                "could not apply edits for the targeted files."
+                            ),
+                        })
+                        self._finish_worker_recoverable_followup(
                             on_event,
                             failure_class="worker_recovery_exhausted",
                             error="".join(error_parts),
@@ -870,7 +900,7 @@ class ConversationManager:
                             ) + 1
                             state.explicit_validation_failure_counts[validation_key] = failure_count
                             if failure_count > 1:
-                                self._finish_worker_unrecoverable(
+                                self._finish_worker_recoverable_followup(
                                     on_event,
                                     failure_class="product_validation_failed",
                                     error=(
@@ -880,6 +910,17 @@ class ConversationManager:
                                     details={
                                         "command": val_result.command,
                                         "diagnostics": val_result.diagnostics,
+                                        "suggested_next_tool": "dispatch_to_worker",
+                                        "suggested_next_action": (
+                                            "Redispatch a focused repair, or revise the "
+                                            "acceptance command if it is misdeclared."
+                                        ),
+                                        "planner_resolution_needed": True,
+                                        "worker_confusion_question": (
+                                            "Worker could not make acceptance validation "
+                                            "pass after one focused repair attempt"
+                                            + (": " + str(val_result.command) if val_result.command else ".")
+                                        ),
                                     },
                                 )
                                 return
@@ -1280,6 +1321,10 @@ class ConversationManager:
                         res["result"], str(res.get("blocker_reason", "")), on_event,
                         res.get("failure_constraint", ""),
                     )
+                    blocker_reason = str(res.get("blocker_reason", ""))
+                    failure_constraint = res.get("failure_constraint", "")
+                    if failure_constraint and blocker_reason not in ("limit", "repeated"):
+                        continue
                     return
                 if res.get("completed_dispatch_for_final"):
                     completed_dispatch_for_final = True

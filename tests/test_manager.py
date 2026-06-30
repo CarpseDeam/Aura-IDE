@@ -1769,6 +1769,349 @@ def test_worker_internal_error_stops_without_redispatch(
     assert last_done.full_message.get("content") == ""
 
 
+# -------------------------------------------------------------------
+# 9b. Blocker continue / return decision (non-terminal constraint → continue)
+# -------------------------------------------------------------------
+
+
+@patch("aura.conversation.manager.classify_failed_worker_dispatch")
+def test_blocker_constraint_non_terminal_reason_continues_loop(
+    mock_classify,
+    manager, mock_client, mock_tools, on_event, captured_events, cancel_event, history
+):
+    """A blocker with a non-empty failure_constraint and a non-terminal
+    blocker_reason continues the loop instead of ending the turn."""
+    mock_classify.return_value = {
+        "counts_as_attempt": True,
+        "blocker_reason": "recoverable",
+        "failure_constraint": "CONSTRAINT FOR NEXT ATTEMPT: Composition failed.",
+    }
+    type(mock_tools).mode = PropertyMock(return_value="planner")
+    tc = _tool_call("dispatch1", "dispatch_to_worker", _valid_dispatch_args())
+    mock_client.side_effect = [
+        iter([_make_done(content="", tool_calls=[tc])]),
+        iter([ContentDelta(text="Retrying..."), _make_done(content="Retrying...")]),
+    ]
+    dispatch_cb = MagicMock(return_value=WorkerDispatchResult(
+        ok=False,
+        summary="Composition failure.",
+        needs_followup=True,
+        recoverable=True,
+        extras={"composition_failure": True},
+        validation="validation_cmd",
+        modified_files=["test.py"],
+    ))
+
+    manager.send(
+        on_event=on_event,
+        approval_cb=_make_approval_cb(),
+        cancel_event=cancel_event,
+        model="deepseek-chat",
+        thinking="off",
+        dispatch_cb=dispatch_cb,
+    )
+
+    # Two Planner rounds — dispatch round + continuation round after constraint
+    assert mock_client.call_count == 2
+    dispatch_cb.assert_called_once()
+
+    # The failure_constraint was appended to history as a user message
+    user_texts = [m["content"] for m in history.messages if m["role"] == "user"
+                  and "CONSTRAINT FOR NEXT ATTEMPT" in str(m["content"])]
+    assert len(user_texts) >= 1
+
+    # Second round content was emitted
+    content_deltas = [ev for ev in captured_events if isinstance(ev, ContentDelta)]
+    assert any("Retrying" in cd.text for cd in content_deltas)
+
+
+@patch("aura.conversation.manager.classify_failed_worker_dispatch")
+def test_blocker_limit_reason_still_ends_turn(
+    mock_classify,
+    manager, mock_client, mock_tools, on_event, captured_events, cancel_event, history
+):
+    """A blocker with blocker_reason='limit' still ends the turn immediately."""
+    mock_classify.return_value = {
+        "counts_as_attempt": True,
+        "blocker_reason": "limit",
+        "failure_constraint": "CONSTRAINT FOR NEXT ATTEMPT: Budget exhausted.",
+    }
+    type(mock_tools).mode = PropertyMock(return_value="planner")
+    tc = _tool_call("dispatch1", "dispatch_to_worker", _valid_dispatch_args())
+    # Only one round — the blocker ends the turn before a second round
+    mock_client.side_effect = [
+        iter([_make_done(content="", tool_calls=[tc])]),
+        iter([_make_done(content="Would not reach")]),
+    ]
+    dispatch_cb = MagicMock(return_value=WorkerDispatchResult(
+        ok=False,
+        summary="Limit reached.",
+        needs_followup=True,
+        recoverable=True,
+    ))
+
+    manager.send(
+        on_event=on_event,
+        approval_cb=_make_approval_cb(),
+        cancel_event=cancel_event,
+        model="deepseek-chat",
+        thinking="off",
+        dispatch_cb=dispatch_cb,
+    )
+
+    # Only one Planner round — "limit" ends the turn
+    assert mock_client.call_count == 1
+    dispatch_cb.assert_called_once()
+
+
+@patch("aura.conversation.manager.classify_failed_worker_dispatch")
+def test_blocker_repeated_reason_still_ends_turn(
+    mock_classify,
+    manager, mock_client, mock_tools, on_event, captured_events, cancel_event, history
+):
+    """A blocker with blocker_reason='repeated' still ends the turn immediately."""
+    mock_classify.return_value = {
+        "counts_as_attempt": True,
+        "blocker_reason": "repeated",
+        "failure_constraint": "CONSTRAINT FOR NEXT ATTEMPT: Do not repeat this approach.",
+    }
+    type(mock_tools).mode = PropertyMock(return_value="planner")
+    tc = _tool_call("dispatch1", "dispatch_to_worker", _valid_dispatch_args())
+    # Only one round — the blocker ends the turn before a second round
+    mock_client.side_effect = [
+        iter([_make_done(content="", tool_calls=[tc])]),
+        iter([_make_done(content="Would not reach")]),
+    ]
+    dispatch_cb = MagicMock(return_value=WorkerDispatchResult(
+        ok=False,
+        summary="Repeated failure.",
+        needs_followup=True,
+        recoverable=True,
+    ))
+
+    manager.send(
+        on_event=on_event,
+        approval_cb=_make_approval_cb(),
+        cancel_event=cancel_event,
+        model="deepseek-chat",
+        thinking="off",
+        dispatch_cb=dispatch_cb,
+    )
+
+    # Only one Planner round — "repeated" ends the turn
+    assert mock_client.call_count == 1
+    dispatch_cb.assert_called_once()
+
+
+@patch("aura.conversation.manager.classify_failed_worker_dispatch")
+def test_redispatch_counter_increments_on_constraint_continue_path(
+    mock_classify,
+    manager, mock_client, mock_tools, on_event, captured_events, cancel_event, history
+):
+    """N constraint-retries increment the redispatch counter until the limit
+    cap is reached and the turn ends."""
+    mock_classify.side_effect = [
+        {
+            "counts_as_attempt": True,
+            "blocker_reason": "recoverable",
+            "failure_constraint": "CONSTRAINT FOR NEXT ATTEMPT: Retry 1.",
+        },
+        {
+            "counts_as_attempt": True,
+            "blocker_reason": "limit",
+            "failure_constraint": "CONSTRAINT FOR NEXT ATTEMPT: Budget exhausted.",
+        },
+    ]
+    type(mock_tools).mode = PropertyMock(return_value="planner")
+    dispatches = [
+        _tool_call(
+            f"dispatch{i}",
+            "dispatch_to_worker",
+            _valid_dispatch_args(goal=f"Pass {i}", core=f"Do pass {i}"),
+        )
+        for i in range(3)
+    ]
+    mock_client.side_effect = [
+        iter([_make_done(content="", tool_calls=[dispatches[0]])]),
+        iter([_make_done(content="", tool_calls=[dispatches[1]])]),
+        iter([_make_done(content="", tool_calls=[dispatches[2]])]),
+    ]
+    dispatch_cb = MagicMock(return_value=WorkerDispatchResult(
+        ok=False,
+        summary="Worker pass limit reached.",
+        needs_followup=True,
+        recoverable=True,
+    ))
+
+    manager.send(
+        on_event=on_event,
+        approval_cb=_make_approval_cb(),
+        cancel_event=cancel_event,
+        model="deepseek-chat",
+        thinking="off",
+        dispatch_cb=dispatch_cb,
+    )
+
+    # First dispatch: recoverable → continue.  Second dispatch: limit → return.
+    # Third dispatch never reached.
+    assert dispatch_cb.call_count == 2
+    assert mock_client.call_count == 2
+
+    # Suppressed visible card: no ContentDelta, Done with empty content
+    content_deltas = [ev for ev in captured_events if isinstance(ev, ContentDelta)]
+    assert len(content_deltas) == 0
+    done_events = [ev for ev in captured_events if isinstance(ev, Done)]
+    assert len(done_events) >= 1
+    last_done = done_events[-1]
+    assert last_done.full_message.get("content") == ""
+
+
+# -------------------------------------------------------------------
+# 9c. Worker finish: recoverable handback instead of unrecoverable
+# -------------------------------------------------------------------
+
+
+@patch("aura.conversation.manager._SendState")
+def test_syntax_invalid_exhausted_produces_recoverable_followup(
+    mock_send_state_cls,
+    manager, mock_client, mock_tools, on_event, captured_events, cancel_event, history
+):
+    """Site 1 (syntax_invalid): exhausting two repair attempts produces a
+    recoverable planner-resolution finish, not a failed_nonrecoverable."""
+    type(mock_tools).mode = PropertyMock(return_value="worker")
+
+    fake_state = _SendState(mode="worker", research_policy=MagicMock())
+    fake_state.syntax_repair_required = {
+        "test.py": {"repair_failed": True, "error": "SyntaxError: invalid syntax"},
+    }
+    fake_state.worker_recovery_nudge_sent = True
+    fake_state.worker_flow = None  # disable so worker-flow checks don't interfere
+    mock_send_state_cls.return_value = fake_state
+
+    mock_client.side_effect = [
+        iter([_make_done(content="")]),  # no tool_calls → triggers if not tool_calls:
+    ]
+
+    manager.send(
+        on_event=on_event,
+        approval_cb=_make_approval_cb(),
+        cancel_event=cancel_event,
+        model="deepseek-chat",
+        thinking="off",
+    )
+
+    # The finish message in history must be recoverable, not unrecoverable
+    assistant_msgs = [m for m in history.messages if m["role"] == "assistant"]
+    assert len(assistant_msgs) >= 1
+    last_payload = json.loads(assistant_msgs[-1]["content"])
+    assert last_payload.get("recoverable") is True
+    assert last_payload.get("needs_follow_up") is True
+    assert last_payload.get("failure_class") == "syntax_invalid"
+    details = last_payload.get("details", {})
+    assert details.get("planner_resolution_needed") is True
+    assert details.get("suggested_next_tool") == "dispatch_to_worker"
+    assert "worker_confusion_question" in details
+    assert "failing_files" in details
+    assert "CONSTRAINT FOR NEXT ATTEMPT" not in str(last_payload)
+
+
+@patch("aura.conversation.manager._SendState")
+def test_worker_recovery_exhausted_produces_recoverable_followup(
+    mock_send_state_cls,
+    manager, mock_client, mock_tools, on_event, captured_events, cancel_event, history
+):
+    """Site 2 (worker_recovery_exhausted): edit-mechanics recovery exhausted
+    produces a recoverable planner-resolution finish."""
+    type(mock_tools).mode = PropertyMock(return_value="worker")
+
+    fake_state = _SendState(mode="worker", research_policy=MagicMock())
+    # No repair_failed entries → has_terminal_syntax_failure is False
+    # But has pending edit recovery → triggers site 2
+    fake_state.edit_fallback_required = {"test.py": {"error": "patch failed"}}
+    fake_state.worker_recovery_nudge_sent = True
+    fake_state.worker_flow = None
+    mock_send_state_cls.return_value = fake_state
+
+    mock_client.side_effect = [
+        iter([_make_done(content="")]),  # no tool_calls
+    ]
+
+    manager.send(
+        on_event=on_event,
+        approval_cb=_make_approval_cb(),
+        cancel_event=cancel_event,
+        model="deepseek-chat",
+        thinking="off",
+    )
+
+    assistant_msgs = [m for m in history.messages if m["role"] == "assistant"]
+    assert len(assistant_msgs) >= 1
+    last_payload = json.loads(assistant_msgs[-1]["content"])
+    assert last_payload.get("recoverable") is True
+    assert last_payload.get("needs_follow_up") is True
+    assert last_payload.get("failure_class") == "worker_recovery_exhausted"
+    details = last_payload.get("details", {})
+    assert details.get("planner_resolution_needed") is True
+    assert details.get("suggested_next_tool") == "dispatch_to_worker"
+    worker_confusion = details.get("worker_confusion_question", "")
+    assert "could not apply edits" in worker_confusion.lower()
+    assert "CONSTRAINT FOR NEXT ATTEMPT" not in str(last_payload)
+
+
+@patch("aura.conversation.manager._SendState")
+def test_product_validation_failed_produces_recoverable_followup(
+    mock_send_state_cls,
+    manager, mock_client, mock_tools, on_event, captured_events, cancel_event, history,
+    tmp_path,
+):
+    """Site 3 (product_validation_failed): acceptance validation still fails
+    after one focused repair attempt produces a recoverable planner-resolution
+    finish."""
+    type(mock_tools).mode = PropertyMock(return_value="worker")
+
+    fake_state = _SendState(mode="worker", research_policy=MagicMock())
+    fake_state.worker_flow = None
+    fake_state.explicit_validation_failure_counts = {"pytest": 1}
+    mock_send_state_cls.return_value = fake_state
+
+    type(mock_tools).workspace_root = PropertyMock(return_value=tmp_path)
+
+    # Mock run_explicit_validation_commands to return a failure
+    with patch(
+        "aura.conversation.manager.run_explicit_validation_commands",
+        return_value=SandboxResult(
+            ok=False,
+            command="pytest",
+            diagnostics="FAILED test_example.py::test_foo - AssertionError",
+            runs=None,
+        ),
+    ):
+        mock_client.side_effect = [
+            iter([_make_done(content="")]),  # no tool_calls → triggers finish block
+        ]
+
+        manager.send(
+            on_event=on_event,
+            approval_cb=_make_approval_cb(),
+            cancel_event=cancel_event,
+            model="deepseek-chat",
+            thinking="off",
+            explicit_validation_commands=["pytest"],
+        )
+
+    assistant_msgs = [m for m in history.messages if m["role"] == "assistant"]
+    assert len(assistant_msgs) >= 1
+    last_payload = json.loads(assistant_msgs[-1]["content"])
+    assert last_payload.get("recoverable") is True
+    assert last_payload.get("needs_follow_up") is True
+    assert last_payload.get("failure_class") == "product_validation_failed"
+    details = last_payload.get("details", {})
+    assert details.get("planner_resolution_needed") is True
+    assert details.get("suggested_next_tool") == "dispatch_to_worker"
+    assert "worker_confusion_question" in details
+    assert "CONSTRAINT FOR NEXT ATTEMPT" not in str(last_payload)
+
+
 # ===================================================================
 # 10. run_terminal_command basic
 # ===================================================================
