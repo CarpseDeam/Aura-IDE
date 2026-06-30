@@ -7,6 +7,7 @@ import pytest
 
 from aura.context_gearbox.models import ComposedContext, ContextLedgerEntry, RuntimeRole
 from aura.context_gearbox.runtime import (
+    CONTEXT_PLACEHOLDER,
     compose_system_prompt,
     context_gearbox_metadata,
     default_role_prompt,
@@ -25,6 +26,7 @@ from aura.prompts import (
     build_tier1_context,
     inject_tier1_context,
 )
+from aura.roles import load_bundled_role_capsule
 
 
 def _entry_by_id(composed: ComposedContext, source_id: str):
@@ -114,31 +116,57 @@ def test_prompt_compatibility_exports_work(tmp_path):
     assert PLANNER_SYSTEM_PROMPT
     assert WORKER_SYSTEM_PROMPT
     assert SINGLE_SYSTEM_PROMPT
+    assert load_bundled_role_capsule(RuntimeRole.PLANNER).content in PLANNER_SYSTEM_PROMPT
+    assert load_bundled_role_capsule(RuntimeRole.WORKER).content in WORKER_SYSTEM_PROMPT
+    assert load_bundled_role_capsule(RuntimeRole.SINGLE).content in SINGLE_SYSTEM_PROMPT
     assert inject_tier1_context("A {TIER1_CONTEXT} B", "ctx") == "A ctx B"
     assert isinstance(build_tier1_context(tmp_path), str)
     assert "worker_execution_contract" in build_tier1_context(tmp_path, mode="worker")
 
 
-def test_planner_prompt_blocks_exact_implementation_edit_reasoning():
+def test_bundled_role_capsules_load_for_all_runtime_roles():
+    for role in (RuntimeRole.PLANNER, RuntimeRole.WORKER, RuntimeRole.SINGLE):
+        capsule = load_bundled_role_capsule(role)
+
+        assert capsule is not None
+        assert capsule.role == role
+        assert capsule.content
+        assert capsule.content == capsule.content.strip()
+        assert len(capsule.checksum) == 64
+        assert all(char in "0123456789abcdef" for char in capsule.checksum)
+
+
+def test_bundled_role_capsules_normalize_string_roles():
+    assert load_bundled_role_capsule("PLANNER").role == RuntimeRole.PLANNER
+    assert load_bundled_role_capsule("default").role == RuntimeRole.PLANNER
+    assert load_bundled_role_capsule("not-a-role") is None
+
+
+def test_default_planner_prompt_uses_bundled_capsule_with_shared_shell():
+    capsule = load_bundled_role_capsule(RuntimeRole.PLANNER)
     prompt = default_role_prompt(RuntimeRole.PLANNER)
 
-    assert "Choose the lane quickly" in prompt
-    assert "default to dispatch_to_worker" in prompt
-    assert "that tool call is the Planner's deliverable" in prompt
-    assert "dispatch instead of presenting a plan" in prompt
-    assert "target seam, allowed files, constraints, non-goals" in prompt
-    assert "Planner must not write code" in prompt
-    assert "exact implementation/edit reasoning" in prompt
-    assert "Worker owns implementation reasoning, exact edits" in prompt
+    assert capsule is not None
+    assert CONTEXT_PLACEHOLDER in prompt
+    assert "Response discipline:" in prompt
+    assert capsule.content in prompt
+    assert "You are Auras Planner." in prompt
+    assert "Inspect and understand the request before dispatch." in prompt
+    assert "Use dispatch_to_worker for implementation." in prompt
+    assert "Do not edit files directly." in prompt
+    assert "Do not send broad work as one giant flat Worker task." in prompt
+    assert "Resolve implementation ambiguity internally when possible." in prompt
 
 
-def test_worker_prompt_pushes_targeted_action_not_planning():
+def test_worker_prompt_uses_bundled_execution_posture():
     prompt = default_role_prompt(RuntimeRole.WORKER)
 
-    assert "read narrowly around the target seam" in prompt
-    assert "make the smallest safe edit" in prompt
-    assert "Do not keep broad-orienting" in prompt
-    assert "Validate focused behavior after writes" in prompt
+    assert "You are Auras Worker." in prompt
+    assert "Execute exactly the assigned bounded step." in prompt
+    assert "Make the smallest correct edit." in prompt
+    assert "Match local style." in prompt
+    assert "When blocked, report the narrow blocker" in prompt
+    assert "Return a concrete receipt." in prompt
 
 
 def test_shared_response_discipline_appears_in_default_role_prompts():
@@ -165,9 +193,35 @@ def test_composer_returns_composed_context_with_core_kernel(tmp_path):
     assert isinstance(composed, ComposedContext)
     assert composed.system_prompt
     assert composed.context_text
+    assert CONTEXT_PLACEHOLDER not in composed.system_prompt
     core_entry = _entry_by_id(composed, "core_kernel")
     assert core_entry.included is True
     assert core_entry.char_count > 0
+    assert "Core kernel:" in composed.system_prompt
+
+
+def test_custom_prompt_overrides_default_capsule_text(tmp_path):
+    planner_capsule = load_bundled_role_capsule(RuntimeRole.PLANNER)
+    custom = "Custom system prompt."
+
+    composed = compose_system_prompt(RuntimeRole.PLANNER, custom, tmp_path)
+
+    assert planner_capsule is not None
+    assert composed.system_prompt == custom
+    assert planner_capsule.content not in composed.system_prompt
+
+
+def test_custom_prompt_with_placeholder_still_overrides_default_capsule_text(tmp_path):
+    planner_capsule = load_bundled_role_capsule(RuntimeRole.PLANNER)
+    custom = f"Custom before\n{CONTEXT_PLACEHOLDER}\nCustom after"
+
+    composed = compose_system_prompt(RuntimeRole.PLANNER, custom, tmp_path)
+
+    assert planner_capsule is not None
+    assert "Custom before" in composed.system_prompt
+    assert "Custom after" in composed.system_prompt
+    assert "Core kernel:" in composed.system_prompt
+    assert planner_capsule.content not in composed.system_prompt
 
 
 def test_project_rules_ledger_included_and_skipped(tmp_path):
@@ -219,8 +273,11 @@ def test_planner_composition_includes_dispatch_contract(tmp_path):
     composed = compose_system_prompt(RuntimeRole.PLANNER, "", tmp_path)
 
     assert "planner_dispatch_contract" in composed.context_text
-    assert "dispatch once the requested change is clear enough" in composed.context_text
-    assert "If those fields are known, call dispatch_to_worker" in composed.context_text
+    assert "Use dispatch_to_worker for code or file implementation." in composed.context_text
+    assert "Do not call write tools directly." in composed.context_text
+    assert "one visible campaign with ordered Worker steps" in composed.context_text
+    assert "Each Worker step must be bounded and independently executable." in composed.context_text
+    assert "Do not dispatch vague \"fix everything\" tasks." in composed.context_text
     assert _included_contract_ids(composed) == ["planner_dispatch_contract"]
     entry = _entry_by_id(composed, "planner_dispatch_contract")
     assert entry.included is True
@@ -275,10 +332,12 @@ def test_worker_composition_includes_quality_contract_stack(tmp_path):
         entry = _entry_by_id(composed, source_id)
         assert entry.included is True
         assert entry.char_count > 0
-    assert "prefer targeted reads around the named seam" in composed.context_text
-    assert "Once the target and local facts are clear, edit" in composed.context_text
-    assert "Do not keep restating plans" in composed.context_text
-    assert "Report changed files, validation, and proof compactly" in composed.context_text
+    assert "Implement only the dispatched spec and current step." in composed.context_text
+    assert "Use patch_file for existing-file edits" in composed.context_text
+    assert "Code must compile or parse when applicable." in composed.context_text
+    assert "Do not claim checks that were not run." in composed.context_text
+    assert "Do not fabricate files, APIs, validation results, or receipts." in composed.context_text
+    assert "List changed files." in composed.context_text
 
 
 def test_worker_gui_target_loads_gui_rules_and_skips_unrelated_packs(tmp_path):

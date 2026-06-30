@@ -21,7 +21,6 @@ import time
 from pathlib import Path
 
 from aura.conversation.tools._types import ApprovalRequest, ToolExecResult
-from aura.conversation.tools.craft_gate import _run_craft_gate
 from aura.conversation.tools.write_payloads import _mark_not_applied, _mark_delete_not_applied
 from aura.conversation.path_utils import normalize_worker_path as _shared_normalize_worker_path
 from aura.paths import safe_relative_to
@@ -858,16 +857,6 @@ class WriteHandlersMixin:
             if syntax_error is not None:
                 return ToolExecResult(ok=False, payload=syntax_error)
 
-            craft_error = _run_craft_gate(
-                proposal,
-                "write_file",
-                contract=self.get_contract(),
-                workspace_root=self._root,
-                task_shape=self.get_task_shape(),
-            )
-            if craft_error is not None:
-                return craft_error
-
             req = ApprovalRequest(
                 tool_name="write_file",
                 rel_path=proposal["rel_path"],
@@ -905,15 +894,9 @@ class WriteHandlersMixin:
                 return ToolExecResult(ok=False, payload=_mark_not_applied(proposal))
 
             _maybe_observe_humanizer(proposal)
-            craft_error = _run_craft_gate(
-                proposal,
-                "patch_file",
-                contract=self.get_contract(),
-                workspace_root=self._root,
-                task_shape=self.get_task_shape(),
-            )
-            if craft_error is not None:
-                return craft_error
+            syntax_error = _python_syntax_error_payload(proposal)
+            if syntax_error is not None:
+                return ToolExecResult(ok=False, payload=syntax_error)
 
             req = ApprovalRequest(
                 tool_name="patch_file",

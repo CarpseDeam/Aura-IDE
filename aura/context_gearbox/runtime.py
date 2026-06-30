@@ -9,6 +9,7 @@ _log = logging.getLogger(__name__)
 
 from aura.context_gearbox.models import ComposedContext, ContextLedgerEntry, RuntimeRole
 from aura.context_gearbox.sources import collect_source_text, iter_registered_sources
+from aura.roles import load_bundled_role_capsule
 
 CONTEXT_PLACEHOLDER = "{TIER1_CONTEXT}"
 
@@ -53,10 +54,17 @@ _ROLE_PROMPTS = {
 }
 
 
+def _role_prompt_text(runtime_role: RuntimeRole) -> str:
+    capsule = load_bundled_role_capsule(runtime_role)
+    if capsule is not None:
+        return capsule.content
+    return _ROLE_PROMPTS[runtime_role]
+
+
 def default_role_prompt(role: RuntimeRole | str) -> str:
     runtime_role = RuntimeRole.from_value(role)
     return "\n\n".join(
-        [CONTEXT_PLACEHOLDER, _RESPONSE_DISCIPLINE, _ROLE_PROMPTS[runtime_role]]
+        [CONTEXT_PLACEHOLDER, _RESPONSE_DISCIPLINE, _role_prompt_text(runtime_role)]
     )
 
 

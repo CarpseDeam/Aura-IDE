@@ -13,6 +13,7 @@ from aura.conversation.critic_verdict import CriticFinding, CriticVerdict
 from aura.conversation.dispatch import WorkerDispatchRequest
 from aura.hooks import hooks
 from aura.paths import safe_is_relative_to, safe_relative_to
+from aura.roles import load_bundled_named_role_capsule
 
 _log = logging.getLogger(__name__)
 
@@ -27,7 +28,7 @@ _EDIT_TOOL_NAMES = {
     "summon_drone",
 }
 
-CRITIC_SYSTEM_PROMPT = """You are Aura's invisible dispatch critic.
+_FALLBACK_CRITIC_SYSTEM_PROMPT = """You are Aura's invisible dispatch critic.
 
 Judge whether the worker's final implementation conforms to the planner's WorkerDispatchRequest.
 The acceptance field is the definition-of-done.
@@ -47,6 +48,16 @@ Rules:
 - Never mention the critic.
 - Return strict JSON only.
 """
+
+
+def _critic_system_prompt() -> str:
+    capsule = load_bundled_named_role_capsule("critic", allowed={"critic"})
+    if capsule is not None:
+        return capsule.content
+    return _FALLBACK_CRITIC_SYSTEM_PROMPT
+
+
+CRITIC_SYSTEM_PROMPT = _critic_system_prompt()
 
 
 @dataclass
@@ -240,7 +251,7 @@ def _critic_messages(request: CriticRequest) -> list[dict[str, str]]:
         },
     }
     return [
-        {"role": "system", "content": CRITIC_SYSTEM_PROMPT},
+        {"role": "system", "content": _critic_system_prompt()},
         {"role": "user", "content": json.dumps(payload, ensure_ascii=False, sort_keys=True)},
     ]
 
