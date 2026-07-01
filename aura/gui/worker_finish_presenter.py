@@ -63,15 +63,18 @@ class WorkerFinishPresenter:
             self._active_mismatch_card_id = tool_call_id
 
         self._playground.stop_aura()
-        if needs_followup is None:
-            self._playground.worker_finished(ok, summary, status=status)
+        if outcome.should_show_visible_summary:
+            if needs_followup is None:
+                self._playground.worker_finished(ok, summary, status=status)
+            else:
+                self._playground.worker_finished(
+                    ok,
+                    summary,
+                    needs_followup=bool(needs_followup),
+                    status=status,
+                )
         else:
-            self._playground.worker_finished(
-                ok,
-                summary,
-                needs_followup=bool(needs_followup),
-                status=status,
-            )
+            self._playground.set_worker_running(False)
         self._playground.finish_todo_list(
             tool_call_id,
             ok=ok,
@@ -80,7 +83,7 @@ class WorkerFinishPresenter:
         if outcome.is_mismatch:
             self._chat.begin_planner_resolution_aura()
 
-        if spec_card and not outcome.suppress_main_summary:
+        if spec_card and outcome.should_show_visible_summary:
             spec_card.worker_finished(
                 ok,
                 summary,
@@ -88,7 +91,7 @@ class WorkerFinishPresenter:
                 is_internal=outcome.is_internal,
             )
         goal = self._worker_summary_goal(tool_call_id, spec_card, active_workflow)
-        if not outcome.suppress_main_summary:
+        if outcome.should_show_visible_summary:
             self._chat.add_worker_summary(
                 tool_call_id,
                 goal,

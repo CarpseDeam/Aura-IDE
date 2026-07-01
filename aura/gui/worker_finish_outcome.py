@@ -30,6 +30,10 @@ class WorkerFinishOutcome:
         return bool(self.is_internal and not self.extras.get("dispatch_session"))
 
     @property
+    def should_show_visible_summary(self) -> bool:
+        return not self.suppress_main_summary
+
+    @property
     def mismatch_display(self) -> tuple[str, str]:
         return (
             str(self.extras.get("mismatch_kind", "")),

@@ -241,7 +241,7 @@ class WorkerEventHandler(QObject):
         if (
             self._active_workflow is not None
             and self._active_workflow.tool_call_id == tool_call_id
-            and not outcome.suppress_main_summary
+            and outcome.should_show_visible_summary
         ):
             self._set_active_workflow(
                 self._active_workflow.finish(
