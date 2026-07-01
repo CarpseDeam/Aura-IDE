@@ -134,6 +134,9 @@ class WorkerEventHandler(QObject):
         file_list = list(files)
         step_list = list(steps or [])
         if self._dispatch_ui.consume_internal_continuation(tool_call_id):
+            # Keep playground-side canonical tracking in sync so that
+            # tool-call noise suppression stays active for the continuation.
+            self._playground.begin_dispatch_todo_list(tool_call_id, step_list)
             self._set_active_workflow(
                 WorkflowState.intent_captured(
                     tool_call_id, goal, summary=summary,
@@ -259,7 +262,8 @@ class WorkerEventHandler(QObject):
         if outcome.should_set_pending_internal_retool:
             self._dispatch_ui.mark_pending_internal_retool(tool_call_id)
         self._dispatch_ui.discard_canonical_dispatch(tool_call_id)
-        self.worker_running_changed.emit(False)
+        if not outcome.is_internal:
+            self.worker_running_changed.emit(False)
 
     def _worker_result_metadata(self, tool_call_id: str) -> dict:
         getter = getattr(self._bridge, "worker_result_metadata", None)

@@ -74,7 +74,10 @@ class WorkerFinishPresenter:
                     status=status,
                 )
         else:
-            self._playground.set_worker_running(False)
+            # Internal continuation — the next Worker restarts the footer
+            # immediately.  Don't toggle it off just to toggle it back on.
+            if not outcome.is_internal:
+                self._playground.set_worker_running(False)
         self._playground.finish_todo_list(
             tool_call_id,
             ok=ok,
