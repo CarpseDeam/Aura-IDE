@@ -140,6 +140,7 @@ class AuraPlayground(QWidget):
         # Tool stream controllers keyed by worker_tool_id
         self._controllers: dict[str, ToolStreamController] = {}
         self._controller_parents: dict[str, str] = {}
+        self._suppressed_worker_tool_ids: set[str] = set()
         self._worker_code_paths: dict[str, str] = {}
         self._worker_code_tool_names: dict[str, str] = {}
         self._pending_worker_code_content: dict[str, str] = {}
@@ -279,6 +280,7 @@ class AuraPlayground(QWidget):
         self._terminal_window.clear()
         self._controllers.clear()
         self._controller_parents.clear()
+        self._suppressed_worker_tool_ids.clear()
         self._worker_code_paths.clear()
         self._worker_code_tool_names.clear()
         self._pending_worker_code_content.clear()
@@ -326,6 +328,7 @@ class AuraPlayground(QWidget):
         # The Planner TODO rail owns the checklist; Worker TODO calls are
         # never shown, so creating a controller and log markers is pure noise.
         if name == "update_todo_list" and is_canonical:
+            self._suppressed_worker_tool_ids.add(worker_tool_id)
             return
 
         # During canonical dispatch, keep the Worker Log calm — tool call /
@@ -362,12 +365,18 @@ class AuraPlayground(QWidget):
             )
 
     def append_tool_args(self, worker_tool_id: str, fragment: str) -> None:
+        if worker_tool_id in self._suppressed_worker_tool_ids:
+            return
         controller = self._controllers.get(worker_tool_id)
         if controller is None:
             return
         controller.append_fragment(fragment)
 
     def set_tool_result(self, worker_tool_id: str, ok: bool, result: str):
+        if worker_tool_id in self._suppressed_worker_tool_ids:
+            self._suppressed_worker_tool_ids.discard(worker_tool_id)
+            return
+
         # During canonical dispatch, suppress Worker Log boundary noise.
         # Tool results still drive code editor tabs and terminal output —
         # only the visual separators in the log are silenced.
@@ -478,6 +487,7 @@ class AuraPlayground(QWidget):
         self._code_editor.close_all_tabs()
         self._controllers.clear()
         self._controller_parents.clear()
+        self._suppressed_worker_tool_ids.clear()
         self._worker_code_paths.clear()
         self._worker_code_tool_names.clear()
         self._pending_worker_code_content.clear()
@@ -488,6 +498,7 @@ class AuraPlayground(QWidget):
         self._code_editor.close_all_tabs()
         self._controllers.clear()
         self._controller_parents.clear()
+        self._suppressed_worker_tool_ids.clear()
         self._worker_code_paths.clear()
         self._worker_code_tool_names.clear()
         self._pending_worker_code_content.clear()
@@ -503,6 +514,7 @@ class AuraPlayground(QWidget):
         self._terminal_window.clear()
         self._controllers.clear()
         self._controller_parents.clear()
+        self._suppressed_worker_tool_ids.clear()
         self._worker_code_paths.clear()
         self._worker_code_tool_names.clear()
         self._pending_worker_code_content.clear()
