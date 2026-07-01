@@ -171,6 +171,142 @@ def test_no_progress_step_stops_campaign_before_next_step():
     assert [event for event in events if event[0] == "done"] == []
 
 
+def test_nonfinal_failed_step_missing_applied_does_not_count_as_progress():
+    """A write record with no ``applied`` key must NOT count as file progress."""
+    req = _request_with_steps()
+    plan = WorkerDispatchPlan(
+        overall_goal=req.goal,
+        visible_summary=req.summary,
+        global_files=list(req.files),
+        steps=list(req.steps),
+    )
+    calls = []
+    events = []
+
+    def run_step(tool_id, step_req, pending):
+        calls.append((tool_id, step_req.goal))
+        return WorkerDispatchResult(
+            ok=False,
+            summary="Step failed; writes recorded no applied field.",
+            recoverable=True,
+            needs_followup=True,
+            status=WorkerOutcomeStatus.validation_failed.value,
+            extras={
+                "writes": [{"path": "some/file.py"}],
+            },
+        )
+
+    session = DispatchSession(
+        tool_call_id="call_dispatch",
+        original_request=req,
+        plan=plan,
+        run_worker_step=run_step,
+        pending=SimpleNamespace(),
+        **_session_callbacks(events),
+    )
+
+    result = session.run()
+
+    assert result.ok is False
+    assert calls == [("call_dispatch", req.steps[0].goal)]
+    assert ("active", "call_dispatch", "step-2") not in events
+
+
+def test_nonfinal_failed_step_applied_false_stays_on_step():
+    """A write record with ``applied`` = False must NOT count as file progress."""
+    req = _request_with_steps()
+    plan = WorkerDispatchPlan(
+        overall_goal=req.goal,
+        visible_summary=req.summary,
+        global_files=list(req.files),
+        steps=list(req.steps),
+    )
+    calls = []
+    events = []
+
+    def run_step(tool_id, step_req, pending):
+        calls.append((tool_id, step_req.goal))
+        return WorkerDispatchResult(
+            ok=False,
+            summary="Step failed; write was not applied.",
+            recoverable=True,
+            needs_followup=True,
+            status=WorkerOutcomeStatus.validation_failed.value,
+            extras={
+                "writes": [{"path": "some/file.py", "applied": False}],
+            },
+        )
+
+    session = DispatchSession(
+        tool_call_id="call_dispatch",
+        original_request=req,
+        plan=plan,
+        run_worker_step=run_step,
+        pending=SimpleNamespace(),
+        **_session_callbacks(events),
+    )
+
+    result = session.run()
+
+    assert result.ok is False
+    assert calls == [("call_dispatch", req.steps[0].goal)]
+    assert ("active", "call_dispatch", "step-2") not in events
+
+
+def test_nonfinal_failed_step_applied_true_advances_to_next_step():
+    """A write record with ``applied`` = True and a valid path MUST count as
+    file progress and allow the campaign to continue to the next step."""
+    req = _request_with_steps()
+    plan = WorkerDispatchPlan(
+        overall_goal=req.goal,
+        visible_summary=req.summary,
+        global_files=list(req.files),
+        steps=list(req.steps),
+    )
+    calls = []
+    events = []
+    results = [
+        WorkerDispatchResult(
+            ok=False,
+            summary="Step 1 created a file but validation failed.",
+            recoverable=True,
+            needs_followup=True,
+            status=WorkerOutcomeStatus.validation_failed.value,
+            extras={
+                "writes": [{"path": "some/file.py", "applied": True}],
+            },
+        ),
+        WorkerDispatchResult(
+            ok=True,
+            summary="Step 2 completed successfully.",
+            status=WorkerOutcomeStatus.completed.value,
+            modified_files=["aura/bridge/worker_completion_result.py"],
+        ),
+    ]
+
+    def run_step(tool_id, step_req, pending):
+        calls.append((tool_id, step_req.goal))
+        return results[len(calls) - 1]
+
+    session = DispatchSession(
+        tool_call_id="call_dispatch",
+        original_request=req,
+        plan=plan,
+        run_worker_step=run_step,
+        pending=SimpleNamespace(),
+        **_session_callbacks(events),
+    )
+
+    result = session.run()
+
+    assert result.ok is True
+    assert calls == [
+        ("call_dispatch", req.steps[0].goal),
+        ("call_dispatch", req.steps[1].goal),
+    ]
+    assert ("active", "call_dispatch", "step-2") in events
+
+
 def test_worker_step_message_forbids_campaign_planning():
     req = _request_with_steps()
     message = _format_spec_as_user_message(req)

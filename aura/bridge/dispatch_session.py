@@ -343,6 +343,20 @@ def _nonfinal_step_may_continue(
     return True
 
 
+def _write_record_is_explicit_file_progress(write: Any) -> bool:
+    """Return True only when *write* records explicit concrete file progress.
+
+    A write entry counts as concrete progress when ``applied`` is ``True``
+    and ``path`` is a non-empty string.
+    """
+    if not isinstance(write, dict):
+        return False
+    if write.get("applied") is not True:
+        return False
+    path = write.get("path")
+    return isinstance(path, str) and bool(path.strip())
+
+
 def _step_made_file_progress(
     worker_result: WorkerDispatchResult,
     extras: dict[str, Any],
@@ -352,7 +366,7 @@ def _step_made_file_progress(
     writes = extras.get("writes")
     if isinstance(writes, list):
         return any(
-            isinstance(write, dict) and write.get("applied") is not False
+            _write_record_is_explicit_file_progress(write)
             for write in writes
         )
     return False
