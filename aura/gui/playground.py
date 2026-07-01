@@ -139,6 +139,7 @@ class AuraPlayground(QWidget):
 
         # Tool stream controllers keyed by worker_tool_id
         self._controllers: dict[str, ToolStreamController] = {}
+        self._controller_parents: dict[str, str] = {}
         self._worker_code_paths: dict[str, str] = {}
         self._worker_code_tool_names: dict[str, str] = {}
         self._pending_worker_code_content: dict[str, str] = {}
@@ -277,6 +278,7 @@ class AuraPlayground(QWidget):
         self._info_hub.clear_log()
         self._terminal_window.clear()
         self._controllers.clear()
+        self._controller_parents.clear()
         self._worker_code_paths.clear()
         self._worker_code_tool_names.clear()
         self._pending_worker_code_content.clear()
@@ -318,10 +320,23 @@ class AuraPlayground(QWidget):
         self._info_hub.append_content(text)
 
     def add_tool_call(self, worker_tool_id: str, name: str, parent_tool_id: str | None = None):
-        self._info_hub.flush_worker_log()
-        self._info_hub.mark_worker_log_boundary()
+        is_canonical = parent_tool_id in self._canonical_active if parent_tool_id else False
+
+        # During canonical dispatch, suppress update_todo_list entirely.
+        # The Planner TODO rail owns the checklist; Worker TODO calls are
+        # never shown, so creating a controller and log markers is pure noise.
+        if name == "update_todo_list" and is_canonical:
+            return
+
+        # During canonical dispatch, keep the Worker Log calm — tool call /
+        # result boundaries are internal gear teeth the user does not need.
+        if not is_canonical:
+            self._info_hub.flush_worker_log()
+            self._info_hub.mark_worker_log_boundary()
+
         c = ToolStreamController(name, self)
         self._controllers[worker_tool_id] = c
+        self._controller_parents[worker_tool_id] = parent_tool_id or ""
 
         if name == "update_todo_list" and parent_tool_id not in self._canonical_active:
             c.todo_updated.connect(
@@ -353,8 +368,14 @@ class AuraPlayground(QWidget):
         controller.append_fragment(fragment)
 
     def set_tool_result(self, worker_tool_id: str, ok: bool, result: str):
-        self._info_hub.flush_worker_log()
-        self._info_hub.mark_worker_log_boundary()
+        # During canonical dispatch, suppress Worker Log boundary noise.
+        # Tool results still drive code editor tabs and terminal output —
+        # only the visual separators in the log are silenced.
+        parent_tool_id = self._controller_parents.pop(worker_tool_id, "")
+        is_canonical = parent_tool_id in self._canonical_active
+        if not is_canonical:
+            self._info_hub.flush_worker_log()
+            self._info_hub.mark_worker_log_boundary()
         controller = self._controllers.pop(worker_tool_id, None)
         if controller is not None:
             controller.finalize(ok, result)
@@ -456,6 +477,7 @@ class AuraPlayground(QWidget):
     def worker_finished(self, ok: bool, summary: str, needs_followup: bool = False, status: str | None = None) -> None:
         self._code_editor.close_all_tabs()
         self._controllers.clear()
+        self._controller_parents.clear()
         self._worker_code_paths.clear()
         self._worker_code_tool_names.clear()
         self._pending_worker_code_content.clear()
@@ -465,6 +487,7 @@ class AuraPlayground(QWidget):
     def worker_cancelled(self):
         self._code_editor.close_all_tabs()
         self._controllers.clear()
+        self._controller_parents.clear()
         self._worker_code_paths.clear()
         self._worker_code_tool_names.clear()
         self._pending_worker_code_content.clear()
@@ -479,6 +502,7 @@ class AuraPlayground(QWidget):
         self._info_hub.clear()
         self._terminal_window.clear()
         self._controllers.clear()
+        self._controller_parents.clear()
         self._worker_code_paths.clear()
         self._worker_code_tool_names.clear()
         self._pending_worker_code_content.clear()
