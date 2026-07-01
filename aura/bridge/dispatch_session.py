@@ -12,7 +12,7 @@ visible lifecycle signals, so a multi-step plan produces exactly one started and
 one finished event regardless of how many internal steps run.
 
 TODO rail:
-- All steps start as pending via WorkflowState.with_steps().
+- Visible checklist rows start as pending via the bridge TODO controller.
 - The active step becomes active while it runs.
 - Completed steps become done before the next step activates.
 - One final TODO emission happens after the loop ends.
@@ -34,6 +34,7 @@ from aura.conversation.dispatch_plan import (
     WorkerStepSpec,
     request_for_step,
 )
+from aura.conversation.dispatch_todo_manifest import todo_tasks_from_plan
 from aura.conversation.worker_outcome import WorkerOutcomeStatus
 
 RunWorkerStep = Callable[[str, WorkerDispatchRequest, Any], WorkerDispatchResult]
@@ -60,8 +61,8 @@ class DispatchSession:
     - Internal steps execute silently inside _run_worker_step without
       re-emitting started/finished to the UI.
 
-    TODO rail (derived from WorkflowState step state):
-    - All steps start as pending via WorkflowState.with_steps().
+    TODO rail (derived from the accepted visible checklist):
+    - Visible checklist rows start as pending via the bridge TODO controller.
     - The active step becomes active while it runs.
     - Completed steps become done before the next step activates.
     - If a step fails, the campaign stops (no blocked TODO state).
@@ -106,24 +107,7 @@ class DispatchSession:
         """Initialize canonical TODO objectives from the visible checklist."""
         if self._begin_steps is None:
             return
-        objectives: list[dict[str, Any]] = []
-        for item in self.plan.visible_checklist:
-            objectives.append({
-                "id": item.id,
-                "description": item.description,
-                "files": list(item.files),
-                "step_id": item.owning_step_id,
-                "owning_step_id": item.owning_step_id,
-            })
-        if not objectives:
-            for step in self.plan.steps:
-                objectives.append({
-                    "id": step.id,
-                    "description": step.title or step.goal or step.id,
-                    "files": list(step.files),
-                    "step_id": step.id,
-                    "owning_step_id": step.id,
-                })
+        objectives = todo_tasks_from_plan(self.plan)
         logging.debug(
             "DispatchSession._begin_canonical_todos tool_call_id=%s todo_count=%d ids=%s",
             self.tool_call_id, len(objectives),

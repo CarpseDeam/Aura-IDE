@@ -7,12 +7,16 @@ user still sees one dispatch card, one Worker run, and one aggregate receipt.
 """
 from __future__ import annotations
 
-import dataclasses
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from aura.conversation.dispatch import WorkerDispatchRequest, WorkerDispatchResult
+from aura.conversation.dispatch_todo_manifest import (
+    DispatchTodoItem,
+    dispatch_todo_manifest_from_request,
+    raw_dispatch_todo_checklist,
+)
 
 
 _BROAD_CAMPAIGN_PATTERNS = (
@@ -102,58 +106,6 @@ class StepValidationPolicy:
             commands=[str(command) for command in commands],
             required_proofs=[str(proof) for proof in proofs],
             reason=str(raw.get("reason") or ""),
-        )
-
-
-@dataclass(frozen=True)
-class DispatchTodoItem:
-    """One user-visible row in the dispatch TODO rail.
-
-    This is deliberately separate from WorkerStepSpec. DispatchSession may run
-    coarse execution steps, but the rail shows this finer accepted checklist.
-    """
-
-    id: str
-    description: str
-    status: str = "pending"
-    files: list[str] = field(default_factory=list)
-    owning_step_id: str = ""
-
-    def to_dict(self) -> dict[str, Any]:
-        payload: dict[str, Any] = {
-            "id": self.id,
-            "description": self.description,
-            "status": self.status,
-        }
-        if self.files:
-            payload["files"] = list(self.files)
-        if self.owning_step_id:
-            payload["owning_step_id"] = self.owning_step_id
-            payload["step_id"] = self.owning_step_id
-        return payload
-
-    @classmethod
-    def from_dict(cls, raw: Any) -> "DispatchTodoItem":
-        if not isinstance(raw, dict):
-            raw = {}
-        item_id = str(raw.get("id") or raw.get("checklist_item_id") or "")
-        description = str(
-            raw.get("description")
-            or raw.get("content")
-            or raw.get("text")
-            or raw.get("task")
-            or item_id
-        )
-        status = str(raw.get("status") or "pending").lower().strip()
-        if status not in {"pending", "active", "done"}:
-            status = "pending"
-        owning_step_id = str(raw.get("owning_step_id") or raw.get("step_id") or "")
-        return cls(
-            id=item_id,
-            description=compact_todo_label(description, fallback=item_id or "Worker task"),
-            status=status,
-            files=_str_list(raw.get("files")),
-            owning_step_id=owning_step_id,
         )
 
 
@@ -259,7 +211,7 @@ class WorkerDispatchPlan:
         if not isinstance(raw, dict):
             raw = {}
         steps = raw.get("steps") if isinstance(raw.get("steps"), list) else []
-        checklist = _raw_checklist(raw)
+        checklist = raw_dispatch_todo_checklist(raw)
         return cls(
             overall_goal=str(raw.get("overall_goal") or raw.get("goal") or ""),
             visible_summary=str(raw.get("visible_summary") or raw.get("summary") or ""),
@@ -388,300 +340,8 @@ def plan_from_request(req: WorkerDispatchRequest) -> WorkerDispatchPlan:
         global_files=list(req.files),
         global_non_goals=list(req.non_goals),
         steps=[step],
-        visible_checklist=dispatch_todo_manifest_from_request(dataclasses.replace(req, steps=[step])),
+        visible_checklist=dispatch_todo_manifest_from_request(replace(req, steps=[step])),
     )
-
-
-def ensure_dispatch_todo_checklist(req: WorkerDispatchRequest) -> WorkerDispatchRequest:
-    """Return a request that carries a durable user-visible TODO checklist."""
-    if getattr(req, "todo_checklist", None):
-        return dataclasses.replace(
-            req,
-            todo_checklist=_normalize_explicit_checklist(req.todo_checklist, req.steps),
-        )
-    return dataclasses.replace(
-        req,
-        todo_checklist=dispatch_todo_manifest_from_request(req),
-    )
-
-
-def dispatch_todo_manifest_from_request(req: WorkerDispatchRequest) -> list[DispatchTodoItem]:
-    """Build the user-visible dispatch checklist from the accepted contract.
-
-    Explicit ``todo_checklist`` rows win. Otherwise derive conservatively from
-    the accepted request's steps, specs, acceptance clauses, required outputs,
-    and validation commands. This keeps the rail tied to the user-facing work
-    contract instead of to DispatchSession's coarser execution steps.
-    """
-    explicit = getattr(req, "todo_checklist", None)
-    if explicit:
-        return _normalize_explicit_checklist(explicit, req.steps)
-
-    items: list[DispatchTodoItem] = []
-    steps = list(req.steps)
-    if steps:
-        for step in steps:
-            items.extend(_items_from_step(step))
-        top_level_items = _items_from_contract_text(
-            item_prefix="contract",
-            owner_steps=steps,
-            files=req.files,
-            texts=[req.spec, req.acceptance, *req.required_outputs],
-            validation_commands=req.validation_commands,
-        )
-        items.extend(top_level_items)
-    else:
-        owner = "step-1"
-        item_texts = _checklist_texts_from_sources(
-            [req.goal, req.spec, req.acceptance, *req.required_outputs],
-            validation_commands=req.validation_commands,
-        )
-        if not item_texts:
-            item_texts = [req.summary or req.goal or "Complete Worker dispatch"]
-        for index, text in enumerate(item_texts, start=1):
-            items.append(
-                DispatchTodoItem(
-                    id=f"{owner}-todo-{index}",
-                    description=text,
-                    files=list(req.files),
-                    owning_step_id=owner,
-                )
-            )
-
-    return _dedupe_todo_items(items)
-
-
-def _normalize_explicit_checklist(
-    checklist: list[DispatchTodoItem],
-    steps: list[WorkerStepSpec],
-) -> list[DispatchTodoItem]:
-    step_owner_by_item = _step_owner_by_item_id(steps)
-    normalized: list[DispatchTodoItem] = []
-    for index, raw_item in enumerate(checklist, start=1):
-        item = raw_item if isinstance(raw_item, DispatchTodoItem) else DispatchTodoItem.from_dict(raw_item)
-        item_id = item.id or f"todo-{index}"
-        description = compact_todo_label(item.description, fallback=item_id)
-        if not description:
-            continue
-        owner = item.owning_step_id or step_owner_by_item.get(item_id, "")
-        normalized.append(
-            DispatchTodoItem(
-                id=item_id,
-                description=description,
-                status="pending",
-                files=list(item.files),
-                owning_step_id=owner,
-            )
-        )
-    return _dedupe_todo_items(normalized)
-
-
-def _items_from_step(step: WorkerStepSpec) -> list[DispatchTodoItem]:
-    item_texts = _checklist_texts_from_sources(
-        [step.title, step.spec, step.acceptance, *step.required_outputs],
-        validation_commands=step.validation_commands or step.validation_policy.commands,
-    )
-    if not item_texts:
-        item_texts = [step.title or step.goal or step.id or "Worker step"]
-
-    items: list[DispatchTodoItem] = []
-    for index, text in enumerate(item_texts, start=1):
-        explicit_id = step.checklist_item_ids[index - 1] if index <= len(step.checklist_item_ids) else ""
-        item_id = explicit_id or _todo_id(step.id, index)
-        items.append(
-            DispatchTodoItem(
-                id=item_id,
-                description=text,
-                files=_step_files(step),
-                owning_step_id=step.id,
-            )
-        )
-    return items
-
-
-def _items_from_contract_text(
-    *,
-    item_prefix: str,
-    owner_steps: list[WorkerStepSpec],
-    files: list[str],
-    texts: list[str],
-    validation_commands: list[str],
-) -> list[DispatchTodoItem]:
-    descriptions = _checklist_texts_from_sources(texts, validation_commands=validation_commands)
-    items: list[DispatchTodoItem] = []
-    for index, text in enumerate(descriptions, start=1):
-        owner = _best_owner_step_id(text, owner_steps)
-        items.append(
-            DispatchTodoItem(
-                id=f"{item_prefix}-todo-{index}",
-                description=text,
-                files=list(files),
-                owning_step_id=owner,
-            )
-        )
-    return items
-
-
-def _checklist_texts_from_sources(
-    texts: list[str],
-    *,
-    validation_commands: list[str],
-) -> list[str]:
-    candidates: list[str] = []
-    for text in texts:
-        candidates.extend(_extract_checklist_lines(text))
-    for command in validation_commands:
-        command = str(command or "").strip()
-        if command:
-            candidates.append(f"Run {command}")
-    return _dedupe([compact_todo_label(item) for item in candidates if item.strip()])
-
-
-def _extract_checklist_lines(text: str) -> list[str]:
-    lines = str(text or "").splitlines()
-    items: list[str] = []
-    in_list_section = False
-    for line in lines:
-        stripped = line.strip()
-        if not stripped:
-            in_list_section = False
-            continue
-        bullet_match = re.match(
-            r"^(?:[-*+]|\d+[\.)]|\[[ xX]\])\s+(?P<item>.+)$",
-            stripped,
-        )
-        if bullet_match:
-            in_list_section = True
-            items.extend(_split_compound_checklist_item(bullet_match.group("item")))
-            continue
-        if stripped.endswith(":") and _line_starts_checklist_section(stripped):
-            in_list_section = True
-            continue
-        if in_list_section and _looks_like_checklist_item(stripped):
-            items.extend(_split_compound_checklist_item(stripped))
-
-    if items:
-        return items
-
-    stripped_text = str(text or "").strip()
-    if _looks_like_checklist_item(stripped_text):
-        return _split_compound_checklist_item(stripped_text)
-    return []
-
-
-def _split_compound_checklist_item(text: str) -> list[str]:
-    cleaned = compact_todo_label(text)
-    if not cleaned:
-        return []
-    parts = [
-        part.strip(" .")
-        for part in re.split(r"\s*;\s*", cleaned)
-        if part.strip(" .")
-    ]
-    if len(parts) > 1:
-        return parts
-    return [cleaned]
-
-
-def _line_starts_checklist_section(line: str) -> bool:
-    text = line.lower()
-    return bool(
-        re.search(r"\b(?:acceptance|checklist|requirements?|tasks?|subtasks?|definition of done)\b", text)
-    )
-
-
-def _looks_like_checklist_item(text: str) -> bool:
-    lowered = str(text or "").lower().strip()
-    if not lowered:
-        return False
-    if len(lowered) > 180:
-        return False
-    return bool(
-        re.match(
-            r"^(?:create|add|move|wire|remove|run|validate|preserve|update|extract|"
-            r"rename|ensure|include|implement|fix|keep|compile|selfcheck)\b",
-            lowered,
-        )
-    )
-
-
-def _best_owner_step_id(description: str, steps: list[WorkerStepSpec]) -> str:
-    if not steps:
-        return ""
-    description_words = _signal_words(description)
-    if not description_words:
-        return steps[-1].id
-    best_step = steps[-1]
-    best_score = -1
-    for step in steps:
-        step_text = " ".join([step.title, step.goal, step.spec, step.acceptance])
-        score = len(description_words & _signal_words(step_text))
-        if score > best_score:
-            best_step = step
-            best_score = score
-    lowered = description.lower()
-    if best_score <= 0 and (
-        "validate" in lowered
-        or "validation" in lowered
-        or "compile" in lowered
-        or "selfcheck" in lowered
-        or lowered.startswith("run ")
-    ):
-        return steps[-1].id
-    return best_step.id
-
-
-def _signal_words(text: str) -> set[str]:
-    stop_words = {
-        "and", "the", "from", "into", "with", "that", "this", "must", "should",
-        "worker", "dispatch", "step", "task", "todo", "list", "rail",
-    }
-    return {
-        word
-        for word in re.findall(r"[a-zA-Z][a-zA-Z0-9_]{2,}", str(text or "").lower())
-        if word not in stop_words
-    }
-
-
-def _todo_id(step_id: str, index: int) -> str:
-    safe_step_id = re.sub(r"[^A-Za-z0-9_.-]+", "-", step_id or "step").strip("-") or "step"
-    return f"{safe_step_id}-todo-{index}"
-
-
-def _step_owner_by_item_id(steps: list[WorkerStepSpec]) -> dict[str, str]:
-    owners: dict[str, str] = {}
-    for step in steps:
-        for item_id in step.checklist_item_ids:
-            item = str(item_id or "").strip()
-            if item and item not in owners:
-                owners[item] = step.id
-    return owners
-
-
-def _dedupe_todo_items(items: list[DispatchTodoItem]) -> list[DispatchTodoItem]:
-    result: list[DispatchTodoItem] = []
-    seen_descriptions: set[str] = set()
-    seen_ids: set[str] = set()
-    for index, item in enumerate(items, start=1):
-        description = compact_todo_label(item.description, fallback=item.id or f"todo-{index}")
-        key = _normalize_boundary_text(description)
-        if not description or key in seen_descriptions:
-            continue
-        item_id = item.id or f"todo-{index}"
-        if item_id in seen_ids:
-            item_id = f"{item_id}-{index}"
-        result.append(
-            DispatchTodoItem(
-                id=item_id,
-                description=description,
-                status="pending",
-                files=list(item.files),
-                owning_step_id=item.owning_step_id,
-            )
-        )
-        seen_descriptions.add(key)
-        seen_ids.add(item_id)
-    return result
 
 
 def request_for_step(
@@ -771,113 +431,6 @@ def _fallback_step_spec(
     if step.non_goals or plan.global_non_goals:
         parts.append("Non-goals: " + "; ".join(_dedupe([*plan.global_non_goals, *step.non_goals])))
     return "\n".join(part for part in parts if part is not None)
-
-
-def compact_todo_label(value: str, fallback: str = "Worker step") -> str:
-    """Return a compact, display-safe label for one TODO rail row.
-
-    Rules:
-    - First meaningful line only.
-    - Strip markdown bullets, numeric prefixes, checkbox prefixes, and headings.
-    - Strip prefixes like ``Step 1:``, ``Objective:``, ``Summary:``,
-      ``Acceptance:``, ``Goal:``.
-    - Collapse whitespace.
-    - Limit around 90 chars.
-    - Preserve explicit Planner step titles, just cleaned.
-    - Do not display whole specs or acceptance paragraphs.
-    """
-    if not value or not value.strip():
-        return fallback
-
-    # Take first meaningful line
-    lines = [line.strip() for line in value.strip().splitlines() if line.strip()]
-    if not lines:
-        return fallback
-    text = lines[0]
-
-    # Strip markdown headings (###, ##, #)
-    text = re.sub(r"^#{1,6}\s+", "", text)
-
-    # Strip markdown bullet / checkbox prefixes
-    text = re.sub(r"^[\-\*\+]\s+", "", text)
-    text = re.sub(r"^\[[ xX]\]\s*", "", text)
-    text = re.sub(r"^\d+[\.\)]\s*", "", text)
-
-    # Strip common prefix labels
-    for prefix in (
-        "Step",
-        "Objective",
-        "Summary",
-        "Acceptance",
-        "Goal",
-        "Task",
-        "Phase",
-        "Milestone",
-    ):
-        text = re.sub(
-            rf"^{re.escape(prefix)}\s*\d*\s*[:\.\-—–]\s*",
-            "",
-            text,
-            flags=re.IGNORECASE,
-        )
-
-    # Collapse whitespace
-    text = re.sub(r"\s+", " ", text).strip()
-
-    if not text:
-        return fallback
-
-    # Limit length
-    if len(text) > 90:
-        text = text[:87] + "..."
-
-    return text
-
-
-def todo_tasks_from_plan(
-    plan: WorkerDispatchPlan,
-    *,
-    active_step_id: str | None = None,
-    completed_step_ids: set[str] | None = None,
-) -> list[dict[str, Any]]:
-    """Convert a WorkerDispatchPlan into canonical TODO tasks for the UI.
-
-    Each task dict uses the stable fields the existing TodoListWidget expects:
-    description, status (pending/active/done), plus step_id, id, and files.
-    There is no blocked state — allowed states are pending, active, done.
-    """
-    completed: set[str] = completed_step_ids or set()
-    tasks: list[dict[str, Any]] = []
-    checklist = list(plan.visible_checklist)
-    if not checklist:
-        checklist = [
-            DispatchTodoItem(
-                id=step.id,
-                description=step.title or step.goal or step.id,
-                files=list(step.files),
-                owning_step_id=step.id,
-            )
-            for step in plan.steps
-        ]
-    for item in checklist:
-        owner = item.owning_step_id or item.id
-        task: dict[str, Any] = {
-            "id": item.id,
-            "step_id": owner,
-            "owning_step_id": owner,
-            "description": item.description,
-            "status": "pending",
-        }
-        if item.files:
-            task["files"] = list(item.files)
-
-        if item.id in completed or owner in completed:
-            task["status"] = "done"
-        elif item.id == active_step_id or owner == active_step_id:
-            task["status"] = "active"
-
-        tasks.append(task)
-    return tasks
 
 
 def validate_dispatch_campaign(req: WorkerDispatchRequest) -> CampaignValidationResult:
@@ -1137,27 +690,14 @@ def _str_dict_list(raw: Any) -> dict[str, list[str]]:
     return result
 
 
-def _raw_checklist(raw: dict[str, Any]) -> list[Any]:
-    for key in ("todo_checklist", "visible_checklist", "checklist"):
-        value = raw.get(key)
-        if isinstance(value, list):
-            return value
-    return []
-
-
 __all__ = [
     "AggregatedDispatchResult",
     "CampaignValidationResult",
-    "DispatchTodoItem",
     "StepResult",
     "StepValidationPolicy",
     "WorkerDispatchPlan",
     "WorkerStepSpec",
-    "compact_todo_label",
-    "dispatch_todo_manifest_from_request",
-    "ensure_dispatch_todo_checklist",
     "plan_from_request",
     "request_for_step",
-    "todo_tasks_from_plan",
     "validate_dispatch_campaign",
 ]

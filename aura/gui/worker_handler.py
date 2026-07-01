@@ -129,9 +129,8 @@ class WorkerEventHandler(QObject):
     def _on_workflow_state_changed(self, state: WorkflowState) -> None:
         """Store and forward a canonical WorkflowState snapshot from the backend."""
         _log.debug(
-            "_on_workflow_state_changed tool_call_id=%s status=%s step_count=%d active_step=%s",
+            "_on_workflow_state_changed tool_call_id=%s status=%s",
             state.tool_call_id, state.status.value if state.status else "?",
-            len(state.steps), state.active_step_id,
         )
         self._active_workflow = state
         # Forward to the spec card for rendering.
@@ -360,4 +359,3 @@ class WorkerEventHandler(QObject):
             [t.get("status", "?") for t in tasks if isinstance(t, dict)],
         )
         self._playground.update_todo_list(tasks, tool_call_id)
-

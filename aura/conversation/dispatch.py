@@ -30,7 +30,8 @@ from aura.conversation.worker_outcome import (
 )
 
 if TYPE_CHECKING:
-    from aura.conversation.dispatch_plan import DispatchTodoItem, WorkerStepSpec
+    from aura.conversation.dispatch_plan import WorkerStepSpec
+    from aura.conversation.dispatch_todo_manifest import DispatchTodoItem
 
 
 @dataclass
@@ -117,15 +118,13 @@ class WorkerDispatchRequest:
             steps = [WorkerStepSpec.from_dict(step) for step in raw_steps]
         else:
             steps = []
-        raw_checklist = []
-        for key in ("todo_checklist", "visible_checklist", "checklist"):
-            value = data.get(key)
-            if isinstance(value, list):
-                raw_checklist = value
-                break
-        if raw_checklist:
-            from aura.conversation.dispatch_plan import DispatchTodoItem
+        from aura.conversation.dispatch_todo_manifest import (
+            DispatchTodoItem,
+            raw_dispatch_todo_checklist,
+        )
 
+        raw_checklist = raw_dispatch_todo_checklist(data)
+        if raw_checklist:
             todo_checklist = [DispatchTodoItem.from_dict(item) for item in raw_checklist]
         else:
             todo_checklist = []

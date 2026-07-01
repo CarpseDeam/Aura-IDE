@@ -50,20 +50,6 @@ class ValidationCommandRun:
 
 
 @dataclass(frozen=True)
-class WorkflowStepState:
-    """One immutable row in the visible dispatch checklist.
-
-    Status must be one of: "pending", "active", "done".
-    """
-
-    id: str
-    description: str
-    files: tuple[str, ...] = ()
-    status: str = "pending"
-    owning_step_id: str = ""
-
-
-@dataclass(frozen=True)
 class WorkflowState:
     tool_call_id: str
     task_title: str
@@ -79,8 +65,6 @@ class WorkflowState:
     write_outcome: str = ""
     caveats: tuple[str, ...] = ()
     blockers: tuple[str, ...] = ()
-    steps: tuple[WorkflowStepState, ...] = ()
-    active_step_id: str = ""
 
     @classmethod
     def intent_captured(
@@ -220,99 +204,6 @@ class WorkflowState:
 
         return state
 
-    # ---- step checklist ---------------------------------------------------
-
-    def with_steps(self, objectives: list[dict[str, Any]]) -> "WorkflowState":
-        """Set the ordered visible checklist from an objectives list.
-
-        Each objective must have ``id`` and ``description`` keys; optional
-        ``files`` (list[str]) and ``owning_step_id``/``step_id``.  All rows
-        start as ``pending``.
-        """
-        step_states: list[WorkflowStepState] = []
-        for obj in objectives:
-            step_id = str(obj.get("id") or "")
-            if not step_id:
-                continue
-            owning_step_id = str(obj.get("owning_step_id") or obj.get("step_id") or "")
-            step_states.append(
-                WorkflowStepState(
-                    id=step_id,
-                    description=str(obj.get("description") or step_id),
-                    files=tuple(str(f) for f in (obj.get("files") or [])),
-                    status="pending",
-                    owning_step_id=owning_step_id,
-                )
-            )
-        return replace(self, steps=tuple(step_states), active_step_id="")
-
-    def set_active_step(self, step_id: str) -> "WorkflowState":
-        """Mark rows for execution *step_id* active.
-
-        A visible checklist row matches when its own id is *step_id* or its
-        owning execution step id is *step_id*.
-        """
-        new_steps: list[WorkflowStepState] = []
-        found = False
-        for s in self.steps:
-            if _workflow_row_matches_step(s, step_id):
-                if s.status == "done":
-                    new_steps.append(s)
-                    found = True
-                    continue
-                found = True
-                new_steps.append(replace(s, status="active"))
-            elif s.status == "active":
-                new_steps.append(replace(s, status="pending"))
-            else:
-                new_steps.append(s)
-        if not found:
-            return self
-        return replace(self, steps=tuple(new_steps), active_step_id=step_id)
-
-    def mark_step_done(self, step_id: str) -> "WorkflowState":
-        """Mark rows for execution *step_id* done."""
-        new_steps: list[WorkflowStepState] = []
-        found = False
-        for s in self.steps:
-            if _workflow_row_matches_step(s, step_id):
-                found = True
-                new_steps.append(replace(s, status="done"))
-            else:
-                new_steps.append(s)
-        if not found:
-            return self
-        return replace(self, steps=tuple(new_steps))
-
-    def finish_steps(self) -> "WorkflowState":
-        """Finalise the step checklist (clear active step marker)."""
-        return replace(self, active_step_id="")
-
-    def has_steps(self) -> bool:
-        """Return True if a non-empty step checklist has been set."""
-        return len(self.steps) > 0
-
-    def todo_snapshot(self) -> list[dict[str, Any]]:
-        """Return the row shape the GUI expects via dispatchTodoListUpdated.
-
-        Each row has ``id``, ``step_id``, ``description``, ``status``, and
-        ``files`` when present — matching the legacy TODO row shape
-        shape.
-        """
-        rows: list[dict[str, Any]] = []
-        for s in self.steps:
-            row: dict[str, Any] = {
-                "id": s.id,
-                "step_id": s.owning_step_id or s.id,
-                "owning_step_id": s.owning_step_id,
-                "description": s.description,
-                "status": s.status,
-            }
-            if s.files:
-                row["files"] = list(s.files)
-            rows.append(row)
-        return rows
-
     def finish(
         self,
         *,
@@ -409,10 +300,6 @@ def _normalize_path(path: str) -> str:
     return normalized
 
 
-def _workflow_row_matches_step(row: WorkflowStepState, step_id: str) -> bool:
-    return row.id == step_id or bool(row.owning_step_id and row.owning_step_id == step_id)
-
-
 def _validation_status(runs: tuple[ValidationCommandRun, ...]) -> ValidationStatus:
     completed = [run.ok for run in runs if run.ok is not None]
     if not runs:
@@ -443,5 +330,4 @@ __all__ = [
     "ValidationStatus",
     "WorkflowState",
     "WorkflowStatus",
-    "WorkflowStepState",
 ]

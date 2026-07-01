@@ -1,16 +1,16 @@
 from types import SimpleNamespace
 
 from aura.bridge.dispatch_session import DispatchSession
+from aura.bridge.dispatch_todo_controller import DispatchTodoController
 from aura.bridge.worker_report import _format_spec_as_user_message
 from aura.conversation.dispatch import WorkerDispatchRequest, WorkerDispatchResult
 from aura.conversation.dispatch_plan import (
-    DispatchTodoItem,
     WorkerDispatchPlan,
     WorkerStepSpec,
     plan_from_request,
 )
+from aura.conversation.dispatch_todo_manifest import DispatchTodoItem
 from aura.conversation.worker_outcome import WorkerOutcomeStatus
-from aura.conversation.workflow_state import WorkflowState
 
 
 def _request_with_steps() -> WorkerDispatchRequest:
@@ -349,30 +349,28 @@ def test_dispatch_session_uses_visible_checklist_not_execution_steps():
     plan = plan_from_request(req)
     calls = []
     snapshots = []
-    state = WorkflowState.intent_captured("call_dispatch", req.goal)
+    controller = DispatchTodoController()
 
-    def save_snapshot():
-        snapshots.append(state.todo_snapshot())
+    def save_snapshot(snapshot):
+        snapshots.append(snapshot)
 
     def begin_steps(tool_id, objectives):
-        nonlocal state
-        state = state.with_steps(objectives)
-        save_snapshot()
+        save_snapshot(controller.begin(tool_id, objectives))
 
     def set_active_step(tool_id, step_id):
-        nonlocal state
-        state = state.set_active_step(step_id)
-        save_snapshot()
+        snapshot = controller.activate_step(tool_id, step_id)
+        if snapshot is not None:
+            save_snapshot(snapshot)
 
     def mark_step_done(tool_id, step_id):
-        nonlocal state
-        state = state.mark_step_done(step_id)
-        save_snapshot()
+        snapshot = controller.complete_step(tool_id, step_id)
+        if snapshot is not None:
+            save_snapshot(snapshot)
 
     def finish_steps(tool_id):
-        nonlocal state
-        state = state.finish_steps()
-        save_snapshot()
+        snapshot = controller.finish(tool_id)
+        if snapshot is not None:
+            save_snapshot(snapshot)
 
     def run_step(tool_id, step_req, pending):
         calls.append((tool_id, step_req.goal))

@@ -14,15 +14,17 @@ from aura.conversation.dispatch import (
 )
 from aura.conversation.dispatch_plan import (
     AggregatedDispatchResult,
-    DispatchTodoItem,
     StepResult,
     StepValidationPolicy,
     WorkerDispatchPlan,
     WorkerStepSpec,
-    dispatch_todo_manifest_from_request,
-    ensure_dispatch_todo_checklist,
     plan_from_request,
     request_for_step,
+)
+from aura.conversation.dispatch_todo_manifest import (
+    DispatchTodoItem,
+    dispatch_todo_manifest_from_request,
+    ensure_dispatch_todo_checklist,
     todo_tasks_from_plan,
 )
 from aura.conversation.history import History
