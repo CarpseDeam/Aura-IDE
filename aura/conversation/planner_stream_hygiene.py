@@ -14,16 +14,20 @@ _BAD_PHRASE_PATTERNS = (
     r"\blet me implement\b",
     r"\blet me prepare (?:the )?(?:capsule|worker capsule|task capsule)\b",
     r"\b(?:i\s+)?(?:can'?t|cannot) write files directly\b",
-    r"\bnow i (?:will|'ll) create\b",
-    r"\bnow i (?:will|'ll) modify\b",
-    r"\b(?:i (?:will|'ll|ill) modify|i (?:will|'ll|ill) implement)\b",
+    r"\bnow i\s*(?:will|['\u2019]?ll) create\b",
+    r"\bnow i\s*(?:will|['\u2019]?ll) update\b",
+    r"\bnow i\s*(?:will|['\u2019]?ll) edit\b",
+    r"\bnow i\s*(?:will|['\u2019]?ll) modify\b",
+    r"\bnow i\s*(?:will|['\u2019]?ll) refactor\b",
+    r"\bnow i\s*(?:will|['\u2019]?ll) extract\b",
+    r"\b(?:i\s*(?:will|['\u2019]?ll|ill) (?:create|update|edit|modify|implement|refactor|extract|move|rename|remove|delete))\b",
     r"\bi have (?:all|enough|the) context\b",
     r"\bnow i have (?:a )?(?:thorough |complete |full )?(?:understanding|picture|context)\b",
 )
 
 _GENERIC_TRANSITION_PATTERNS = (
-    r"^\s*now[, ]+(?:i|let me)\b.*\b(?:context|understanding|picture|implement|create|modify|capsule|dispatch)\b",
-    r"^\s*(?:now\s+)?let me\b.*\b(?:prepare|implement|create|modify|dispatch|capsule)\b",
+    r"^\s*now[, ]+(?:i|let me)\b.*\b(?:context|understanding|picture|implement|create|update|edit|modify|refactor|extract|capsule|dispatch)\b",
+    r"^\s*(?:now\s+)?let me\b.*\b(?:prepare|implement|create|update|edit|modify|refactor|extract|dispatch|capsule)\b",
     r"^\s*i (?:have|now have)\b.*\b(?:context|understanding|picture)\b",
 )
 

@@ -27,10 +27,12 @@ _LOCAL_PATTERNS: tuple[str, ...] = (
     r"\b(?:read|inspect|open|search|grep|scan|summarize)\s+(?:the\s+)?(?:local\s+)?(?:file|repo|repository|workspace|codebase)\b",
     r"\b(?:git\s+status|git\s+diff|git\s+log|current\s+branch|latest\s+snapshot|last\s+commit)\b",
     r"\b(?:in|inside|from)\s+(?:this|the)\s+(?:repo|repository|workspace|project|codebase|file)\b",
+    r"\b[a-z0-9_.-]+(?:[/\\][a-z0-9_.-]+)+\.(?:py|pyw|ts|tsx|js|jsx|json|toml|yaml|yml|md|txt|css|scss|html|gd|cs|java|go|rs|cpp|c|h|hpp)\b",
 )
 
 _CODING_PATTERNS: tuple[str, ...] = (
-    r"\b(?:add|build|change|create|fix|implement|modify|refactor|repair|update|wire|integrate)\b",
+    r"\b(?:add|build|change|clean\s+up|cleanup|create|delete|extract|fix|"
+    r"implement|modify|move|refactor|remove|rename|repair|update|wire|integrate)\b",
     r"\b(?:write|edit|patch)\s+(?:code|tests?|files?)\b",
 )
 
@@ -82,7 +84,7 @@ _RESEARCH_RULES: tuple[tuple[str, tuple[str, ...]]] = (
         (
             r"\b(?:look up|lookup|search|google|research)\b.*\b(?:error|exception|stack trace|traceback|status code|errno)\b",
             r"\b(?:what does|what is)\b.*\b(?:error|exception|status code|errno)\b.*\b(?:mean|indicate)\b",
-            r"\b(?:err_[a-z0-9_]+|e[a-z]+[a-z0-9_]*|http\s*[45]\d\d)\b",
+            r"\b(?:err_[a-z0-9_]+|e[a-z]+[0-9][a-z0-9_]*|enoent|eacces|eperm|eexist|enotdir|eisdir|http\s*[45]\d\d)\b",
         ),
     ),
     (

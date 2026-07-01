@@ -130,7 +130,8 @@ def _looks_like_validation(normalized: str) -> bool:
 def _looks_like_implementation(normalized: str) -> bool:
     return bool(
         re.search(
-            r"\b(?:add|build|change|create|fix|implement|modify|refactor|repair|update)\b",
+            r"\b(?:add|build|change|clean\s+up|cleanup|create|delete|extract|fix|"
+            r"implement|modify|move|refactor|remove|rename|repair|update|wire)\b",
             normalized,
         )
     )

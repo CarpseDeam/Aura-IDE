@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from typing import Any
 
 from aura.conversation.tools._drone_schemas import (
@@ -55,6 +56,25 @@ def _tool_name(tool_def: dict[str, Any]) -> str:
     return str(fn.get("name", "")) if isinstance(fn, dict) else ""
 
 
+def _planner_safe_tool_def(tool_def: dict[str, Any]) -> dict[str, Any]:
+    copied = copy.deepcopy(tool_def)
+    fn = copied.get("function")
+    if not isinstance(fn, dict):
+        return copied
+    description = str(fn.get("description") or "")
+    description = description.replace(" before answering or editing", " before answering or dispatching")
+    description = description.replace("before editing", "before dispatching")
+    description = description.replace("after editing", "after Worker edits")
+    if "Planner must not edit files" not in description:
+        description = (
+            description.rstrip()
+            + " Planner must not edit files; use gathered context only to answer "
+            "or call dispatch_to_worker."
+        )
+    fn["description"] = description
+    return copied
+
+
 class ToolCatalog:
     """Builds the available tool schemas for the current mode/read-only state."""
 
@@ -71,10 +91,14 @@ class ToolCatalog:
             tools: list[dict[str, Any]] = list(READ_TOOL_DEFS) + list(GIT_TOOL_DEFS)
         elif mode == "planner":
             planner_read_tools = [
-                tool for tool in READ_TOOL_DEFS if _tool_name(tool) in PLANNER_TOOL_NAMES
+                _planner_safe_tool_def(tool)
+                for tool in READ_TOOL_DEFS
+                if _tool_name(tool) in PLANNER_TOOL_NAMES
             ]
             planner_git_tools = [
-                tool for tool in GIT_TOOL_DEFS if _tool_name(tool) in PLANNER_TOOL_NAMES
+                _planner_safe_tool_def(tool)
+                for tool in GIT_TOOL_DEFS
+                if _tool_name(tool) in PLANNER_TOOL_NAMES
             ]
             tools = (
                 planner_read_tools

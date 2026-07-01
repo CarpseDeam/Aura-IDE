@@ -38,6 +38,7 @@ class _SendState:
     task_completion_context: bool = False
     final_messages_after_completion: int = 0
     last_completion_final_text: str = ""
+    planner_dispatch_gate_steered: bool = False
 
     # --- worker-only objects (initialised in __post_init__) ---
     limits: ToolLimitState = field(init=False)

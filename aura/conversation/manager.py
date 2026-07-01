@@ -54,6 +54,7 @@ from aura.conversation.history import History
 from aura.conversation.loop_detection import LoopDetector
 from aura.conversation.manager_send_state import _SendState
 from aura.conversation.manager_tool_round import ToolRoundRunner
+from aura.conversation.planner_dispatch_gate import maybe_force_worker_dispatch
 from aura.conversation.planner_stream_hygiene import PlannerStreamHygiene
 from aura.conversation.planner_refresh import PlannerRefreshState
 from aura.conversation.stream_event_router import StreamEventRouter
@@ -349,6 +350,20 @@ class ConversationManager:
                 return
 
             if not tool_calls:
+                if state.mode == "planner":
+                    dispatch_gate = maybe_force_worker_dispatch(
+                        latest_user_text=_latest_user_text(self._history),
+                        candidate_message=full_message,
+                        planner_tool_calls_seen=state.limits.total_calls,
+                        dispatch_calls_seen=state.limits.dispatch_calls,
+                        already_steered=state.planner_dispatch_gate_steered,
+                    )
+                    if dispatch_gate.should_continue:
+                        self._history.append_internal_user_text(
+                            dispatch_gate.steering_message
+                        )
+                        state.planner_dispatch_gate_steered = True
+                        continue
                 if state.mode == "worker":
                     finalization_action = handle_worker_candidate_finalization(
                         state=state,
