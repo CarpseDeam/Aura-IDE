@@ -127,7 +127,7 @@ class ToolRunner:
             )
             # Manager owns dispatch lifecycle emission — do NOT emit ToolResult
             # or append tool result here.  The returned result flows through
-            # classify_failed_worker_dispatch → blocker → internal handback.
+            # classify_failed_worker_dispatch → Manager internal handoff.
             if workflow_state_cb:
                 workflow_state_cb(tool_call_id, req.goal, req.summary, WorkflowStatus.planner_resolving)
             return result
@@ -161,7 +161,7 @@ class ToolRunner:
             )
             # Manager owns dispatch lifecycle emission — do NOT emit ToolResult
             # or append tool result here.  The returned result flows through
-            # classify_failed_worker_dispatch → blocker → internal handback.
+            # classify_failed_worker_dispatch → Manager internal handoff.
             if workflow_state_cb:
                 workflow_state_cb(tool_call_id, req.goal, req.summary, WorkflowStatus.planner_resolving)
             return result
