@@ -56,6 +56,7 @@ from aura.conversation.manager_send_state import _SendState
 from aura.conversation.manager_tool_round import ToolRoundRunner
 from aura.conversation.planner_stream_hygiene import PlannerStreamHygiene
 from aura.conversation.planner_refresh import PlannerRefreshState
+from aura.conversation.stream_event_router import StreamEventRouter
 from aura.conversation.tool_runner import ToolRunner
 from aura.conversation.tools._types import (
     ApprovalCallback,
@@ -272,6 +273,13 @@ class ConversationManager:
                 else None
             )
 
+            router = StreamEventRouter(
+                planner_hygiene=planner_hygiene,
+                on_event=on_event,
+                mode=state.mode,
+                stream_buffer=state.stream_buffer,
+            )
+
             for ev in hooks.trigger(
                 hook_name,
                 messages=self._history.for_api(),
@@ -284,35 +292,14 @@ class ConversationManager:
                 if _first_event:
                     _log.info("%s_first_event model=%s", label, model)
                     _first_event = False
-                if planner_hygiene is not None and isinstance(ev, ContentDelta):
-                    filtered_text = planner_hygiene.filter_delta(ev.text)
-                    if not filtered_text:
-                        continue
-                    ev = ContentDelta(text=filtered_text)
-                elif planner_hygiene is not None and isinstance(ev, Done):
-                    if not state.silent_preflight:
-                        flush_text = planner_hygiene.flush()
-                        if flush_text:
-                            on_event(ContentDelta(text=flush_text))
-                    if isinstance(ev.full_message, dict):
-                        content = ev.full_message.get("content")
-                        if isinstance(content, str):
-                            ev.full_message["content"] = planner_hygiene.sanitize_message_text(content)
-                if state.silent_preflight:
-                    if isinstance(ev, (ContentDelta, ReasoningDelta)):
-                        continue
-                    if isinstance(ev, Done):
-                        full_message = ev.full_message
-                        continue
-                if state.mode == "worker" and state.stream_buffer is not None:
-                    state.stream_buffer.capture_or_forward(ev, on_event)
-                else:
-                    on_event(ev)
-                if isinstance(ev, Done):
-                    full_message = ev.full_message
-                if isinstance(ev, ApiError):
+
+                result = router.process(ev, silent_preflight=state.silent_preflight)
+
+                if result.full_message is not None:
+                    full_message = result.full_message
+                if result.api_error is not None:
                     _log.info("%s_api_error model=%s", label, model)
-                    return  # surface and stop
+                    return
 
             _log.info("%s_done model=%s", label, model)
 
@@ -407,8 +394,11 @@ class ConversationManager:
             if tool_round.action == "return":
                 return
             if tool_round.action == "continue":
-                if tool_round.enter_silent_preflight:
-                    state.silent_preflight = True
+                # Only enter silent preflight when the ToolRoundRunner
+                # explicitly requests it (internal planner handoff).
+                # Normal continues (phase boundaries, task-completion
+                # turns) must NOT inherit silent preflight.
+                state.silent_preflight = tool_round.enter_silent_preflight
                 continue
 
             if state.worker_flow is not None and not tool_round.flow_steering_suppressed:

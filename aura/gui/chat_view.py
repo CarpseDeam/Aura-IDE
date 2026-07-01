@@ -351,6 +351,11 @@ class ChatView(QScrollArea):
         self._add_card(card)
 
     def add_user(self, text: str, image_b64s: list[str] | None = None) -> None:
+        # Clear any lingering PlanWriterCard suppression from a previous
+        # turn's internal continuation — a new user turn should always
+        # show the planning card for visible dispatches.
+        self._suppress_next_dispatch_plan_writer = False
+
         # Slight right inset on user cards so the conversation rhythm is visible at a glance —
         # not a chat-bubble alignment, just enough to feel like input vs. output.
         wrapper = QWidget(self)
@@ -724,6 +729,19 @@ class ChatView(QScrollArea):
 
                 # Close the current assistant turn so the next Planner
                 # continuation starts a fresh card.
+                if _internal_continuation:
+                    # Suppress the next dispatch_to_worker PlanWriterCard:
+                    # the continuation's dispatch is internal and should
+                    # not flash a transient plan card.
+                    self._suppress_next_dispatch_plan_writer = True
+                else:
+                    # Internal continuation scope has ended — any subsequent
+                    # dispatch is user-visible, so ensure the suppression
+                    # flag is cleared (it may have been set by a prior
+                    # continuation whose silent preflight round never
+                    # consumed it via add_tool_call).
+                    self._suppress_next_dispatch_plan_writer = False
+
                 self.close_current_assistant_for_continuation()
 
             else:

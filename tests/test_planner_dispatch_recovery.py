@@ -429,16 +429,21 @@ def test_internal_handoff_returns_enter_silent_preflight(tmp_path):
     assert outcome.enter_silent_preflight is True
 
 
-def test_silent_preflight_suppresses_reasoning_and_content_events():
-    """When silent_preflight is active, ContentDelta, ReasoningDelta, and
-    Done must be suppressed; tool events must still pass through."""
+def test_silent_preflight_suppresses_all_visible_events():
+    """When silent_preflight is active, ALL stream events (ContentDelta,
+    ReasoningDelta, ToolCallStart, ToolCallArgsDelta, ToolCallEnd, Usage,
+    Done) must be suppressed from reaching the UI -- only the Done
+    full_message is captured for the caller."""
+    from aura.client import ToolCallArgsDelta, ToolCallEnd, Usage
 
     def _run_stream(events, *, silent_preflight):
         forwarded = []
         full_message = None
         for ev in events:
             if silent_preflight:
-                if isinstance(ev, (ContentDelta, ReasoningDelta)):
+                if isinstance(ev, (ContentDelta, ReasoningDelta,
+                                   ToolCallStart, ToolCallArgsDelta,
+                                   ToolCallEnd, Usage)):
                     continue
                 if isinstance(ev, Done):
                     full_message = ev.full_message
@@ -452,17 +457,28 @@ def test_silent_preflight_suppresses_reasoning_and_content_events():
         ReasoningDelta(text="I see the dispatch was rejected..."),
         ContentDelta(text="The dispatch was rejected because step 6 has an empty files array."),
         ToolCallStart(index=0, id="call_1", name="read_file"),
+        ToolCallArgsDelta(index=0, args_chunk='{"path":'),
+        ToolCallEnd(index=0),
+        Usage(prompt_tokens=100, completion_tokens=50, cache_hit_tokens=0, cache_miss_tokens=100),
         Done(finish_reason="tool_calls", full_message={"role": "assistant", "content": "", "tool_calls": []}),
     ]
 
     forwarded_off, _ = _run_stream(events, silent_preflight=False)
     assert any(isinstance(e, ReasoningDelta) for e in forwarded_off)
     assert any(isinstance(e, ContentDelta) for e in forwarded_off)
+    assert any(isinstance(e, ToolCallStart) for e in forwarded_off)
+    assert any(isinstance(e, ToolCallArgsDelta) for e in forwarded_off)
+    assert any(isinstance(e, ToolCallEnd) for e in forwarded_off)
+    assert any(isinstance(e, Usage) for e in forwarded_off)
     assert any(isinstance(e, Done) for e in forwarded_off)
 
     forwarded_on, fm = _run_stream(events, silent_preflight=True)
-    assert not any(isinstance(e, (ReasoningDelta, ContentDelta, Done)) for e in forwarded_on)
-    assert any(isinstance(e, ToolCallStart) for e in forwarded_on)
+    # No events of any type reach the UI during silent preflight
+    assert not any(isinstance(e, (ReasoningDelta, ContentDelta,
+                                  ToolCallStart, ToolCallArgsDelta,
+                                  ToolCallEnd, Usage, Done))
+                   for e in forwarded_on)
+    assert len(forwarded_on) == 0
     # full_message must still be captured from suppressed Done
     assert fm is not None
     assert fm["role"] == "assistant"

@@ -4,7 +4,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from aura.client import ApiError, ContentDelta, Done, Event, ReasoningDelta
+from aura.client import (
+    ApiError,
+    ContentDelta,
+    Done,
+    Event,
+    ReasoningDelta,
+    ToolCallArgsDelta,
+    ToolCallEnd,
+    ToolCallStart,
+    Usage,
+)
 from aura.conversation.planner_stream_hygiene import PlannerStreamHygiene
 from aura.conversation.worker_stream_buffer import WorkerStreamBuffer
 
@@ -53,8 +63,22 @@ class StreamEventRouter:
                     ev.full_message["content"] = self._planner_hygiene.sanitize_message_text(content)
 
         # 3. Silent preflight suppression
+        #
+        # During an internal planner recovery round the user must see nothing:
+        # suppress content, reasoning, tool events, and usage so the GUI never
+        # creates a visible card.  The Done event's full_message is captured
+        # so the caller can inspect tool_calls / content for the next loop
+        # iteration without forwarding the event to the UI.
+        _SILENT_PREFLIGHT_SUPPRESSED_TYPES = (
+            ContentDelta,
+            ReasoningDelta,
+            ToolCallStart,
+            ToolCallArgsDelta,
+            ToolCallEnd,
+            Usage,
+        )
         if silent_preflight:
-            if isinstance(ev, (ContentDelta, ReasoningDelta)):
+            if isinstance(ev, _SILENT_PREFLIGHT_SUPPRESSED_TYPES):
                 return StreamEventResult()
             if isinstance(ev, Done):
                 return StreamEventResult(full_message=ev.full_message)
