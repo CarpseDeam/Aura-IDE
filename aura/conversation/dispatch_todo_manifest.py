@@ -171,40 +171,42 @@ def todo_tasks_from_plan(
     active_step_id: str | None = None,
     completed_step_ids: set[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Convert a dispatch plan's visible checklist into TODO snapshot rows."""
-    completed: set[str] = completed_step_ids or set()
-    checklist = list(getattr(plan, "visible_checklist", []) or [])
-    if not checklist:
-        checklist = [
-            DispatchTodoItem(
-                id=str(getattr(step, "id", "") or ""),
-                description=(
-                    str(getattr(step, "title", "") or "")
-                    or str(getattr(step, "goal", "") or "")
-                    or str(getattr(step, "id", "") or "")
-                ),
-                files=list(getattr(step, "files", []) or []),
-                owning_step_id=str(getattr(step, "id", "") or ""),
-            )
-            for step in list(getattr(plan, "steps", []) or [])
-        ]
+    """Convert a dispatch plan into TODO snapshot rows — one row per step.
 
+    The visible rail mirrors the plan's execution steps 1:1 so it ticks one row
+    at a time as the Worker activates and completes each step. Each row's id,
+    step_id, and owning_step_id are all the step id, so ``activate_step`` and
+    ``complete_step`` light and green exactly one row.
+
+    Finer-grained spec/acceptance/validation detail stays inside each step
+    (the Worker still receives all of it); it is deliberately not exploded into
+    separate rows, which would flip in per-step batches instead of one at a
+    time.
+    """
+    completed: set[str] = completed_step_ids or set()
     tasks: list[dict[str, Any]] = []
-    for item in checklist:
-        owner = item.owning_step_id or item.id
+    for step in list(getattr(plan, "steps", []) or []):
+        step_id = str(getattr(step, "id", "") or "")
+        description = compact_todo_label(
+            str(getattr(step, "title", "") or "")
+            or str(getattr(step, "goal", "") or "")
+            or step_id,
+            fallback=step_id or "Worker step",
+        )
         task: dict[str, Any] = {
-            "id": item.id,
-            "step_id": owner,
-            "owning_step_id": owner,
-            "description": item.description,
+            "id": step_id,
+            "step_id": step_id,
+            "owning_step_id": step_id,
+            "description": description,
             "status": "pending",
         }
-        if item.files:
-            task["files"] = list(item.files)
+        files = list(getattr(step, "files", []) or [])
+        if files:
+            task["files"] = files
 
-        if item.id in completed or owner in completed:
+        if step_id and step_id in completed:
             task["status"] = "done"
-        elif item.id == active_step_id or owner == active_step_id:
+        elif step_id and step_id == active_step_id:
             task["status"] = "active"
 
         tasks.append(task)

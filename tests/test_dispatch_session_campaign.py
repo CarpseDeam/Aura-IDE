@@ -322,8 +322,16 @@ def test_worker_step_message_forbids_campaign_planning():
     assert "Do not plan, decompose, or schedule the whole task" in message
 
 
-def test_dispatch_session_uses_visible_checklist_not_execution_steps():
+def test_dispatch_session_todo_shows_one_row_per_step():
+    """The rail mirrors execution steps 1:1 and ticks one row at a time.
+
+    Even when a fine-grained ``todo_checklist`` is supplied, the visible rail
+    shows one row per step (not one row per checklist item), so each step
+    activates and completes exactly one row — the one-at-a-time tick.
+    """
     req = _request_with_steps()
+    # Supplied but intentionally ignored for the rail: proves the display is
+    # step-granular, not checklist-item-granular.
     req.todo_checklist = [
         DispatchTodoItem(
             id="create-helper",
@@ -396,30 +404,22 @@ def test_dispatch_session_uses_visible_checklist_not_execution_steps():
     result = session.run()
 
     assert result.ok is True
+    # One row per execution step — not one row per checklist item.
     assert [row["description"] for row in snapshots[0]] == [
         "Create shell pipeline helper module",
-        "Move shell parser helper",
         "Wire helper module into completion result",
-        "Run compile validation",
     ]
-    assert [row["status"] for row in snapshots[0]] == [
-        "pending",
-        "pending",
-        "pending",
-        "pending",
-    ]
-    assert [row["status"] for row in snapshots[1]] == [
-        "active",
-        "active",
-        "pending",
-        "pending",
-    ]
-    assert [row["status"] for row in snapshots[-1]] == [
-        "done",
-        "done",
-        "done",
-        "done",
-    ]
+    # Begin: every step pending.
+    assert [row["status"] for row in snapshots[0]] == ["pending", "pending"]
+    # step-1 active — exactly one row lights up.
+    assert [row["status"] for row in snapshots[1]] == ["active", "pending"]
+    # step-1 done — exactly one row greens; step-2 still pending.
+    assert [row["status"] for row in snapshots[2]] == ["done", "pending"]
+    # step-2 active — the tick advances to the next single row.
+    assert [row["status"] for row in snapshots[3]] == ["done", "active"]
+    # step-2 done — the whole rail is complete.
+    assert [row["status"] for row in snapshots[4]] == ["done", "done"]
+    assert [row["status"] for row in snapshots[-1]] == ["done", "done"]
     assert calls == [
         ("call_dispatch", req.steps[0].goal),
         ("call_dispatch", req.steps[1].goal),
