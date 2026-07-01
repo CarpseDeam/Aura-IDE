@@ -1301,6 +1301,7 @@ class ConversationManager:
             completed_dispatch_for_final = False
             completed_tool_result_for_final = False
             planner_stale_read_files: list[str] = []
+            planner_restart_needed = False
             for task in tasks:
                 if cancel_event.is_set():
                     self._cleanup_cancelled(on_event)
@@ -1317,14 +1318,37 @@ class ConversationManager:
                     self._planner_refresh.handle_post_write_notices(
                         self._history, planner_stale_read_files
                     )
-                    self._append_dispatch_blocker_message(
-                        res["result"], str(res.get("blocker_reason", "")), on_event,
-                        res.get("failure_constraint", ""),
-                    )
                     blocker_reason = str(res.get("blocker_reason", ""))
                     failure_constraint = res.get("failure_constraint", "")
-                    if failure_constraint and blocker_reason not in ("limit", "repeated"):
-                        continue
+                    result_obj = res.get("result")
+
+                    # Internal planner handback: the dispatch failed in a
+                    # recoverable way (not limit/repeated).  Append the
+                    # failure constraint as a user message so the Planner
+                    # sees it, but do NOT emit Done — the Planner loop
+                    # restarts invisibly.
+                    is_internal = (
+                        bool(failure_constraint)
+                        and blocker_reason not in ("limit", "repeated")
+                        and isinstance(result_obj, WorkerDispatchResult)
+                        and not result_obj.cancelled
+                    )
+                    if is_internal:
+                        extras = result_obj.extras or {}
+                        if not (
+                            extras.get("user_visible_blocker")
+                            or extras.get("user_only_blocker")
+                            or extras.get("terminal_environment_blocker")
+                        ):
+                            self._history.append_user_text(failure_constraint)
+                            planner_restart_needed = True
+                            break
+
+                    # Terminal / user-visible blocker: surface it.
+                    self._append_dispatch_blocker_message(
+                        res["result"], blocker_reason, on_event,
+                        failure_constraint,
+                    )
                     return
                 if res.get("completed_dispatch_for_final"):
                     completed_dispatch_for_final = True
@@ -1351,6 +1375,9 @@ class ConversationManager:
                 if "result_payload" in res:
                     self._history.append_tool_result(task["id"], res["result_payload"])
                     on_event(res["event"])
+
+            if planner_restart_needed:
+                continue
 
             self._planner_refresh.handle_post_write_notices(
                 self._history, planner_stale_read_files
@@ -1744,14 +1771,15 @@ class ConversationManager:
             if action["counts_as_attempt"]:
                 state.worker_redispatches += 1
             blocker_reason = action["blocker_reason"]
-            if blocker_reason:
+            failure_constraint = action.get("failure_constraint", "")
+            if blocker_reason or failure_constraint:
                 return {
                     "id": tool_call_id,
                     "blocker": True,
                     "result": result,
                     "blocker_reason": blocker_reason,
                     "terminal_dispatch": False,
-                    "failure_constraint": action.get("failure_constraint", ""),
+                    "failure_constraint": failure_constraint,
                 }
             return {
                 "id": tool_call_id,
@@ -1779,13 +1807,14 @@ class ConversationManager:
                 if action["counts_as_attempt"]:
                     state.worker_redispatches += 1
                 blocker_reason = action["blocker_reason"]
-                if blocker_reason:
+                failure_constraint = action.get("failure_constraint", "")
+                if blocker_reason or failure_constraint:
                     return {
                         "id": tool_call_id,
                         "blocker": True,
                         "result": result,
                         "blocker_reason": blocker_reason,
-                        "failure_constraint": action.get("failure_constraint", ""),
+                        "failure_constraint": failure_constraint,
                         "planner_stale_read_files": (
                             list(result.modified_files)
                             if result.modified_files

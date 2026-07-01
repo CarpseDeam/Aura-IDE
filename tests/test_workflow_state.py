@@ -46,9 +46,9 @@ def test_workflow_finish_maps_retryable_failure() -> None:
         status=WorkerOutcomeStatus.validation_failed.value,
     )
 
-    assert finished.status == WorkflowStatus.failed_retryable
+    assert finished.status == WorkflowStatus.planner_resolving
     assert finished.follow_up_required is True
-    assert "continue" in finished.pending_user_action
+    assert "Continuing internally" in finished.pending_user_action
 
 
 def test_workflow_finish_maps_nonrecoverable_failure() -> None:
@@ -78,7 +78,7 @@ def test_workflow_finish_maps_needs_planner_resolution() -> None:
 
     assert finished.status == WorkflowStatus.planner_resolving
     assert finished.follow_up_required is True
-    assert "Planner is resolving" in finished.pending_user_action
+    assert "Continuing internally" in finished.pending_user_action
 
 
 def test_workflow_finish_maps_planner_resolution_needed_extras() -> None:
@@ -112,7 +112,7 @@ def test_mismatch_question_becomes_blocker_reason() -> None:
     assert finished.failure_reason == ""
 
 
-def test_normal_needs_followup_still_maps_to_failed_retryable() -> None:
+def test_normal_needs_followup_now_maps_to_planner_resolving() -> None:
     state = WorkflowState.intent_captured("tc1", "Fix login")
 
     finished = state.finish(
@@ -122,4 +122,4 @@ def test_normal_needs_followup_still_maps_to_failed_retryable() -> None:
         status=WorkerOutcomeStatus.needs_followup.value,
     )
 
-    assert finished.status == WorkflowStatus.failed_retryable
+    assert finished.status == WorkflowStatus.planner_resolving

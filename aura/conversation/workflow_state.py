@@ -311,7 +311,7 @@ def _validation_status(runs: tuple[ValidationCommandRun, ...]) -> ValidationStat
 
 def _pending_action(status: WorkflowStatus, needs_followup: bool) -> str:
     if status == WorkflowStatus.planner_resolving:
-        return "Planner is resolving the Worker mismatch."
+        return "Continuing internally."
     if status == WorkflowStatus.failed_retryable:
         return "Review the blocker, then continue or revise the plan."
     if status == WorkflowStatus.failed_nonrecoverable:

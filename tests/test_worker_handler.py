@@ -629,8 +629,8 @@ class TestDispatchActions:
         assert SpecCard._workflow_status_label(WorkflowStatus.editing)[0] == "Editing"
         assert SpecCard._workflow_status_label(WorkflowStatus.validating)[0] == "Validating"
         assert SpecCard._workflow_status_label(WorkflowStatus.blocked)[0] == "Blocked"
-        assert SpecCard._workflow_status_label(WorkflowStatus.planner_resolving)[0] == "Planner resolving mismatch"
-        assert SpecCard._workflow_status_label(WorkflowStatus.failed_retryable)[0] == "Failed"
+        assert SpecCard._workflow_status_label(WorkflowStatus.planner_resolving)[0] == "Retrying"
+        assert SpecCard._workflow_status_label(WorkflowStatus.failed_retryable)[0] == "Retrying"
         assert SpecCard._workflow_status_label(WorkflowStatus.done)[0] == "Done"
 
     def test_finished_status_label_supports_needs_planner_resolution(self, qapp) -> None:
@@ -638,7 +638,7 @@ class TestDispatchActions:
         from aura.gui.cards.spec_card import SpecCard
 
         label, color = SpecCard._finished_status_label(False, "needs_planner_resolution")
-        assert label == "Planner resolving mismatch"
+        assert label == "Retrying"
 
 
 class TestMismatchResolutionWiring:

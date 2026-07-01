@@ -1815,7 +1815,8 @@ def test_blocker_constraint_non_terminal_reason_continues_loop(
     assert mock_client.call_count == 2
     dispatch_cb.assert_called_once()
 
-    # The failure_constraint was appended to history as a user message
+    # The failure_constraint was appended as a user message (internal handback)
+    # so the Planner sees it, but no Done was emitted.
     user_texts = [m["content"] for m in history.messages if m["role"] == "user"
                   and "CONSTRAINT FOR NEXT ATTEMPT" in str(m["content"])]
     assert len(user_texts) >= 1
