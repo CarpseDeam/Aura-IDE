@@ -48,7 +48,7 @@ RunWorkerStep = Callable[[str, WorkerDispatchRequest, Any], WorkerDispatchResult
 _EmitStarted = Callable[[str], None]
 _EmitFinished = Callable[[str, bool, str, bool, str], None]
 
-MAX_WORKER_STEP_ATTEMPTS = 3
+MAX_WORKER_STEP_ATTEMPTS = 5
 NO_PROGRESS_FINGERPRINT_THRESHOLD = 2
 
 
