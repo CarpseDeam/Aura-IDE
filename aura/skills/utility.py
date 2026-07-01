@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from aura.conversation.dispatch import WorkerOutcomeStatus
+from aura.conversation.worker_outcome import WorkerOutcomeStatus
 
 _log = logging.getLogger(__name__)
 

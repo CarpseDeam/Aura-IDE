@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QSize, QTimer, Signal
+from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QGuiApplication, QIcon
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -20,8 +20,8 @@ from aura.gui.cards._helpers import _mono_font
 from aura.gui.cards.diff_card import DiffCard
 from aura.gui.cards.error_card import ErrorCard
 from aura.gui.theme import ACCENT, BG, BG_RAISED, BORDER, FG
-from aura.gui.worker_log_stream import WorkerLogStreamBuffer
 from aura.gui.widgets.todo_list import TodoListWidget
+from aura.gui.worker_log_stream import WorkerLogStreamBuffer
 
 
 class InfoHubPane(QWidget):
@@ -294,7 +294,7 @@ def _final_summary_label(
     needs_followup: bool = False,
     status: str | None = None,
 ) -> str:
-    from aura.conversation.dispatch import WorkerOutcomeStatus, normalize_outcome_status
+    from aura.conversation.worker_outcome import WorkerOutcomeStatus, normalize_outcome_status
 
     normalized = normalize_outcome_status(status)
     if normalized == WorkerOutcomeStatus.cancelled.value:

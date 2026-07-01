@@ -8,12 +8,11 @@ from typing import Any
 
 from aura.conversation.dispatch import (
     WorkerDispatchResult,
-    WorkerOutcomeStatus,
     infer_outcome_status,
 )
 from aura.conversation.dispatch_lifecycle import is_internal_dispatch_continuation
 from aura.conversation.tool_limits import WRITE_TOOLS
-
+from aura.conversation.worker_outcome import WorkerOutcomeStatus
 
 COMPLETION_PHRASE_MARKERS = (
     "all set",
@@ -96,8 +95,8 @@ def text_overlap_ratio(left: str, right: str) -> float:
 def worker_dispatch_is_terminal(result: WorkerDispatchResult | None) -> bool:
     """Return True if the Worker dispatch result is terminal — the Planner should not continue.
 
-    Uses WorkerOutcomeStatus from aura.conversation.dispatch rather than
-    duplicating status strings. Falls back to result.ok for unrecognized statuses.
+    Uses WorkerOutcomeStatus rather than duplicating status strings. Falls back
+    to result.ok for unrecognized statuses.
 
     Internal continuations (campaign handback, planner handoff, recoverable
     spec-reject) are **non-terminal** — the Planner restarts internally.

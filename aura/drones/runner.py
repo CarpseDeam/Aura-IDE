@@ -5,7 +5,7 @@ import datetime as dt
 import json
 import logging
 from pathlib import Path
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from PySide6.QtCore import QObject, Signal, Slot
 
@@ -222,8 +222,15 @@ class DroneRunner(QObject):
 
         import datetime as dt
 
-        from aura.conversation.dispatch import WorkerOutcomeStatus
-        from aura.git_ops import changes_since, clean_untracked_paths, commit_all, restore_to_snapshot, snapshot, working_tree_status
+        from aura.conversation.worker_outcome import WorkerOutcomeStatus
+        from aura.git_ops import (
+            changes_since,
+            clean_untracked_paths,
+            commit_all,
+            restore_to_snapshot,
+            snapshot,
+            working_tree_status,
+        )
 
         # 1. Check working tree — allow owned dirty files from previous Gardener runs
         workspace_root = self._workspace_root

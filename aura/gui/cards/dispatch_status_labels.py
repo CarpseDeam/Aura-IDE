@@ -29,7 +29,7 @@ def worker_summary_status_label(
 
     Internal continuations must never show process, mismatch, or blocker labels.
     """
-    from aura.conversation.dispatch import WorkerOutcomeStatus
+    from aura.conversation.worker_outcome import WorkerOutcomeStatus
     from aura.gui.theme import DANGER, FG_MUTED, SUCCESS, WARN
 
     if is_internal:
@@ -109,7 +109,7 @@ def spec_finished_label(
 
     Internal continuations must never show process or error ceremony.
     """
-    from aura.conversation.dispatch import WorkerOutcomeStatus, normalize_outcome_status
+    from aura.conversation.worker_outcome import WorkerOutcomeStatus, normalize_outcome_status
     from aura.gui.theme import DANGER, SUCCESS, WARN
 
     if is_internal:

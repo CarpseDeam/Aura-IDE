@@ -19,7 +19,6 @@ from aura.conversation.dispatch import (
     DispatchCallback,
     WorkerDispatchRequest,
     WorkerDispatchResult,
-    WorkerOutcomeStatus,
 )
 from aura.conversation.dispatch_contract import enrich_worker_dispatch_contract
 from aura.conversation.dispatch_plan import validate_dispatch_campaign
@@ -39,6 +38,7 @@ from aura.conversation.validation_orchestrator import (
     parse_validation_command,
 )
 from aura.conversation.verification_progress import VerificationProgressTracker
+from aura.conversation.worker_outcome import WorkerOutcomeStatus
 from aura.conversation.workflow_state import WorkflowStatus
 from aura.project_env import (
     build_project_command,

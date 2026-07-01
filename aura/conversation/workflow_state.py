@@ -8,17 +8,16 @@ from typing import Any
 
 from aura.conversation._workflow_parse import (
     _compact_title,
-    _parse_json_object,
+    _environment_caveats,
+    _failure_text,
+    _first_error,
     _first_string,
     _int_or_none,
-    _failure_text,
-    _environment_caveats,
     _not_applied_outcome,
-    _first_error,
+    _parse_json_object,
 )
-
-from aura.conversation.dispatch import WorkerOutcomeStatus, normalize_outcome_status
 from aura.conversation.tool_limits import WRITE_TOOLS
+from aura.conversation.worker_outcome import WorkerOutcomeStatus, normalize_outcome_status
 
 
 class WorkflowStatus(str, enum.Enum):

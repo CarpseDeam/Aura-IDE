@@ -8,7 +8,6 @@ planner as the tool_result for that call.
 """
 from __future__ import annotations
 
-import enum
 import re
 import time
 from dataclasses import dataclass, field
@@ -25,6 +24,10 @@ from aura.conversation._dispatch_helpers import (
 )
 from aura.conversation.project_profile import ProjectProfile
 from aura.conversation.task_shape import TaskShape, infer_task_shape, unknown_task_shape
+from aura.conversation.worker_outcome import (
+    WorkerOutcomeStatus,
+    normalize_outcome_status,
+)
 
 if TYPE_CHECKING:
     from aura.conversation.dispatch_plan import WorkerStepSpec
@@ -43,52 +46,6 @@ class ExplicitSpecContract:
     forbidden_calls: list[str] = field(default_factory=list)
     required_outputs: list[str] = field(default_factory=list)
     non_goals: list[str] = field(default_factory=list)
-
-
-class WorkerOutcomeStatus(str, enum.Enum):
-    """Outcome classification for a worker dispatch result."""
-
-    completed = "completed"
-    """Worker finished successfully with all goals met."""
-
-    completed_with_caveats = "completed_with_caveats"
-    """Worker finished but attached caveats or non-blocking concerns."""
-
-    needs_followup = "needs_followup"
-    """Worker made partial progress; a follow-up dispatch is needed."""
-
-    needs_planner_resolution = "needs_planner_resolution"
-    """Worker encountered Planner handoff conflicts with repo reality."""
-
-    validation_failed = "validation_failed"
-    """Worker-produced code failed validation checks."""
-
-    edit_mechanics_blocked = "edit_mechanics_blocked"
-    """Worker could not apply edits due to mechanical tool failures."""
-
-    scope_mismatch = "scope_mismatch"
-    """Worker determined the request was out of scope or unclear."""
-
-    approval_rejected = "approval_rejected"
-    """User rejected the dispatch approval request."""
-
-    cancelled = "cancelled"
-    """Worker execution was cancelled before completion."""
-
-    harness_error = "harness_error"
-    """An unexpected error occurred in the worker harness."""
-
-
-def normalize_outcome_status(value: Any) -> str | None:
-    """Return a valid WorkerOutcomeStatus string, or None for unknown values."""
-    if value is None:
-        return None
-    if isinstance(value, WorkerOutcomeStatus):
-        return value.value
-    try:
-        return WorkerOutcomeStatus(str(value).strip()).value
-    except ValueError:
-        return None
 
 
 @dataclass

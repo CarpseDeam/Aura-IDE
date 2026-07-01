@@ -26,7 +26,6 @@ from typing import Any
 from aura.conversation.dispatch import (
     WorkerDispatchRequest,
     WorkerDispatchResult,
-    WorkerOutcomeStatus,
 )
 from aura.conversation.dispatch_plan import (
     StepResult,
@@ -35,6 +34,7 @@ from aura.conversation.dispatch_plan import (
     compact_todo_label,
     request_for_step,
 )
+from aura.conversation.worker_outcome import WorkerOutcomeStatus
 
 RunWorkerStep = Callable[[str, WorkerDispatchRequest, Any], WorkerDispatchResult]
 

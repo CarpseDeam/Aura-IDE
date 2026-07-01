@@ -5,11 +5,11 @@ from typing import Any
 
 from aura.conversation.dispatch import (
     WorkerDispatchResult,
-    WorkerOutcomeStatus,
     infer_outcome_status,
 )
 from aura.conversation.dispatch_lifecycle import is_internal_dispatch_continuation
 from aura.conversation.tool_limits import MAX_WORKER_REDISPATCHES_PER_USER_TURN
+from aura.conversation.worker_outcome import WorkerOutcomeStatus
 
 __all__ = [
     "classify_failed_worker_dispatch",

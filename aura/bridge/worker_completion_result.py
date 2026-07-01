@@ -27,9 +27,10 @@ from aura.conversation import (
     WorkerMismatch,
     WorkerTaskSpec,
 )
-from aura.conversation.dispatch import WorkerOutcomeStatus
 from aura.conversation.path_utils import (
     is_validation_scratch_path as _is_validation_scratch_path,
+)
+from aura.conversation.path_utils import (
     normalize_worker_path as _normalize_worker_path,
 )
 from aura.conversation.tool_limits import WRITE_TOOLS
@@ -42,6 +43,7 @@ from aura.conversation.validation_orchestrator import (
     TEST_SELECTION_EMPTY,
     TIMEOUT,
 )
+from aura.conversation.worker_outcome import WorkerOutcomeStatus
 from aura.validation.selector import ValidationPlan
 
 _log = logging.getLogger(__name__)

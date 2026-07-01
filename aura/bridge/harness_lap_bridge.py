@@ -231,7 +231,7 @@ class HarnessLapBridge(QObject):
             worker_errors: list[str] = []
             validation_results: list[dict] = []
             try:
-                from aura.conversation.dispatch import WorkerOutcomeStatus
+                from aura.conversation.worker_outcome import WorkerOutcomeStatus
 
                 _SEVERITY = {
                     WorkerOutcomeStatus.completed.value: 0,
