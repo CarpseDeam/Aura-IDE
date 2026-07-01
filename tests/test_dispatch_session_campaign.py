@@ -3,8 +3,14 @@ from types import SimpleNamespace
 from aura.bridge.dispatch_session import DispatchSession
 from aura.bridge.worker_report import _format_spec_as_user_message
 from aura.conversation.dispatch import WorkerDispatchRequest, WorkerDispatchResult
-from aura.conversation.dispatch_plan import WorkerDispatchPlan, WorkerStepSpec
+from aura.conversation.dispatch_plan import (
+    DispatchTodoItem,
+    WorkerDispatchPlan,
+    WorkerStepSpec,
+    plan_from_request,
+)
 from aura.conversation.worker_outcome import WorkerOutcomeStatus
+from aura.conversation.workflow_state import WorkflowState
 
 
 def _request_with_steps() -> WorkerDispatchRequest:
@@ -314,3 +320,165 @@ def test_worker_step_message_forbids_campaign_planning():
     assert "Active Dispatch Step" in message
     assert "Do only this step" in message
     assert "Do not plan, decompose, or schedule the whole task" in message
+
+
+def test_dispatch_session_uses_visible_checklist_not_execution_steps():
+    req = _request_with_steps()
+    req.todo_checklist = [
+        DispatchTodoItem(
+            id="create-helper",
+            description="Create shell pipeline helper module",
+            owning_step_id="step-1",
+        ),
+        DispatchTodoItem(
+            id="move-parser",
+            description="Move shell parser helper",
+            owning_step_id="step-1",
+        ),
+        DispatchTodoItem(
+            id="wire-caller",
+            description="Wire helper module into completion result",
+            owning_step_id="step-2",
+        ),
+        DispatchTodoItem(
+            id="run-compile",
+            description="Run compile validation",
+            owning_step_id="step-2",
+        ),
+    ]
+    plan = plan_from_request(req)
+    calls = []
+    snapshots = []
+    state = WorkflowState.intent_captured("call_dispatch", req.goal)
+
+    def save_snapshot():
+        snapshots.append(state.todo_snapshot())
+
+    def begin_steps(tool_id, objectives):
+        nonlocal state
+        state = state.with_steps(objectives)
+        save_snapshot()
+
+    def set_active_step(tool_id, step_id):
+        nonlocal state
+        state = state.set_active_step(step_id)
+        save_snapshot()
+
+    def mark_step_done(tool_id, step_id):
+        nonlocal state
+        state = state.mark_step_done(step_id)
+        save_snapshot()
+
+    def finish_steps(tool_id):
+        nonlocal state
+        state = state.finish_steps()
+        save_snapshot()
+
+    def run_step(tool_id, step_req, pending):
+        calls.append((tool_id, step_req.goal))
+        return WorkerDispatchResult(
+            ok=True,
+            summary=f"Completed {step_req.summary}",
+            status=WorkerOutcomeStatus.completed.value,
+            modified_files=list(step_req.files),
+        )
+
+    session = DispatchSession(
+        tool_call_id="call_dispatch",
+        original_request=req,
+        plan=plan,
+        run_worker_step=run_step,
+        pending=SimpleNamespace(),
+        begin_steps=begin_steps,
+        set_active_step=set_active_step,
+        mark_step_done=mark_step_done,
+        finish_steps=finish_steps,
+    )
+
+    result = session.run()
+
+    assert result.ok is True
+    assert [row["description"] for row in snapshots[0]] == [
+        "Create shell pipeline helper module",
+        "Move shell parser helper",
+        "Wire helper module into completion result",
+        "Run compile validation",
+    ]
+    assert [row["status"] for row in snapshots[0]] == [
+        "pending",
+        "pending",
+        "pending",
+        "pending",
+    ]
+    assert [row["status"] for row in snapshots[1]] == [
+        "active",
+        "active",
+        "pending",
+        "pending",
+    ]
+    assert [row["status"] for row in snapshots[-1]] == [
+        "done",
+        "done",
+        "done",
+        "done",
+    ]
+    assert calls == [
+        ("call_dispatch", req.steps[0].goal),
+        ("call_dispatch", req.steps[1].goal),
+    ]
+
+
+def test_plan_from_request_expands_acceptance_bullets_into_visible_checklist():
+    req = WorkerDispatchRequest(
+        goal="Extract WorkerToolEventRouter and wire WorkerEventHandler to it.",
+        files=["aura/gui/worker_handler.py", "aura/gui/worker_tool_event_router.py"],
+        spec=(
+            "Accepted work contract:\n"
+            "- Create WorkerToolEventRouter helper module\n"
+            "- Move worker tool call start routing\n"
+            "- Move worker tool args routing\n"
+            "- Move worker tool result routing\n"
+            "- Move worker diff decision routing\n"
+            "- Move worker terminal output routing\n"
+            "- Move agent process start/output/finish routing\n"
+            "- Move single-mode terminal routing\n"
+            "- Wire WorkerEventHandler to the router\n"
+            "- Remove moved method bodies/imports from WorkerEventHandler\n"
+            "- Run compile/selfcheck\n"
+        ),
+        acceptance="The visible TODO rail shows every accepted work item and validation passes.",
+        summary="Extract WorkerToolEventRouter.",
+        steps=[
+            WorkerStepSpec(
+                id="step-1",
+                title="Create WorkerToolEventRouter helper module",
+                goal="Create the router helper module and move routing methods into it.",
+                spec="Create the helper module for moved Worker tool/event routing.",
+                files=["aura/gui/worker_tool_event_router.py"],
+                acceptance="Router module exists with moved routing helpers.",
+            ),
+            WorkerStepSpec(
+                id="step-2",
+                title="Wire WorkerToolEventRouter into WorkerEventHandler and remove moved methods",
+                goal="Wire WorkerEventHandler to the router and clean up moved code.",
+                spec="Wire WorkerEventHandler to the router, remove moved method bodies/imports, and run compile/selfcheck.",
+                files=["aura/gui/worker_handler.py"],
+                acceptance="WorkerEventHandler delegates to the router and validation passes.",
+            ),
+        ],
+    )
+
+    descriptions = [item.description for item in plan_from_request(req).visible_checklist]
+
+    assert len(descriptions) >= 11
+    assert "Create WorkerToolEventRouter helper module" in descriptions
+    assert "Move worker tool call start routing" in descriptions
+    assert "Move worker tool args routing" in descriptions
+    assert "Move worker tool result routing" in descriptions
+    assert "Move worker diff decision routing" in descriptions
+    assert "Move worker terminal output routing" in descriptions
+    assert "Move agent process start/output/finish routing" in descriptions
+    assert "Move single-mode terminal routing" in descriptions
+    assert "Wire WorkerEventHandler to the router" in descriptions
+    assert "Remove moved method bodies/imports from WorkerEventHandler" in descriptions
+    assert "Run compile/selfcheck" in descriptions

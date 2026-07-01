@@ -30,7 +30,7 @@ from aura.conversation.worker_outcome import (
 )
 
 if TYPE_CHECKING:
-    from aura.conversation.dispatch_plan import WorkerStepSpec
+    from aura.conversation.dispatch_plan import DispatchTodoItem, WorkerStepSpec
 
 
 @dataclass
@@ -70,6 +70,7 @@ class WorkerDispatchRequest:
     contract: ExplicitSpecContract | None = None
     task_shape: TaskShape | None = None
     steps: list[WorkerStepSpec] = field(default_factory=list)
+    todo_checklist: list[DispatchTodoItem] = field(default_factory=list)
     
     def to_dict(self) -> dict[str, Any]:
         payload = {
@@ -95,6 +96,8 @@ class WorkerDispatchRequest:
             payload["task_shape"] = self.task_shape.to_dict()
         if self.steps:
             payload["steps"] = [step.to_dict() for step in self.steps]
+        if self.todo_checklist:
+            payload["todo_checklist"] = [item.to_dict() for item in self.todo_checklist]
         return payload
 
     @classmethod
@@ -114,6 +117,18 @@ class WorkerDispatchRequest:
             steps = [WorkerStepSpec.from_dict(step) for step in raw_steps]
         else:
             steps = []
+        raw_checklist = []
+        for key in ("todo_checklist", "visible_checklist", "checklist"):
+            value = data.get(key)
+            if isinstance(value, list):
+                raw_checklist = value
+                break
+        if raw_checklist:
+            from aura.conversation.dispatch_plan import DispatchTodoItem
+
+            todo_checklist = [DispatchTodoItem.from_dict(item) for item in raw_checklist]
+        else:
+            todo_checklist = []
         return cls(
             goal=str(data.get("goal", "")),
             files=[str(f) for f in files],
@@ -134,6 +149,7 @@ class WorkerDispatchRequest:
             contract=ExplicitSpecContract.from_dict(data["contract"]) if data.get("contract") else None,
             task_shape=task_shape,
             steps=steps,
+            todo_checklist=todo_checklist,
         )
 
 

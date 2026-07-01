@@ -21,7 +21,10 @@ from aura.conversation.dispatch import (
     WorkerDispatchResult,
 )
 from aura.conversation.dispatch_contract import enrich_worker_dispatch_contract
-from aura.conversation.dispatch_plan import validate_dispatch_campaign
+from aura.conversation.dispatch_plan import (
+    ensure_dispatch_todo_checklist,
+    validate_dispatch_campaign,
+)
 from aura.conversation.history import History
 from aura.conversation.loop_detection import LoopDetector
 from aura.conversation.spec_quality import validate_worker_dispatch_spec
@@ -85,6 +88,7 @@ class ToolRunner:
 
             req.steps = [WorkerStepSpec.from_dict(step) for step in raw_steps]
         req = enrich_worker_dispatch_contract(req)
+        req = ensure_dispatch_todo_checklist(req)
         campaign = validate_dispatch_campaign(req)
         if not campaign.ok:
             _log.debug(

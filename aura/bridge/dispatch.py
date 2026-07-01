@@ -40,7 +40,7 @@ from aura.conversation import (
     WorkerDispatchRequest,
     WorkerDispatchResult,
 )
-from aura.conversation.dispatch_plan import plan_from_request
+from aura.conversation.dispatch_plan import ensure_dispatch_todo_checklist, plan_from_request
 from aura.conversation.persistence import WorkerDispatchRecord
 from aura.conversation.tool_limits import TERMINAL_TOOLS, WRITE_TOOLS
 from aura.conversation.workflow_state import WorkflowState, WorkflowStatus
@@ -242,13 +242,13 @@ class _DispatchProxy(QObject):
                 extras={"dispatch_not_started": True, "dispatch_cancelled": True},
             )
 
-        edited = pending.edited_request or req
+        edited = ensure_dispatch_todo_checklist(pending.edited_request or req)
 
         # -- dependency graph: annotate downstream dependents ---------------
         if self._workspace_root is not None and edited.files:
             stanza = build_dependency_stanza(self._workspace_root, edited.files)
             if stanza:
-                edited = replace(edited, spec=edited.spec + stanza)
+                edited = ensure_dispatch_todo_checklist(replace(edited, spec=edited.spec + stanza))
 
         # --- Emit dispatched snapshot (fresh WorkflowState — no steps yet) ---
         self._transition_workflow_state(

@@ -32,7 +32,6 @@ from aura.conversation.dispatch_plan import (
     StepResult,
     WorkerDispatchPlan,
     WorkerStepSpec,
-    compact_todo_label,
     request_for_step,
 )
 from aura.conversation.worker_outcome import WorkerOutcomeStatus
@@ -104,20 +103,29 @@ class DispatchSession:
     # ------------------------------------------------------------------
 
     def _begin_canonical_todos(self) -> None:
-        """Initialize canonical TODO objectives from the plan."""
+        """Initialize canonical TODO objectives from the visible checklist."""
         if self._begin_steps is None:
             return
         objectives: list[dict[str, Any]] = []
-        for step in self.plan.steps:
-            raw_label = step.title or step.goal or ""
-            description = compact_todo_label(raw_label, fallback=step.id or "Worker step")
+        for item in self.plan.visible_checklist:
             objectives.append({
-                "id": step.id,
-                "description": description,
-                "files": list(step.files),
+                "id": item.id,
+                "description": item.description,
+                "files": list(item.files),
+                "step_id": item.owning_step_id,
+                "owning_step_id": item.owning_step_id,
             })
+        if not objectives:
+            for step in self.plan.steps:
+                objectives.append({
+                    "id": step.id,
+                    "description": step.title or step.goal or step.id,
+                    "files": list(step.files),
+                    "step_id": step.id,
+                    "owning_step_id": step.id,
+                })
         logging.debug(
-            "DispatchSession._begin_canonical_todos tool_call_id=%s step_count=%d ids=%s",
+            "DispatchSession._begin_canonical_todos tool_call_id=%s todo_count=%d ids=%s",
             self.tool_call_id, len(objectives),
             [o["id"] for o in objectives],
         )

@@ -787,8 +787,55 @@ DISPATCH_TOOL_DEF: dict[str, Any] = {
                                 "items": {"type": "string"},
                                 "description": "Public class methods this step must not introduce.",
                             },
+                            "checklist_item_ids": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": (
+                                    "Optional ids of user-visible checklist rows this execution "
+                                    "step owns. Use this to map one coarse Worker step to multiple "
+                                    "concrete TODO rail items."
+                                ),
+                            },
                         },
                         "required": ["id", "title", "goal", "spec", "files", "acceptance"],
+                        "additionalProperties": False,
+                    },
+                },
+                "todo_checklist": {
+                    "type": "array",
+                    "description": (
+                        "User-visible TODO rail manifest for this accepted work contract. "
+                        "For non-trivial campaigns, include concrete checklist rows that cover "
+                        "the real acceptance items such as method moves, wiring, cleanup, and "
+                        "validation. This list is separate from execution steps: DispatchSession "
+                        "may run coarse steps, but the GUI shows this full checklist from Worker "
+                        "start through completion. Each row should have a stable id and description; "
+                        "owning_step_id should match the execution step that advances it."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {
+                                "type": "string",
+                                "minLength": 1,
+                                "description": "Stable checklist row id, e.g. 'move-tool-args-routing'.",
+                            },
+                            "description": {
+                                "type": "string",
+                                "minLength": 1,
+                                "description": "Concrete user-visible task or acceptance item.",
+                            },
+                            "files": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Optional workspace-relative files relevant to this row.",
+                            },
+                            "owning_step_id": {
+                                "type": "string",
+                                "description": "Optional execution step id that should mark this row active/done.",
+                            },
+                        },
+                        "required": ["id", "description"],
                         "additionalProperties": False,
                     },
                 },
