@@ -22,6 +22,7 @@ _log = logging.getLogger(__name__)
 from aura.conversation.workflow_state import WorkflowState
 from aura.gui.dispatch_ui_lifecycle import DispatchUiLifecycle
 from aura.gui.worker_finish_presenter import WorkerFinishPresenter
+from aura.gui.worker_tool_event_router import WorkerToolEventRouter
 
 if TYPE_CHECKING:
     from PySide6.QtWidgets import QWidget
@@ -70,6 +71,7 @@ class WorkerEventHandler(QObject):
             active_workflow=lambda: self._active_workflow,
         )
         self._finish_presenter = WorkerFinishPresenter(chat, playground)
+        self._tool_router = WorkerToolEventRouter(playground=playground, chat=chat)
 
     # ---- public property -------------------------------------------------------
 
@@ -105,20 +107,20 @@ class WorkerEventHandler(QObject):
         self._bridge.workerCancelled.connect(self._on_worker_cancelled)
         self._bridge.workerReasoningDelta.connect(self._on_worker_reasoning)
         self._bridge.workerContentDelta.connect(self._on_worker_content)
-        self._bridge.workerToolCallStart.connect(self._on_worker_tool_call_start)
-        self._bridge.workerToolCallArgs.connect(self._on_worker_tool_args)
+        self._bridge.workerToolCallStart.connect(self._tool_router.on_worker_tool_call_start)
+        self._bridge.workerToolCallArgs.connect(self._tool_router.on_worker_tool_args)
         self._bridge.workerToolCallEnd.connect(lambda _t, _w: None)
-        self._bridge.workerToolResult.connect(self._on_worker_tool_result)
-        self._bridge.workerDiffDecided.connect(self._on_worker_diff_decided)
+        self._bridge.workerToolResult.connect(self._tool_router.on_worker_tool_result)
+        self._bridge.workerDiffDecided.connect(self._tool_router.on_worker_diff_decided)
         self._bridge.workerApiError.connect(self._on_worker_api_error)
         self._bridge.workerUsage.connect(self._on_worker_usage)
         self._bridge.workerTodoListUpdated.connect(self._on_worker_todo_list_updated)
         self._bridge.dispatchTodoListUpdated.connect(self._on_dispatch_todo_list_updated)
-        self._bridge.workerTerminalOutput.connect(self._on_worker_terminal_output)
-        self._bridge.workerAgentProcessStarted.connect(self._on_worker_agent_process_started)
-        self._bridge.workerAgentProcessOutput.connect(self._on_worker_agent_process_output)
-        self._bridge.workerAgentProcessFinished.connect(self._on_worker_agent_process_finished)
-        self._bridge.terminalOutput.connect(self._on_terminal_output)
+        self._bridge.workerTerminalOutput.connect(self._tool_router.on_worker_terminal_output)
+        self._bridge.workerAgentProcessStarted.connect(self._tool_router.on_worker_agent_process_started)
+        self._bridge.workerAgentProcessOutput.connect(self._tool_router.on_worker_agent_process_output)
+        self._bridge.workerAgentProcessFinished.connect(self._tool_router.on_worker_agent_process_finished)
+        self._bridge.terminalOutput.connect(self._tool_router.on_terminal_output)
         # Backend-owned canonical WorkflowState snapshots.
         self._bridge.workflowStateChanged.connect(self._on_workflow_state_changed)
 
@@ -296,53 +298,6 @@ class WorkerEventHandler(QObject):
             return
         self._playground.append_content(text)
 
-    # ---- worker tool call slots ------------------------------------------------
-
-    def _on_worker_tool_call_start(
-        self, tool_call_id: str, worker_tool_id: str, name: str
-    ) -> None:
-        """Forward tool call start to playground."""
-
-        self._playground.add_tool_call(worker_tool_id, name, parent_tool_id=tool_call_id)
-        # Tool-level state transitions (editing, validating) are now owned by
-        # the backend _DispatchProxy via WorkflowState.absorb_worker_tool_result.
-        # No speculation here.
-
-    def _on_worker_tool_args(
-        self, tool_call_id: str, worker_tool_id: str, fragment: str
-    ) -> None:
-        """Forward tool call args delta to playground."""
-
-        self._playground.append_tool_args(worker_tool_id, fragment)
-
-    def _on_worker_tool_result(
-        self,
-        parent_tool_id: str,
-        worker_tool_id: str,
-        name: str,
-        ok: bool,
-        result: str,
-        extras: dict,
-    ) -> None:
-        """Forward tool result to playground."""
-
-        self._playground.set_tool_result(worker_tool_id, ok, result)
-        # Tool-result-level state absorption (editing, validating, changed_files)
-        # is now owned by the backend _DispatchProxy. No mutation here.
-
-    def _on_worker_diff_decided(
-        self,
-        parent_tool_id: str,
-        worker_tool_id: str,
-        decision: str,
-        rel_path: str,
-        old: str,
-        new: str,
-        is_new_file: bool,
-    ) -> None:
-        """Forward diff decision to playground."""
-
-        self._playground.show_code_diff(worker_tool_id, rel_path, old, new, decision)
 
     def _on_worker_api_error(self, tool_call_id: str, status: int, message: str) -> None:
         """Forward API error to playground with a formatted title."""
@@ -406,35 +361,3 @@ class WorkerEventHandler(QObject):
         )
         self._playground.update_todo_list(tasks, tool_call_id)
 
-    def _on_worker_terminal_output(
-        self, parent_tool_id: str, worker_tool_id: str, text: str
-    ) -> None:
-        """Route terminal output (worker mode) to the playground."""
-
-        self._playground.append_terminal_output(worker_tool_id, text)
-
-    def _on_worker_agent_process_started(
-        self, parent_tool_id: str, process_id: str, label: str, command: str
-    ) -> None:
-        """Route CLI backend process start to the playground terminal."""
-
-        self._playground.start_terminal_process(process_id, command)
-
-    def _on_worker_agent_process_output(
-        self, parent_tool_id: str, process_id: str, text: str
-    ) -> None:
-        """Route CLI backend process output to the playground terminal."""
-
-        self._playground.append_terminal_output(process_id, text)
-
-    def _on_worker_agent_process_finished(
-        self, parent_tool_id: str, process_id: str, exit_code: int
-    ) -> None:
-        """Route CLI backend process completion to the playground terminal."""
-
-        self._playground.finish_terminal_process(process_id, exit_code)
-
-    def _on_terminal_output(self, tool_call_id: str, text: str) -> None:
-        """Route terminal output (single mode) to the chat view."""
-
-        self._chat.append_terminal_output(tool_call_id, text)
