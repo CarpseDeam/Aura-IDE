@@ -25,6 +25,8 @@ class MainWindowUpdateController(QObject):
 
     def check_for_updates(self) -> None:
         """Run a background update check in a worker thread."""
+        if self._thread is not None:
+            return
         self._worker = UpdateWorker("check")
         self._thread = QThread(self)
         self._worker.moveToThread(self._thread)
@@ -33,9 +35,15 @@ class MainWindowUpdateController(QObject):
         self._worker.finished.connect(self._thread.quit)
         self._worker.finished.connect(self._worker.deleteLater)
         self._thread.finished.connect(self._thread.deleteLater)
+        self._thread.finished.connect(self._clear_worker)
         self._thread.start()
 
     def _on_background_update_finished(self, status: UpdateStatus) -> None:
         """Handle the update worker result."""
         if status.state == "behind":
             self._toolbar.set_update_available(True)
+
+    def _clear_worker(self) -> None:
+        """Clear thread and worker references after finish."""
+        self._thread = None
+        self._worker = None
