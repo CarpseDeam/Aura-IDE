@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from dataclasses import replace
 from typing import Any
 
 from aura.conversation.dispatch import (
@@ -35,6 +36,7 @@ from aura.conversation.dispatch_plan import (
     request_for_step,
 )
 from aura.conversation.dispatch_todo_manifest import todo_tasks_from_plan
+from aura.conversation.verification_progress import fingerprint_failures
 from aura.conversation.worker_outcome import WorkerOutcomeStatus
 
 RunWorkerStep = Callable[[str, WorkerDispatchRequest, Any], WorkerDispatchResult]
@@ -45,6 +47,9 @@ RunWorkerStep = Callable[[str, WorkerDispatchRequest, Any], WorkerDispatchResult
 #   workerFinished → (tool_call_id: str, ok: bool, summary: str, needs_followup: bool, status: str)
 _EmitStarted = Callable[[str], None]
 _EmitFinished = Callable[[str, bool, str, bool, str], None]
+
+MAX_WORKER_STEP_ATTEMPTS = 3
+NO_PROGRESS_FINGERPRINT_THRESHOLD = 2
 
 
 class DispatchSession:
@@ -255,7 +260,57 @@ class DispatchSession:
 
     def _run_one_step(self, step: WorkerStepSpec) -> WorkerDispatchResult:
         step_request = request_for_step(self.plan, step, self.original_request)
-        return self._run_worker_step(self.tool_call_id, step_request, self._pending)
+        attempts: list[dict[str, Any]] = []
+        fingerprint_counts: dict[str, int] = {}
+        modified_files: list[str] = []
+
+        for attempt_number in range(1, MAX_WORKER_STEP_ATTEMPTS + 1):
+            request = _request_with_attempt_context(
+                step_request,
+                attempts=attempts,
+                attempt_number=attempt_number,
+            )
+            result = self._run_worker_step(self.tool_call_id, request, self._pending)
+            modified_files = _dedupe([*modified_files, *result.modified_files])
+            result = _with_persistence_metadata(
+                result,
+                attempt_number=attempt_number,
+                max_attempts=MAX_WORKER_STEP_ATTEMPTS,
+                attempts=attempts,
+                modified_files=modified_files,
+            )
+
+            if result.ok or not _worker_step_failure_is_recoverable(result):
+                return result
+
+            attempt = _attempt_record(attempt_number, result)
+            attempts.append(attempt)
+            fingerprint = str(attempt["fingerprint"])
+            fingerprint_counts[fingerprint] = fingerprint_counts.get(fingerprint, 0) + 1
+
+            if fingerprint_counts[fingerprint] >= NO_PROGRESS_FINGERPRINT_THRESHOLD:
+                return _terminal_persistence_result(
+                    result,
+                    reason="worker_step_no_progress",
+                    attempt_number=attempt_number,
+                    max_attempts=MAX_WORKER_STEP_ATTEMPTS,
+                    attempts=attempts,
+                    modified_files=modified_files,
+                    fingerprint=fingerprint,
+                )
+
+            if attempt_number >= MAX_WORKER_STEP_ATTEMPTS:
+                return _terminal_persistence_result(
+                    result,
+                    reason="worker_step_attempt_budget_exhausted",
+                    attempt_number=attempt_number,
+                    max_attempts=MAX_WORKER_STEP_ATTEMPTS,
+                    attempts=attempts,
+                    modified_files=modified_files,
+                    fingerprint=fingerprint,
+                )
+
+        return result
 
     # ------------------------------------------------------------------
     # Aggregation
@@ -400,6 +455,256 @@ def _step_result_is_true_blocker(worker_result: WorkerDispatchResult) -> bool:
         or extras.get("dispatch_internal_error")
         or worker_result.mismatch is not None
     )
+
+
+def _worker_step_failure_is_recoverable(result: WorkerDispatchResult) -> bool:
+    if result.cancelled or result.phase_boundary:
+        return False
+    status = str(result.status or "")
+    if status in {
+        WorkerOutcomeStatus.approval_rejected.value,
+        WorkerOutcomeStatus.cancelled.value,
+    }:
+        return False
+
+    extras = result.extras if isinstance(result.extras, dict) else {}
+    if any(
+        extras.get(key)
+        for key in (
+            "user_visible_blocker",
+            "user_only_blocker",
+            "terminal_environment_blocker",
+            "worker_internal_error",
+            "dispatch_internal_error",
+            "environment_setup_blockers",
+        )
+    ):
+        return False
+
+    if status in {
+        WorkerOutcomeStatus.validation_failed.value,
+        WorkerOutcomeStatus.edit_mechanics_blocked.value,
+    }:
+        return True
+
+    if result.recoverable or result.needs_followup:
+        return True
+
+    failure_class = str(extras.get("failure_class") or "")
+    if failure_class in {
+        "harness_no_progress",
+        "worker_zero_work_no_progress",
+        "worker_flow_zero_work_no_progress",
+    }:
+        return True
+    if extras.get("harness_no_progress"):
+        return True
+    if extras.get("validation_not_run"):
+        return True
+    if extras.get("validation_results"):
+        return True
+    if extras.get("verification_progress_stop"):
+        return True
+    if extras.get("not_applied_writes") or extras.get("unrecovered_not_applied_writes"):
+        return True
+    return False
+
+
+def _request_with_attempt_context(
+    request: WorkerDispatchRequest,
+    *,
+    attempts: list[dict[str, Any]],
+    attempt_number: int,
+) -> WorkerDispatchRequest:
+    if attempt_number <= 1 or not attempts:
+        return request
+
+    context = _failure_context_stanza(attempts[-1], attempt_number=attempt_number)
+    return replace(
+        request,
+        spec=_append_stanza(request.spec, context),
+        risk_notes=[
+            *request.risk_notes,
+            "Worker persistence retry: use the prior failure context; do not repeat identical edit/tool arguments.",
+        ],
+    )
+
+
+def _failure_context_stanza(
+    attempt: dict[str, Any],
+    *,
+    attempt_number: int,
+) -> str:
+    parts = [
+        "",
+        "Worker Persistence Context",
+        f"This is attempt {attempt_number} for the same bounded step.",
+        "The previous attempt failed. Treat this as an observation, not a handoff.",
+        "Do not retry identical edit or validation arguments unless the previous failure context has been addressed.",
+        "",
+        f"Previous attempt: {attempt.get('attempt')}",
+        f"Previous status: {attempt.get('status') or 'unknown'}",
+        f"Previous summary: {attempt.get('summary') or '(none)'}",
+    ]
+    validation = str(attempt.get("validation") or "").strip()
+    if validation:
+        parts.extend(["Previous validation:", validation[:4000]])
+    errors = attempt.get("errors")
+    if isinstance(errors, list) and errors:
+        parts.append("Previous errors:")
+        parts.extend(f"- {str(error)[:500]}" for error in errors[:5])
+    caveats = attempt.get("caveats")
+    if isinstance(caveats, list) and caveats:
+        parts.append("Previous caveats:")
+        parts.extend(f"- {str(caveat)[:500]}" for caveat in caveats[:5])
+    return "\n".join(parts)
+
+
+def _append_stanza(text: str, stanza: str) -> str:
+    base = str(text or "").rstrip()
+    if not base:
+        return stanza.strip()
+    return f"{base}\n\n{stanza.strip()}"
+
+
+def _attempt_record(attempt_number: int, result: WorkerDispatchResult) -> dict[str, Any]:
+    extras = result.extras if isinstance(result.extras, dict) else {}
+    errors = extras.get("errors") if isinstance(extras.get("errors"), list) else []
+    caveats = extras.get("caveats") if isinstance(extras.get("caveats"), list) else []
+    failure_text = _failure_text(result)
+    return {
+        "attempt": attempt_number,
+        "status": result.status,
+        "summary": result.summary,
+        "validation": result.validation or "",
+        "errors": [str(error) for error in errors[:5]],
+        "caveats": [str(caveat) for caveat in caveats[:5]],
+        "fingerprint": _fingerprint_key(failure_text),
+    }
+
+
+def _failure_text(result: WorkerDispatchResult) -> str:
+    extras = result.extras if isinstance(result.extras, dict) else {}
+    parts = [
+        f"status={result.status or ''}",
+        f"summary={result.summary or ''}",
+        f"validation={result.validation or ''}",
+    ]
+    for key in (
+        "errors",
+        "caveats",
+        "validation_results",
+        "validation_command_issues",
+        "not_applied_writes",
+        "unrecovered_not_applied_writes",
+        "recoverable_write_failures",
+        "harness_no_progress",
+        "failure_class",
+    ):
+        value = extras.get(key)
+        if value:
+            parts.append(f"{key}={value}")
+    return "\n".join(parts)
+
+
+def _fingerprint_key(text: str) -> str:
+    return "|".join(sorted(fingerprint_failures(text)))
+
+
+def _with_persistence_metadata(
+    result: WorkerDispatchResult,
+    *,
+    attempt_number: int,
+    max_attempts: int,
+    attempts: list[dict[str, Any]],
+    modified_files: list[str],
+) -> WorkerDispatchResult:
+    extras = dict(result.extras if isinstance(result.extras, dict) else {})
+    extras["worker_persistence"] = {
+        "attempt": attempt_number,
+        "max_attempts": max_attempts,
+        "prior_attempts": list(attempts),
+    }
+    return replace(
+        result,
+        modified_files=_dedupe([*modified_files, *result.modified_files]),
+        extras=extras,
+    )
+
+
+def _terminal_persistence_result(
+    result: WorkerDispatchResult,
+    *,
+    reason: str,
+    attempt_number: int,
+    max_attempts: int,
+    attempts: list[dict[str, Any]],
+    modified_files: list[str],
+    fingerprint: str,
+) -> WorkerDispatchResult:
+    extras = dict(result.extras if isinstance(result.extras, dict) else {})
+    extras["worker_persistence"] = {
+        "terminal": True,
+        "reason": reason,
+        "attempts": attempt_number,
+        "max_attempts": max_attempts,
+        "no_progress_threshold": NO_PROGRESS_FINGERPRINT_THRESHOLD,
+        "fingerprint": fingerprint,
+        "attempt_history": list(attempts),
+    }
+    summary = _terminal_persistence_summary(
+        result,
+        reason=reason,
+        attempt_number=attempt_number,
+        attempts=attempts,
+        modified_files=modified_files,
+    )
+    return replace(
+        result,
+        ok=False,
+        recoverable=False,
+        needs_followup=False,
+        phase_boundary=False,
+        status=WorkerOutcomeStatus.harness_error.value,
+        summary=summary,
+        modified_files=_dedupe([*modified_files, *result.modified_files]),
+        extras=extras,
+    )
+
+
+def _terminal_persistence_summary(
+    result: WorkerDispatchResult,
+    *,
+    reason: str,
+    attempt_number: int,
+    attempts: list[dict[str, Any]],
+    modified_files: list[str],
+) -> str:
+    reason_text = (
+        "same failure repeated without progress"
+        if reason == "worker_step_no_progress"
+        else "attempt budget exhausted"
+    )
+    lines = [
+        result.summary.strip() or "Worker could not complete this step.",
+        "",
+        (
+            "Worker persistence stopped this step after "
+            f"{attempt_number} attempt(s): {reason_text}."
+        ),
+    ]
+    if modified_files:
+        lines.append("Files changed during attempts: " + ", ".join(modified_files))
+    if attempts:
+        lines.append("Attempt history:")
+        for attempt in attempts:
+            status = attempt.get("status") or "unknown"
+            summary = str(attempt.get("summary") or "").strip()
+            if len(summary) > 220:
+                summary = summary[:217] + "..."
+            lines.append(f"- Attempt {attempt.get('attempt')}: {status} - {summary}")
+    lines.append("This is a terminal harness receipt, not a request for user input.")
+    return "\n".join(lines)
 
 
 def _collect_modified_files(step_results: list[StepResult]) -> list[str]:

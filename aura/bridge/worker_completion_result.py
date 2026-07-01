@@ -130,7 +130,7 @@ class WorkerCompletionAssembly:
             phase_boundary=self.outcome["phase_boundary"],
             followup_reason=(
                 str(self.relay.phase_boundary_info.get("reason"))
-                if self.relay.phase_boundary_info
+                if _is_true_phase_boundary(self.relay.phase_boundary_info)
                 else None
             ),
             recoverable=self.outcome["recoverable"],
@@ -496,7 +496,7 @@ def _classify_worker_completion(
     write_failures = completion["write_failures"]
     is_implementation = completion["is_implementation"]
 
-    phase_boundary = relay.phase_boundary_info is not None
+    phase_boundary = _is_true_phase_boundary(relay.phase_boundary_info)
     mismatch = WorkerMismatch.from_dict(continuation.get("mismatch"))
     has_planner_resolution_mismatch = mismatch is not None
 
@@ -716,15 +716,17 @@ def _build_worker_result_payload(
         "validation_not_run": validation_not_run,
         "recoverable": recoverable,
         "needs_followup": needs_followup,
-        "phase_boundary": relay.phase_boundary_info or {},
+        "phase_boundary": relay.phase_boundary_info if phase_boundary else {},
         "task_shape": task_shape_summary,
         "context_gearbox": context_gearbox,
         "limit": (
             relay.phase_boundary_info
-            if relay.phase_boundary_info and relay.phase_boundary_info.get("limit_reached")
+            if phase_boundary and relay.phase_boundary_info and relay.phase_boundary_info.get("limit_reached")
             else {}
         ),
     }
+    if relay.phase_boundary_info and not phase_boundary:
+        extras["verification_progress_stop"] = dict(relay.phase_boundary_info)
     if isinstance(task_shape_ms, (int, float)):
         extras["task_shape_ms"] = task_shape_ms
 
@@ -753,7 +755,7 @@ def _build_worker_result_payload(
             "zero_work_recovery_attempted": False,
             "last_steering_message": "",
             "internal_recovery_steer_count": len(internal_recovery_steers),
-            "phase_boundary": relay.phase_boundary_info or {},
+            "phase_boundary": relay.phase_boundary_info if phase_boundary else {},
             "errors": list(result_errors),
         }
 
@@ -880,6 +882,18 @@ def _terminal_failure_status(
     if has_recoverable_edit_blocker:
         return WorkerOutcomeStatus.edit_mechanics_blocked.value
     return WorkerOutcomeStatus.harness_error.value
+
+
+def _is_true_phase_boundary(info: dict[str, Any] | None) -> bool:
+    if not isinstance(info, dict):
+        return False
+    reason = str(info.get("reason") or "")
+    if reason in {
+        "verification_churn_budget_exceeded",
+        "verification_not_converging",
+    }:
+        return False
+    return bool(info)
 
 
 def _last_assistant_content(history: History) -> str:

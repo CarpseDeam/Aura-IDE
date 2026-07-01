@@ -18,7 +18,7 @@ _TRACEBACK_LINE_RE = re.compile(r":\d+:")
 class VerificationProgressTracker:
     """Detect validation runs that keep failing across worker edits."""
 
-    def __init__(self, *, threshold: int = 3, churn_threshold: int = 6) -> None:
+    def __init__(self, *, threshold: int = 2, churn_threshold: int = 6) -> None:
         self.threshold = threshold
         self.churn_threshold = churn_threshold
         self._failures: dict[str, tuple[frozenset[str], int]] = {}
@@ -63,8 +63,8 @@ class VerificationProgressTracker:
                     "Verification churn budget exceeded: validation failed "
                     f"{churn_count} times for `{key}` without reaching green. "
                     "Stop calling tools and report completed work, current blocker, "
-                    "latest failing items, and what changed across attempts so the "
-                    "planner can choose a narrower repair or different approach: "
+                    "latest failing items, and what changed across attempts in a "
+                    "terminal receipt: "
                     f"{_format_items(items)}."
                 ),
                 "verification_churn": {
@@ -85,7 +85,7 @@ class VerificationProgressTracker:
                 "Verification is not converging: the same validation failures "
                 f"repeated {count} times for `{key}`. Stop calling tools and "
                 "report completed work, blockers, and these stuck failing items "
-                f"so the planner can adjust the approach: {_format_items(items)}."
+                f"in a terminal receipt: {_format_items(items)}."
             ),
             "verification_stall": {
                 "fingerprint": items,
