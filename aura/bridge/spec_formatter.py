@@ -121,7 +121,7 @@ def _format_spec_as_user_message(task: WorkerTaskSpec | WorkerDispatchRequest) -
         "- Do not hide failure behind success-looking output.",
         "- Do not satisfy acceptance with placeholder behavior.",
         "- If a requested responsibility does not belong in a listed file, inspect and choose the smallest correct neighboring module, or report the mismatch.",
-        "- Use update_todo_list for broad or risky work; small localized tasks may proceed directly after reading.",
+
         "- Use patch_file for existing-file edits after reading the file or target range.",
         "- Use write_file only for new files or intentional full-file replacement.",
         "- Use delete_file for intentional file removals; do not use terminal rm/del as the primary deletion path.",

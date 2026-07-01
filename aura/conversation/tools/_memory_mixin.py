@@ -13,22 +13,6 @@ from aura.memory_db import ProjectMemoryDB
 class MemoryHandlersMixin:
     """Handlers for project memory and todo-list tools."""
 
-    def _handle_update_todo_list(self, args, approval_cb, reject_all) -> ToolExecResult:
-        tasks = args.get("tasks", [])
-        if not isinstance(tasks, list):
-            return ToolExecResult(ok=False, payload={"ok": False, "error": "tasks must be an array"})
-        for t in tasks:
-            if not isinstance(t, dict):
-                return ToolExecResult(ok=False, payload={"ok": False, "error": "each task must be an object"})
-            if "description" not in t or "status" not in t:
-                return ToolExecResult(ok=False, payload={"ok": False, "error": "each task must have description and status"})
-            if t["status"] not in ("pending", "active", "done"):
-                return ToolExecResult(ok=False, payload={"ok": False, "error": f"invalid status: {t['status']}"})
-        return ToolExecResult(
-            ok=True,
-            payload={"ok": True, "message": "TODO list updated", "tasks": tasks},
-            extras={"is_todo_update": True, "tasks": tasks},
-        )
 
     def _handle_search_project_memory(self, args, approval_cb, reject_all) -> ToolExecResult:
         """Handle search_project_memory tool call."""

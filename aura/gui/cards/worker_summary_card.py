@@ -20,7 +20,7 @@ from aura.gui.theme import BG_ALT, BG_RAISED, DANGER, FG, FG_DIM, FG_MUTED, SUCC
 
 # Known non-user-facing caveats to filter out
 _FILTERED_CAVEATS: frozenset[str] = frozenset([
-    "Broad/multi-file task did not use update_todo_list — consider a visible plan next time.",
+
 ])
 
 

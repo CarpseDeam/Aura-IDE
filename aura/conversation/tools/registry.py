@@ -181,7 +181,7 @@ TOOL_HANDLERS["git_stash_show"] = ToolRegistry._handle_git_stash_show
 TOOL_HANDLERS["write_file"] = ToolRegistry._handle_write_file
 TOOL_HANDLERS["delete_file"] = ToolRegistry._handle_delete_file
 TOOL_HANDLERS["patch_file"] = ToolRegistry._handle_patch_file
-TOOL_HANDLERS["update_todo_list"] = ToolRegistry._handle_update_todo_list
+
 TOOL_HANDLERS["search_project_memory"] = ToolRegistry._handle_search_project_memory
 TOOL_HANDLERS["save_to_project_memory"] = ToolRegistry._handle_save_to_project_memory
 TOOL_HANDLERS["run_diagnostic_command"] = ToolRegistry._handle_run_diagnostic_command

@@ -1098,34 +1098,6 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
     },
 ]
 
-WORKER_TODO_TOOL_DEF: dict[str, Any] = {
-    "type": "function",
-    "function": {
-        "name": "update_todo_list",
-        "description": (
-            "Update the worker's pinned TODO list. Call this before making file changes "
-            "to establish your execution plan, and update as task statuses change. "
-            "The list is displayed prominently to the user."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "tasks": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "description": {"type": "string", "description": "Short description of the task."},
-                            "status": {"type": "string", "enum": ["pending", "active", "done"]},
-                        },
-                        "required": ["description", "status"],
-                    },
-                }
-            },
-            "required": ["tasks"],
-        },
-    },
-}
 
 PROJECT_MEMORY_TOOL_DEFS: list[dict[str, Any]] = [
     {

@@ -19,7 +19,7 @@ from aura.conversation.tools._schemas import (
     RUN_AND_WATCH_TOOL_DEF,
     SUMMON_DRONE_TOOL_DEF,
     TERMINAL_TOOL_DEF,
-    WORKER_TODO_TOOL_DEF,
+
     WORKSPACE_SNAPSHOT_TOOL_DEF,
     WRITE_TOOL_DEFS,
 )
@@ -96,7 +96,7 @@ class ToolCatalog:
             tools = (
                 list(READ_TOOL_DEFS)
                 + worker_write_tools
-                + [dict(WORKER_TODO_TOOL_DEF)]
+
                 + [dict(TERMINAL_TOOL_DEF)]
                 + [dict(RUN_AND_WATCH_TOOL_DEF)]
                 + list(GIT_TOOL_DEFS)
