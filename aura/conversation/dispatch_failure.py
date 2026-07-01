@@ -34,7 +34,10 @@ def classify_failed_worker_dispatch(
                            constraint on the next attempt. Empty when nothing
                            specific is extractable.
     """
-    if _is_quiet_internal_campaign_result(result):
+    if (
+        _is_quiet_internal_campaign_result(result)
+        and not _failed_dispatch_allows_planner_continuation(result)
+    ):
         return {"counts_as_attempt": False, "blocker_reason": "", "failure_constraint": ""}
     if _is_worker_internal_error(result):
         return {"counts_as_attempt": False, "blocker_reason": "internal", "failure_constraint": ""}
@@ -143,6 +146,34 @@ def _compute_failure_constraint(result: WorkerDispatchResult) -> str:
             "Revise the plan to address quality requirements before retry."
         )
 
+    if (
+        extras.get("internal_campaign_continuation")
+        or extras.get("campaign_recovery_classification")
+        or extras.get("dispatch_session")
+    ):
+        blocked_step_id = str(extras.get("blocked_step_id") or "").strip()
+        if blocked_step_id:
+            return (
+                "CONSTRAINT FOR NEXT ATTEMPT: Previous campaign step "
+                f"{blocked_step_id} paused for planner revision. "
+                "Revise the plan before retrying."
+            )
+
+        classification = str(
+            extras.get("campaign_recovery_classification") or ""
+        ).strip()
+        if classification:
+            return (
+                "CONSTRAINT FOR NEXT ATTEMPT: Previous campaign step paused "
+                f"for planner revision after {classification}. "
+                "Revise the plan before retrying."
+            )
+
+        return (
+            "CONSTRAINT FOR NEXT ATTEMPT: Previous campaign step paused for "
+            "planner revision. Revise the plan before retrying."
+        )
+
     return ""
 
 
@@ -180,8 +211,11 @@ def _is_quiet_internal_campaign_result(result: WorkerDispatchResult) -> bool:
     return bool(
         result.extras.get("internal_campaign_continuation")
         and result.extras.get("suppress_user_followup_card")
+        and not result.cancelled
         and not result.extras.get("user_visible_blocker")
         and not result.extras.get("user_only_blocker")
+        and not result.extras.get("terminal_environment_blocker")
+        and result.status not in {"approval_rejected", "cancelled"}
     )
 
 

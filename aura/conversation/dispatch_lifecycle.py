@@ -158,11 +158,7 @@ def is_internal_dispatch_continuation(
     """
     ex, meta = _normalise_source(source, extras, blocker_reason=blocker_reason, **overrides)
 
-    # ── 1. Explicit handoff ───────────────────────────────────────────
-    if ex.get("internal_planner_handoff"):
-        return True
-
-    # ── 2. Terminal exclusions — these are NEVER internal ─────────────
+    # ── 1. Terminal exclusions — these are NEVER internal ─────────────
     if meta.get("cancelled"):
         return False
     if (blocker_reason or "") in _TERMINAL_BLOCKER_REASONS:
@@ -171,6 +167,10 @@ def is_internal_dispatch_continuation(
         return False
     if meta.get("status") in _TERMINAL_STATUSES:
         return False
+
+    # ── 2. Explicit handoff ───────────────────────────────────────────
+    if ex.get("internal_planner_handoff"):
+        return True
 
     # ── 3. Internal campaign continuation ─────────────────────────────
     if ex.get("internal_campaign_continuation") and ex.get("suppress_user_followup_card"):
