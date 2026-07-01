@@ -271,7 +271,11 @@ class DispatchSession:
                 attempt_number=attempt_number,
             )
             result = self._run_worker_step(self.tool_call_id, request, self._pending)
-            modified_files = _dedupe([*modified_files, *result.modified_files])
+            modified_files = _dedupe([
+                *modified_files,
+                *result.modified_files,
+                *_applied_write_paths(result),
+            ])
             result = _with_persistence_metadata(
                 result,
                 attempt_number=attempt_number,
@@ -282,6 +286,15 @@ class DispatchSession:
 
             if result.ok or not _worker_step_failure_is_recoverable(result):
                 return result
+
+            if _step_has_file_progress(result):
+                return _partial_progress_persistence_result(
+                    result,
+                    attempt_number=attempt_number,
+                    max_attempts=MAX_WORKER_STEP_ATTEMPTS,
+                    attempts=attempts,
+                    modified_files=modified_files,
+                )
 
             attempt = _attempt_record(attempt_number, result)
             attempts.append(attempt)
@@ -428,13 +441,28 @@ def _step_made_file_progress(
 ) -> bool:
     if worker_result.modified_files:
         return True
+    return bool(_applied_write_paths_from_extras(extras))
+
+
+def _step_has_file_progress(result: WorkerDispatchResult) -> bool:
+    extras = result.extras if isinstance(result.extras, dict) else {}
+    return _step_made_file_progress(result, extras)
+
+
+def _applied_write_paths(result: WorkerDispatchResult) -> list[str]:
+    extras = result.extras if isinstance(result.extras, dict) else {}
+    return _applied_write_paths_from_extras(extras)
+
+
+def _applied_write_paths_from_extras(extras: dict[str, Any]) -> list[str]:
     writes = extras.get("writes")
     if isinstance(writes, list):
-        return any(
-            _write_record_is_explicit_file_progress(write)
+        return _dedupe([
+            str(write.get("path") or "")
             for write in writes
-        )
-    return False
+            if _write_record_is_explicit_file_progress(write)
+        ])
+    return []
 
 
 def _step_result_is_true_blocker(worker_result: WorkerDispatchResult) -> bool:
@@ -625,6 +653,31 @@ def _with_persistence_metadata(
         "max_attempts": max_attempts,
         "prior_attempts": list(attempts),
     }
+    return replace(
+        result,
+        modified_files=_dedupe([*modified_files, *result.modified_files]),
+        extras=extras,
+    )
+
+
+def _partial_progress_persistence_result(
+    result: WorkerDispatchResult,
+    *,
+    attempt_number: int,
+    max_attempts: int,
+    attempts: list[dict[str, Any]],
+    modified_files: list[str],
+) -> WorkerDispatchResult:
+    extras = dict(result.extras if isinstance(result.extras, dict) else {})
+    extras["worker_persistence"] = {
+        "stopped_retries": True,
+        "reason": "partial_progress_continuation",
+        "attempt": attempt_number,
+        "max_attempts": max_attempts,
+        "prior_attempts": list(attempts),
+        "modified_files": list(modified_files),
+    }
+    extras["partial_progress_continuation"] = True
     return replace(
         result,
         modified_files=_dedupe([*modified_files, *result.modified_files]),

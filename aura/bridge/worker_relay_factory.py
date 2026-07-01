@@ -21,6 +21,7 @@ def create_worker_relay(
     worker_model: str,
     dispatch_proxy: Any,
     todo_relay_callback: Callable[[str, list], None],
+    suppress_todo_updates: bool = False,
 ) -> WorkerEventRelay:
     """Construct a WorkerEventRelay and wire every signal to *dispatch_proxy*.
 
@@ -32,6 +33,7 @@ def create_worker_relay(
     relay = WorkerEventRelay(
         approval_proxy=approval_proxy,
         worker_model=worker_model,
+        suppress_todo_updates=suppress_todo_updates,
     )
     # Stream events
     relay.reasoningDelta.connect(dispatch_proxy.workerReasoningDelta)

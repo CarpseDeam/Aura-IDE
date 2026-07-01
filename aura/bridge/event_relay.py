@@ -131,10 +131,17 @@ class WorkerEventRelay(QObject):
     agentProcessOutput = Signal(str, str, str)  # parent_tool_id, process_id, text
     agentProcessFinished = Signal(str, str, object)  # parent_tool_id, process_id, exit_code
 
-    def __init__(self, approval_proxy: Any, worker_model: str = "", parent: QObject | None = None) -> None:
+    def __init__(
+        self,
+        approval_proxy: Any,
+        worker_model: str = "",
+        parent: QObject | None = None,
+        suppress_todo_updates: bool = False,
+    ) -> None:
         super().__init__(parent)
         self._approval_proxy = approval_proxy
         self._worker_model = worker_model
+        self._suppress_todo_updates = suppress_todo_updates
         self.index_to_id: dict[int, str] = {}
         self.write_results: list[dict[str, Any]] = []
         self.not_applied_writes: list[dict[str, Any]] = []
@@ -616,6 +623,8 @@ class WorkerEventRelay(QObject):
             self._progress_todo_status[key] = status
 
     def _emit_todo_progress(self, tool_call_id: str, *, force: bool = False) -> None:
+        if self._suppress_todo_updates:
+            return
         tasks = self._combined_todo_tasks()
         signature = todo_signature(tasks)
         if not force and signature == self._last_emitted_todo_signature:

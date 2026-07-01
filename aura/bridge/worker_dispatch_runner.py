@@ -15,6 +15,11 @@ from aura.bridge.worker_completion_result import prepare_worker_completion_resul
 from aura.bridge.worker_recording import _record_worker_completion
 from aura.bridge.worker_relay_factory import create_worker_relay
 from aura.bridge.worker_report import _format_spec_as_user_message
+from aura.bridge.worker_scratch_cleanup import (
+    _cleanup_new_validation_scratch_files,
+    _request_allows_root_check_files,
+    _validation_scratch_files,
+)
 from aura.bridge.worker_validation_selector_bridge import (
     _WorkerValidationSelectorBridge,
     refresh_worker_validation_selector_plan,
@@ -58,6 +63,7 @@ class WorkerDispatchRunner:
         todo_relay_callback: Callable[[str, list], None],
         records: list[WorkerDispatchRecord],
         result_metadata: dict[str, dict[str, Any]],
+        suppress_worker_todo_updates: bool = False,
         set_tier1_context: Callable[[str], None] | None = None,
     ) -> None:
         self._approval_proxy = approval_proxy
@@ -70,6 +76,7 @@ class WorkerDispatchRunner:
         self._max_tool_rounds = max_tool_rounds
         self._dispatch_proxy = dispatch_proxy
         self._todo_relay_callback = todo_relay_callback
+        self._suppress_worker_todo_updates = suppress_worker_todo_updates
         self._records = records
         self._result_metadata = result_metadata
         self._set_tier1_context = set_tier1_context
@@ -229,6 +236,7 @@ class WorkerDispatchRunner:
             worker_model=str(self._worker_model),
             dispatch_proxy=self._dispatch_proxy,
             todo_relay_callback=self._todo_relay_callback,
+            suppress_todo_updates=self._suppress_worker_todo_updates,
         )
 
     def _execute_worker_conversation(
@@ -333,56 +341,3 @@ class WorkerDispatchRunner:
                 ]
             return cleaned_scratch_files
         return []
-
-
-def _validation_scratch_files(root: Path | None) -> set[Path]:
-    if root is None:
-        return set()
-
-    files = set(_root_check_files(root))
-    tmp_dir = root / ".aura" / "tmp"
-    if tmp_dir.is_dir():
-        for pattern in ("dump*.py", "_check*.py", "check*.py", "tmp*.py", "_tmp*.py", "_inspect*.py", "inspect*.py", "diagnostic*.py", "_diagnostic*.py"):
-            files.update(path for path in tmp_dir.glob(pattern) if path.is_file())
-    return files
-
-
-def _cleanup_new_validation_scratch_files(root: Path, before: set[Path]) -> list[str]:
-    cleaned: list[str] = []
-    for path in _validation_scratch_files(root):
-        if path in before:
-            continue
-        try:
-            rel = path.relative_to(root).as_posix()
-        except ValueError:
-            continue
-        try:
-            path.unlink()
-        except OSError:
-            continue
-        cleaned.append(rel)
-    return sorted(cleaned)
-
-
-def _root_check_files(root: Path | None) -> set[Path]:
-    if root is None:
-        return set()
-    try:
-        files: set[Path] = set()
-        for pattern in ("_check*.py", "_tmp*.py", "tmp_*.py", "_inspect*.py", "inspect*.py", "diagnostic*.py", "_diagnostic*.py"):
-            files.update(path.resolve() for path in root.glob(pattern) if path.is_file())
-        return files
-    except OSError:
-        return set()
-
-
-def _request_allows_root_check_files(req: WorkerDispatchRequest) -> bool:
-    text = " ".join([req.goal, req.spec, req.acceptance, req.summary]).lower()
-    if "_check" in text or "_tmp" in text or "tmp_" in text:
-        return True
-    if "_inspect" in text or "_diagnostic" in text:
-        return True
-    return any(
-        Path(path).name.startswith(("_check", "_tmp", "tmp_", "_inspect", "inspect", "diagnostic", "_diagnostic"))
-        for path in req.files
-    )

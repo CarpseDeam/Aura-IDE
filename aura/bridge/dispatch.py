@@ -547,10 +547,16 @@ class _DispatchProxy(QObject):
         aggregate campaign result is recorded once after session.run()
         returns.
         """
-        runner = self._create_worker_dispatch_runner()
+        runner = self._create_worker_dispatch_runner(
+            suppress_worker_todo_updates=True,
+        )
         return runner.run_worker(tool_call_id, req, pending, record_replayable=False)
 
-    def _create_worker_dispatch_runner(self) -> WorkerDispatchRunner:
+    def _create_worker_dispatch_runner(
+        self,
+        *,
+        suppress_worker_todo_updates: bool = False,
+    ) -> WorkerDispatchRunner:
         return WorkerDispatchRunner(
             approval_proxy=self._approval_proxy,
             registry_factory=self._registry_factory,
@@ -562,6 +568,7 @@ class _DispatchProxy(QObject):
             max_tool_rounds=self._max_tool_rounds,
             dispatch_proxy=self,
             todo_relay_callback=self._relay_worker_todo_update,
+            suppress_worker_todo_updates=suppress_worker_todo_updates,
             records=self._records,
             result_metadata=self._result_metadata,
             set_tier1_context=self.set_tier1_context,
