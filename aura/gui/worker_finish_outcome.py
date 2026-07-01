@@ -87,6 +87,21 @@ def classify_worker_finish(
     )
 
 
+def classify_finish_outcome(
+    *,
+    ok: bool,
+    needs_followup: bool,
+    status: str | None,
+    metadata: dict,
+) -> WorkerFinishOutcome:
+    return classify_worker_finish(
+        ok=ok,
+        needs_followup=needs_followup,
+        status=status,
+        metadata=metadata,
+    )
+
+
 def _scrub_internal_success_extras(extras: dict) -> dict:
     """Drop retry-control flags that must not survive onto a later success."""
     if not isinstance(extras, dict):

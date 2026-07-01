@@ -159,7 +159,7 @@ class WorkflowState:
                 if not reason and write_outcome:
                     reason = write_outcome
                 state = state.with_status(
-                    WorkflowStatus.blocked,
+                    WorkflowStatus.planner_resolving,
                     blocker_reason=reason,
                     follow_up_required=True,
                 )
@@ -179,7 +179,7 @@ class WorkflowState:
                 )
                 if state.validation_status in {ValidationStatus.failed, ValidationStatus.mixed}:
                     state = state.with_status(
-                        WorkflowStatus.blocked,
+                        WorkflowStatus.validating,
                         blocker_reason=f"Validation failed: {command}",
                         follow_up_required=True,
                     )
@@ -196,7 +196,7 @@ class WorkflowState:
                 )
                 if state.validation_status in {ValidationStatus.failed, ValidationStatus.mixed}:
                     state = state.with_status(
-                        WorkflowStatus.blocked,
+                        WorkflowStatus.validating,
                         blocker_reason=f"Validation failed: {command}",
                         follow_up_required=True,
                     )
@@ -318,7 +318,7 @@ def _pending_action(status: WorkflowStatus, needs_followup: bool) -> str:
     if status == WorkflowStatus.planner_resolving:
         return "Continuing internally."
     if status == WorkflowStatus.failed_retryable:
-        return "Review the blocker, then continue or revise the plan."
+        return "Continuing internally."
     if status == WorkflowStatus.failed_nonrecoverable:
         return "Review the failure before retrying."
     if needs_followup:
