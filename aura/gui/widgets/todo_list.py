@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 from PySide6.QtCore import QEasingCurve, Qt, QVariantAnimation
 from PySide6.QtGui import QPixmap
@@ -8,6 +9,8 @@ from PySide6.QtWidgets import QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabe
 from aura.config import media_path
 from aura.gui.theme import BG, BORDER, FG_DIM, SUCCESS, WARN
 from aura.todo_state import normalize_todo_tasks, todo_signature
+
+_log = logging.getLogger(__name__)
 
 
 class TodoListWidget(QFrame):
@@ -70,7 +73,17 @@ class TodoListWidget(QFrame):
         # 1. Signature caching to avoid redundant widget updates
         sig = todo_signature(normalized)
         if self._last_sig == sig:
+            _log.debug(
+                "TodoListWidget.update_tasks sig unchanged — skipped (task_count=%d)",
+                len(normalized),
+            )
             return
+        _log.debug(
+            "TodoListWidget.update_tasks task_count=%d sig=%s -> %s",
+            len(normalized),
+            [(d, s) for d, s in self._last_sig],
+            [(d, s) for d, s in sig],
+        )
         self._last_sig = sig
 
         if not normalized:

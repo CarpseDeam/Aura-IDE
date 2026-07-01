@@ -155,7 +155,13 @@ class _DispatchProxy(QObject):
         """Emit dispatchTodoListUpdated from the active WorkflowState."""
         if self._active_workflow is None or self._active_workflow.tool_call_id != tool_call_id:
             return
-        self.dispatchTodoListUpdated.emit(tool_call_id, self._active_workflow.todo_snapshot())
+        tasks = self._active_workflow.todo_snapshot()
+        logging.debug(
+            "_emit_workflow_todo_snapshot tool_call_id=%s task_count=%d statuses=%s",
+            tool_call_id, len(tasks),
+            [t.get("status", "?") for t in tasks if isinstance(t, dict)],
+        )
+        self.dispatchTodoListUpdated.emit(tool_call_id, tasks)
 
     def _relay_worker_todo_update(self, tool_call_id: str, tasks: list) -> None:
         """Relay Worker-local TODO updates only outside canonical dispatch.
@@ -165,7 +171,15 @@ class _DispatchProxy(QObject):
         TODO rail is derived from WorkflowState step state.
         """
         if self._has_canonical_steps(tool_call_id):
+            logging.debug(
+                "_relay_worker_todo_update tool_call_id=%s suppressed (canonical steps active)",
+                tool_call_id,
+            )
             return
+        logging.debug(
+            "_relay_worker_todo_update tool_call_id=%s task_count=%d",
+            tool_call_id, len(tasks),
+        )
         self.workerTodoListUpdated.emit(tool_call_id, tasks)
 
     # ---- planner-thread side ---------------------------------------------
@@ -400,25 +414,57 @@ class _DispatchProxy(QObject):
         self, tool_call_id: str, objectives: list[dict[str, Any]]
     ) -> None:
         if self._active_workflow is None or self._active_workflow.tool_call_id != tool_call_id:
+            logging.debug(
+                "_workflow_begin_steps tool_call_id=%s skipped — workflow mismatch",
+                tool_call_id,
+            )
             return
+        logging.debug(
+            "_workflow_begin_steps tool_call_id=%s objective_count=%d",
+            tool_call_id, len(objectives),
+        )
         self._set_workflow_state(self._active_workflow.with_steps(objectives))
         self._emit_workflow_todo_snapshot(tool_call_id)
 
     def _workflow_set_active_step(self, tool_call_id: str, step_id: str) -> None:
         if self._active_workflow is None or self._active_workflow.tool_call_id != tool_call_id:
+            logging.debug(
+                "_workflow_set_active_step tool_call_id=%s step_id=%s skipped — workflow mismatch",
+                tool_call_id, step_id,
+            )
             return
+        logging.debug(
+            "_workflow_set_active_step tool_call_id=%s step_id=%s",
+            tool_call_id, step_id,
+        )
         self._set_workflow_state(self._active_workflow.set_active_step(step_id))
         self._emit_workflow_todo_snapshot(tool_call_id)
 
     def _workflow_mark_step_done(self, tool_call_id: str, step_id: str) -> None:
         if self._active_workflow is None or self._active_workflow.tool_call_id != tool_call_id:
+            logging.debug(
+                "_workflow_mark_step_done tool_call_id=%s step_id=%s skipped — workflow mismatch",
+                tool_call_id, step_id,
+            )
             return
+        logging.debug(
+            "_workflow_mark_step_done tool_call_id=%s step_id=%s",
+            tool_call_id, step_id,
+        )
         self._set_workflow_state(self._active_workflow.mark_step_done(step_id))
         self._emit_workflow_todo_snapshot(tool_call_id)
 
     def _workflow_finish_steps(self, tool_call_id: str) -> None:
         if self._active_workflow is None or self._active_workflow.tool_call_id != tool_call_id:
+            logging.debug(
+                "_workflow_finish_steps tool_call_id=%s skipped — workflow mismatch",
+                tool_call_id,
+            )
             return
+        logging.debug(
+            "_workflow_finish_steps tool_call_id=%s",
+            tool_call_id,
+        )
         self._set_workflow_state(self._active_workflow.finish_steps())
         self._emit_workflow_todo_snapshot(tool_call_id)
 

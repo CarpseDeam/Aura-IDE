@@ -126,6 +126,11 @@ class WorkerEventHandler(QObject):
 
     def _on_workflow_state_changed(self, state: WorkflowState) -> None:
         """Store and forward a canonical WorkflowState snapshot from the backend."""
+        _log.debug(
+            "_on_workflow_state_changed tool_call_id=%s status=%s step_count=%d active_step=%s",
+            state.tool_call_id, state.status.value if state.status else "?",
+            len(state.steps), state.active_step_id,
+        )
         self._active_workflow = state
         # Forward to the spec card for rendering.
         card = self._dispatch_ui.get_spec_card(state.tool_call_id)
@@ -377,7 +382,15 @@ class WorkerEventHandler(QObject):
         is owned by DispatchSession and arrives via _on_dispatch_todo_list_updated.
         """
         if self._dispatch_ui.is_canonical_dispatch(tool_call_id):
+            _log.debug(
+                "_on_worker_todo_list_updated tool_call_id=%s suppressed (canonical dispatch)",
+                tool_call_id,
+            )
             return
+        _log.debug(
+            "_on_worker_todo_list_updated tool_call_id=%s task_count=%d",
+            tool_call_id, len(tasks),
+        )
         self._playground.update_todo_list(tasks, tool_call_id)
 
     def _on_dispatch_todo_list_updated(self, tool_call_id: str, tasks: list) -> None:
@@ -386,6 +399,11 @@ class WorkerEventHandler(QObject):
         Always forwarded — canonical snapshots are the sole source of truth
         for the visible dispatch TODO rail.
         """
+        _log.debug(
+            "_on_dispatch_todo_list_updated tool_call_id=%s task_count=%d statuses=%s",
+            tool_call_id, len(tasks),
+            [t.get("status", "?") for t in tasks if isinstance(t, dict)],
+        )
         self._playground.update_todo_list(tasks, tool_call_id)
 
     def _on_worker_terminal_output(

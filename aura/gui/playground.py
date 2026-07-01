@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
+
+_log = logging.getLogger(__name__)
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -294,11 +297,33 @@ class AuraPlayground(QWidget):
         update_todo_list tool calls, log boundaries, and progress-TODO
         emissions are suppressed during the dispatch campaign.
         """
+        _log.debug(
+            "begin_canonical_dispatch_tracking tool_call_id=%s step_count=%d",
+            tool_call_id, len(steps),
+        )
         self._canonical_active.add(tool_call_id)
 
     def render_dispatch_todo_list(self, tool_call_id: str) -> None:
-        """Replay the last cached canonical TODO snapshot for a tool_call_id."""
-        self._info_hub.update_todo_list(self._dispatch_rail.replay(tool_call_id))
+        """Replay the last cached canonical TODO snapshot for a tool_call_id.
+
+        Only replays when the cache already holds a snapshot.  If the cache is
+        empty the first dispatchTodoListUpdated signal has not arrived yet and
+        replaying [] would clear the visible TODO rail.  The arriving signal
+        will seed the cache and render the correct tasks.
+        """
+        snapshot = self._dispatch_rail.replay(tool_call_id)
+        if not snapshot:
+            _log.debug(
+                "render_dispatch_todo_list tool_call_id=%s cache empty — skipping replay",
+                tool_call_id,
+            )
+            return
+        _log.debug(
+            "render_dispatch_todo_list tool_call_id=%s replaying %d tasks statuses=%s",
+            tool_call_id, len(snapshot),
+            [t.get("status", "?") for t in snapshot if isinstance(t, dict)],
+        )
+        self._info_hub.update_todo_list(snapshot)
 
     def append_reasoning(self, text: str):
         self._info_hub.append_reasoning(text)
@@ -396,7 +421,13 @@ class AuraPlayground(QWidget):
         Accepts both canonical DispatchSession snapshots and Worker-local
         TODO updates (the latter only when no canonical dispatch is active).
         """
-        self._info_hub.update_todo_list(self._dispatch_rail.set(tool_call_id, tasks))
+        snapshot = self._dispatch_rail.set(tool_call_id, tasks)
+        _log.debug(
+            "update_todo_list tool_call_id=%s task_count=%d statuses=%s",
+            tool_call_id, len(snapshot),
+            [t.get("status", "?") for t in snapshot if isinstance(t, dict)],
+        )
+        self._info_hub.update_todo_list(snapshot)
 
     def finish_todo_list(self, tool_call_id: str, *, ok: bool, needs_followup: bool) -> None:
         """Replay the last canonical snapshot and clear canonical tracking.

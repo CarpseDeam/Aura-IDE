@@ -20,6 +20,7 @@ TODO rail:
 """
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from typing import Any
 
@@ -115,21 +116,38 @@ class DispatchSession:
                 "description": description,
                 "files": list(step.files),
             })
+        logging.debug(
+            "DispatchSession._begin_canonical_todos tool_call_id=%s step_count=%d ids=%s",
+            self.tool_call_id, len(objectives),
+            [o["id"] for o in objectives],
+        )
         self._begin_steps(self.tool_call_id, objectives)
 
     def _canonical_set_active(self, step_id: str) -> None:
         if self._set_active_step is None:
             return
+        logging.debug(
+            "DispatchSession._canonical_set_active tool_call_id=%s step_id=%s",
+            self.tool_call_id, step_id,
+        )
         self._set_active_step(self.tool_call_id, step_id)
 
     def _canonical_mark_done(self, step_id: str) -> None:
         if self._mark_step_done is None:
             return
+        logging.debug(
+            "DispatchSession._canonical_mark_done tool_call_id=%s step_id=%s",
+            self.tool_call_id, step_id,
+        )
         self._mark_step_done(self.tool_call_id, step_id)
 
     def _canonical_finish(self) -> None:
         if self._finish_steps is None:
             return
+        logging.debug(
+            "DispatchSession._canonical_finish tool_call_id=%s",
+            self.tool_call_id,
+        )
         self._finish_steps(self.tool_call_id)
 
     # ------------------------------------------------------------------
