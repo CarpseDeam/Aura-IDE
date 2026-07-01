@@ -226,7 +226,7 @@ def _finish_worker_critic_planner_resolution(
         or "Please revise the worker handoff so the implementation target is achievable and unambiguous."
     )
     payload = {
-        "status": "needs_planner_resolution",
+        "status": "harness_error",
         "summary": "Critic found the worker diff needs planner resolution.",
         "mismatch": {
             "kind": WorkerMismatch.CONFLICTING_SPEC,

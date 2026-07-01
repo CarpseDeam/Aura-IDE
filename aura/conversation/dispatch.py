@@ -294,12 +294,24 @@ def infer_outcome_status(result: WorkerDispatchResult) -> str:
     if result.cancelled:
         return WorkerOutcomeStatus.cancelled.value
     if result.mismatch is not None:
-        return WorkerOutcomeStatus.needs_planner_resolution.value
+        return WorkerOutcomeStatus.harness_error.value
     if result.extras.get("planner_resolution_needed"):
-        return WorkerOutcomeStatus.needs_planner_resolution.value
+        return WorkerOutcomeStatus.harness_error.value
     if not result.ok:
         extras = result.extras if isinstance(result.extras, dict) else {}
         errors = extras.get("errors") if isinstance(extras.get("errors"), list) else []
+        validation_results = (
+            extras.get("validation_results")
+            if isinstance(extras.get("validation_results"), list)
+            else []
+        )
+        if any(
+            isinstance(item, dict) and item.get("exit_code") not in (0, None)
+            for item in validation_results
+        ) or result.validation:
+            return WorkerOutcomeStatus.validation_failed.value
+        if extras.get("unrecovered_not_applied_writes") or extras.get("not_applied_writes"):
+            return WorkerOutcomeStatus.edit_mechanics_blocked.value
         internal_signals = [
             extras.get("worker_internal_error"),
             extras.get("internal_error"),
@@ -309,9 +321,9 @@ def infer_outcome_status(result: WorkerDispatchResult) -> str:
         ]
         if any(_looks_like_harness_error(signal) for signal in internal_signals):
             return WorkerOutcomeStatus.harness_error.value
-        return WorkerOutcomeStatus.needs_followup.value
+        return WorkerOutcomeStatus.harness_error.value
     if result.needs_followup:
-        return WorkerOutcomeStatus.needs_followup.value
+        return WorkerOutcomeStatus.completed_with_caveats.value
     return WorkerOutcomeStatus.completed.value
 
 

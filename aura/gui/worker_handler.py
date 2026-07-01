@@ -160,14 +160,6 @@ class WorkerEventHandler(QObject):
 
         file_list = list(files)
         step_list = list(steps or [])
-        if self._dispatch_ui.consume_internal_continuation(tool_call_id):
-            # Keep playground-side canonical tracking in sync so that
-            # tool-call noise suppression stays active for the continuation.
-            self._playground.begin_canonical_dispatch_tracking(tool_call_id, step_list)
-            # Backend _DispatchProxy owns the plan_ready/dispatched snapshot.
-            self._bridge.user_dispatched(tool_call_id, goal, file_list, spec, acceptance, summary)
-            self._chat.scroll_to_bottom(force=True)
-            return
 
         if self._bridge.auto_dispatch:
             _log.info(
@@ -258,11 +250,8 @@ class WorkerEventHandler(QObject):
         # in request_dispatch after DispatchSession.run().  No finish() call here.
         if outcome.should_clear_dispatch_card:
             self._dispatch_ui.clear_active_spec_card(tool_call_id)
-        if outcome.should_set_pending_internal_retool:
-            self._dispatch_ui.mark_pending_internal_retool(tool_call_id)
         self._dispatch_ui.discard_canonical_dispatch(tool_call_id)
-        if not outcome.is_internal:
-            self.worker_running_changed.emit(False)
+        self.worker_running_changed.emit(False)
 
     def _worker_result_metadata(self, tool_call_id: str) -> dict:
         getter = getattr(self._bridge, "worker_result_metadata", None)

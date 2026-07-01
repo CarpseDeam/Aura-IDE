@@ -162,7 +162,7 @@ class DispatchSession:
             result = WorkerDispatchResult(
                 ok=False,
                 summary="Aura stopped before completion.",
-                status=WorkerOutcomeStatus.needs_followup.value,
+                status=WorkerOutcomeStatus.harness_error.value,
                 needs_followup=True,
                 recoverable=True,
                 extras={
@@ -211,7 +211,7 @@ class DispatchSession:
             result = WorkerDispatchResult(
                 ok=False,
                 summary="Aura stopped before completion.",
-                status=WorkerOutcomeStatus.needs_followup.value,
+                status=WorkerOutcomeStatus.harness_error.value,
                 needs_followup=True,
                 recoverable=True,
                 extras={
@@ -388,7 +388,6 @@ def _step_result_is_true_blocker(worker_result: WorkerDispatchResult) -> bool:
         WorkerOutcomeStatus.approval_rejected.value,
         WorkerOutcomeStatus.cancelled.value,
         WorkerOutcomeStatus.harness_error.value,
-        WorkerOutcomeStatus.needs_planner_resolution.value,
     }:
         return True
 

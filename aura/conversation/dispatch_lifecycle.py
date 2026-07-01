@@ -1,10 +1,4 @@
-"""Canonical dispatch lifecycle predicates.
-
-Every layer (Manager, ChatView, PlanWriterCard, WorkerHandler,
-completion_guard, dispatch_failure) routes through these pure functions
-so internal planner handbacks, user-visible blockers, and terminal stops
-are decided consistently.
-"""
+"""Canonical dispatch lifecycle predicates."""
 
 from __future__ import annotations
 
@@ -139,75 +133,13 @@ def _normalise_source(
 # ---------------------------------------------------------------------------
 
 
-def is_internal_dispatch_continuation(
-    source: Any = None,
-    *,
-    extras: dict[str, Any] | None = None,
-    blocker_reason: str = "",
-    **overrides: Any,
-) -> bool:
-    """Return True when a dispatch result should trigger an internal Planner
-    handback — no user-facing failure, no terminal stop.
-
-    Calling convention (any of these work)::
-
-        is_internal_dispatch_continuation(result)           # WorkerDispatchResult
-        is_internal_dispatch_continuation(payload_dict)     # JSON dict payload
-        is_internal_dispatch_continuation(extras=ex)        # bare extras dict
-        is_internal_dispatch_continuation(payload, extras=ex, blocker_reason="limit")
-    """
-    ex, meta = _normalise_source(source, extras, blocker_reason=blocker_reason, **overrides)
-
-    # ── 1. Terminal exclusions — these are NEVER internal ─────────────
-    if meta.get("cancelled"):
-        return False
-    if (blocker_reason or "") in _TERMINAL_BLOCKER_REASONS:
-        return False
-    if any(ex.get(flag) for flag in _USER_VISIBLE_EXTRAS):
-        return False
-    if meta.get("status") in _TERMINAL_STATUSES:
-        return False
-    if (
-        meta.get("ok")
-        and not meta.get("needs_followup")
-        and meta.get("status") != "needs_planner_resolution"
-    ):
-        return False
-
-    # ── 2. Explicit handoff ───────────────────────────────────────────
-    if ex.get("internal_planner_handoff"):
-        return True
-
-    # ── 3. Failure constraint + recoverable signal ────────────────────
-    failure_constraint: str = str(meta.get("failure_constraint", "") or "")
-    if failure_constraint:
-        recoverable_signal = (
-            meta.get("recoverable")
-            or ex.get("planner_resolution_needed")
-            or ex.get("dispatch_spec_rejected")
-            or meta.get("dispatch_spec_rejected")
-            or meta.get("mismatch") is not None
-            or meta.get("status") == "needs_planner_resolution"
-        )
-        if recoverable_signal:
-            return True
-
-    return False
-
-
 def is_user_visible_dispatch_blocker(
     source: Any = None,
     *,
     extras: dict[str, Any] | None = None,
     **overrides: Any,
 ) -> bool:
-    """Return True when a dispatch failure should be **surfaced to the user**
-    as a visible blocker card or error.
-
-    This is the complement of the internal Planner handback predicate for
-    non-success results: if the dispatch didn't succeed and the harness
-    can't absorb it internally, the user should see it.
-    """
+    """Return True when a dispatch failure should be surfaced to the user."""
     ex, meta = _normalise_source(source, extras, **overrides)
 
     # Explicit user-visible / environment flags
@@ -224,10 +156,8 @@ def is_user_visible_dispatch_blocker(
     if meta.get("status") == "approval_rejected":
         return True
 
-    # Not ok + not internal → user should see the blocker
-    if not meta.get("ok", True) and not is_internal_dispatch_continuation(
-        source, extras=ex
-    ):
+    # Not ok surfaces.
+    if not meta.get("ok", True):
         return True
 
     return False
@@ -240,20 +170,7 @@ def is_terminal_dispatch_blocker(
     blocker_reason: str = "",
     **overrides: Any,
 ) -> bool:
-    """Return True when the Planner loop **must stop** after this dispatch
-    result — no retry, no internal restart, no follow-up.
-
-    Internal Planner handbacks are **non-terminal** by definition. True
-    terminal blockers are cancelled dispatches, repeat/limit guards,
-    user-visible blockers, approval rejections, hard harness errors
-    without recovery, and explicit success completions.
-    """
-    # Internal Planner handback → *never* terminal
-    if is_internal_dispatch_continuation(
-        source, extras=extras, blocker_reason=blocker_reason, **overrides
-    ):
-        return False
-
+    """Return True when the Planner loop must stop after this dispatch result."""
     ex, meta = _normalise_source(source, extras, blocker_reason=blocker_reason, **overrides)
 
     # Explicit terminal signals
@@ -279,8 +196,8 @@ def is_terminal_dispatch_blocker(
         if not meta.get("recoverable") and not meta.get("needs_followup") and not meta.get("phase_boundary"):
             return True
 
-    # Recoverable / needs_followup / phase_boundary → non-terminal
-    if meta.get("recoverable") or meta.get("needs_followup") or meta.get("phase_boundary"):
+    # Phase-boundary remains non-terminal.
+    if meta.get("phase_boundary"):
         return False
 
     # Default: not ok + no recovery → terminal
@@ -302,14 +219,8 @@ def classify_dispatch_result(
     blocker_reason: str = "",
     **overrides: Any,
 ) -> dict[str, bool]:
-    """Return a classification dict with all three predicates at once.
-
-    Keys: ``internal``, ``user_visible``, ``terminal``.
-    """
+    """Return a classification dict with user-visible and terminal predicates."""
     return {
-        "internal": is_internal_dispatch_continuation(
-            source, extras=extras, blocker_reason=blocker_reason, **overrides
-        ),
         "user_visible": is_user_visible_dispatch_blocker(
             source, extras=extras, **overrides
         ),
@@ -320,7 +231,6 @@ def classify_dispatch_result(
 
 
 __all__ = [
-    "is_internal_dispatch_continuation",
     "is_user_visible_dispatch_blocker",
     "is_terminal_dispatch_blocker",
     "classify_dispatch_result",

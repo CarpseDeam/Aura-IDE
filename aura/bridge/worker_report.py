@@ -214,9 +214,7 @@ def _build_worker_summary(
             elif errors[0].startswith("Validation command failed"):
                 status = "validation_failed"
             else:
-                status = "needs_followup"
-        elif continuation.get("status") == "needs_followup":
-            status = "needs_followup"
+                status = "harness_error"
         elif caveats:
             status = "completed_with_caveats"
         else:
@@ -225,8 +223,6 @@ def _build_worker_summary(
     STATUS_LABELS = {
         "completed": "Completed",
         "completed_with_caveats": "Completed",
-        "needs_followup": "Needs attention",
-        "needs_planner_resolution": "Needs attention",
         "validation_failed": "Needs attention",
         "edit_mechanics_blocked": "Needs attention",
         "scope_mismatch": "Needs attention",
@@ -237,8 +233,6 @@ def _build_worker_summary(
     ACTION_LABELS = {
         "completed": "Ready for review",
         "completed_with_caveats": "Review details below",
-        "needs_followup": "Review details below",
-        "needs_planner_resolution": "Review details below",
         "validation_failed": "Review details below",
         "edit_mechanics_blocked": "Review details below",
         "scope_mismatch": "Review details below",

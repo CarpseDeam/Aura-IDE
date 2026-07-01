@@ -17,10 +17,7 @@ from aura.conversation.completion_guard import (
     worker_dispatch_is_terminal,
 )
 from aura.conversation.dispatch import DispatchCallback, WorkerDispatchResult
-from aura.conversation.dispatch_failure import (
-    classify_failed_worker_dispatch,
-    is_internal_planner_handback,
-)
+from aura.conversation.dispatch_failure import classify_failed_worker_dispatch
 from aura.conversation.edit_orchestrator import EditRetryLedger
 from aura.conversation.history import History
 from aura.conversation.loop_detection import LoopDetector
@@ -64,7 +61,6 @@ _READ_ONLY_TOOLS = {
 class ToolRoundOutcome:
     action: str
     flow_steering_suppressed: bool = False
-    enter_silent_preflight: bool = False
 
 
 class ToolRoundRunner:
@@ -215,7 +211,6 @@ class ToolRoundRunner:
 
         completed_dispatch_for_final = False
         completed_tool_result_for_final = False
-        planner_internal_handoff = False
         planner_stale_read_files: list[str] = []
         for task in tasks:
             if cancel_event.is_set():
@@ -271,8 +266,6 @@ class ToolRoundRunner:
                 planner_constraint = str(res.get("planner_internal_constraint", "") or "")
                 if planner_constraint:
                     self._history.append_internal_user_text(planner_constraint)
-                if res.get("internal_planner_handoff"):
-                    planner_internal_handoff = True
 
         self._planner_refresh.handle_post_write_notices(
             self._history, planner_stale_read_files
@@ -284,9 +277,6 @@ class ToolRoundRunner:
                 self._history.append_user_text(str(state.worker_phase_boundary_info["message"]))
             state.worker_needs_final_report = True
             return ToolRoundOutcome(action="continue")
-
-        if planner_internal_handoff:
-            return ToolRoundOutcome(action="continue", enter_silent_preflight=True)
 
         if completed_dispatch_for_final:
             return ToolRoundOutcome(action="return")
@@ -655,24 +645,11 @@ class ToolRoundRunner:
                 on_event=on_event,
             )
             action = classify_failed_worker_dispatch(
-                args=args,
                 result=result,
-                failures=state.worker_dispatch_failures,
-                failed_attempts=state.worker_redispatches,
             )
-            if action["counts_as_attempt"]:
-                state.worker_redispatches += 1
             blocker_reason = action["blocker_reason"]
             failure_constraint = action.get("failure_constraint", "")
             if blocker_reason or failure_constraint:
-                internal_handoff = self._dispatch_result_internal_handoff(
-                    tool_call_id=tool_call_id,
-                    result=result,
-                    blocker_reason=blocker_reason,
-                    failure_constraint=failure_constraint,
-                )
-                if internal_handoff is not None:
-                    return internal_handoff
                 return {
                     "id": tool_call_id,
                     "blocker": True,
@@ -700,29 +677,11 @@ class ToolRoundRunner:
                 terminal_dispatch = True
             else:
                 action = classify_failed_worker_dispatch(
-                    args=args,
                     result=result,
-                    failures=state.worker_dispatch_failures,
-                    failed_attempts=state.worker_redispatches,
                 )
-                if action["counts_as_attempt"]:
-                    state.worker_redispatches += 1
                 blocker_reason = action["blocker_reason"]
                 failure_constraint = action.get("failure_constraint", "")
                 if blocker_reason or failure_constraint:
-                    internal_handoff = self._dispatch_result_internal_handoff(
-                        tool_call_id=tool_call_id,
-                        result=result,
-                        blocker_reason=blocker_reason,
-                        failure_constraint=failure_constraint,
-                    )
-                    if internal_handoff is not None:
-                        internal_handoff["planner_stale_read_files"] = (
-                            list(result.modified_files)
-                            if result.modified_files
-                            else []
-                        )
-                        return internal_handoff
                     return {
                         "id": tool_call_id,
                         "blocker": True,
@@ -744,64 +703,6 @@ class ToolRoundRunner:
                 list(result.modified_files) if result and result.modified_files else []
             ),
             "terminal_dispatch": terminal_dispatch,
-        }
-
-    def _dispatch_result_internal_handoff(
-        self,
-        *,
-        tool_call_id: str,
-        result: WorkerDispatchResult,
-        blocker_reason: str,
-        failure_constraint: str,
-    ) -> dict[str, Any] | None:
-        payload_dict = result.to_tool_payload()
-        if failure_constraint:
-            extras = payload_dict.setdefault("extras", {})
-            if isinstance(extras, dict):
-                extras.setdefault("failure_constraint", failure_constraint)
-
-        if not is_internal_planner_handback(
-            payload_dict,
-            blocker_reason=blocker_reason,
-        ):
-            return None
-
-        payload = json.dumps(payload_dict, ensure_ascii=False)
-        event_extras = {
-            "dispatch": True,
-            "cancelled": result.cancelled,
-            "summary": result.summary,
-            "recoverable": result.recoverable,
-            "phase_boundary": result.phase_boundary,
-            "needs_followup": result.needs_followup,
-            "followup_reason": result.followup_reason,
-        }
-        event_extras.update(result.extras)
-        event_extras.update(
-            {
-                "internal_planner_handoff": True,
-                "planner_resolution_needed": True,
-                "user_visible_blocker": False,
-            }
-        )
-        if result.extras.get("dispatch_spec_rejected"):
-            event_extras["dispatch_spec_rejected"] = True
-
-        return {
-            "id": tool_call_id,
-            "result_payload": payload,
-            "event": ToolResult(
-                tool_call_id=tool_call_id,
-                name="dispatch_to_worker",
-                ok=False,
-                result=payload,
-                extras=event_extras,
-            ),
-            "planner_internal_constraint": failure_constraint,
-            "completed_tool_result_for_final": False,
-            "completed_dispatch_for_final": False,
-            "internal_planner_handoff": True,
-            "terminal_dispatch": False,
         }
 
     def _worker_recovery_block(

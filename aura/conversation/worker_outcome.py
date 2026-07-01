@@ -18,12 +18,6 @@ class WorkerOutcomeStatus(str, enum.Enum):
     completed_with_caveats = "completed_with_caveats"
     """Worker finished but attached caveats or non-blocking concerns."""
 
-    needs_followup = "needs_followup"
-    """Worker made partial progress; a follow-up dispatch is needed."""
-
-    needs_planner_resolution = "needs_planner_resolution"
-    """Worker encountered Planner handoff conflicts with repo reality."""
-
     validation_failed = "validation_failed"
     """Worker-produced code failed validation checks."""
 

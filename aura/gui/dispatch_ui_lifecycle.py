@@ -38,7 +38,6 @@ class DispatchUiLifecycle:
         self._wired_spec_cards: set[str] = set()
         self._canonical_dispatch_ids: set[str] = set()
         self._visible_dispatch_card_id: str | None = None
-        self._pending_internal_retool_id: str | None = None
 
     def get_spec_card(self, tool_call_id: str):
         return self._chat.get_spec_card(tool_call_id)
@@ -48,21 +47,6 @@ class DispatchUiLifecycle:
 
     def discard_canonical_dispatch(self, tool_call_id: str) -> None:
         self._canonical_dispatch_ids.discard(tool_call_id)
-
-    def mark_pending_internal_retool(self, tool_call_id: str) -> None:
-        self._pending_internal_retool_id = tool_call_id
-
-    def consume_internal_continuation(self, tool_call_id: str) -> bool:
-        if self._pending_internal_retool_id is None:
-            return False
-        old_id = self._pending_internal_retool_id
-        self._pending_internal_retool_id = None
-        self._chat.remove_spec_card(old_id)
-        self._wired_spec_cards.discard(old_id)
-        self._canonical_dispatch_ids.discard(old_id)
-        self._canonical_dispatch_ids.add(tool_call_id)
-        self._visible_dispatch_card_id = None
-        return True
 
     def begin_visible_dispatch(self, tool_call_id: str) -> None:
         previous_card_id = self._visible_dispatch_card_id

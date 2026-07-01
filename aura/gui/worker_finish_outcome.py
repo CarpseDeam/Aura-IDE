@@ -11,17 +11,12 @@ class WorkerFinishOutcome:
     metadata: dict
     extras: dict
     terminal_success: bool
-    is_internal: bool
     suppress_main_summary: bool
     is_mismatch: bool
 
     @property
     def should_clear_dispatch_card(self) -> bool:
         return True
-
-    @property
-    def should_set_pending_internal_retool(self) -> bool:
-        return self.is_internal
 
     @property
     def should_show_visible_summary(self) -> bool:
@@ -43,20 +38,17 @@ def classify_worker_finish(
     metadata: dict,
 ) -> WorkerFinishOutcome:
     extras = metadata.get("extras") if isinstance(metadata.get("extras"), dict) else {}
-    cancelled = bool(metadata.get("cancelled", False))
-    terminal_success = bool(ok and not needs_followup and status != "needs_planner_resolution")
+    terminal_success = bool(ok and not needs_followup)
     if terminal_success:
         extras = _scrub_internal_success_extras(extras)
         metadata = {**metadata, "extras": extras}
 
-    is_internal = bool(not cancelled and not ok and status == "needs_planner_resolution")
-    suppress_main_summary = is_internal
+    suppress_main_summary = False
     has_mismatch_data = bool(
         extras.get("mismatch_kind")
         or extras.get("mismatch_question")
     )
     is_mismatch = mismatch_card_should_show(
-        is_internal=is_internal,
         suppressed=False,
         has_mismatch_data=has_mismatch_data,
     )
@@ -67,7 +59,6 @@ def classify_worker_finish(
         metadata=metadata,
         extras=extras,
         terminal_success=terminal_success,
-        is_internal=is_internal,
         suppress_main_summary=suppress_main_summary,
         is_mismatch=is_mismatch,
     )

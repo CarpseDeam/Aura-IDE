@@ -45,7 +45,6 @@ def _is_terminal_worker_success(
     return bool(
         payload_ok
         and not needs_followup
-        and status != "needs_planner_resolution"
     )
 
 
@@ -102,8 +101,6 @@ class ChatView(QScrollArea):
         self._mismatch_resolution_cards: dict[str, MismatchResolutionCard] = {}
         self._compact_tools: bool = False
         self._compact_tool_names: dict[str, str] = {}
-        self._suppress_next_dispatch_plan_writer = False
-        self._suppressed_dispatch_tool_ids: set[str] = set()
         self._is_bulk_updating: bool = False
         self._show_empty_hint()
 
@@ -281,8 +278,6 @@ class ChatView(QScrollArea):
         self._controllers.clear()
         self._clear_code_card_routes()
         self._compact_tool_names.clear()
-        self._suppress_next_dispatch_plan_writer = False
-        self._suppressed_dispatch_tool_ids.clear()
         self._auto_follow_bottom = True
         self._last_scroll_max = 0
         self._empty_hint = None
@@ -351,11 +346,6 @@ class ChatView(QScrollArea):
         self._add_card(card)
 
     def add_user(self, text: str, image_b64s: list[str] | None = None) -> None:
-        # Clear any lingering PlanWriterCard suppression from a previous
-        # turn's internal continuation — a new user turn should always
-        # show the planning card for visible dispatches.
-        self._suppress_next_dispatch_plan_writer = False
-
         # Slight right inset on user cards so the conversation rhythm is visible at a glance —
         # not a chat-bubble alignment, just enough to feel like input vs. output.
         wrapper = QWidget(self)
@@ -575,11 +565,6 @@ class ChatView(QScrollArea):
                 controller = ToolStreamController(name, parent=self)
                 self._controllers[tool_call_id] = controller
 
-            if self._suppress_next_dispatch_plan_writer:
-                self._suppress_next_dispatch_plan_writer = False
-                self._suppressed_dispatch_tool_ids.add(tool_call_id)
-                return
-
             ac = self.current_assistant()
 
             # Remove any terminal-state plan cards left from prior retries
@@ -624,24 +609,17 @@ class ChatView(QScrollArea):
         controller = self._controllers.pop(tool_call_id, None)
         if controller:
             if controller.tool_name == "dispatch_to_worker":
-                suppressed_dispatch = tool_call_id in self._suppressed_dispatch_tool_ids
                 summary = ""
                 needs_followup = False
                 status = None
                 dispatch_not_started = False
                 approval_timeout = False
                 cancelled = False
-                recoverable = False
-                _internal_continuation = False
                 try:
                     data = json.loads(result_text)
                     extras = data.get("extras", {})
                     if not isinstance(extras, dict):
                         extras = {}
-                    recoverable = bool(
-                        data.get("recoverable")
-                        or extras.get("recoverable")
-                    )
                     dispatch_not_started = bool(
                         data.get("dispatch_not_started")
                         or data.get("dispatch_spec_rejected")
@@ -655,11 +633,6 @@ class ChatView(QScrollArea):
                         summary = data.get("summary", "")
                         needs_followup = bool(data.get("needs_followup", False))
                         status = data.get("status")
-                        _internal_continuation = bool(
-                            not cancelled
-                            and not ok
-                            and status == "needs_planner_resolution"
-                        )
                     if _is_terminal_worker_success(
                         data,
                         event_ok=ok,
@@ -679,14 +652,8 @@ class ChatView(QScrollArea):
                 except Exception:
                     pass
 
-                # Recoverable failures are planner control-flow — don't show transient failure
-                if not ok and recoverable and not cancelled:
-                    ok = True
                 # Finalize controller FIRST (updates planner/spec UI above)
                 controller.finalize(ok, result_text)
-
-                if suppressed_dispatch:
-                    self._suppressed_dispatch_tool_ids.discard(tool_call_id)
 
                 # THEN update spec card for not-started scenarios (stale/cancelled/expired).
                 # Completed dispatches get one deduped final summary card so
@@ -710,7 +677,6 @@ class ChatView(QScrollArea):
                 if (
                     summary
                     and not dispatch_not_started
-                    and not (needs_followup and recoverable)
                 ):
                     goal = (
                         controller.goal
@@ -724,24 +690,10 @@ class ChatView(QScrollArea):
                         summary,
                         needs_followup=needs_followup,
                         status=status,
-                        is_internal=_internal_continuation,
                     )
 
                 # Close the current assistant turn so the next Planner
                 # continuation starts a fresh card.
-                if _internal_continuation:
-                    # Suppress the next dispatch_to_worker PlanWriterCard:
-                    # the continuation's dispatch is internal and should
-                    # not flash a transient plan card.
-                    self._suppress_next_dispatch_plan_writer = True
-                else:
-                    # Internal continuation scope has ended — any subsequent
-                    # dispatch is user-visible, so ensure the suppression
-                    # flag is cleared (it may have been set by a prior
-                    # continuation whose silent preflight round never
-                    # consumed it via add_tool_call).
-                    self._suppress_next_dispatch_plan_writer = False
-
                 self.close_current_assistant_for_continuation()
 
             else:

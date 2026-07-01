@@ -1,12 +1,4 @@
-"""Canonical view-state labels for dispatch results.
-
-Every GUI component that renders a dispatch outcome label routes through
-the functions in this module so internal continuation never leaks
-user-facing failure, mismatch, or blocker language.
-
-Internal continuations do not show process ceremony.
-Terminal / user-visible cases use compact product labels.
-"""
+"""Canonical view-state labels for dispatch results."""
 
 from __future__ import annotations
 
@@ -25,10 +17,7 @@ def worker_summary_status_label(
     *,
     is_internal: bool = False,
 ) -> tuple[str, str]:
-    """Return ``(label_text, color)`` for a WorkerSummaryCard status header.
-
-    Internal continuations must never show process, mismatch, or blocker labels.
-    """
+    """Return ``(label_text, color)`` for a WorkerSummaryCard status header."""
     from aura.conversation.worker_outcome import WorkerOutcomeStatus
     from aura.gui.theme import DANGER, FG_MUTED, SUCCESS, WARN
 
@@ -41,14 +30,7 @@ def worker_summary_status_label(
             return ("Done", SUCCESS)
         return ("Needs attention", FG_MUTED)
 
-    # ---- non-internal: keep terminal labels honest -----------------------
     if status is not None:
-        # needs_followup is internal Planner continuation machinery.
-        # Never show a scary yellow card for it — resolve contextually
-        # from the summary receipt instead.
-        if status == WorkerOutcomeStatus.needs_followup.value:
-            return _resolve_needs_followup_label(ok, summary, is_internal=False)
-
         mapping = {
             WorkerOutcomeStatus.completed.value: ("Completed", SUCCESS),
             WorkerOutcomeStatus.completed_with_caveats.value: ("Completed", SUCCESS),
@@ -58,7 +40,6 @@ def worker_summary_status_label(
             WorkerOutcomeStatus.approval_rejected.value: ("Failed", DANGER),
             WorkerOutcomeStatus.cancelled.value: ("Cancelled", "#6b7280"),
             WorkerOutcomeStatus.harness_error.value: ("Failed", DANGER),
-            WorkerOutcomeStatus.needs_planner_resolution.value: ("Needs attention", WARN),
         }
         return mapping.get(status, ("Needs attention", FG_MUTED))
 
@@ -105,10 +86,7 @@ def spec_finished_label(
     *,
     is_internal: bool = False,
 ) -> tuple[str, str]:
-    """Return ``(label_text, color)`` for SpecCard.worker_finished().
-
-    Internal continuations must never show process or error ceremony.
-    """
+    """Return ``(label_text, color)`` for SpecCard.worker_finished()."""
     from aura.conversation.worker_outcome import WorkerOutcomeStatus, normalize_outcome_status
     from aura.gui.theme import DANGER, SUCCESS, WARN
 
@@ -127,14 +105,12 @@ def spec_finished_label(
         mapping = {
             WorkerOutcomeStatus.completed.value: ("Completed", SUCCESS),
             WorkerOutcomeStatus.completed_with_caveats.value: ("Completed", SUCCESS),
-            WorkerOutcomeStatus.needs_followup.value: ("Needs attention", WARN),
             WorkerOutcomeStatus.validation_failed.value: ("Needs attention", WARN),
             WorkerOutcomeStatus.edit_mechanics_blocked.value: ("Needs attention", WARN),
             WorkerOutcomeStatus.scope_mismatch.value: ("Needs attention", WARN),
             WorkerOutcomeStatus.approval_rejected.value: ("Failed", DANGER),
             WorkerOutcomeStatus.cancelled.value: ("Cancelled", DANGER),
             WorkerOutcomeStatus.harness_error.value: ("Failed", DANGER),
-            WorkerOutcomeStatus.needs_planner_resolution.value: ("Needs attention", WARN),
         }
         normalized = normalize_outcome_status(status)
         if normalized in mapping:
@@ -170,13 +146,7 @@ def mismatch_card_should_show(
     suppressed: bool = False,
     has_mismatch_data: bool = False,
 ) -> bool:
-    """Return True when a MismatchResolutionCard should appear in the chat.
-
-    Never shown for:
-    - Internal continuations (Planner restart is invisible)
-    - Suppressed follow-up cards
-    - Results without mismatch kind/question data
-    """
+    """Return True when a MismatchResolutionCard should appear in the chat."""
     if is_internal:
         return False
     if suppressed:

@@ -58,7 +58,6 @@ class WorkerFinishPresenter:
                 tool_call_id,
                 kind,
                 question,
-                is_internal=outcome.is_internal,
             )
             self._active_mismatch_card_id = tool_call_id
 
@@ -74,10 +73,7 @@ class WorkerFinishPresenter:
                     status=status,
                 )
         else:
-            # Internal continuation — the next Worker restarts the footer
-            # immediately.  Don't toggle it off just to toggle it back on.
-            if not outcome.is_internal:
-                self._playground.set_worker_running(False)
+            self._playground.set_worker_running(False)
         self._playground.finish_todo_list(
             tool_call_id,
             ok=ok,
@@ -91,7 +87,6 @@ class WorkerFinishPresenter:
                 ok,
                 summary,
                 status=status,
-                is_internal=outcome.is_internal,
             )
         goal = self._worker_summary_goal(tool_call_id, spec_card, active_workflow)
         if outcome.should_show_visible_summary:
@@ -102,7 +97,6 @@ class WorkerFinishPresenter:
                 summary,
                 needs_followup=bool(needs_followup),
                 status=status,
-                is_internal=outcome.is_internal,
             )
         return WorkerFinishPresentation(outcome=outcome)
 

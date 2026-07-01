@@ -307,8 +307,6 @@ def _final_summary_label(
     }:
         return "Completed."
     if needs_followup or normalized in {
-        WorkerOutcomeStatus.needs_followup.value,
-        WorkerOutcomeStatus.needs_planner_resolution.value,
         WorkerOutcomeStatus.validation_failed.value,
         WorkerOutcomeStatus.edit_mechanics_blocked.value,
         WorkerOutcomeStatus.scope_mismatch.value,

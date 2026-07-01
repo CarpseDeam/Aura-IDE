@@ -236,7 +236,6 @@ class HarnessLapBridge(QObject):
                 _SEVERITY = {
                     WorkerOutcomeStatus.completed.value: 0,
                     WorkerOutcomeStatus.completed_with_caveats.value: 1,
-                    WorkerOutcomeStatus.needs_followup.value: 2,
                     WorkerOutcomeStatus.validation_failed.value: 3,
                     WorkerOutcomeStatus.edit_mechanics_blocked.value: 4,
                     WorkerOutcomeStatus.harness_error.value: 5,
@@ -309,7 +308,7 @@ class HarnessLapBridge(QObject):
                                 )
                         elif extras.get("needs_followup"):
                             candidate = (
-                                WorkerOutcomeStatus.needs_followup.value
+                                WorkerOutcomeStatus.harness_error.value
                             )
                             if not worker_errors:
                                 worker_errors.append(

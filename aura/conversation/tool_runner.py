@@ -205,7 +205,7 @@ class ToolRunner:
                     summary="Harness error due to an internal Worker dispatch exception.",
                     needs_followup=True,
                     recoverable=True,
-                    status=WorkerOutcomeStatus.needs_followup.value,
+                    status=WorkerOutcomeStatus.harness_error.value,
                     extras={
                         "worker_internal_error": True,
                         "error_type": type(exc).__name__,

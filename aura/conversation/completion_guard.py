@@ -6,13 +6,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from aura.conversation.dispatch import (
-    WorkerDispatchResult,
-    infer_outcome_status,
-)
-from aura.conversation.dispatch_lifecycle import is_internal_dispatch_continuation
+from aura.conversation.dispatch import WorkerDispatchResult
 from aura.conversation.tool_limits import WRITE_TOOLS
-from aura.conversation.worker_outcome import WorkerOutcomeStatus
 
 COMPLETION_PHRASE_MARKERS = (
     "all set",
@@ -95,59 +90,13 @@ def text_overlap_ratio(left: str, right: str) -> float:
 def worker_dispatch_is_terminal(result: WorkerDispatchResult | None) -> bool:
     """Return True if the Worker dispatch result is terminal — the Planner should not continue.
 
-    Uses WorkerOutcomeStatus rather than duplicating status strings. Falls back
-    to result.ok for unrecognized statuses.
-
-    Internal continuations (campaign handback, planner handoff, recoverable
-    spec-reject) are **non-terminal** — the Planner restarts internally.
+    A dispatch result ends the campaign unless it is a genuine phase-boundary
+    checkpoint.
     """
     if result is None:
         return False
 
-    # Internal continuation is never terminal.
-    if is_internal_dispatch_continuation(result):
-        return False
-
-    extras = result.extras if isinstance(result.extras, dict) else {}
-
-    # Explicit boolean signals always win (fast path).
-    if result.needs_followup:
-        return False
-    if result.recoverable:
-        return False
     if result.phase_boundary:
         return False
 
-    # Cancelled is always terminal.
-    if result.cancelled:
-        return True
-
-    # Use canonical outcome status inference.
-    status = infer_outcome_status(result)
-
-    # Terminal statuses.
-    if status in (
-        WorkerOutcomeStatus.completed.value,
-        WorkerOutcomeStatus.completed_with_caveats.value,
-        WorkerOutcomeStatus.cancelled.value,
-        WorkerOutcomeStatus.approval_rejected.value,
-    ):
-        return True
-
-    # harness_error is terminal when not recoverable/needs_followup/phase_boundary
-    # (those booleans already filtered above).
-    if status == WorkerOutcomeStatus.harness_error.value:
-        return True
-
-    # Non-terminal statuses — these need Planner attention.
-    if status in (
-        WorkerOutcomeStatus.needs_followup.value,
-        WorkerOutcomeStatus.needs_planner_resolution.value,
-        WorkerOutcomeStatus.validation_failed.value,
-        WorkerOutcomeStatus.edit_mechanics_blocked.value,
-        WorkerOutcomeStatus.scope_mismatch.value,
-    ):
-        return False
-
-    # Fallback: rely on result.ok for unknown/unrecognized statuses.
-    return bool(result.ok)
+    return True

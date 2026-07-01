@@ -64,12 +64,6 @@ class _SendState:
     stale_validation_notes: list[str] = field(default_factory=list)
 
     # --- dispatch ---
-    worker_redispatches: int = 0
-    worker_dispatch_failures: dict[str, int] = field(default_factory=dict)
-
-    # --- silent preflight ---
-    silent_preflight: bool = False
-
     # --- edit recovery ---
     edit_failed_shapes: set[str] = field(default_factory=set)
     edit_fallback_required: dict[str, dict[str, Any]] = field(default_factory=dict)

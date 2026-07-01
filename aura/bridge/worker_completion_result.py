@@ -120,14 +120,6 @@ class WorkerCompletionAssembly:
             validation_selector=validation_selector,
         )
 
-        from aura.conversation.worker_handback import annotate_worker_result_extras
-
-        extras = annotate_worker_result_extras(
-            extras,
-            status=self.outcome["status"],
-            structured_failure=self.messages.get("structured_failure"),
-        )
-
         continuation = self.completion["continuation"]
         result = WorkerDispatchResult(
             ok=self.outcome["ok"],
@@ -220,7 +212,7 @@ def _collect_worker_completion_data(
 ) -> dict[str, Any]:
     final_report = _last_assistant_content(worker_history)
     continuation = _parse_continuation_report(final_report)
-    is_partial = bool(continuation.get("status") == "needs_followup" or continuation.get("remaining"))
+    is_partial = bool(continuation.get("remaining"))
     claimed_validation = _final_report_claims_validation(final_report) or bool(continuation.get("validation_text"))
 
     diagnostic_environment_caveats = (
@@ -332,7 +324,7 @@ def _build_worker_completion_messages(
         if structured_failure.get("status") == "needs_planner_resolution":
             if not continuation.get("mismatch"):
                 continuation["mismatch"] = structured_failure.get("mismatch")
-            continuation["status"] = "needs_planner_resolution"
+            continuation["status"] = "harness_error"
             continuation["reason"] = "planner_resolution_needed"
         else:
             result_errors.append(_format_structured_worker_failure(structured_failure))
@@ -506,10 +498,7 @@ def _classify_worker_completion(
 
     phase_boundary = relay.phase_boundary_info is not None
     mismatch = WorkerMismatch.from_dict(continuation.get("mismatch"))
-    has_planner_resolution_mismatch = (
-        mismatch is not None
-        or continuation.get("status") == "needs_planner_resolution"
-    )
+    has_planner_resolution_mismatch = mismatch is not None
 
     has_hard_failure = bool(result_errors)
     structured_failure_class = str(structured_failure.get("failure_class") or "")
@@ -606,7 +595,7 @@ def _classify_worker_completion(
         )
     if has_recoverable_edit_blocker:
         if not summary_continuation.get("status"):
-            summary_continuation["status"] = "needs_followup"
+            summary_continuation["status"] = "edit_mechanics_blocked"
         if result_caveats:
             if not summary_continuation.get("reason"):
                 summary_continuation["reason"] = result_caveats[0]
@@ -614,7 +603,7 @@ def _classify_worker_completion(
         summary_continuation["status"] = "validation_not_run"
         summary_continuation["reason"] = "Files changed but validation did not run."
     if has_diagnostic_environment_blocker and not summary_continuation.get("status"):
-        summary_continuation["status"] = "needs_followup"
+        summary_continuation["status"] = "harness_error"
         summary_continuation["reason"] = diagnostic_environment_caveats[0]
 
     status = _compute_outcome_status(
@@ -815,7 +804,10 @@ def _compute_outcome_status(
         return WorkerOutcomeStatus.approval_rejected.value
     structured_status = str(continuation.get("status") or "")
     if structured_status == "needs_planner_resolution":
-        return WorkerOutcomeStatus.needs_planner_resolution.value
+        return _terminal_failure_status(
+            has_validation_failure=has_validation_failure,
+            has_recoverable_edit_blocker=has_recoverable_edit_blocker,
+        )
     if has_recoverable_edit_blocker or (
         not has_applied_writes
         and any(
@@ -843,15 +835,15 @@ def _compute_outcome_status(
     ):
         return WorkerOutcomeStatus.harness_error.value
     if has_source_inspection_blocker or "source_inspection_command_blocked" in failure_classes:
-        return WorkerOutcomeStatus.needs_followup.value
+        return WorkerOutcomeStatus.harness_error.value
     if has_environment_setup_blocker or any(fc.startswith("project_environment_missing_") for fc in failure_classes):
-        return WorkerOutcomeStatus.needs_followup.value
+        return WorkerOutcomeStatus.harness_error.value
     if has_hard_failure:
         if structured_status == "phased":
-            return WorkerOutcomeStatus.needs_followup.value
-        return WorkerOutcomeStatus.needs_followup.value
+            return WorkerOutcomeStatus.harness_error.value
+        return WorkerOutcomeStatus.harness_error.value
     if has_no_work and is_implementation:
-        return WorkerOutcomeStatus.needs_followup.value
+        return WorkerOutcomeStatus.harness_error.value
     if has_unverified_acceptance:
         validation_never_ran = any(
             "validation did not run" in str(caveat).lower()
@@ -867,12 +859,27 @@ def _compute_outcome_status(
                 return WorkerOutcomeStatus.completed_with_caveats.value
             return WorkerOutcomeStatus.completed.value
         else:
-            return WorkerOutcomeStatus.needs_followup.value
+            return WorkerOutcomeStatus.validation_failed.value
     if ok and result_caveats:
         return WorkerOutcomeStatus.completed_with_caveats.value
     if ok:
         return WorkerOutcomeStatus.completed.value
-    return WorkerOutcomeStatus.needs_followup.value
+    return _terminal_failure_status(
+        has_validation_failure=has_validation_failure,
+        has_recoverable_edit_blocker=has_recoverable_edit_blocker,
+    )
+
+
+def _terminal_failure_status(
+    *,
+    has_validation_failure: bool,
+    has_recoverable_edit_blocker: bool,
+) -> str:
+    if has_validation_failure:
+        return WorkerOutcomeStatus.validation_failed.value
+    if has_recoverable_edit_blocker:
+        return WorkerOutcomeStatus.edit_mechanics_blocked.value
+    return WorkerOutcomeStatus.harness_error.value
 
 
 def _last_assistant_content(history: History) -> str:

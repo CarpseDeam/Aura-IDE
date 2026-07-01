@@ -37,8 +37,6 @@ MAX_TOOL_CALLS_BY_MODE: dict[RegistryMode, int] = {
     "single": 300,
 }
 
-MAX_WORKER_REDISPATCHES_PER_USER_TURN = 8
-
 # Backward-compatible aliases for older imports. Category-specific hard caps are
 # intentionally disabled; ToolLimitState does not enforce these values.
 MAX_CONTEXT_CALLS_PER_PLANNER_TURN: int = 16
@@ -179,7 +177,6 @@ __all__ = [
     "MAX_DISPATCH_CALLS_PER_PLANNER_TURN",
     "MAX_TERMINAL_CALLS_PER_WORKER_PASS",
     "MAX_TOOL_CALLS_BY_MODE",
-    "MAX_WORKER_REDISPATCHES_PER_USER_TURN",
     "MAX_WRITE_CALLS_PER_WORKER_PASS",
     "PLANNER_CONTEXT_TOOLS",
     "RegistryMode",

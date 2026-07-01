@@ -245,16 +245,11 @@ class WorkflowState:
             ok
             and not needs_followup
             and not _not_applied_outcome(write_outcome)
-            and outcome != WorkerOutcomeStatus.needs_planner_resolution.value
         )
         if outcome == WorkerOutcomeStatus.cancelled.value:
             final_status = WorkflowStatus.cancelled
         elif ordinary_success:
             final_status = WorkflowStatus.done
-        elif outcome == WorkerOutcomeStatus.needs_planner_resolution.value or (
-            isinstance(extras, dict) and extras.get("planner_resolution_needed")
-        ):
-            final_status = WorkflowStatus.planner_resolving
         elif outcome in {
             WorkerOutcomeStatus.harness_error.value,
             WorkerOutcomeStatus.approval_rejected.value,

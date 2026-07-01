@@ -9,11 +9,6 @@ from aura.client import (
     ContentDelta,
     Done,
     Event,
-    ReasoningDelta,
-    ToolCallArgsDelta,
-    ToolCallEnd,
-    ToolCallStart,
-    Usage,
 )
 from aura.conversation.planner_stream_hygiene import PlannerStreamHygiene
 from aura.conversation.worker_stream_buffer import WorkerStreamBuffer
@@ -26,8 +21,8 @@ class StreamEventResult:
 
 
 class StreamEventRouter:
-    """Route inbound stream events through hygiene filtering, silent-preflight
-    suppression, and worker-buffer capture before forwarding to the UI.
+    """Route inbound stream events through hygiene filtering and worker-buffer
+    capture before forwarding to the UI.
     """
 
     def __init__(
@@ -43,7 +38,7 @@ class StreamEventRouter:
         self._mode = mode
         self._stream_buffer = stream_buffer
 
-    def process(self, ev: Event, *, silent_preflight: bool = False) -> StreamEventResult:
+    def process(self, ev: Event) -> StreamEventResult:
         # 1. Planner ContentDelta filter
         if self._planner_hygiene is not None and isinstance(ev, ContentDelta):
             filtered_text = self._planner_hygiene.filter_delta(ev.text)
@@ -53,51 +48,29 @@ class StreamEventRouter:
 
         # 2. Planner Done flush/sanitize (elif)
         elif self._planner_hygiene is not None and isinstance(ev, Done):
-            if not silent_preflight:
-                flush_text = self._planner_hygiene.flush()
-                if flush_text:
-                    self._on_event(ContentDelta(text=flush_text))
+            flush_text = self._planner_hygiene.flush()
+            if flush_text:
+                self._on_event(ContentDelta(text=flush_text))
             if isinstance(ev.full_message, dict):
                 content = ev.full_message.get("content")
                 if isinstance(content, str):
                     ev.full_message["content"] = self._planner_hygiene.sanitize_message_text(content)
 
-        # 3. Silent preflight suppression
-        #
-        # During an internal planner recovery round the user must see nothing:
-        # suppress content, reasoning, tool events, and usage so the GUI never
-        # creates a visible card.  The Done event's full_message is captured
-        # so the caller can inspect tool_calls / content for the next loop
-        # iteration without forwarding the event to the UI.
-        _SILENT_PREFLIGHT_SUPPRESSED_TYPES = (
-            ContentDelta,
-            ReasoningDelta,
-            ToolCallStart,
-            ToolCallArgsDelta,
-            ToolCallEnd,
-            Usage,
-        )
-        if silent_preflight:
-            if isinstance(ev, _SILENT_PREFLIGHT_SUPPRESSED_TYPES):
-                return StreamEventResult()
-            if isinstance(ev, Done):
-                return StreamEventResult(full_message=ev.full_message)
-
-        # 4. Worker stream_buffer routing / normal forwarding
+        # 3. Worker stream_buffer routing / normal forwarding
         if self._mode == "worker" and self._stream_buffer is not None:
             self._stream_buffer.capture_or_forward(ev, self._on_event)
         else:
             self._on_event(ev)
 
-        # 5. Done full_message capture
+        # 4. Done full_message capture
         if isinstance(ev, Done):
             return StreamEventResult(full_message=ev.full_message)
 
-        # 6. ApiError detection
+        # 5. ApiError detection
         if isinstance(ev, ApiError):
             return StreamEventResult(api_error=ev.message)
 
-        # 7. Default
+        # 6. Default
         return StreamEventResult()
 
 

@@ -67,7 +67,6 @@ from aura.conversation.tools.registry import ToolRegistry
 from aura.conversation.verification_progress import VerificationProgressTracker
 from aura.conversation.worker_finalization_gate import handle_worker_candidate_finalization
 from aura.conversation.worker_finish import (
-    build_worker_recoverable_followup_message,
     build_worker_unrecoverable_message,
 )
 from aura.conversation.worker_flow import WORKER_FLOW_ZERO_WORK_RECOVERY_TEXT
@@ -293,7 +292,7 @@ class ConversationManager:
                     _log.info("%s_first_event model=%s", label, model)
                     _first_event = False
 
-                result = router.process(ev, silent_preflight=state.silent_preflight)
+                result = router.process(ev)
 
                 if result.full_message is not None:
                     full_message = result.full_message
@@ -359,7 +358,7 @@ class ConversationManager:
                         workspace_root=self._tools.workspace_root,
                         on_event=on_event,
                         finish_worker_recoverable_followup=(
-                            self._finish_worker_recoverable_followup
+                            self._finish_worker_unrecoverable
                         ),
                         handle_worker_flow_steering=self._handle_worker_flow_steering,
                         handle_worker_zero_work_final=self._handle_worker_zero_work_final,
@@ -394,11 +393,6 @@ class ConversationManager:
             if tool_round.action == "return":
                 return
             if tool_round.action == "continue":
-                # Only enter silent preflight when the ToolRoundRunner
-                # explicitly requests it (internal planner handoff).
-                # Normal continues (phase boundaries, task-completion
-                # turns) must NOT inherit silent preflight.
-                state.silent_preflight = tool_round.enter_silent_preflight
                 continue
 
             if state.worker_flow is not None and not tool_round.flow_steering_suppressed:
@@ -418,41 +412,6 @@ class ConversationManager:
         details: dict[str, Any] | None = None,
     ) -> None:
         content, full_message = build_worker_unrecoverable_message(
-            failure_class=failure_class,
-            error=error,
-            details=details,
-        )
-        self._history.append_assistant(full_message)
-        on_event(ContentDelta(text=content))
-        on_event(Done(finish_reason="stop", full_message=full_message))
-
-    def _finish_worker_recoverable_followup(
-        self,
-        on_event: EventCallback,
-        *,
-        failure_class: str,
-        error: str,
-        details: dict[str, Any] | None = None,
-    ) -> None:
-        from aura.conversation.worker_handback import (
-            build_internal_handback_message,
-            should_route_as_internal_handback,
-        )
-
-        if should_route_as_internal_handback(details):
-            # Internal handback: append to history silently so the dispatch
-            # proxy reads the structured payload, but emit NO ContentDelta or
-            # Done — the user should see nothing, and the Planner restarts
-            # invisibly through the dispatch-continuation lifecycle.
-            _content, full_message = build_internal_handback_message(
-                failure_class=failure_class,
-                error=error,
-                details=details,
-            )
-            self._history.append_assistant(full_message)
-            return
-
-        content, full_message = build_worker_recoverable_followup_message(
             failure_class=failure_class,
             error=error,
             details=details,
@@ -489,7 +448,7 @@ class ConversationManager:
                         steering=steering,
                     )
                     return "nudged"
-                self._finish_worker_recoverable_followup(
+                self._finish_worker_unrecoverable(
                     on_event,
                     failure_class="worker_flow_zero_work_no_progress",
                     error=(
@@ -499,20 +458,10 @@ class ConversationManager:
                     details={
                         "reason": reason,
                         "steering": steering,
-                        "suggested_next_tool": "dispatch_to_worker",
-                        "suggested_next_action": (
-                            "Redispatch with a narrower target, exact edit region, "
-                            "or explicit blocker resolution."
-                        ),
-                        "planner_resolution_needed": True,
-                        "worker_confusion_question": (
-                            f"Worker could not identify a safe first edit for: "
-                            f"{steering}"
-                        ),
                     },
                 )
                 return "finished"
-            self._finish_worker_recoverable_followup(
+            self._finish_worker_unrecoverable(
                 on_event,
                 failure_class="worker_flow_thrash",
                 error=(
@@ -523,11 +472,6 @@ class ConversationManager:
                     "reason": reason,
                     "steering": steering,
                     "counts": state.limits.to_dict(),
-                    "suggested_next_tool": "dispatch_to_worker",
-                    "suggested_next_action": (
-                        "Redispatch with a narrower target, exact edit region, "
-                        "or explicit blocker resolution."
-                    ),
                 },
             )
             return "finished"
@@ -556,7 +500,7 @@ class ConversationManager:
                 steering=state.worker_flow_last_steering,
             )
             return "nudged"
-        self._finish_worker_recoverable_followup(
+        self._finish_worker_unrecoverable(
             on_event,
             failure_class="worker_flow_zero_work_no_progress",
             error=(
@@ -566,16 +510,6 @@ class ConversationManager:
             details={
                 "reason": state.worker_flow_last_reason or "zero_work_final",
                 "steering": state.worker_flow_last_steering,
-                "suggested_next_tool": "dispatch_to_worker",
-                "suggested_next_action": (
-                    "Redispatch with a narrower target, exact edit region, "
-                    "or explicit blocker resolution."
-                ),
-                "planner_resolution_needed": True,
-                "worker_confusion_question": (
-                    f"Worker could not identify a safe first edit for: "
-                    f"{state.worker_flow_last_steering}"
-                ),
             },
         )
         return "finished"

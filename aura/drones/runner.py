@@ -484,9 +484,7 @@ class DroneRunner(QObject):
             self._run_owned_files.update(changed_files)
 
             terminal_statuses = {
-                WorkerOutcomeStatus.needs_followup.value,
                 WorkerOutcomeStatus.scope_mismatch.value,
-                WorkerOutcomeStatus.needs_planner_resolution.value,
                 WorkerOutcomeStatus.harness_error.value,
                 WorkerOutcomeStatus.edit_mechanics_blocked.value,
             }
@@ -520,8 +518,6 @@ class DroneRunner(QObject):
             WorkerOutcomeStatus.validation_failed.value,
             WorkerOutcomeStatus.edit_mechanics_blocked.value,
             WorkerOutcomeStatus.harness_error.value,
-            WorkerOutcomeStatus.needs_followup.value,
-            WorkerOutcomeStatus.needs_planner_resolution.value,
             WorkerOutcomeStatus.scope_mismatch.value,
             WorkerOutcomeStatus.approval_rejected.value,
         }
