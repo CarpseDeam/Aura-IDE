@@ -21,7 +21,6 @@ _BROAD_CAMPAIGN_PATTERNS = (
     r"\barchitect(?:ure|ural)?\b",
     r"\brefactor(?:ing)?\b",
     r"\bfeature\b",
-    r"\bcampaign\b",
     r"\bvalidation\b.*\b(?:rung|pipeline|orchestrat|stage|system|flow)\b",
     r"\b(?:build|create|implement|add)\b.*\b(?:system|subsystem|architecture|feature|workflow|pipeline|rung)\b",
 )
@@ -590,12 +589,10 @@ def _step_boundary_errors(
             errors.append(
                 "Subsystem, architecture, feature, refactor, and validation campaign work needs multiple bounded steps."
             )
-        else:
-            errors.append("This dispatch is not tiny enough for a one-step campaign.")
 
     for index, step in enumerate(steps, start=1):
         prefix = f"step {index}"
-        needs_distinct_boundary = requires_steps or len(steps) > 1
+        needs_distinct_boundary = len(steps) > 1
         if not step.id.strip():
             errors.append(f"{prefix} is missing id.")
         if not _useful_step_title(
