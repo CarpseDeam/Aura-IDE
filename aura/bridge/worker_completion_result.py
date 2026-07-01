@@ -9,20 +9,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from aura.conversation.worker_completion._shell_pipeline import (
-    _is_benign_search_no_match,
-    _is_no_match_only_output,
-    _split_simple_pipeline,
-    _pipeline_segment_starts_with_search,
-)
-from aura.conversation.worker_completion._summary_formatters import (
-    _final_report_claims_failure,
-    _final_report_claims_validation,
-    _format_recoverable_write_failure,
-    _format_structured_worker_failure,
-    _format_worker_write_failure,
-    _parse_structured_worker_failure,
-)
 from aura.bridge.event_relay import WorkerEventRelay
 from aura.bridge.worker_report import _build_worker_summary, _dedupe_summary_writes
 from aura.conversation import (
@@ -34,6 +20,8 @@ from aura.conversation import (
 )
 from aura.conversation.path_utils import (
     is_validation_scratch_path as _is_validation_scratch_path,
+)
+from aura.conversation.path_utils import (
     normalize_worker_path as _normalize_worker_path,
 )
 from aura.conversation.tool_limits import WRITE_TOOLS
@@ -45,6 +33,17 @@ from aura.conversation.validation_orchestrator import (
     POLICY_BLOCKED,
     TEST_SELECTION_EMPTY,
     TIMEOUT,
+)
+from aura.conversation.worker_completion._shell_pipeline import (
+    _is_benign_search_no_match,
+)
+from aura.conversation.worker_completion._summary_formatters import (
+    _final_report_claims_failure,
+    _final_report_claims_validation,
+    _format_recoverable_write_failure,
+    _format_structured_worker_failure,
+    _format_worker_write_failure,
+    _parse_structured_worker_failure,
 )
 from aura.conversation.worker_outcome import WorkerOutcomeStatus
 from aura.validation.selector import ValidationPlan
@@ -669,6 +668,7 @@ def _build_worker_result_payload(
     status = outcome["status"]
     recoverable = outcome["recoverable"]
     needs_followup = outcome["needs_followup"]
+    phase_boundary = outcome["phase_boundary"]
     mismatch = outcome["mismatch"]
 
     summary = _build_worker_summary(
@@ -797,11 +797,6 @@ def _compute_outcome_status(
         for item in [structured_failure, *write_failures]
         if isinstance(item, dict)
     ]
-    reject_flags = any(
-        bool(item.get("reject"))
-        for item in [structured_failure, *write_failures]
-        if isinstance(item, dict)
-    )
     if "approval_rejected" in failure_classes:
         return WorkerOutcomeStatus.approval_rejected.value
     structured_status = str(continuation.get("status") or "")
