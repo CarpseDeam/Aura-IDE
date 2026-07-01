@@ -320,11 +320,11 @@ def _build_worker_completion_messages(
 
     structured_failure = _parse_structured_worker_failure(final_report)
     if structured_failure:
-        if structured_failure.get("status") == "needs_planner_resolution":
+        if structured_failure.get("status") == "mismatch_detected":
             if not continuation.get("mismatch"):
                 continuation["mismatch"] = structured_failure.get("mismatch")
             continuation["status"] = "harness_error"
-            continuation["reason"] = "planner_resolution_needed"
+            continuation["reason"] = "worker_mismatch"
         else:
             result_errors.append(_format_structured_worker_failure(structured_failure))
 
@@ -760,7 +760,7 @@ def _build_worker_result_payload(
         }
 
     if mismatch is not None:
-        extras["planner_resolution_needed"] = True
+        extras["mismatch_detected"] = True
         extras["mismatch_kind"] = mismatch.kind
         extras["mismatch_question"] = mismatch.question_for_planner
 
@@ -800,7 +800,7 @@ def _compute_outcome_status(
     if "approval_rejected" in failure_classes:
         return WorkerOutcomeStatus.approval_rejected.value
     structured_status = str(continuation.get("status") or "")
-    if structured_status == "needs_planner_resolution":
+    if structured_status == "mismatch_detected":
         return _terminal_failure_status(
             has_validation_failure=has_validation_failure,
             has_recoverable_edit_blocker=has_recoverable_edit_blocker,

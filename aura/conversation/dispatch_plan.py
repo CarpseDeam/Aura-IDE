@@ -233,7 +233,7 @@ class StepResult:
     summary: str = ""
     modified_files: list[str] = field(default_factory=list)
     validation: str | None = None
-    needs_planner_resolution: bool = False
+    has_mismatch: bool = False
     user_only_blocker: bool = False
     extras: dict[str, Any] = field(default_factory=dict)
 
@@ -243,7 +243,7 @@ class StepResult:
             "ok": self.ok,
             "summary": self.summary,
             "modified_files": list(self.modified_files),
-            "needs_planner_resolution": self.needs_planner_resolution,
+            "has_mismatch": self.has_mismatch,
             "user_only_blocker": self.user_only_blocker,
             "extras": dict(self.extras),
         }
@@ -263,7 +263,7 @@ class StepResult:
             summary=result.summary,
             modified_files=list(result.modified_files),
             validation=result.validation,
-            needs_planner_resolution=bool(result.mismatch is not None or extras.get("planner_resolution_needed")),
+            has_mismatch=bool(result.mismatch is not None or extras.get("mismatch_detected")),
             user_only_blocker=bool(extras.get("user_only_blocker")),
             extras=dict(extras),
         )

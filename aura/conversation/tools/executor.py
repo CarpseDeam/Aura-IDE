@@ -156,9 +156,6 @@ def _planner_write_tool_correction(name: str) -> ToolExecResult:
         ),
         "failure_class": "planner_tool_unavailable",
         "planner_tool_unavailable": True,
-        "planner_resolution_needed": True,
-        "internal_planner_handoff": True,
-        "user_visible_blocker": False,
         "suggested_next_tool": "dispatch_to_worker",
         "failure_constraint": failure_constraint,
     }
@@ -167,9 +164,6 @@ def _planner_write_tool_correction(name: str) -> ToolExecResult:
         payload=payload,
         extras={
             "planner_tool_unavailable": True,
-            "planner_resolution_needed": True,
-            "internal_planner_handoff": True,
-            "user_visible_blocker": False,
             "failure_constraint": failure_constraint,
             "suggested_next_tool": "dispatch_to_worker",
         },

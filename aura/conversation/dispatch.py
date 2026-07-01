@@ -196,7 +196,7 @@ class WorkerDispatchResult:
             payload["suggested_next_spec"] = self.suggested_next_spec
         extras = dict(self.extras)
         if self.mismatch is not None:
-            extras.setdefault("planner_resolution_needed", True)
+            extras.setdefault("mismatch_detected", True)
             extras.setdefault("mismatch_kind", self.mismatch.kind)
             extras.setdefault("mismatch_question", self.mismatch.question_for_planner)
         if extras:
@@ -295,7 +295,7 @@ def infer_outcome_status(result: WorkerDispatchResult) -> str:
         return WorkerOutcomeStatus.cancelled.value
     if result.mismatch is not None:
         return WorkerOutcomeStatus.harness_error.value
-    if result.extras.get("planner_resolution_needed"):
+    if result.extras.get("mismatch_detected"):
         return WorkerOutcomeStatus.harness_error.value
     if not result.ok:
         extras = result.extras if isinstance(result.extras, dict) else {}

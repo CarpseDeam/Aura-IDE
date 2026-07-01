@@ -56,8 +56,8 @@ def _compute_failure_constraint(result: WorkerDispatchResult) -> str:
             )
         return "CONSTRAINT FOR NEXT ATTEMPT: This attempt failed composition verification."
 
-    # planner_resolution_needed / mismatch: use the resolution/mismatch text
-    if extras.get("planner_resolution_needed") or result.mismatch is not None:
+    # mismatch_detected / mismatch: use the resolution/mismatch text
+    if extras.get("mismatch_detected") or result.mismatch is not None:
         if result.mismatch is not None:
             texts = [
                 p
@@ -69,7 +69,7 @@ def _compute_failure_constraint(result: WorkerDispatchResult) -> str:
             ]
             if texts:
                 return "CONSTRAINT FOR NEXT ATTEMPT: " + " ".join(texts)
-        if extras.get("planner_resolution_needed"):
+        if extras.get("mismatch_detected"):
             return "CONSTRAINT FOR NEXT ATTEMPT: The plan needs revision before retry."
         return ""
 

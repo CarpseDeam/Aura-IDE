@@ -85,8 +85,6 @@ def _scrub_internal_success_extras(extras: dict) -> dict:
         return {}
     result = dict(extras)
     for key in (
-        "internal_planner_handoff",
-        "planner_resolution_needed",
         "mismatch_kind",
         "mismatch_question",
         "failure_constraint",

@@ -641,8 +641,6 @@ class ChatView(QScrollArea):
                     ):
                         _internal_continuation = False
                         for key in (
-                            "internal_planner_handoff",
-                            "planner_resolution_needed",
                             "mismatch_kind",
                             "mismatch_question",
                             "failure_constraint",

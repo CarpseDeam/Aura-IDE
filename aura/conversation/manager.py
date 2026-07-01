@@ -112,8 +112,7 @@ _ALLOWED_ZERO_WORK_BLOCKER_RE = re.compile(
     r"\b(?:permission|access)\s+denied\b|"
     r"\b(?:cannot|can't|could\s+not|couldn't|unable\s+to)\s+(?:read|write|access)\b|"
     r"\b(?:missing|unavailable)\s+(?:runtime|environment|tool|dependency|executable)\b|"
-    r"\b(?:conflicting|impossible)\s+(?:spec|requirements?)\b|"
-    r"\bneeds_planner_resolution\b",
+    r"\b(?:conflicting|impossible)\s+(?:spec|requirements?)\b",
     re.IGNORECASE | re.DOTALL,
 )
 
@@ -143,7 +142,7 @@ def _candidate_final_has_real_zero_work_blocker(
     full_message: dict[str, Any] | None,
 ) -> bool:
     payload = _candidate_final_payload(full_message)
-    if payload.get("status") == "needs_planner_resolution":
+    if payload.get("status") == "mismatch_detected":
         return bool(
             payload.get("mismatch")
             or payload.get("question")

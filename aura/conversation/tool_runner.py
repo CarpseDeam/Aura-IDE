@@ -120,16 +120,13 @@ class ToolRunner:
                 recoverable=True,
                 extras={
                     "dispatch_spec_rejected": True,
-                    "planner_resolution_needed": True,
-                    "internal_planner_handoff": True,
-                    "user_visible_blocker": False,
                     "campaign_errors": list(campaign.errors),
                     "failure_constraint": failure_constraint,
                 },
             )
             # Manager owns dispatch lifecycle emission — do NOT emit ToolResult
-            # or append tool result here.  The returned result flows through
-            # classify_failed_worker_dispatch → Manager internal handoff.
+            # or append tool result here. The returned result flows through
+            # classify_failed_worker_dispatch as a terminal dispatch rejection.
             if workflow_state_cb:
                 workflow_state_cb(tool_call_id, req.goal, req.summary, WorkflowStatus.planner_resolving)
             return result
@@ -151,8 +148,6 @@ class ToolRunner:
                 recoverable=True,
                 extras={
                     "dispatch_spec_rejected": True,
-                    "internal_planner_handoff": True,
-                    "user_visible_blocker": False,
                     "quality_errors": list(quality.errors),
                     "failure_constraint": (
                         "CONSTRAINT FOR NEXT ATTEMPT: Plan is missing required "
@@ -162,8 +157,8 @@ class ToolRunner:
                 },
             )
             # Manager owns dispatch lifecycle emission — do NOT emit ToolResult
-            # or append tool result here.  The returned result flows through
-            # classify_failed_worker_dispatch → Manager internal handoff.
+            # or append tool result here. The returned result flows through
+            # classify_failed_worker_dispatch as a terminal dispatch rejection.
             if workflow_state_cb:
                 workflow_state_cb(tool_call_id, req.goal, req.summary, WorkflowStatus.planner_resolving)
             return result

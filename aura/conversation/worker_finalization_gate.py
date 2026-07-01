@@ -117,7 +117,7 @@ def handle_worker_candidate_finalization(
                     "Redispatch with a narrower edit target or "
                     "different approach to the failing file."
                 ),
-                "planner_resolution_needed": True,
+                "dispatch_mismatch": True,
                 "worker_confusion_question": (
                     "Worker could not repair Python syntax errors "
                     "after two repair attempts"
@@ -208,7 +208,7 @@ def handle_worker_candidate_finalization(
                 "Redispatch with exact edit regions for "
                 "the files that failed to apply."
             ),
-            "planner_resolution_needed": True,
+            "dispatch_mismatch": True,
             "worker_confusion_question": (
                 "Worker exhausted edit-mechanics recovery; "
                 "could not apply edits for the targeted files."
@@ -286,7 +286,7 @@ def handle_worker_candidate_finalization(
                     "Run the smallest relevant py_compile or pytest "
                     "command, then provide the final report."
                 ),
-                "planner_resolution_needed": True,
+                "dispatch_mismatch": True,
             },
         )
         return "finished"
@@ -568,7 +568,7 @@ def _run_explicit_validation(
                         "Redispatch a focused repair, or revise the "
                         "acceptance command if it is misdeclared."
                     ),
-                    "planner_resolution_needed": True,
+                    "dispatch_mismatch": True,
                     "worker_confusion_question": (
                         "Worker could not make acceptance validation "
                         "pass after one focused repair attempt"

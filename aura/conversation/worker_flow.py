@@ -57,7 +57,7 @@ WORKER_FLOW_LARGE_FILE_SEAM_TEXT = (
     "Stop calculating method boundaries by repeated reads. Use read_file_outline "
     "or code_intel_outline to anchor symbols, then one or two read_file_range calls "
     "around the current symbols. Patch one seam only, or return "
-    "needs_planner_resolution if the seam cannot be located quickly."
+    "mismatch_detected if the seam cannot be located quickly."
 )
 
 WORKER_FLOW_LARGE_SOURCE_READ_TEXT = (

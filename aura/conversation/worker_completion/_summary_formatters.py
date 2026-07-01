@@ -63,8 +63,8 @@ def _parse_structured_worker_failure(content: str) -> dict[str, Any]:
         return {}
     if not isinstance(parsed, dict):
         return {}
-    # Recognize needs_planner_resolution as a structured handoff, not a failure.
-    if parsed.get("status") == "needs_planner_resolution" and isinstance(parsed.get("mismatch"), dict):
+    # Recognize mismatch_detected as structured metadata, not a failure.
+    if parsed.get("status") == "mismatch_detected" and isinstance(parsed.get("mismatch"), dict):
         return parsed
     if parsed.get("ok") is not False:
         return {}
