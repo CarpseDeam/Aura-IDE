@@ -196,9 +196,16 @@ class WorkerEventHandler(QObject):
     # ---- worker lifecycle slots ------------------------------------------------
 
     def _on_worker_started(self, tool_call_id: str) -> None:
-        """Stop the planner aura and start the playground's assistant aura."""
+        """Stop the planner aura, remove the plan writer card, and start the
+        playground's assistant aura."""
 
         self._chat.stop_current_aura()
+        # Remove any remaining PlanWriterCard — once the Worker is running,
+        # the plan-writing UI is replaced by the Worker Log.  This covers
+        # both the auto-dispatch path (no spec card) and the visible-dispatch
+        # path where the card was already removed by prepare_spec_card
+        # (the call is idempotent).
+        self._chat._remove_plan_writer_card(tool_call_id)
         self._playground.set_glow_state("coding")
         self._playground.begin_assistant()
         self._playground.render_dispatch_todo_list(tool_call_id)

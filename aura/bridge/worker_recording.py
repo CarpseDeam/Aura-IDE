@@ -33,7 +33,17 @@ def _record_worker_completion(
     task_shape_summary: dict[str, Any],
     result_errors: list[str],
     context_gearbox: dict[str, Any] | None = None,
-) -> WorkerDispatchRecord:
+    replayable: bool = True,
+) -> WorkerDispatchRecord | None:
+    """Record a completed worker dispatch.
+
+    Args:
+        replayable: When False, the WorkerDispatchRecord is not appended to
+            *records* and is not persisted to project memory. Hazard and
+            outcome logging still run. Used for internal dispatch steps
+            whose aggregate result is recorded separately after the
+            campaign completes.
+    """
     spec_dict = req.to_dict()
     spec_dict["task_spec"] = task_spec.to_dict()
     record = WorkerDispatchRecord(
@@ -43,14 +53,16 @@ def _record_worker_completion(
         worker_history=list(worker_history.messages),
         result_summary=summary,
     )
-    records.append(record)
+    if replayable:
+        records.append(record)
 
     # Auto-save this dispatch record to project memory (Tier 2).
-    if workspace_root is not None:
+    if replayable and workspace_root is not None:
         from aura.conversation.persistence import save_dispatch_record_to_memory
 
         save_dispatch_record_to_memory(record, workspace_root)
 
+    if workspace_root is not None:
         from aura.hazard.capture import record_hazard
 
         record_hazard(

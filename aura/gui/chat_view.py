@@ -398,10 +398,6 @@ class ChatView(QScrollArea):
     def _remove_plan_writer_card(self, tool_call_id: str) -> None:
         """Remove and delete the PlanWriterCard associated with *tool_call_id*."""
         card = self._plan_writer_cards.pop(tool_call_id, None)
-
-    def get_plan_writer_card(self, tool_call_id: str):
-        """Return the PlanWriterCard for *tool_call_id*, or None."""
-        return self._plan_writer_cards.get(tool_call_id)
         if card is None:
             return
         parent = card.parentWidget()
@@ -409,9 +405,13 @@ class ChatView(QScrollArea):
             layout = parent.layout()
             if layout is not None:
                 layout.removeWidget(card)
-        # Reparent to None so findChildren() stops finding it immediately
         card.setParent(None)
         card.deleteLater()
+        self._scroll_to_bottom()
+
+    def get_plan_writer_card(self, tool_call_id: str):
+        """Return the PlanWriterCard for *tool_call_id*, or None."""
+        return self._plan_writer_cards.get(tool_call_id)
 
     def _remove_terminal_plan_cards(self) -> None:
         """Remove any PlanWriterCard in terminal state (done/failed) to prevent

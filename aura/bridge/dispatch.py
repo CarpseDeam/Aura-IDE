@@ -247,7 +247,7 @@ class _DispatchProxy(QObject):
             tool_call_id=tool_call_id,
             original_request=edited,
             plan=plan,
-            run_worker_step=self._run_worker,
+            run_worker_step=self._run_worker_internal,
             pending=pending,
             begin_steps=self._workflow_begin_steps,
             set_active_step=self._workflow_set_active_step,
@@ -261,6 +261,28 @@ class _DispatchProxy(QObject):
         # cleared only on the next dispatch for this tool_call_id, cancellation,
         # or conversation reset.
         result = session.run()
+
+        # Create one aggregate WorkerDispatchRecord for the whole dispatch
+        # campaign so that conversation replay shows one user-facing
+        # WorkerSummaryCard rather than one card per internal step.
+        if isinstance(result.extras, dict) and result.extras.get("dispatch_session"):
+            aggregate_spec = edited.to_dict()
+            aggregate_spec["extras"] = dict(result.extras)
+            if result.modified_files:
+                aggregate_spec["modified_files"] = list(result.modified_files)
+            aggregate_record = WorkerDispatchRecord(
+                after_message_index=-1,
+                tool_call_id=tool_call_id,
+                spec=aggregate_spec,
+                worker_history=[],
+                result_summary=result.summary or "",
+            )
+            self._records.append(aggregate_record)
+            if self._workspace_root is not None:
+                from aura.conversation.persistence import save_dispatch_record_to_memory
+
+                save_dispatch_record_to_memory(aggregate_record, self._workspace_root)
+
         # Emit the finished WorkflowState snapshot for the terminal outcome.
         if self._active_workflow is not None and self._active_workflow.tool_call_id == tool_call_id:
             extras = result.extras if isinstance(result.extras, dict) else {}
@@ -472,6 +494,22 @@ class _DispatchProxy(QObject):
     ) -> WorkerDispatchResult:
         runner = self._create_worker_dispatch_runner()
         return runner.run_worker(tool_call_id, req, pending)
+
+    def _run_worker_internal(
+        self,
+        tool_call_id: str,
+        req: WorkerDispatchRequest,
+        pending: "_DispatchPending",
+    ) -> WorkerDispatchResult:
+        """Run a single dispatch step without creating a replayable record.
+
+        Internal steps (part of a multi-step DispatchSession campaign) must
+        not create durable WorkerDispatchRecord entries, because the
+        aggregate campaign result is recorded once after session.run()
+        returns.
+        """
+        runner = self._create_worker_dispatch_runner()
+        return runner.run_worker(tool_call_id, req, pending, record_replayable=False)
 
     def _create_worker_dispatch_runner(self) -> WorkerDispatchRunner:
         return WorkerDispatchRunner(
