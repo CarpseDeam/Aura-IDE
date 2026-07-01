@@ -150,6 +150,8 @@ def normalize_dispatch_todo_checklist(
         description = compact_todo_label(item.description, fallback=item_id)
         if not description:
             continue
+        if _is_implementation_detail(description):
+            continue
         owner = item.owning_step_id or step_owner_by_item.get(item_id, "") or single_step_owner
         normalized.append(
             DispatchTodoItem(
@@ -249,6 +251,71 @@ def compact_todo_label(value: str, fallback: str = "Worker step") -> str:
     return text
 
 
+# ── Implementation-detail filter ──────────────────────────────────────────
+# Rows matching these patterns are code / import / declaration noise that
+# should never appear in the user-facing TODO checklist.
+
+_IMPORT_STMT = re.compile(r"^(?:from\s+\S+\s+import\s+|import\s+\S+)")
+_FIELD_DECL = re.compile(
+    r"^[a-zA-Z_][a-zA-Z0-9_]*\s*:\s*"
+    r"(?:str|int|bool|float|bytes|Any|None"
+    r"|dict\s*(?:\[[^]]*\])?"
+    r"|list\s*(?:\[[^]]*\])?"
+    r"|tuple\s*(?:\[[^]]*\])?"
+    r"|set\s*(?:\[[^]]*\])?"
+    r"|frozenset\s*(?:\[[^]]*\])?"
+    r"|Dict\s*(?:\[[^]]*\])?"
+    r"|List\s*(?:\[[^]]*\])?"
+    r"|Set\s*(?:\[[^]]*\])?"
+    r"|Optional\s*(?:\[[^]]*\])?"
+    r"|Callable\s*(?:\[[^]]*\])?"
+    r")"
+)
+_FUTURE_IMPORT = re.compile(r"from\s+__future__\s+import", re.IGNORECASE)
+_PAREN_FILLER = re.compile(r"^\([^)]*\)$")
+_SHORT_SYMBOLIC = re.compile(r"^[^\w\s]{4,}$")
+_OPERATOR_LEAD = re.compile(r"^[|\-=\[\]]+\s")  # "| None = None", "= default"
+
+
+def _is_implementation_detail(text: str) -> bool:
+    """Return True if *text* is code/import/declaration noise, not a work item."""
+    stripped = str(text or "").strip()
+    if not stripped:
+        return True
+
+    # Literal import statements: "from x import y" / "import x"
+    if _IMPORT_STMT.match(stripped):
+        return True
+    # "from __future__ import annotations"
+    if _FUTURE_IMPORT.search(stripped):
+        return True
+
+    # Docstring / code-fence fragments
+    if '"""' in stripped:
+        return True
+
+    # Field declarations: "full_message: dict[str, Any] | None = None"
+    m = _FIELD_DECL.match(stripped)
+    if m:
+        rest = stripped[m.end() :]
+        if not rest or rest.lstrip().startswith(("|", "=")):
+            return True
+
+    # Parenthetical filler: "(no other fields)"
+    if _PAREN_FILLER.match(stripped):
+        return True
+
+    # Short purely-symbolic fragments
+    if _SHORT_SYMBOLIC.match(stripped):
+        return True
+
+    # Lines starting with an operator: "| None = None",  "= default"
+    if _OPERATOR_LEAD.match(stripped):
+        return True
+
+    return False
+
+
 def _items_from_step(step: Any) -> list[DispatchTodoItem]:
     validation_policy = getattr(step, "validation_policy", None)
     policy_commands = getattr(validation_policy, "commands", []) if validation_policy is not None else []
@@ -321,7 +388,14 @@ def _checklist_texts_from_sources(
         command = str(command or "").strip()
         if command:
             candidates.append(f"Run {command}")
-    return _dedupe([compact_todo_label(item) for item in candidates if item.strip()])
+    cleaned: list[str] = []
+    for item in candidates:
+        if not item.strip():
+            continue
+        label = compact_todo_label(item)
+        if label and not _is_implementation_detail(label):
+            cleaned.append(label)
+    return _dedupe(cleaned)
 
 
 def _extract_checklist_lines(text: str) -> list[str]:
@@ -382,6 +456,8 @@ def _looks_like_checklist_item(text: str) -> bool:
     if not lowered:
         return False
     if len(lowered) > 180:
+        return False
+    if _is_implementation_detail(lowered):
         return False
     return bool(
         re.match(
