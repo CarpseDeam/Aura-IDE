@@ -110,6 +110,10 @@ from aura.conversation.worker_flow import (
     WORKER_FLOW_VALIDATION_REQUIRED_TEXT,
     WORKER_FLOW_ZERO_WORK_RECOVERY_TEXT,
 )
+from aura.conversation.worker_final_report_guard import (
+    WORKER_FINAL_REPORT_PROOF_REQUIRED_TEXT,
+    worker_final_report_missing_proof,
+)
 from aura.conversation.worker_quality_gate import handle_worker_quality_gate
 from aura.conversation.worker_recovery_messages import (
     PATCH_CANDIDATE_INVALID_SYNTAX_ACTION,
@@ -138,36 +142,11 @@ from aura.verify import run_dependent_import_check, run_focused_import_check
 
 EventCallback = Callable[[Event], None]
 
-WORKER_FINAL_REPORT_PROOF_REQUIRED_TEXT = (
-    "Worker final report is missing explicit validation or acceptance proof. "
-    "Reply with the final report only and include concrete lines for changed files, "
-    "validation command/result, and acceptance verification."
-)
-
 _LOCAL_CODE_INTENT_RE = re.compile(
     r"\b(?:fix|add|update|change|modify|edit|patch|refactor|extract|move|"
     r"create|remove|delete|rename|implement|test|py_compile|pytest|import|"
     r"module|function|class|file)\b",
     re.IGNORECASE,
-)
-
-_FINAL_REPORT_INCOMPLETE_PROOF_RE = re.compile(
-    r"\b(?:not\s+(?:tested|validated|verified)|validation\s+(?:did\s+not|didn't|"
-    r"not)\s+run|failed\s+(?:validation|acceptance)|(?:validation|acceptance)\s+failed|"
-    r"could\s+not\s+(?:verify|run)|couldn't\s+(?:verify|run)|unable\s+to\s+(?:verify|run))\b",
-    re.IGNORECASE,
-)
-
-_FINAL_REPORT_VALIDATION_PROOF_RE = re.compile(
-    r"\b(?:verified|validated|pytest|py_compile|ruff|mypy|tests?\s+pass(?:ed|es)?|"
-    r"compiled|exit\s+code\s+0|exits\s+0)\b",
-    re.IGNORECASE,
-)
-
-_FINAL_REPORT_ACCEPTANCE_PROOF_RE = re.compile(
-    r"\b(?:acceptance|accepted)\b.{0,80}\b(?:verified|validated|passed|met|satisfied|confirmed|ok)\b|"
-    r"\b(?:verified|validated|passed|met|satisfied|confirmed)\b.{0,80}\bacceptance\b",
-    re.IGNORECASE | re.DOTALL,
 )
 
 _ALLOWED_ZERO_WORK_FAILURE_CLASSES = frozenset(
@@ -227,33 +206,6 @@ def _terminal_payload_ok(loop_info: dict[str, Any] | None) -> bool | None:
     if "ok" not in payload:
         return None
     return bool(payload.get("ok"))
-
-
-def _worker_final_report_claims_validation_or_acceptance(content: str) -> bool:
-    text = str(content or "")
-    if _FINAL_REPORT_INCOMPLETE_PROOF_RE.search(text):
-        return False
-    return bool(
-        _FINAL_REPORT_VALIDATION_PROOF_RE.search(text)
-        or _FINAL_REPORT_ACCEPTANCE_PROOF_RE.search(text)
-    )
-
-
-def _worker_final_report_needs_proof(state: _SendState) -> bool:
-    flow = state.worker_flow
-    if flow is None:
-        return False
-    return int(getattr(flow.state, "write_actions", 0) or 0) > 0
-
-
-def _worker_final_report_missing_proof(state: _SendState, full_message: dict[str, Any]) -> bool:
-    if state.worker_final_report_proof_nudge_sent:
-        return False
-    if not _worker_final_report_needs_proof(state):
-        return False
-    return not _worker_final_report_claims_validation_or_acceptance(
-        assistant_message_text(full_message)
-    )
 
 
 def _worker_has_zero_applied_writes(state: _SendState) -> bool:
@@ -500,7 +452,7 @@ class ConversationManager:
             if state.worker_needs_final_report:
                 if not tool_calls:
                     if state.candidate_final_message is not None:
-                        if _worker_final_report_missing_proof(
+                        if worker_final_report_missing_proof(
                             state,
                             state.candidate_final_message,
                         ):
@@ -1000,7 +952,7 @@ class ConversationManager:
                         continue
                     # All gates passed — release candidate final and flush buffer
                     if state.candidate_final_message is not None:
-                        if _worker_final_report_missing_proof(
+                        if worker_final_report_missing_proof(
                             state,
                             state.candidate_final_message,
                         ):
