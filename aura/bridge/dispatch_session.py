@@ -12,8 +12,8 @@ visible lifecycle signals, so a multi-step plan produces exactly one started and
 one finished event regardless of how many internal steps run.
 
 TODO rail:
-- All steps start as pending via todo_controller.begin().
-- The active step becomes active while it runs (todo_controller.set_active).
+- All steps start as pending via WorkflowState.with_steps().
+- The active step becomes active while it runs.
 - Completed steps become done before the next step activates.
 - One final TODO emission happens after the loop ends.
 - Worker-local TODO updates are ignored by the bridge.
@@ -21,8 +21,7 @@ TODO rail:
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
-from typing import Any, TYPE_CHECKING
+from typing import Any
 
 from aura.conversation.dispatch import (
     WorkerDispatchRequest,
@@ -37,9 +36,6 @@ from aura.conversation.dispatch_plan import (
     request_for_step,
 )
 
-if TYPE_CHECKING:
-    from aura.bridge.todo_controller import DispatchTodoController
-
 RunWorkerStep = Callable[[str, WorkerDispatchRequest, Any], WorkerDispatchResult]
 
 # Callback types for the outer campaign lifecycle signals.
@@ -48,18 +44,6 @@ RunWorkerStep = Callable[[str, WorkerDispatchRequest, Any], WorkerDispatchResult
 #   workerFinished → (tool_call_id: str, ok: bool, summary: str, needs_followup: bool, status: str)
 _EmitStarted = Callable[[str], None]
 _EmitFinished = Callable[[str, bool, str, bool, str], None]
-
-
-@dataclass
-class DispatchStepCursor:
-    """Mutable cursor tracking progress across one visible dispatch campaign."""
-
-    index: int = 0
-    completed_step_ids: list[str] = field(default_factory=list)
-
-    @property
-    def completed_set(self) -> set[str]:
-        return set(self.completed_step_ids)
 
 
 class DispatchSession:
@@ -76,8 +60,8 @@ class DispatchSession:
     - Internal steps execute silently inside _run_worker_step without
       re-emitting started/finished to the UI.
 
-    TODO rail:
-    - All steps start as pending.
+    TODO rail (derived from WorkflowState step state):
+    - All steps start as pending via WorkflowState.with_steps().
     - The active step becomes active while it runs.
     - Completed steps become done before the next step activates.
     - If a step fails, the campaign stops (no blocked TODO state).
@@ -94,30 +78,33 @@ class DispatchSession:
         plan: WorkerDispatchPlan,
         run_worker_step: RunWorkerStep,
         pending: Any,
-        emit_todo_update: Callable[[str, list[dict[str, Any]]], None] | None = None,
+        begin_steps: Callable[[str, list[dict[str, Any]]], None] | None = None,
+        set_active_step: Callable[[str, str], None] | None = None,
+        mark_step_done: Callable[[str, str], None] | None = None,
+        finish_steps: Callable[[str], None] | None = None,
         emit_worker_started: _EmitStarted | None = None,
         emit_worker_finished: _EmitFinished | None = None,
-        todo_controller: DispatchTodoController | None = None,
     ) -> None:
         self.tool_call_id = tool_call_id
         self.original_request = original_request
         self.plan = plan
         self._run_worker_step = run_worker_step
         self._pending = pending
-        self._emit_todo_update = emit_todo_update
+        self._begin_steps = begin_steps
+        self._set_active_step = set_active_step
+        self._mark_step_done = mark_step_done
+        self._finish_steps = finish_steps
         self._emit_worker_started = emit_worker_started
         self._emit_worker_finished = emit_worker_finished
-        self._todo_controller = todo_controller
-        self.cursor = DispatchStepCursor()
         self.step_results: list[StepResult] = []
 
     # ------------------------------------------------------------------
-    # TODO emission
+    # TODO emission (via WorkflowState callbacks)
     # ------------------------------------------------------------------
 
     def _begin_canonical_todos(self) -> None:
         """Initialize canonical TODO objectives from the plan."""
-        if self._todo_controller is None:
+        if self._begin_steps is None:
             return
         objectives: list[dict[str, Any]] = []
         for step in self.plan.steps:
@@ -128,34 +115,22 @@ class DispatchSession:
                 "description": description,
                 "files": list(step.files),
             })
-        self._todo_controller.begin(self.tool_call_id, objectives)
-
-    def _emit_canonical_snapshot(self) -> None:
-        """Emit the current canonical snapshot to the GUI."""
-        if self._emit_todo_update is None:
-            return
-        if self._todo_controller is None:
-            return
-        tasks = self._todo_controller.snapshot(self.tool_call_id)
-        self._emit_todo_update(self.tool_call_id, tasks)
+        self._begin_steps(self.tool_call_id, objectives)
 
     def _canonical_set_active(self, step_id: str) -> None:
-        if self._todo_controller is None:
+        if self._set_active_step is None:
             return
-        self._todo_controller.set_active(self.tool_call_id, step_id)
-        self._emit_canonical_snapshot()
+        self._set_active_step(self.tool_call_id, step_id)
 
     def _canonical_mark_done(self, step_id: str) -> None:
-        if self._todo_controller is None:
+        if self._mark_step_done is None:
             return
-        self._todo_controller.mark_done(self.tool_call_id, step_id)
-        self._emit_canonical_snapshot()
+        self._mark_step_done(self.tool_call_id, step_id)
 
     def _canonical_finish(self) -> None:
-        if self._todo_controller is None:
+        if self._finish_steps is None:
             return
-        self._todo_controller.finish(self.tool_call_id)
-        self._emit_canonical_snapshot()
+        self._finish_steps(self.tool_call_id)
 
     # ------------------------------------------------------------------
     # Main entry point
@@ -190,7 +165,6 @@ class DispatchSession:
 
         # Initialize canonical TODO state: all steps pending.
         self._begin_canonical_todos()
-        self._emit_canonical_snapshot()
 
         # Campaign starts — one visible Worker start event for the whole run.
         if self._emit_worker_started is not None:
@@ -198,9 +172,7 @@ class DispatchSession:
 
         final_worker_result: WorkerDispatchResult | None = None
 
-        for i, step in enumerate(self.plan.steps):
-            self.cursor.index = i
-
+        for step in self.plan.steps:
             # Activate this step in the TODO rail.
             self._canonical_set_active(step.id)
 
@@ -213,8 +185,7 @@ class DispatchSession:
             if _step_should_stop(step_result, worker_result):
                 break
 
-            # Step completed — advance cursor; mark done.
-            self.cursor.completed_step_ids.append(step.id)
+            # Step completed — mark done.
             self._canonical_mark_done(step.id)
 
         # Emit final TODO state once.
@@ -372,6 +343,5 @@ def _dedupe(values: list[str]) -> list[str]:
 
 __all__ = [
     "DispatchSession",
-    "DispatchStepCursor",
     "RunWorkerStep",
 ]

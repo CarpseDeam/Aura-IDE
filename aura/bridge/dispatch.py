@@ -19,7 +19,6 @@ from PySide6.QtCore import (
 from aura.bridge.approval_proxy import _ApprovalProxy
 from aura.bridge.dispatch_pending import _DispatchPending, DispatchPendingMap
 from aura.bridge.dispatch_session import DispatchSession
-from aura.bridge.todo_controller import DispatchTodoController
 from aura.bridge.worker_completion_result import (
     _check_read_before_edit,
     _last_assistant_content,
@@ -109,7 +108,6 @@ class _DispatchProxy(QObject):
         # Records of each completed dispatch for persistence.
         self._records: list[WorkerDispatchRecord] = []
         self._result_metadata: dict[str, dict[str, Any]] = {}
-        self._todo_controller: DispatchTodoController = DispatchTodoController()
         self._active_workflow: WorkflowState | None = None
 
     # ---- config -----------------------------------------------------------
@@ -146,32 +144,26 @@ class _DispatchProxy(QObject):
 
     def clear_records(self) -> None:
         self._records.clear()
-        self._todo_controller.clear_all()
 
     def result_metadata(self, tool_call_id: str) -> dict[str, Any]:
         return dict(self._result_metadata.get(tool_call_id, {}))
 
-    # ---- canonical TODO controller ---------------------------------------
+    # ---- canonical TODO (derived from WorkflowState) -----------------------
 
-    def _emit_canonical_dispatch_todos(
-        self, tool_call_id: str, tasks: list[dict[str, Any]]
-    ) -> None:
-        """Emit a canonical TODO snapshot to the GUI.
-
-        This is the only path through which DispatchSession emits TODO updates
-        during a canonical dispatch. Uses a dedicated signal so the GUI can
-        distinguish DispatchSession snapshots from Worker-local TODO updates.
-        """
-        self.dispatchTodoListUpdated.emit(tool_call_id, tasks)
+    def _emit_workflow_todo_snapshot(self, tool_call_id: str) -> None:
+        """Emit dispatchTodoListUpdated from the active WorkflowState."""
+        if self._active_workflow is None or self._active_workflow.tool_call_id != tool_call_id:
+            return
+        self.dispatchTodoListUpdated.emit(tool_call_id, self._active_workflow.todo_snapshot())
 
     def _relay_worker_todo_update(self, tool_call_id: str, tasks: list) -> None:
         """Relay Worker-local TODO updates only outside canonical dispatch.
 
-        During canonical dispatch, the Worker's update_todo_list tool calls
+        During canonical dispatch the Worker's update_todo_list tool calls
         and progress-TODO emissions are suppressed — the visible dispatch
-        TODO rail is owned by DispatchSession / DispatchTodoController.
+        TODO rail is derived from WorkflowState step state.
         """
-        if self._todo_controller.has_canonical(tool_call_id):
+        if self._has_canonical_steps(tool_call_id):
             return
         self.workerTodoListUpdated.emit(tool_call_id, tasks)
 
@@ -243,11 +235,7 @@ class _DispatchProxy(QObject):
             if stanza:
                 edited = replace(edited, spec=edited.spec + stanza)
 
-        # Clear any prior canonical TODO state for this tool_call_id before
-        # starting a new dispatch (new SpecCard → fresh checklist).
-        self._todo_controller.clear(tool_call_id)
-
-        # --- Emit dispatched snapshot ---
+        # --- Emit dispatched snapshot (fresh WorkflowState — no steps yet) ---
         self._transition_workflow_state(
             tool_call_id,
             WorkflowStatus.dispatched,
@@ -261,10 +249,12 @@ class _DispatchProxy(QObject):
             plan=plan,
             run_worker_step=self._run_worker,
             pending=pending,
-            emit_todo_update=self._emit_canonical_dispatch_todos,
+            begin_steps=self._workflow_begin_steps,
+            set_active_step=self._workflow_set_active_step,
+            mark_step_done=self._workflow_mark_step_done,
+            finish_steps=self._workflow_finish_steps,
             emit_worker_started=self.workerStarted.emit,
             emit_worker_finished=self.workerFinished.emit,
-            todo_controller=self._todo_controller,
         )
         # Run the session. The canonical TODO checklist survives after finish
         # so late Worker-local TODO events cannot repaint the rail. It is
@@ -389,6 +379,39 @@ class _DispatchProxy(QObject):
         if self._active_workflow is None or self._active_workflow.tool_call_id != tool_call_id:
             self._init_workflow_state(tool_call_id, goal, summary)
         self._transition_workflow_state(tool_call_id, status)
+
+    # ---- WorkflowState step helpers ---------------------------------------
+
+    def _workflow_begin_steps(
+        self, tool_call_id: str, objectives: list[dict[str, Any]]
+    ) -> None:
+        if self._active_workflow is None or self._active_workflow.tool_call_id != tool_call_id:
+            return
+        self._set_workflow_state(self._active_workflow.with_steps(objectives))
+        self._emit_workflow_todo_snapshot(tool_call_id)
+
+    def _workflow_set_active_step(self, tool_call_id: str, step_id: str) -> None:
+        if self._active_workflow is None or self._active_workflow.tool_call_id != tool_call_id:
+            return
+        self._set_workflow_state(self._active_workflow.set_active_step(step_id))
+        self._emit_workflow_todo_snapshot(tool_call_id)
+
+    def _workflow_mark_step_done(self, tool_call_id: str, step_id: str) -> None:
+        if self._active_workflow is None or self._active_workflow.tool_call_id != tool_call_id:
+            return
+        self._set_workflow_state(self._active_workflow.mark_step_done(step_id))
+        self._emit_workflow_todo_snapshot(tool_call_id)
+
+    def _workflow_finish_steps(self, tool_call_id: str) -> None:
+        if self._active_workflow is None or self._active_workflow.tool_call_id != tool_call_id:
+            return
+        self._set_workflow_state(self._active_workflow.finish_steps())
+        self._emit_workflow_todo_snapshot(tool_call_id)
+
+    def _has_canonical_steps(self, tool_call_id: str) -> bool:
+        if self._active_workflow is None or self._active_workflow.tool_call_id != tool_call_id:
+            return False
+        return self._active_workflow.has_steps()
 
     def _workflow_tool_started(
         self, tool_call_id: str, worker_tool_id: str, name: str
