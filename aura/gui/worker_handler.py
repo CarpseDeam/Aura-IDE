@@ -127,12 +127,7 @@ class WorkerEventHandler(QObject):
         summary: str,
         steps: list | None = None,
     ) -> None:
-        """Always show the SpecCard; auto-dispatch or wait for card interaction."""
-        _log.info(
-            "dispatch_card_shown tool_call_id=%s goal=%s",
-            tool_call_id, goal[:120],
-        )
-
+        """Route Planner dispatch requests through auto or manual review."""
         if self._finish_presenter.resolve_active_mismatch():
             self._chat.stop_current_aura()
 
@@ -151,6 +146,31 @@ class WorkerEventHandler(QObject):
             self._chat.scroll_to_bottom(force=True)
             return
 
+        if self._bridge.auto_dispatch:
+            _log.info(
+                "dispatch_auto_accepted tool_call_id=%s goal=%s",
+                tool_call_id, goal[:120],
+            )
+            self._dispatch_ui.begin_auto_dispatch(tool_call_id)
+            self._playground.begin_dispatch_todo_list(tool_call_id, step_list)
+            self._set_active_workflow(
+                WorkflowState.intent_captured(
+                    tool_call_id,
+                    goal,
+                    summary=summary,
+                ).with_status(
+                    WorkflowStatus.dispatched,
+                    pending_user_action="",
+                )
+            )
+            self._bridge.user_dispatched(tool_call_id, goal, file_list, spec, acceptance, summary)
+            self._chat.scroll_to_bottom(force=True)
+            return
+
+        _log.info(
+            "dispatch_card_shown tool_call_id=%s goal=%s",
+            tool_call_id, goal[:120],
+        )
         self._dispatch_ui.begin_visible_dispatch(tool_call_id)
         self._playground.begin_dispatch_todo_list(tool_call_id, step_list)
         self._set_active_workflow(

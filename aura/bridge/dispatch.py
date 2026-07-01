@@ -300,7 +300,11 @@ class _DispatchProxy(QObject):
         req: WorkerDispatchRequest,
         pending: "_DispatchPending",
     ) -> WorkerDispatchResult:
-        runner = WorkerDispatchRunner(
+        runner = self._create_worker_dispatch_runner()
+        return runner.run_worker(tool_call_id, req, pending)
+
+    def _create_worker_dispatch_runner(self) -> WorkerDispatchRunner:
+        return WorkerDispatchRunner(
             approval_proxy=self._approval_proxy,
             registry_factory=self._registry_factory,
             workspace_root=self._workspace_root,
@@ -315,4 +319,3 @@ class _DispatchProxy(QObject):
             result_metadata=self._result_metadata,
             set_tier1_context=self.set_tier1_context,
         )
-        return runner.run_worker(tool_call_id, req, pending)

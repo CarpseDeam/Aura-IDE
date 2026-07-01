@@ -70,6 +70,15 @@ class DispatchUiLifecycle:
         self._canonical_dispatch_ids.add(tool_call_id)
         self._visible_dispatch_card_id = tool_call_id
 
+    def begin_auto_dispatch(self, tool_call_id: str) -> None:
+        previous_card_id = self._visible_dispatch_card_id
+        if previous_card_id:
+            self._chat.remove_spec_card(previous_card_id)
+            self._wired_spec_cards.discard(previous_card_id)
+            self._canonical_dispatch_ids.discard(previous_card_id)
+        self._canonical_dispatch_ids.add(tool_call_id)
+        self._visible_dispatch_card_id = None
+
     def show_spec_card(
         self,
         *,
@@ -134,29 +143,10 @@ class DispatchUiLifecycle:
             card.cancel_clicked.connect(self._on_cancel_dispatch_clicked)
             self._wired_spec_cards.add(tool_call_id)
 
-        if self._bridge.auto_dispatch:
-            if hasattr(card, "mark_dispatched"):
-                card.mark_dispatched()
-            self._transition_workflow(
-                tool_call_id,
-                WorkflowStatus.dispatched,
-                pending_user_action="",
-            )
-            self._bridge.user_dispatched(
-                tool_call_id,
-                goal,
-                file_list,
-                spec,
-                acceptance,
-                summary,
-            )
         return True
 
     def mark_worker_started(self, tool_call_id: str) -> None:
         card = self.get_spec_card(tool_call_id)
-        if card and self._bridge.auto_dispatch:
-            self.clear_active_spec_card(tool_call_id)
-            card = None
         if card:
             card.mark_worker_running()
 
