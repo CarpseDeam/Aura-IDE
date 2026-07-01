@@ -103,6 +103,8 @@ class ChatView(QScrollArea):
         self._mismatch_resolution_cards: dict[str, MismatchResolutionCard] = {}
         self._compact_tools: bool = False
         self._compact_tool_names: dict[str, str] = {}
+        self._suppress_next_dispatch_plan_writer = False
+        self._suppressed_dispatch_tool_ids: set[str] = set()
         self._is_bulk_updating: bool = False
         self._show_empty_hint()
 
@@ -280,6 +282,8 @@ class ChatView(QScrollArea):
         self._controllers.clear()
         self._clear_code_card_routes()
         self._compact_tool_names.clear()
+        self._suppress_next_dispatch_plan_writer = False
+        self._suppressed_dispatch_tool_ids.clear()
         self._auto_follow_bottom = True
         self._last_scroll_max = 0
         self._empty_hint = None
@@ -556,13 +560,19 @@ class ChatView(QScrollArea):
         if self._current_aura is not None:
             self._current_aura.set_glow_state("coding")
 
-        ac = self.current_assistant()
         if name in ("dispatch_to_worker",):
             # Reuse existing controller if this ID was already started (uncommon but possible in replay/retry)
             controller = self._controllers.get(tool_call_id)
             if controller is None:
                 controller = ToolStreamController(name, parent=self)
                 self._controllers[tool_call_id] = controller
+
+            if self._suppress_next_dispatch_plan_writer:
+                self._suppress_next_dispatch_plan_writer = False
+                self._suppressed_dispatch_tool_ids.add(tool_call_id)
+                return
+
+            ac = self.current_assistant()
 
             # Remove any terminal-state plan cards left from prior retries
             self._remove_terminal_plan_cards()
@@ -582,6 +592,7 @@ class ChatView(QScrollArea):
                 lambda text, c=controller, card=card: card.set_result(c._state == "done", text)
             )
         else:
+            ac = self.current_assistant()
             ac.notify_compact_tool_start(name)
             self._compact_tool_names[tool_call_id] = name
 
@@ -605,6 +616,7 @@ class ChatView(QScrollArea):
         controller = self._controllers.pop(tool_call_id, None)
         if controller:
             if controller.tool_name == "dispatch_to_worker":
+                suppressed_dispatch = tool_call_id in self._suppressed_dispatch_tool_ids
                 summary = ""
                 needs_followup = False
                 status = None
@@ -686,9 +698,14 @@ class ChatView(QScrollArea):
                 # fresh.  The dispatch tool lifecycle is already cleanly finalised.
                 if _internal_continuation:
                     self._remove_plan_writer_card(tool_call_id)
+                    self._suppressed_dispatch_tool_ids.discard(tool_call_id)
+                    self._suppress_next_dispatch_plan_writer = True
                     self.close_current_assistant_for_continuation()
                     self._scroll_to_bottom()
                     return
+
+                if suppressed_dispatch:
+                    self._suppressed_dispatch_tool_ids.discard(tool_call_id)
 
                 # THEN update spec card for not-started scenarios (stale/cancelled/expired).
                 # Completed dispatches get one deduped final summary card so

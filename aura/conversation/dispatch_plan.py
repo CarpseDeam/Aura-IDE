@@ -553,7 +553,7 @@ def _request_requires_campaign(req: WorkerDispatchRequest) -> bool:
         return True
     text = _request_text(req)
     if _matches_any(text, _BROAD_CAMPAIGN_PATTERNS):
-        return True
+        return not _looks_bounded_single_file_repair(req)
     if req.risk_notes or _matches_any(text, _HIGH_RISK_PATTERNS):
         return True
     if len(req.validation_commands) > 1:
@@ -585,10 +585,6 @@ def _step_boundary_errors(
         step_files = step.files or req.files
         if len(step_files) >= 3:
             errors.append("A single campaign step cannot cover 3 or more files.")
-        elif _matches_any(_request_text(req), _BROAD_CAMPAIGN_PATTERNS):
-            errors.append(
-                "Subsystem, architecture, feature, refactor, and validation campaign work needs multiple bounded steps."
-            )
 
     for index, step in enumerate(steps, start=1):
         prefix = f"step {index}"
@@ -710,6 +706,21 @@ def _looks_tiny_cleanup(req: WorkerDispatchRequest) -> bool:
         _matches_any(text, _BROAD_CAMPAIGN_PATTERNS)
         or _matches_any(text, _HIGH_RISK_PATTERNS)
     )
+
+
+def _looks_bounded_single_file_repair(req: WorkerDispatchRequest) -> bool:
+    if len(req.files) != 1:
+        return False
+    if req.risk_notes or len(req.validation_commands) > 1:
+        return False
+    text = _request_text(req)
+    if _matches_any(text, _HIGH_RISK_PATTERNS):
+        return False
+    if _looks_multi_stage_validation(req.acceptance):
+        return False
+    if not req.goal.strip() or not req.spec.strip() or not req.acceptance.strip():
+        return False
+    return _matches_any(text, (r"\brepair\b", r"\bfix\b", r"\brefactor(?:ing)?\b"))
 
 
 def _dedupe(values: list[str]) -> list[str]:

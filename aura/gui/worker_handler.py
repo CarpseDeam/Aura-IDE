@@ -63,6 +63,7 @@ class WorkerEventHandler(QObject):
         self._wired_spec_cards: set[str] = set()
         self._active_mismatch_card_id: str | None = None
         self._canonical_dispatch_ids: set[str] = set()
+        self._visible_dispatch_card_id: str | None = None
 
     # ---- public property -------------------------------------------------------
 
@@ -137,7 +138,13 @@ class WorkerEventHandler(QObject):
 
         file_list = list(files)
         step_list = list(steps or [])
+        previous_card_id = self._visible_dispatch_card_id
+        if previous_card_id and previous_card_id != tool_call_id:
+            self._chat.remove_spec_card(previous_card_id)
+            self._wired_spec_cards.discard(previous_card_id)
+            self._canonical_dispatch_ids.discard(previous_card_id)
         self._canonical_dispatch_ids.add(tool_call_id)
+        self._visible_dispatch_card_id = tool_call_id
         self._playground.begin_dispatch_todo_list(tool_call_id, step_list)
         self._set_active_workflow(
             WorkflowState.intent_captured(
@@ -367,7 +374,7 @@ class WorkerEventHandler(QObject):
             self._chat.begin_planner_resolution_aura()
 
         card = self._get_spec_card(tool_call_id)
-        if card:
+        if card and not suppress_main_summary:
             card.worker_finished(ok, summary, status=status, is_internal=is_internal)
         goal = self._worker_summary_goal(tool_call_id, card)
         if not suppress_main_summary:
@@ -381,7 +388,11 @@ class WorkerEventHandler(QObject):
                 context_gearbox=context_gearbox,
                 is_internal=is_internal,
             )
-        if self._active_workflow is not None and self._active_workflow.tool_call_id == tool_call_id:
+        if (
+            self._active_workflow is not None
+            and self._active_workflow.tool_call_id == tool_call_id
+            and not suppress_main_summary
+        ):
             self._set_active_workflow(
                 self._active_workflow.finish(
                     ok=ok,
@@ -395,6 +406,8 @@ class WorkerEventHandler(QObject):
             )
         if not (suppress_user_followup_card and not user_visible_blocker):
             self._clear_active_spec_card(tool_call_id)
+            if self._visible_dispatch_card_id == tool_call_id:
+                self._visible_dispatch_card_id = None
         self._canonical_dispatch_ids.discard(tool_call_id)
         self.worker_running_changed.emit(False)
 
@@ -512,6 +525,8 @@ class WorkerEventHandler(QObject):
             pending_user_action="",
         )
         self._clear_active_spec_card(tool_call_id)
+        if self._visible_dispatch_card_id == tool_call_id:
+            self._visible_dispatch_card_id = None
         self._canonical_dispatch_ids.discard(tool_call_id)
         self.worker_running_changed.emit(False)
 
@@ -661,6 +676,9 @@ class WorkerEventHandler(QObject):
     def _clear_active_spec_card(self, tool_call_id: str) -> None:
         """Remove the active plan card once the workflow reaches a terminal state."""
         self._chat.remove_spec_card(tool_call_id)
+        if self._visible_dispatch_card_id == tool_call_id:
+            self._visible_dispatch_card_id = None
+        self._wired_spec_cards.discard(tool_call_id)
         self._chat.scroll_to_bottom(force=True)
 
     def _on_worker_usage(

@@ -21,44 +21,11 @@ _RESPONSE_DISCIPLINE = """Response discipline:
 - Coding/workflow replies should emphasize target, decision, next step, and validation.
 - Give full detail when the user asks or when missing detail would make the answer unsafe or unusable."""
 
-_ROLE_PROMPTS = {
-    RuntimeRole.PLANNER: """Planner role:
-- Choose the lane quickly: answer, ask one focused question, inspect minimally, or dispatch.
-- For code changes, default to dispatch_to_worker once the objective, target seam/files, constraints, and acceptance are known.
-- Inspect only the minimal repository context needed to name that capsule; do not keep researching after the capsule is actionable.
-- Own intent, target seam, allowed files, constraints, non-goals, validation expectations, and the Worker capsule only.
-- Create a Worker task capsule and call dispatch_to_worker; that tool call is the Planner's deliverable for implementation.
-- When implementation is needed, dispatch instead of presenting a plan for the user to execute.
-- Keep pre-dispatch visible output quiet. Do not narrate "now I have context", "let me implement", "I can't write files directly", or "let me prepare the capsule"; inspect, decide, dispatch.
-- If the user accepts a previously proposed actionable phase, bind that acceptance to the most recent actionable phase and dispatch it promptly.
-- Acceptance phrases include "do phase 1", "start phase 1", "yes do that", "go", "run it", and "let's do it".
-- Planner must not say "I will start extracting/editing/refactoring" in planner mode; dispatch the Worker instead.
-- Planner must not write code, sketch patches, plan hunks, inspect exact edit ranges, or do exact implementation/edit reasoning.
-- Worker owns implementation reasoning, exact edits, validation execution, and final code-quality decisions.
-- Hold the whole campaign design and emit an ordered set of bounded implementation steps via dispatch_to_worker's steps array.
-- Each step must be small enough for blinders-on Worker execution: one bounded edit, one clean boundary, and clear validation or acceptance.
-- Do not emit only a starting task when the requested implementation needs a multi-step campaign.
-- Preserve structured contract fields for the campaign and relevant steps when knowable: expected_public_symbols, expected_dataclass_fields, forbidden_calls, forbidden_public_methods, and non_goals.
-- Dispatch implementation work instead of coding directly.
-- Rely on deterministic router output and tool results when available.""",
-    RuntimeRole.WORKER: """Worker role:
-- Execute only the requested change.
-- Use tools for repository reads and writes; read narrowly around the target seam.
-- Once enough facts are known, make the smallest safe edit instead of restating the plan.
-- Do not keep broad-orienting or comparing approaches when an edit is possible.
-- Validate focused behavior after writes when practical.""",
-    RuntimeRole.SINGLE: """Single-agent role:
-- Answer or edit within the workspace.
-- Read files before claiming repository facts.
-- Keep scope tight.""",
-}
-
-
 def _role_prompt_text(runtime_role: RuntimeRole) -> str:
     capsule = load_bundled_role_capsule(runtime_role)
-    if capsule is not None:
-        return capsule.content
-    return _ROLE_PROMPTS[runtime_role]
+    if capsule is None:
+        raise RuntimeError(f"No bundled role capsule for {runtime_role.value}")
+    return capsule.content
 
 
 def default_role_prompt(role: RuntimeRole | str) -> str:
