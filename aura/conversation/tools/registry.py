@@ -35,7 +35,7 @@ from aura.conversation.tools.mcp_registry import MCPToolRegistry
 from aura.conversation.tools.task_context import TaskContextHandlersMixin
 
 try:
-    from aura.craft import ExplicitSpecContract
+    from aura.conversation.dispatch import ExplicitSpecContract
 except ImportError:
     ExplicitSpecContract = None
 

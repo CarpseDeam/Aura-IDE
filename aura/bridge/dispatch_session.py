@@ -66,7 +66,6 @@ class DispatchStepCursor:
 
     index: int = 0
     completed_step_ids: list[str] = field(default_factory=list)
-    blocked_step_id: str | None = None
 
     @property
     def completed_set(self) -> set[str]:
@@ -91,10 +90,10 @@ class DispatchSession:
     - All steps start as pending.
     - The active step becomes active while it runs.
     - Completed steps become done before the next step activates.
-    - A blocked/failed step shows as active+blocked in the final emission.
+    - If a step fails, the campaign stops (no blocked TODO state).
     - One final TODO emission happens after the loop ends.
-    - Worker-local TODO updates from inside _run_worker_step are blocked for
-      canonical dispatch tool_call_ids by _DispatchProxy._relay_worker_todo_update.
+    - Worker-local TODO updates from inside _run_worker_step are absorbed
+      by the controller for canonical dispatch tool_call_ids.
     """
 
     def __init__(
@@ -162,12 +161,6 @@ class DispatchSession:
         self._todo_controller.mark_done(self.tool_call_id, step_id)
         self._emit_canonical_snapshot()
 
-    def _canonical_mark_blocked(self, step_id: str) -> None:
-        if self._todo_controller is None:
-            return
-        self._todo_controller.mark_blocked(self.tool_call_id, step_id)
-        self._emit_canonical_snapshot()
-
     def _canonical_finish(self) -> None:
         if self._todo_controller is None:
             return
@@ -182,13 +175,13 @@ class DispatchSession:
         """Execute every plan step in order and return the aggregate result.
 
         workerStarted is emitted once before the first step.
-        workerFinished is emitted once after the last/blocking step with the
+        workerFinished is emitted once after the last step with the
         aggregate ok/summary/needs_followup/status — never per internal step.
 
         Steps run sequentially under the same tool_call_id. The first step that
-        triggers _step_should_stop halts the campaign; that step's id is recorded
-        as blocked_step_id. Steps completed before the halt contribute their
-        modified files to the aggregate and appear as done in the final TODO state.
+        triggers _step_should_stop halts the campaign. Steps completed before
+        the halt contribute their modified files to the aggregate and appear
+        as done in the final TODO state.
         """
         if not self.plan.steps:
             result = WorkerDispatchResult(
@@ -235,9 +228,6 @@ class DispatchSession:
             self.step_results.append(step_result)
 
             if _step_should_stop(step_result, worker_result):
-                # Record as blocked; final TODO emit below shows active+blocked.
-                self.cursor.blocked_step_id = step.id
-                self._canonical_mark_blocked(step.id)
                 break
 
             # Step completed — advance cursor; mark done.
@@ -274,7 +264,8 @@ class DispatchSession:
         # ------------------------------------------------------------------
         # Campaign composition-validation gate (all-green path only)
         # ------------------------------------------------------------------
-        if self.cursor.blocked_step_id is None:
+        all_steps_completed = len(self.cursor.completed_step_ids) == len(self.plan.steps)
+        if all_steps_completed:
             commands = self.plan.campaign_validation_commands()
             if commands:
                 modified_files_union = _collect_modified_files(self.step_results)
@@ -290,7 +281,6 @@ class DispatchSession:
                     self._pending,
                 )
                 if not validation_result.ok:
-                    self.cursor.blocked_step_id = "campaign-validation"
                     validation_result.extras["composition_failure"] = True
                     validation_result.extras["planner_resolution_needed"] = True
                     final_worker_result = validation_result
@@ -476,7 +466,6 @@ def _session_metadata(
         "dispatch_cursor": {
             "index": cursor.index,
             "completed_step_ids": list(cursor.completed_step_ids),
-            "blocked_step_id": cursor.blocked_step_id,
         },
         "dispatch_step_results": [sr.to_dict() for sr in step_results],
         "campaign_recovery_classification": recovery_classification,
@@ -578,8 +567,7 @@ def _campaign_recovery_attempts(
 ) -> dict[str, int]:
     if recovery_classification in {NO_RECOVERY_NEEDED, USER_VISIBLE_BLOCKER, USER_ONLY_BLOCKER, TERMINAL_ENVIRONMENT_BLOCKER}:
         return {}
-    step_id = cursor.blocked_step_id
-    return {step_id: 1} if step_id else {}
+    return {}
 
 
 def _visible_campaign_result(
@@ -597,9 +585,8 @@ def _visible_campaign_result(
             "status": worker_result.status,
         }
 
-    blocked_step = session_metadata.get("dispatch_cursor", {}).get("blocked_step_id")
     classification = str(session_metadata.get("campaign_recovery_classification") or "")
-    summary = _calm_campaign_recovery_summary(blocked_step, classification)
+    summary = _calm_campaign_recovery_summary(classification)
     return {
         "ok": False,
         "summary": summary,
@@ -609,14 +596,11 @@ def _visible_campaign_result(
     }
 
 
-def _calm_campaign_recovery_summary(blocked_step: Any, classification: str) -> str:
-    step_text = f" at {blocked_step}" if blocked_step else ""
+def _calm_campaign_recovery_summary(classification: str) -> str:
     if classification == INTERNAL_RECOVERABLE_ERROR:
-        return (
-            f"Aura paused this campaign{step_text} without needing user action."
-        )
+        return "Aura paused this campaign without needing user action."
     return (
-        f"Aura paused this campaign{step_text} before completion. "
+        "Aura paused this campaign before completion. "
         "No user action is required."
     )
 

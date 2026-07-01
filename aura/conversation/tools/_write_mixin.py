@@ -13,7 +13,6 @@ in test_tool_registry.py takes effect correctly.
 
 from __future__ import annotations
 
-import logging
 import os
 import stat
 import tempfile
@@ -30,280 +29,6 @@ from aura.paths import safe_relative_to
 # `registry` is already in sys.modules by the time this module is loaded.
 
 from aura.conversation.tools import registry as _reg
-
-_log = logging.getLogger("aura.humanizer")
-
-
-def _humanizer_settings():
-    try:
-        from aura.settings import load_settings
-        return load_settings()
-    except Exception:
-        return None
-
-
-def _humanizer_enabled() -> bool:
-    settings = _humanizer_settings()
-    enabled = True if settings is None else bool(getattr(settings, "humanizer_enabled", True))
-
-    env = os.environ.get("AURA_HUMANIZER")
-    if env == "0":
-        return False
-    if env == "1":
-        return True
-
-    return enabled
-
-
-def _humanizer_observe_enabled() -> bool:
-    settings = _humanizer_settings()
-    observe = False if settings is None else bool(getattr(settings, "humanizer_observe", False))
-
-    env = os.environ.get("AURA_HUMANIZER_OBSERVE")
-    if env == "1":
-        return True
-    if env == "0":
-        return False
-
-    return observe
-
-
-def _humanizer_feature_log_enabled() -> bool:
-    settings = _humanizer_settings()
-    enabled = False if settings is None else bool(getattr(settings, "humanizer_feature_log", False))
-
-    env = os.environ.get("AURA_HUMANIZER_FEATURE_LOG")
-    if env == "1":
-        return True
-    if env == "0":
-        return False
-
-    return enabled
-
-
-def _humanizer_gate_enabled() -> bool:
-    # Tool-result based rejection is developer-only because normal tool results
-    # enter model-visible history and UI event flow. Product behavior is
-    # cleanup/scan before approval, not visible rejection.
-    if not _humanizer_enabled():
-        return False
-    if _humanizer_observe_enabled():
-        return False
-
-    settings = _humanizer_settings()
-    enabled = False if settings is None else bool(getattr(settings, "humanizer_gate_enabled", False))
-
-    env = os.environ.get("AURA_HUMANIZER_GATE")
-    if env == "0":
-        return False
-    if env == "1":
-        return True
-
-    return enabled
-
-
-def _humanizer_gate_min_severity() -> str:
-    settings = _humanizer_settings()
-    severity = "high" if settings is None else str(getattr(settings, "humanizer_gate_min_severity", "high")).lower()
-
-    env = os.environ.get("AURA_HUMANIZER_GATE_MIN_SEVERITY")
-    if env:
-        severity = env.strip().lower()
-
-    if severity not in {"critical", "high", "medium", "low"}:
-        return "high"
-
-    return severity
-
-
-def _log_humanizer_observe(rel_path: str, result) -> None:
-    """Log what the humanizer would change for observe-only mode."""
-    if result.changed:
-        parts = []
-        if result.markdown_stripped:
-            parts.append("strip markdown")
-        if result.comments_removed > 0:
-            parts.append(f"remove {result.comments_removed} comments")
-        if result.docstrings_removed > 0:
-            parts.append(f"remove {result.docstrings_removed} docstrings")
-        _log.info("[humanizer:observe] %s: would %s", rel_path, ", ".join(parts))
-    else:
-        _log.info("[humanizer:observe] %s: no changes", rel_path)
-
-    if _humanizer_feature_log_enabled() and result.feature_report and result.feature_report.has_structural_smells:
-        report = result.feature_report
-        _log.info(
-            "[humanizer:features] %s: %d tuple returns, %d generic names, %d narration comments, %d thin helpers",
-            rel_path,
-            len(report.tuple_returns),
-            len(report.generic_names),
-            len(report.narration_comments),
-            len(report.thin_helpers),
-        )
-
-
-def _severity_rank(value: str) -> int:
-    order = {
-        "critical": 0,
-        "high": 1,
-        "medium": 2,
-        "low": 3,
-    }
-    return order.get(value, 99)
-
-
-def _blocking_slop_issues(result) -> list:
-    """Return blocking slop issues from a HumanizerResult, sorted by severity."""
-    report = getattr(result, "slop_report", None)
-    if report is None:
-        return []
-
-    min_severity = _humanizer_gate_min_severity()
-
-    blocking = []
-    for issue in report.issues:
-        severity = getattr(issue.severity, "value", str(issue.severity)).lower()
-
-        if severity == "critical":
-            blocking.append(issue)
-            continue
-
-        if min_severity == "high" and severity == "high":
-            blocking.append(issue)
-
-    blocking.sort(
-        key=lambda issue: (
-            _severity_rank(getattr(issue.severity, "value", str(issue.severity)).lower()),
-            getattr(issue, "line", 0),
-            getattr(issue, "column", 0),
-            getattr(issue, "code", ""),
-        )
-    )
-    return blocking
-
-
-def _humanizer_gate_error(rel_path: str, result, blocking_issues: list) -> ToolExecResult:
-    """Build a ToolExecResult rejection for blocking slop issues."""
-    report = getattr(result, "slop_report", None)
-
-    issues_payload = []
-    for issue in blocking_issues[:8]:
-        severity = getattr(issue.severity, "value", str(issue.severity))
-        issues_payload.append(
-            {
-                "code": issue.code,
-                "line": issue.line,
-                "severity": severity,
-                "message": issue.message,
-                "suggestion": issue.suggestion,
-            }
-        )
-
-    return ToolExecResult(
-        ok=False,
-        payload=_mark_not_applied({
-            "ok": False,
-            "error": "Aura humanizer rejected generated Python before approval.",
-            "failure_class": "craft_rejected",
-            "humanizer_gate": True,
-            "path": rel_path,
-            "slop_score": getattr(report, "score", 0.0) if report else 0.0,
-            "slop_status": getattr(report, "status", "unknown") if report else "unknown",
-            "issue_count": getattr(report, "issue_count", 0) if report else 0,
-            "blocking_issue_count": len(blocking_issues),
-            "issues": issues_payload,
-        }),
-    )
-
-
-def _maybe_observe_humanizer(proposal: dict) -> None:
-    """Run humanizer in observe-only mode for existing .py file edits."""
-    if not _humanizer_enabled():
-        return
-    if os.environ.get("AURA_HUMANIZER_EDIT_FILE") != "1":
-        return
-    rel_path = proposal.get("rel_path", "")
-    if not rel_path.endswith(".py"):
-        return
-    try:
-        from aura.humanizer import HumanizerPipeline
-
-        result = HumanizerPipeline().humanize_code(
-            proposal["new_content"], language="python"
-        )
-        _log_humanizer_observe(rel_path, result)
-    except Exception:
-        _log.exception(
-            "HumanizerPipeline failed for %s, skipping observe", rel_path
-        )
-
-
-def _maybe_humanize_proposal(proposal: dict) -> ToolExecResult | None:
-    """Run humanizer on proposal content, potentially replacing it.
-
-    Respects AURA_HUMANIZER kill switch and AURA_HUMANIZER_OBSERVE mode.
-    Returns a rejection ToolExecResult when the gate blocks slop, else None.
-    All other errors are logged and swallowed.
-    """
-    if not _humanizer_enabled():
-        return None
-    rel_path = proposal.get("rel_path", "")
-    if not rel_path.endswith(".py"):
-        return None
-    try:
-        from aura.humanizer import HumanizerPipeline
-
-        pipeline_path = Path(rel_path) if rel_path else None
-        result = HumanizerPipeline().humanize_code(
-            proposal["new_content"], language="python", path=pipeline_path
-        )
-        if _humanizer_observe_enabled():
-            _log_humanizer_observe(rel_path, result)
-        else:
-            if not result.syntax_fallback and result.error is None:
-                proposal["new_content"] = result.text
-
-        # Gate: reject if blocking slop issues found
-        if _humanizer_gate_enabled():
-            blocking_issues = _blocking_slop_issues(result)
-            if blocking_issues:
-                return _humanizer_gate_error(rel_path, result, blocking_issues)
-
-        if _humanizer_feature_log_enabled() and result.feature_report and result.feature_report.has_structural_smells:
-            report = result.feature_report
-            _log.info(
-                "[humanizer:features] %s: %d tuple returns, %d generic names, %d narration comments, %d thin helpers",
-                rel_path,
-                len(report.tuple_returns),
-                len(report.generic_names),
-                len(report.narration_comments),
-                len(report.thin_helpers),
-            )
-            for tr in report.tuple_returns:
-                _log.info(
-                    "[humanizer:features] %s: %s returns %d values on line %d",
-                    rel_path, tr.function_name, tr.size, tr.line,
-                )
-            for gn in report.generic_names:
-                _log.info(
-                    "[humanizer:features] %s: generic name '%s' on line %d",
-                    rel_path, gn.name, gn.line,
-                )
-            for nc in report.narration_comments:
-                _log.info(
-                    "[humanizer:features] %s: narration comment on line %d: %s",
-                    rel_path, nc.line, nc.text[:60],
-                )
-            for th in report.thin_helpers:
-                _log.info(
-                    "[humanizer:features] %s: thin helper '%s' (%d lines) on line %d",
-                    rel_path, th.function_name, th.body_lines, th.line,
-                )
-    except Exception:
-        _log.exception(
-            "HumanizerPipeline failed for %s, using original content", rel_path
-        )
-    return None
 
 PATCH_FILE_REPAIR_ACTION = (
     "Re-read the current file and inspect proposed_context. Treat joined Python statements "
@@ -848,11 +573,6 @@ class WriteHandlersMixin:
             if not proposal.get("ok", False):
                 return ToolExecResult(ok=False, payload=_mark_not_applied(proposal))
 
-            # Humanizer: clean new Python file content before approval
-            if proposal.get("is_new_file", False):
-                gate_error = _maybe_humanize_proposal(proposal)
-                if gate_error is not None:
-                    return gate_error
             syntax_error = _python_syntax_error_payload(proposal)
             if syntax_error is not None:
                 return ToolExecResult(ok=False, payload=syntax_error)
@@ -893,7 +613,6 @@ class WriteHandlersMixin:
             if not proposal.get("ok", False):
                 return ToolExecResult(ok=False, payload=_mark_not_applied(proposal))
 
-            _maybe_observe_humanizer(proposal)
             syntax_error = _python_syntax_error_payload(proposal)
             if syntax_error is not None:
                 return ToolExecResult(ok=False, payload=syntax_error)
@@ -965,17 +684,8 @@ class WriteHandlersMixin:
         }
         if proposal.get("pre_existing_environment_issues"):
             payload["pre_existing_environment_issues"] = proposal.get("pre_existing_environment_issues")
-        introduced_environment_issues = None
-        if isinstance(proposal.get("craft_metadata"), dict):
-            introduced_environment_issues = proposal["craft_metadata"].get("introduced_environment_issues")
-        if introduced_environment_issues:
-            payload["introduced_environment_issues"] = introduced_environment_issues
         if proposal.get("checks_warned"):
             payload["checks_warned"] = proposal.get("checks_warned")
-        if proposal.get("craft_warnings"):
-            payload["craft_warnings"] = proposal.get("craft_warnings")
-        if proposal.get("craft_metadata"):
-            payload["craft_metadata"] = proposal.get("craft_metadata")
         if name == "patch_file":
             payload["hunk_count"] = proposal.get("hunk_count", 0)
         return ToolExecResult(

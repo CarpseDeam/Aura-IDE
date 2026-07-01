@@ -13,8 +13,6 @@ _log = logging.getLogger(__name__)
 HAZARD_STATUSES = frozenset({
     "validation_failed",
     "harness_error",
-    "craft_blocked",
-    "craft_rejected",
     "edit_mechanics_blocked",
 })
 

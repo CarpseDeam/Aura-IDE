@@ -515,8 +515,6 @@ class DroneRunner(QObject):
             WorkerOutcomeStatus.harness_error.value,
             WorkerOutcomeStatus.needs_followup.value,
             WorkerOutcomeStatus.needs_planner_resolution.value,
-            WorkerOutcomeStatus.craft_blocked.value,
-            WorkerOutcomeStatus.craft_rejected.value,
             WorkerOutcomeStatus.scope_mismatch.value,
             WorkerOutcomeStatus.approval_rejected.value,
         }

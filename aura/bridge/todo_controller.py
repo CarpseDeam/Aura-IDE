@@ -10,7 +10,7 @@ Rules:
 - Unknown Worker objective IDs with status other than "done"/"active"
   are ignored.
 - A Worker "done"/"active" update with an unknown ID is routed to the
-  single active non-blocked canonical objective (the step currently being
+  single active canonical objective (the step currently being
   executed). If there is zero or more than one active row, it is ignored.
 - Worker-local TODOs with unknown IDs, ad-hoc descriptions, or replacement
   task lists are ignored during canonical dispatch.
@@ -18,6 +18,9 @@ Rules:
 - Final checklist remains visible after dispatch finish.
 - Clear canonical state only when a new dispatch begins for that tool ID,
   when the run is cancelled/reset, or when the owning conversation resets.
+
+Allowed visible TODO states: pending, active, done.
+There is no blocked state in the TODO row model.
 """
 
 from __future__ import annotations
@@ -34,7 +37,6 @@ class TodoObjective:
     description: str
     status: str = "pending"
     files: list[str] = field(default_factory=list)
-    blocked: bool = False
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -46,8 +48,6 @@ class TodoObjective:
         }
         if self.files:
             result["files"] = list(self.files)
-        if self.blocked:
-            result["blocked"] = True
         if self.metadata:
             result["metadata"] = dict(self.metadata)
         return result
@@ -88,7 +88,6 @@ class DispatchTodoController:
                 description=str(obj.get("description") or obj_id),
                 status="pending",
                 files=_str_list(obj.get("files")),
-                blocked=False,
                 metadata=dict(obj.get("metadata") or {}),
             )
         self._canonical[tool_call_id] = ordered
@@ -109,14 +108,13 @@ class DispatchTodoController:
     ) -> list[dict[str, Any]]:
         """Mark one objective as active. Returns the full snapshot.
 
-        Enforces one-active-row: any other non-done, non-blocked active
-        row is returned to pending. Done rows and blocked rows are
-        never touched.
+        Enforces one-active-row: any other non-done active row is
+        returned to pending.
         """
         obj = self._get(tool_call_id, objective_id)
         if obj is None:
             return self.snapshot(tool_call_id)
-        if obj.status in ("done",):
+        if obj.status == "done":
             return self.snapshot(tool_call_id)
 
         ordered = self._canonical.get(tool_call_id)
@@ -125,8 +123,6 @@ class DispatchTodoController:
                 if other_id == objective_id:
                     continue
                 if other.status == "done":
-                    continue
-                if other.blocked:
                     continue
                 if other.status == "active":
                     other.status = "pending"
@@ -142,35 +138,13 @@ class DispatchTodoController:
         if obj is None:
             return self.snapshot(tool_call_id)
         obj.status = "done"
-        obj.blocked = False
-        return self.snapshot(tool_call_id)
-
-    def mark_blocked(
-        self, tool_call_id: str, objective_id: str
-    ) -> list[dict[str, Any]]:
-        """Mark one objective as active + blocked. Returns the full snapshot."""
-        obj = self._get(tool_call_id, objective_id)
-        if obj is None:
-            return self.snapshot(tool_call_id)
-        obj.status = "active"
-        obj.blocked = True
         return self.snapshot(tool_call_id)
 
     def finish(self, tool_call_id: str) -> list[dict[str, Any]]:
-        """Finalize: mark any still-active objective back to pending.
+        """Finalize the checklist. The checklist stays visible after finish.
 
-        The checklist stays visible after finish.
         Returns the final full snapshot.
         """
-        ordered = self._canonical.get(tool_call_id)
-        if ordered is None:
-            return []
-        for obj in ordered.values():
-            if obj.status == "active" and not obj.blocked:
-                # Active-but-not-blocked at finish time means the step was
-                # interrupted. Leave it as-is so the user sees what state it
-                # was in. Don't force-downgrade.
-                pass
         return self.snapshot(tool_call_id)
 
     def clear(self, tool_call_id: str) -> None:
@@ -204,7 +178,7 @@ class DispatchTodoController:
         if the worker update should be completely suppressed (no emission).
 
         Enforces one-active-row: when a known objective is set to active,
-        any other non-done, non-blocked active row is returned to pending.
+        any other non-done active row is returned to pending.
         """
         if not self.has_canonical(tool_call_id):
             return None
@@ -222,11 +196,8 @@ class DispatchTodoController:
 
             obj = ordered.get(task_id)
             if obj is None:
-                # Unknown ID — the worker is reporting on its own task
-                # identifiers which do not match the planner's step IDs.
-                # But exactly one canonical step is active at a time, so
-                # route a "done"/"active" update to the currently-active
-                # objective instead of discarding it.
+                # Unknown ID — route "done"/"active" update to the
+                # currently-active objective.
                 if worker_status not in ("done", "active"):
                     continue
                 active_obj = _find_single_active(ordered)
@@ -237,13 +208,11 @@ class DispatchTodoController:
                 active_obj.status = worker_status
                 changed = True
                 # Enforce one active row when routing to active
-                if worker_status == "active" and not active_obj.blocked:
+                if worker_status == "active":
                     for other in ordered.values():
                         if other is active_obj:
                             continue
                         if other.status == "done":
-                            continue
-                        if other.blocked:
                             continue
                         if other.status == "active":
                             other.status = "pending"
@@ -255,13 +224,11 @@ class DispatchTodoController:
                     obj.status = worker_status
                     changed = True
                     # Enforce one active row when setting a known ID to active
-                    if worker_status == "active" and not obj.blocked:
+                    if worker_status == "active":
                         for other_id, other in ordered.items():
                             if other_id == task_id:
                                 continue
                             if other.status == "done":
-                                continue
-                            if other.blocked:
                                 continue
                             if other.status == "active":
                                 other.status = "pending"
@@ -287,14 +254,14 @@ class DispatchTodoController:
 def _find_single_active(
     ordered: dict[str, TodoObjective],
 ) -> TodoObjective | None:
-    """Return the single active, non-blocked objective, or None.
+    """Return the single active objective, or None.
 
-    Returns None when there are zero or more than one active non-blocked
-    rows — the fallback routing is only safe when the target is unambiguous.
+    Returns None when there are zero or more than one active rows — the
+    fallback routing is only safe when the target is unambiguous.
     """
     found: TodoObjective | None = None
     for obj in ordered.values():
-        if obj.status == "active" and not obj.blocked:
+        if obj.status == "active":
             if found is not None:
                 # More than one active → ambiguous, abort
                 return None
@@ -314,8 +281,6 @@ def _normalize_status(raw: str) -> str:
         return "done"
     if s in ("active", "in_progress", "doing", "current"):
         return "active"
-    if s in ("blocked",):
-        return "blocked"
     return "pending"
 
 

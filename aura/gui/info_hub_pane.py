@@ -175,8 +175,6 @@ class InfoHubPane(QWidget):
                 WorkerOutcomeStatus.needs_followup.value: "ℹ️ Worker Log details below.",
                 WorkerOutcomeStatus.validation_failed.value: "❌ Worker validation failed.",
                 WorkerOutcomeStatus.edit_mechanics_blocked.value: "⚠️ Worker edit mechanics blocked.",
-                WorkerOutcomeStatus.craft_blocked.value: "❌ Worker craft blocked.",
-                WorkerOutcomeStatus.craft_rejected.value: "❌ Worker craft rejected.",
                 WorkerOutcomeStatus.scope_mismatch.value: "⚠️ Worker scope mismatch.",
                 WorkerOutcomeStatus.approval_rejected.value: "❌ Worker approval rejected.",
                 WorkerOutcomeStatus.cancelled.value: "🔶 Worker cancelled.",
@@ -256,10 +254,13 @@ class InfoHubPane(QWidget):
 
     def clear(self) -> None:
         """Reset the Worker Log: clear text, todo, and dynamic cards."""
+        self.clear_log()
+        self._todo_widget.update_tasks([])
+
+    def clear_log(self) -> None:
+        """Clear log text and dynamic cards without touching the TODO rail."""
         self._log_stream.clear()
         self._log_view.setPlainText("")
-
-        self._todo_widget.update_tasks([])
 
         # Remove all dynamic cards
         while self._cards_layout.count() > 0:

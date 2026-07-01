@@ -298,6 +298,31 @@ def is_terminal_dispatch_blocker(
     return False
 
 
+def is_terminal_dispatch_session_campaign(
+    source: Any = None,
+    *,
+    extras: dict[str, Any] | None = None,
+    **overrides: Any,
+) -> bool:
+    """Return True when *source* came from a DispatchSession multi-step
+    campaign that finished (possibly with a blocked step).  The session
+    already owns the cursor, emitted the final TODO snapshot, and fired
+    workerFinished — the Planner loop must stop, not restart for ordinary
+    step advancement.
+
+    Calling convention::
+
+        is_terminal_dispatch_session_campaign(result)       # WorkerDispatchResult
+        is_terminal_dispatch_session_campaign(payload_dict) # JSON dict payload
+        is_terminal_dispatch_session_campaign(extras=ex)    # bare extras dict
+    """
+    ex, _meta = _normalise_source(source, extras, **overrides)
+    return bool(
+        ex.get("dispatch_session")
+        and ex.get("internal_campaign_continuation")
+    )
+
+
 # ---------------------------------------------------------------------------
 # Convenience: single-call classification
 # ---------------------------------------------------------------------------
@@ -331,5 +356,6 @@ __all__ = [
     "is_internal_dispatch_continuation",
     "is_user_visible_dispatch_blocker",
     "is_terminal_dispatch_blocker",
+    "is_terminal_dispatch_session_campaign",
     "classify_dispatch_result",
 ]

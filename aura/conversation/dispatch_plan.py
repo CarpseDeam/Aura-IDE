@@ -488,12 +488,12 @@ def todo_tasks_from_plan(
     *,
     active_step_id: str | None = None,
     completed_step_ids: set[str] | None = None,
-    blocked_step_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Convert a WorkerDispatchPlan into canonical TODO tasks for the UI.
 
     Each task dict uses the stable fields the existing TodoListWidget expects:
     description, status (pending/active/done), plus step_id, id, and files.
+    There is no blocked state — allowed states are pending, active, done.
     """
     completed: set[str] = completed_step_ids or set()
     tasks: list[dict[str, Any]] = []
@@ -513,11 +513,6 @@ def todo_tasks_from_plan(
             task["status"] = "done"
         elif step.id == active_step_id:
             task["status"] = "active"
-            if step.id == blocked_step_id:
-                task["blocked"] = True
-        elif step.id == blocked_step_id:
-            task["status"] = "active"
-            task["blocked"] = True
 
         tasks.append(task)
     return tasks

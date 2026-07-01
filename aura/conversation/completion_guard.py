@@ -146,8 +146,6 @@ def worker_dispatch_is_terminal(result: WorkerDispatchResult | None) -> bool:
         WorkerOutcomeStatus.needs_planner_resolution.value,
         WorkerOutcomeStatus.validation_failed.value,
         WorkerOutcomeStatus.edit_mechanics_blocked.value,
-        WorkerOutcomeStatus.craft_blocked.value,
-        WorkerOutcomeStatus.craft_rejected.value,
         WorkerOutcomeStatus.scope_mismatch.value,
     ):
         return False

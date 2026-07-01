@@ -60,8 +60,6 @@ def worker_summary_status_label(
             WorkerOutcomeStatus.completed_with_caveats.value: ("Done", SUCCESS),
             WorkerOutcomeStatus.validation_failed.value: ("Failed validation", DANGER),
             WorkerOutcomeStatus.edit_mechanics_blocked.value: ("Edit mechanics blocked", WARN),
-            WorkerOutcomeStatus.craft_blocked.value: ("Craft blocked", DANGER),
-            WorkerOutcomeStatus.craft_rejected.value: ("Craft rejected", DANGER),
             WorkerOutcomeStatus.scope_mismatch.value: ("Scope mismatch", WARN),
             WorkerOutcomeStatus.approval_rejected.value: ("Approval rejected", DANGER),
             WorkerOutcomeStatus.cancelled.value: ("Cancelled", "#6b7280"),
@@ -71,8 +69,6 @@ def worker_summary_status_label(
         return mapping.get(status, ("Unknown", "#6b7280"))
 
     # Fallback to legacy inference
-    if "Craft blocked" in summary:
-        return "Craft blocked", DANGER
     if "Waiting for approval" in summary:
         return "Waiting for approval", WARN
     if "Repairing patch" in summary:
@@ -149,8 +145,6 @@ def spec_finished_label(
             WorkerOutcomeStatus.needs_followup.value: ("Completed with caveats", WARN),
             WorkerOutcomeStatus.validation_failed.value: ("Validation failed", DANGER),
             WorkerOutcomeStatus.edit_mechanics_blocked.value: ("Edit mechanics blocked", WARN),
-            WorkerOutcomeStatus.craft_blocked.value: ("Craft blocked", DANGER),
-            WorkerOutcomeStatus.craft_rejected.value: ("Craft rejected", DANGER),
             WorkerOutcomeStatus.scope_mismatch.value: ("Scope mismatch", WARN),
             WorkerOutcomeStatus.approval_rejected.value: ("Approval rejected", DANGER),
             WorkerOutcomeStatus.cancelled.value: ("Cancelled", DANGER),

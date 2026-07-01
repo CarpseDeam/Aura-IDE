@@ -25,10 +25,24 @@ from aura.conversation._dispatch_helpers import (
 )
 from aura.conversation.project_profile import ProjectProfile
 from aura.conversation.task_shape import TaskShape, infer_task_shape, unknown_task_shape
-from aura.craft.types import ExplicitSpecContract
 
 if TYPE_CHECKING:
     from aura.conversation.dispatch_plan import WorkerStepSpec
+
+
+@dataclass
+class ExplicitSpecContract:
+    """Formal contract between Planner and Worker.
+
+    Captures what the Worker must produce and must not do.
+    Populated from the Planner's dispatch fields.
+    """
+    expected_public_symbols: list[str] = field(default_factory=list)
+    expected_dataclass_fields: dict[str, list[str]] = field(default_factory=dict)
+    forbidden_public_methods: list[str] = field(default_factory=list)
+    forbidden_calls: list[str] = field(default_factory=list)
+    required_outputs: list[str] = field(default_factory=list)
+    non_goals: list[str] = field(default_factory=list)
 
 
 class WorkerOutcomeStatus(str, enum.Enum):
@@ -51,12 +65,6 @@ class WorkerOutcomeStatus(str, enum.Enum):
 
     edit_mechanics_blocked = "edit_mechanics_blocked"
     """Worker could not apply edits due to mechanical tool failures."""
-
-    craft_blocked = "craft_blocked"
-    """Craft blocked the proposal before approval."""
-
-    craft_rejected = "craft_rejected"
-    """Craft rejected the patch and it was not retried."""
 
     scope_mismatch = "scope_mismatch"
     """Worker determined the request was out of scope or unclear."""

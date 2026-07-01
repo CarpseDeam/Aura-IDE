@@ -269,9 +269,12 @@ class AuraPlayground(QWidget):
     # Public API (backward-compatible with worker_handler.py)
 
     def begin_assistant(self):
-        """Reset the workspace for a new assistant run."""
+        """Reset the workspace for a new assistant run (log text, code tabs, terminal).
+
+        Does NOT clear the TODO rail — the bridge owns TODO state during dispatch.
+        """
         self._code_editor.close_worker_tabs()
-        self._info_hub.clear()
+        self._info_hub.clear_log()
         self._terminal_window.clear()
         self._controllers.clear()
         self._worker_code_paths.clear()
@@ -279,9 +282,31 @@ class AuraPlayground(QWidget):
         self._pending_worker_code_content.clear()
 
     def begin_dispatch_todo_list(self, tool_call_id: str, steps: list) -> None:
+        """Seed the visible TODO rail from Planner steps.
+
+        Steps is a list of dicts with id, title/goal, and files.
+        Converts each step into a {id, description, status: "pending"} task.
+        """
         self._canonical_active.add(tool_call_id)
         self._dispatch_rail.reset(tool_call_id)
-        self._info_hub.update_todo_list([])
+        tasks: list[dict] = []
+        for step in (steps or []):
+            if not isinstance(step, dict):
+                continue
+            step_id = str(step.get("id") or "")
+            title = str(step.get("title") or step.get("goal") or step_id)
+            task: dict = {
+                "id": step_id,
+                "step_id": step_id,
+                "description": title,
+                "status": "pending",
+            }
+            files = step.get("files")
+            if isinstance(files, list):
+                task["files"] = [str(f) for f in files]
+            tasks.append(task)
+        self._dispatch_rail.set(tool_call_id, tasks)
+        self._info_hub.update_todo_list(tasks)
 
     def render_dispatch_todo_list(self, tool_call_id: str) -> None:
         self._info_hub.update_todo_list(self._dispatch_rail.replay(tool_call_id))

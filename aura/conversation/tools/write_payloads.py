@@ -4,8 +4,8 @@
 def _write_outcome_for_failure(failure_class: str) -> str:
     if failure_class == "approval_rejected":
         return "not_applied_user_rejected"
-    if failure_class in {"craft_blocked", "craft_rejected", "introduced_environment_issue", "syntax_invalid"}:
-        return "not_applied_craft_rejected"
+    if failure_class == "syntax_invalid":
+        return "not_applied_edit_mechanics_blocked"
     if failure_class == "pre_existing_environment_issue":
         return "not_applied_pre_existing_environment_blocked"
     if failure_class == "internal_error":

@@ -258,7 +258,6 @@ class WorkflowState:
             final_status = WorkflowStatus.planner_resolving
         elif outcome in {
             WorkerOutcomeStatus.harness_error.value,
-            WorkerOutcomeStatus.craft_rejected.value,
             WorkerOutcomeStatus.approval_rejected.value,
         }:
             final_status = WorkflowStatus.failed_nonrecoverable

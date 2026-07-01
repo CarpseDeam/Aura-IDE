@@ -68,10 +68,6 @@ def _compute_outcome_status(
     )
     if "approval_rejected" in failure_classes:
         return WorkerOutcomeStatus.approval_rejected.value
-    if "craft_blocked" in failure_classes:
-        return WorkerOutcomeStatus.craft_blocked.value
-    if "craft_rejected" in failure_classes or reject_flags:
-        return WorkerOutcomeStatus.craft_rejected.value
     structured_status = str(continuation.get("status") or "")
     if structured_status == "needs_planner_resolution":
         return WorkerOutcomeStatus.needs_planner_resolution.value

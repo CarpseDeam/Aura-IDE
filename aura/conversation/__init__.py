@@ -4,6 +4,7 @@ from aura.conversation.critic_dispatch import CriticCallback, CriticRequest
 from aura.conversation.critic_verdict import CriticFinding, CriticVerdict
 from aura.conversation.dispatch import (
     DispatchCallback,
+    ExplicitSpecContract,
     WorkerDispatchRequest,
     WorkerDispatchResult,
     WorkerMismatch,
@@ -44,6 +45,7 @@ def __getattr__(name: str):
 __all__ = [
     "History",
     "ConversationManager",
+    "ExplicitSpecContract",
     "WorkerDispatchRequest",
     "WorkerDispatchResult",
     "WorkerMismatch",

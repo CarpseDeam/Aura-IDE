@@ -38,9 +38,6 @@ Settings are stored in `~/.config/Aura/config.json` (platform-specific via platf
 | `companion_relay_url`         | str     | `"ws://localhost:8765"`  | WebSocket relay URL                                       |
 | `companion_display_name`      | str     | `""`                     | Display name for this desktop                             |
 | `companion_web_url`           | str     | `"http://localhost:5173"`| Web UI URL for companion                                  |
-| `humanizer_enabled`           | bool    | `true`                   | Enable Humanizer quality checks                           |
-| `humanizer_gate_enabled`      | bool    | `false`                  | Block writes that fail Humanizer checks                   |
-| `humanizer_gate_min_severity` | str     | `"high"`                 | Minimum severity to block: `"critical"`, `"high"`, `"medium"`, `"low"` |
 | `first_launch_done`           | bool    | `false`                  | Whether onboarding has completed                          |
 
 ## Settings Dialog

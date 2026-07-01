@@ -108,12 +108,6 @@ class AppSettings:
     first_launch_done: bool = False
     onboarding_checklist: dict = field(default_factory=dict)
     onboarding_version: int = 1
-    humanizer_enabled: bool = True
-    humanizer_gate_enabled: bool = False
-    humanizer_gate_min_severity: str = "high"
-    humanizer_feature_log: bool = False
-    humanizer_observe: bool = False
-
     # Companion (mobile control plane)
     companion_enabled: bool = False
     companion_relay_url: str = DEFAULT_HOSTED_COMPANION_RELAY_URL
@@ -125,19 +119,6 @@ class AppSettings:
         s = cls()
         # Ensure the rich interactive UI is always enabled, ignoring old saved configs.
         s.planner_worker_mode = True
-        # Humanizer
-        if isinstance(data.get("humanizer_enabled"), bool):
-            s.humanizer_enabled = data["humanizer_enabled"]
-        if isinstance(data.get("humanizer_gate_enabled"), bool):
-            s.humanizer_gate_enabled = data["humanizer_gate_enabled"]
-        if isinstance(data.get("humanizer_feature_log"), bool):
-            s.humanizer_feature_log = data["humanizer_feature_log"]
-        if isinstance(data.get("humanizer_observe"), bool):
-            s.humanizer_observe = data["humanizer_observe"]
-        if isinstance(data.get("humanizer_gate_min_severity"), str):
-            val = data["humanizer_gate_min_severity"].lower()
-            if val in ("critical", "high", "medium", "low"):
-                s.humanizer_gate_min_severity = val
         # Rounds
         if "max_tool_rounds" in data:
             raw = data["max_tool_rounds"]

@@ -686,7 +686,7 @@ def update_worker_recovery_state(
         content = json.dumps(parsed, ensure_ascii=False)
     elif path and failure_class == "syntax_invalid":
         parsed.setdefault("applied", False)
-        parsed.setdefault("write_outcome", "not_applied_craft_rejected")
+        parsed.setdefault("write_outcome", "not_applied_edit_mechanics_blocked")
         state = syntax_repair_state_for_path(syntax_repair_required, path)
         if not state:
             state = {"failed_repairs": 0}
