@@ -34,10 +34,12 @@ def classify_failed_worker_dispatch(
                            constraint on the next attempt. Empty when nothing
                            specific is extractable.
     """
-    if (
-        _is_quiet_internal_campaign_result(result)
-        and not _failed_dispatch_allows_planner_continuation(result)
-    ):
+    if _is_quiet_internal_campaign_result(result):
+        # Quiet internal campaign results (DispatchSession multi-step
+        # campaigns that finished with a blocked step or internal error)
+        # are absorbed here.  The DispatchSession already owns the cursor,
+        # emitted the final TODO snapshot, and fired workerFinished.
+        # The Planner must NOT re-enter for ordinary step advancement.
         return {"counts_as_attempt": False, "blocker_reason": "", "failure_constraint": ""}
     if _is_worker_internal_error(result):
         return {"counts_as_attempt": False, "blocker_reason": "internal", "failure_constraint": ""}
@@ -83,6 +85,12 @@ def _compute_failure_constraint(result: WorkerDispatchResult) -> str:
     attempt, or an empty string when nothing specific can be extracted.
     """
     extras = result.extras or {}
+
+    # DispatchSession campaign results are terminal — the session already
+    # owns the cursor, emitted the final TODO snapshot, and fired
+    # workerFinished.  Do not suggest Planner retry.
+    if extras.get("dispatch_session") and extras.get("internal_campaign_continuation"):
+        return ""
 
     # Passthrough: a pre-computed failure_constraint in extras always wins
     # over synthesised messages.  ToolRunner and DispatchSession set this

@@ -929,6 +929,16 @@ class ChatView(QScrollArea):
         self._scroll_after_bottom_layout_change()
         return card
 
+    def remap_spec_card(self, old_id: str, new_id: str) -> None:
+        """Re-map a spec card from old_id to new_id without removing it.
+
+        Used during internal dispatch continuation so the existing visible
+        card is preserved across retries with different tool_call_ids.
+        """
+        card = self._spec_cards.pop(old_id, None)
+        if card is not None:
+            self._spec_cards[new_id] = card
+
     def get_spec_card(self, tool_call_id: str) -> SpecCard | None:
         return self._spec_cards.get(tool_call_id)
 

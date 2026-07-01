@@ -10,8 +10,9 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from aura.config import redact_secrets
 from PySide6.QtCore import QObject, Signal
+
+from aura.config import redact_secrets
 
 _log = logging.getLogger(__name__)
 
@@ -64,6 +65,7 @@ class WorkerEventHandler(QObject):
         self._active_mismatch_card_id: str | None = None
         self._canonical_dispatch_ids: set[str] = set()
         self._visible_dispatch_card_id: str | None = None
+        self._pending_internal_retool_id: str | None = None
 
     # ---- public property -------------------------------------------------------
 
@@ -138,6 +140,49 @@ class WorkerEventHandler(QObject):
 
         file_list = list(files)
         step_list = list(steps or [])
+        # ---- Internal continuation: reuse existing card instead of stacking ----
+        if self._pending_internal_retool_id is not None:
+            old_id = self._pending_internal_retool_id
+            self._pending_internal_retool_id = None
+            if hasattr(self._chat, "prepare_spec_card"):
+                self._chat.prepare_spec_card(tool_call_id)
+            if old_id != tool_call_id:
+                self._chat.remap_spec_card(old_id, tool_call_id)
+                self._wired_spec_cards.discard(old_id)
+                self._canonical_dispatch_ids.discard(old_id)
+            self._canonical_dispatch_ids.add(tool_call_id)
+            self._visible_dispatch_card_id = tool_call_id
+            self._playground.begin_dispatch_todo_list(tool_call_id, step_list)
+            self._set_active_workflow(
+                WorkflowState.intent_captured(
+                    tool_call_id, goal, summary=summary,
+                ).with_status(
+                    WorkflowStatus.plan_ready,
+                    pending_user_action="Dispatch, edit, or cancel the plan.",
+                )
+            )
+            card = self._get_spec_card(tool_call_id)
+            if card:
+                card.update_spec(goal, file_list, spec, acceptance, summary, steps=step_list)
+                if hasattr(card, "update_workflow_state") and self._active_workflow is not None:
+                    card.update_workflow_state(self._active_workflow)
+            if tool_call_id not in self._wired_spec_cards and card is not None:
+                card.dispatch_clicked.connect(self._on_dispatch_clicked)
+                card.edit_clicked.connect(self._on_edit_spec_clicked)
+                card.cancel_clicked.connect(self._on_cancel_dispatch_clicked)
+                self._wired_spec_cards.add(tool_call_id)
+            if self._bridge.auto_dispatch:
+                if card and hasattr(card, "mark_dispatched"):
+                    card.mark_dispatched()
+                self._transition_active_workflow(
+                    tool_call_id,
+                    WorkflowStatus.dispatched,
+                    pending_user_action="",
+                )
+                self._bridge.user_dispatched(tool_call_id, goal, file_list, spec, acceptance, summary)
+            self._chat.scroll_to_bottom(force=True)
+            return
+
         previous_card_id = self._visible_dispatch_card_id
         if previous_card_id and previous_card_id != tool_call_id:
             self._chat.remove_spec_card(previous_card_id)
@@ -408,6 +453,12 @@ class WorkerEventHandler(QObject):
             self._clear_active_spec_card(tool_call_id)
             if self._visible_dispatch_card_id == tool_call_id:
                 self._visible_dispatch_card_id = None
+        if is_internal and not extras.get("dispatch_session"):
+            # Only set pending retool for non-DispatchSession internal
+            # continuations (e.g. spec-reject handbacks from ToolRunner).
+            # DispatchSession campaigns are terminal — the session already
+            # owns the cursor and finalized the TODO list.
+            self._pending_internal_retool_id = tool_call_id
         self._canonical_dispatch_ids.discard(tool_call_id)
         self.worker_running_changed.emit(False)
 

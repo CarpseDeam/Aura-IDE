@@ -1836,6 +1836,13 @@ class ConversationManager:
         if result is not None and not result.cancelled:
             if result.ok:
                 terminal_dispatch = True
+            elif _is_dispatch_session_terminal_campaign(result):
+                # DispatchSession multi-step campaign finished (possibly
+                # with a blocked step).  The session already owns the
+                # cursor, emitted the final TODO snapshot, and fired
+                # workerFinished.  Treat as terminal — Planner must not
+                # re-enter for ordinary step advancement.
+                terminal_dispatch = True
             else:
                 action = classify_failed_worker_dispatch(
                     args=args,
@@ -1952,6 +1959,18 @@ def _latest_user_text(history: History) -> str:
                     parts.append(str(item.get("text") or ""))
             return "\n".join(part for part in parts if part)
     return ""
+
+
+def _is_dispatch_session_terminal_campaign(result: WorkerDispatchResult) -> bool:
+    """Return True when *result* came from a DispatchSession campaign that
+    finished (possibly with a blocked step).  The DispatchSession already
+    owns the cursor, emitted the final TODO snapshot, and fired
+    workerFinished — the Planner loop must stop, not restart."""
+    extras = result.extras if isinstance(result.extras, dict) else {}
+    return bool(
+        extras.get("dispatch_session")
+        and extras.get("internal_campaign_continuation")
+    )
 
 
 def _dispatch_args_look_like_local_code_work(args: dict[str, Any]) -> bool:
