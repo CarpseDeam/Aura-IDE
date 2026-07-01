@@ -290,13 +290,20 @@ class ConversationManager:
                         continue
                     ev = ContentDelta(text=filtered_text)
                 elif planner_hygiene is not None and isinstance(ev, Done):
-                    flush_text = planner_hygiene.flush()
-                    if flush_text:
-                        on_event(ContentDelta(text=flush_text))
+                    if not state.silent_preflight:
+                        flush_text = planner_hygiene.flush()
+                        if flush_text:
+                            on_event(ContentDelta(text=flush_text))
                     if isinstance(ev.full_message, dict):
                         content = ev.full_message.get("content")
                         if isinstance(content, str):
                             ev.full_message["content"] = planner_hygiene.sanitize_message_text(content)
+                if state.silent_preflight:
+                    if isinstance(ev, (ContentDelta, ReasoningDelta)):
+                        continue
+                    if isinstance(ev, Done):
+                        full_message = ev.full_message
+                        continue
                 if state.mode == "worker" and state.stream_buffer is not None:
                     state.stream_buffer.capture_or_forward(ev, on_event)
                 else:
@@ -400,6 +407,8 @@ class ConversationManager:
             if tool_round.action == "return":
                 return
             if tool_round.action == "continue":
+                if tool_round.enter_silent_preflight:
+                    state.silent_preflight = True
                 continue
 
             if state.worker_flow is not None and not tool_round.flow_steering_suppressed:

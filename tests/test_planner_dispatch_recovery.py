@@ -1,7 +1,14 @@
 import json
 import threading
 
-from aura.client import Done, ToolResult, WorkerDispatchRequested
+from aura.client import (
+    ContentDelta,
+    Done,
+    ReasoningDelta,
+    ToolCallStart,
+    ToolResult,
+    WorkerDispatchRequested,
+)
 from aura.conversation.dispatch_failure import classify_failed_worker_dispatch
 from aura.conversation.history import History
 from aura.conversation.loop_detection import LoopDetector
@@ -386,3 +393,220 @@ def test_planner_registered_write_tool_is_also_blocked_with_correction(tmp_path)
     assert payload["planner_tool_unavailable"] is True
     assert payload["suggested_next_tool"] == "dispatch_to_worker"
     assert "write_file is not available in Planner mode" in payload["error"]
+
+
+# ---------------------------------------------------------------------------
+# Silent preflight: internal dispatch repair must not leak visible chatter
+# ---------------------------------------------------------------------------
+
+
+def test_internal_handoff_returns_enter_silent_preflight(tmp_path):
+    """ToolRoundOutcome for a recoverable dispatch rejection must signal
+    that the next Planner turn should run in silent preflight mode."""
+    runner, history = _round_runner(tmp_path)
+    state = _planner_state()
+    tool_call = _dispatch_tool_call(_flat_steps_required_dispatch())
+    history.append_assistant(
+        {
+            "role": "assistant",
+            "content": "",
+            "reasoning_content": None,
+            "tool_calls": [tool_call],
+        }
+    )
+
+    outcome = runner.run(
+        tool_calls=[tool_call],
+        state=state,
+        on_event=lambda event: None,
+        approval_cb=lambda request: None,
+        cancel_event=threading.Event(),
+        dispatch_cb=lambda _tool_id, _req: None,
+        cleanup_cancelled=lambda on_event: None,
+    )
+
+    assert outcome.action == "continue"
+    assert outcome.enter_silent_preflight is True
+
+
+def test_silent_preflight_suppresses_reasoning_and_content_events():
+    """When silent_preflight is active, ContentDelta, ReasoningDelta, and
+    Done must be suppressed; tool events must still pass through."""
+
+    def _run_stream(events, *, silent_preflight):
+        forwarded = []
+        full_message = None
+        for ev in events:
+            if silent_preflight:
+                if isinstance(ev, (ContentDelta, ReasoningDelta)):
+                    continue
+                if isinstance(ev, Done):
+                    full_message = ev.full_message
+                    continue
+            forwarded.append(ev)
+            if isinstance(ev, Done):
+                full_message = ev.full_message
+        return forwarded, full_message
+
+    events = [
+        ReasoningDelta(text="I see the dispatch was rejected..."),
+        ContentDelta(text="The dispatch was rejected because step 6 has an empty files array."),
+        ToolCallStart(index=0, id="call_1", name="read_file"),
+        Done(finish_reason="tool_calls", full_message={"role": "assistant", "content": "", "tool_calls": []}),
+    ]
+
+    forwarded_off, _ = _run_stream(events, silent_preflight=False)
+    assert any(isinstance(e, ReasoningDelta) for e in forwarded_off)
+    assert any(isinstance(e, ContentDelta) for e in forwarded_off)
+    assert any(isinstance(e, Done) for e in forwarded_off)
+
+    forwarded_on, fm = _run_stream(events, silent_preflight=True)
+    assert not any(isinstance(e, (ReasoningDelta, ContentDelta, Done)) for e in forwarded_on)
+    assert any(isinstance(e, ToolCallStart) for e in forwarded_on)
+    # full_message must still be captured from suppressed Done
+    assert fm is not None
+    assert fm["role"] == "assistant"
+
+
+def test_worker_dispatch_requested_not_emitted_during_preflight_rejection(tmp_path):
+    """WorkerDispatchRequested must NOT fire for a rejected preflight dispatch;
+    it must fire only when a valid campaign passes dispatch validation."""
+    runner, history = _round_runner(tmp_path)
+    state = _planner_state()
+    events = []
+
+    # Round 1: invalid dispatch — internal handoff, no WorkerDispatchRequested
+    invalid_call = _dispatch_tool_call(_flat_steps_required_dispatch(), "call_bad")
+    history.append_assistant(
+        {
+            "role": "assistant",
+            "content": "",
+            "reasoning_content": None,
+            "tool_calls": [invalid_call],
+        }
+    )
+    invalid_outcome = runner.run(
+        tool_calls=[invalid_call],
+        state=state,
+        on_event=events.append,
+        approval_cb=lambda request: None,
+        cancel_event=threading.Event(),
+        dispatch_cb=lambda _tool_id, _req: None,
+        cleanup_cancelled=lambda on_event: None,
+    )
+    assert invalid_outcome.action == "continue"
+    assert invalid_outcome.enter_silent_preflight is True
+    assert not any(isinstance(e, WorkerDispatchRequested) for e in events)
+
+    # Round 2: valid dispatch — WorkerDispatchRequested IS emitted
+    dispatches = []
+    valid_call = _dispatch_tool_call(_valid_steps_dispatch(), "call_good")
+    history.append_assistant(
+        {
+            "role": "assistant",
+            "content": "",
+            "reasoning_content": None,
+            "tool_calls": [valid_call],
+        }
+    )
+    valid_outcome = runner.run(
+        tool_calls=[valid_call],
+        state=state,
+        on_event=events.append,
+        approval_cb=lambda request: None,
+        cancel_event=threading.Event(),
+        dispatch_cb=lambda tool_id, req: (
+            dispatches.append((tool_id, req)),
+            WorkerDispatchResult(ok=True, summary="Worker completed."),
+        )[1],
+        cleanup_cancelled=lambda on_event: None,
+    )
+
+    assert valid_outcome.action == "return"
+    assert dispatches and dispatches[0][0] == "call_good"
+    assert any(
+        isinstance(e, WorkerDispatchRequested) and e.tool_call_id == "call_good"
+        for e in events
+    )
+
+
+def test_worker_log_todo_not_seeded_for_rejected_preflight_dispatch(tmp_path):
+    """A rejected preflight dispatch must set workflow status to
+    planner_resolving, not worker_starting. The TODO rail is NOT seeded."""
+    runner = ToolRunner(
+        History(),
+        tmp_path,
+        LoopDetector(),
+        VerificationProgressTracker(),
+    )
+    states = []
+
+    result = runner.handle_dispatch(
+        "call_dispatch",
+        _flat_steps_required_dispatch(),
+        on_event=lambda event: None,
+        dispatch_cb=lambda _tool_id, _req: None,
+        workflow_state_cb=lambda *items: states.append(items),
+    )
+
+    assert result is not None
+    assert result.ok is False
+    assert states and states[-1][3] == WorkflowStatus.planner_resolving
+    assert not any(s[3] == WorkflowStatus.dispatched for s in states)
+
+
+def test_terminal_blocker_still_surfaces_during_preflight(tmp_path):
+    """After silent preflight is active, a repeated dispatch shape rejection
+    must still produce a terminal blocker with a Done(stop) event."""
+    runner, history = _round_runner(tmp_path)
+    state = _planner_state()
+    events = []
+
+    # First rejection: internal handoff, enters silent preflight
+    first_call = _dispatch_tool_call(_flat_steps_required_dispatch(), "call_dispatch_1")
+    history.append_assistant(
+        {
+            "role": "assistant",
+            "content": "",
+            "reasoning_content": None,
+            "tool_calls": [first_call],
+        }
+    )
+    first_outcome = runner.run(
+        tool_calls=[first_call],
+        state=state,
+        on_event=events.append,
+        approval_cb=lambda request: None,
+        cancel_event=threading.Event(),
+        dispatch_cb=lambda _tool_id, _req: None,
+        cleanup_cancelled=lambda on_event: None,
+    )
+    assert first_outcome.action == "continue"
+    assert first_outcome.enter_silent_preflight is True
+
+    # Second rejection: same signature, becomes terminal blocker
+    second_call = _dispatch_tool_call(_flat_steps_required_dispatch(), "call_dispatch_2")
+    history.append_assistant(
+        {
+            "role": "assistant",
+            "content": "",
+            "reasoning_content": None,
+            "tool_calls": [second_call],
+        }
+    )
+    second_outcome = runner.run(
+        tool_calls=[second_call],
+        state=state,
+        on_event=events.append,
+        approval_cb=lambda request: None,
+        cancel_event=threading.Event(),
+        dispatch_cb=lambda _tool_id, _req: None,
+        cleanup_cancelled=lambda on_event: None,
+    )
+
+    # Terminal blocker must still surface
+    assert second_outcome.action == "return"
+    assert any(
+        isinstance(event, Done) and event.finish_reason == "stop"
+        for event in events
+    )

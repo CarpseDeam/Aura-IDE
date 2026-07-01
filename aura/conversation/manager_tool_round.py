@@ -64,6 +64,7 @@ _READ_ONLY_TOOLS = {
 class ToolRoundOutcome:
     action: str
     flow_steering_suppressed: bool = False
+    enter_silent_preflight: bool = False
 
 
 class ToolRoundRunner:
@@ -285,7 +286,7 @@ class ToolRoundRunner:
             return ToolRoundOutcome(action="continue")
 
         if planner_internal_handoff:
-            return ToolRoundOutcome(action="continue")
+            return ToolRoundOutcome(action="continue", enter_silent_preflight=True)
 
         if completed_dispatch_for_final:
             return ToolRoundOutcome(action="return")
