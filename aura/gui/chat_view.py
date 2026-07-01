@@ -626,7 +626,6 @@ class ChatView(QScrollArea):
                 recoverable = False
                 suppress_user_followup_card = False
                 user_visible_blocker = False
-                internal_planner_handoff = False
                 _internal_continuation = False
                 try:
                     data = json.loads(result_text)
