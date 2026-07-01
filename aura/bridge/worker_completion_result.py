@@ -9,13 +9,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from aura.bridge._shell_pipeline import (
+from aura.conversation.worker_completion._shell_pipeline import (
     _is_benign_search_no_match,
     _is_no_match_only_output,
     _split_simple_pipeline,
     _pipeline_segment_starts_with_search,
 )
-from aura.bridge._summary_formatters import (
+from aura.conversation.worker_completion._summary_formatters import (
     _final_report_claims_failure,
     _final_report_claims_validation,
     _format_recoverable_write_failure,

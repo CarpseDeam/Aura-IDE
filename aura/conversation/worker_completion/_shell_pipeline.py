@@ -83,7 +83,7 @@ def _pipeline_segment_starts_with_search(segment: str) -> bool:
         return False
     if not tokens:
         return False
-    executable = tokens[0].strip("'\"").replace("\\", "/").rsplit("/", 1)[-1].lower()
+    executable = tokens[0].strip("'\"'").replace("\\", "/").rsplit("/", 1)[-1].lower()
     if executable.endswith(".exe"):
         executable = executable[:-4]
     return executable in {"rg", "grep", "findstr"}

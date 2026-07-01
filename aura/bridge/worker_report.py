@@ -6,7 +6,7 @@ import json
 import re
 from typing import Any
 
-from aura.bridge._summary_formatters import (
+from aura.conversation.worker_completion._summary_formatters import (
     _final_report_claims_failure,
     _final_report_claims_validation,
     _format_recoverable_write_failure,
