@@ -11,6 +11,7 @@ from aura.conversation.dispatch import (
     WorkerOutcomeStatus,
     infer_outcome_status,
 )
+from aura.conversation.dispatch_lifecycle import is_internal_dispatch_continuation
 from aura.conversation.tool_limits import WRITE_TOOLS
 
 
@@ -97,17 +98,18 @@ def worker_dispatch_is_terminal(result: WorkerDispatchResult | None) -> bool:
 
     Uses WorkerOutcomeStatus from aura.conversation.dispatch rather than
     duplicating status strings. Falls back to result.ok for unrecognized statuses.
+
+    Internal continuations (campaign handback, planner handoff, recoverable
+    spec-reject) are **non-terminal** — the Planner restarts internally.
     """
     if result is None:
         return False
+
+    # Internal continuation is never terminal.
+    if is_internal_dispatch_continuation(result):
+        return False
+
     extras = result.extras if isinstance(result.extras, dict) else {}
-    if (
-        extras.get("internal_campaign_continuation")
-        and extras.get("suppress_user_followup_card")
-        and not extras.get("user_visible_blocker")
-        and not extras.get("user_only_blocker")
-    ):
-        return True
 
     # Explicit boolean signals always win (fast path).
     if result.needs_followup:

@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLay
 from aura.conversation.workflow_state import WorkflowState, WorkflowStatus
 from aura.gui.cards._collapsible import _CollapsibleSection
 from aura.gui.cards._helpers import _MarkdownTextBlock
+from aura.gui.cards.dispatch_status_labels import spec_finished_label, spec_replay_finished_label
 from aura.gui.markdown_renderer import _render_markdown_with_code
 from aura.gui.theme import ACCENT, BG_ALT, BG_RAISED, BORDER, DANGER, FG, FG_DIM, FG_MUTED, SUCCESS, WARN
 
@@ -524,36 +525,17 @@ class SpecCard(QFrame):
             self._edit_btn.setEnabled(False)
         self._cancel_btn.setEnabled(False)
 
-    def worker_finished(self, ok: bool, summary: str, status: str | None = None) -> None:
+    def worker_finished(self, ok: bool, summary: str, status: str | None = None, *, is_internal: bool = False) -> None:
         """Update status when worker completes."""
         self._worker_running = False
-        verb, color = self._finished_status_label(ok, status)
+        verb, color = spec_finished_label(ok, status, is_internal=is_internal)
         self._status_label.setText(verb)
         self._status_label.setStyleSheet(f"color: {color}; font-size: 11px;")
 
     @staticmethod
     def _finished_status_label(ok: bool, status: str | None = None) -> tuple[str, str]:
-        if status is not None:
-            from aura.conversation.dispatch import WorkerOutcomeStatus, normalize_outcome_status
-
-            mapping = {
-                WorkerOutcomeStatus.completed.value: ("Completed", SUCCESS),
-                WorkerOutcomeStatus.completed_with_caveats.value: ("Completed with caveats", WARN),
-                WorkerOutcomeStatus.needs_followup.value: ("Completed with caveats", WARN),
-                WorkerOutcomeStatus.validation_failed.value: ("Validation failed", DANGER),
-                WorkerOutcomeStatus.edit_mechanics_blocked.value: ("Edit mechanics blocked", WARN),
-                WorkerOutcomeStatus.craft_blocked.value: ("Craft blocked", DANGER),
-                WorkerOutcomeStatus.craft_rejected.value: ("Craft rejected", DANGER),
-                WorkerOutcomeStatus.scope_mismatch.value: ("Scope mismatch", WARN),
-                WorkerOutcomeStatus.approval_rejected.value: ("Approval rejected", DANGER),
-                WorkerOutcomeStatus.cancelled.value: ("Cancelled", DANGER),
-                WorkerOutcomeStatus.harness_error.value: ("Harness error", DANGER),
-                WorkerOutcomeStatus.needs_planner_resolution.value: ("Retrying", WARN),
-            }
-            normalized = normalize_outcome_status(status)
-            if normalized in mapping:
-                return mapping[normalized]
-        return ("Completed", SUCCESS) if ok else ("Blocked", WARN)
+        """Canonical finished label via ``dispatch_status_labels.spec_finished_label``."""
+        return spec_finished_label(ok, status)
 
     def worker_cancelled(self) -> None:
         """Update status when worker is cancelled during execution."""
@@ -607,13 +589,12 @@ class SpecCard(QFrame):
 
 
 
-    def set_dispatched_and_finished(self, ok: bool) -> None:
+    def set_dispatched_and_finished(self, ok: bool, *, is_internal: bool = False) -> None:
         """Force the card into a read-only finished state (for history replay)."""
         self._dispatched = True
         self._worker_running = False
         self._buttons_row.setVisible(False)
-        verb = "Completed" if ok else "Completed with errors"
-        color = SUCCESS if ok else DANGER
+        verb, color = spec_replay_finished_label(ok, is_internal=is_internal)
         self._status_label.setText(verb)
         self._status_label.setStyleSheet(f"color: {color}; font-size: 11px;")
         self._status_label.setVisible(True)

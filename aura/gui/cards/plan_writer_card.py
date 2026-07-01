@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
 )
 
+from aura.conversation.dispatch_lifecycle import is_internal_dispatch_continuation
 from aura.gui.cards._helpers import _fade_in_widget
 from aura.gui.theme import BG_TOOL_CARD, BORDER, DANGER, SUCCESS, WARN
 
@@ -25,6 +26,7 @@ class PlanWriterCard(QFrame):
     STATE_PHASE = "phase"
     STATE_INCOMPLETE = "incomplete"
     STATE_NOT_STARTED = "not_started"
+    STATE_RETRYING = "retrying"
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -62,6 +64,7 @@ class PlanWriterCard(QFrame):
             self.STATE_PHASE: WARN,
             self.STATE_INCOMPLETE: WARN,
             self.STATE_NOT_STARTED: WARN,
+            self.STATE_RETRYING: WARN,
         }[self._state]
 
         text = {
@@ -73,6 +76,7 @@ class PlanWriterCard(QFrame):
             self.STATE_PHASE: "⚡ Phase complete — preparing follow-up",
             self.STATE_INCOMPLETE: self._incomplete_text,
             self.STATE_NOT_STARTED: self._incomplete_text,
+            self.STATE_RETRYING: "⚡ Retrying",
         }[self._state]
 
         metrics = QFontMetrics(self._status.font())
@@ -128,6 +132,12 @@ class PlanWriterCard(QFrame):
                 parsed = {}
             if isinstance(parsed, dict):
                 extras = parsed.get("extras") if isinstance(parsed.get("extras"), dict) else {}
+                # Internal continuation — recoverable planner handback, not
+                # user-visible.  Do NOT render "Plan incomplete".
+                if is_internal_dispatch_continuation(parsed):
+                    self._state = self.STATE_RETRYING
+                    self._refresh()
+                    return
                 if parsed.get("dispatch_spec_rejected") or extras.get("dispatch_spec_rejected"):
                     self._incomplete_text = self._format_incomplete_text(
                         extras.get("quality_errors") or parsed.get("quality_errors")

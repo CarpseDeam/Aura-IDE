@@ -19,6 +19,8 @@ from aura.gui.cards.code_writer_card import CodeWriterCard
 from aura.gui.cards.diff_card import DiffCard
 from aura.gui.cards.error_card import ErrorCard
 from aura.gui.cards.mismatch_resolution_card import MismatchResolutionCard
+from aura.conversation.dispatch_lifecycle import is_internal_dispatch_continuation
+from aura.gui.cards.dispatch_status_labels import mismatch_card_should_show
 from aura.gui.cards.plan_writer_card import PlanWriterCard
 from aura.gui.cards.spec_card import SpecCard
 from aura.gui.cards.terminal_card import TerminalCard
@@ -595,6 +597,7 @@ class ChatView(QScrollArea):
                 recoverable = False
                 suppress_user_followup_card = False
                 user_visible_blocker = False
+                internal_planner_handoff = False
                 try:
                     data = json.loads(result_text)
                     extras = data.get("extras", {})
@@ -611,11 +614,16 @@ class ChatView(QScrollArea):
                         extras.get("user_visible_blocker")
                         or extras.get("user_only_blocker")
                     )
+                    # Canonical internal-continuation check — supersedes ad-hoc
+                    # internal_planner_handoff / dispatch_not_started guards.
+                    _internal_continuation = is_internal_dispatch_continuation(
+                        data, extras=extras
+                    )
                     dispatch_not_started = bool(
                         data.get("dispatch_not_started")
-                        or data.get("dispatch_spec_rejected")
+                        or (data.get("dispatch_spec_rejected") and not _internal_continuation)
                         or extras.get("dispatch_not_started")
-                        or extras.get("dispatch_spec_rejected")
+                        or (extras.get("dispatch_spec_rejected") and not _internal_continuation)
                     )
                     if dispatch_not_started:
                         approval_timeout = extras.get("dispatch_approval_timeout", False)
@@ -635,6 +643,16 @@ class ChatView(QScrollArea):
                     ok = True
                 # Finalize controller FIRST (updates planner/spec UI above)
                 controller.finalize(ok, result_text)
+
+                # Internal planner handback: remove the PlanWriterCard, skip all
+                # user-facing card creation (spec stale, WorkerSummary, etc.), and
+                # close the assistant turn so the next Planner continuation starts
+                # fresh.  The dispatch tool lifecycle is already cleanly finalised.
+                if _internal_continuation:
+                    self._remove_plan_writer_card(tool_call_id)
+                    self.close_current_assistant_for_continuation()
+                    self._scroll_to_bottom()
+                    return
 
                 # THEN update spec card for not-started scenarios (stale/cancelled/expired).
                 # Completed dispatches get one deduped final summary card so
@@ -675,6 +693,7 @@ class ChatView(QScrollArea):
                         needs_followup=needs_followup,
                         status=status,
                         context_gearbox=context_gearbox,
+                        is_internal=_internal_continuation,
                     )
 
                 # Close the current assistant turn so the next Planner
@@ -885,6 +904,7 @@ class ChatView(QScrollArea):
         self, tool_call_id: str, goal: str, ok: bool, summary: str,
         needs_followup: bool = False, status: str | None = None,
         context_gearbox: dict | None = None,
+        is_internal: bool = False,
     ) -> None:
         """Add a summary card to the chat after a worker completes."""
         if self._worker_summary_disabled:
@@ -900,6 +920,7 @@ class ChatView(QScrollArea):
                 needs_followup=needs_followup,
                 status=status,
                 context_gearbox=context_gearbox,
+                is_internal=is_internal,
             )
             self._scroll_after_bottom_layout_change()
             return
@@ -908,19 +929,21 @@ class ChatView(QScrollArea):
             needs_followup=needs_followup, parent=self,
             status=status,
             context_gearbox=context_gearbox,
+            is_internal=is_internal,
         )
         self._worker_summary_cards[tool_call_id] = card
         self._add_card(card)
 
     def add_mismatch_resolution_card(
-        self, tool_call_id: str, kind: str = "", question: str = ""
+        self, tool_call_id: str, kind: str = "", question: str = "",
+        is_internal: bool = False,
     ) -> MismatchResolutionCard:
         """Add or update a mismatch resolution card for the given tool call."""
         existing = self._mismatch_resolution_cards.get(tool_call_id)
         if existing is not None:
             existing.update_mismatch(kind, question)
             return existing
-        card = MismatchResolutionCard(tool_call_id, kind, question, parent=self)
+        card = MismatchResolutionCard(tool_call_id, kind, question, parent=self, is_internal=is_internal)
         self._mismatch_resolution_cards[tool_call_id] = card
         self._add_card(card)
         return card

@@ -3,6 +3,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout
 
+from aura.gui.cards.dispatch_status_labels import mismatch_card_labels
 from aura.gui.theme import BG_ALT, BORDER, FG, FG_DIM, FG_MUTED, WARN
 
 STATE_RESOLVING = "resolving"
@@ -10,7 +11,10 @@ STATE_RESOLVED = "resolved"
 
 
 class MismatchResolutionCard(QFrame):
-    """Compact card showing a worker handoff mismatch that needs Planner resolution."""
+    """Compact card showing a worker handoff mismatch that needs Planner resolution.
+
+    Only appears for true user-visible ambiguity, never for internal Planner retry.
+    """
 
     def __init__(
         self,
@@ -18,12 +22,14 @@ class MismatchResolutionCard(QFrame):
         kind: str = "",
         question: str = "",
         parent=None,
+        is_internal: bool = False,
     ) -> None:
         super().__init__(parent)
         self._tool_call_id = tool_call_id
         self._kind = kind
         self._question = question
         self._state = STATE_RESOLVING
+        self._is_internal = is_internal
 
         self.setFrameStyle(QFrame.StyledPanel | QFrame.Plain)
         self.setObjectName("mismatchResolutionCard")
@@ -36,15 +42,17 @@ class MismatchResolutionCard(QFrame):
         layout.setContentsMargins(12, 10, 12, 10)
         layout.setSpacing(6)
 
+        title_text, status_text = mismatch_card_labels(is_internal=self._is_internal)
+
         # Title
-        self._title_label = QLabel("Worker needs Planner resolution")
+        self._title_label = QLabel(title_text)
         self._title_label.setStyleSheet(
             f"font-weight: 700; font-size: 13px; color: {WARN}; background: transparent; border: none;"
         )
         layout.addWidget(self._title_label)
 
         # Status
-        self._status_label = QLabel("Planner is resolving the handoff.")
+        self._status_label = QLabel(status_text)
         self._status_label.setStyleSheet(f"color: {FG_DIM}; font-size: 12px; background: transparent; border: none;")
         layout.addWidget(self._status_label)
 

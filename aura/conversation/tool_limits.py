@@ -41,7 +41,7 @@ MAX_WORKER_REDISPATCHES_PER_USER_TURN = 8
 
 # Backward-compatible aliases for older imports. Category-specific hard caps are
 # intentionally disabled; ToolLimitState does not enforce these values.
-MAX_CONTEXT_CALLS_PER_PLANNER_TURN: int | None = None
+MAX_CONTEXT_CALLS_PER_PLANNER_TURN: int = 16
 MAX_TERMINAL_CALLS_PER_WORKER_PASS: int | None = None
 MAX_WRITE_CALLS_PER_WORKER_PASS: int | None = None
 MAX_DISPATCH_CALLS_PER_PLANNER_TURN: int | None = None
@@ -64,7 +64,33 @@ class ToolLimitState:
         self.round_dispatch_calls = 0
 
     def check(self, tool_name: str) -> tuple[bool, dict[str, Any]]:
-        """Return whether *tool_name* may run plus a JSON-ready reason payload."""
+        """Return whether *tool_name* may run plus a JSON-ready reason payload.
+
+        Two layers of enforcement:
+          1. Planner context-read ceiling — prevents over-orienting before dispatch.
+          2. High emergency total guard (runaway backstop) for all modes.
+        """
+        # 1. Planner context-read ceiling: enough gathered, time to dispatch.
+        if self.mode == "planner" and tool_name in PLANNER_CONTEXT_TOOLS:
+            if self.planner_context_calls >= MAX_CONTEXT_CALLS_PER_PLANNER_TURN:
+                return False, self._payload(
+                    tool_name=tool_name,
+                    reason="planner_context_ceiling",
+                    limit_name="planner_context_calls",
+                    limit=MAX_CONTEXT_CALLS_PER_PLANNER_TURN,
+                    current=self.planner_context_calls,
+                    recoverable=True,
+                    phase_boundary=False,
+                    message=(
+                        "Planner context-read ceiling reached. You have gathered "
+                        "sufficient context. Do not read more files. Dispatch a "
+                        "bounded ordered campaign now using the evidence already "
+                        "gathered. Identify target files, required changes, and "
+                        "order of operations."
+                    ),
+                )
+
+        # 2. High emergency total guard (runaway backstop).
         max_total = MAX_TOOL_CALLS_BY_MODE.get(self.mode, MAX_TOOL_CALLS_BY_MODE["single"])
         if self.total_calls + 1 > max_total:
             phase_boundary = self.mode == "worker"
@@ -77,6 +103,7 @@ class ToolLimitState:
                 recoverable=phase_boundary,
                 phase_boundary=phase_boundary,
             )
+
         return True, {}
 
     def record(self, tool_name: str) -> None:
@@ -102,17 +129,19 @@ class ToolLimitState:
         current: int,
         recoverable: bool = False,
         phase_boundary: bool = False,
+        message: str | None = None,
     ) -> dict[str, Any]:
-        message = (
-            "Emergency tool-call guard reached for this worker pass. Do not call more "
-            "tools. Summarize completed work, modified files, validation status, "
-            "blockers, and remaining work so the planner can adjust."
-            if phase_boundary
-            else (
-                "Emergency tool-call guard reached. Stop calling tools and report the "
-                "current state or ask one concise clarifying question."
+        if message is None:
+            message = (
+                "Emergency tool-call guard reached for this worker pass. Do not call more "
+                "tools. Summarize completed work, modified files, validation status, "
+                "blockers, and remaining work so the planner can adjust."
+                if phase_boundary
+                else (
+                    "Emergency guard reached. Summarize completed work, current "
+                    "blockers, and the safest next step to continue."
+                )
             )
-        )
         return {
             "ok": False,
             "limit_reached": True,

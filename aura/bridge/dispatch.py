@@ -555,6 +555,16 @@ class _DispatchProxy(QObject):
             validation_selector=validation_selector,
         )
 
+        # Internal handback: annotate extras so the Planner-side lifecycle
+        # predicates (dispatch_lifecycle) route this as an invisible internal
+        # continuation rather than a visible failure.
+        from aura.conversation.worker_handback import annotate_worker_result_extras
+        extras = annotate_worker_result_extras(
+            extras,
+            status=outcome["status"],
+            structured_failure=messages.get("structured_failure"),
+        )
+
         continuation = completion["continuation"]
         _record_worker_completion(
             records=self._records,

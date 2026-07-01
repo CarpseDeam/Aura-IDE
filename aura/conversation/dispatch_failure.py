@@ -8,9 +8,14 @@ from aura.conversation.dispatch import (
     WorkerOutcomeStatus,
     infer_outcome_status,
 )
+from aura.conversation.dispatch_lifecycle import is_internal_dispatch_continuation
 from aura.conversation.tool_limits import MAX_WORKER_REDISPATCHES_PER_USER_TURN
 
-__all__ = ["classify_failed_worker_dispatch"]
+__all__ = [
+    "classify_failed_worker_dispatch",
+    "is_internal_planner_handback",
+    "payload_is_internal_handback",
+]
 
 
 def classify_failed_worker_dispatch(
@@ -76,6 +81,12 @@ def _compute_failure_constraint(result: WorkerDispatchResult) -> str:
     """
     extras = result.extras or {}
 
+    # Passthrough: a pre-computed failure_constraint in extras always wins
+    # over synthesised messages.  ToolRunner and DispatchSession set this
+    # when they already know the exact constraint for the Planner.
+    if extras.get("failure_constraint"):
+        return str(extras["failure_constraint"])
+
     # composition_failure: name the failing validation command and modified files
     if extras.get("composition_failure"):
         parts = []
@@ -116,6 +127,22 @@ def _compute_failure_constraint(result: WorkerDispatchResult) -> str:
                 + validation_text
             )
 
+    # dispatch_spec_rejected without a richer mismatch / validation signal.
+    # Must return a non-empty constraint so the Manager routes this through
+    # the internal-Planner-handback path (blocker) instead of silently
+    # skipping the dispatch tool result (split-brain).
+    if extras.get("dispatch_spec_rejected"):
+        quality_errors = extras.get("quality_errors")
+        if isinstance(quality_errors, list) and quality_errors:
+            errors_text = "; ".join(str(e) for e in quality_errors[:5])
+            return (
+                "CONSTRAINT FOR NEXT ATTEMPT: Plan was rejected: " + errors_text
+            )
+        return (
+            "CONSTRAINT FOR NEXT ATTEMPT: Plan was rejected before dispatch. "
+            "Revise the plan to address quality requirements before retry."
+        )
+
     return ""
 
 
@@ -145,6 +172,11 @@ def _is_worker_internal_error(result: WorkerDispatchResult) -> bool:
 
 
 def _is_quiet_internal_campaign_result(result: WorkerDispatchResult) -> bool:
+    """Only absorb results from internal campaign dispatch sessions that
+    have already been fully handled within the session.  ToolRunner
+    rejections (internal_planner_handoff) and other internal continuations
+    must flow through the normal blocker path so the Manager owns the
+    tool-result emission."""
     return bool(
         result.extras.get("internal_campaign_continuation")
         and result.extras.get("suppress_user_followup_card")
@@ -211,3 +243,25 @@ def _worker_dispatch_error_signature(result: WorkerDispatchResult) -> str:
     if not parts:
         parts.append(" ".join(result.summary.split())[:240])
     return ";".join(parts)
+
+
+def is_internal_planner_handback(
+    payload: dict[str, Any],
+    blocker_reason: str = "",
+) -> bool:
+    """Detect whether a dispatch result payload should trigger internal Planner
+    continuation (invisible to the user) rather than surfacing as a terminal or
+    user-visible failure.
+
+    Thin delegation to ``dispatch_lifecycle.is_internal_dispatch_continuation``
+    — the canonical single source of truth for this decision.
+    """
+    return is_internal_dispatch_continuation(payload, blocker_reason=blocker_reason)
+
+
+def payload_is_internal_handback(payload: dict[str, Any]) -> bool:
+    """Convenience wrapper for callers that don't have *blocker_reason*.
+
+    Same as ``is_internal_planner_handback(payload, blocker_reason="")``.
+    """
+    return is_internal_planner_handback(payload, blocker_reason="")

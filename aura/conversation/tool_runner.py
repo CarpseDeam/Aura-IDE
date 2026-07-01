@@ -105,30 +105,23 @@ class ToolRunner:
                 summary=error_message,
                 recoverable=True,
                 extras={
-                    "dispatch_not_started": True,
                     "dispatch_spec_rejected": True,
                     "planner_resolution_needed": True,
+                    "internal_planner_handoff": True,
+                    "suppress_user_followup_card": True,
+                    "user_visible_blocker": False,
                     "campaign_errors": list(campaign.errors),
+                    "failure_constraint": (
+                        "CONSTRAINT FOR NEXT ATTEMPT: Broad/multi-file/refactor work "
+                        "must be dispatched as an ordered steps campaign of bounded "
+                        "objectives. Re-call dispatch_to_worker with a populated steps "
+                        "array."
+                    ),
                 },
             )
-            payload = json.dumps(result.to_tool_payload(), ensure_ascii=False)
-            self._history.append_tool_result(tool_call_id, payload)
-            on_event(
-                ToolResult(
-                    tool_call_id=tool_call_id,
-                    name="dispatch_to_worker",
-                    ok=True,
-                    result=payload,
-                    extras={
-                        "dispatch_not_started": True,
-                        "dispatch_spec_rejected": True,
-                        "planner_resolution_needed": True,
-                        "recoverable": True,
-                        "summary": error_message,
-                        "campaign_errors": list(campaign.errors),
-                    },
-                )
-            )
+            # Manager owns dispatch lifecycle emission — do NOT emit ToolResult
+            # or append tool result here.  The returned result flows through
+            # classify_failed_worker_dispatch → blocker → internal handback.
             return result
 
         quality = validate_worker_dispatch_spec(req.spec, req.acceptance, goal=req.goal)
@@ -147,28 +140,21 @@ class ToolRunner:
                 summary=error_message,
                 recoverable=True,
                 extras={
-                    "dispatch_not_started": True,
                     "dispatch_spec_rejected": True,
+                    "internal_planner_handoff": True,
+                    "suppress_user_followup_card": True,
+                    "user_visible_blocker": False,
                     "quality_errors": list(quality.errors),
+                    "failure_constraint": (
+                        "CONSTRAINT FOR NEXT ATTEMPT: Plan is missing required "
+                        "fields: " + missing_text + ". "
+                        "Revise the dispatch_to_worker call with complete fields."
+                    ),
                 },
             )
-            payload = json.dumps(result.to_tool_payload(), ensure_ascii=False)
-            self._history.append_tool_result(tool_call_id, payload)
-            on_event(
-                ToolResult(
-                    tool_call_id=tool_call_id,
-                    name="dispatch_to_worker",
-                    ok=True,
-                    result=payload,
-                    extras={
-                        "dispatch_not_started": True,
-                        "dispatch_spec_rejected": True,
-                        "recoverable": True,
-                        "summary": error_message,
-                        "quality_errors": list(quality.errors),
-                    },
-                )
-            )
+            # Manager owns dispatch lifecycle emission — do NOT emit ToolResult
+            # or append tool result here.  The returned result flows through
+            # classify_failed_worker_dispatch → blocker → internal handback.
             return result
 
         if dispatch_cb is None:

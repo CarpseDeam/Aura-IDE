@@ -12,6 +12,7 @@ from typing import Any
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout
 
+from aura.gui.cards.dispatch_status_labels import worker_summary_status_label
 from aura.gui.markdown_renderer import _render_markdown_with_code
 from aura.gui.theme import BG_ALT, BG_RAISED, DANGER, FG, FG_DIM, FG_MUTED, SUCCESS, WARN
 
@@ -153,9 +154,11 @@ class WorkerSummaryCard(QFrame):
         parent=None,
         status: str | None = None,
         context_gearbox: dict[str, Any] | None = None,
+        is_internal: bool = False,
     ) -> None:
         super().__init__(parent)
         self.tool_call_id = tool_call_id
+        self._is_internal = is_internal
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 14, 16, 14)
@@ -214,8 +217,11 @@ class WorkerSummaryCard(QFrame):
         needs_followup: bool = False,
         status: str | None = None,
         context_gearbox: dict[str, Any] | None = None,
+        is_internal: bool | None = None,
     ) -> None:
         """Update this card in place for repeated results with the same ID."""
+        if is_internal is not None:
+            self._is_internal = is_internal
         self._status = status
         header_text, header_color = self._status_label(ok, needs_followup, summary, status)
         self._header.setText(header_text)
@@ -365,51 +371,25 @@ class WorkerSummaryCard(QFrame):
             return stripped
         return ""
 
-    @staticmethod
     def _status_label(
+        self,
         ok: bool,
         needs_followup: bool = False,
         summary: str = "",
         status: str | None = None,
     ) -> tuple[str, str]:
-        if status is not None:
-            from aura.conversation.dispatch import WorkerOutcomeStatus
+        """Canonical status label via ``dispatch_status_labels.worker_summary_status_label``.
 
-            # needs_followup is internal Planner continuation machinery.
-            # Never show a scary yellow card for it — resolve contextually
-            # from the summary receipt instead.
-            if status == WorkerOutcomeStatus.needs_followup.value:
-                return WorkerSummaryCard._resolve_needs_followup_label(ok, summary)
-
-            mapping = {
-                WorkerOutcomeStatus.completed.value: ("✅ Done", SUCCESS),
-                WorkerOutcomeStatus.completed_with_caveats.value: ("✅ Done", SUCCESS),
-                WorkerOutcomeStatus.validation_failed.value: ("❌ Failed validation", DANGER),
-                WorkerOutcomeStatus.edit_mechanics_blocked.value: ("⚠️ Edit mechanics blocked", WARN),
-                WorkerOutcomeStatus.craft_blocked.value: ("❌ Craft blocked", DANGER),
-                WorkerOutcomeStatus.craft_rejected.value: ("❌ Craft rejected", DANGER),
-                WorkerOutcomeStatus.scope_mismatch.value: ("⚠️ Scope mismatch", WARN),
-                WorkerOutcomeStatus.approval_rejected.value: ("❌ Approval rejected", DANGER),
-                WorkerOutcomeStatus.cancelled.value: ("🔶 Cancelled", "#6b7280"),
-                WorkerOutcomeStatus.harness_error.value: ("❌ Harness error", DANGER),
-                WorkerOutcomeStatus.needs_planner_resolution.value: ("⚠️ Planner resolving mismatch", WARN),
-            }
-            return mapping.get(status, ("Unknown", "#6b7280"))
-        # Fallback to legacy inference
-        if "Craft blocked" in summary:
-            return "❌ Craft blocked", DANGER
-        if "Waiting for approval" in summary:
-            return "⚠️ Waiting for approval", WARN
-        if "Repairing patch" in summary:
-            return "⚠️ Repairing patch", WARN
-        if ok:
-            return "✅ Done", SUCCESS
-        if summary.startswith("Harness error"):
-            return "❌ Harness error", DANGER
-        if summary.startswith("Validation failed"):
-            return "❌ Failed validation", WARN
-        # needs_followup without explicit status → neutral, not scary
-        return "ℹ️ Details in Worker Log", FG_MUTED
+        Internal continuations (``self._is_internal``) never leak failure,
+        mismatch, or blocker language.
+        """
+        return worker_summary_status_label(
+            status=status,
+            ok=ok,
+            needs_followup=needs_followup,
+            summary=summary,
+            is_internal=self._is_internal,
+        )
 
     @staticmethod
     def _resolve_needs_followup_label(ok: bool, summary: str) -> tuple[str, str]:

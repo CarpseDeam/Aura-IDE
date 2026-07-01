@@ -15,7 +15,12 @@ from PySide6.QtCore import QObject, Signal
 
 _log = logging.getLogger(__name__)
 
+from aura.conversation.dispatch_lifecycle import (
+    is_internal_dispatch_continuation,
+    is_user_visible_dispatch_blocker,
+)
 from aura.conversation.workflow_state import WorkflowState, WorkflowStatus
+from aura.gui.cards.dispatch_status_labels import mismatch_card_should_show
 
 if TYPE_CHECKING:
     from PySide6.QtWidgets import QWidget
@@ -286,22 +291,33 @@ class WorkerEventHandler(QObject):
 
         metadata = self._worker_result_metadata(tool_call_id)
         context_gearbox = self._context_gearbox_metadata(metadata)
-        suppress_main_summary = self._is_recoverable_internal_worker_result(
-            ok=ok,
-            needs_followup=bool(needs_followup),
-            metadata=metadata,
+        extras = metadata.get("extras") if isinstance(metadata.get("extras"), dict) else {}
+
+        # ── canonical dispatch lifecycle classification ──────────────────
+        is_internal = is_internal_dispatch_continuation(metadata)
+        user_visible_blocker = is_user_visible_dispatch_blocker(metadata)
+        suppress_user_followup_card = bool(extras.get("suppress_user_followup_card"))
+
+        # Internal continuations are never user-visible summaries
+        suppress_main_summary = is_internal or (
+            suppress_user_followup_card and not user_visible_blocker
         )
-        user_visible_blocker = self._is_user_visible_blocker(metadata)
-        suppress_user_followup_card = self._suppress_user_followup_card(metadata)
-        if suppress_user_followup_card and not user_visible_blocker:
-            suppress_main_summary = True
-        is_mismatch = (
-            self._is_planner_resolution_result(status, metadata)
-            and not (suppress_user_followup_card and not user_visible_blocker)
+
+        # Mismatch card: only for true user-visible ambiguity
+        has_mismatch_data = bool(
+            extras.get("mismatch_kind")
+            or extras.get("mismatch_question")
+        )
+        is_mismatch = mismatch_card_should_show(
+            is_internal=is_internal,
+            suppressed=suppress_user_followup_card and not user_visible_blocker,
+            has_mismatch_data=has_mismatch_data,
         )
         if is_mismatch:
             kind, question = self._mismatch_display(metadata)
-            self._chat.add_mismatch_resolution_card(tool_call_id, kind, question)
+            self._chat.add_mismatch_resolution_card(
+                tool_call_id, kind, question, is_internal=is_internal,
+            )
             self._active_mismatch_card_id = tool_call_id
             suppress_main_summary = True
         self._playground.stop_aura()
@@ -317,7 +333,7 @@ class WorkerEventHandler(QObject):
                 shower(context_gearbox)
 
         # Validation selector line
-        validation_selector = metadata.get("extras", {}).get("validation_selector")
+        validation_selector = extras.get("validation_selector")
         if isinstance(validation_selector, dict) and validation_selector.get("display"):
             shower = getattr(self._playground, "show_validation_selector_line", None)
             if callable(shower):
@@ -328,7 +344,7 @@ class WorkerEventHandler(QObject):
 
         card = self._get_spec_card(tool_call_id)
         if card:
-            card.worker_finished(ok, summary, status=status)
+            card.worker_finished(ok, summary, status=status, is_internal=is_internal)
         goal = self._worker_summary_goal(tool_call_id, card)
         if not suppress_main_summary:
             self._chat.add_worker_summary(
@@ -339,6 +355,7 @@ class WorkerEventHandler(QObject):
                 needs_followup=bool(needs_followup),
                 status=status,
                 context_gearbox=context_gearbox,
+                is_internal=is_internal,
             )
         if self._active_workflow is not None and self._active_workflow.tool_call_id == tool_call_id:
             self._set_active_workflow(
@@ -349,7 +366,7 @@ class WorkerEventHandler(QObject):
                     status=status,
                     modified_files=metadata.get("modified_files"),
                     validation=metadata.get("validation"),
-                    extras=metadata.get("extras"),
+                    extras=extras,
                 )
             )
         if not (suppress_user_followup_card and not user_visible_blocker):
@@ -358,15 +375,26 @@ class WorkerEventHandler(QObject):
 
     @staticmethod
     def _is_planner_resolution_result(status: str | None, metadata: dict) -> bool:
-        if status == "needs_planner_resolution":
-            return True
+        """Check whether status/metadata indicate Planner resolution is needed
+        **and** the result is user-visible (not an internal continuation).
+
+        Internal continuations (Planner retry) are never "planner resolution"
+        results from the user's perspective — the Planner handles them silently.
+        """
+        is_internal = is_internal_dispatch_continuation(metadata)
+        if is_internal:
+            return False
         extras = metadata.get("extras") if isinstance(metadata.get("extras"), dict) else {}
-        return bool(extras.get("planner_resolution_needed"))
+        return bool(
+            extras.get("mismatch_kind")
+            or extras.get("mismatch_question")
+            or status == "needs_planner_resolution"
+        )
 
     @staticmethod
     def _is_user_visible_blocker(metadata: dict) -> bool:
-        extras = metadata.get("extras") if isinstance(metadata.get("extras"), dict) else {}
-        return bool(extras.get("user_visible_blocker") or extras.get("user_only_blocker"))
+        """Thin delegation to the canonical lifecycle predicate."""
+        return is_user_visible_dispatch_blocker(metadata)
 
     @staticmethod
     def _suppress_user_followup_card(metadata: dict) -> bool:
@@ -394,21 +422,8 @@ class WorkerEventHandler(QObject):
         needs_followup: bool,
         metadata: dict,
     ) -> bool:
-        extras = metadata.get("extras") if isinstance(metadata.get("extras"), dict) else {}
-        return bool(
-            (
-                extras.get("suppress_user_followup_card")
-                or (
-                    not ok
-                    and needs_followup
-                    and extras.get("recoverable")
-                )
-            )
-            and not extras.get("user_visible_blocker")
-            and not extras.get("user_only_blocker")
-            and not extras.get("worker_internal_error")
-            and not extras.get("internal_error")
-        )
+        """Thin delegation to the canonical lifecycle predicate."""
+        return is_internal_dispatch_continuation(metadata)
 
     def _worker_result_metadata(self, tool_call_id: str) -> dict:
         getter = getattr(self._bridge, "worker_result_metadata", None)

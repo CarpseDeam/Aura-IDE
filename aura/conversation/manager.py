@@ -52,7 +52,10 @@ from aura.conversation.dispatch import (
     WorkerDispatchRequest,
     WorkerDispatchResult,
 )
-from aura.conversation.dispatch_failure import classify_failed_worker_dispatch
+from aura.conversation.dispatch_failure import (
+    classify_failed_worker_dispatch,
+)
+from aura.conversation.dispatch_lifecycle import is_internal_dispatch_continuation
 from aura.conversation.edit_orchestrator import (
     EditRetryLedger,
 )
@@ -959,6 +962,7 @@ class ConversationManager:
                                     "Run the smallest relevant py_compile or pytest "
                                     "command, then provide the final report."
                                 ),
+                                "planner_resolution_needed": True,
                             },
                         )
                         return
@@ -1321,28 +1325,44 @@ class ConversationManager:
                     blocker_reason = str(res.get("blocker_reason", ""))
                     failure_constraint = res.get("failure_constraint", "")
                     result_obj = res.get("result")
-
-                    # Internal planner handback: the dispatch failed in a
-                    # recoverable way (not limit/repeated).  Append the
-                    # failure constraint as a user message so the Planner
-                    # sees it, but do NOT emit Done — the Planner loop
-                    # restarts invisibly.
-                    is_internal = (
-                        bool(failure_constraint)
-                        and blocker_reason not in ("limit", "repeated")
-                        and isinstance(result_obj, WorkerDispatchResult)
-                        and not result_obj.cancelled
+                    payload_dict = (
+                        result_obj.to_tool_payload()
+                        if isinstance(result_obj, WorkerDispatchResult)
+                        else {}
                     )
-                    if is_internal:
-                        extras = result_obj.extras or {}
-                        if not (
-                            extras.get("user_visible_blocker")
-                            or extras.get("user_only_blocker")
-                            or extras.get("terminal_environment_blocker")
-                        ):
-                            self._history.append_user_text(failure_constraint)
-                            planner_restart_needed = True
-                            break
+                    if failure_constraint:
+                        payload_dict["failure_constraint"] = failure_constraint
+
+                    # Internal planner handback: close the dispatch tool
+                    # lifecycle cleanly and restart the Planner loop without
+                    # user-facing notification.
+                    if is_internal_dispatch_continuation(payload_dict, blocker_reason=blocker_reason):
+                        extras = (
+                            payload_dict.get("extras")
+                            if isinstance(payload_dict.get("extras"), dict)
+                            else {}
+                        )
+                        payload_dict["extras"] = {
+                            **extras,
+                            "internal_planner_handoff": True,
+                            "suppress_user_followup_card": True,
+                            "recoverable": True,
+                            "user_visible_blocker": False,
+                            "failure_constraint": failure_constraint,
+                        }
+                        payload_dict["failure_constraint"] = failure_constraint
+                        payload = json.dumps(payload_dict, ensure_ascii=False)
+                        self._history.append_tool_result(task["id"], payload)
+                        self._history.append_user_text(failure_constraint)
+                        on_event(ToolResult(
+                            tool_call_id=task["id"],
+                            name="dispatch_to_worker",
+                            ok=True,
+                            result=payload,
+                            extras=payload_dict["extras"],
+                        ))
+                        planner_restart_needed = True
+                        break
 
                     # Terminal / user-visible blocker: surface it.
                     self._append_dispatch_blocker_message(
@@ -1434,6 +1454,24 @@ class ConversationManager:
         error: str,
         details: dict[str, Any] | None = None,
     ) -> None:
+        from aura.conversation.worker_handback import (
+            build_internal_handback_message,
+            should_route_as_internal_handback,
+        )
+
+        if should_route_as_internal_handback(details):
+            # Internal handback: append to history silently so the dispatch
+            # proxy reads the structured payload, but emit NO ContentDelta or
+            # Done — the user should see nothing, and the Planner restarts
+            # invisibly through the dispatch-continuation lifecycle.
+            _content, full_message = build_internal_handback_message(
+                failure_class=failure_class,
+                error=error,
+                details=details,
+            )
+            self._history.append_assistant(full_message)
+            return
+
         content, full_message = build_worker_recoverable_followup_message(
             failure_class=failure_class,
             error=error,
