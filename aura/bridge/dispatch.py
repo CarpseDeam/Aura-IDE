@@ -30,9 +30,11 @@ from aura.bridge._summary_formatters import (
     _parse_structured_worker_failure,
 )
 from aura.bridge.approval_proxy import _ApprovalProxy
+from aura.bridge.dispatch_pending import _DispatchPending, DispatchPendingMap
 from aura.bridge.dispatch_session import DispatchSession
 from aura.bridge.event_relay import WorkerEventRelay
 from aura.bridge.todo_controller import DispatchTodoController
+from aura.bridge.worker_relay_factory import create_worker_relay
 from aura.bridge.worker_recording import _record_worker_completion
 from aura.bridge.worker_report import (
     _build_worker_summary,
@@ -117,15 +119,6 @@ EDIT_TRANSACTION_FAILURE_CLASSES = {
 }
 
 
-class _DispatchPending:
-    def __init__(self, request: WorkerDispatchRequest) -> None:
-        self.request = request
-        self.edited_request: WorkerDispatchRequest | None = None
-        self.cancelled: bool = False
-        self.decision_event: threading.Event = threading.Event()
-        self.cancel_event: threading.Event | None = None
-
-
 class _DispatchProxy(QObject):
     showSpecCard = Signal(str, str, list, str, str, str, list)  # tool_id, goal, files, spec, acceptance, summary, steps
     workerStarted = Signal(str)  # tool_id
@@ -169,10 +162,9 @@ class _DispatchProxy(QObject):
         self._tier1_context: str = ""
         self._max_tool_rounds: int | None = None
 
-        # Per-call state — guarded by a lock so concurrent dispatches (which
-        # shouldn't happen, but be safe) don't trample each other.
-        self._lock = threading.Lock()
-        self._pending: dict[str, _DispatchPending] = {}
+        # Per-call state — the pending map owns its own lock so concurrent
+        # dispatches (which shouldn't happen, but be safe) don't trample.
+        self._pending_map = DispatchPendingMap()
         # Records of each completed dispatch for persistence.
         self._records: list[WorkerDispatchRecord] = []
         self._result_metadata: dict[str, dict[str, Any]] = {}
@@ -242,9 +234,7 @@ class _DispatchProxy(QObject):
         self, tool_call_id: str, req: WorkerDispatchRequest
     ) -> WorkerDispatchResult:
         """Called from the planner's worker thread. Blocks."""
-        pending = _DispatchPending(request=req)
-        with self._lock:
-            self._pending[tool_call_id] = pending
+        pending = self._pending_map.register(tool_call_id, req)
 
         # Tell GUI thread to render the spec card; user will call user_dispatched
         # or user_cancelled, which will set decision_event.
@@ -260,8 +250,7 @@ class _DispatchProxy(QObject):
 
         signaled = pending.decision_event.wait(timeout=DISPATCH_TIMEOUT)
         if not signaled:
-            with self._lock:
-                self._pending.pop(tool_call_id, None)
+            self._pending_map.pop(tool_call_id)
             return WorkerDispatchResult(
                 ok=False,
                 recoverable=True,
@@ -270,8 +259,7 @@ class _DispatchProxy(QObject):
             )
 
         if pending.cancelled:
-            with self._lock:
-                self._pending.pop(tool_call_id, None)
+            self._pending_map.pop(tool_call_id)
             return WorkerDispatchResult(
                 ok=False,
                 summary="Cancelled",
@@ -309,8 +297,7 @@ class _DispatchProxy(QObject):
         # or conversation reset.
         result = session.run()
         self._merge_session_result_metadata(tool_call_id, result)
-        with self._lock:
-            self._pending.pop(tool_call_id, None)
+        self._pending_map.pop(tool_call_id)
         return result
     # ---- GUI-thread side --------------------------------------------------
 
@@ -323,23 +310,18 @@ class _DispatchProxy(QObject):
         acceptance: str,
         summary: str,
     ) -> bool:
-        with self._lock:
-            pending = self._pending.get(tool_call_id)
-        if pending is None:
+        if not self._pending_map.resolve_dispatched(
+            tool_call_id,
+            goal=goal,
+            files=files,
+            spec=spec,
+            acceptance=acceptance,
+            summary=summary,
+        ):
             logging.warning(
                 f"user_dispatched: tool_call_id '{tool_call_id}' is not pending or has already timed out/resolved."
             )
             return False
-        pending.edited_request = replace(
-            pending.request,
-            goal=goal,
-            files=list(files),
-            spec=spec,
-            acceptance=acceptance,
-            summary=summary,
-        )
-        pending.cancelled = False
-        pending.decision_event.set()
         return True
 
     def _merge_session_result_metadata(
@@ -359,15 +341,11 @@ class _DispatchProxy(QObject):
         self._result_metadata[tool_call_id] = metadata
 
     def user_cancelled(self, tool_call_id: str) -> bool:
-        with self._lock:
-            pending = self._pending.get(tool_call_id)
-        if pending is None:
+        if not self._pending_map.resolve_cancelled(tool_call_id):
             logging.warning(
                 f"user_cancelled: tool_call_id '{tool_call_id}' is not pending or has already timed out/resolved."
             )
             return False
-        pending.cancelled = True
-        pending.decision_event.set()
         return True
 
     def cancel_all_pending(self) -> None:
@@ -375,16 +353,7 @@ class _DispatchProxy(QObject):
         dispatch decision AND signals any running worker to cancel."""
         if self._approval_proxy is not None:
             self._approval_proxy.cancel_active_dialog()
-
-        with self._lock:
-            for tool_id, pending in list(self._pending.items()):
-                # Unblock dispatch decision wait (if planner is waiting on SpecCard)
-                if not pending.decision_event.is_set():
-                    pending.cancelled = True
-                    pending.decision_event.set()
-                # Signal the worker's cancel event (if worker is running)
-                if pending.cancel_event is not None:
-                    pending.cancel_event.set()
+        self._pending_map.cancel_all()
 
     # ---- worker run ------
 
@@ -579,27 +548,12 @@ class _DispatchProxy(QObject):
         return worker_history, task_spec, context_gearbox, worker_manager
 
     def _create_worker_relay(self) -> WorkerEventRelay:
-        relay = WorkerEventRelay(
+        return create_worker_relay(
             approval_proxy=self._approval_proxy,
             worker_model=str(self._worker_model),
+            dispatch_proxy=self,
+            todo_relay_callback=self._relay_worker_todo_update,
         )
-        # Forward relay signals to the dispatch proxy's signals for the UI.
-        relay.reasoningDelta.connect(self.workerReasoningDelta)
-        relay.contentDelta.connect(self.workerContentDelta)
-        relay.toolCallStart.connect(self.workerToolCallStart)
-        relay.toolCallArgs.connect(self.workerToolCallArgs)
-        relay.toolCallEnd.connect(self.workerToolCallEnd)
-        relay.usage.connect(self.workerUsage)
-        relay.streamDone.connect(self.workerStreamDone)
-        relay.apiError.connect(self.workerApiError)
-        relay.toolResult.connect(self.workerToolResult)
-        relay.diffDecided.connect(self.workerDiffDecided)
-        relay.todoListUpdated.connect(self._relay_worker_todo_update)
-        relay.terminalOutput.connect(self.workerTerminalOutput)
-        relay.agentProcessStarted.connect(self.workerAgentProcessStarted)
-        relay.agentProcessOutput.connect(self.workerAgentProcessOutput)
-        relay.agentProcessFinished.connect(self.workerAgentProcessFinished)
-        return relay
 
     def _refresh_worker_validation_selector_plan(
         self,
