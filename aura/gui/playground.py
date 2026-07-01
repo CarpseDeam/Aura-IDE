@@ -285,34 +285,19 @@ class AuraPlayground(QWidget):
         self._worker_code_tool_names.clear()
         self._pending_worker_code_content.clear()
 
-    def begin_dispatch_todo_list(self, tool_call_id: str, steps: list) -> None:
-        """Seed the visible TODO rail from Planner steps.
+    def begin_canonical_dispatch_tracking(self, tool_call_id: str, steps: list) -> None:
+        """Mark a tool_call_id as canonical for suppression purposes.
 
-        Steps is a list of dicts with id, title/goal, and files.
-        Converts each step into a {id, description, status: "pending"} task.
+        The visible dispatch TODO rail is owned by DispatchSession, which
+        emits canonical snapshots (pending → active → done) via
+        dispatchTodoListUpdated. This method only ensures Worker-local
+        update_todo_list tool calls, log boundaries, and progress-TODO
+        emissions are suppressed during the dispatch campaign.
         """
         self._canonical_active.add(tool_call_id)
-        self._dispatch_rail.reset(tool_call_id)
-        tasks: list[dict] = []
-        for step in (steps or []):
-            if not isinstance(step, dict):
-                continue
-            step_id = str(step.get("id") or "")
-            title = str(step.get("title") or step.get("goal") or step_id)
-            task: dict = {
-                "id": step_id,
-                "step_id": step_id,
-                "description": title,
-                "status": "pending",
-            }
-            files = step.get("files")
-            if isinstance(files, list):
-                task["files"] = [str(f) for f in files]
-            tasks.append(task)
-        self._dispatch_rail.set(tool_call_id, tasks)
-        self._info_hub.update_todo_list(tasks)
 
     def render_dispatch_todo_list(self, tool_call_id: str) -> None:
+        """Replay the last cached canonical TODO snapshot for a tool_call_id."""
         self._info_hub.update_todo_list(self._dispatch_rail.replay(tool_call_id))
 
     def append_reasoning(self, text: str):
@@ -406,9 +391,19 @@ class AuraPlayground(QWidget):
         self._terminal_window.set_result(worker_tool_id, exit_code)
 
     def update_todo_list(self, tasks: list, tool_call_id: str | None = None):
+        """Render a TODO snapshot and cache it for replay.
+
+        Accepts both canonical DispatchSession snapshots and Worker-local
+        TODO updates (the latter only when no canonical dispatch is active).
+        """
         self._info_hub.update_todo_list(self._dispatch_rail.set(tool_call_id, tasks))
 
     def finish_todo_list(self, tool_call_id: str, *, ok: bool, needs_followup: bool) -> None:
+        """Replay the last canonical snapshot and clear canonical tracking.
+
+        Does not invent statuses — the last DispatchSession snapshot is the
+        final truth for the visible TODO rail.
+        """
         self._canonical_active.discard(tool_call_id)
         self._info_hub.update_todo_list(self._dispatch_rail.replay(tool_call_id))
 

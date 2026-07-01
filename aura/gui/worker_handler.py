@@ -109,6 +109,7 @@ class WorkerEventHandler(QObject):
         self._bridge.workerApiError.connect(self._on_worker_api_error)
         self._bridge.workerUsage.connect(self._on_worker_usage)
         self._bridge.workerTodoListUpdated.connect(self._on_worker_todo_list_updated)
+        self._bridge.dispatchTodoListUpdated.connect(self._on_dispatch_todo_list_updated)
         self._bridge.workerTerminalOutput.connect(self._on_worker_terminal_output)
         self._bridge.workerAgentProcessStarted.connect(self._on_worker_agent_process_started)
         self._bridge.workerAgentProcessOutput.connect(self._on_worker_agent_process_output)
@@ -136,7 +137,7 @@ class WorkerEventHandler(QObject):
         if self._dispatch_ui.consume_internal_continuation(tool_call_id):
             # Keep playground-side canonical tracking in sync so that
             # tool-call noise suppression stays active for the continuation.
-            self._playground.begin_dispatch_todo_list(tool_call_id, step_list)
+            self._playground.begin_canonical_dispatch_tracking(tool_call_id, step_list)
             self._set_active_workflow(
                 WorkflowState.intent_captured(
                     tool_call_id, goal, summary=summary,
@@ -155,7 +156,7 @@ class WorkerEventHandler(QObject):
                 tool_call_id, goal[:120],
             )
             self._dispatch_ui.begin_auto_dispatch(tool_call_id)
-            self._playground.begin_dispatch_todo_list(tool_call_id, step_list)
+            self._playground.begin_canonical_dispatch_tracking(tool_call_id, step_list)
             self._set_active_workflow(
                 WorkflowState.intent_captured(
                     tool_call_id,
@@ -175,7 +176,7 @@ class WorkerEventHandler(QObject):
             tool_call_id, goal[:120],
         )
         self._dispatch_ui.begin_visible_dispatch(tool_call_id)
-        self._playground.begin_dispatch_todo_list(tool_call_id, step_list)
+        self._playground.begin_canonical_dispatch_tracking(tool_call_id, step_list)
         self._set_active_workflow(
             WorkflowState.intent_captured(
                 tool_call_id,
@@ -448,10 +449,21 @@ class WorkerEventHandler(QObject):
         self.usage_updated.emit()
 
     def _on_worker_todo_list_updated(self, tool_call_id: str, tasks: list) -> None:
-        """Route the worker's TODO list update to the playground."""
+        """Route Worker-local TODO updates (update_todo_list tool + progress TODOs).
 
+        Suppressed during canonical dispatch — the visible dispatch TODO rail
+        is owned by DispatchSession and arrives via _on_dispatch_todo_list_updated.
+        """
         if self._dispatch_ui.is_canonical_dispatch(tool_call_id):
             return
+        self._playground.update_todo_list(tasks, tool_call_id)
+
+    def _on_dispatch_todo_list_updated(self, tool_call_id: str, tasks: list) -> None:
+        """Route canonical DispatchSession TODO snapshots to the playground.
+
+        Always forwarded — canonical snapshots are the sole source of truth
+        for the visible dispatch TODO rail.
+        """
         self._playground.update_todo_list(tasks, tool_call_id)
 
     def _on_worker_terminal_output(

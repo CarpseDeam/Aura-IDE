@@ -71,7 +71,8 @@ class _DispatchProxy(QObject):
     workerStreamDone = Signal(str, str, dict)
     workerApiError = Signal(str, int, str)
     workerUsage = Signal(str, str, int, int, int, int)  # tool_id, model, prompt, comp, hit, miss
-    workerTodoListUpdated = Signal(str, list)  # tool_call_id, tasks
+    workerTodoListUpdated = Signal(str, list)  # tool_call_id, tasks (Worker-local only)
+    dispatchTodoListUpdated = Signal(str, list)  # tool_call_id, tasks (canonical snapshots from DispatchSession)
     workerTerminalOutput = Signal(str, str, str)  # parent_tool_id, worker_tool_id, text
     workerAgentProcessStarted = Signal(str, str, str, str)  # parent_tool_id, process_id, label, command
     workerAgentProcessOutput = Signal(str, str, str)  # parent_tool_id, process_id, text
@@ -154,15 +155,20 @@ class _DispatchProxy(QObject):
         """Emit a canonical TODO snapshot to the GUI.
 
         This is the only path through which DispatchSession emits TODO updates
-        during a canonical dispatch. It replaces raw Worker-local emissions.
+        during a canonical dispatch. Uses a dedicated signal so the GUI can
+        distinguish DispatchSession snapshots from Worker-local TODO updates.
         """
-        self.workerTodoListUpdated.emit(tool_call_id, tasks)
+        self.dispatchTodoListUpdated.emit(tool_call_id, tasks)
 
     def _relay_worker_todo_update(self, tool_call_id: str, tasks: list) -> None:
-        """Relay Worker-local TODO updates only outside canonical dispatch."""
+        """Relay Worker-local TODO updates only outside canonical dispatch.
+
+        During canonical dispatch, the Worker's update_todo_list tool calls
+        and progress-TODO emissions are suppressed — the visible dispatch
+        TODO rail is owned by DispatchSession / DispatchTodoController.
+        """
         if self._todo_controller.has_canonical(tool_call_id):
             return
-        # No canonical state: pass through as before (non-dispatch worker runs).
         self.workerTodoListUpdated.emit(tool_call_id, tasks)
 
     # ---- planner-thread side ---------------------------------------------

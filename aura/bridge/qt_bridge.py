@@ -226,7 +226,8 @@ class ConversationBridge(QObject):
     workerDiffDecided = Signal(str, str, str, str, str, str, bool)
     workerApiError = Signal(str, int, str)
     workerUsage = Signal(str, str, int, int, int, int)
-    workerTodoListUpdated = Signal(str, list)
+    workerTodoListUpdated = Signal(str, list)  # Worker-local only
+    dispatchTodoListUpdated = Signal(str, list)  # Canonical snapshots from DispatchSession
     workerTerminalOutput = Signal(str, str, str)  # parent_tool_id, worker_tool_id, text
     workerAgentProcessStarted = Signal(str, str, str, str)
     workerAgentProcessOutput = Signal(str, str, str)
@@ -306,6 +307,7 @@ class ConversationBridge(QObject):
         self._dispatch_proxy.workerApiError.connect(self.workerApiError)
         self._dispatch_proxy.workerUsage.connect(self.workerUsage)
         self._dispatch_proxy.workerTodoListUpdated.connect(self.workerTodoListUpdated)
+        self._dispatch_proxy.dispatchTodoListUpdated.connect(self.dispatchTodoListUpdated)
         self._dispatch_proxy.workerTerminalOutput.connect(self.workerTerminalOutput)
         self._dispatch_proxy.workerAgentProcessStarted.connect(self.workerAgentProcessStarted)
         self._dispatch_proxy.workerAgentProcessOutput.connect(self.workerAgentProcessOutput)
