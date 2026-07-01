@@ -34,13 +34,6 @@ def classify_failed_worker_dispatch(
                            constraint on the next attempt. Empty when nothing
                            specific is extractable.
     """
-    if _is_quiet_internal_campaign_result(result):
-        # Quiet internal campaign results (DispatchSession multi-step
-        # campaigns that finished with a blocked step or internal error)
-        # are absorbed here.  The DispatchSession already owns the cursor,
-        # emitted the final TODO snapshot, and fired workerFinished.
-        # The Planner must NOT re-enter for ordinary step advancement.
-        return {"counts_as_attempt": False, "blocker_reason": "", "failure_constraint": ""}
     if _is_worker_internal_error(result):
         return {"counts_as_attempt": False, "blocker_reason": "internal", "failure_constraint": ""}
 
@@ -85,12 +78,6 @@ def _compute_failure_constraint(result: WorkerDispatchResult) -> str:
     attempt, or an empty string when nothing specific can be extracted.
     """
     extras = result.extras or {}
-
-    # DispatchSession campaign results are terminal — the session already
-    # owns the cursor, emitted the final TODO snapshot, and fired
-    # workerFinished.  Do not suggest Planner retry.
-    if extras.get("dispatch_session") and extras.get("internal_campaign_continuation"):
-        return ""
 
     # Passthrough: a pre-computed failure_constraint in extras always wins
     # over synthesised messages.  ToolRunner and DispatchSession set this
@@ -154,34 +141,6 @@ def _compute_failure_constraint(result: WorkerDispatchResult) -> str:
             "Revise the plan to address quality requirements before retry."
         )
 
-    if (
-        extras.get("internal_campaign_continuation")
-        or extras.get("campaign_recovery_classification")
-        or extras.get("dispatch_session")
-    ):
-        blocked_step_id = str(extras.get("blocked_step_id") or "").strip()
-        if blocked_step_id:
-            return (
-                "CONSTRAINT FOR NEXT ATTEMPT: Previous campaign step "
-                f"{blocked_step_id} paused for planner revision. "
-                "Revise the plan before retrying."
-            )
-
-        classification = str(
-            extras.get("campaign_recovery_classification") or ""
-        ).strip()
-        if classification:
-            return (
-                "CONSTRAINT FOR NEXT ATTEMPT: Previous campaign step paused "
-                f"for planner revision after {classification}. "
-                "Revise the plan before retrying."
-            )
-
-        return (
-            "CONSTRAINT FOR NEXT ATTEMPT: Previous campaign step paused for "
-            "planner revision. Revise the plan before retrying."
-        )
-
     return ""
 
 
@@ -202,28 +161,9 @@ def _failed_dispatch_allows_planner_continuation(
 
 
 def _is_worker_internal_error(result: WorkerDispatchResult) -> bool:
-    if result.extras.get("internal_campaign_continuation"):
-        return False
     return bool(
         result.extras.get("worker_internal_error")
         or result.extras.get("dispatch_internal_error")
-    )
-
-
-def _is_quiet_internal_campaign_result(result: WorkerDispatchResult) -> bool:
-    """Only absorb results from internal campaign dispatch sessions that
-    have already been fully handled within the session.  ToolRunner
-    rejections (internal_planner_handoff) and other internal continuations
-    must flow through the normal blocker path so the Manager owns the
-    tool-result emission."""
-    return bool(
-        result.extras.get("internal_campaign_continuation")
-        and result.extras.get("suppress_user_followup_card")
-        and not result.cancelled
-        and not result.extras.get("user_visible_blocker")
-        and not result.extras.get("user_only_blocker")
-        and not result.extras.get("terminal_environment_blocker")
-        and result.status not in {"approval_rejected", "cancelled"}
     )
 
 

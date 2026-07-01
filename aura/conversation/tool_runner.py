@@ -108,7 +108,6 @@ class ToolRunner:
                     "dispatch_spec_rejected": True,
                     "planner_resolution_needed": True,
                     "internal_planner_handoff": True,
-                    "suppress_user_followup_card": True,
                     "user_visible_blocker": False,
                     "campaign_errors": list(campaign.errors),
                     "failure_constraint": (
@@ -142,7 +141,6 @@ class ToolRunner:
                 extras={
                     "dispatch_spec_rejected": True,
                     "internal_planner_handoff": True,
-                    "suppress_user_followup_card": True,
                     "user_visible_blocker": False,
                     "quality_errors": list(quality.errors),
                     "failure_constraint": (
@@ -191,10 +189,7 @@ class ToolRunner:
             if req.steps:
                 result = WorkerDispatchResult(
                     ok=False,
-                    summary=(
-                        "Aura paused the campaign for internal recovery. "
-                        "No user action is required."
-                    ),
+                    summary="Harness error due to an internal Worker dispatch exception.",
                     needs_followup=True,
                     recoverable=True,
                     status=WorkerOutcomeStatus.needs_followup.value,
@@ -203,13 +198,6 @@ class ToolRunner:
                         "error_type": type(exc).__name__,
                         "internal_error": redact_secrets(f"{type(exc).__name__}: {exc}"),
                         "dispatch_session": True,
-                        "campaign_recovery_classification": "internal_recoverable_error",
-                        "campaign_recovery_budget": 1,
-                        "campaign_recovery_attempts": {},
-                        "campaign_recovery_budget_exhausted": False,
-                        "internal_campaign_continuation": True,
-                        "suppress_user_followup_card": True,
-                        "user_visible_blocker": False,
                     },
                 )
             else:
@@ -621,4 +609,3 @@ class ToolRunner:
         )
 
         return {"_terminal_payload": payload_dict}
-

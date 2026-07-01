@@ -81,7 +81,6 @@ class StepValidationPolicy:
     tier: str = "structural"
     commands: list[str] = field(default_factory=list)
     required_proofs: list[str] = field(default_factory=list)
-    run_full_campaign_validation: bool = False
     reason: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -89,7 +88,6 @@ class StepValidationPolicy:
             "tier": self.tier,
             "commands": list(self.commands),
             "required_proofs": list(self.required_proofs),
-            "run_full_campaign_validation": self.run_full_campaign_validation,
             "reason": self.reason,
         }
 
@@ -103,7 +101,6 @@ class StepValidationPolicy:
             tier=str(raw.get("tier") or "structural"),
             commands=[str(command) for command in commands],
             required_proofs=[str(proof) for proof in proofs],
-            run_full_campaign_validation=bool(raw.get("run_full_campaign_validation", False)),
             reason=str(raw.get("reason") or ""),
         )
 
@@ -213,16 +210,6 @@ class WorkerDispatchPlan:
             steps=[WorkerStepSpec.from_dict(step) for step in steps],
         )
 
-    def campaign_validation_commands(self) -> list[str]:
-        """Return validation commands from the last step (in reverse order)
-        whose validation_policy.run_full_campaign_validation is True.
-
-        Returns [] when no step carries the flag.
-        """
-        for step in reversed(self.steps):
-            if step.validation_policy.run_full_campaign_validation:
-                return list(step.validation_commands or step.validation_policy.commands)
-        return []
 
 
 @dataclass(frozen=True)
@@ -374,37 +361,6 @@ def request_for_step(
         forbidden_calls=list(step.forbidden_calls or original.forbidden_calls),
         contract=original.contract,
         task_shape=original.task_shape,
-    )
-
-
-def request_for_campaign_validation(
-    plan: WorkerDispatchPlan,
-    original_request: WorkerDispatchRequest,
-    commands: list[str],
-    files: list[str],
-) -> WorkerDispatchRequest:
-    """Build a verification-only WorkerDispatchRequest for campaign composition validation.
-
-    Uses dataclasses.replace on the original request to preserve all routing
-    fields while replacing files, spec, acceptance, validation_commands, and
-    steps with verification-only values. Appends a non-goal that forbids any
-    file create, edit, or delete.
-    """
-    return dataclasses.replace(
-        original_request,
-        files=list(files),
-        spec="",
-        acceptance="\n".join(commands),
-        validation_commands=list(commands),
-        steps=[],
-        non_goals=list(original_request.non_goals)
-        + [
-            (
-                "DO NOT create, edit, or delete any files. "
-                "This is a verification-only dispatch. "
-                "Run the validation commands and report the results only."
-            )
-        ],
     )
 
 
@@ -761,7 +717,6 @@ __all__ = [
     "WorkerStepSpec",
     "compact_todo_label",
     "plan_from_request",
-    "request_for_campaign_validation",
     "request_for_step",
     "todo_tasks_from_plan",
     "validate_dispatch_campaign",

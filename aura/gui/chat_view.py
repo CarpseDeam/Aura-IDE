@@ -19,7 +19,6 @@ from aura.gui.cards.code_writer_card import CodeWriterCard
 from aura.gui.cards.diff_card import DiffCard
 from aura.gui.cards.error_card import ErrorCard
 from aura.gui.cards.mismatch_resolution_card import MismatchResolutionCard
-from aura.conversation.dispatch_lifecycle import is_internal_dispatch_continuation
 from aura.gui.cards.dispatch_status_labels import mismatch_card_should_show
 from aura.gui.cards.plan_writer_card import PlanWriterCard
 from aura.gui.cards.spec_card import SpecCard
@@ -624,8 +623,6 @@ class ChatView(QScrollArea):
                 approval_timeout = False
                 cancelled = False
                 recoverable = False
-                suppress_user_followup_card = False
-                user_visible_blocker = False
                 _internal_continuation = False
                 try:
                     data = json.loads(result_text)
@@ -636,23 +633,11 @@ class ChatView(QScrollArea):
                         data.get("recoverable")
                         or extras.get("recoverable")
                     )
-                    suppress_user_followup_card = bool(
-                        extras.get("suppress_user_followup_card")
-                    )
-                    user_visible_blocker = bool(
-                        extras.get("user_visible_blocker")
-                        or extras.get("user_only_blocker")
-                    )
-                    # Canonical internal-continuation check — supersedes ad-hoc
-                    # internal_planner_handoff / dispatch_not_started guards.
-                    _internal_continuation = is_internal_dispatch_continuation(
-                        data, extras=extras
-                    )
                     dispatch_not_started = bool(
                         data.get("dispatch_not_started")
-                        or (data.get("dispatch_spec_rejected") and not _internal_continuation)
+                        or data.get("dispatch_spec_rejected")
                         or extras.get("dispatch_not_started")
-                        or (extras.get("dispatch_spec_rejected") and not _internal_continuation)
+                        or extras.get("dispatch_spec_rejected")
                     )
                     if dispatch_not_started:
                         approval_timeout = extras.get("dispatch_approval_timeout", False)
@@ -661,6 +646,11 @@ class ChatView(QScrollArea):
                         summary = data.get("summary", "")
                         needs_followup = bool(data.get("needs_followup", False))
                         status = data.get("status")
+                        _internal_continuation = bool(
+                            not cancelled
+                            and not ok
+                            and status == "needs_planner_resolution"
+                        )
                     if _is_terminal_worker_success(
                         data,
                         event_ok=ok,
@@ -668,10 +658,8 @@ class ChatView(QScrollArea):
                         status=status,
                     ):
                         _internal_continuation = False
-                        suppress_user_followup_card = False
                         for key in (
                             "internal_planner_handoff",
-                            "internal_campaign_continuation",
                             "planner_resolution_needed",
                             "mismatch_kind",
                             "mismatch_question",
@@ -683,25 +671,10 @@ class ChatView(QScrollArea):
                     pass
 
                 # Recoverable failures are planner control-flow — don't show transient failure
-                if not ok and (
-                    (recoverable and not cancelled)
-                    or (suppress_user_followup_card and not user_visible_blocker)
-                ):
+                if not ok and recoverable and not cancelled:
                     ok = True
                 # Finalize controller FIRST (updates planner/spec UI above)
                 controller.finalize(ok, result_text)
-
-                # Internal planner handback: remove the PlanWriterCard, skip all
-                # user-facing card creation (spec stale, WorkerSummary, etc.), and
-                # close the assistant turn so the next Planner continuation starts
-                # fresh.  The dispatch tool lifecycle is already cleanly finalised.
-                if _internal_continuation:
-                    self._remove_plan_writer_card(tool_call_id)
-                    self._suppressed_dispatch_tool_ids.discard(tool_call_id)
-                    self._suppress_next_dispatch_plan_writer = True
-                    self.close_current_assistant_for_continuation()
-                    self._scroll_to_bottom()
-                    return
 
                 if suppressed_dispatch:
                     self._suppressed_dispatch_tool_ids.discard(tool_call_id)
@@ -729,7 +702,6 @@ class ChatView(QScrollArea):
                     summary
                     and not dispatch_not_started
                     and not (needs_followup and recoverable)
-                    and not (suppress_user_followup_card and not user_visible_blocker)
                 ):
                     goal = (
                         controller.goal

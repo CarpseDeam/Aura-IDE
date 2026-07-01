@@ -1,9 +1,9 @@
 """Canonical dispatch lifecycle predicates.
 
 Every layer (Manager, ChatView, PlanWriterCard, WorkerHandler,
-completion_guard, dispatch_failure) routes through these three pure
-functions so internal continuation, user-visible blockers, and terminal
-stops are decided consistently.
+completion_guard, dispatch_failure) routes through these pure functions
+so internal planner handbacks, user-visible blockers, and terminal stops
+are decided consistently.
 """
 
 from __future__ import annotations
@@ -62,8 +62,8 @@ def _normalise_source(
         if isinstance(inner, dict):
             extras = dict(inner)
         else:
-            # Bare extras dict — keys like suppress_user_followup_card,
-            # recoverable, dispatch_spec_rejected, etc.
+            # Bare extras dict — keys like recoverable,
+            # dispatch_spec_rejected, etc.
             extras = {str(k): v for k, v in source.items()}
     else:
         extras = {}
@@ -146,8 +146,8 @@ def is_internal_dispatch_continuation(
     blocker_reason: str = "",
     **overrides: Any,
 ) -> bool:
-    """Return True when a dispatch result should trigger an **invisible**
-    Planner restart — no user-facing failure, no terminal stop.
+    """Return True when a dispatch result should trigger an internal Planner
+    handback — no user-facing failure, no terminal stop.
 
     Calling convention (any of these work)::
 
@@ -178,11 +178,7 @@ def is_internal_dispatch_continuation(
     if ex.get("internal_planner_handoff"):
         return True
 
-    # ── 3. Internal campaign continuation ─────────────────────────────
-    if ex.get("internal_campaign_continuation") and ex.get("suppress_user_followup_card"):
-        return True
-
-    # ── 4. Failure constraint + recoverable signal ────────────────────
+    # ── 3. Failure constraint + recoverable signal ────────────────────
     failure_constraint: str = str(meta.get("failure_constraint", "") or "")
     if failure_constraint:
         recoverable_signal = (
@@ -196,10 +192,6 @@ def is_internal_dispatch_continuation(
         if recoverable_signal:
             return True
 
-    # ── 5. suppress + recoverable pattern ─────────────────────────────
-    if ex.get("suppress_user_followup_card") and meta.get("recoverable"):
-        return True
-
     return False
 
 
@@ -212,7 +204,7 @@ def is_user_visible_dispatch_blocker(
     """Return True when a dispatch failure should be **surfaced to the user**
     as a visible blocker card or error.
 
-    This is the complement of *is_internal_dispatch_continuation* for
+    This is the complement of the internal Planner handback predicate for
     non-success results: if the dispatch didn't succeed and the harness
     can't absorb it internally, the user should see it.
     """
@@ -251,12 +243,12 @@ def is_terminal_dispatch_blocker(
     """Return True when the Planner loop **must stop** after this dispatch
     result — no retry, no internal restart, no follow-up.
 
-    Internal continuations are **non-terminal** by definition.  True
+    Internal Planner handbacks are **non-terminal** by definition. True
     terminal blockers are cancelled dispatches, repeat/limit guards,
     user-visible blockers, approval rejections, hard harness errors
     without recovery, and explicit success completions.
     """
-    # Internal continuation → *never* terminal
+    # Internal Planner handback → *never* terminal
     if is_internal_dispatch_continuation(
         source, extras=extras, blocker_reason=blocker_reason, **overrides
     ):
@@ -298,31 +290,6 @@ def is_terminal_dispatch_blocker(
     return False
 
 
-def is_terminal_dispatch_session_campaign(
-    source: Any = None,
-    *,
-    extras: dict[str, Any] | None = None,
-    **overrides: Any,
-) -> bool:
-    """Return True when *source* came from a DispatchSession multi-step
-    campaign that finished (possibly with a blocked step).  The session
-    already owns the cursor, emitted the final TODO snapshot, and fired
-    workerFinished — the Planner loop must stop, not restart for ordinary
-    step advancement.
-
-    Calling convention::
-
-        is_terminal_dispatch_session_campaign(result)       # WorkerDispatchResult
-        is_terminal_dispatch_session_campaign(payload_dict) # JSON dict payload
-        is_terminal_dispatch_session_campaign(extras=ex)    # bare extras dict
-    """
-    ex, _meta = _normalise_source(source, extras, **overrides)
-    return bool(
-        ex.get("dispatch_session")
-        and ex.get("internal_campaign_continuation")
-    )
-
-
 # ---------------------------------------------------------------------------
 # Convenience: single-call classification
 # ---------------------------------------------------------------------------
@@ -356,6 +323,5 @@ __all__ = [
     "is_internal_dispatch_continuation",
     "is_user_visible_dispatch_blocker",
     "is_terminal_dispatch_blocker",
-    "is_terminal_dispatch_session_campaign",
     "classify_dispatch_result",
 ]

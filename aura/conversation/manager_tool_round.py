@@ -17,7 +17,6 @@ from aura.conversation.completion_guard import (
 )
 from aura.conversation.dispatch import DispatchCallback, WorkerDispatchResult
 from aura.conversation.dispatch_failure import classify_failed_worker_dispatch
-from aura.conversation.dispatch_lifecycle import is_internal_dispatch_continuation
 from aura.conversation.edit_orchestrator import EditRetryLedger
 from aura.conversation.history import History
 from aura.conversation.loop_detection import LoopDetector
@@ -210,7 +209,6 @@ class ToolRoundRunner:
         completed_dispatch_for_final = False
         completed_tool_result_for_final = False
         planner_stale_read_files: list[str] = []
-        planner_restart_needed = False
         for task in tasks:
             if cancel_event.is_set():
                 cleanup_cancelled(on_event)
@@ -229,45 +227,6 @@ class ToolRoundRunner:
                 )
                 blocker_reason = str(res.get("blocker_reason", ""))
                 failure_constraint = res.get("failure_constraint", "")
-                result_obj = res.get("result")
-                payload_dict = (
-                    result_obj.to_tool_payload()
-                    if isinstance(result_obj, WorkerDispatchResult)
-                    else {}
-                )
-                if failure_constraint:
-                    payload_dict["failure_constraint"] = failure_constraint
-
-                if is_internal_dispatch_continuation(payload_dict, blocker_reason=blocker_reason):
-                    extras = (
-                        payload_dict.get("extras")
-                        if isinstance(payload_dict.get("extras"), dict)
-                        else {}
-                    )
-                    payload_dict["extras"] = {
-                        **extras,
-                        "internal_planner_handoff": True,
-                        "suppress_user_followup_card": True,
-                        "recoverable": True,
-                        "user_visible_blocker": False,
-                        "failure_constraint": failure_constraint,
-                    }
-                    payload_dict["failure_constraint"] = failure_constraint
-                    payload = json.dumps(payload_dict, ensure_ascii=False)
-                    self._history.append_tool_result(task["id"], payload)
-                    if failure_constraint:
-                        self._history.append_internal_user_text(failure_constraint)
-                    on_event(
-                        ToolResult(
-                            tool_call_id=task["id"],
-                            name="dispatch_to_worker",
-                            ok=True,
-                            result=payload,
-                            extras=payload_dict["extras"],
-                        )
-                    )
-                    planner_restart_needed = True
-                    break
 
                 self._append_dispatch_blocker_message(
                     res["result"],
@@ -301,9 +260,6 @@ class ToolRoundRunner:
             if "result_payload" in res:
                 self._history.append_tool_result(task["id"], res["result_payload"])
                 on_event(res["event"])
-
-        if planner_restart_needed:
-            return ToolRoundOutcome(action="continue")
 
         self._planner_refresh.handle_post_write_notices(
             self._history, planner_stale_read_files
@@ -709,8 +665,6 @@ class ToolRoundRunner:
         if result is not None and not result.cancelled:
             if result.ok:
                 terminal_dispatch = True
-            elif _is_dispatch_session_terminal_campaign(result):
-                terminal_dispatch = True
             else:
                 action = classify_failed_worker_dispatch(
                     args=args,
@@ -851,14 +805,6 @@ def _terminal_payload_ok(loop_info: dict[str, Any] | None) -> bool | None:
     if "ok" not in payload:
         return None
     return bool(payload.get("ok"))
-
-
-def _is_dispatch_session_terminal_campaign(result: WorkerDispatchResult) -> bool:
-    extras = result.extras if isinstance(result.extras, dict) else {}
-    return bool(
-        extras.get("dispatch_session")
-        and extras.get("internal_campaign_continuation")
-    )
 
 
 def _dispatch_args_look_like_local_code_work(args: dict[str, Any]) -> bool:

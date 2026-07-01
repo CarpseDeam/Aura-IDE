@@ -3,10 +3,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from aura.conversation.dispatch_lifecycle import (
-    is_internal_dispatch_continuation,
-    is_user_visible_dispatch_blocker,
-)
 from aura.gui.cards.dispatch_status_labels import mismatch_card_should_show
 
 
@@ -16,18 +12,16 @@ class WorkerFinishOutcome:
     extras: dict
     terminal_success: bool
     is_internal: bool
-    user_visible_blocker: bool
-    suppress_user_followup_card: bool
     suppress_main_summary: bool
     is_mismatch: bool
 
     @property
     def should_clear_dispatch_card(self) -> bool:
-        return not (self.suppress_user_followup_card and not self.user_visible_blocker)
+        return True
 
     @property
     def should_set_pending_internal_retool(self) -> bool:
-        return bool(self.is_internal and not self.extras.get("dispatch_session"))
+        return self.is_internal
 
     @property
     def should_show_visible_summary(self) -> bool:
@@ -49,31 +43,21 @@ def classify_worker_finish(
     metadata: dict,
 ) -> WorkerFinishOutcome:
     extras = metadata.get("extras") if isinstance(metadata.get("extras"), dict) else {}
+    cancelled = bool(metadata.get("cancelled", False))
     terminal_success = bool(ok and not needs_followup and status != "needs_planner_resolution")
     if terminal_success:
         extras = _scrub_internal_success_extras(extras)
         metadata = {**metadata, "extras": extras}
 
-    is_internal = is_internal_dispatch_continuation(
-        metadata,
-        ok=ok,
-        needs_followup=needs_followup,
-        status=status,
-    )
-    user_visible_blocker = is_user_visible_dispatch_blocker(metadata)
-    suppress_user_followup_card = (
-        False if terminal_success else bool(extras.get("suppress_user_followup_card"))
-    )
-    suppress_main_summary = is_internal or (
-        suppress_user_followup_card and not user_visible_blocker
-    )
+    is_internal = bool(not cancelled and not ok and status == "needs_planner_resolution")
+    suppress_main_summary = is_internal
     has_mismatch_data = bool(
         extras.get("mismatch_kind")
         or extras.get("mismatch_question")
     )
     is_mismatch = mismatch_card_should_show(
         is_internal=is_internal,
-        suppressed=suppress_user_followup_card and not user_visible_blocker,
+        suppressed=False,
         has_mismatch_data=has_mismatch_data,
     )
     if is_mismatch:
@@ -84,8 +68,6 @@ def classify_worker_finish(
         extras=extras,
         terminal_success=terminal_success,
         is_internal=is_internal,
-        user_visible_blocker=user_visible_blocker,
-        suppress_user_followup_card=suppress_user_followup_card,
         suppress_main_summary=suppress_main_summary,
         is_mismatch=is_mismatch,
     )
@@ -113,8 +95,6 @@ def _scrub_internal_success_extras(extras: dict) -> dict:
     result = dict(extras)
     for key in (
         "internal_planner_handoff",
-        "internal_campaign_continuation",
-        "suppress_user_followup_card",
         "planner_resolution_needed",
         "mismatch_kind",
         "mismatch_question",
