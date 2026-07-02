@@ -23,6 +23,9 @@ WORKER_FINAL_REPORT_STARTED = "worker.final_report_started"
 WORKER_FINAL_REPORT_FINISHED = "worker.final_report_finished"
 WORKER_FAILED = "worker.failed"
 
+# ── Lifecycle gate events ──────────────────────────────────────────────────
+WORKER_PRE_TOOL_GATE_DECIDED = "worker.pre_tool_gate_decided"
+
 # ── Wildcard — matches every event ──────────────────────────────────────────
 ALL = "*"
 
@@ -46,6 +49,7 @@ WORKER_TOPICS = frozenset({
     WORKER_FINAL_REPORT_STARTED,
     WORKER_FINAL_REPORT_FINISHED,
     WORKER_FAILED,
+    WORKER_PRE_TOOL_GATE_DECIDED,
 })
 
 ALL_TOPICS = DISPATCH_TOPICS | WORKER_TOPICS

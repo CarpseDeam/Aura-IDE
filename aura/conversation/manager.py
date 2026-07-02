@@ -67,6 +67,8 @@ from aura.conversation.tools._types import (
 from aura.conversation.tools.registry import ToolRegistry
 from aura.conversation.verification_progress import VerificationProgressTracker
 from aura.conversation.worker_finalization_gate import handle_worker_candidate_finalization
+from aura.events import EventBus
+from aura.lifecycle import LifecycleHooks
 from aura.conversation.worker_finish import (
     build_worker_unrecoverable_message,
 )
@@ -176,9 +178,13 @@ class ConversationManager:
         self,
         history: History,
         tool_registry: ToolRegistry,
+        lifecycle: LifecycleHooks | None = None,
+        event_bus: EventBus | None = None,
     ) -> None:
         self._history = history
         self._tools = tool_registry
+        self._lifecycle = lifecycle
+        self._event_bus = event_bus
         self._loop_detector = LoopDetector()
         self._verification_tracker = VerificationProgressTracker()
         self._tool_runner = ToolRunner(
@@ -194,6 +200,8 @@ class ConversationManager:
             tool_runner=self._tool_runner,
             loop_detector=self._loop_detector,
             planner_refresh=self._planner_refresh,
+            lifecycle=self._lifecycle,
+            event_bus=self._event_bus,
         )
 
     @property

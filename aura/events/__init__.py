@@ -27,6 +27,7 @@ from aura.events.topics import (
     WORKER_COMMAND_FINISHED,
     WORKER_FINAL_REPORT_STARTED,
     WORKER_FINAL_REPORT_FINISHED,
+    WORKER_PRE_TOOL_GATE_DECIDED,
     WORKER_TOOL_STARTED,
     WORKER_TOOL_FINISHED,
     WORKER_TOPICS,
@@ -53,6 +54,7 @@ __all__ = [
     "WORKER_FINAL_REPORT_STARTED",
     "WORKER_FINAL_REPORT_FINISHED",
     "WORKER_FAILED",
+    "WORKER_PRE_TOOL_GATE_DECIDED",
     # ── sentinel ────────────────────────────────────────────────
     "ALL",
     # ── convenience groupings ───────────────────────────────────

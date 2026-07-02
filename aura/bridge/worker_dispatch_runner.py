@@ -39,6 +39,7 @@ from aura.conversation.critic_dispatch import CriticCallback, CriticRequest, run
 from aura.conversation.persistence import WorkerDispatchRecord
 from aura.conversation.project_profile import detect_project_profile
 from aura.events import EventBus
+from aura.lifecycle import LifecycleHooks
 from aura.validation.selector import ValidationPlan
 
 _log = logging.getLogger(__name__)
@@ -65,6 +66,7 @@ class WorkerDispatchRunner:
         records: list[WorkerDispatchRecord],
         result_metadata: dict[str, dict[str, Any]],
         event_bus: EventBus,
+        lifecycle: LifecycleHooks | None = None,
         suppress_worker_todo_updates: bool = False,
         suppress_final_report_activity: bool = False,
         set_tier1_context: Callable[[str], None] | None = None,
@@ -85,6 +87,7 @@ class WorkerDispatchRunner:
         self._result_metadata = result_metadata
         self._set_tier1_context = set_tier1_context
         self._event_bus = event_bus
+        self._lifecycle = lifecycle
 
     def run_worker(
         self,
@@ -233,7 +236,12 @@ class WorkerDispatchRunner:
             worker_registry.set_contract(task_spec.contract)
         if task_spec.task_shape is not None and hasattr(worker_registry, "set_task_shape"):
             worker_registry.set_task_shape(task_spec.task_shape)
-        worker_manager = ConversationManager(worker_history, worker_registry)
+        worker_manager = ConversationManager(
+            worker_history,
+            worker_registry,
+            lifecycle=self._lifecycle,
+            event_bus=self._event_bus,
+        )
         return worker_history, task_spec, context_gearbox, worker_manager
 
     def _create_worker_relay(self) -> WorkerEventRelay:

@@ -734,4 +734,5 @@ class _DispatchProxy(QObject):
             result_metadata=self._result_metadata,
             set_tier1_context=self.set_tier1_context,
             event_bus=self._event_bus,
+            lifecycle=self._lifecycle,
         )

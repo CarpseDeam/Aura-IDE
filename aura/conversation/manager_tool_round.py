@@ -1,8 +1,10 @@
 """Tool-call round execution for ConversationManager."""
 from __future__ import annotations
 
+import asyncio
 import concurrent.futures
 import json
+import logging
 import re
 import threading
 from dataclasses import dataclass
@@ -37,6 +39,8 @@ from aura.conversation.worker_recovery_payload import (
     is_recoverable_phase_boundary,
     parse_tool_payload,
 )
+from aura.events import AuraEvent, EventBus, WORKER_PRE_TOOL_GATE_DECIDED
+from aura.lifecycle import GateDecision, HookContext, LifecycleHooks
 from aura.research.policy import ANSWER_ONLY
 
 EventCallback = Callable[[Event], None]
@@ -75,12 +79,16 @@ class ToolRoundRunner:
         tool_runner: ToolRunner,
         loop_detector: LoopDetector,
         planner_refresh: PlannerRefreshState,
+        lifecycle: LifecycleHooks | None = None,
+        event_bus: EventBus | None = None,
     ) -> None:
         self._history = history
         self._tools = tools
         self._tool_runner = tool_runner
         self._loop_detector = loop_detector
         self._planner_refresh = planner_refresh
+        self._lifecycle = lifecycle
+        self._event_bus = event_bus
 
     def run(
         self,
@@ -388,6 +396,25 @@ class ToolRoundRunner:
                     blocked["_worker_phase_boundary_info"] = blocked_payload
                 return blocked
 
+        # ── Lifecycle gate: worker.pre_tool_use ─────────────────────────
+        if state.mode == "worker" and self._lifecycle is not None:
+            gate_result = self._run_worker_pre_tool_gate(
+                tool_call_id=tool_call_id,
+                name=name,
+                args=args,
+                state=state,
+            )
+            if gate_result is not None:
+                if gate_result.get("blocked"):
+                    return blocked_tool_result(
+                        tool_call_id,
+                        name,
+                        gate_result["blocked_payload"],
+                    )
+                if "rewritten_args" in gate_result:
+                    args = gate_result["rewritten_args"]
+                    task = dict(task, args=args)
+
         if name == "dispatch_to_worker":
             return self._handle_dispatch_to_worker(
                 tool_call_id=tool_call_id,
@@ -548,6 +575,138 @@ class ToolRoundRunner:
         if is_recoverable_phase_boundary(loop_info):
             result["_worker_phase_boundary_info"] = loop_info
         return result
+
+    def _run_worker_pre_tool_gate(
+        self,
+        *,
+        tool_call_id: str,
+        name: str,
+        args: dict[str, Any],
+        state: _SendState,
+    ) -> dict[str, Any] | None:
+        """Evaluate the worker.pre_tool_use lifecycle gate.
+
+        Returns ``None`` if no gate triggered (allow).
+        Returns a dict with ``"blocked": True`` and ``"blocked_payload"`` if
+        the gate blocked execution.
+        Returns a dict with ``"rewritten_args"`` if the gate rewrote the
+        tool call payload.
+        """
+        if self._lifecycle is None:
+            return None
+
+        ctx = HookContext(
+            topic="worker.pre_tool_use",
+            category="gate",
+            phase="pre_tool_use",
+            role="worker",
+            tool_call_id=tool_call_id,
+            tool_name=name,
+            payload={
+                "tool_call_id": tool_call_id,
+                "tool_name": name,
+                "args": dict(args),
+                "mode": state.mode,
+                "dispatch_tool_call_id": "",
+            },
+        )
+        try:
+            decision = asyncio.run(self._lifecycle.ask(ctx))
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "lifecycle_gate_ask_failed topic=worker.pre_tool_use "
+                "tool_call_id=%s tool_name=%s",
+                tool_call_id,
+                name,
+            )
+            blocked_payload = {
+                "ok": False,
+                "blocked": True,
+                "failure_class": "lifecycle_gate_blocked",
+                "reason": "lifecycle_gate_handler_error",
+                "tool": name,
+                "recoverable": True,
+                "phase_boundary": False,
+            }
+            self._emit_worker_pre_tool_gate_decided(
+                tool_call_id=tool_call_id,
+                name=name,
+                allowed=False,
+                blocked=True,
+                reason="lifecycle_gate_handler_error",
+                rewritten=False,
+                additional_context=False,
+            )
+            return {"blocked": True, "blocked_payload": blocked_payload}
+
+        has_additional_context = bool(decision.additional_context)
+        has_rewrite = False
+        rewritten_args: dict[str, Any] | None = None
+        if decision.updated_payload is not None:
+            new_args = decision.updated_payload.get("args")
+            if isinstance(new_args, dict):
+                rewritten_args = new_args
+                has_rewrite = True
+
+        self._emit_worker_pre_tool_gate_decided(
+            tool_call_id=tool_call_id,
+            name=name,
+            allowed=decision.allowed,
+            blocked=decision.blocked,
+            reason=decision.reason,
+            rewritten=has_rewrite,
+            additional_context=has_additional_context,
+        )
+
+        if decision.additional_context:
+            self._history.append_internal_user_text(decision.additional_context)
+
+        if decision.blocked:
+            blocked_payload = {
+                "ok": False,
+                "blocked": True,
+                "failure_class": "lifecycle_gate_blocked",
+                "reason": decision.reason or "worker_pre_tool_use_blocked",
+                "tool": name,
+                "recoverable": True,
+                "phase_boundary": False,
+            }
+            return {"blocked": True, "blocked_payload": blocked_payload}
+
+        if rewritten_args is not None:
+            return {"rewritten_args": rewritten_args}
+
+        return None
+
+    def _emit_worker_pre_tool_gate_decided(
+        self,
+        *,
+        tool_call_id: str,
+        name: str,
+        allowed: bool,
+        blocked: bool,
+        reason: str,
+        rewritten: bool,
+        additional_context: bool,
+    ) -> None:
+        if self._event_bus is None:
+            return
+        self._event_bus.emit(
+            AuraEvent(
+                topic=WORKER_PRE_TOOL_GATE_DECIDED,
+                run_id=tool_call_id,
+                campaign_id=tool_call_id,
+                payload={
+                    "tool_call_id": tool_call_id,
+                    "tool_name": name,
+                    "allowed": allowed,
+                    "blocked": blocked,
+                    "reason": reason,
+                    "rewritten": rewritten,
+                    "additional_context": additional_context,
+                },
+            )
+        )
 
     def _append_limit_tool_result(
         self,
