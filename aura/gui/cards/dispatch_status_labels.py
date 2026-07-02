@@ -80,7 +80,7 @@ def spec_finished_label(
 ) -> tuple[str, str]:
     """Return ``(label_text, color)`` for SpecCard.worker_finished()."""
     from aura.conversation.worker_outcome import WorkerOutcomeStatus, normalize_outcome_status
-    from aura.gui.theme import DANGER, SUCCESS, WARN
+    from aura.gui.theme import DANGER, FG_MUTED, SUCCESS, WARN
 
     if is_internal:
         if status is not None:
@@ -90,24 +90,25 @@ def spec_finished_label(
                 WorkerOutcomeStatus.completed_with_caveats.value,
             ):
                 return ("Completed", SUCCESS)
-        return ("Needs attention", WARN) if not ok else ("Completed", SUCCESS)
+        return ("Worker Report", WARN) if not ok else ("Completed", SUCCESS)
 
     # ---- non-internal: honest terminal labels ----------------------------
     if status is not None:
         mapping = {
             WorkerOutcomeStatus.completed.value: ("Completed", SUCCESS),
             WorkerOutcomeStatus.completed_with_caveats.value: ("Completed", SUCCESS),
-            WorkerOutcomeStatus.validation_failed.value: ("Needs attention", WARN),
-            WorkerOutcomeStatus.edit_mechanics_blocked.value: ("Needs attention", WARN),
-            WorkerOutcomeStatus.scope_mismatch.value: ("Needs attention", WARN),
-            WorkerOutcomeStatus.approval_rejected.value: ("Failed", DANGER),
-            WorkerOutcomeStatus.cancelled.value: ("Cancelled", DANGER),
-            WorkerOutcomeStatus.harness_error.value: ("Failed", DANGER),
+            WorkerOutcomeStatus.validation_failed.value: ("Worker Report", WARN),
+            WorkerOutcomeStatus.edit_mechanics_blocked.value: ("Worker Report", WARN),
+            WorkerOutcomeStatus.scope_mismatch.value: ("Worker Report", WARN),
+            WorkerOutcomeStatus.needs_followup.value: ("Worker Report", FG_MUTED),
+            WorkerOutcomeStatus.approval_rejected.value: ("Changes rejected", DANGER),
+            WorkerOutcomeStatus.cancelled.value: ("Cancelled", "#6b7280"),
+            WorkerOutcomeStatus.harness_error.value: ("Worker Error", DANGER),
         }
         normalized = normalize_outcome_status(status)
         if normalized in mapping:
             return mapping[normalized]
-    return ("Completed", SUCCESS) if ok else ("Needs attention", WARN)
+    return ("Completed", SUCCESS) if ok else ("Worker Report", DANGER)
 
 
 def spec_replay_finished_label(
@@ -123,8 +124,8 @@ def spec_replay_finished_label(
     from aura.gui.theme import DANGER, SUCCESS, WARN
 
     if is_internal:
-        return ("Needs attention", WARN) if not ok else ("Completed", SUCCESS)
-    return ("Completed", SUCCESS) if ok else ("Failed", DANGER)
+        return ("Worker Report", WARN) if not ok else ("Completed", SUCCESS)
+    return ("Completed", SUCCESS) if ok else ("Worker Error", DANGER)
 
 
 # ---------------------------------------------------------------------------
