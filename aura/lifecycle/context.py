@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import Any
 
 from aura.events.event import AuraEvent
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
 class HookContext:
     """Immutable context snapshot delivered to lifecycle hook handlers.
 
@@ -14,49 +16,22 @@ class HookContext:
     handlers can make decisions without reaching into other subsystems.
     """
 
-    __slots__ = (
-        "topic",
-        "category",
-        "phase",
-        "role",
-        "run_id",
-        "campaign_id",
-        "step_id",
-        "tool_call_id",
-        "parent_tool_call_id",
-        "tool_name",
-        "payload",
-        "metadata",
-    )
+    topic: str
+    category: str
+    phase: str = ""
+    role: str = ""
+    run_id: str = ""
+    campaign_id: str = ""
+    step_id: str = ""
+    tool_call_id: str = ""
+    parent_tool_call_id: str = ""
+    tool_name: str = ""
+    payload: dict[str, Any] | None = field(default_factory=dict)
+    metadata: dict[str, Any] | None = field(default_factory=dict)
 
-    def __init__(
-        self,
-        *,
-        topic: str,
-        category: str,
-        phase: str = "",
-        role: str = "",
-        run_id: str = "",
-        campaign_id: str = "",
-        step_id: str = "",
-        tool_call_id: str = "",
-        parent_tool_call_id: str = "",
-        tool_name: str = "",
-        payload: dict[str, Any] | None = None,
-        metadata: dict[str, Any] | None = None,
-    ) -> None:
-        self.topic = topic
-        self.category = category
-        self.phase = phase
-        self.role = role
-        self.run_id = run_id
-        self.campaign_id = campaign_id
-        self.step_id = step_id
-        self.tool_call_id = tool_call_id
-        self.parent_tool_call_id = parent_tool_call_id
-        self.tool_name = tool_name
-        self.payload: dict[str, Any] = payload if payload is not None else {}
-        self.metadata: dict[str, Any] = metadata if metadata is not None else {}
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "payload", dict(self.payload or {}))
+        object.__setattr__(self, "metadata", dict(self.metadata or {}))
 
     # ------------------------------------------------------------------
     # Factory

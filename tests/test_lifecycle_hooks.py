@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import FrozenInstanceError
 from typing import Any
 
 import pytest
@@ -67,6 +68,11 @@ class TestHookContext:
         assert ctx.payload == {}
         assert ctx.metadata == {}
 
+    def test_field_assignment_raises_frozen_instance_error(self) -> None:
+        ctx = HookContext(topic="t", category="notify")
+        with pytest.raises(FrozenInstanceError):
+            ctx.topic = "other"
+
     def test_from_event_copies_identity(self) -> None:
         ev = AuraEvent(
             topic="worker.tool.started",
@@ -82,6 +88,14 @@ class TestHookContext:
         assert ctx.step_id == "s1"
         assert ctx.payload == {"key": "val"}
         assert ctx.category == "notify"  # default
+
+    def test_constructor_copies_payload(self) -> None:
+        payload = {"key": "val"}
+        ctx = HookContext(topic="t", category="notify", payload=payload)
+
+        payload["key"] = "changed"
+
+        assert ctx.payload == {"key": "val"}
 
     def test_from_event_accepts_overrides(self) -> None:
         ev = AuraEvent(topic="t", run_id="r1")
@@ -121,6 +135,11 @@ class TestHookMatcher:
         m = HookMatcher("worker.tool.started")
         ctx = _make_ctx(topic="worker.tool.started")
         assert m.matches(ctx)
+
+    def test_field_assignment_raises_frozen_instance_error(self) -> None:
+        m = HookMatcher("*")
+        with pytest.raises(FrozenInstanceError):
+            m.topic = "other"
 
     def test_exact_topic_no_match(self) -> None:
         m = HookMatcher("worker.tool.started")
@@ -198,6 +217,12 @@ class TestHandlerRecord:
         assert rec.handler_kind == "python"
         assert rec.source == "internal"
         assert rec.metadata == {}
+
+    def test_field_assignment_raises_frozen_instance_error(self) -> None:
+        matcher = HookMatcher("*")
+        rec = HandlerRecord(name="test", matcher=matcher, callback=lambda ctx: None)
+        with pytest.raises(FrozenInstanceError):
+            rec.name = "other"
 
     def test_explicit_source_and_kind(self) -> None:
         matcher = HookMatcher("*")
@@ -309,6 +334,11 @@ class TestGateDecision:
         assert not d.blocked
         assert d.reason == ""
 
+    def test_field_assignment_raises_frozen_instance_error(self) -> None:
+        d = GateDecision.allow()
+        with pytest.raises(FrozenInstanceError):
+            d.allowed = False
+
     def test_block(self) -> None:
         d = GateDecision.block("not allowed", severity="warning")
         assert not d.allowed
@@ -322,6 +352,14 @@ class TestGateDecision:
         assert not d.blocked
         assert d.updated_payload == {"new": "payload"}
         assert d.reason == "transformed"
+
+    def test_rewrite_copies_updated_payload(self) -> None:
+        updated_payload = {"new": "payload"}
+        d = GateDecision.rewrite(updated_payload, reason="transformed")
+
+        updated_payload["new"] = "changed"
+
+        assert d.updated_payload == {"new": "payload"}
 
     def test_inject_context(self) -> None:
         d = GateDecision.inject_context("extra info", reason="enrich")
@@ -425,6 +463,27 @@ class TestGateHookRegistry:
         decision = _run_async(reg.ask(_make_ctx()))
         assert decision.blocked
         assert decision.reason == "lifecycle_gate_handler_error"
+
+    def test_async_handler_supported(self) -> None:
+        reg = GateHookRegistry()
+
+        async def async_handler(_ctx: HookContext) -> GateDecision:
+            await asyncio.sleep(0)
+            return GateDecision.inject_context("async-context")
+
+        reg.register(HookMatcher("*"), async_handler)
+
+        decision = _run_async(reg.ask(_make_ctx()))
+        assert decision.allowed
+        assert decision.additional_context == "async-context"
+
+    def test_invalid_handler_return_blocks(self) -> None:
+        reg = GateHookRegistry()
+        reg.register(HookMatcher("*"), lambda ctx: "invalid")
+
+        decision = _run_async(reg.ask(_make_ctx()))
+        assert decision.blocked
+        assert decision.reason == "lifecycle_gate_invalid_decision"
 
     def test_force_continue_preserved(self) -> None:
         reg = GateHookRegistry()

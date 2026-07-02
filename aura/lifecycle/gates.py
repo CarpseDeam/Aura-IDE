@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import inspect
 import logging
-from typing import Callable
+from typing import Any, Callable
 
 from aura.lifecycle.context import HookContext
 from aura.lifecycle.decisions import GateDecision
@@ -107,13 +108,11 @@ class GateHookRegistry:
 
         for record in matching:
             try:
-                decision: GateDecision = record.callback(ctx)
+                result: Any = record.callback(ctx)
 
-                # Allow awaiting coroutines.
-                while hasattr(decision, "__await__"):
-                    decision = await decision
-                    if isinstance(decision, GateDecision):
-                        break
+                # Allow awaiting coroutines and other awaitable handler results.
+                if inspect.isawaitable(result):
+                    result = await result
 
             except Exception:
                 _log.exception(
@@ -125,6 +124,20 @@ class GateHookRegistry:
                     reason="lifecycle_gate_handler_error",
                     severity="error",
                 )
+
+            if not isinstance(result, GateDecision):
+                _log.error(
+                    "gate_handler_invalid_decision name=%s topic=%s result_type=%s",
+                    record.name,
+                    ctx.topic,
+                    type(result).__name__,
+                )
+                return GateDecision.block(
+                    reason="lifecycle_gate_invalid_decision",
+                    severity="error",
+                )
+
+            decision = result
 
             # --- Compose ---
 

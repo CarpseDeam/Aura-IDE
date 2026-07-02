@@ -2,10 +2,31 @@
 
 from __future__ import annotations
 
-from typing import Any
+from dataclasses import dataclass, field
+from typing import Any, ClassVar
 
 
-class GateDecision:
+class _GateDecisionMeta(type):
+    def __getattribute__(cls, name: str) -> Any:
+        if name == "force_continue":
+            namespace = super().__getattribute__("__dict__")
+            if namespace.get("_force_continue_factory_ready", False):
+
+                def factory(reason: str) -> "GateDecision":
+                    return cls(
+                        allowed=True,
+                        blocked=False,
+                        force_continue=True,
+                        reason=reason,
+                    )
+
+                return factory
+
+        return super().__getattribute__(name)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class GateDecision(metaclass=_GateDecisionMeta):
     """Result returned by a gate hook handler.
 
     A gate decision can *allow* (default), *block*, *rewrite* the payload,
@@ -13,26 +34,22 @@ class GateDecision:
     multiple decisions according to the lifecycle gate contract.
     """
 
-    def __init__(
-        self,
-        *,
-        allowed: bool = True,
-        blocked: bool = False,
-        reason: str = "",
-        severity: str = "info",
-        updated_payload: dict[str, Any] | None = None,
-        additional_context: str = "",
-        force_continue: bool = False,
-        metadata: dict[str, Any] | None = None,
-    ) -> None:
-        self.allowed = allowed
-        self.blocked = blocked
-        self.reason = reason
-        self.severity = severity
-        self.updated_payload = updated_payload
-        self.additional_context = additional_context
-        self.force_continue = force_continue
-        self.metadata: dict[str, Any] = metadata if metadata is not None else {}
+    allowed: bool = True
+    blocked: bool = False
+    reason: str = ""
+    severity: str = "info"
+    updated_payload: dict[str, Any] | None = None
+    additional_context: str = ""
+    force_continue: bool = False
+    metadata: dict[str, Any] | None = field(default_factory=dict)
+    _force_continue_factory_ready: ClassVar[bool] = False
+
+    def __post_init__(self) -> None:
+        if self.updated_payload is not None:
+            object.__setattr__(
+                self, "updated_payload", dict(self.updated_payload)
+            )
+        object.__setattr__(self, "metadata", dict(self.metadata or {}))
 
     # ------------------------------------------------------------------
     # Factory constructors
@@ -72,8 +89,22 @@ class GateDecision:
             reason=reason,
         )
 
-    @classmethod
-    def force_continue(cls, reason: str) -> "GateDecision":
-        """Return a decision that forces continuation regardless of other
-        handlers."""
-        return cls(allowed=True, blocked=False, force_continue=True, reason=reason)
+    def to_dict(self) -> dict[str, Any]:
+        """Return a plain dict for serialisation or logging."""
+        return {
+            "allowed": self.allowed,
+            "blocked": self.blocked,
+            "reason": self.reason,
+            "severity": self.severity,
+            "updated_payload": (
+                dict(self.updated_payload)
+                if self.updated_payload is not None
+                else None
+            ),
+            "additional_context": self.additional_context,
+            "force_continue": self.force_continue,
+            "metadata": dict(self.metadata),
+        }
+
+
+GateDecision._force_continue_factory_ready = True

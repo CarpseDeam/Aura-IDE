@@ -8,7 +8,7 @@ from typing import Any, Callable
 from aura.lifecycle.matchers import HookMatcher
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class HandlerRecord:
     """Metadata record for a registered lifecycle hook handler.
 
@@ -21,4 +21,7 @@ class HandlerRecord:
     callback: Callable[..., Any]
     handler_kind: str = "python"
     source: str = "internal"
-    metadata: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] | None = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "metadata", dict(self.metadata or {}))
