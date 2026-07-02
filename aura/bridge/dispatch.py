@@ -51,6 +51,7 @@ from aura.conversation.workflow_state import WorkflowState, WorkflowStatus
 from aura.dependency_context import build_dependency_stanza
 from aura.events import EventBus
 from aura.execution_checklist import ExecutionChecklistController
+from aura.lifecycle import LifecycleHooks, attach_lifecycle_notify
 
 __all__ = [
     "_DispatchProxy",
@@ -123,6 +124,14 @@ class _DispatchProxy(QObject):
         # and WorkerDispatchRunner for activity projection.
         self._event_bus = EventBus()
 
+        # Lifecycle hooks — observation bridge attached to the event bus.
+        # ExecutionChecklistController and WorkerActivityController remain
+        # subscribed directly to EventBus; lifecycle notify observes in parallel.
+        self._lifecycle = LifecycleHooks()
+        self._detach_lifecycle_notify = attach_lifecycle_notify(
+            self._event_bus, self._lifecycle
+        )
+
         # Execution checklist projects from dispatch lifecycle events on the bus.
         self._checklist_controller = ExecutionChecklistController(event_bus=self._event_bus)
         self._checklist_controller.set_on_change(self._on_checklist_controller_changed)
@@ -156,6 +165,10 @@ class _DispatchProxy(QObject):
 
     def set_max_tool_rounds(self, value: int | None) -> None:
         self._max_tool_rounds = value
+
+    def lifecycle_hooks(self) -> LifecycleHooks:
+        """Return the lifecycle hooks bridge for test inspection."""
+        return self._lifecycle
 
     def records(self) -> list[WorkerDispatchRecord]:
         return list(self._records)

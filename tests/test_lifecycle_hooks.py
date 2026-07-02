@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from aura.events import ALL, EventBus
 from aura.events.event import AuraEvent
 from aura.lifecycle import (
     GateDecision,
@@ -17,6 +18,7 @@ from aura.lifecycle import (
     HookMatcher,
     LifecycleHooks,
     NotifyHookRegistry,
+    attach_lifecycle_notify,
 )
 
 
@@ -535,3 +537,94 @@ class TestLifecycleHooksFacade:
         lh = LifecycleHooks()
         decision = _run_async(lh.ask(_make_ctx()))
         assert decision.allowed
+
+
+# ── Event Adapter ─────────────────────────────────────────────────────────
+
+
+class TestAttachLifecycleNotify:
+    """EventBus → LifecycleHooks adapter behaviour."""
+
+    def test_event_bus_emit_reaches_notify_handler(self) -> None:
+        bus = EventBus()
+        lh = LifecycleHooks()
+        received: list[HookContext] = []
+
+        lh.register_notify(HookMatcher("*"), received.append)
+        unsub = attach_lifecycle_notify(bus, lh)
+
+        bus.emit(AuraEvent(topic="worker.tool_started", run_id="r1"))
+        assert len(received) == 1
+        assert received[0].topic == "worker.tool_started"
+        assert received[0].run_id == "r1"
+        assert received[0].category == "notify"
+
+        unsub()
+
+    def test_adapter_returns_unsubscribe_callable(self) -> None:
+        bus = EventBus()
+        lh = LifecycleHooks()
+
+        unsub = attach_lifecycle_notify(bus, lh)
+        assert callable(unsub)
+
+        # Should be callable without error.
+        unsub()
+
+    def test_after_unsubscribe_notify_no_longer_receives(self) -> None:
+        bus = EventBus()
+        lh = LifecycleHooks()
+        received: list[HookContext] = []
+
+        lh.register_notify(HookMatcher("*"), received.append)
+        unsub = attach_lifecycle_notify(bus, lh)
+
+        bus.emit(AuraEvent(topic="t1"))
+        assert len(received) == 1
+
+        unsub()
+        bus.emit(AuraEvent(topic="t2"))
+        # No further events should arrive after detach.
+        assert len(received) == 1
+
+    def test_existing_subscribers_still_work_alongside_adapter(self) -> None:
+        bus = EventBus()
+        lh = LifecycleHooks()
+        direct: list[AuraEvent] = []
+        lifecycle: list[HookContext] = []
+
+        bus.subscribe(ALL, direct.append)
+        lh.register_notify(HookMatcher("*"), lifecycle.append)
+        unsub = attach_lifecycle_notify(bus, lh)
+
+        ev = AuraEvent(topic="dispatch.step_started", step_id="s1")
+        bus.emit(ev)
+
+        assert len(direct) == 1
+        assert direct[0] is ev
+        assert len(lifecycle) == 1
+        assert lifecycle[0].topic == "dispatch.step_started"
+
+        unsub()
+
+    def test_adapter_uses_all_wildcard_subscription(self) -> None:
+        """Lifecycle notify should receive events of any topic."""
+        bus = EventBus()
+        lh = LifecycleHooks()
+        received: list[HookContext] = []
+
+        lh.register_notify(HookMatcher("*"), received.append)
+        unsub = attach_lifecycle_notify(bus, lh)
+
+        bus.emit(AuraEvent(topic="dispatch.campaign_started"))
+        bus.emit(AuraEvent(topic="worker.tool_finished"))
+        bus.emit(AuraEvent(topic="worker.file_changed"))
+
+        assert len(received) == 3
+        assert [c.topic for c in received] == [
+            "dispatch.campaign_started",
+            "worker.tool_finished",
+            "worker.file_changed",
+        ]
+
+        unsub()
