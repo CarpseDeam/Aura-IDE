@@ -37,8 +37,11 @@ class DispatchTodoItem:
 
     @classmethod
     def from_dict(cls, raw: Any) -> "DispatchTodoItem":
+        if isinstance(raw, cls):
+            return raw
         if not isinstance(raw, dict):
-            raw = {}
+            description = compact_todo_label(str(raw or ""), fallback="")
+            return cls(id="", description=description)
         item_id = str(raw.get("id") or raw.get("checklist_item_id") or "")
         description = str(
             raw.get("description")
@@ -87,53 +90,15 @@ def dispatch_todo_manifest_from_request(req: Any) -> list[DispatchTodoItem]:
     explicit = getattr(req, "todo_checklist", None)
     steps = list(getattr(req, "steps", []) or [])
     if explicit:
-        return normalize_dispatch_todo_checklist(explicit, steps)
-
-    items: list[DispatchTodoItem] = []
-    if steps:
-        for step in steps:
-            items.extend(_items_from_step(step))
-        items.extend(
-            _items_from_contract_text(
-                item_prefix="contract",
-                owner_steps=steps,
-                files=list(getattr(req, "files", []) or []),
-                texts=[
-                    str(getattr(req, "spec", "") or ""),
-                    str(getattr(req, "acceptance", "") or ""),
-                    *_str_list(getattr(req, "required_outputs", [])),
-                ],
-                validation_commands=_str_list(getattr(req, "validation_commands", [])),
-            )
-        )
-    else:
-        owner = "step-1"
-        item_texts = _checklist_texts_from_sources(
-            [
-                str(getattr(req, "goal", "") or ""),
-                str(getattr(req, "spec", "") or ""),
-                str(getattr(req, "acceptance", "") or ""),
-                *_str_list(getattr(req, "required_outputs", [])),
-            ],
-            validation_commands=_str_list(getattr(req, "validation_commands", [])),
-        )
-        if not item_texts:
-            item_texts = [
-                str(getattr(req, "summary", "") or "")
-                or str(getattr(req, "goal", "") or "")
-                or "Complete Worker dispatch"
-            ]
-        for index, text in enumerate(item_texts, start=1):
-            items.append(
-                DispatchTodoItem(
-                    id=f"{owner}-todo-{index}",
-                    description=text,
-                    files=list(getattr(req, "files", []) or []),
-                    owning_step_id=owner,
-                )
-            )
-
-    return _dedupe_todo_items(items)
+        normalized = normalize_dispatch_todo_checklist(explicit, steps)
+        if normalized:
+            return normalized
+    return _fallback_step_todo_items(
+        steps,
+        goal=str(getattr(req, "goal", "") or ""),
+        summary=str(getattr(req, "summary", "") or ""),
+        files=list(getattr(req, "files", []) or []),
+    )
 
 
 def normalize_dispatch_todo_checklist(
@@ -142,17 +107,20 @@ def normalize_dispatch_todo_checklist(
 ) -> list[DispatchTodoItem]:
     """Normalize explicit checklist rows and fill missing owning step ids."""
     step_owner_by_item = _step_owner_by_item_id(steps)
+    valid_step_ids = set(_step_ids(steps))
     single_step_owner = str(getattr(steps[0], "id", "") or "") if len(steps) == 1 else ""
     normalized: list[DispatchTodoItem] = []
     for index, raw_item in enumerate(checklist, start=1):
         item = raw_item if isinstance(raw_item, DispatchTodoItem) else DispatchTodoItem.from_dict(raw_item)
-        item_id = item.id or f"todo-{index}"
-        description = compact_todo_label(item.description, fallback=item_id)
+        item_id = str(item.id or f"todo-{index}").strip()
+        description_fallback = item_id if str(item.description or "").strip() else ""
+        description = compact_todo_label(item.description, fallback=description_fallback)
         if not description:
             continue
         if _is_implementation_detail(description):
             continue
-        owner = item.owning_step_id or step_owner_by_item.get(item_id, "") or single_step_owner
+        owner = item.owning_step_id if item.owning_step_id in valid_step_ids else ""
+        owner = owner or step_owner_by_item.get(item_id, "") or single_step_owner
         normalized.append(
             DispatchTodoItem(
                 id=item_id,
@@ -162,7 +130,7 @@ def normalize_dispatch_todo_checklist(
                 owning_step_id=owner,
             )
         )
-    return _dedupe_todo_items(normalized)
+    return _assign_missing_todo_owners(_dedupe_todo_items(normalized), steps)
 
 
 def todo_tasks_from_plan(
@@ -171,42 +139,39 @@ def todo_tasks_from_plan(
     active_step_id: str | None = None,
     completed_step_ids: set[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Convert a dispatch plan into TODO snapshot rows — one row per step.
+    """Convert a dispatch plan into visible TODO snapshot rows.
 
-    The visible rail mirrors the plan's execution steps 1:1 so it ticks one row
-    at a time as the Worker activates and completes each step. Each row's id,
-    step_id, and owning_step_id are all the step id, so ``activate_step`` and
-    ``complete_step`` light and green exactly one row.
-
-    Finer-grained spec/acceptance/validation detail stays inside each step
-    (the Worker still receives all of it); it is deliberately not exploded into
-    separate rows, which would flip in per-step batches instead of one at a
-    time.
+    Planner-authored visible_checklist rows are the canonical rail when they
+    survive normalization. Step rows are only the compatibility fallback.
     """
     completed: set[str] = completed_step_ids or set()
     tasks: list[dict[str, Any]] = []
-    for step in list(getattr(plan, "steps", []) or []):
-        step_id = str(getattr(step, "id", "") or "")
-        description = compact_todo_label(
-            str(getattr(step, "title", "") or "")
-            or str(getattr(step, "goal", "") or "")
-            or step_id,
-            fallback=step_id or "Worker step",
+    steps = list(getattr(plan, "steps", []) or [])
+    visible_checklist = list(getattr(plan, "visible_checklist", []) or [])
+    items = normalize_dispatch_todo_checklist(visible_checklist, steps) if visible_checklist else []
+    if not items:
+        items = _fallback_step_todo_items(
+            steps,
+            goal=str(getattr(plan, "overall_goal", "") or ""),
+            summary=str(getattr(plan, "visible_summary", "") or ""),
+            files=list(getattr(plan, "global_files", []) or []),
         )
+
+    for item in items:
+        owner = item.owning_step_id or item.id
         task: dict[str, Any] = {
-            "id": step_id,
-            "step_id": step_id,
-            "owning_step_id": step_id,
-            "description": description,
+            "id": item.id,
+            "step_id": owner,
+            "owning_step_id": owner,
+            "description": item.description,
             "status": "pending",
         }
-        files = list(getattr(step, "files", []) or [])
-        if files:
-            task["files"] = files
+        if item.files:
+            task["files"] = list(item.files)
 
-        if step_id and step_id in completed:
+        if owner and owner in completed:
             task["status"] = "done"
-        elif step_id and step_id == active_step_id:
+        elif owner and owner == active_step_id:
             task["status"] = "active"
 
         tasks.append(task)
@@ -277,6 +242,7 @@ _FUTURE_IMPORT = re.compile(r"from\s+__future__\s+import", re.IGNORECASE)
 _PAREN_FILLER = re.compile(r"^\([^)]*\)$")
 _SHORT_SYMBOLIC = re.compile(r"^[^\w\s]{4,}$")
 _OPERATOR_LEAD = re.compile(r"^[|\-=\[\]]+\s")  # "| None = None", "= default"
+_BARE_CODE_SYMBOL = re.compile(r"^_?[A-Za-z][A-Za-z0-9_]*(?:\(\))?$")
 
 
 def _is_implementation_detail(text: str) -> bool:
@@ -315,234 +281,117 @@ def _is_implementation_detail(text: str) -> bool:
     if _OPERATOR_LEAD.match(stripped):
         return True
 
+    # Bare helper/function names are scratch/code fragments, not work items.
+    if _BARE_CODE_SYMBOL.match(stripped) and (
+        stripped.startswith("_") or stripped.endswith("()") or "_" in stripped
+    ):
+        return True
+
     return False
 
 
-def _items_from_step(step: Any) -> list[DispatchTodoItem]:
-    validation_policy = getattr(step, "validation_policy", None)
-    policy_commands = getattr(validation_policy, "commands", []) if validation_policy is not None else []
-    item_texts = _checklist_texts_from_sources(
-        [
-            str(getattr(step, "title", "") or ""),
-            str(getattr(step, "spec", "") or ""),
-            str(getattr(step, "acceptance", "") or ""),
-            *_str_list(getattr(step, "required_outputs", [])),
-        ],
-        validation_commands=_str_list(getattr(step, "validation_commands", []) or policy_commands),
-    )
-    if not item_texts:
-        item_texts = [
-            str(getattr(step, "title", "") or "")
-            or str(getattr(step, "goal", "") or "")
-            or str(getattr(step, "id", "") or "")
-            or "Worker step"
-        ]
-
-    checklist_item_ids = _str_list(getattr(step, "checklist_item_ids", []))
-    step_id = str(getattr(step, "id", "") or "")
-    items: list[DispatchTodoItem] = []
-    for index, text in enumerate(item_texts, start=1):
-        explicit_id = checklist_item_ids[index - 1] if index <= len(checklist_item_ids) else ""
-        item_id = explicit_id or _todo_id(step_id, index)
-        items.append(
-            DispatchTodoItem(
-                id=item_id,
-                description=text,
-                files=_step_files(step),
-                owning_step_id=step_id,
-            )
-        )
-    return items
-
-
-def _items_from_contract_text(
+def _fallback_step_todo_items(
+    steps: list[Any],
     *,
-    item_prefix: str,
-    owner_steps: list[Any],
-    files: list[str],
-    texts: list[str],
-    validation_commands: list[str],
+    goal: str = "",
+    summary: str = "",
+    files: list[str] | None = None,
 ) -> list[DispatchTodoItem]:
-    descriptions = _checklist_texts_from_sources(texts, validation_commands=validation_commands)
-    items: list[DispatchTodoItem] = []
-    for index, text in enumerate(descriptions, start=1):
-        owner = _best_owner_step_id(text, owner_steps)
-        items.append(
-            DispatchTodoItem(
-                id=f"{item_prefix}-todo-{index}",
-                description=text,
-                files=list(files),
-                owning_step_id=owner,
+    """Build one compatibility TODO row per Worker execution step."""
+    if steps:
+        items: list[DispatchTodoItem] = []
+        for index, step in enumerate(steps, start=1):
+            step_id = str(getattr(step, "id", "") or f"step-{index}")
+            description = compact_todo_label(
+                str(getattr(step, "title", "") or "")
+                or str(getattr(step, "goal", "") or "")
+                or step_id,
+                fallback=step_id or "Worker step",
             )
+            items.append(
+                DispatchTodoItem(
+                    id=step_id,
+                    description=description,
+                    files=_step_files(step),
+                    owning_step_id=step_id,
+                )
+            )
+        return _dedupe_todo_items(items)
+
+    owner = "step-1"
+    return [
+        DispatchTodoItem(
+            id=owner,
+            description=compact_todo_label(
+                summary or goal or "Complete Worker dispatch",
+                fallback="Complete Worker dispatch",
+            ),
+            files=list(files or []),
+            owning_step_id=owner,
         )
-    return items
-
-
-def _checklist_texts_from_sources(
-    texts: list[str],
-    *,
-    validation_commands: list[str],
-) -> list[str]:
-    candidates: list[str] = []
-    for text in texts:
-        candidates.extend(_extract_checklist_lines(text))
-    for command in validation_commands:
-        command = str(command or "").strip()
-        if command:
-            candidates.append(f"Run {command}")
-    cleaned: list[str] = []
-    for item in candidates:
-        if not item.strip():
-            continue
-        label = compact_todo_label(item)
-        if label and not _is_implementation_detail(label):
-            cleaned.append(label)
-    return _dedupe(cleaned)
-
-
-def _extract_checklist_lines(text: str) -> list[str]:
-    lines = str(text or "").splitlines()
-    items: list[str] = []
-    in_list_section = False
-    for line in lines:
-        stripped = line.strip()
-        if not stripped:
-            in_list_section = False
-            continue
-        bullet_match = re.match(
-            r"^(?:[-*+]|\d+[\.)]|\[[ xX]\])\s+(?P<item>.+)$",
-            stripped,
-        )
-        if bullet_match:
-            in_list_section = True
-            items.extend(_split_compound_checklist_item(bullet_match.group("item")))
-            continue
-        if stripped.endswith(":") and _line_starts_checklist_section(stripped):
-            in_list_section = True
-            continue
-        if in_list_section and _looks_like_checklist_item(stripped):
-            items.extend(_split_compound_checklist_item(stripped))
-
-    if items:
-        return items
-
-    stripped_text = str(text or "").strip()
-    if _looks_like_checklist_item(stripped_text):
-        return _split_compound_checklist_item(stripped_text)
-    return []
-
-
-def _split_compound_checklist_item(text: str) -> list[str]:
-    cleaned = compact_todo_label(text)
-    if not cleaned:
-        return []
-    parts = [
-        part.strip(" .")
-        for part in re.split(r"\s*;\s*", cleaned)
-        if part.strip(" .")
     ]
-    if len(parts) > 1:
-        return parts
-    return [cleaned]
-
-
-def _line_starts_checklist_section(line: str) -> bool:
-    text = line.lower()
-    return bool(
-        re.search(r"\b(?:acceptance|checklist|requirements?|tasks?|subtasks?|definition of done)\b", text)
-    )
-
-
-def _looks_like_checklist_item(text: str) -> bool:
-    lowered = str(text or "").lower().strip()
-    if not lowered:
-        return False
-    if len(lowered) > 180:
-        return False
-    if _is_implementation_detail(lowered):
-        return False
-    return bool(
-        re.match(
-            r"^(?:create|add|move|wire|remove|run|validate|preserve|update|extract|"
-            r"rename|ensure|include|implement|fix|keep|compile|selfcheck)\b",
-            lowered,
-        )
-    )
-
-
-def _best_owner_step_id(description: str, steps: list[Any]) -> str:
-    if not steps:
-        return ""
-    description_words = _signal_words(description)
-    if not description_words:
-        return str(getattr(steps[-1], "id", "") or "")
-    best_step = steps[-1]
-    best_score = -1
-    for step in steps:
-        step_text = " ".join(
-            [
-                str(getattr(step, "title", "") or ""),
-                str(getattr(step, "goal", "") or ""),
-                str(getattr(step, "spec", "") or ""),
-                str(getattr(step, "acceptance", "") or ""),
-            ]
-        )
-        score = len(description_words & _signal_words(step_text))
-        if score > best_score:
-            best_step = step
-            best_score = score
-    lowered = description.lower()
-    if best_score <= 0 and (
-        "validate" in lowered
-        or "validation" in lowered
-        or "compile" in lowered
-        or "selfcheck" in lowered
-        or lowered.startswith("run ")
-    ):
-        return str(getattr(steps[-1], "id", "") or "")
-    return str(getattr(best_step, "id", "") or "")
-
-
-def _signal_words(text: str) -> set[str]:
-    stop_words = {
-        "and",
-        "the",
-        "from",
-        "into",
-        "with",
-        "that",
-        "this",
-        "must",
-        "should",
-        "worker",
-        "dispatch",
-        "step",
-        "task",
-        "todo",
-        "list",
-        "rail",
-    }
-    return {
-        word
-        for word in re.findall(r"[a-zA-Z][a-zA-Z0-9_]{2,}", str(text or "").lower())
-        if word not in stop_words
-    }
-
-
-def _todo_id(step_id: str, index: int) -> str:
-    safe_step_id = re.sub(r"[^A-Za-z0-9_.-]+", "-", step_id or "step").strip("-") or "step"
-    return f"{safe_step_id}-todo-{index}"
-
 
 def _step_owner_by_item_id(steps: list[Any]) -> dict[str, str]:
     owners: dict[str, str] = {}
     for step in steps:
         step_id = str(getattr(step, "id", "") or "")
+        if not step_id:
+            continue
         for item_id in _str_list(getattr(step, "checklist_item_ids", [])):
             item = str(item_id or "").strip()
             if item and item not in owners:
                 owners[item] = step_id
     return owners
+
+
+def _assign_missing_todo_owners(
+    items: list[DispatchTodoItem],
+    steps: list[Any],
+) -> list[DispatchTodoItem]:
+    if not items:
+        return []
+    step_ids = _step_ids(steps)
+    if not step_ids:
+        return items
+
+    valid_step_ids = set(step_ids)
+    if len(step_ids) == 1:
+        owner = step_ids[0]
+        return [
+            replace(
+                item,
+                owning_step_id=item.owning_step_id
+                if item.owning_step_id in valid_step_ids
+                else owner,
+            )
+            for item in items
+        ]
+
+    total = len(items)
+    assigned: list[DispatchTodoItem] = []
+    for index, item in enumerate(items):
+        owner = item.owning_step_id if item.owning_step_id in valid_step_ids else ""
+        if not owner:
+            owner = _distributed_step_id(index, total, step_ids)
+        assigned.append(replace(item, owning_step_id=owner))
+    return assigned
+
+
+def _distributed_step_id(index: int, total_items: int, step_ids: list[str]) -> str:
+    if not step_ids:
+        return ""
+    if total_items <= 0:
+        return step_ids[0]
+    step_index = min((index * len(step_ids)) // total_items, len(step_ids) - 1)
+    return step_ids[step_index]
+
+
+def _step_ids(steps: list[Any]) -> list[str]:
+    return [
+        step_id
+        for step_id in (str(getattr(step, "id", "") or "").strip() for step in steps)
+        if step_id
+    ]
 
 
 def _dedupe_todo_items(items: list[DispatchTodoItem]) -> list[DispatchTodoItem]:

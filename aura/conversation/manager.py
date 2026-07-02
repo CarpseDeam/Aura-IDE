@@ -70,7 +70,10 @@ from aura.conversation.worker_finalization_gate import handle_worker_candidate_f
 from aura.conversation.worker_finish import (
     build_worker_unrecoverable_message,
 )
-from aura.conversation.worker_flow import WORKER_FLOW_ZERO_WORK_RECOVERY_TEXT
+from aura.conversation.worker_flow import (
+    WORKER_FLOW_VALIDATION_REQUIRED_TEXT,
+    WORKER_FLOW_ZERO_WORK_RECOVERY_TEXT,
+)
 from aura.hooks import hooks
 from aura.research.policy import decide_research_policy
 
@@ -118,9 +121,17 @@ _ALLOWED_ZERO_WORK_BLOCKER_RE = re.compile(
 )
 
 def _worker_has_zero_applied_writes(state: _SendState) -> bool:
+    return not _worker_has_concrete_file_progress(state)
+
+
+def _worker_has_concrete_file_progress(state: _SendState) -> bool:
     flow = state.worker_flow
     write_actions = int(getattr(flow.state, "write_actions", 0) or 0) if flow else 0
-    return write_actions == 0 and not state.worker_app_writes
+    return bool(
+        write_actions > 0
+        or state.worker_app_writes
+        or state.syntax_validation_required
+    )
 
 
 def _worker_has_attempted_write(state: _SendState) -> bool:
@@ -442,6 +453,10 @@ class ConversationManager:
         """Steer Worker Flow without turning zero-work orientation into follow-up."""
         if state.worker_flow is None:
             return "none"
+        if not state.worker_flow.pending_steering_message:
+            return "none"
+        if _worker_has_concrete_file_progress(state):
+            return self._handle_worker_flow_progress_continuation(state)
         reason = str(
             getattr(state.worker_flow.state, "pending_steering_reason", "")
             or "worker_flow"
@@ -492,6 +507,23 @@ class ConversationManager:
         self._history.append_user_text(steering)
         state.worker_flow_nudge_sent = True
         return "nudged"
+
+    def _handle_worker_flow_progress_continuation(
+        self,
+        state: _SendState,
+    ) -> str:
+        """Drop stale orientation steering once concrete file progress exists."""
+        if state.worker_flow is None:
+            return "none"
+        state.worker_flow.pop_pending_steering()
+        state.worker_flow.mark_non_thrashing()
+        if state.worker_flow.requires_validation_before_final():
+            if not state.worker_validation_nudge_sent:
+                self._history.append_user_text(WORKER_FLOW_VALIDATION_REQUIRED_TEXT)
+                state.worker_validation_nudge_sent = True
+                return "nudged"
+            return "none"
+        return "none"
 
     def _handle_worker_zero_work_final(
         self,

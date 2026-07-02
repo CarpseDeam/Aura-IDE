@@ -45,13 +45,21 @@ def _worker_final_report_claims_validation_or_acceptance(content: str) -> bool:
 
 def _worker_final_report_needs_proof(state: Any) -> bool:
     flow = state.worker_flow
-    if flow is None:
-        return False
-    return int(getattr(flow.state, "write_actions", 0) or 0) > 0
+    write_actions = int(getattr(flow.state, "write_actions", 0) or 0) if flow else 0
+    return bool(
+        write_actions > 0
+        or getattr(state, "worker_app_writes", set())
+        or getattr(state, "syntax_validation_required", set())
+    )
 
 
-def worker_final_report_missing_proof(state: Any, full_message: dict[str, Any]) -> bool:
-    if state.worker_final_report_proof_nudge_sent:
+def worker_final_report_missing_proof(
+    state: Any,
+    full_message: dict[str, Any],
+    *,
+    ignore_prior_nudge: bool = False,
+) -> bool:
+    if state.worker_final_report_proof_nudge_sent and not ignore_prior_nudge:
         return False
     if not _worker_final_report_needs_proof(state):
         return False

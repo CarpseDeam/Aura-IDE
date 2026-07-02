@@ -81,6 +81,7 @@ def handle_worker_candidate_finalization(
             state=state,
             history=history,
             on_event=on_event,
+            finish_worker_recoverable_followup=finish_worker_recoverable_followup,
         )
 
     if has_terminal_syntax_failure(state.syntax_repair_required):
@@ -324,6 +325,7 @@ def handle_worker_candidate_finalization(
         state=state,
         history=history,
         on_event=on_event,
+        finish_worker_recoverable_followup=finish_worker_recoverable_followup,
     )
 
 
@@ -595,12 +597,31 @@ def _release_candidate_final(
     state: _SendState,
     history: History,
     on_event: EventCallback,
+    finish_worker_recoverable_followup: Callable[..., None],
 ) -> WorkerFinalizationAction:
     if state.candidate_final_message is not None:
         if worker_final_report_missing_proof(
             state,
             state.candidate_final_message,
+            ignore_prior_nudge=True,
         ):
+            if state.worker_final_report_proof_nudge_sent:
+                state.discard_worker_candidate_final()
+                finish_worker_recoverable_followup(
+                    on_event,
+                    failure_class="worker_final_report_missing_proof",
+                    error=(
+                        "Worker changed files but did not provide validation or "
+                        "acceptance proof after the final-report proof nudge."
+                    ),
+                    details={
+                        "suggested_next_action": (
+                            "Provide a final report with changed files, validation "
+                            "command/result, and acceptance verification."
+                        ),
+                    },
+                )
+                return "finished"
             history.append_user_text(WORKER_FINAL_REPORT_PROOF_REQUIRED_TEXT)
             state.worker_final_report_proof_nudge_sent = True
             state.discard_worker_candidate_final()

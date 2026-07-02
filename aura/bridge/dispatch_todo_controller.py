@@ -63,6 +63,10 @@ class DispatchTodoController:
         if found:
             self._rows = tuple(new_rows)
             self._active_step_id = step_id
+        else:
+            self._rows, found = _activate_next_pending_row(self._rows)
+            if found:
+                self._active_step_id = step_id
         return self.snapshot(tool_call_id)
 
     def complete_step(self, tool_call_id: str, step_id: str) -> list[dict[str, Any]] | None:
@@ -78,6 +82,8 @@ class DispatchTodoController:
                 new_rows.append(row)
         if found:
             self._rows = tuple(new_rows)
+        else:
+            self._rows, found = _complete_active_or_next_pending_row(self._rows)
         return self.snapshot(tool_call_id)
 
     def finish(self, tool_call_id: str) -> list[dict[str, Any]] | None:
@@ -112,6 +118,45 @@ class DispatchTodoController:
 
 def _row_matches_step(row: DispatchTodoRow, step_id: str) -> bool:
     return row.id == step_id or bool(row.owning_step_id and row.owning_step_id == step_id)
+
+
+def _activate_next_pending_row(
+    rows: tuple[DispatchTodoRow, ...],
+) -> tuple[tuple[DispatchTodoRow, ...], bool]:
+    activated = False
+    updated: list[DispatchTodoRow] = []
+    for row in rows:
+        if row.status == "active":
+            updated.append(replace(row, status="pending"))
+            continue
+        if not activated and row.status != "done":
+            updated.append(replace(row, status="active"))
+            activated = True
+            continue
+        updated.append(row)
+    return tuple(updated), activated
+
+
+def _complete_active_or_next_pending_row(
+    rows: tuple[DispatchTodoRow, ...],
+) -> tuple[tuple[DispatchTodoRow, ...], bool]:
+    has_active = any(row.status == "active" for row in rows)
+    completed = False
+    updated: list[DispatchTodoRow] = []
+    for row in rows:
+        if has_active:
+            if row.status == "active":
+                updated.append(replace(row, status="done"))
+                completed = True
+            else:
+                updated.append(row)
+            continue
+        if not completed and row.status != "done":
+            updated.append(replace(row, status="done"))
+            completed = True
+            continue
+        updated.append(row)
+    return tuple(updated), completed
 
 
 __all__ = ["DispatchTodoController", "DispatchTodoRow"]
