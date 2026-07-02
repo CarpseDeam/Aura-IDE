@@ -89,7 +89,12 @@ class WorkerFinishPresenter:
                 status=status,
             )
         goal = self._worker_summary_goal(tool_call_id, spec_card, active_workflow)
-        if outcome.should_show_visible_summary:
+        # Only show WorkerSummaryCard in chat for truly exceptional outcomes
+        # (harness errors and approval rejections).  Normal outcomes — completed,
+        # validation_failed, edit_mechanics_blocked, etc. — get their factual
+        # report in the Worker Log only.
+        _EXCEPTIONAL_SUMMARY_STATUSES = frozenset({"harness_error", "approval_rejected"})
+        if outcome.should_show_visible_summary and status in _EXCEPTIONAL_SUMMARY_STATUSES:
             self._chat.add_worker_summary(
                 tool_call_id,
                 goal,

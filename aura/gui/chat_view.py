@@ -19,7 +19,6 @@ from aura.gui.cards.code_writer_card import CodeWriterCard
 from aura.gui.cards.diff_card import DiffCard
 from aura.gui.cards.error_card import ErrorCard
 from aura.gui.cards.mismatch_resolution_card import MismatchResolutionCard
-from aura.gui.cards.dispatch_status_labels import mismatch_card_should_show
 from aura.gui.cards.plan_writer_card import PlanWriterCard
 from aura.gui.cards.spec_card import SpecCard
 from aura.gui.cards.terminal_card import TerminalCard
@@ -675,6 +674,7 @@ class ChatView(QScrollArea):
                 if (
                     summary
                     and not dispatch_not_started
+                    and status in {"harness_error", "approval_rejected"}
                 ):
                     goal = (
                         controller.goal

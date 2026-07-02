@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 # ---------------------------------------------------------------------------
 # WorkerSummaryCard header labels
 # ---------------------------------------------------------------------------
@@ -32,16 +30,16 @@ def worker_summary_status_label(
 
     if status is not None:
         mapping = {
-            WorkerOutcomeStatus.completed.value: ("Completed", SUCCESS),
-            WorkerOutcomeStatus.completed_with_caveats.value: ("Completed", SUCCESS),
-            WorkerOutcomeStatus.validation_failed.value: ("Needs attention", WARN),
-            WorkerOutcomeStatus.edit_mechanics_blocked.value: ("Needs attention", WARN),
-            WorkerOutcomeStatus.scope_mismatch.value: ("Needs attention", WARN),
-            WorkerOutcomeStatus.approval_rejected.value: ("Failed", DANGER),
+            WorkerOutcomeStatus.completed.value: ("Worker Report", SUCCESS),
+            WorkerOutcomeStatus.completed_with_caveats.value: ("Worker Report", SUCCESS),
+            WorkerOutcomeStatus.validation_failed.value: ("Worker Report", WARN),
+            WorkerOutcomeStatus.edit_mechanics_blocked.value: ("Worker Report", WARN),
+            WorkerOutcomeStatus.scope_mismatch.value: ("Worker Report", WARN),
+            WorkerOutcomeStatus.approval_rejected.value: ("Changes rejected", DANGER),
             WorkerOutcomeStatus.cancelled.value: ("Cancelled", "#6b7280"),
-            WorkerOutcomeStatus.harness_error.value: ("Failed", DANGER),
+            WorkerOutcomeStatus.harness_error.value: ("Worker Error", DANGER),
         }
-        return mapping.get(status, ("Needs attention", FG_MUTED))
+        return mapping.get(status, ("Worker Report", FG_MUTED))
 
     # Fallback to legacy inference
     if "Waiting for approval" in summary:
@@ -49,10 +47,10 @@ def worker_summary_status_label(
     if "Repairing patch" in summary:
         return "Repairing patch", WARN
     if ok:
-        return ("Completed", SUCCESS)
+        return ("Worker Report", SUCCESS)
     if needs_followup:
-        return ("Needs attention", FG_MUTED)
-    return ("Failed", DANGER)
+        return ("Worker Report", FG_MUTED)
+    return ("Worker Report", DANGER)
 
 
 def _resolve_needs_followup_label(
@@ -66,7 +64,7 @@ def _resolve_needs_followup_label(
     Non-internal cases get neutral labels; receipt parsing is handled by
     WorkerSummaryCard.update_summary().
     """
-    from aura.gui.theme import FG_MUTED, SUCCESS, WARN
+    from aura.gui.theme import FG_MUTED, SUCCESS
 
     if is_internal:
         return ("Needs attention", FG_MUTED)

@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-import json
-import re
 from typing import Any
 
+from aura.conversation import History, WorkerDispatchRequest, WorkerTaskSpec, normalize_worker_task
+from aura.conversation.task_shape import task_shape_contract_lines
+from aura.conversation.validation_orchestrator import validation_issue_message
 from aura.conversation.worker_completion._summary_formatters import (
     _final_report_claims_failure,
     _final_report_claims_validation,
@@ -14,9 +15,6 @@ from aura.conversation.worker_completion._summary_formatters import (
     _format_worker_write_failure,
     _parse_structured_worker_failure,
 )
-from aura.conversation import History, WorkerDispatchRequest, WorkerTaskSpec, normalize_worker_task
-from aura.conversation.task_shape import task_shape_contract_lines
-from aura.conversation.validation_orchestrator import validation_issue_message
 
 __all__ = [
     "_format_spec_as_user_message",
@@ -220,29 +218,18 @@ def _build_worker_summary(
         else:
             status = "completed"
 
-    STATUS_LABELS = {
-        "completed": "Completed",
-        "completed_with_caveats": "Completed",
-        "validation_failed": "Needs attention",
-        "edit_mechanics_blocked": "Needs attention",
-        "scope_mismatch": "Needs attention",
-        "approval_rejected": "Failed",
+    HEADER_LABELS = {
+        "completed": "Worker Report",
+        "completed_with_caveats": "Worker Report",
+        "validation_failed": "Worker Report",
+        "edit_mechanics_blocked": "Worker Report",
+        "scope_mismatch": "Worker Report",
+        "approval_rejected": "Changes rejected",
         "cancelled": "Cancelled",
-        "harness_error": "Failed",
-    }
-    ACTION_LABELS = {
-        "completed": "Ready for review",
-        "completed_with_caveats": "Review details below",
-        "validation_failed": "Review details below",
-        "edit_mechanics_blocked": "Review details below",
-        "scope_mismatch": "Review details below",
-        "approval_rejected": "Review details below",
-        "cancelled": "No action needed",
-        "harness_error": "Review details below",
+        "harness_error": "Worker Error",
     }
 
-    status_label = STATUS_LABELS.get(status, "\u2753  Unknown outcome")
-    action_needed = ACTION_LABELS.get(status, "Review details below")
+    header_label = HEADER_LABELS.get(status, "\u2753  Unknown outcome")
 
     BORDER = "\u2550" * 38
     DIVIDER = "\u2500" * 38
@@ -286,13 +273,12 @@ def _build_worker_summary(
 
     # === Top section ===
     lines.append(BORDER)
-    lines.append(f" {status_label}")
+    lines.append(f" {header_label}")
     lines.append(DIVIDER)
 
     # Glance line
     lines.append(f" Files changed   : {files_changed_str}")
     lines.append(f" Validation      : {validation_str}")
-    lines.append(f" Action needed   : {action_needed}")
     lines.append(DIVIDER)
 
     # === Modified files ===

@@ -335,17 +335,18 @@ def _final_summary_label(
     normalized = normalize_outcome_status(status)
     if normalized == WorkerOutcomeStatus.cancelled.value:
         return "Cancelled."
-    if ok and not needs_followup:
-        return "Completed."
+    if normalized == WorkerOutcomeStatus.approval_rejected.value:
+        return "Changes rejected."
+    if normalized == WorkerOutcomeStatus.harness_error.value:
+        return "Worker Error."
     if normalized in {
         WorkerOutcomeStatus.completed.value,
         WorkerOutcomeStatus.completed_with_caveats.value,
-    }:
-        return "Completed."
-    if needs_followup or normalized in {
         WorkerOutcomeStatus.validation_failed.value,
         WorkerOutcomeStatus.edit_mechanics_blocked.value,
         WorkerOutcomeStatus.scope_mismatch.value,
     }:
-        return "Needs attention."
-    return "Failed."
+        return "Worker Report."
+    if ok and not needs_followup:
+        return "Worker Report."
+    return "Worker Report."
