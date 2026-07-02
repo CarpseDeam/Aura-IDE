@@ -110,16 +110,22 @@ class ExecutionChecklistController:
             self._notify_change_if_changed(old_rows)
         return self.snapshot(campaign_id)
 
-    def finish(self, campaign_id: str) -> list[dict[str, Any]] | None:
+    def finish(
+        self,
+        campaign_id: str,
+        *,
+        ok: bool | None = None,
+    ) -> list[dict[str, Any]] | None:
         """Finalize a campaign while preserving rows.
 
-        Completed rows remain done. Any still-active row moves forward to
-        skipped so the final snapshot has no active state.
+        Completed rows remain done. Any unfinished row is resolved from the
+        canonical campaign outcome so the final snapshot cannot leave active
+        or pending rows stale after the campaign has ended.
         """
         if not self._matches_campaign(campaign_id):
             return None
         self._rows = tuple(
-            replace(row, status="skipped") if row.status == "active" else row
+            _finish_row(row, ok=ok)
             for row in self._rows
         )
         self._notify_change()
@@ -164,7 +170,11 @@ class ExecutionChecklistController:
         self.complete_step(campaign_id_from_event(event), step_id_from_event(event))
 
     def _on_campaign_finished(self, event: "AuraEvent") -> None:
-        self.finish(campaign_id_from_event(event))
+        ok = event.payload.get("ok") if isinstance(event.payload, dict) else None
+        self.finish(
+            campaign_id_from_event(event),
+            ok=ok if isinstance(ok, bool) else None,
+        )
 
 
 def _snapshot_row(row: ExecutionChecklistItem) -> dict[str, Any]:
@@ -271,6 +281,18 @@ def _move_forward(
     if row.status in {"done", "failed", "skipped"}:
         return row
     return replace(row, status=status)  # type: ignore[arg-type]
+
+
+def _finish_row(
+    row: ExecutionChecklistItem,
+    *,
+    ok: bool | None,
+) -> ExecutionChecklistItem:
+    if row.status in {"done", "failed", "skipped"}:
+        return row
+    if ok is True:
+        return replace(row, status="done")
+    return replace(row, status="skipped")
 
 
 __all__ = [

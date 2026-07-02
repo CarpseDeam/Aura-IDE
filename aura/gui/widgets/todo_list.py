@@ -5,7 +5,15 @@ from typing import Any
 
 from PySide6.QtCore import QEasingCurve, Qt, QVariantAnimation
 from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QFrame,
+    QGraphicsOpacityEffect,
+    QHBoxLayout,
+    QLabel,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
+)
 
 from aura.config import media_path
 from aura.gui.theme import BG, BORDER, DANGER, FG_DIM, FG_MUTED, SUCCESS, WARN
@@ -20,6 +28,11 @@ class TodoListWidget(QFrame):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("todoListWidget")
+        self.setMinimumWidth(0)
+        self.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Maximum,
+        )
         self.setStyleSheet(
             f"QFrame#todoListWidget {{  background: {BG};  border-bottom: 1px solid {BORDER};  padding: 0;}}"
         )
@@ -97,6 +110,11 @@ class TodoListWidget(QFrame):
         # 2. Grow widget list to fit task count
         while len(self._task_widgets) < len(normalized):
             row = QFrame(self)
+            row.setMinimumWidth(0)
+            row.setSizePolicy(
+                QSizePolicy.Policy.Expanding,
+                QSizePolicy.Policy.Preferred,
+            )
             row.setStyleSheet("border: none; background: transparent;")
             row_layout = QHBoxLayout(row)
             row_layout.setContentsMargins(0, 0, 0, 0)
@@ -107,7 +125,12 @@ class TodoListWidget(QFrame):
             row_layout.addWidget(icon_label)
 
             desc_label = QLabel(row)
+            desc_label.setMinimumWidth(0)
             desc_label.setWordWrap(True)
+            desc_label.setSizePolicy(
+                QSizePolicy.Policy.Ignored,
+                QSizePolicy.Policy.Preferred,
+            )
             font = desc_label.font()
             font.setFamily("Geist Mono, JetBrains Mono, Consolas, monospace")
             font.setPointSize(11)

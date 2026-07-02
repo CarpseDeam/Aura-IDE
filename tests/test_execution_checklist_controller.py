@@ -165,6 +165,67 @@ def test_campaign_finished_preserves_final_checked_list() -> None:
     assert [row["status"] for row in rows] == ["done", "done"]
 
 
+def test_campaign_finished_resolves_stale_active_and_pending_rows_on_success() -> None:
+    bus, controller, _snapshots = _controller_with_bus()
+    _declare(bus)
+    bus.emit(AuraEvent(topic=DISPATCH_STEP_STARTED, campaign_id="campaign-1", step_id="step-1"))
+
+    bus.emit(
+        AuraEvent(
+            topic=DISPATCH_CAMPAIGN_FINISHED,
+            campaign_id="campaign-1",
+            payload={"ok": True},
+        )
+    )
+
+    rows = controller.snapshot("campaign-1")
+    assert [row["status"] for row in rows] == ["done", "done"]
+    assert "active" not in {row["status"] for row in rows}
+    assert "pending" not in {row["status"] for row in rows}
+
+
+def test_campaign_finished_skips_unfinished_rows_on_failure() -> None:
+    bus, controller, _snapshots = _controller_with_bus()
+    _declare(bus)
+    bus.emit(AuraEvent(topic=DISPATCH_STEP_STARTED, campaign_id="campaign-1", step_id="step-1"))
+
+    bus.emit(
+        AuraEvent(
+            topic=DISPATCH_CAMPAIGN_FINISHED,
+            campaign_id="campaign-1",
+            payload={"ok": False},
+        )
+    )
+
+    rows = controller.snapshot("campaign-1")
+    assert [row["status"] for row in rows] == ["skipped", "skipped"]
+    assert "active" not in {row["status"] for row in rows}
+    assert "pending" not in {row["status"] for row in rows}
+
+
+def test_active_campaign_declaration_does_not_replace_canonical_rows() -> None:
+    bus, controller, _snapshots = _controller_with_bus()
+    _declare(bus)
+
+    bus.emit(
+        AuraEvent(
+            topic=DISPATCH_CHECKLIST_DECLARED,
+            campaign_id="campaign-1",
+            payload={
+                "items": [
+                    {
+                        "id": "worker-row",
+                        "description": "Worker-local replacement",
+                    },
+                ],
+            },
+        )
+    )
+
+    rows = controller.snapshot("campaign-1")
+    assert [row["id"] for row in rows] == ["create-helper", "wire-caller"]
+
+
 def test_worker_tool_events_do_not_alter_checklist_state() -> None:
     bus, controller, snapshots = _controller_with_bus()
     _declare(bus)

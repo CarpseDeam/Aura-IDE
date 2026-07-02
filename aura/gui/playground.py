@@ -419,19 +419,38 @@ class AuraPlayground(QWidget):
             pass
         self._terminal_window.set_result(worker_tool_id, exit_code)
 
-    def update_todo_list(self, tasks: list, tool_call_id: str | None = None):
-        """Render a TODO snapshot and cache it for replay.
+    def update_dispatch_todo_list(self, tasks: list, tool_call_id: str) -> None:
+        """Render and cache a canonical DispatchSession TODO snapshot."""
+        snapshot = self._dispatch_rail.set(tool_call_id, tasks)
+        _log.debug(
+            "update_dispatch_todo_list tool_call_id=%s task_count=%d statuses=%s",
+            tool_call_id, len(snapshot),
+            [t.get("status", "?") for t in snapshot if isinstance(t, dict)],
+        )
+        self._info_hub.update_todo_list(snapshot)
 
-        The single entry point for all TODO snapshot rendering. Accepts both
-        canonical ``DispatchSession`` snapshots (via ``dispatchTodoListUpdated``)
-        and Worker-local TODO updates (the latter only when no canonical dispatch
-        is active — see ``WorkerEventHandler._on_worker_todo_list_updated``).
+    def update_todo_list(self, tasks: list, tool_call_id: str | None = None):
+        """Render a Worker-local TODO snapshot.
+
+        Canonical ``DispatchSession`` snapshots enter through
+        ``update_dispatch_todo_list``. Worker-local TODO updates are ignored for
+        canonical dispatch ids, including after finish while the canonical rail
+        cache is retained for replay.
 
         The ``TodoListWidget`` is a pure renderer: snapshot in, rows painted.
         No status inference, repair, collapse, or canonical state mutation
         happens here.
         """
-        snapshot = self._dispatch_rail.set(tool_call_id, tasks)
+        if tool_call_id and (
+            tool_call_id in self._canonical_active
+            or self._dispatch_rail.has(tool_call_id)
+        ):
+            _log.debug(
+                "update_todo_list tool_call_id=%s suppressed (canonical dispatch TODO owns rail)",
+                tool_call_id,
+            )
+            return
+        snapshot = list(tasks) if isinstance(tasks, list) else []
         _log.debug(
             "update_todo_list tool_call_id=%s task_count=%d statuses=%s",
             tool_call_id, len(snapshot),

@@ -29,6 +29,9 @@ class DispatchTodoRail:
     def replay(self, tool_call_id: str) -> list[Any]:
         return list(self._snapshots.get(tool_call_id, []))
 
+    def has(self, tool_call_id: str | None) -> bool:
+        return bool(tool_call_id and tool_call_id in self._snapshots)
+
     def reset(self, tool_call_id: str) -> None:
         self._snapshots.pop(tool_call_id, None)
 

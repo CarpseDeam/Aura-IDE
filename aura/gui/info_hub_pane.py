@@ -70,13 +70,22 @@ class InfoHubPane(QWidget):
 
         # ---- Worker Log tab (permanent, index 0) ----
         self._log_tab = QWidget(self)
+        self._log_tab.setMinimumSize(0, 0)
+        self._log_tab.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
         log_layout = QVBoxLayout(self._log_tab)
         log_layout.setContentsMargins(0, 0, 0, 0)
         log_layout.setSpacing(0)
 
         # TODO list widget
         self._todo_widget = TodoListWidget(self._log_tab)
-        log_layout.addWidget(self._todo_widget)
+        self._todo_widget.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Maximum,
+        )
+        log_layout.addWidget(self._todo_widget, 0)
 
         # Worker Activity feed (append-only heartbeat, under TODO)
         self._activity_container = QWidget(self._log_tab)
@@ -84,11 +93,15 @@ class InfoHubPane(QWidget):
         self._activity_container.setStyleSheet(
             f"#workerActivityFeed {{ background: transparent; border-bottom: 1px solid {BORDER}; padding: 0; }}"
         )
+        self._activity_container.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Maximum,
+        )
         self._activity_layout = QVBoxLayout(self._activity_container)
         self._activity_layout.setContentsMargins(12, 2, 12, 4)
         self._activity_layout.setSpacing(0)
         self._activity_container.setVisible(False)
-        log_layout.addWidget(self._activity_container)
+        log_layout.addWidget(self._activity_container, 0)
 
         # Worker prose log text area
         self._log_view = QPlainTextEdit(self._log_tab)
@@ -107,7 +120,7 @@ class InfoHubPane(QWidget):
         self._cards_layout = QVBoxLayout()
         self._cards_layout.setContentsMargins(8, 0, 8, 8)
         self._cards_layout.setSpacing(6)
-        log_layout.addLayout(self._cards_layout)
+        log_layout.addLayout(self._cards_layout, 0)
 
         # Worker footer bar with Stop Worker button
         self._worker_footer = QWidget(self._log_tab)
@@ -117,7 +130,12 @@ class InfoHubPane(QWidget):
         footer_layout.addWidget(self._stop_worker_btn)
         footer_layout.addStretch(1)
         self._worker_footer.setVisible(False)
-        log_layout.addWidget(self._worker_footer)
+        log_layout.addWidget(self._worker_footer, 0)
+        log_layout.setStretch(0, 0)
+        log_layout.setStretch(1, 0)
+        log_layout.setStretch(2, 1)
+        log_layout.setStretch(3, 0)
+        log_layout.setStretch(4, 0)
 
         self._tabs.addTab(self._log_tab, "Worker Log")
 
@@ -168,6 +186,12 @@ class InfoHubPane(QWidget):
         visible = entries[-15:]
         for entry in visible:
             label = QLabel(entry.get("message", ""), self._activity_container)
+            label.setMinimumWidth(0)
+            label.setWordWrap(True)
+            label.setSizePolicy(
+                QSizePolicy.Policy.Ignored,
+                QSizePolicy.Policy.Preferred,
+            )
             label.setFont(_mono_font(9))
             label.setStyleSheet(f"color: {FG}; padding: 0; border: none; background: transparent;")
             self._activity_layout.addWidget(label)

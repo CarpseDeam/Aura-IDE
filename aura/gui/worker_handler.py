@@ -393,7 +393,7 @@ class WorkerEventHandler(QObject):
             tool_call_id, len(tasks),
             [t.get("status", "?") for t in tasks if isinstance(t, dict)],
         )
-        self._playground.update_todo_list(tasks, tool_call_id)
+        self._playground.update_dispatch_todo_list(tasks, tool_call_id)
 
     def _on_worker_activity_updated(self, tool_call_id: str, entries: list) -> None:
         """Route Worker Activity snapshots to playground (append-only heartbeat)."""

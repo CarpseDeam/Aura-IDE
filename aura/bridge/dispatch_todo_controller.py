@@ -47,8 +47,13 @@ class DispatchTodoController(ExecutionChecklistController):
     ) -> list[dict[str, Any]] | None:
         return super().complete_step(tool_call_id, step_id)
 
-    def finish(self, tool_call_id: str) -> list[dict[str, Any]] | None:
-        return super().finish(tool_call_id)
+    def finish(
+        self,
+        tool_call_id: str,
+        *,
+        ok: bool | None = None,
+    ) -> list[dict[str, Any]] | None:
+        return super().finish(tool_call_id, ok=ok)
 
     def snapshot(self, tool_call_id: str) -> list[dict[str, Any]]:
         return super().snapshot(tool_call_id)

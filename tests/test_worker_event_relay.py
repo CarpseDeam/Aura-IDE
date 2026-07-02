@@ -470,6 +470,26 @@ class TestWorkerEventHandlerIdempotency:
             "present must be called for each distinct tool_call_id"
         )
 
+    def test_internal_duplicate_lifecycle_and_worker_todo_do_not_reinitialize_ui(self, handler) -> None:
+        """Duplicate internal lifecycle and Worker-local TODO events do not
+        trigger destructive playground lifecycle more than once per campaign.
+        """
+        handler._dispatch_ui.is_canonical_dispatch = MagicMock(return_value=True)
+        handler._on_worker_started("tc-1")
+        handler._on_worker_started("tc-1")
+
+        handler._on_worker_todo_list_updated(
+            "tc-1",
+            [{"id": "worker-local", "description": "Worker-local replacement"}],
+        )
+
+        handler._on_worker_finished("tc-1", True, "done", False, "completed")
+        handler._on_worker_finished("tc-1", True, "done", False, "completed")
+
+        assert handler._playground.begin_assistant.call_count == 1
+        assert handler._finish_presenter.present.call_count == 1
+        handler._playground.update_todo_list.assert_not_called()
+
     def test_workflow_state_plan_writer_guard(self, handler) -> None:
         """WorkflowState changes after Worker start must not update
         PlanWriterCard for that tool_call_id."""
