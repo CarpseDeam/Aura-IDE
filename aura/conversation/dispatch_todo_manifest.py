@@ -1,8 +1,8 @@
-"""Visible dispatch TODO manifest construction.
+"""Legacy visible dispatch TODO manifest construction.
 
-This module owns the user-facing checklist contract for Planner -> Worker
-dispatches. Execution steps remain in dispatch_plan.py; this file only builds,
-normalizes, serializes, and snapshots visible checklist rows.
+The canonical data model and projector live in ``aura.execution_checklist``.
+This module remains as a compatibility layer for existing dispatch request and
+plan fields that are still named ``todo_checklist`` or ``visible_checklist``.
 """
 
 from __future__ import annotations
@@ -10,6 +10,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field, replace
 from typing import Any
+
+from aura.execution_checklist.validation import request_is_non_trivial
 
 
 @dataclass(frozen=True)
@@ -65,7 +67,7 @@ class DispatchTodoItem:
 
 def raw_dispatch_todo_checklist(raw: dict[str, Any]) -> list[Any]:
     """Return the first recognized raw checklist field from a payload."""
-    for key in ("todo_checklist", "visible_checklist", "checklist"):
+    for key in ("execution_checklist", "todo_checklist", "visible_checklist", "checklist"):
         value = raw.get(key)
         if isinstance(value, list):
             return value
@@ -99,6 +101,8 @@ def dispatch_todo_manifest_from_request(req: Any) -> list[DispatchTodoItem]:
     )
     if accepted_items:
         return accepted_items
+    if not steps and request_is_non_trivial(req):
+        return []
     return _fallback_step_todo_items(
         steps,
         goal=str(getattr(req, "goal", "") or ""),
@@ -182,8 +186,11 @@ def todo_tasks_from_plan(
 ) -> list[dict[str, Any]]:
     """Convert a dispatch plan into visible TODO snapshot rows.
 
-    Planner-authored visible_checklist rows are the canonical rail when they
-    survive normalization. Step rows are only the compatibility fallback.
+    .. deprecated::
+        The canonical execution checklist uses ``aura.execution_checklist``
+        models and the ``ExecutionChecklistController`` projector. This
+        function is a legacy compatibility shim retained only for existing
+        tests. Do not use for new code.
     """
     completed: set[str] = completed_step_ids or set()
     tasks: list[dict[str, Any]] = []
@@ -509,5 +516,4 @@ __all__ = [
     "ensure_dispatch_todo_checklist",
     "normalize_dispatch_todo_checklist",
     "raw_dispatch_todo_checklist",
-    "todo_tasks_from_plan",
 ]

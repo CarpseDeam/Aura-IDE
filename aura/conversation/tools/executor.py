@@ -164,6 +164,7 @@ def _planner_write_tool_correction(name: str) -> ToolExecResult:
         payload=payload,
         extras={
             "planner_tool_unavailable": True,
+            "internal_planner_handoff": True,
             "failure_constraint": failure_constraint,
             "suggested_next_tool": "dispatch_to_worker",
         },

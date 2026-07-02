@@ -19,7 +19,6 @@ from PySide6.QtCore import (
 from aura.bridge.approval_proxy import _ApprovalProxy
 from aura.bridge.dispatch_pending import _DispatchPending, DispatchPendingMap
 from aura.bridge.dispatch_session import DispatchSession
-from aura.bridge.dispatch_todo_controller import DispatchTodoController
 from aura.bridge.worker_activity import WorkerActivityController
 from aura.bridge.worker_recording import record_dispatch_campaign_completion
 from aura.bridge.worker_completion_result import (
@@ -51,6 +50,7 @@ from aura.conversation.tool_limits import TERMINAL_TOOLS, WRITE_TOOLS
 from aura.conversation.workflow_state import WorkflowState, WorkflowStatus
 from aura.dependency_context import build_dependency_stanza
 from aura.events import EventBus
+from aura.execution_checklist import ExecutionChecklistController
 
 __all__ = [
     "_DispatchProxy",
@@ -81,7 +81,7 @@ class _DispatchProxy(QObject):
     workerApiError = Signal(str, int, str)
     workerUsage = Signal(str, str, int, int, int, int)  # tool_id, model, prompt, comp, hit, miss
     workerTodoListUpdated = Signal(str, list)  # tool_call_id, tasks (Worker-local only)
-    dispatchTodoListUpdated = Signal(str, list)  # tool_call_id, tasks (canonical snapshots from DispatchSession)
+    dispatchTodoListUpdated = Signal(str, list)  # tool_call_id, tasks (canonical execution checklist snapshots)
     workerTerminalOutput = Signal(str, str, str)  # parent_tool_id, worker_tool_id, text
     workerAgentProcessStarted = Signal(str, str, str, str)  # parent_tool_id, process_id, label, command
     workerAgentProcessOutput = Signal(str, str, str)  # parent_tool_id, process_id, text
@@ -123,9 +123,9 @@ class _DispatchProxy(QObject):
         # and WorkerDispatchRunner for activity projection.
         self._event_bus = EventBus()
 
-        # TODO controller projects from dispatch lifecycle events on the bus.
-        self._todo_controller = DispatchTodoController(event_bus=self._event_bus)
-        self._todo_controller.set_on_change(self._on_todo_controller_changed)
+        # Execution checklist projects from dispatch lifecycle events on the bus.
+        self._checklist_controller = ExecutionChecklistController(event_bus=self._event_bus)
+        self._checklist_controller.set_on_change(self._on_checklist_controller_changed)
 
         # Activity controller projects from worker tool/command events on the bus.
         self._activity_controller = WorkerActivityController(self._event_bus)
@@ -169,7 +169,7 @@ class _DispatchProxy(QObject):
     def result_metadata(self, tool_call_id: str) -> dict[str, Any]:
         return dict(self._result_metadata.get(tool_call_id, {}))
 
-    # ---- canonical TODO (owned by DispatchTodoController) ------------------
+    # ---- canonical execution checklist ------------------------------------
 
     def _emit_dispatch_todo_snapshot(self, tool_call_id: str, tasks: list[dict[str, Any]]) -> None:
         """Emit a canonical dispatch TODO snapshot."""
@@ -185,7 +185,7 @@ class _DispatchProxy(QObject):
 
         During canonical dispatch the Worker's update_todo_list tool calls
         and progress-TODO emissions are suppressed — the visible dispatch
-        TODO rail is derived from DispatchTodoController state.
+        TODO rail is derived from ExecutionChecklistController state.
         """
         if self._has_canonical_todo(tool_call_id):
             logging.debug(
@@ -539,15 +539,15 @@ class _DispatchProxy(QObject):
 
     # ---- dispatch TODO helpers --------------------------------------------
 
-    def _on_todo_controller_changed(self, tool_call_id: str, tasks: list[dict[str, Any]]) -> None:
-        """Relay a canonical TODO snapshot from the controller to the GUI.
+    def _on_checklist_controller_changed(self, tool_call_id: str, tasks: list[dict[str, Any]]) -> None:
+        """Relay a canonical checklist snapshot from the controller to the GUI.
 
         Only relays when the active workflow matches — stale emissions after
         cancellation or reset are silently dropped.
         """
         if self._active_workflow is None or self._active_workflow.tool_call_id != tool_call_id:
             logging.debug(
-                "_on_todo_controller_changed tool_call_id=%s suppressed — workflow mismatch",
+                "_on_checklist_controller_changed tool_call_id=%s suppressed — workflow mismatch",
                 tool_call_id,
             )
             return
@@ -556,7 +556,7 @@ class _DispatchProxy(QObject):
     # ── canonical TODO guard ────────────────────────────────────────────
 
     def _has_canonical_todo(self, tool_call_id: str) -> bool:
-        return self._todo_controller.has_active_tool_call(tool_call_id)
+        return self._checklist_controller.has_active_campaign(tool_call_id)
 
     def _workflow_tool_started(
         self, tool_call_id: str, worker_tool_id: str, name: str

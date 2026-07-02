@@ -1,9 +1,11 @@
-"""Render cache for bridge-owned dispatch TODO snapshots.
+"""Render cache for canonical execution checklist snapshots.
 
-The bridge DispatchTodoController is the sole owner of dispatch TODO state.
-DispatchTodoRail only replays bridge-emitted snapshots so the GUI can repaint
-the rail after widget clears. It contains no status logic, matching, or
-Planner-step seeding.
+``DispatchTodoRail`` caches canonical snapshots so the GUI can repaint the
+TODO rail after widget clears (e.g. ``begin_assistant``). It contains no
+status logic, matching, or Planner-step seeding — it is a pure replay cache.
+
+The canonical checklist state is owned by ``ExecutionChecklistController``
+which projects from EventBus lifecycle events.
 """
 
 from __future__ import annotations

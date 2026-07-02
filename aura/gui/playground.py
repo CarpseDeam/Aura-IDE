@@ -294,8 +294,8 @@ class AuraPlayground(QWidget):
         The visible dispatch TODO rail is owned by DispatchSession, which
         emits canonical snapshots (pending → active → done) via
         dispatchTodoListUpdated. This method only ensures Worker-local
-        update_todo_list tool calls, log boundaries, and progress-TODO
-        emissions are suppressed during the dispatch campaign.
+        update_todo_list tool calls and log boundaries are suppressed
+        during the dispatch campaign.
         """
         _log.debug(
             "begin_canonical_dispatch_tracking tool_call_id=%s step_count=%d",
@@ -306,10 +306,14 @@ class AuraPlayground(QWidget):
     def render_dispatch_todo_list(self, tool_call_id: str) -> None:
         """Replay the last cached canonical TODO snapshot for a tool_call_id.
 
-        Only replays when the cache already holds a snapshot.  If the cache is
-        empty the first dispatchTodoListUpdated signal has not arrived yet and
-        replaying [] would clear the visible TODO rail.  The arriving signal
-        will seed the cache and render the correct tasks.
+        Only replays when the cache already holds a snapshot. An empty cache
+        means the first ``dispatchTodoListUpdated`` signal has not arrived yet
+        and replaying ``[]`` would clear the visible TODO rail. The arriving
+        signal will seed the cache and render the correct tasks.
+
+        The visible execution checklist remains visible after completion —
+        ``finish_todo_list`` replays the last canonical snapshot rather than
+        clearing it.
         """
         snapshot = self._dispatch_rail.replay(tool_call_id)
         if not snapshot:
@@ -335,8 +339,8 @@ class AuraPlayground(QWidget):
         is_canonical = parent_tool_id in self._canonical_active if parent_tool_id else False
 
         # During canonical dispatch, suppress update_todo_list entirely.
-        # The Planner TODO rail owns the checklist; Worker TODO calls are
-        # never shown, so creating a controller and log markers is pure noise.
+        # The canonical execution checklist owns the TODO rail; Worker TODO
+        # calls are never shown, so creating a controller is pure noise.
         if name == "update_todo_list" and is_canonical:
             self._suppressed_worker_tool_ids.add(worker_tool_id)
             return
@@ -418,8 +422,14 @@ class AuraPlayground(QWidget):
     def update_todo_list(self, tasks: list, tool_call_id: str | None = None):
         """Render a TODO snapshot and cache it for replay.
 
-        Accepts both canonical DispatchSession snapshots and Worker-local
-        TODO updates (the latter only when no canonical dispatch is active).
+        The single entry point for all TODO snapshot rendering. Accepts both
+        canonical ``DispatchSession`` snapshots (via ``dispatchTodoListUpdated``)
+        and Worker-local TODO updates (the latter only when no canonical dispatch
+        is active — see ``WorkerEventHandler._on_worker_todo_list_updated``).
+
+        The ``TodoListWidget`` is a pure renderer: snapshot in, rows painted.
+        No status inference, repair, collapse, or canonical state mutation
+        happens here.
         """
         snapshot = self._dispatch_rail.set(tool_call_id, tasks)
         _log.debug(
@@ -432,6 +442,7 @@ class AuraPlayground(QWidget):
     def finish_todo_list(self, tool_call_id: str, *, ok: bool, needs_followup: bool) -> None:
         """Replay the last canonical snapshot and clear canonical tracking.
 
+        The visible execution checklist remains visible after completion.
         Does not invent statuses — the last DispatchSession snapshot is the
         final truth for the visible TODO rail.
         """

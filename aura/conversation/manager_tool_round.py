@@ -61,6 +61,7 @@ _READ_ONLY_TOOLS = {
 class ToolRoundOutcome:
     action: str
     flow_steering_suppressed: bool = False
+    enter_silent_preflight: bool = False
 
 
 class ToolRoundRunner:
@@ -105,6 +106,7 @@ class ToolRoundRunner:
 
         terminal_dispatch = False
         worker_phase_boundary_info: dict[str, Any] | None = None
+        enter_silent_preflight = False
 
         tasks: list[dict[str, Any]] = []
         for tc in tool_calls:
@@ -242,6 +244,8 @@ class ToolRoundRunner:
                 completed_dispatch_for_final = True
             if res.get("completed_tool_result_for_final"):
                 completed_tool_result_for_final = True
+            if res.get("enter_silent_preflight"):
+                enter_silent_preflight = True
             if state.worker_flow is not None and res.get("flow_result"):
                 flow_result = res["flow_result"]
                 before_write_actions = int(state.worker_flow.state.write_actions)
@@ -257,15 +261,15 @@ class ToolRoundRunner:
                     or state.worker_flow.state.validation_actions > before_validation_actions
                 ):
                     state.worker_flow_nudge_sent = False
+            planner_constraint = str(res.get("planner_internal_constraint", "") or "")
+            if planner_constraint:
+                self._history.append_internal_user_text(planner_constraint)
             if res.get("skip"):
                 continue
 
             if "result_payload" in res:
                 self._history.append_tool_result(task["id"], res["result_payload"])
                 on_event(res["event"])
-                planner_constraint = str(res.get("planner_internal_constraint", "") or "")
-                if planner_constraint:
-                    self._history.append_internal_user_text(planner_constraint)
 
         self._planner_refresh.handle_post_write_notices(
             self._history, planner_stale_read_files
@@ -286,10 +290,13 @@ class ToolRoundRunner:
 
         if terminal_dispatch:
             return ToolRoundOutcome(action="return")
+        if enter_silent_preflight:
+            return ToolRoundOutcome(action="continue", enter_silent_preflight=True)
 
         return ToolRoundOutcome(
             action="next_round",
             flow_steering_suppressed=flow_steering_suppressed,
+            enter_silent_preflight=enter_silent_preflight,
         )
 
     def _append_worker_final_report_tool_results(
@@ -676,6 +683,26 @@ class ToolRoundRunner:
             if result.ok:
                 terminal_dispatch = True
             else:
+                extras = result.extras if isinstance(result.extras, dict) else {}
+                failure_constraint = str(extras.get("failure_constraint") or "")
+                if extras.get("internal_planner_handoff") and failure_constraint:
+                    if _internal_constraint_seen(self._history, failure_constraint):
+                        return {
+                            "id": tool_call_id,
+                            "blocker": True,
+                            "result": result,
+                            "blocker_reason": "failed",
+                            "failure_constraint": failure_constraint,
+                            "terminal_dispatch": False,
+                        }
+                    return {
+                        "id": tool_call_id,
+                        "skip": True,
+                        "completed_dispatch_for_final": False,
+                        "terminal_dispatch": False,
+                        "planner_internal_constraint": failure_constraint,
+                        "enter_silent_preflight": True,
+                    }
                 action = classify_failed_worker_dispatch(
                     result=result,
                 )
@@ -881,6 +908,15 @@ def _looks_like_local_path(value: Any) -> bool:
         or "." in Path(path).name
         or path.startswith(".")
     )
+
+
+def _internal_constraint_seen(history: History, failure_constraint: str) -> bool:
+    if not failure_constraint:
+        return False
+    for message in history.messages:
+        if message.get("aura_internal") is True and message.get("content") == failure_constraint:
+            return True
+    return False
 
 
 __all__ = ["ToolRoundOutcome", "ToolRoundRunner"]

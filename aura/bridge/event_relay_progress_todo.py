@@ -1,8 +1,12 @@
-"""Non-canonical progress/TODO overlay machinery extracted from WorkerEventRelay.
+"""LEGACY — Non-canonical progress/TODO overlay for free-form Worker calls.
 
-This module owns the progress-TODO state and overlay logic for free-form
-(non-canonical) Worker calls.  During canonical DispatchSession campaigns
-suppress_todo_updates is set and all emissions are dropped.
+During canonical DispatchSession campaigns ``suppress_todo_updates`` is set to
+``True`` and all emissions from this module are dropped. The visible checklist is
+then projected by ``ExecutionChecklistController`` from event-bus lifecycle
+events, not by this progress-TODO overlay.
+
+This module remains only for non-canonical Workers that use the model's own
+``update_todo_list`` tool. Do not add new code here.
 """
 
 from __future__ import annotations

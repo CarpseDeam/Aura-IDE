@@ -1,16 +1,22 @@
 from types import SimpleNamespace
 
 from aura.bridge.dispatch_session import DispatchSession
-from aura.bridge.dispatch_todo_controller import DispatchTodoController
 from aura.bridge.worker_report import _format_spec_as_user_message
 from aura.conversation.dispatch import WorkerDispatchRequest, WorkerDispatchResult
 from aura.conversation.dispatch_plan import (
     WorkerDispatchPlan,
     WorkerStepSpec,
     plan_from_request,
+    request_for_step,
 )
 from aura.conversation.dispatch_todo_manifest import DispatchTodoItem
 from aura.conversation.worker_outcome import WorkerOutcomeStatus
+from aura.events import (
+    DISPATCH_STEP_COMPLETED,
+    DISPATCH_STEP_STARTED,
+    EventBus,
+)
+from aura.execution_checklist import ExecutionChecklistController
 
 
 def _request_with_steps() -> WorkerDispatchRequest:
@@ -41,23 +47,24 @@ def _request_with_steps() -> WorkerDispatchRequest:
     )
 
 
-def _session_callbacks(events: list[tuple]) -> dict:
+def _session_lifecycle_callbacks(events: list[tuple]) -> dict:
     return {
-        "begin_steps": lambda tool_id, objectives: events.append(
-            ("begin", tool_id, [item["id"] for item in objectives])
-        ),
-        "set_active_step": lambda tool_id, step_id: events.append(
-            ("active", tool_id, step_id)
-        ),
-        "mark_step_done": lambda tool_id, step_id: events.append(
-            ("done", tool_id, step_id)
-        ),
-        "finish_steps": lambda tool_id: events.append(("finish_steps", tool_id)),
         "emit_worker_started": lambda tool_id: events.append(("started", tool_id)),
         "emit_worker_finished": lambda tool_id, ok, summary, needs_followup, status: events.append(
             ("finished", tool_id, ok, needs_followup, status)
         ),
     }
+
+
+def _record_step_events(bus: EventBus, events: list[tuple]) -> None:
+    bus.subscribe(
+        DISPATCH_STEP_STARTED,
+        lambda event: events.append(("active", event.campaign_id, event.step_id)),
+    )
+    bus.subscribe(
+        DISPATCH_STEP_COMPLETED,
+        lambda event: events.append(("done", event.campaign_id, event.step_id)),
+    )
 
 
 def test_nonfinal_progress_followup_continues_same_dispatch_session():
@@ -70,6 +77,8 @@ def test_nonfinal_progress_followup_continues_same_dispatch_session():
     )
     calls = []
     events = []
+    bus = EventBus()
+    _record_step_events(bus, events)
     results = [
         WorkerDispatchResult(
             ok=False,
@@ -108,7 +117,8 @@ def test_nonfinal_progress_followup_continues_same_dispatch_session():
         plan=plan,
         run_worker_step=run_step,
         pending=SimpleNamespace(),
-        **_session_callbacks(events),
+        event_bus=bus,
+        **_session_lifecycle_callbacks(events),
     )
 
     result = session.run()
@@ -148,6 +158,8 @@ def test_no_progress_step_stops_campaign_before_next_step():
     )
     calls = []
     events = []
+    bus = EventBus()
+    _record_step_events(bus, events)
 
     def run_step(tool_id, step_req, pending):
         calls.append((tool_id, step_req.goal))
@@ -166,7 +178,8 @@ def test_no_progress_step_stops_campaign_before_next_step():
         plan=plan,
         run_worker_step=run_step,
         pending=SimpleNamespace(),
-        **_session_callbacks(events),
+        event_bus=bus,
+        **_session_lifecycle_callbacks(events),
     )
 
     result = session.run()
@@ -188,6 +201,8 @@ def test_nonfinal_failed_step_missing_applied_does_not_count_as_progress():
     )
     calls = []
     events = []
+    bus = EventBus()
+    _record_step_events(bus, events)
 
     def run_step(tool_id, step_req, pending):
         calls.append((tool_id, step_req.goal))
@@ -208,7 +223,8 @@ def test_nonfinal_failed_step_missing_applied_does_not_count_as_progress():
         plan=plan,
         run_worker_step=run_step,
         pending=SimpleNamespace(),
-        **_session_callbacks(events),
+        event_bus=bus,
+        **_session_lifecycle_callbacks(events),
     )
 
     result = session.run()
@@ -229,6 +245,8 @@ def test_nonfinal_failed_step_applied_false_stays_on_step():
     )
     calls = []
     events = []
+    bus = EventBus()
+    _record_step_events(bus, events)
 
     def run_step(tool_id, step_req, pending):
         calls.append((tool_id, step_req.goal))
@@ -249,7 +267,8 @@ def test_nonfinal_failed_step_applied_false_stays_on_step():
         plan=plan,
         run_worker_step=run_step,
         pending=SimpleNamespace(),
-        **_session_callbacks(events),
+        event_bus=bus,
+        **_session_lifecycle_callbacks(events),
     )
 
     result = session.run()
@@ -271,6 +290,8 @@ def test_nonfinal_failed_step_applied_true_advances_to_next_step():
     )
     calls = []
     events = []
+    bus = EventBus()
+    _record_step_events(bus, events)
     results = [
         WorkerDispatchResult(
             ok=False,
@@ -300,7 +321,8 @@ def test_nonfinal_failed_step_applied_true_advances_to_next_step():
         plan=plan,
         run_worker_step=run_step,
         pending=SimpleNamespace(),
-        **_session_callbacks(events),
+        event_bus=bus,
+        **_session_lifecycle_callbacks(events),
     )
 
     result = session.run()
@@ -320,6 +342,79 @@ def test_worker_step_message_forbids_campaign_planning():
     assert "Active Dispatch Step" in message
     assert "Do only this step" in message
     assert "Do not plan, decompose, or schedule the whole task" in message
+
+
+def test_worker_step_request_contains_only_current_step_fields():
+    req = _request_with_steps()
+    req.todo_checklist = [
+        DispatchTodoItem(
+            id="create-helper",
+            description="Create helper module",
+            owning_step_id="step-1",
+        ),
+        DispatchTodoItem(
+            id="wire-caller",
+            description="Wire caller",
+            owning_step_id="step-2",
+        ),
+    ]
+    plan = plan_from_request(req)
+
+    step_req = request_for_step(plan, plan.steps[0], req)
+
+    assert step_req.goal == req.steps[0].goal
+    assert step_req.summary == req.steps[0].title
+    assert step_req.files == req.steps[0].files
+    assert step_req.steps == []
+    assert step_req.todo_checklist == []
+    payload = step_req.to_dict()
+    assert "steps" not in payload
+    assert "todo_checklist" not in payload
+
+
+def test_dispatch_session_checklist_snapshots_advance_one_row_at_a_time():
+    req = _request_with_steps()
+    plan = plan_from_request(req)
+    calls = []
+    snapshots = []
+    bus = EventBus()
+    controller = ExecutionChecklistController(bus)
+    controller.set_on_change(lambda _campaign_id, snapshot: snapshots.append(snapshot))
+
+    def run_step(tool_id, step_req, pending):
+        calls.append((tool_id, step_req.goal))
+        return WorkerDispatchResult(
+            ok=True,
+            summary=f"Completed {step_req.summary}",
+            status=WorkerOutcomeStatus.completed.value,
+            modified_files=list(step_req.files),
+        )
+
+    session = DispatchSession(
+        tool_call_id="call_dispatch",
+        original_request=req,
+        plan=plan,
+        run_worker_step=run_step,
+        pending=SimpleNamespace(),
+        event_bus=bus,
+    )
+
+    result = session.run()
+
+    assert result.ok is True
+    assert calls == [
+        ("call_dispatch", req.steps[0].goal),
+        ("call_dispatch", req.steps[1].goal),
+    ]
+    assert [[row["status"] for row in snapshot] for snapshot in snapshots] == [
+        ["pending", "pending"],
+        ["active", "pending"],
+        ["done", "pending"],
+        ["done", "active"],
+        ["done", "done"],
+        ["done", "done"],
+    ]
+    assert controller.snapshot("call_dispatch") == snapshots[-1]
 
 
 def test_dispatch_session_todo_uses_planner_checklist_rows():
@@ -353,32 +448,9 @@ def test_dispatch_session_todo_uses_planner_checklist_rows():
     plan = plan_from_request(req)
     calls = []
     snapshots = []
-    controller = DispatchTodoController()
-
-    def save_snapshot(snapshot):
-        snapshots.append(snapshot)
-
-    def begin_steps(tool_id, objectives):
-        # Use the canonical planner checklist rows (via .to_dict())
-        # instead of whatever the dispatch loop passes as objectives.
-        save_snapshot(
-            controller.begin(tool_id, [item.to_dict() for item in plan.visible_checklist])
-        )
-
-    def set_active_step(tool_id, step_id):
-        snapshot = controller.activate_step(tool_id, step_id)
-        if snapshot is not None:
-            save_snapshot(snapshot)
-
-    def mark_step_done(tool_id, step_id):
-        snapshot = controller.complete_step(tool_id, step_id)
-        if snapshot is not None:
-            save_snapshot(snapshot)
-
-    def finish_steps(tool_id):
-        snapshot = controller.finish(tool_id)
-        if snapshot is not None:
-            save_snapshot(snapshot)
+    bus = EventBus()
+    controller = ExecutionChecklistController(bus)
+    controller.set_on_change(lambda _campaign_id, snapshot: snapshots.append(snapshot))
 
     def run_step(tool_id, step_req, pending):
         calls.append((tool_id, step_req.goal))
@@ -395,10 +467,7 @@ def test_dispatch_session_todo_uses_planner_checklist_rows():
         plan=plan,
         run_worker_step=run_step,
         pending=SimpleNamespace(),
-        begin_steps=begin_steps,
-        set_active_step=set_active_step,
-        mark_step_done=mark_step_done,
-        finish_steps=finish_steps,
+        event_bus=bus,
     )
 
     result = session.run()

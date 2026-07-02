@@ -1,11 +1,12 @@
 """WorkerEventRelay — maps worker Event objects to PySide6 signals.
 
-Non-canonical progress/TODO overlay machinery has been extracted into
-EventRelayProgressTodo in aura/bridge/event_relay_progress_todo.py.
-During canonical DispatchSession campaigns _suppress_todo_updates is set
-and all TODO emissions from this relay are dropped — the visible TODO
-rail is projected by DispatchTodoController from event-bus lifecycle events.
-Worker Activity (via WorkerActivityController) is the correct execution
+LEGACY — Non-canonical progress/TODO overlay (``EventRelayProgressTodo``) is
+extracted into ``aura/bridge/event_relay_progress_todo.py``. During canonical
+DispatchSession campaigns ``suppress_todo_updates`` is set and all TODO
+emissions from this relay are dropped — the visible execution checklist is
+projected by ``ExecutionChecklistController`` from event-bus lifecycle events.
+
+Worker Activity (via ``WorkerActivityController``) is the correct execution
 heartbeat for both canonical and non-canonical paths.
 """
 from __future__ import annotations

@@ -10,6 +10,7 @@ __all__ = [
 def classify_failed_worker_dispatch(
     *,
     result: WorkerDispatchResult,
+    **_legacy: object,
 ) -> dict[str, str]:
     """Build the terminal failure metadata for a failed dispatch.
 
@@ -21,6 +22,11 @@ def classify_failed_worker_dispatch(
     """
     if _is_worker_internal_error(result):
         return {"blocker_reason": "internal", "failure_constraint": ""}
+    if result.extras.get("internal_planner_handoff"):
+        return {
+            "blocker_reason": "",
+            "failure_constraint": _compute_failure_constraint(result),
+        }
 
     return {
         "blocker_reason": "failed",

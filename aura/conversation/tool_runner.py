@@ -25,6 +25,7 @@ from aura.conversation.dispatch_plan import validate_dispatch_campaign
 from aura.conversation.dispatch_todo_manifest import ensure_dispatch_todo_checklist
 from aura.conversation.history import History
 from aura.conversation.loop_detection import LoopDetector
+from aura.conversation.workflow_state import WorkflowStatus
 from aura.conversation.terminal_policy import worker_terminal_command_allowed
 from aura.conversation.tool_runner_terminal_policy import (
     matches_explicit_validation,
@@ -93,6 +94,35 @@ class ToolRunner:
                 campaign.requires_steps,
                 campaign.errors,
             )
+            result = _dispatch_preflight_rejection(
+                req,
+                campaign_errors=campaign.errors,
+                checklist_errors=campaign.checklist_errors,
+            )
+            if workflow_state_cb is not None:
+                workflow_state_cb(
+                    tool_call_id,
+                    req.goal,
+                    req.summary,
+                    WorkflowStatus.planner_resolving,
+                )
+            payload = json.dumps(result.to_tool_payload(), ensure_ascii=False)
+            self._history.append_tool_result(tool_call_id, payload)
+            on_event(
+                ToolResult(
+                    tool_call_id=tool_call_id,
+                    name="dispatch_to_worker",
+                    ok=False,
+                    result=payload,
+                    extras={
+                        "dispatch": True,
+                        "recoverable": True,
+                        "summary": result.summary,
+                        **result.extras,
+                    },
+                )
+            )
+            return result
 
         if dispatch_cb is None:
             err = (
@@ -548,3 +578,63 @@ class ToolRunner:
         )
 
         return {"_terminal_payload": payload_dict}
+
+
+def _dispatch_preflight_rejection(
+    req: WorkerDispatchRequest,
+    *,
+    campaign_errors: list[str],
+    checklist_errors: list[str],
+) -> WorkerDispatchResult:
+    campaign_errors = [str(error) for error in campaign_errors if str(error or "").strip()]
+    checklist_errors = [str(error) for error in checklist_errors if str(error or "").strip()]
+    failure_constraint = _dispatch_recovery_constraint(
+        campaign_errors=campaign_errors,
+        checklist_errors=checklist_errors,
+    )
+    summary = (
+        "The Worker was not started because the dispatch_to_worker request is "
+        "not a valid bounded campaign yet. Planner must retry "
+        "dispatch_to_worker with a real steps array and a concrete visible "
+        "execution checklist."
+    )
+    return WorkerDispatchResult(
+        ok=False,
+        summary=summary,
+        needs_followup=True,
+        recoverable=True,
+        status=WorkerOutcomeStatus.needs_followup.value,
+        extras={
+            "dispatch_not_started": True,
+            "dispatch_spec_rejected": True,
+            "planner_resolution_needed": True,
+            "internal_planner_handoff": True,
+            "user_visible_blocker": False,
+            "campaign_errors": campaign_errors,
+            "checklist_errors": checklist_errors,
+            "failure_constraint": failure_constraint,
+            "requested_goal": req.goal,
+            "requested_files": list(req.files),
+        },
+    )
+
+
+def _dispatch_recovery_constraint(
+    *,
+    campaign_errors: list[str],
+    checklist_errors: list[str],
+) -> str:
+    lines = [
+        "CONSTRAINT FOR NEXT DISPATCH ATTEMPT:",
+        "The previous dispatch_to_worker call was rejected before Worker start.",
+        "Re-call dispatch_to_worker immediately with a valid steps array.",
+        "Every step must include id, title, goal, spec, files, and acceptance.",
+        "Each step must be a bounded active-step work order, not the full campaign.",
+        "Provide a concrete execution_checklist or todo_checklist, or rely on one checklist row per valid step.",
+        "Do not call edit/write tools.",
+    ]
+    if campaign_errors:
+        lines.append("campaign_errors: " + "; ".join(campaign_errors))
+    if checklist_errors:
+        lines.append("checklist_errors: " + "; ".join(checklist_errors))
+    return "\n".join(lines)

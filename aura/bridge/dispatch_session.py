@@ -11,19 +11,15 @@ whole campaign. _run_worker is a pure execution function that no longer emits
 visible lifecycle signals, so a multi-step plan produces exactly one started and
 one finished event regardless of how many internal steps run.
 
-TODO rail:
-- Visible checklist rows start as pending via the bridge TODO controller.
-- The active step becomes active while it runs.
-- Completed steps become done before the next step activates.
-- One final TODO emission happens after the loop ends.
+Execution checklist:
+- DispatchSession emits checklist lifecycle facts only.
+- The EventBus checklist projector owns visible row state.
 - Worker-local TODO updates are ignored by the bridge.
 
 Ownership:
-- The primary TODO path is event-driven: lifecycle events flow through
-  the EventBus to DispatchTodoController, which projects checklist
-  state.  The four callback parameters (begin_steps, set_active_step,
-  mark_step_done, finish_steps) exist for testing and direct
-  (non-event-bus) consumers only — they are not wired in production.
+- The primary checklist path is event-driven: lifecycle events flow through
+  the EventBus to ExecutionChecklistController, which projects checklist
+  state.
 
 Event bus:
 - Accepts an optional EventBus and emits campaign/step lifecycle events
@@ -48,7 +44,6 @@ from aura.conversation.dispatch_plan import (
     WorkerStepSpec,
     request_for_step,
 )
-from aura.conversation.dispatch_todo_manifest import todo_tasks_from_plan
 from aura.conversation.verification_progress import fingerprint_failures
 from aura.conversation.worker_outcome import WorkerOutcomeStatus
 from aura.events import (
@@ -59,6 +54,7 @@ from aura.events import (
     DISPATCH_STEP_COMPLETED,
     DISPATCH_STEP_STARTED,
 )
+from aura.execution_checklist import build_execution_checklist_items
 
 RunWorkerStep = Callable[[str, WorkerDispatchRequest, Any], WorkerDispatchResult]
 
@@ -88,12 +84,12 @@ class DispatchSession:
     - Internal steps execute silently inside _run_worker_step without
       re-emitting started/finished to the UI.
 
-    TODO rail (derived from the accepted visible checklist):
-    - Visible checklist rows start as pending via the bridge TODO controller.
-    - The active step becomes active while it runs.
-    - Completed steps become done before the next step activates.
+    Execution checklist (derived from the accepted visible checklist):
+    - Visible checklist rows start as pending via EventBus declaration.
+    - The active step becomes active while it runs in the EventBus projector.
+    - Completed steps become done before the next step activates in the projector.
     - If a step fails, the campaign stops (no blocked TODO state).
-    - One final TODO emission happens after the loop ends.
+    - One final campaign-finished event happens after the loop ends.
     - Worker-local TODO updates from inside _run_worker_step are ignored
       for canonical dispatch tool_call_ids.
     """
@@ -106,10 +102,6 @@ class DispatchSession:
         plan: WorkerDispatchPlan,
         run_worker_step: RunWorkerStep,
         pending: Any,
-        begin_steps: Callable[[str, list[dict[str, Any]]], None] | None = None,
-        set_active_step: Callable[[str, str], None] | None = None,
-        mark_step_done: Callable[[str, str], None] | None = None,
-        finish_steps: Callable[[str], None] | None = None,
         emit_worker_started: _EmitStarted | None = None,
         emit_worker_finished: _EmitFinished | None = None,
         event_bus: EventBus | None = None,
@@ -119,62 +111,28 @@ class DispatchSession:
         self.plan = plan
         self._run_worker_step = run_worker_step
         self._pending = pending
-        self._begin_steps = begin_steps
-        self._set_active_step = set_active_step
-        self._mark_step_done = mark_step_done
-        self._finish_steps = finish_steps
         self._emit_worker_started = emit_worker_started
         self._emit_worker_finished = emit_worker_finished
         self._event_bus = event_bus
         self.step_results: list[StepResult] = []
 
     # ------------------------------------------------------------------
-    # TODO emission (via WorkflowState callbacks)
+    # Checklist lifecycle emission
     # ------------------------------------------------------------------
 
-    def _begin_canonical_todos(self) -> None:
-        """Initialize canonical TODO objectives from the visible checklist."""
-        objectives = todo_tasks_from_plan(self.plan)
+    def _declare_execution_checklist(self) -> None:
+        """Declare canonical checklist rows from the visible checklist."""
+        items = [item.to_dict() for item in build_execution_checklist_items(self.plan)]
         logging.debug(
-            "DispatchSession._begin_canonical_todos tool_call_id=%s todo_count=%d ids=%s",
-            self.tool_call_id, len(objectives),
-            [o["id"] for o in objectives],
+            "DispatchSession._declare_execution_checklist tool_call_id=%s row_count=%d ids=%s",
+            self.tool_call_id, len(items),
+            [o["id"] for o in items],
         )
-        # Emit checklist_declared on the event bus so projectors (TODO controller,
-        # telemetry) can react.  The callback still fires for direct consumers.
+        # Emit checklist_declared on the event bus so projectors can react.
         self._emit_event(DISPATCH_CHECKLIST_DECLARED, {
-            "objectives": objectives,
+            "items": items,
             "step_count": len(self.plan.steps),
         })
-        if self._begin_steps is not None:
-            self._begin_steps(self.tool_call_id, objectives)
-
-    def _canonical_set_active(self, step_id: str) -> None:
-        if self._set_active_step is None:
-            return
-        logging.debug(
-            "DispatchSession._canonical_set_active tool_call_id=%s step_id=%s",
-            self.tool_call_id, step_id,
-        )
-        self._set_active_step(self.tool_call_id, step_id)
-
-    def _canonical_mark_done(self, step_id: str) -> None:
-        if self._mark_step_done is None:
-            return
-        logging.debug(
-            "DispatchSession._canonical_mark_done tool_call_id=%s step_id=%s",
-            self.tool_call_id, step_id,
-        )
-        self._mark_step_done(self.tool_call_id, step_id)
-
-    def _canonical_finish(self) -> None:
-        if self._finish_steps is None:
-            return
-        logging.debug(
-            "DispatchSession._canonical_finish tool_call_id=%s",
-            self.tool_call_id,
-        )
-        self._finish_steps(self.tool_call_id)
 
     # ── Event bus emission ──────────────────────────────────────────────
 
@@ -226,8 +184,8 @@ class DispatchSession:
             self._emit_lifecycle_pair(result)
             return result
 
-        # Initialize canonical TODO state: all steps pending.
-        self._begin_canonical_todos()
+        # Declare canonical checklist state: all rows pending in the projector.
+        self._declare_execution_checklist()
 
         # Campaign starts — one visible Worker start event for the whole run.
         if self._emit_worker_started is not None:
@@ -244,9 +202,6 @@ class DispatchSession:
 
         final_step_index = len(self.plan.steps) - 1
         for index, step in enumerate(self.plan.steps):
-            # Activate this step in the TODO rail.
-            self._canonical_set_active(step.id)
-
             # Emit step_started on the event bus.
             self._emit_event(DISPATCH_STEP_STARTED, {
                 "step_id": step.id,
@@ -274,18 +229,12 @@ class DispatchSession:
             ):
                 break
 
-            # Step completed — mark done.
-            self._canonical_mark_done(step.id)
-
             # Emit step_completed on the event bus.
             self._emit_event(DISPATCH_STEP_COMPLETED, {
                 "step_id": step.id,
                 "description": step.title or step.goal,
                 "ok": worker_result.ok,
             })
-
-        # Emit final TODO state once.
-        self._canonical_finish()
 
         if final_worker_result is None:
             # Guard — can't happen: plan.steps was verified non-empty above.

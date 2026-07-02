@@ -17,6 +17,7 @@ from aura.conversation.dispatch_todo_manifest import (
     dispatch_todo_manifest_from_request,
     raw_dispatch_todo_checklist,
 )
+from aura.execution_checklist import build_execution_checklist_items
 
 
 _BROAD_CAMPAIGN_PATTERNS = (
@@ -71,6 +72,7 @@ class CampaignValidationResult:
     ok: bool
     requires_steps: bool = False
     errors: list[str] = field(default_factory=list)
+    checklist_errors: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -451,10 +453,13 @@ def validate_dispatch_campaign(req: WorkerDispatchRequest) -> CampaignValidation
     if req.steps:
         errors.extend(_step_boundary_errors(req, requires_steps=requires_steps))
 
+    checklist_errors = _checklist_errors(req, requires_steps=requires_steps)
+
     return CampaignValidationResult(
-        ok=not errors,
+        ok=not errors and not checklist_errors,
         requires_steps=requires_steps,
         errors=errors,
+        checklist_errors=checklist_errors,
     )
 
 
@@ -495,6 +500,16 @@ def _step_boundary_errors(
         step_files = _step_files(step) or _dedupe(req.files)
         if len(step_files) >= 3:
             errors.append("A single campaign step cannot cover 3 or more files.")
+        if len(_dedupe(req.files)) > 1 and len(step_files) >= len(_dedupe(req.files)):
+            errors.append("Broad multi-file dispatches must split file work across multiple bounded steps.")
+        if _boundary_text_is_top_level(step.title, req):
+            errors.append("step 1 title repeats the top-level dispatch instead of naming a step boundary.")
+        if _boundary_text_is_top_level(step.goal, req):
+            errors.append("step 1 goal repeats the top-level dispatch instead of naming a step boundary.")
+        if _boundary_text_is_top_level(step.spec, req):
+            errors.append("step 1 spec must be bounded to that step, not the full campaign.")
+        if _boundary_text_is_top_level(step.acceptance, req):
+            errors.append("step 1 acceptance repeats the top-level dispatch instead of a step-specific pass/fail check.")
 
     for index, step in enumerate(steps, start=1):
         prefix = f"step {index}"
@@ -528,6 +543,33 @@ def _step_boundary_errors(
         errors.append("Campaign steps need distinct titles.")
 
     return _dedupe(errors)
+
+
+def _checklist_errors(
+    req: WorkerDispatchRequest,
+    *,
+    requires_steps: bool,
+) -> list[str]:
+    if not requires_steps:
+        return []
+
+    rows = build_execution_checklist_items(req)
+    if not rows:
+        return [
+            "Broad implementation dispatches must produce a concrete visible execution checklist."
+        ]
+
+    if req.steps and len(rows) < len(req.steps):
+        return [
+            "Broad implementation dispatches must produce checklist rows that cover every step."
+        ]
+
+    if not req.steps and len(rows) == 1:
+        return [
+            "Broad implementation dispatches must not collapse to a single campaign-title checklist row."
+        ]
+
+    return []
 
 
 def _request_text(req: WorkerDispatchRequest) -> str:

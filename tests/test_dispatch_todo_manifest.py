@@ -1,12 +1,13 @@
-"""Tests for dispatch TODO manifest filtering, fallback, and controller."""
+"""Tests for dispatch TODO manifest filtering, fallback, and checklist projection."""
 
-from aura.bridge.dispatch_todo_controller import DispatchTodoController
 from aura.conversation.dispatch_plan import WorkerDispatchPlan, WorkerStepSpec
 from aura.conversation.dispatch_todo_manifest import (
     DispatchTodoItem,
     _is_implementation_detail,
     todo_tasks_from_plan,
 )
+from aura.conversation.dispatch import WorkerDispatchRequest
+from aura.execution_checklist import ExecutionChecklistController
 
 # ── _is_implementation_detail ─────────────────────────────────────────────
 
@@ -140,11 +141,25 @@ def test_todo_tasks_from_plan_fallback():
     assert tasks[1]["owning_step_id"] == "step-2"
 
 
-# ── DispatchTodoController ownerless fallback ────────────────────────────
+def test_non_trivial_flat_request_does_not_create_one_title_row():
+    req = WorkerDispatchRequest(
+        goal="Refactor the dispatch checklist subsystem.",
+        files=["aura/bridge/dispatch.py", "aura/bridge/dispatch_session.py"],
+        spec="Refactor the checklist flow across bridge and session.",
+        acceptance="The checklist path is event-driven and tests pass.",
+        summary="Refactor dispatch checklist subsystem.",
+    )
 
-def test_dispatch_todo_controller_ownerless_fallback():
+    from aura.conversation.dispatch_todo_manifest import dispatch_todo_manifest_from_request
+
+    assert dispatch_todo_manifest_from_request(req) == []
+
+
+# ── ExecutionChecklistController ownerless fallback ───────────────────────
+
+def test_execution_checklist_controller_ownerless_fallback():
     """Controller activates next pending / completes active when step_id does not match."""
-    ctrl = DispatchTodoController()
+    ctrl = ExecutionChecklistController()
 
     result = ctrl.begin("test", [
         {"id": "task-1", "description": "First task"},

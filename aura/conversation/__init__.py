@@ -25,7 +25,6 @@ from aura.conversation.dispatch_todo_manifest import (
     DispatchTodoItem,
     dispatch_todo_manifest_from_request,
     ensure_dispatch_todo_checklist,
-    todo_tasks_from_plan,
 )
 from aura.conversation.history import History
 from aura.conversation.task_shape import TaskShape, infer_task_shape
@@ -78,7 +77,6 @@ __all__ = [
     "ensure_dispatch_todo_checklist",
     "plan_from_request",
     "request_for_step",
-    "todo_tasks_from_plan",
     "ValidationCommandRun",
     "ValidationStatus",
     "WorkflowState",
