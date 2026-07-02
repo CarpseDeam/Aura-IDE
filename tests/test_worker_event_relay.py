@@ -384,16 +384,11 @@ class TestEventBusIntegration:
         assert final_report_events[1].kind == "final_report_completed"
 
 
-# ── WorkerEventHandler lifecycle idempotency ─────────────────────────────
+# ── WorkerEventHandler lifecycle handling ────────────────────────────────
 
 
-class TestWorkerEventHandlerIdempotency:
-    """Verify that WorkerEventHandler lifecycle guards fire exactly once
-    per tool_call_id.
-
-    These tests use MagicMock for Qt dependencies and only exercise the
-    idempotency logic, not full signal routing.
-    """
+class TestWorkerEventHandlerLifecycle:
+    """Verify WorkerEventHandler lifecycle signal handling."""
 
     @pytest.fixture
     def handler(self):
@@ -424,16 +419,15 @@ class TestWorkerEventHandlerIdempotency:
         h._dispatch_ui.get_spec_card = MagicMock(return_value=None)
         return h
 
-    def test_on_worker_started_idempotent(self, handler) -> None:
-        """_on_worker_started calls playground.begin_assistant only once
-        per tool_call_id."""
+    def test_on_worker_started_runs_start_choreography(self, handler) -> None:
+        """_on_worker_started runs the visible start choreography."""
         handler._on_worker_started("tc-1")
-        handler._on_worker_started("tc-1")  # second call — same id
 
         assert handler._playground.begin_assistant.call_count == 1, (
-            "begin_assistant must be called exactly once for the same tool_call_id"
+            "begin_assistant must be called for the workerStarted signal"
         )
-        assert "tc-1" in handler._initialized_worker_campaigns
+        handler._chat._remove_plan_writer_card.assert_called_once_with("tc-1")
+        handler._playground.render_dispatch_todo_list.assert_called_once_with("tc-1")
 
     def test_on_worker_started_different_ids_not_blocked(self, handler) -> None:
         """_on_worker_started for different tool_call_ids both proceed."""
@@ -444,25 +438,16 @@ class TestWorkerEventHandlerIdempotency:
             "begin_assistant must be called for each distinct tool_call_id"
         )
 
-    def test_on_worker_finished_idempotent(self, handler) -> None:
-        """_on_worker_finished calls finish_presenter.present only once
-        per tool_call_id."""
-        # Must mark as initialized first (the guard requires it)
-        handler._initialized_worker_campaigns.add("tc-1")
-
+    def test_on_worker_finished_runs_finish_presentation(self, handler) -> None:
+        """_on_worker_finished presents the worker result."""
         handler._on_worker_finished("tc-1", True, "all good")
-        handler._on_worker_finished("tc-1", True, "all good")  # second call
 
         assert handler._finish_presenter.present.call_count == 1, (
-            "present must be called exactly once for the same tool_call_id"
+            "present must be called for the workerFinished signal"
         )
-        assert "tc-1" in handler._finalized_worker_campaigns
 
     def test_on_worker_finished_different_ids_not_blocked(self, handler) -> None:
         """_on_worker_finished for different tool_call_ids both proceed."""
-        handler._initialized_worker_campaigns.add("tc-1")
-        handler._initialized_worker_campaigns.add("tc-2")
-
         handler._on_worker_finished("tc-1", True, "done")
         handler._on_worker_finished("tc-2", True, "done")
 
@@ -470,29 +455,18 @@ class TestWorkerEventHandlerIdempotency:
             "present must be called for each distinct tool_call_id"
         )
 
-    def test_internal_duplicate_lifecycle_and_worker_todo_do_not_reinitialize_ui(self, handler) -> None:
-        """Duplicate internal lifecycle and Worker-local TODO events do not
-        trigger destructive playground lifecycle more than once per campaign.
-        """
+    def test_canonical_worker_todo_is_still_suppressed(self, handler) -> None:
+        """Worker-local TODO events cannot repaint a canonical dispatch."""
         handler._dispatch_ui.is_canonical_dispatch = MagicMock(return_value=True)
-        handler._on_worker_started("tc-1")
-        handler._on_worker_started("tc-1")
-
         handler._on_worker_todo_list_updated(
             "tc-1",
             [{"id": "worker-local", "description": "Worker-local replacement"}],
         )
 
-        handler._on_worker_finished("tc-1", True, "done", False, "completed")
-        handler._on_worker_finished("tc-1", True, "done", False, "completed")
-
-        assert handler._playground.begin_assistant.call_count == 1
-        assert handler._finish_presenter.present.call_count == 1
         handler._playground.update_todo_list.assert_not_called()
 
-    def test_workflow_state_plan_writer_guard(self, handler) -> None:
-        """WorkflowState changes after Worker start must not update
-        PlanWriterCard for that tool_call_id."""
+    def test_workflow_state_plan_writer_updates_only_before_dispatch(self, handler) -> None:
+        """Only plan_ready WorkflowState snapshots update PlanWriterCard."""
         from aura.conversation.workflow_state import WorkflowState, WorkflowStatus
 
         plan_card = MagicMock()
@@ -500,7 +474,6 @@ class TestWorkerEventHandlerIdempotency:
         handler._dispatch_ui.get_spec_card = MagicMock(return_value=None)
         handler._chat.get_plan_writer_card = MagicMock(return_value=plan_card)
 
-        # Before Worker start — PlanWriterCard should be updated
         state_before = WorkflowState(
             tool_call_id="tc-1",
             task_title="test",
@@ -510,13 +483,9 @@ class TestWorkerEventHandlerIdempotency:
         handler._on_workflow_state_changed(state_before)
 
         assert plan_card.update_workflow_state.call_count == 1, (
-            "PlanWriterCard must be updated before Worker start"
+            "PlanWriterCard must be updated for plan_ready snapshots"
         )
 
-        # Simulate Worker start
-        handler._initialized_worker_campaigns.add("tc-1")
-
-        # After Worker start — PlanWriterCard must NOT be updated
         state_after = WorkflowState(
             tool_call_id="tc-1",
             task_title="test",
@@ -526,12 +495,11 @@ class TestWorkerEventHandlerIdempotency:
         handler._on_workflow_state_changed(state_after)
 
         assert plan_card.update_workflow_state.call_count == 1, (
-            "PlanWriterCard must NOT be updated after Worker start for same tool_call_id"
+            "PlanWriterCard must not be updated for dispatched snapshots"
         )
 
-    def test_workflow_state_diff_tool_call_id_not_blocked(self, handler) -> None:
-        """WorkflowState for a different tool_call_id must update
-        PlanWriterCard even if one tool_call_id has started."""
+    def test_workflow_state_plan_ready_updates_matching_plan_card(self, handler) -> None:
+        """plan_ready snapshots update the matching PlanWriterCard."""
         from aura.conversation.workflow_state import WorkflowState, WorkflowStatus
 
         plan_card_b = MagicMock()
@@ -542,10 +510,6 @@ class TestWorkerEventHandlerIdempotency:
 
         handler._chat.get_plan_writer_card = _get_plan_card
 
-        # Worker started for tc-a
-        handler._initialized_worker_campaigns.add("tc-a")
-
-        # WorkflowState for tc-b (different id) — should still update
         state_b = WorkflowState(
             tool_call_id="tc-b",
             task_title="other task",
@@ -555,20 +519,5 @@ class TestWorkerEventHandlerIdempotency:
         handler._on_workflow_state_changed(state_b)
 
         assert plan_card_b.update_workflow_state.call_count == 1, (
-            "PlanWriterCard for tc-b must be updated even after tc-a has started"
-        )
-
-    def test_reset_session_usage_clears_lifecycle_guards(self, handler) -> None:
-        """reset_session_usage() clears both lifecycle guard sets so
-        a new conversation can reuse tool_call_ids."""
-        handler._initialized_worker_campaigns.add("tc-1")
-        handler._finalized_worker_campaigns.add("tc-1")
-
-        handler.reset_session_usage()
-
-        assert len(handler._initialized_worker_campaigns) == 0, (
-            "reset_session_usage must clear _initialized_worker_campaigns"
-        )
-        assert len(handler._finalized_worker_campaigns) == 0, (
-            "reset_session_usage must clear _finalized_worker_campaigns"
+            "PlanWriterCard for tc-b must be updated for its plan_ready snapshot"
         )
