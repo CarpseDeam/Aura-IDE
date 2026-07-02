@@ -6,6 +6,7 @@ from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QGuiApplication, QIcon
 from PySide6.QtWidgets import (
     QHBoxLayout,
+    QLabel,
     QPlainTextEdit,
     QPushButton,
     QSizePolicy,
@@ -77,6 +78,18 @@ class InfoHubPane(QWidget):
         self._todo_widget = TodoListWidget(self._log_tab)
         log_layout.addWidget(self._todo_widget)
 
+        # Worker Activity feed (append-only heartbeat, under TODO)
+        self._activity_container = QWidget(self._log_tab)
+        self._activity_container.setObjectName("workerActivityFeed")
+        self._activity_container.setStyleSheet(
+            f"#workerActivityFeed {{ background: transparent; border-bottom: 1px solid {BORDER}; padding: 0; }}"
+        )
+        self._activity_layout = QVBoxLayout(self._activity_container)
+        self._activity_layout.setContentsMargins(12, 2, 12, 4)
+        self._activity_layout.setSpacing(0)
+        self._activity_container.setVisible(False)
+        log_layout.addWidget(self._activity_container)
+
         # Worker prose log text area
         self._log_view = QPlainTextEdit(self._log_tab)
         self._log_view.setReadOnly(True)
@@ -138,6 +151,28 @@ class InfoHubPane(QWidget):
     def update_todo_list(self, tasks: list[dict]) -> None:
         """Delegate to the embedded TodoListWidget."""
         self._todo_widget.update_tasks(tasks)
+
+    def update_activity(self, entries: list[dict]) -> None:
+        """Render the Worker Activity feed (append-only heartbeat)."""
+        # Clear old activity rows
+        while self._activity_layout.count() > 0:
+            item = self._activity_layout.takeAt(0)
+            if item and item.widget():
+                item.widget().deleteLater()
+
+        if not entries:
+            self._activity_container.setVisible(False)
+            return
+
+        # Show only the last 15 most recent entries
+        visible = entries[-15:]
+        for entry in visible:
+            label = QLabel(entry.get("message", ""), self._activity_container)
+            label.setFont(_mono_font(9))
+            label.setStyleSheet(f"color: {FG}; padding: 0; border: none; background: transparent;")
+            self._activity_layout.addWidget(label)
+
+        self._activity_container.setVisible(True)
 
     def add_diff_card(
         self,
@@ -211,9 +246,10 @@ class InfoHubPane(QWidget):
         btn.setToolTip("Copy summary")
 
     def clear(self) -> None:
-        """Reset the Worker Log: clear text, todo, and dynamic cards."""
+        """Reset the Worker Log: clear text, todo, activity, and dynamic cards."""
         self.clear_log()
         self._todo_widget.update_tasks([])
+        self.update_activity([])
 
     def clear_log(self) -> None:
         """Clear log text and dynamic cards without touching the TODO rail."""

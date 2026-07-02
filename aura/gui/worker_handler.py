@@ -116,6 +116,7 @@ class WorkerEventHandler(QObject):
         self._bridge.workerUsage.connect(self._on_worker_usage)
         self._bridge.workerTodoListUpdated.connect(self._on_worker_todo_list_updated)
         self._bridge.dispatchTodoListUpdated.connect(self._on_dispatch_todo_list_updated)
+        self._bridge.workerActivityUpdated.connect(self._on_worker_activity_updated)
         self._bridge.workerTerminalOutput.connect(self._tool_router.on_worker_terminal_output)
         self._bridge.workerAgentProcessStarted.connect(self._tool_router.on_worker_agent_process_started)
         self._bridge.workerAgentProcessOutput.connect(self._tool_router.on_worker_agent_process_output)
@@ -348,3 +349,11 @@ class WorkerEventHandler(QObject):
             [t.get("status", "?") for t in tasks if isinstance(t, dict)],
         )
         self._playground.update_todo_list(tasks, tool_call_id)
+
+    def _on_worker_activity_updated(self, tool_call_id: str, entries: list) -> None:
+        """Route Worker Activity snapshots to playground (append-only heartbeat)."""
+        _log.debug(
+            "_on_worker_activity_updated tool_call_id=%s entry_count=%d",
+            tool_call_id, len(entries),
+        )
+        self._playground.update_activity(entries, tool_call_id)

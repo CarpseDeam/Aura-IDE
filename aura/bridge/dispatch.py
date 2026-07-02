@@ -20,6 +20,7 @@ from aura.bridge.approval_proxy import _ApprovalProxy
 from aura.bridge.dispatch_pending import _DispatchPending, DispatchPendingMap
 from aura.bridge.dispatch_session import DispatchSession
 from aura.bridge.dispatch_todo_controller import DispatchTodoController
+from aura.bridge.worker_activity import WorkerActivityController
 from aura.bridge.worker_recording import record_dispatch_campaign_completion
 from aura.bridge.worker_completion_result import (
     _check_read_before_edit,
@@ -47,6 +48,7 @@ from aura.conversation.persistence import WorkerDispatchRecord
 from aura.conversation.tool_limits import TERMINAL_TOOLS, WRITE_TOOLS
 from aura.conversation.workflow_state import WorkflowState, WorkflowStatus
 from aura.dependency_context import build_dependency_stanza
+from aura.events import EventBus
 
 __all__ = [
     "_DispatchProxy",
@@ -82,6 +84,7 @@ class _DispatchProxy(QObject):
     workerAgentProcessOutput = Signal(str, str, str)  # parent_tool_id, process_id, text
     workerAgentProcessFinished = Signal(str, str, object)  # parent_tool_id, process_id, exit_code
     workflowStateChanged = Signal(object)  # WorkflowState snapshot
+    workerActivityUpdated = Signal(str, list)  # tool_call_id, activity snapshot entries
 
     def __init__(
         self,
@@ -113,6 +116,12 @@ class _DispatchProxy(QObject):
         self._result_metadata: dict[str, dict[str, Any]] = {}
         self._active_workflow: WorkflowState | None = None
         self._todo_controller = DispatchTodoController()
+
+        # Event bus — owned by the dispatch proxy; shared with DispatchSession
+        # and WorkerDispatchRunner for activity projection.
+        self._event_bus = EventBus()
+        self._activity_controller = WorkerActivityController(self._event_bus)
+        self._activity_controller.set_on_change(self._on_activity_changed)
 
     # ---- config -----------------------------------------------------------
 
@@ -181,6 +190,20 @@ class _DispatchProxy(QObject):
             tool_call_id, len(tasks),
         )
         self.workerTodoListUpdated.emit(tool_call_id, tasks)
+
+    # ---- Worker Activity (projected from event bus) -----------------------
+
+    def _on_activity_changed(self, entries: list) -> None:
+        """Emit the latest activity snapshot whenever the controller appends."""
+        # Forward as a dict snapshot for bridge relay & GUI consumption.
+        self.workerActivityUpdated.emit(
+            entries[0].campaign_id if entries else "",
+            [e.to_dict() for e in entries],
+        )
+
+    def clear_activity(self) -> None:
+        """Clear activity entries (conversation reset / teardown)."""
+        self._activity_controller.clear()
 
     # ---- planner-thread side ---------------------------------------------
 
@@ -270,6 +293,7 @@ class _DispatchProxy(QObject):
             finish_steps=self._dispatch_todo_finish,
             emit_worker_started=self.workerStarted.emit,
             emit_worker_finished=self.workerFinished.emit,
+            event_bus=self._event_bus,
         )
         # Run the session. The canonical TODO checklist survives after finish
         # so late Worker-local TODO events cannot repaint the rail. It is
@@ -572,4 +596,5 @@ class _DispatchProxy(QObject):
             records=self._records,
             result_metadata=self._result_metadata,
             set_tier1_context=self.set_tier1_context,
+            event_bus=self._event_bus,
         )

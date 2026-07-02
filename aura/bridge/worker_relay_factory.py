@@ -13,6 +13,7 @@ from typing import Any
 from PySide6.QtCore import Qt
 
 from aura.bridge.event_relay import WorkerEventRelay
+from aura.events import EventBus
 
 
 def create_worker_relay(
@@ -22,6 +23,7 @@ def create_worker_relay(
     dispatch_proxy: Any,
     todo_relay_callback: Callable[[str, list], None],
     suppress_todo_updates: bool = False,
+    event_bus: EventBus | None = None,
 ) -> WorkerEventRelay:
     """Construct a WorkerEventRelay and wire every signal to *dispatch_proxy*.
 
@@ -34,6 +36,7 @@ def create_worker_relay(
         approval_proxy=approval_proxy,
         worker_model=worker_model,
         suppress_todo_updates=suppress_todo_updates,
+        event_bus=event_bus,
     )
     # Stream events
     relay.reasoningDelta.connect(dispatch_proxy.workerReasoningDelta)

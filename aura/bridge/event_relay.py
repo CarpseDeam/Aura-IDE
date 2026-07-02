@@ -23,6 +23,20 @@ from aura.client import (
     ToolResult,
     Usage,
 )
+from aura.events import (
+    AuraEvent,
+    EventBus,
+    WORKER_COMMAND_FINISHED,
+    WORKER_COMMAND_STARTED,
+    WORKER_FAILED,
+    WORKER_FILE_CHANGED,
+    WORKER_FINAL_REPORT_FINISHED,
+    WORKER_FINAL_REPORT_STARTED,
+    WORKER_TOOL_FINISHED,
+    WORKER_TOOL_STARTED,
+    WORKER_VALIDATION_FINISHED,
+    WORKER_VALIDATION_STARTED,
+)
 from aura.conversation.tool_limits import WRITE_TOOLS
 from aura.conversation.validation_orchestrator import classify_validation_payload
 from aura.todo_state import todo_signature, todo_task_description, todo_task_status
@@ -137,11 +151,13 @@ class WorkerEventRelay(QObject):
         worker_model: str = "",
         parent: QObject | None = None,
         suppress_todo_updates: bool = False,
+        event_bus: EventBus | None = None,
     ) -> None:
         super().__init__(parent)
         self._approval_proxy = approval_proxy
         self._worker_model = worker_model
         self._suppress_todo_updates = suppress_todo_updates
+        self._event_bus = event_bus
         self.index_to_id: dict[int, str] = {}
         self.write_results: list[dict[str, Any]] = []
         self.not_applied_writes: list[dict[str, Any]] = []
@@ -167,6 +183,12 @@ class WorkerEventRelay(QObject):
         self._tool_arg_fragments: dict[str, str] = {}
         self._last_emitted_todo_signature: tuple[tuple[str, str], ...] = ()
 
+    def _emit_bus_event(self, topic: str, payload: dict) -> None:
+        """Emit an event on the optional event bus (pure-python, no Qt)."""
+        if self._event_bus is None:
+            return
+        self._event_bus.emit(AuraEvent(topic=topic, payload=dict(payload)))
+
     def relay(self, tool_call_id: str, ev: Event) -> None:
         """Emit the appropriate signal for the event type and track side effects."""
         if isinstance(ev, ReasoningDelta):
@@ -179,6 +201,23 @@ class WorkerEventRelay(QObject):
             self._tool_arg_fragments[ev.id] = ""
             self.toolCallStart.emit(tool_call_id, ev.id, ev.name)
             self._mark_progress_tool_started(tool_call_id, ev.name)
+            # Emit tool_started for activity projectors.
+            # For terminal commands also emit command_started.
+            self._emit_bus_event(WORKER_TOOL_STARTED, {
+                "name": ev.name,
+                "tool_call_id": ev.id,
+            })
+            if ev.name in ("run_terminal_command", "run_and_watch"):
+                self._emit_bus_event(WORKER_COMMAND_STARTED, {
+                    "name": ev.name,
+                    "command": "",
+                    "tool_call_id": ev.id,
+                })
+                self._emit_bus_event(WORKER_VALIDATION_STARTED, {
+                    "name": ev.name,
+                    "command": "",
+                    "tool_call_id": ev.id,
+                })
         elif isinstance(ev, ToolCallArgsDelta):
             wid = self.index_to_id.get(ev.index, "")
             if wid:
@@ -213,6 +252,11 @@ class WorkerEventRelay(QObject):
                     self.final_report_text = content
             if ev.finish_reason == "stop":
                 self._mark_progress_finished(tool_call_id)
+                self._emit_bus_event(WORKER_FINAL_REPORT_STARTED, {})
+                self._emit_bus_event(WORKER_FINAL_REPORT_FINISHED, {
+                    "ok": True,
+                    "finish_reason": ev.finish_reason or "",
+                })
         elif isinstance(ev, ApiError):
             from aura.config import redact_secrets
             msg = f"{ev.status_code}: {ev.message}" if ev.status_code is not None else ev.message
@@ -222,6 +266,10 @@ class WorkerEventRelay(QObject):
                 ev.status_code if ev.status_code is not None else -1,
                 redact_secrets(ev.message),
             )
+            self._emit_bus_event(WORKER_FAILED, {
+                "error": ev.message,
+                "status_code": ev.status_code,
+            })
         elif isinstance(ev, ToolResult):
             approval = (ev.extras or {}).get("approval")
             if approval:
@@ -292,6 +340,14 @@ class WorkerEventRelay(QObject):
                 if "operation_count" in parsed:
                     write_record["operation_count"] = parsed.get("operation_count")
                 self.write_results.append(write_record)
+                path = parsed.get("path")
+                if isinstance(path, str) and path:
+                    action = "created" if parsed.get("is_new_file") else ("deleted" if parsed.get("deleted") else "modified")
+                    self._emit_bus_event(WORKER_FILE_CHANGED, {
+                        "path": path,
+                        "action": action,
+                        "tool": ev.name,
+                    })
                 path = parsed.get("path")
                 if isinstance(path, str) and path:
                     self.touched_files.add(path)
@@ -372,6 +428,11 @@ class WorkerEventRelay(QObject):
             )
             self._active_tool_names.pop(ev.tool_call_id, None)
             self._tool_arg_fragments.pop(ev.tool_call_id, None)
+            self._emit_bus_event(WORKER_TOOL_FINISHED, {
+                "name": ev.name,
+                "tool_call_id": ev.tool_call_id,
+                "ok": ev.ok,
+            })
             # Track all tool results
             tr = self._tool_result_record(ev, parsed)
             self.tool_results.append(tr)
@@ -398,8 +459,19 @@ class WorkerEventRelay(QObject):
                     record["auto_validation"] = True
                 _attach_validation_metadata(record, parsed)
                 self.terminal_results.append(record)
-                if _is_validation_terminal_record(record):
+                self._emit_bus_event(WORKER_COMMAND_FINISHED, {
+                    "command": record["command"],
+                    "exit_code": record["exit_code"],
+                    "ok": record["ok"],
+                })
+                is_validation = _is_validation_terminal_record(record)
+                if is_validation:
                     self.validation_results.append(record)
+                    self._emit_bus_event(WORKER_VALIDATION_FINISHED, {
+                        "command": record["command"],
+                        "ok": record["ok"],
+                        "exit_code": record["exit_code"],
+                    })
 
             if (
                 ev.name == "run_and_watch"
@@ -418,8 +490,18 @@ class WorkerEventRelay(QObject):
                 }
                 _attach_validation_metadata(record, parsed)
                 self.terminal_results.append(record)
+                self._emit_bus_event(WORKER_COMMAND_FINISHED, {
+                    "command": record["command"],
+                    "exit_code": record["exit_code"],
+                    "ok": record["ok"],
+                })
                 if _is_validation_terminal_record(record):
                     self.validation_results.append(record)
+                    self._emit_bus_event(WORKER_VALIDATION_FINISHED, {
+                        "command": record["command"],
+                        "ok": record["ok"],
+                        "exit_code": record["exit_code"],
+                    })
         elif isinstance(ev, TerminalOutput):            self.terminalOutput.emit(tool_call_id, ev.tool_call_id, ev.text)
         elif isinstance(ev, AgentProcessStarted):
             self.agentProcessStarted.emit(

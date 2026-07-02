@@ -38,6 +38,7 @@ from aura.conversation import (
 from aura.conversation.critic_dispatch import CriticCallback, CriticRequest, run_critic_dispatch
 from aura.conversation.persistence import WorkerDispatchRecord
 from aura.conversation.project_profile import detect_project_profile
+from aura.events import EventBus
 from aura.validation.selector import ValidationPlan
 
 _log = logging.getLogger(__name__)
@@ -65,6 +66,7 @@ class WorkerDispatchRunner:
         result_metadata: dict[str, dict[str, Any]],
         suppress_worker_todo_updates: bool = False,
         set_tier1_context: Callable[[str], None] | None = None,
+        event_bus: EventBus | None = None,
     ) -> None:
         self._approval_proxy = approval_proxy
         self._registry_factory = registry_factory
@@ -80,6 +82,7 @@ class WorkerDispatchRunner:
         self._records = records
         self._result_metadata = result_metadata
         self._set_tier1_context = set_tier1_context
+        self._event_bus = event_bus
 
     def run_worker(
         self,
@@ -237,6 +240,7 @@ class WorkerDispatchRunner:
             dispatch_proxy=self._dispatch_proxy,
             todo_relay_callback=self._todo_relay_callback,
             suppress_todo_updates=self._suppress_worker_todo_updates,
+            event_bus=self._event_bus,
         )
 
     def _execute_worker_conversation(

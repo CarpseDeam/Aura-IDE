@@ -322,16 +322,12 @@ def test_worker_step_message_forbids_campaign_planning():
     assert "Do not plan, decompose, or schedule the whole task" in message
 
 
-def test_dispatch_session_todo_shows_one_row_per_step():
-    """The rail mirrors execution steps 1:1 and ticks one row at a time.
-
-    Even when a fine-grained ``todo_checklist`` is supplied, the visible rail
-    shows one row per step (not one row per checklist item), so each step
-    activates and completes exactly one row — the one-at-a-time tick.
+def test_dispatch_session_todo_uses_planner_checklist_rows():
+    """The visible TODO rail is driven by planner-authored checklist rows,
+    not by step-level objectives. Each checklist item becomes one row,
+    and `owning_step_id` controls which step activates/completes which rows.
     """
     req = _request_with_steps()
-    # Supplied but intentionally ignored for the rail: proves the display is
-    # step-granular, not checklist-item-granular.
     req.todo_checklist = [
         DispatchTodoItem(
             id="create-helper",
@@ -363,7 +359,11 @@ def test_dispatch_session_todo_shows_one_row_per_step():
         snapshots.append(snapshot)
 
     def begin_steps(tool_id, objectives):
-        save_snapshot(controller.begin(tool_id, objectives))
+        # Use the canonical planner checklist rows (via .to_dict())
+        # instead of whatever the dispatch loop passes as objectives.
+        save_snapshot(
+            controller.begin(tool_id, [item.to_dict() for item in plan.visible_checklist])
+        )
 
     def set_active_step(tool_id, step_id):
         snapshot = controller.activate_step(tool_id, step_id)
@@ -404,22 +404,25 @@ def test_dispatch_session_todo_shows_one_row_per_step():
     result = session.run()
 
     assert result.ok is True
-    # One row per execution step — not one row per checklist item.
-    assert [row["description"] for row in snapshots[0]] == [
+    # Four checklist rows, one per DispatchTodoItem, in checklist order.
+    expected_descriptions = [
         "Create shell pipeline helper module",
+        "Move shell parser helper",
         "Wire helper module into completion result",
+        "Run compile validation",
     ]
-    # Begin: every step pending.
-    assert [row["status"] for row in snapshots[0]] == ["pending", "pending"]
-    # step-1 active — exactly one row lights up.
-    assert [row["status"] for row in snapshots[1]] == ["active", "pending"]
-    # step-1 done — exactly one row greens; step-2 still pending.
-    assert [row["status"] for row in snapshots[2]] == ["done", "pending"]
-    # step-2 active — the tick advances to the next single row.
-    assert [row["status"] for row in snapshots[3]] == ["done", "active"]
+    assert [row["description"] for row in snapshots[0]] == expected_descriptions
+    # Begin: every row pending.
+    assert [row["status"] for row in snapshots[0]] == ["pending", "pending", "pending", "pending"]
+    # step-1 active — first 2 checklist rows (owned by step-1) light up.
+    assert [row["status"] for row in snapshots[1]] == ["active", "active", "pending", "pending"]
+    # step-1 done — first 2 rows done; step-2 rows still pending.
+    assert [row["status"] for row in snapshots[2]] == ["done", "done", "pending", "pending"]
+    # step-2 active — last 2 checklist rows (owned by step-2) light up.
+    assert [row["status"] for row in snapshots[3]] == ["done", "done", "active", "active"]
     # step-2 done — the whole rail is complete.
-    assert [row["status"] for row in snapshots[4]] == ["done", "done"]
-    assert [row["status"] for row in snapshots[-1]] == ["done", "done"]
+    assert [row["status"] for row in snapshots[4]] == ["done", "done", "done", "done"]
+    assert [row["status"] for row in snapshots[-1]] == ["done", "done", "done", "done"]
     assert calls == [
         ("call_dispatch", req.steps[0].goal),
         ("call_dispatch", req.steps[1].goal),

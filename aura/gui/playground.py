@@ -438,6 +438,10 @@ class AuraPlayground(QWidget):
         self._canonical_active.discard(tool_call_id)
         self._info_hub.update_todo_list(self._dispatch_rail.replay(tool_call_id))
 
+    def update_activity(self, entries: list, tool_call_id: str | None = None) -> None:
+        """Render a Worker Activity snapshot in the info hub."""
+        self._info_hub.update_activity(entries)
+
     def _on_code_path_resolved(self, worker_tool_id: str, path: str) -> None:
         self._worker_code_paths[worker_tool_id] = path
         self._code_editor.open_or_focus_tab(worker_tool_id, path)

@@ -17,6 +17,11 @@ TODO rail:
 - Completed steps become done before the next step activates.
 - One final TODO emission happens after the loop ends.
 - Worker-local TODO updates are ignored by the bridge.
+
+Event bus:
+- Accepts an optional EventBus and emits campaign/step lifecycle events
+  that the WorkerActivityController (or any projector) can subscribe to.
+- Event emission is pure-python — no Qt dependency.
 """
 from __future__ import annotations
 
@@ -38,6 +43,7 @@ from aura.conversation.dispatch_plan import (
 from aura.conversation.dispatch_todo_manifest import todo_tasks_from_plan
 from aura.conversation.verification_progress import fingerprint_failures
 from aura.conversation.worker_outcome import WorkerOutcomeStatus
+from aura.events import AuraEvent, EventBus, DISPATCH_CAMPAIGN_STARTED, DISPATCH_STEP_STARTED, DISPATCH_STEP_COMPLETED
 
 RunWorkerStep = Callable[[str, WorkerDispatchRequest, Any], WorkerDispatchResult]
 
@@ -90,6 +96,7 @@ class DispatchSession:
         finish_steps: Callable[[str], None] | None = None,
         emit_worker_started: _EmitStarted | None = None,
         emit_worker_finished: _EmitFinished | None = None,
+        event_bus: EventBus | None = None,
     ) -> None:
         self.tool_call_id = tool_call_id
         self.original_request = original_request
@@ -102,6 +109,7 @@ class DispatchSession:
         self._finish_steps = finish_steps
         self._emit_worker_started = emit_worker_started
         self._emit_worker_finished = emit_worker_finished
+        self._event_bus = event_bus
         self.step_results: list[StepResult] = []
 
     # ------------------------------------------------------------------
@@ -147,6 +155,20 @@ class DispatchSession:
         )
         self._finish_steps(self.tool_call_id)
 
+    # ── Event bus emission ──────────────────────────────────────────────
+
+    def _emit_event(self, topic: str, payload: dict[str, Any]) -> None:
+        """Emit a lifecycle event on the optional event bus."""
+        if self._event_bus is None:
+            return
+        self._event_bus.emit(AuraEvent(
+            topic=topic,
+            payload=dict(payload),
+            run_id=self.tool_call_id,
+            campaign_id=self.tool_call_id,
+            step_id=str(payload.get("step_id", "")),
+        ))
+
     # ------------------------------------------------------------------
     # Main entry point
     # ------------------------------------------------------------------
@@ -185,12 +207,24 @@ class DispatchSession:
         if self._emit_worker_started is not None:
             self._emit_worker_started(self.tool_call_id)
 
+        # Emit campaign_started on the event bus for activity projectors.
+        self._emit_event(DISPATCH_CAMPAIGN_STARTED, {
+            "goal": self.original_request.goal,
+            "step_count": len(self.plan.steps),
+        })
+
         final_worker_result: WorkerDispatchResult | None = None
 
         final_step_index = len(self.plan.steps) - 1
         for index, step in enumerate(self.plan.steps):
             # Activate this step in the TODO rail.
             self._canonical_set_active(step.id)
+
+            # Emit step_started on the event bus.
+            self._emit_event(DISPATCH_STEP_STARTED, {
+                "step_id": step.id,
+                "description": step.title or step.goal,
+            })
 
             worker_result = self._run_one_step(step)
             final_worker_result = worker_result
@@ -207,6 +241,13 @@ class DispatchSession:
 
             # Step completed — mark done.
             self._canonical_mark_done(step.id)
+
+            # Emit step_completed on the event bus.
+            self._emit_event(DISPATCH_STEP_COMPLETED, {
+                "step_id": step.id,
+                "description": step.title or step.goal,
+                "ok": worker_result.ok,
+            })
 
         # Emit final TODO state once.
         self._canonical_finish()
