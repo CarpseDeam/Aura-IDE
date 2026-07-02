@@ -18,15 +18,19 @@ _IMPLEMENTATION_NARRATION_RE = re.compile(
     r"\b(?:"
     r"i\s*(?:will|['\u2019]?ll|am going to|can|would)\s+"
     r"(?:create|update|edit|modify|implement|refactor|extract|move|rename|"
+    r"write|writes|writing|written|"
     r"remove|delete|clean\s+up|cleanup|add|wire|patch|change|fix)|"
     r"i(?:['\u2019]?m)\s+(?:going\s+to\s+)?"
     r"(?:create|update|edit|modify|implement|refactor|extract|move|rename|"
+    r"write|writes|writing|written|"
     r"remove|delete|clean\s+up|cleanup|add|wire|patch|change|fix)|"
     r"let\s+me\s+"
     r"(?:create|update|edit|modify|implement|refactor|extract|move|rename|"
+    r"write|writes|writing|written|"
     r"remove|delete|clean\s+up|cleanup|add|wire|patch|change|fix)|"
     r"(?:next|now)\s+i\s*(?:will|['\u2019]?ll|can)\s+"
     r"(?:create|update|edit|modify|implement|refactor|extract|move|rename|"
+    r"write|writes|writing|written|"
     r"remove|delete|clean\s+up|cleanup|add|wire|patch|change|fix)"
     r")\b",
     re.IGNORECASE,
@@ -34,7 +38,9 @@ _IMPLEMENTATION_NARRATION_RE = re.compile(
 
 _IMPLEMENTATION_SURFACE_RE = re.compile(
     r"\b(?:implementation|refactor|cleanup|clean\s+up|module|file|function|"
-    r"class|helper|prompt|tool|schema|registry|manager|router|policy)\b",
+    r"class|helper|prompt|tool|schema|registry|manager|router|policy|test|tests|"
+    r"test\s+file|test\s+files|regression\s+test|regression\s+tests|"
+    r"test\s+coverage)\b",
     re.IGNORECASE,
 )
 
@@ -57,7 +63,7 @@ def maybe_force_worker_dispatch(
     """Return an internal steering message when Planner must dispatch now."""
     if already_steered:
         return PlannerDispatchGateDecision(False)
-    if planner_tool_calls_seen <= 0 or dispatch_calls_seen > 0:
+    if dispatch_calls_seen > 0:
         return PlannerDispatchGateDecision(False)
     if not _latest_user_is_local_implementation(latest_user_text):
         return PlannerDispatchGateDecision(False)
@@ -74,13 +80,14 @@ def maybe_force_worker_dispatch(
         True,
         steering_message=(
             "INTERNAL PLANNER DISPATCH GATE: The latest user request is local "
-            "implementation/refactor/cleanup work. You already inspected enough "
-            "context to describe the bounded work, but your last assistant "
-            "message narrated implementation intent instead of dispatching. "
-            "Do not answer in chat. Do not call edit/write tools. Call "
-            "dispatch_to_worker now with a self-contained Worker task capsule "
-            "that names the goal, files, constraints, acceptance, and bounded "
-            "steps when the work is non-trivial."
+            "implementation/test/refactor work. Your last response narrated "
+            "implementation intent instead of calling dispatch_to_worker. Do "
+            "not answer in chat. Do not call edit/write tools. If enough target "
+            "context is already known, call dispatch_to_worker now. If one short "
+            "inspection pass is required to name target files, use read-only "
+            "inspection only, then dispatch. This turn must not end without "
+            "dispatch_to_worker unless asking one real user-owned blocker "
+            "question."
         ),
         reason="planner_implementation_narration_without_dispatch",
     )

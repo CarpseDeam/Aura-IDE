@@ -134,6 +134,11 @@ def _looks_like_implementation(normalized: str) -> bool:
             r"implement|modify|move|refactor|remove|rename|repair|update|wire)\b",
             normalized,
         )
+        or re.search(
+            r"\b(?:write|writes|writing|written)\b.*\b(?:tests?|test\s+files?|"
+            r"regression\s+tests?|test\s+coverage)\b",
+            normalized,
+        )
     )
 
 
