@@ -624,11 +624,11 @@ class _DispatchProxy(QObject):
         req: WorkerDispatchRequest,
         pending: "_DispatchPending",
     ) -> WorkerDispatchResult:
-        """Run a single dispatch step without creating a replayable record.
+        """Run a single dispatch step without creating a durable diagnostic record.
 
         Internal steps (part of a multi-step DispatchSession campaign) must
         not create durable WorkerDispatchRecord entries, because the
-        aggregate campaign result is recorded once after session.run()
+        aggregate campaign diagnostic is recorded once after session.run()
         returns.
 
         They also must not emit final-report Activity entries on the event

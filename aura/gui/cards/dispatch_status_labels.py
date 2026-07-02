@@ -35,17 +35,13 @@ def worker_summary_status_label(
             WorkerOutcomeStatus.validation_failed.value: ("Worker Report", WARN),
             WorkerOutcomeStatus.edit_mechanics_blocked.value: ("Worker Report", WARN),
             WorkerOutcomeStatus.scope_mismatch.value: ("Worker Report", WARN),
+            WorkerOutcomeStatus.needs_followup.value: ("Worker Report", FG_MUTED),
             WorkerOutcomeStatus.approval_rejected.value: ("Changes rejected", DANGER),
             WorkerOutcomeStatus.cancelled.value: ("Cancelled", "#6b7280"),
             WorkerOutcomeStatus.harness_error.value: ("Worker Error", DANGER),
         }
         return mapping.get(status, ("Worker Report", FG_MUTED))
 
-    # Fallback to legacy inference
-    if "Waiting for approval" in summary:
-        return "Waiting for approval", WARN
-    if "Repairing patch" in summary:
-        return "Repairing patch", WARN
     if ok:
         return ("Worker Report", SUCCESS)
     if needs_followup:
@@ -68,9 +64,7 @@ def _resolve_needs_followup_label(
 
     if is_internal:
         return ("Needs attention", FG_MUTED)
-    if ok:
-        return ("Completed", SUCCESS)
-    return ("Needs attention", FG_MUTED)
+    return ("Worker Report", SUCCESS if ok else FG_MUTED)
 
 
 # ---------------------------------------------------------------------------

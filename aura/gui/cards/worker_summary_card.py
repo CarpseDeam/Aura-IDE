@@ -374,22 +374,9 @@ class WorkerSummaryCard(QFrame):
     def _resolve_needs_followup_label(ok: bool, summary: str) -> tuple[str, str]:
         """Resolve a ``needs_followup`` status into a user-facing label.
 
-        If the Worker made changes and validation passed the card shows
-        *Completed* or *Completed with caveats*.  Otherwise a neutral info
-        label directs the user to the Worker Log.
+        Chat-facing Worker completion cards use neutral report labels.
         """
-        parsed = parse_worker_summary_receipt(summary)
-        files_total = parsed["file_counts"].get("total", 0)
-        validation = parsed.get("validation", "")
-
-        if files_total > 0:
-            if validation and "✓" in validation:
-                return "✅ Completed", SUCCESS
-            return "✅ Completed with caveats", WARN
-        if ok:
-            return "✅ Completed", SUCCESS
-        # No files changed and not ok — neutral, not a scary warning
-        return "ℹ️ Details in Worker Log", FG_MUTED
+        return "Worker Report", SUCCESS if ok else FG_MUTED
 
     @staticmethod
     def _sanitize_summary(summary: str) -> str:

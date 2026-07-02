@@ -8,6 +8,8 @@ Schema:
   worker_dispatches list. Loading v1 is backward-compatible: it's treated as
   planner_worker_mode=False with a single set of messages on the planner.
 - v2 + provider: v2 schema extended with a `provider` field.
+- v2 + chat_items: durable render transcript. `messages` remain model
+  continuity; `worker_dispatches` remain diagnostics/project memory.
 """
 from __future__ import annotations
 
@@ -31,6 +33,10 @@ from aura.config import (
     ProviderId,
     ThinkingMode,
 )
+from aura.conversation.chat_transcript import (
+    legacy_chat_items_from_messages,
+    normalize_chat_items,
+)
 from aura.conversation.history import History
 from aura.git_ops import ensure_aura_gitignored
 from aura.providers.registry import provider_registry
@@ -50,8 +56,10 @@ class ConversationMeta:
 
 @dataclass
 class WorkerDispatchRecord:
-    """One worker dispatch fired during a planner conversation. Stored
-    alongside the planner history so the chat can be replayed faithfully.
+    """Diagnostic/runtime metadata for one worker dispatch.
+
+    These records support project memory and troubleshooting. They are not chat
+    transcript material and must not be used to reconstruct visible chat cards.
     """
     after_message_index: int
     spec: dict[str, Any]
@@ -125,6 +133,7 @@ def save_conversation(
     planner_thinking: ThinkingMode | None = None,
     worker_thinking: ThinkingMode | None = None,
     worker_dispatches: list[WorkerDispatchRecord] | None = None,
+    chat_items: list[dict[str, Any]] | None = None,
     provider: ProviderId | None = None,
     planner_provider: ProviderId | None = None,
     worker_provider: ProviderId | None = None,
@@ -154,6 +163,9 @@ def save_conversation(
         "worker_thinking": worker_thinking or DEFAULT_WORKER_THINKING,
         "system_prompt": history.system_prompt,
         "messages": copy.deepcopy(history.messages),
+        "chat_items": normalize_chat_items(chat_items)
+        if chat_items is not None
+        else legacy_chat_items_from_messages(history.messages),
         "worker_dispatches": [
             d.to_dict() for d in (worker_dispatches or [])
         ],
@@ -197,6 +209,7 @@ class LoadedConversation:
     planner_thinking: ThinkingMode = DEFAULT_PLANNER_THINKING
     worker_thinking: ThinkingMode = DEFAULT_WORKER_THINKING
     worker_dispatches: list[WorkerDispatchRecord] = field(default_factory=list)
+    chat_items: list[dict[str, Any]] = field(default_factory=list)
 
 
 def load_conversation(path: Path) -> LoadedConversation:
@@ -211,6 +224,11 @@ def load_conversation(path: Path) -> LoadedConversation:
     msgs = data.get("messages")
     if isinstance(msgs, list):
         history.messages = [m for m in msgs if isinstance(m, dict)]
+
+    if "chat_items" in data:
+        chat_items = normalize_chat_items(data.get("chat_items"))
+    else:
+        chat_items = legacy_chat_items_from_messages(history.messages)
 
     # Any string is now valid as a model ID — no hardcoded valid_models list.
     valid_thinking = ("off", "high", "max")
@@ -270,6 +288,7 @@ def load_conversation(path: Path) -> LoadedConversation:
         planner_thinking=planner_thinking,
         worker_thinking=worker_thinking,
         worker_dispatches=dispatches,
+        chat_items=chat_items,
     )
 
 

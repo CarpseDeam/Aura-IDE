@@ -27,8 +27,8 @@ def record_dispatch_campaign_completion(
 
     This replaces inline campaign-record creation in ``dispatch.py`` so that all
     persistence logic lives in one place. Internal step records are not appended;
-    only this aggregate record is persisted and marked replayable with
-    ``replay_kind="dispatch_campaign"``.
+    only this aggregate diagnostic record is persisted with
+    ``replay_kind="dispatch_campaign"`` for compatibility with existing files.
     """
     aggregate_spec = edited_request.to_dict()
     if isinstance(result.extras, dict):
@@ -77,11 +77,11 @@ def _record_worker_completion(
     """Record a completed worker dispatch.
 
     Args:
-        replayable: When False, the WorkerDispatchRecord is not appended to
-            *records* and is not persisted to project memory. Hazard and
-            outcome logging still run. Used for internal dispatch steps
-            whose aggregate result is recorded separately after the
-            campaign completes.
+        replayable: Historical name for whether the diagnostic
+            WorkerDispatchRecord is appended to *records* and persisted to
+            project memory. Hazard and outcome logging still run when this is
+            false. Used for internal dispatch steps whose aggregate result is
+            recorded separately after the campaign completes.
     """
     spec_dict = req.to_dict()
     spec_dict["task_spec"] = task_spec.to_dict()

@@ -24,6 +24,12 @@ from aura.gui.cards.spec_card import SpecCard
 from aura.gui.cards.terminal_card import TerminalCard
 from aura.gui.cards.user_card import UserCard
 from aura.gui.cards.worker_summary_card import WorkerSummaryCard
+from aura.conversation.chat_transcript import (
+    clone_chat_items,
+    planner_item,
+    user_item,
+    worker_complete_item,
+)
 from aura.gui.controllers import ToolStreamController
 from aura.gui.theme import (
     ACCENT,
@@ -97,6 +103,10 @@ class ChatView(QScrollArea):
         self._plan_writer_cards: dict[str, PlanWriterCard] = {}
         self._worker_summary_cards: dict[str, WorkerSummaryCard] = {}
         self._worker_summary_disabled: bool = False
+        self._chat_items: list[dict] = []
+        self._record_transcript: bool = True
+        self._current_assistant_transcript_parts: list[str] = []
+        self._current_assistant_transcript_recorded: bool = False
         self._mismatch_resolution_cards: dict[str, MismatchResolutionCard] = {}
         self._compact_tools: bool = False
         self._compact_tool_names: dict[str, str] = {}
@@ -272,6 +282,9 @@ class ChatView(QScrollArea):
         self._spec_cards.clear()
         self._plan_writer_cards.clear()
         self._worker_summary_cards.clear()
+        self._chat_items.clear()
+        self._current_assistant_transcript_parts.clear()
+        self._current_assistant_transcript_recorded = False
         self._mismatch_resolution_cards.clear()
         self._terminal_cards.clear()
         self._controllers.clear()
@@ -282,38 +295,37 @@ class ChatView(QScrollArea):
         self._empty_hint = None
         self._show_empty_hint()
 
-    def replay_messages(self, messages: list[dict]) -> None:
-        """Replay saved messages into the chat view.
+    @property
+    def chat_items(self) -> list[dict]:
+        return clone_chat_items(self._chat_items)
 
+    def begin_transcript_replay(self) -> None:
+        self._record_transcript = False
+
+    def end_transcript_replay(self, items: list[dict]) -> None:
+        self._record_transcript = True
+        self._chat_items = clone_chat_items(items)
+        self._current_assistant_transcript_parts.clear()
+        self._current_assistant_transcript_recorded = False
+
+    def replay_messages(self, messages: list[dict]) -> None:
+        """Legacy text-only replay helper.
+
+        Normal conversation load must render durable ``chat_items`` instead.
         The caller is responsible for calling reset() first.
-        Messages are full API-format dicts: user, assistant, tool.
         """
-        for msg in messages:
-            if msg.get("aura_internal"):
-                continue
-            role = msg.get("role", "")
-            if role == "user":
-                content = msg.get("content", "")
-                if isinstance(content, str):
-                    self.add_user(content)
-            elif role == "assistant":
-                card = self.begin_assistant()
-                reasoning = msg.get("reasoning_content")
-                if reasoning:
-                    card.append_reasoning(reasoning)
-                content = msg.get("content", "")
-                if isinstance(content, str) and content:
-                    card.append_content(content)
-                elif isinstance(content, list):
-                    # Multi-modal content: extract text parts
-                    for part in content:
-                        if isinstance(part, dict) and part.get("type") == "text":
-                            card.append_content(part["text"])
+        from aura.conversation.chat_transcript import legacy_chat_items_from_messages
+
+        items = legacy_chat_items_from_messages(messages)
+        self.begin_transcript_replay()
+        for item in items:
+            if item.get("kind") == "user":
+                self.add_user(str(item.get("text", "")))
+            elif item.get("kind") == "planner":
+                self.begin_assistant()
+                self.append_content(str(item.get("text", "")))
                 self.assistant_done()
-            elif role == "tool":
-                # Tool messages are for model continuity and Worker Log,
-                # not the human transcript — skip during replay.
-                pass
+        self.end_transcript_replay(items)
 
     def _add_tool_result_card(self, tool_call_id: str, content: str) -> None:
         """Add a compact card showing a tool result during history replay."""
@@ -364,6 +376,8 @@ class ChatView(QScrollArea):
         card.set_rerun_visible(True)
         card.rerun_requested.connect(self.retry_requested.emit)
         self._current_assistant = None  # next assistant turn opens a new card
+        if self._record_transcript:
+            self._chat_items.append(user_item(text, image_b64s))
 
     def begin_assistant(self) -> AssistantCard:
         self._clear_code_card_routes()
@@ -375,6 +389,8 @@ class ChatView(QScrollArea):
         self._add_card(wrapper)
         wrapper.start_aura()
         wrapper.set_glow_state("thinking")
+        self._current_assistant_transcript_parts = []
+        self._current_assistant_transcript_recorded = False
         return card
 
     def current_assistant(self) -> AssistantCard:
@@ -551,6 +567,8 @@ class ChatView(QScrollArea):
         if not ac._content_label.isVisible() and self._current_aura is not None:
             self._current_aura.set_glow_state("thinking")
         ac.append_content(text)
+        if self._record_transcript:
+            self._current_assistant_transcript_parts.append(text)
         self._request_scroll_to_bottom()
 
     def add_tool_call(self, tool_call_id: str, name: str) -> None:
@@ -671,25 +689,6 @@ class ChatView(QScrollArea):
                 # Failed state, remove it so it doesn't appear as the final item.
                 self._cleanup_failed_code_cards(tool_call_id)
 
-                if (
-                    summary
-                    and not dispatch_not_started
-                    and status in {"harness_error", "approval_rejected"}
-                ):
-                    goal = (
-                        controller.goal
-                        or self._tool_goal_from_args(controller.buffer)
-                        or "Worker task"
-                    )
-                    self.add_worker_summary(
-                        tool_call_id,
-                        goal,
-                        ok,
-                        summary,
-                        needs_followup=needs_followup,
-                        status=status,
-                    )
-
                 # Close the current assistant turn so the next Planner
                 # continuation starts a fresh card.
                 self.close_current_assistant_for_continuation()
@@ -788,6 +787,7 @@ class ChatView(QScrollArea):
         ac = self._current_assistant
         if ac is None:
             return
+        self._record_current_assistant_transcript()
         ac.finalize_content()
         # Clean up any failed CodeWriterCards — write failures belong in
         # the Worker Log, not the main chat.  Call before stopping the aura
@@ -811,6 +811,7 @@ class ChatView(QScrollArea):
         """
         ac = self._current_assistant
         if ac is not None:
+            self._record_current_assistant_transcript()
             ac.finalize_content()
             self._scroll_to_bottom()
 
@@ -821,6 +822,7 @@ class ChatView(QScrollArea):
         """
         if self._current_assistant is None:
             return
+        self._record_current_assistant_transcript()
         # Finalize current assistant content
         self._current_assistant.finalize_content()
         # Remove failed write cards from that assistant
@@ -926,6 +928,17 @@ class ChatView(QScrollArea):
             )
             self._scroll_after_bottom_layout_change()
             return
+        if self._record_transcript:
+            self._chat_items.append(
+                worker_complete_item(
+                    tool_call_id=tool_call_id,
+                    goal=goal,
+                    summary=summary,
+                    status=status,
+                    ok=ok,
+                    needs_followup=needs_followup,
+                )
+            )
         card = WorkerSummaryCard(
             tool_call_id, goal, ok, summary,
             needs_followup=needs_followup, parent=self,
@@ -934,6 +947,17 @@ class ChatView(QScrollArea):
         )
         self._worker_summary_cards[tool_call_id] = card
         self._add_card(card)
+
+    def _record_current_assistant_transcript(self) -> None:
+        if not self._record_transcript:
+            return
+        if self._current_assistant_transcript_recorded:
+            return
+        text = "".join(self._current_assistant_transcript_parts).strip()
+        if not text:
+            return
+        self._chat_items.append(planner_item(text))
+        self._current_assistant_transcript_recorded = True
 
     def add_mismatch_resolution_card(
         self, tool_call_id: str, kind: str = "", question: str = "",

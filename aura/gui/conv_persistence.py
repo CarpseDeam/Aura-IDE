@@ -22,6 +22,13 @@ from aura.conversation.persistence import (
     most_recent_conversation,
     save_conversation,
 )
+from aura.conversation.chat_transcript import (
+    PLANNER,
+    USER,
+    WORKER_COMPLETE,
+    clone_chat_items,
+    legacy_chat_items_from_messages,
+)
 from aura.projects.store import ProjectStore
 from aura.settings import AppSettings
 
@@ -178,6 +185,7 @@ class ConversationPersistence(QObject):
         # Deep copy data for thread safety
         history_copy = copy.deepcopy(self._bridge.history)
         dispatch_records_copy = list(self._bridge.dispatch_records)
+        chat_items_copy = clone_chat_items(getattr(self._chat, "chat_items", []))
         existing_path = self._current_conversation_path
 
         # Guard: if existing_path is not under the current workspace root's
@@ -204,6 +212,7 @@ class ConversationPersistence(QObject):
                     planner_thinking=thinking,
                     worker_thinking=worker_thinking,
                     worker_dispatches=dispatch_records_copy,
+                    chat_items=chat_items_copy,
                     provider=provider,
                     planner_provider=planner_provider,
                     worker_provider=worker_provider,
@@ -367,7 +376,7 @@ class ConversationPersistence(QObject):
         self._chat.reset()
         self._playground.clear()
         self._bridge.clear_pre_worker_snapshot()
-        self.replay_history()
+        self._render_chat_items(loaded.chat_items)
         self.needs_status_refresh.emit()
 
         # Sync companion context after applying a loaded conversation
@@ -391,12 +400,10 @@ class ConversationPersistence(QObject):
     # ---- replay history into view ------------------------------------------
 
     def replay_history(self, *, synchronous: bool = False) -> None:
-        """Replay durable conversation content into the chat view.
+        """Replay a safe legacy transcript from current model history.
 
-        Renders only persistent conversation elements: user messages,
-        assistant text, and completed Worker dispatch summaries.
-        Transient runtime UI (tool-call cards, progress indicators,
-        in-flight state) is not recreated.
+        Used by retry/rerun flows after model history has been rewound. Normal
+        conversation load renders persisted ``chat_items`` instead.
         """
         msgs = self._bridge.history.messages
         if not msgs:
@@ -406,48 +413,29 @@ class ConversationPersistence(QObject):
         self._active_replay_id += 1
         my_id = self._active_replay_id
 
-        self._chat.begin_bulk_update()
-
-        # Filter out tool messages and transient runtime artifacts.
-        process_msgs = [
+        process_items = legacy_chat_items_from_messages([
             m for m in msgs
-            if m.get("role") != "tool"
-            and not _is_transient_replay_message(m)
-        ]
-        msg_iter = iter(process_msgs)
+            if not _is_transient_replay_message(m)
+        ])
+        msg_iter = iter(process_items)
+        self._chat.begin_bulk_update()
+        if hasattr(self._chat, "begin_transcript_replay"):
+            self._chat.begin_transcript_replay()
 
         def process_chunk() -> None:
             if self._active_replay_id != my_id:
                 return
 
-            chunk_size = max(1, len(process_msgs)) if synchronous else 10
+            chunk_size = max(1, len(process_items)) if synchronous else 10
             try:
                 for _ in range(chunk_size):
-                    m = next(msg_iter)
-                    role = m.get("role")
-                    if role == "user":
-                        content = m.get("content")
-                        if isinstance(content, str):
-                            self._chat.add_user(content)
-                        elif isinstance(content, list):
-                            text_parts = [
-                                p.get("text", "")
-                                for p in content
-                                if isinstance(p, dict)
-                                and p.get("type") == "text"
-                            ]
-                            self._chat.add_user("\n".join(text_parts))
-                    elif role == "assistant":
+                    item = next(msg_iter)
+                    kind = item.get("kind")
+                    if kind == USER:
+                        self._chat.add_user(str(item.get("text", "")))
+                    elif kind == PLANNER:
                         self._chat.begin_assistant()
-                        # reasoning_content is never replayed — it is
-                        # transient runtime state from the LLM stream.
-                        content = m.get("content")
-                        if isinstance(content, str) and content:
-                            self._chat.append_content(content)
-                        # Tool-call cards are skipped during replay.
-                        # Completed Worker dispatches are restored
-                        # separately from persisted dispatch records
-                        # (see _replay_worker_summary_cards).
+                        self._chat.append_content(str(item.get("text", "")))
                         self._chat.assistant_done()
 
                 # Schedule next chunk
@@ -457,8 +445,9 @@ class ConversationPersistence(QObject):
                     QTimer.singleShot(0, process_chunk)
             except StopIteration:
                 if self._active_replay_id == my_id:
+                    if hasattr(self._chat, "end_transcript_replay"):
+                        self._chat.end_transcript_replay(process_items)
                     self._chat.end_bulk_update()
-                    self._replay_worker_summary_cards()
 
         if synchronous:
             process_chunk()
@@ -466,22 +455,38 @@ class ConversationPersistence(QObject):
             # Defer the first chunk as well to keep the UI thread moving.
             QTimer.singleShot(0, process_chunk)
 
-    def _replay_worker_summary_cards(self) -> None:
-        """Restore completed WorkerSummaryCards from persisted dispatch records.
-
-        Iterates the bridge's dispatch records and creates a compact summary
-        card for every completed (non-empty ``result_summary``) dispatch.
-        In-flight or interrupted dispatches (empty result summary) are silently
-        omitted.
-        """
-        for record in self._bridge.dispatch_records:
-            if not record.result_summary:
-                continue  # In-flight or interrupted — do not replay.
-            spec = record.spec or {}
-            goal = spec.get("goal", "Worker task")
-            self._chat.add_worker_summary(
-                record.tool_call_id,
-                goal,
-                True,  # ok — actual status is parsed from receipt text.
-                record.result_summary,
-            )
+    def _render_chat_items(self, items: list[dict]) -> None:
+        """Render durable chat transcript items without runtime reconstruction."""
+        render_items = clone_chat_items(items)
+        self._active_replay_id += 1
+        self._chat.begin_bulk_update()
+        if hasattr(self._chat, "begin_transcript_replay"):
+            self._chat.begin_transcript_replay()
+        for item in render_items:
+            kind = item.get("kind")
+            if kind == USER:
+                image_b64s = item.get("image_b64s")
+                self._chat.add_user(
+                    str(item.get("text", "")),
+                    image_b64s if isinstance(image_b64s, list) else None,
+                )
+            elif kind == PLANNER:
+                self._chat.begin_assistant()
+                self._chat.append_content(str(item.get("text", "")))
+                self._chat.assistant_done()
+            elif kind == WORKER_COMPLETE:
+                self._chat.add_worker_summary(
+                    str(item.get("tool_call_id", "")),
+                    str(item.get("goal", "Worker task")),
+                    bool(item.get("ok", False)),
+                    str(item.get("summary", "")),
+                    needs_followup=bool(item.get("needs_followup", False)),
+                    status=(
+                        str(item.get("status"))
+                        if item.get("status") is not None
+                        else None
+                    ),
+                )
+        if hasattr(self._chat, "end_transcript_replay"):
+            self._chat.end_transcript_replay(render_items)
+        self._chat.end_bulk_update()
