@@ -109,7 +109,7 @@ class WorkerActivityController:
 
     def __init__(
         self,
-        bus: EventBus | None = None,
+        bus: EventBus,
         maxlen: int = 200,
     ) -> None:
         self._entries: list[ActivityEntry] = []
@@ -117,8 +117,7 @@ class WorkerActivityController:
         self._on_change: _OnChange | None = None
         self._run_id: str = ""
 
-        if bus is not None:
-            self._subscribe(bus)
+        self._subscribe(bus)
 
     # ── public API ──────────────────────────────────────────────────────────
 

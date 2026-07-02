@@ -374,7 +374,7 @@ class TestWorkerActivityController:
         assert names == ["a", "b", "c"]
 
     def test_caps_history(self) -> None:
-        ctrl = WorkerActivityController(maxlen=3)
+        ctrl = WorkerActivityController(EventBus(), maxlen=3)
 
         # Feed through _append so the cap logic fires
         for i in range(5):
@@ -490,10 +490,10 @@ class TestWorkerActivityController:
         assert "Add tests for auth" in entries[0].message
 
 
-# ── Event-driven DispatchTodoController ──────────────────────────────────────
+# ── Event-driven ExecutionChecklistController ────────────────────────────────
 
-class TestDispatchTodoControllerEvents:
-    """DispatchTodoController projecting from the event bus."""
+class TestExecutionChecklistControllerEvents:
+    """ExecutionChecklistController projecting from the event bus."""
 
     @staticmethod
     def _bus_and_controller():
@@ -502,12 +502,12 @@ class TestDispatchTodoControllerEvents:
         The controller subscribes to the bus; every _on_change call appends
         (tool_call_id, tasks) to *captured*.
         """
-        from aura.bridge.dispatch_todo_controller import DispatchTodoController
+        from aura.execution_checklist import ExecutionChecklistController
         from aura.events import EventBus as EB
 
         bus = EB()
         captured: list[tuple[str, list[dict[str, Any]]]] = []
-        ctrl = DispatchTodoController(event_bus=bus)
+        ctrl = ExecutionChecklistController(event_bus=bus)
         ctrl.set_on_change(lambda tid, tasks: captured.append((tid, tasks)))
         return bus, ctrl, captured
 
@@ -529,7 +529,7 @@ class TestDispatchTodoControllerEvents:
             },
         ))
 
-        assert ctrl.has_active_tool_call("tc-1")
+        assert ctrl.has_active_campaign("tc-1")
         tasks = ctrl.snapshot("tc-1")
         assert len(tasks) == 2
         assert tasks[0]["id"] == "todo-1"
@@ -710,9 +710,9 @@ class TestDispatchTodoControllerEvents:
 
     def test_ownerless_fallback_progresses_in_order(self) -> None:
         """Direct method calls: ownerless fallback activates/completes pending rows in order."""
-        from aura.bridge.dispatch_todo_controller import DispatchTodoController
+        from aura.execution_checklist import ExecutionChecklistController
 
-        ctrl = DispatchTodoController()  # no event bus — direct calls
+        ctrl = ExecutionChecklistController(EventBus())
 
         ctrl.begin("test", [
             {"id": "t1", "description": "First"},
@@ -737,14 +737,14 @@ class TestDispatchTodoControllerEvents:
 
     def test_controller_clear_resets_state(self) -> None:
         """clear() resets tool_call_id and rows."""
-        from aura.bridge.dispatch_todo_controller import DispatchTodoController
+        from aura.execution_checklist import ExecutionChecklistController
 
-        ctrl = DispatchTodoController()
+        ctrl = ExecutionChecklistController(EventBus())
         ctrl.begin("tc-1", [{"id": "a", "description": "Task A"}])
-        assert ctrl.has_active_tool_call("tc-1")
+        assert ctrl.has_active_campaign("tc-1")
 
         ctrl.clear()
-        assert not ctrl.has_active_tool_call("tc-1")
+        assert not ctrl.has_active_campaign("tc-1")
         assert ctrl.snapshot("tc-1") == []
 
     def test_worker_local_todo_suppressed_during_canonical(self) -> None:
@@ -759,16 +759,16 @@ class TestDispatchTodoControllerEvents:
         is active, the has_active_tool_call gate returns True and Worker TODO
         updates are routed to the suppressed path.
         """
-        from aura.bridge.dispatch_todo_controller import DispatchTodoController
+        from aura.execution_checklist import ExecutionChecklistController
 
-        ctrl = DispatchTodoController()
+        ctrl = ExecutionChecklistController(EventBus())
 
         # No canonical TODO yet — gate is open.
-        assert not ctrl.has_active_tool_call("tc-1")
+        assert not ctrl.has_active_campaign("tc-1")
 
         # Begin canonical dispatch — gate closes.
         ctrl.begin("tc-1", [{"id": "a", "description": "Planner task"}])
-        assert ctrl.has_active_tool_call("tc-1")
+        assert ctrl.has_active_campaign("tc-1")
 
         # Worker update_todo_list would arrive on workerTodoListUpdated signal.
         # _relay_worker_todo_update checks _has_canonical_todo("tc-1") → True → suppressed.
@@ -779,6 +779,6 @@ class TestDispatchTodoControllerEvents:
 
         # Even after finish, the gate remains closed (prevents late Worker repaints).
         ctrl.finish("tc-1")
-        assert ctrl.has_active_tool_call("tc-1")
+        assert ctrl.has_active_campaign("tc-1")
         tasks = ctrl.snapshot("tc-1")
         assert len(tasks) == 1

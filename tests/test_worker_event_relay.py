@@ -224,9 +224,9 @@ class TestFlagThreading:
             worker_model="test-model",
             dispatch_proxy=dispatch_proxy,
             todo_relay_callback=todo_relay_callback,
+            event_bus=EventBus(),
             suppress_todo_updates=False,
             suppress_final_report_activity=True,
-            event_bus=None,
         )
 
         # Verify the flag reached the relay via behavioral test:

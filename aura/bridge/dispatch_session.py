@@ -22,7 +22,7 @@ Ownership:
   state.
 
 Event bus:
-- Accepts an optional EventBus and emits campaign/step lifecycle events
+- Accepts an EventBus and emits campaign/step lifecycle events
   that the WorkerActivityController (or any projector) can subscribe to.
 - Event emission is pure-python — no Qt dependency.
 """
@@ -102,9 +102,9 @@ class DispatchSession:
         plan: WorkerDispatchPlan,
         run_worker_step: RunWorkerStep,
         pending: Any,
+        event_bus: EventBus,
         emit_worker_started: _EmitStarted | None = None,
         emit_worker_finished: _EmitFinished | None = None,
-        event_bus: EventBus | None = None,
     ) -> None:
         self.tool_call_id = tool_call_id
         self.original_request = original_request
@@ -137,9 +137,7 @@ class DispatchSession:
     # ── Event bus emission ──────────────────────────────────────────────
 
     def _emit_event(self, topic: str, payload: dict[str, Any]) -> None:
-        """Emit a lifecycle event on the optional event bus."""
-        if self._event_bus is None:
-            return
+        """Emit a lifecycle event on the event bus."""
         self._event_bus.emit(AuraEvent(
             topic=topic,
             payload=dict(payload),

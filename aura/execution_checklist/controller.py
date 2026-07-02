@@ -34,12 +34,11 @@ class ExecutionChecklistController:
     emits snapshots through ``on_change`` after real state changes.
     """
 
-    def __init__(self, event_bus: "EventBus | None" = None) -> None:
+    def __init__(self, event_bus: "EventBus") -> None:
         self._campaign_id = ""
         self._rows: tuple[ExecutionChecklistItem, ...] = ()
         self._on_change: OnChange | None = None
-        if event_bus is not None:
-            self.subscribe(event_bus)
+        self.subscribe(event_bus)
 
     def subscribe(self, event_bus: "EventBus") -> None:
         """Subscribe this controller to dispatch lifecycle topics."""

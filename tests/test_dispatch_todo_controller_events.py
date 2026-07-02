@@ -1,4 +1,4 @@
-"""Focused event-driven DispatchTodoController regression tests.
+"""Focused event-driven ExecutionChecklistController regression tests.
 
 Every test constructs a fresh controller wired to an EventBus and drives
 it by emitting dispatch-lifecycle events.  This exercises the subscription
@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from aura.bridge.dispatch_todo_controller import DispatchTodoController
 from aura.events import (
     DISPATCH_CAMPAIGN_FINISHED,
     DISPATCH_CHECKLIST_DECLARED,
@@ -18,6 +17,7 @@ from aura.events import (
     AuraEvent,
     EventBus,
 )
+from aura.execution_checklist import ExecutionChecklistController
 
 # ── helpers ────────────────────────────────────────────────────────────────
 
@@ -26,13 +26,13 @@ def _make_bus_and_controller():
     """Return ``(bus, controller, snapshots)``.
 
     *bus* — a fresh ``EventBus`` the controller already subscribes to.
-    *controller* — a ``DispatchTodoController`` wired to *bus*.
+    *controller* — an ``ExecutionChecklistController`` wired to *bus*.
     *snapshots* — a ``list[list[dict]]`` that receives every ``_on_change``
         snapshot, in order.
     """
     bus = EventBus()
     snapshots: list[list[dict[str, Any]]] = []
-    ctrl = DispatchTodoController(event_bus=bus)
+    ctrl = ExecutionChecklistController(event_bus=bus)
     ctrl.set_on_change(lambda _tid, tasks: snapshots.append(tasks))
     return bus, ctrl, snapshots
 
@@ -65,7 +65,7 @@ def _seed_objectives(bus: EventBus) -> None:
     ))
 
 
-def _statuses(ctrl: DispatchTodoController) -> list[str]:
+def _statuses(ctrl: ExecutionChecklistController) -> list[str]:
     """Return the status of every row in the controller snapshot."""
     return [r["status"] for r in ctrl.snapshot("test-campaign")]
 
@@ -290,7 +290,7 @@ class TestOwnerlessFallbackViaEvents:
         ))
 
     @staticmethod
-    def _fallback_statuses(ctrl: DispatchTodoController,
+    def _fallback_statuses(ctrl: ExecutionChecklistController,
                            campaign_id: str = "tc-fallback") -> list[str]:
         return [r["status"] for r in ctrl.snapshot(campaign_id)]
 

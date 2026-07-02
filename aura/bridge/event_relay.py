@@ -79,11 +79,11 @@ class WorkerEventRelay(QObject):
     def __init__(
         self,
         approval_proxy: Any,
+        event_bus: EventBus,
         worker_model: str = "",
         parent: QObject | None = None,
         suppress_todo_updates: bool = False,
         suppress_final_report_activity: bool = False,
-        event_bus: EventBus | None = None,
     ) -> None:
         super().__init__(parent)
         self._approval_proxy = approval_proxy
@@ -186,9 +186,7 @@ class WorkerEventRelay(QObject):
         self._ledger.edited_existing_files = value
 
     def _emit_bus_event(self, topic: str, payload: dict) -> None:
-        """Emit an event on the optional event bus (pure-python, no Qt)."""
-        if self._event_bus is None:
-            return
+        """Emit an event on the event bus (pure-python, no Qt)."""
         self._event_bus.emit(AuraEvent(topic=topic, payload=dict(payload)))
 
     def relay(self, tool_call_id: str, ev: Event) -> None:

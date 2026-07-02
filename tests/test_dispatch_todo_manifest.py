@@ -7,6 +7,7 @@ from aura.conversation.dispatch_todo_manifest import (
     todo_tasks_from_plan,
 )
 from aura.conversation.dispatch import WorkerDispatchRequest
+from aura.events import EventBus
 from aura.execution_checklist import ExecutionChecklistController
 
 # ── _is_implementation_detail ─────────────────────────────────────────────
@@ -159,7 +160,7 @@ def test_non_trivial_flat_request_does_not_create_one_title_row():
 
 def test_execution_checklist_controller_ownerless_fallback():
     """Controller activates next pending / completes active when step_id does not match."""
-    ctrl = ExecutionChecklistController()
+    ctrl = ExecutionChecklistController(EventBus())
 
     result = ctrl.begin("test", [
         {"id": "task-1", "description": "First task"},

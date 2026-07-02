@@ -5,6 +5,7 @@ from aura.bridge.dispatch_session import DispatchSession
 from aura.conversation.dispatch import WorkerDispatchRequest, WorkerDispatchResult
 from aura.conversation.dispatch_plan import WorkerDispatchPlan, WorkerStepSpec
 from aura.conversation.worker_outcome import WorkerOutcomeStatus
+from aura.events import EventBus
 
 
 def _request() -> WorkerDispatchRequest:
@@ -98,6 +99,7 @@ def test_dispatch_session_emits_started_before_worker_step_and_finished_after():
         plan=plan,
         run_worker_step=run_worker_step,
         pending=SimpleNamespace(),
+        event_bus=EventBus(),
         emit_worker_started=lambda tool_id: events.append(("started", tool_id)),
         emit_worker_finished=lambda tool_id, ok, summary, needs_followup, status: events.append(
             ("finished", tool_id, ok, summary, needs_followup, status)

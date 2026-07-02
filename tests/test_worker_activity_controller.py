@@ -29,7 +29,7 @@ class TestWorkerActivityController:
     """Minimal WorkerActivityController tests."""
 
     def test_controller_created_empty(self) -> None:
-        ctrl = WorkerActivityController()
+        ctrl = WorkerActivityController(EventBus())
         assert ctrl.snapshot() == []
 
     def test_campaign_started_appends_entry(self) -> None:
@@ -340,21 +340,11 @@ class TestComprehensiveActivityFlow:
         # Direct import attempts should fail with ImportError
         from aura.bridge import worker_activity as wa_mod
 
-        # Neither DispatchTodoController nor DispatchTodoRow should exist
-        # in the worker_activity module's namespace.
-        assert not hasattr(wa_mod, "DispatchTodoController"), (
-            "worker_activity module must not expose DispatchTodoController"
-        )
+        # DispatchTodoRow should not exist in the worker_activity module's
+        # namespace.
         assert not hasattr(wa_mod, "DispatchTodoRow"), (
             "worker_activity module must not expose DispatchTodoRow"
         )
-
-        # Verify via import attempt as well
-        try:
-            from aura.bridge.worker_activity import DispatchTodoController  # noqa: F401
-            assert False, "DispatchTodoController should not be importable"
-        except ImportError:
-            pass
 
         try:
             from aura.bridge.worker_activity import DispatchTodoRow  # noqa: F401

@@ -9,6 +9,7 @@ from aura.bridge.worker_completion_result import prepare_worker_completion_resul
 from aura.client import ToolResult
 from aura.conversation import History, WorkerDispatchRequest, normalize_worker_task
 from aura.conversation.worker_outcome import WorkerOutcomeStatus
+from aura.events import EventBus
 
 
 class _ApprovalProxy:
@@ -42,7 +43,7 @@ def _completion_result(req: WorkerDispatchRequest, relay: WorkerEventRelay):
 
 
 def _relay_with_events(*events: ToolResult) -> WorkerEventRelay:
-    relay = WorkerEventRelay(_ApprovalProxy())
+    relay = WorkerEventRelay(_ApprovalProxy(), event_bus=EventBus())
     for event in events:
         relay.relay("worker-parent", event)
     return relay

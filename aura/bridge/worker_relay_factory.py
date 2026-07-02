@@ -22,9 +22,9 @@ def create_worker_relay(
     worker_model: str,
     dispatch_proxy: Any,
     todo_relay_callback: Callable[[str, list], None],
+    event_bus: EventBus,
     suppress_todo_updates: bool = False,
     suppress_final_report_activity: bool = False,
-    event_bus: EventBus | None = None,
 ) -> WorkerEventRelay:
     """Construct a WorkerEventRelay and wire every signal to *dispatch_proxy*.
 

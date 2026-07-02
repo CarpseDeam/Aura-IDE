@@ -64,10 +64,10 @@ class WorkerDispatchRunner:
         todo_relay_callback: Callable[[str, list], None],
         records: list[WorkerDispatchRecord],
         result_metadata: dict[str, dict[str, Any]],
+        event_bus: EventBus,
         suppress_worker_todo_updates: bool = False,
         suppress_final_report_activity: bool = False,
         set_tier1_context: Callable[[str], None] | None = None,
-        event_bus: EventBus | None = None,
     ) -> None:
         self._approval_proxy = approval_proxy
         self._registry_factory = registry_factory
