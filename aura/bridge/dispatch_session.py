@@ -43,7 +43,14 @@ from aura.conversation.dispatch_plan import (
 from aura.conversation.dispatch_todo_manifest import todo_tasks_from_plan
 from aura.conversation.verification_progress import fingerprint_failures
 from aura.conversation.worker_outcome import WorkerOutcomeStatus
-from aura.events import AuraEvent, EventBus, DISPATCH_CAMPAIGN_STARTED, DISPATCH_STEP_STARTED, DISPATCH_STEP_COMPLETED
+from aura.events import (
+    AuraEvent, EventBus,
+    DISPATCH_CAMPAIGN_FINISHED,
+    DISPATCH_CAMPAIGN_STARTED,
+    DISPATCH_CHECKLIST_DECLARED,
+    DISPATCH_STEP_COMPLETED,
+    DISPATCH_STEP_STARTED,
+)
 
 RunWorkerStep = Callable[[str, WorkerDispatchRequest, Any], WorkerDispatchResult]
 
@@ -118,15 +125,20 @@ class DispatchSession:
 
     def _begin_canonical_todos(self) -> None:
         """Initialize canonical TODO objectives from the visible checklist."""
-        if self._begin_steps is None:
-            return
         objectives = todo_tasks_from_plan(self.plan)
         logging.debug(
             "DispatchSession._begin_canonical_todos tool_call_id=%s todo_count=%d ids=%s",
             self.tool_call_id, len(objectives),
             [o["id"] for o in objectives],
         )
-        self._begin_steps(self.tool_call_id, objectives)
+        # Emit checklist_declared on the event bus so projectors (TODO controller,
+        # telemetry) can react.  The callback still fires for direct consumers.
+        self._emit_event(DISPATCH_CHECKLIST_DECLARED, {
+            "objectives": objectives,
+            "step_count": len(self.plan.steps),
+        })
+        if self._begin_steps is not None:
+            self._begin_steps(self.tool_call_id, objectives)
 
     def _canonical_set_active(self, step_id: str) -> None:
         if self._set_active_step is None:
@@ -286,6 +298,13 @@ class DispatchSession:
         self._emit_lifecycle_finished(result)
 
     def _emit_lifecycle_finished(self, result: WorkerDispatchResult) -> None:
+        # Emit campaign_finished on the event bus for projectors.
+        self._emit_event(DISPATCH_CAMPAIGN_FINISHED, {
+            "ok": result.ok,
+            "summary": result.summary,
+            "status": result.status or "",
+            "needs_followup": result.needs_followup,
+        })
         if self._emit_worker_finished is not None:
             self._emit_worker_finished(
                 self.tool_call_id,

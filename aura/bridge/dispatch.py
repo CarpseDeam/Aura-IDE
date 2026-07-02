@@ -115,7 +115,8 @@ class _DispatchProxy(QObject):
         self._records: list[WorkerDispatchRecord] = []
         self._result_metadata: dict[str, dict[str, Any]] = {}
         self._active_workflow: WorkflowState | None = None
-        self._todo_controller = DispatchTodoController()
+        self._todo_controller = DispatchTodoController(event_bus=self._event_bus)
+        self._todo_controller.set_on_change(self._on_todo_controller_changed)
 
         # Event bus — owned by the dispatch proxy; shared with DispatchSession
         # and WorkerDispatchRunner for activity projection.
@@ -287,10 +288,6 @@ class _DispatchProxy(QObject):
             plan=plan,
             run_worker_step=self._run_worker_internal,
             pending=pending,
-            begin_steps=self._dispatch_todo_begin,
-            set_active_step=self._dispatch_todo_set_active_step,
-            mark_step_done=self._dispatch_todo_mark_step_done,
-            finish_steps=self._dispatch_todo_finish,
             emit_worker_started=self.workerStarted.emit,
             emit_worker_finished=self.workerFinished.emit,
             event_bus=self._event_bus,
@@ -434,66 +431,59 @@ class _DispatchProxy(QObject):
 
     # ---- dispatch TODO helpers --------------------------------------------
 
+    def _on_todo_controller_changed(self, tool_call_id: str, tasks: list[dict[str, Any]]) -> None:
+        """Relay a canonical TODO snapshot from the controller to the GUI.
+
+        Only relays when the active workflow matches — stale emissions after
+        cancellation or reset are silently dropped.
+        """
+        if self._active_workflow is None or self._active_workflow.tool_call_id != tool_call_id:
+            logging.debug(
+                "_on_todo_controller_changed tool_call_id=%s suppressed — workflow mismatch",
+                tool_call_id,
+            )
+            return
+        self._emit_dispatch_todo_snapshot(tool_call_id, tasks)
+
+    # ── callback helpers (delegate to controller; _on_change handles emission) ──
+
     def _dispatch_todo_begin(
         self, tool_call_id: str, objectives: list[dict[str, Any]]
     ) -> None:
         if self._active_workflow is None or self._active_workflow.tool_call_id != tool_call_id:
-            logging.debug(
-                "_dispatch_todo_begin tool_call_id=%s skipped - workflow mismatch",
-                tool_call_id,
-            )
             return
         logging.debug(
             "_dispatch_todo_begin tool_call_id=%s objective_count=%d",
             tool_call_id, len(objectives),
         )
-        tasks = self._todo_controller.begin(tool_call_id, objectives)
-        self._emit_dispatch_todo_snapshot(tool_call_id, tasks)
+        self._todo_controller.begin(tool_call_id, objectives)
 
     def _dispatch_todo_set_active_step(self, tool_call_id: str, step_id: str) -> None:
         if self._active_workflow is None or self._active_workflow.tool_call_id != tool_call_id:
-            logging.debug(
-                "_dispatch_todo_set_active_step tool_call_id=%s step_id=%s skipped - workflow mismatch",
-                tool_call_id, step_id,
-            )
             return
         logging.debug(
             "_dispatch_todo_set_active_step tool_call_id=%s step_id=%s",
             tool_call_id, step_id,
         )
-        tasks = self._todo_controller.activate_step(tool_call_id, step_id)
-        if tasks is not None:
-            self._emit_dispatch_todo_snapshot(tool_call_id, tasks)
+        self._todo_controller.activate_step(tool_call_id, step_id)
 
     def _dispatch_todo_mark_step_done(self, tool_call_id: str, step_id: str) -> None:
         if self._active_workflow is None or self._active_workflow.tool_call_id != tool_call_id:
-            logging.debug(
-                "_dispatch_todo_mark_step_done tool_call_id=%s step_id=%s skipped - workflow mismatch",
-                tool_call_id, step_id,
-            )
             return
         logging.debug(
             "_dispatch_todo_mark_step_done tool_call_id=%s step_id=%s",
             tool_call_id, step_id,
         )
-        tasks = self._todo_controller.complete_step(tool_call_id, step_id)
-        if tasks is not None:
-            self._emit_dispatch_todo_snapshot(tool_call_id, tasks)
+        self._todo_controller.complete_step(tool_call_id, step_id)
 
     def _dispatch_todo_finish(self, tool_call_id: str) -> None:
         if self._active_workflow is None or self._active_workflow.tool_call_id != tool_call_id:
-            logging.debug(
-                "_dispatch_todo_finish tool_call_id=%s skipped - workflow mismatch",
-                tool_call_id,
-            )
             return
         logging.debug(
             "_dispatch_todo_finish tool_call_id=%s",
             tool_call_id,
         )
-        tasks = self._todo_controller.finish(tool_call_id)
-        if tasks is not None:
-            self._emit_dispatch_todo_snapshot(tool_call_id, tasks)
+        self._todo_controller.finish(tool_call_id)
 
     def _has_canonical_todo(self, tool_call_id: str) -> bool:
         return self._todo_controller.has_active_tool_call(tool_call_id)

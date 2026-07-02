@@ -5,9 +5,11 @@ matching the pattern ``<subsystem>.<event>``.
 """
 
 # ── Dispatch lifecycle ──────────────────────────────────────────────────────
+DISPATCH_CHECKLIST_DECLARED = "dispatch.checklist_declared"
 DISPATCH_CAMPAIGN_STARTED = "dispatch.campaign_started"
 DISPATCH_STEP_STARTED = "dispatch.step_started"
 DISPATCH_STEP_COMPLETED = "dispatch.step_completed"
+DISPATCH_CAMPAIGN_FINISHED = "dispatch.campaign_finished"
 
 # ── Worker / tool execution ─────────────────────────────────────────────────
 WORKER_TOOL_STARTED = "worker.tool_started"
@@ -26,9 +28,11 @@ ALL = "*"
 
 # ── Convenience groupings for validation / introspection ────────────────────
 DISPATCH_TOPICS = frozenset({
+    DISPATCH_CHECKLIST_DECLARED,
     DISPATCH_CAMPAIGN_STARTED,
     DISPATCH_STEP_STARTED,
     DISPATCH_STEP_COMPLETED,
+    DISPATCH_CAMPAIGN_FINISHED,
 })
 
 WORKER_TOPICS = frozenset({

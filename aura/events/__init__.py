@@ -13,7 +13,9 @@ No Qt, no GUI, no async.  Pure Python with ``dataclasses`` and ``typing``.
 from aura.events.bus import EventBus
 from aura.events.event import AuraEvent
 from aura.events.topics import (
+    DISPATCH_CAMPAIGN_FINISHED,
     DISPATCH_CAMPAIGN_STARTED,
+    DISPATCH_CHECKLIST_DECLARED,
     DISPATCH_STEP_COMPLETED,
     DISPATCH_STEP_STARTED,
     ALL,
@@ -36,9 +38,11 @@ __all__ = [
     "AuraEvent",
     "EventBus",
     # ── individual topic constants ──────────────────────────────
+    "DISPATCH_CHECKLIST_DECLARED",
     "DISPATCH_CAMPAIGN_STARTED",
     "DISPATCH_STEP_STARTED",
     "DISPATCH_STEP_COMPLETED",
+    "DISPATCH_CAMPAIGN_FINISHED",
     "WORKER_TOOL_STARTED",
     "WORKER_TOOL_FINISHED",
     "WORKER_FILE_CHANGED",
