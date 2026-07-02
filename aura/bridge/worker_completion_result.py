@@ -266,7 +266,8 @@ def _collect_worker_completion_data(
         if not is_partial and not claimed_validation and not validation_ran:
             acceptance_unverified = True
     validation_not_run = bool(relay.write_results) and not validation_ran
-    is_implementation = not (
+    validation_only = _is_explicit_validation_only_request(req)
+    is_implementation = not validation_only and not (
         "blueprint" in req.spec.lower()[:200]
         or "inspect" in req.goal.lower()[:100]
         or "diagnostic" in req.goal.lower()[:100]
@@ -289,6 +290,7 @@ def _collect_worker_completion_data(
         "unrecovered_not_applied_writes": unrecovered_not_applied_writes,
         "acceptance_unverified": acceptance_unverified,
         "validation_not_run": validation_not_run,
+        "validation_only": validation_only,
         "is_implementation": is_implementation,
     }
 
@@ -317,6 +319,7 @@ def _build_worker_completion_messages(
     validation_command_issues = completion["validation_command_issues"]
     diagnostic_environment_caveats = completion["diagnostic_environment_caveats"]
     acceptance_unverified = completion["acceptance_unverified"]
+    is_implementation = completion["is_implementation"]
 
     structured_failure = _parse_structured_worker_failure(final_report)
     if structured_failure:
@@ -449,18 +452,26 @@ def _build_worker_completion_messages(
         except Exception:
             _log.exception("Post-edit structural audit failed")
 
-    if (
-        completion["is_implementation"]
-        and not structured_failure
-        and not relay.touched_files
-        and not relay.failed_tool_results
+    no_failure_or_blocker = (
+        not relay.failed_tool_results
         and not internal_error
         and not relay.api_errors
+    )
+    if (
+        is_implementation
+        and not structured_failure
+        and not relay.touched_files
+        and no_failure_or_blocker
     ):
-        result_errors.append(
-            "Harness no-progress: Worker made no changes, reported no blocker, "
-            "and ran no meaningful validation."
-        )
+        if completion["validation_results"] and not failed_validation:
+            result_errors.append(
+                "Harness no-progress: Worker ran validation but made no implementation changes."
+            )
+        elif not completion["validation_results"]:
+            result_errors.append(
+                "Harness no-progress: Worker made no changes, reported no blocker, "
+                "and ran no meaningful validation."
+            )
 
     return {
         "structured_failure": structured_failure,
@@ -534,8 +545,17 @@ def _classify_worker_completion(
         and not internal_error
         and not relay.api_errors
     )
+    has_no_implementation_work = (
+        is_implementation
+        and not relay.touched_files
+        and bool(completion["validation_results"])
+        and not failed_validation
+        and not relay.failed_tool_results
+        and not internal_error
+        and not relay.api_errors
+    )
     has_no_progress_failure = has_harness_no_progress_failure or (
-        has_no_work and is_implementation and not structured_failure
+        (has_no_work or has_no_implementation_work) and is_implementation and not structured_failure
     )
     has_unverified_acceptance = acceptance_unverified or validation_not_run
 
@@ -895,6 +915,24 @@ def _is_true_phase_boundary(info: dict[str, Any] | None) -> bool:
     }:
         return False
     return bool(info)
+
+
+def _is_explicit_validation_only_request(req: WorkerDispatchRequest) -> bool:
+    text = " ".join(
+        part for part in (req.goal, req.spec, req.acceptance, req.summary) if part
+    ).lower()
+    if not text:
+        return False
+    patterns = (
+        r"\bvalidation[- ]only\b",
+        r"\btests?[- ]only\b",
+        r"\bverify[- ]only\b",
+        r"\bonly\s+(?:run\s+)?(?:validation|tests?|checks?|verification)\b",
+        r"\b(?:run\s+)?(?:validation|tests?|checks?|verification)\s+only\b",
+        r"\bvalidate\s+only\b",
+        r"\bonly\s+validate\b",
+    )
+    return any(re.search(pattern, text) for pattern in patterns)
 
 
 def _last_assistant_content(history: History) -> str:

@@ -53,6 +53,15 @@ from aura.todo_state import todo_signature, todo_task_description, todo_task_sta
 
 TERMINAL_OUTPUT_CAPTURE_CHARS = 4000
 TERMINAL_OUTPUT_PREVIEW_CHARS = 200
+LEGACY_EDIT_TOOLS = frozenset(
+    {
+        "edit_file",
+        "edit_symbol",
+        "edit_line_range",
+        "apply_edit_transaction",
+    }
+)
+FILE_MUTATION_TOOLS = frozenset(WRITE_TOOLS) | LEGACY_EDIT_TOOLS
 
 READ_PROGRESS_TOOLS = frozenset(
     {
@@ -322,19 +331,19 @@ class WorkerEventRelay(QObject):
             ):
                 self.phase_boundary_info = parsed
             if (
-                ev.name in WRITE_TOOLS
-                and isinstance(parsed, dict)
-                and parsed.get("ok")
-                and parsed.get("applied") is True
+                _file_mutation_was_applied(ev.name, ev.ok, parsed, ev.extras or {})
             ):
+                path = _result_path(parsed, ev.extras or {})
+                is_new_file = bool(parsed.get("is_new_file", False))
+                deleted = bool(parsed.get("deleted"))
                 write_record = {
                     "tool": ev.name,
-                    "path": parsed.get("path"),
-                    "is_new_file": parsed.get("is_new_file", False),
-                    "deleted": bool(parsed.get("deleted")),
+                    "path": path,
+                    "is_new_file": is_new_file,
+                    "deleted": deleted,
                     "applied": True,
                     "applied_tool": parsed.get("applied_tool") or ev.name,
-                    "write_outcome": parsed.get("write_outcome") or "applied",
+                    "write_outcome": parsed.get("write_outcome") or ("deleted" if deleted else "applied"),
                     "backup": parsed.get("backup"),
                 }
                 if parsed.get("pre_existing_environment_issues"):
@@ -350,26 +359,23 @@ class WorkerEventRelay(QObject):
                 if "operation_count" in parsed:
                     write_record["operation_count"] = parsed.get("operation_count")
                 self.write_results.append(write_record)
-                path = parsed.get("path")
-                if isinstance(path, str) and path:
-                    action = "created" if parsed.get("is_new_file") else ("deleted" if parsed.get("deleted") else "modified")
+                if path:
+                    action = "created" if is_new_file else ("deleted" if deleted else "modified")
                     self._emit_bus_event(WORKER_FILE_CHANGED, {
                         "path": path,
                         "action": action,
                         "tool": ev.name,
                     })
-                path = parsed.get("path")
-                if isinstance(path, str) and path:
                     self.touched_files.add(path)
-                    if parsed.get("is_new_file"):
+                    if is_new_file:
                         self.wrote_new_files.append(path)
-                    elif not parsed.get("deleted"):
+                    elif not deleted:
                         self.edited_existing_files.append(path)
-            elif ev.name in WRITE_TOOLS and isinstance(parsed, dict):
+            elif _is_file_mutation_tool(ev.name) and isinstance(parsed, dict):
                 if parsed.get("applied") is False or str(parsed.get("write_outcome") or "").startswith("not_applied_"):
                     write_record = {
                         "tool": ev.name,
-                        "path": parsed.get("path") or parsed.get("rel_path"),
+                        "path": _result_path(parsed, ev.extras or {}),
                         "applied": False,
                         "write_outcome": parsed.get("write_outcome") or "not_applied_edit_mechanics_blocked",
                         "failure_class": parsed.get("failure_class", ""),
@@ -673,7 +679,7 @@ class WorkerEventRelay(QObject):
             return
 
         if ok and isinstance(parsed, dict):
-            if name in WRITE_TOOLS and parsed.get("applied") is False:
+            if _is_file_mutation_tool(name) and parsed.get("applied") is False:
                 self._clear_active_model_todo_phase(key)
                 self._mark_recovery_progress_active(details)
             elif name in VALIDATION_PROGRESS_TOOLS and parsed.get("ok") is False:
@@ -941,6 +947,31 @@ class WorkerEventRelay(QObject):
                 self._runtime_todo_phase.pop(key, None)
 
 
+def _is_file_mutation_tool(name: str) -> bool:
+    return name in FILE_MUTATION_TOOLS
+
+
+def _result_path(parsed: dict[str, Any], extras: dict[str, Any]) -> str:
+    for source in (parsed, extras):
+        for field in PATH_FIELDS:
+            value = source.get(field)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return ""
+
+
+def _file_mutation_was_applied(name: str, ok: bool, parsed: Any, extras: dict[str, Any]) -> bool:
+    if not _is_file_mutation_tool(name):
+        return False
+    if ok is False or not isinstance(parsed, dict):
+        return False
+    if parsed.get("applied") is True:
+        return bool(_result_path(parsed, extras))
+    if parsed.get("applied") is False:
+        return False
+    return parsed.get("ok") is True and bool(_result_path(parsed, extras))
+
+
 def _tool_progress_details_from_result(
     name: str,
     parsed: Any,
@@ -1030,7 +1061,7 @@ def _extract_json_string_field(text: str, fields: tuple[str, ...]) -> str:
 
 
 def _write_action_words(name: str, payload: dict[str, Any]) -> list[str]:
-    if name not in WRITE_TOOLS:
+    if not _is_file_mutation_tool(name):
         return []
     if name == "delete_file" or payload.get("deleted"):
         return ["remove", "delete"]
@@ -1128,7 +1159,7 @@ def _progress_key_for_tool(name: str) -> str:
         return ""
     if name in READ_PROGRESS_TOOLS:
         return "inspect"
-    if name in WRITE_TOOLS:
+    if _is_file_mutation_tool(name):
         return "edit"
     if name in VALIDATION_PROGRESS_TOOLS:
         return "validate"
