@@ -630,10 +630,15 @@ class _DispatchProxy(QObject):
         not create durable WorkerDispatchRecord entries, because the
         aggregate campaign result is recorded once after session.run()
         returns.
+
+        They also must not emit final-report Activity entries on the event
+        bus, because those would look like the Worker finished and restarted
+        between steps.
         """
         _log.info("_run_worker_internal entered tool_call_id=%s", tool_call_id)
         runner = self._create_worker_dispatch_runner(
             suppress_worker_todo_updates=True,
+            suppress_final_report_activity=True,
         )
         return runner.run_worker(tool_call_id, req, pending, record_replayable=False)
 
@@ -697,6 +702,7 @@ class _DispatchProxy(QObject):
         self,
         *,
         suppress_worker_todo_updates: bool = False,
+        suppress_final_report_activity: bool = False,
     ) -> WorkerDispatchRunner:
         return WorkerDispatchRunner(
             approval_proxy=self._approval_proxy,
@@ -710,6 +716,7 @@ class _DispatchProxy(QObject):
             dispatch_proxy=self,
             todo_relay_callback=self._relay_worker_todo_update,
             suppress_worker_todo_updates=suppress_worker_todo_updates,
+            suppress_final_report_activity=suppress_final_report_activity,
             records=self._records,
             result_metadata=self._result_metadata,
             set_tier1_context=self.set_tier1_context,

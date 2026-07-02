@@ -82,6 +82,7 @@ class WorkerEventRelay(QObject):
         worker_model: str = "",
         parent: QObject | None = None,
         suppress_todo_updates: bool = False,
+        suppress_final_report_activity: bool = False,
         event_bus: EventBus | None = None,
     ) -> None:
         super().__init__(parent)
@@ -100,6 +101,12 @@ class WorkerEventRelay(QObject):
             emit_bus_event=self._emit_bus_event,
         )
         self._suppress_todo_updates = suppress_todo_updates
+        # Explicit flag to suppress final-report Activity on the event bus.
+        # Internal DispatchSession worker steps must not emit
+        # WORKER_FINAL_REPORT_STARTED / WORKER_FINAL_REPORT_FINISHED,
+        # because those look like the Worker finished and restarted.
+        # This flag is semantically distinct from suppress_todo_updates.
+        self._suppress_final_report_activity = suppress_final_report_activity
         self.todo_used: bool = False              # whether update_todo_list was called
         self.final_report_text: str = ""          # last assistant content after Done event
         self._active_tool_names: dict[str, str] = {}
@@ -249,10 +256,10 @@ class WorkerEventRelay(QObject):
                 self._progress_todo.mark_progress_finished(tool_call_id)
                 # Only emit final-report activity events at campaign boundaries,
                 # not for internal steps within a multi-step DispatchSession.
-                # The caller sets suppress_todo_updates=True for internal steps;
-                # use the same flag here since the correlation is 1:1 (internal
-                # campaign steps are the only suppressed path).
-                if not self._suppress_todo_updates:
+                # The caller sets suppress_final_report_activity=True for internal
+                # dispatch steps; this is semantically distinct from
+                # suppress_todo_updates (which covers TODO/progress emissions).
+                if not self._suppress_final_report_activity:
                     self._emit_bus_event(WORKER_FINAL_REPORT_STARTED, {})
                     self._emit_bus_event(WORKER_FINAL_REPORT_FINISHED, {
                         "ok": True,

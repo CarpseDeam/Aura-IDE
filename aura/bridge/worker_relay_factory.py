@@ -23,6 +23,7 @@ def create_worker_relay(
     dispatch_proxy: Any,
     todo_relay_callback: Callable[[str, list], None],
     suppress_todo_updates: bool = False,
+    suppress_final_report_activity: bool = False,
     event_bus: EventBus | None = None,
 ) -> WorkerEventRelay:
     """Construct a WorkerEventRelay and wire every signal to *dispatch_proxy*.
@@ -31,11 +32,18 @@ def create_worker_relay(
     itself as *dispatch_proxy* so the factory can connect each relay signal
     to the matching proxy signal.  The factory does not become a second
     dispatch proxy — it only builds and wires the relay.
+
+    suppress_final_report_activity: When True, the relay will not emit
+        WORKER_FINAL_REPORT_STARTED / WORKER_FINAL_REPORT_FINISHED events
+        on the event bus. Used for internal DispatchSession worker steps
+        so the UI does not see false "Final report started/completed"
+        Activity entries between steps.
     """
     relay = WorkerEventRelay(
         approval_proxy=approval_proxy,
         worker_model=worker_model,
         suppress_todo_updates=suppress_todo_updates,
+        suppress_final_report_activity=suppress_final_report_activity,
         event_bus=event_bus,
     )
     # Stream events

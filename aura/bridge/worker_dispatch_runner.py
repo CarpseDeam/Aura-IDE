@@ -65,6 +65,7 @@ class WorkerDispatchRunner:
         records: list[WorkerDispatchRecord],
         result_metadata: dict[str, dict[str, Any]],
         suppress_worker_todo_updates: bool = False,
+        suppress_final_report_activity: bool = False,
         set_tier1_context: Callable[[str], None] | None = None,
         event_bus: EventBus | None = None,
     ) -> None:
@@ -79,6 +80,7 @@ class WorkerDispatchRunner:
         self._dispatch_proxy = dispatch_proxy
         self._todo_relay_callback = todo_relay_callback
         self._suppress_worker_todo_updates = suppress_worker_todo_updates
+        self._suppress_final_report_activity = suppress_final_report_activity
         self._records = records
         self._result_metadata = result_metadata
         self._set_tier1_context = set_tier1_context
@@ -241,6 +243,7 @@ class WorkerDispatchRunner:
             dispatch_proxy=self._dispatch_proxy,
             todo_relay_callback=self._todo_relay_callback,
             suppress_todo_updates=self._suppress_worker_todo_updates,
+            suppress_final_report_activity=self._suppress_final_report_activity,
             event_bus=self._event_bus,
         )
 

@@ -95,8 +95,14 @@ class WorkerEventHandler(QObject):
     # ---- public methods --------------------------------------------------------
 
     def reset_session_usage(self) -> None:
-        """Clear the usage accumulator and notify listeners."""
+        """Clear the usage accumulator and notify listeners.
+
+        Also clears the lifecycle guard sets so that worker started/finished
+        idempotency guards are reset when the user starts a new conversation.
+        """
         self._session_usage.clear()
+        self._initialized_worker_campaigns.clear()
+        self._finalized_worker_campaigns.clear()
         self.usage_updated.emit()
 
     def update_settings(self, settings: AppSettings) -> None:
