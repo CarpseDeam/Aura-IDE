@@ -527,7 +527,13 @@ def _classify_worker_completion(
     has_terminal_policy_blocker = bool(terminal_policy_blockers)
     has_environment_setup_blocker = bool(environment_setup_blockers)
     has_diagnostic_environment_blocker = bool(diagnostic_environment_caveats) and not relay.write_results
-    has_no_work = not relay.touched_files and not relay.failed_tool_results and not internal_error and not relay.api_errors
+    has_no_work = (
+        not relay.touched_files
+        and not completion["validation_results"]
+        and not relay.failed_tool_results
+        and not internal_error
+        and not relay.api_errors
+    )
     has_no_progress_failure = has_harness_no_progress_failure or (
         has_no_work and is_implementation and not structured_failure
     )
