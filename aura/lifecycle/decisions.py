@@ -3,30 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, ClassVar
-
-
-class _GateDecisionMeta(type):
-    def __getattribute__(cls, name: str) -> Any:
-        if name == "force_continue":
-            namespace = super().__getattribute__("__dict__")
-            if namespace.get("_force_continue_factory_ready", False):
-
-                def factory(reason: str) -> "GateDecision":
-                    return cls(
-                        allowed=True,
-                        blocked=False,
-                        force_continue=True,
-                        reason=reason,
-                    )
-
-                return factory
-
-        return super().__getattribute__(name)
+from typing import Any
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class GateDecision(metaclass=_GateDecisionMeta):
+class GateDecision:
     """Result returned by a gate hook handler.
 
     A gate decision can *allow* (default), *block*, *rewrite* the payload,
@@ -42,7 +23,6 @@ class GateDecision(metaclass=_GateDecisionMeta):
     additional_context: str = ""
     force_continue: bool = False
     metadata: dict[str, Any] | None = field(default_factory=dict)
-    _force_continue_factory_ready: ClassVar[bool] = False
 
     def __post_init__(self) -> None:
         if self.updated_payload is not None:
@@ -89,6 +69,12 @@ class GateDecision(metaclass=_GateDecisionMeta):
             reason=reason,
         )
 
+    @classmethod
+    def force_continuation(cls, reason: str) -> "GateDecision":
+        """Return a decision that forces continuation regardless of other
+        handlers."""
+        return cls(allowed=True, blocked=False, force_continue=True, reason=reason)
+
     def to_dict(self) -> dict[str, Any]:
         """Return a plain dict for serialisation or logging."""
         return {
@@ -105,6 +91,3 @@ class GateDecision(metaclass=_GateDecisionMeta):
             "force_continue": self.force_continue,
             "metadata": dict(self.metadata),
         }
-
-
-GateDecision._force_continue_factory_ready = True

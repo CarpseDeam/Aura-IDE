@@ -368,12 +368,12 @@ class TestGateDecision:
         assert d.additional_context == "extra info"
         assert d.reason == "enrich"
 
-    def test_force_continue(self) -> None:
-        d = GateDecision.force_continue("proceed anyway")
+    def test_force_continuation(self) -> None:
+        d = GateDecision.force_continuation("keep going")
         assert d.allowed
         assert not d.blocked
         assert d.force_continue
-        assert d.reason == "proceed anyway"
+        assert d.reason == "keep going"
 
 
 # ── GateHookRegistry ────────────────────────────────────────────────────────
@@ -489,7 +489,7 @@ class TestGateHookRegistry:
         reg = GateHookRegistry()
         reg.register(
             HookMatcher("*"),
-            lambda ctx: GateDecision.force_continue("keep going"),
+            lambda ctx: GateDecision.force_continuation("keep going"),
         )
 
         decision = _run_async(reg.ask(_make_ctx()))
