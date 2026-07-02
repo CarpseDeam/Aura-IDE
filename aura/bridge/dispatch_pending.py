@@ -11,7 +11,7 @@ import threading
 from dataclasses import replace
 from typing import Any
 
-from aura.conversation import WorkerDispatchRequest
+from aura.conversation import WorkerDispatchRequest, WorkerDispatchResult
 
 
 class _DispatchPending:
@@ -27,6 +27,7 @@ class _DispatchPending:
         self.cancelled: bool = False
         self.decision_event: threading.Event = threading.Event()
         self.cancel_event: threading.Event | None = None
+        self.failure_result: WorkerDispatchResult | None = None
 
 
 class DispatchPendingMap:
@@ -62,6 +63,15 @@ class DispatchPendingMap:
         with self._lock:
             return self._pending.pop(tool_call_id, None)
 
+    def active_ids(self) -> list[str]:
+        """Return pending dispatch ids that have not received a decision."""
+        with self._lock:
+            return [
+                tool_id
+                for tool_id, pending in self._pending.items()
+                if not pending.decision_event.is_set()
+            ]
+
     # -- resolution -------------------------------------------------------
 
     def resolve_dispatched(
@@ -91,6 +101,25 @@ class DispatchPendingMap:
         pending.cancelled = False
         pending.decision_event.set()
         return True
+
+    def fail_unresolved(self, result: WorkerDispatchResult) -> list[str]:
+        """Fail and unblock every still-unresolved pending dispatch.
+
+        This is used only when the GUI/bridge handoff receives a dispatch
+        decision that cannot be matched to a pending id. At that point the
+        handoff state is inconsistent, so surfacing a harness error is safer
+        than leaving the planner thread blocked until timeout.
+        """
+        failed_ids: list[str] = []
+        with self._lock:
+            for tool_id, pending in self._pending.items():
+                if pending.decision_event.is_set():
+                    continue
+                pending.failure_result = result
+                pending.cancelled = False
+                pending.decision_event.set()
+                failed_ids.append(tool_id)
+        return failed_ids
 
     def resolve_cancelled(self, tool_call_id: str) -> bool:
         """Mark the pending entry as cancelled and unblock the planner.

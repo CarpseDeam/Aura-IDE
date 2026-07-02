@@ -91,6 +91,7 @@ class WorkerDispatchRunner:
         pending: Any,
         record_replayable: bool = True,
     ) -> WorkerDispatchResult:
+        _log.info("WorkerDispatchRunner.run_worker entered tool_call_id=%s", tool_call_id)
         worker_history, task_spec, context_gearbox, worker_manager = self._prepare_worker_conversation(
             tool_call_id,
             req,

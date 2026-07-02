@@ -37,6 +37,7 @@ from collections.abc import Callable
 from dataclasses import replace
 from typing import Any
 
+from aura.config import redact_secrets
 from aura.conversation.dispatch import (
     WorkerDispatchRequest,
     WorkerDispatchResult,
@@ -69,7 +70,8 @@ _EmitStarted = Callable[[str], None]
 _EmitFinished = Callable[[str, bool, str, bool, str], None]
 
 MAX_WORKER_STEP_ATTEMPTS = 5
-NO_PROGRESS_FINGERPRINT_THRESHOLD = 2
+NO_PROGRESS_FINGERPRINT_THRESHOLD = 1
+_log = logging.getLogger(__name__)
 
 
 class DispatchSession:
@@ -204,6 +206,11 @@ class DispatchSession:
         the halt contribute their modified files to the aggregate and appear
         as done in the final TODO state.
         """
+        _log.info(
+            "DispatchSession.run entered tool_call_id=%s step_count=%d",
+            self.tool_call_id,
+            len(self.plan.steps),
+        )
         if not self.plan.steps:
             result = WorkerDispatchResult(
                 ok=False,
@@ -224,6 +231,7 @@ class DispatchSession:
 
         # Campaign starts — one visible Worker start event for the whole run.
         if self._emit_worker_started is not None:
+            _log.info("DispatchSession workerStarted emitted tool_call_id=%s", self.tool_call_id)
             self._emit_worker_started(self.tool_call_id)
 
         # Emit campaign_started on the event bus for activity projectors.
@@ -245,7 +253,15 @@ class DispatchSession:
                 "description": step.title or step.goal,
             })
 
-            worker_result = self._run_one_step(step)
+            try:
+                worker_result = self._run_one_step(step)
+            except Exception as exc:
+                _log.exception(
+                    "DispatchSession worker step failed tool_call_id=%s step_id=%s",
+                    self.tool_call_id,
+                    step.id,
+                )
+                worker_result = _worker_step_exception_result(exc)
             final_worker_result = worker_result
 
             step_result = _step_result_for(step, worker_result)
@@ -301,6 +317,7 @@ class DispatchSession:
     def _emit_lifecycle_pair(self, result: WorkerDispatchResult) -> None:
         """Emit started then finished immediately (for error/empty plan exits)."""
         if self._emit_worker_started is not None:
+            _log.info("DispatchSession workerStarted emitted tool_call_id=%s", self.tool_call_id)
             self._emit_worker_started(self.tool_call_id)
         self._emit_lifecycle_finished(result)
 
@@ -439,6 +456,26 @@ class DispatchSession:
 def _step_result_for(step: WorkerStepSpec, worker_result: WorkerDispatchResult) -> StepResult:
     """Convert a WorkerDispatchResult to a StepResult for the given step."""
     return StepResult.from_worker_result(step.id, worker_result)
+
+
+def _worker_step_exception_result(exc: Exception) -> WorkerDispatchResult:
+    """Convert a DispatchSession step exception into a visible harness error."""
+    return WorkerDispatchResult(
+        ok=False,
+        summary="Dispatch could not continue because the worker step failed in the harness.",
+        needs_followup=True,
+        recoverable=True,
+        status=WorkerOutcomeStatus.harness_error.value,
+        extras={
+            "dispatch_session": True,
+            "dispatch_session_failed": True,
+            "dispatch_session_step_failed": True,
+            "dispatch_session_start_failed": False,
+            "dispatch_internal_error": True,
+            "error_type": type(exc).__name__,
+            "internal_error": redact_secrets(f"{type(exc).__name__}: {exc}"),
+        },
+    )
 
 
 def _step_should_stop(

@@ -27,6 +27,9 @@ class WorkerOutcomeStatus(str, enum.Enum):
     scope_mismatch = "scope_mismatch"
     """Worker determined the request was out of scope or unclear."""
 
+    needs_followup = "needs_followup"
+    """Worker stopped before completion and needs another harness turn."""
+
     approval_rejected = "approval_rejected"
     """User rejected the dispatch approval request."""
 

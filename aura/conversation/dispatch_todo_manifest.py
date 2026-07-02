@@ -93,6 +93,12 @@ def dispatch_todo_manifest_from_request(req: Any) -> list[DispatchTodoItem]:
         normalized = normalize_dispatch_todo_checklist(explicit, steps)
         if normalized:
             return normalized
+    accepted_items = _accepted_work_contract_todo_items(
+        str(getattr(req, "spec", "") or ""),
+        steps,
+    )
+    if accepted_items:
+        return accepted_items
     return _fallback_step_todo_items(
         steps,
         goal=str(getattr(req, "goal", "") or ""),
@@ -131,6 +137,41 @@ def normalize_dispatch_todo_checklist(
             )
         )
     return _assign_missing_todo_owners(_dedupe_todo_items(normalized), steps)
+
+
+def _accepted_work_contract_todo_items(
+    spec: str,
+    steps: list[Any],
+) -> list[DispatchTodoItem]:
+    """Extract visible checklist rows from an accepted-work bullet block."""
+    lines = str(spec or "").splitlines()
+    in_contract = False
+    raw_items: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            if in_contract and raw_items:
+                break
+            continue
+        if re.match(r"^accepted\s+work\s+contract\s*:", stripped, re.IGNORECASE):
+            in_contract = True
+            continue
+        if not in_contract:
+            continue
+        match = re.match(r"^(?:[-*+]|\d+[.)])\s+(.+)$", stripped)
+        if not match:
+            if raw_items:
+                break
+            continue
+        description = compact_todo_label(match.group(1))
+        if description and not _is_implementation_detail(description):
+            raw_items.append(description)
+
+    items = [
+        DispatchTodoItem(id=f"todo-{index}", description=description)
+        for index, description in enumerate(raw_items, start=1)
+    ]
+    return _assign_missing_todo_owners(_dedupe_todo_items(items), steps)
 
 
 def todo_tasks_from_plan(

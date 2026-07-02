@@ -36,11 +36,13 @@ from aura.config import (
     DEFAULT_WORKER_THINKING,
     ModelId,
     ProviderId,
+    redact_secrets,
     ThinkingMode,
 )
 from aura.conversation import (
     WorkerDispatchRequest,
     WorkerDispatchResult,
+    WorkerOutcomeStatus,
 )
 from aura.conversation.dispatch_plan import plan_from_request
 from aura.conversation.dispatch_todo_manifest import ensure_dispatch_todo_checklist
@@ -60,6 +62,7 @@ __all__ = [
 ]
 
 DISPATCH_TIMEOUT = 300.0
+_log = logging.getLogger(__name__)
 
 
 class _DispatchProxy(QObject):
@@ -217,6 +220,7 @@ class _DispatchProxy(QObject):
     ) -> WorkerDispatchResult:
         """Called from the planner's worker thread. Blocks."""
         pending = self._pending_map.register(tool_call_id, req)
+        _log.info("request_dispatch registered pending tool_call_id=%s", tool_call_id)
 
         # Tell GUI thread to render the spec card; user will call user_dispatched
         # or user_cancelled, which will set decision_event.
@@ -229,6 +233,7 @@ class _DispatchProxy(QObject):
             req.summary,
             [step.to_dict() for step in req.steps],
         )
+        _log.info("request_dispatch showSpecCard emitted tool_call_id=%s", tool_call_id)
 
         # --- Emit plan_ready snapshot ---
         self._set_workflow_state(
@@ -239,8 +244,17 @@ class _DispatchProxy(QObject):
                 pending_user_action="Dispatch, edit, or cancel the plan.",
             )
         )
+        _log.info("request_dispatch workflow plan_ready emitted tool_call_id=%s", tool_call_id)
 
+        _log.info("request_dispatch waiting for dispatch decision tool_call_id=%s", tool_call_id)
         signaled = pending.decision_event.wait(timeout=DISPATCH_TIMEOUT)
+        _log.info(
+            "request_dispatch decision_event wait returned tool_call_id=%s signaled=%s cancelled=%s failure=%s",
+            tool_call_id,
+            signaled,
+            pending.cancelled,
+            pending.failure_result is not None,
+        )
         if not signaled:
             self._pending_map.pop(tool_call_id)
             self._transition_workflow_state(
@@ -255,6 +269,26 @@ class _DispatchProxy(QObject):
                 summary="Plan expired — click Dispatch again or Cancel",
                 extras={"dispatch_not_started": True, "dispatch_approval_timeout": True},
             )
+
+        if pending.failure_result is not None:
+            result = pending.failure_result
+            self._pending_map.pop(tool_call_id)
+            self._transition_workflow_state(
+                tool_call_id,
+                WorkflowStatus.failed_nonrecoverable,
+                pending_user_action="",
+                failure_reason=result.summary,
+                follow_up_required=True,
+            )
+            self._store_result_metadata(tool_call_id, result)
+            self.workerFinished.emit(
+                tool_call_id,
+                result.ok,
+                result.summary,
+                result.needs_followup,
+                result.status or "",
+            )
+            return result
 
         if pending.cancelled:
             self._pending_map.pop(tool_call_id)
@@ -286,13 +320,26 @@ class _DispatchProxy(QObject):
         )
 
         plan = plan_from_request(edited)
+        _log.info(
+            "request_dispatch DispatchSession constructed tool_call_id=%s step_count=%d",
+            tool_call_id,
+            len(plan.steps),
+        )
+        worker_started_emitted = False
+
+        def emit_worker_started(started_tool_call_id: str) -> None:
+            nonlocal worker_started_emitted
+            worker_started_emitted = True
+            _log.info("workerStarted emitted tool_call_id=%s", started_tool_call_id)
+            self.workerStarted.emit(started_tool_call_id)
+
         session = DispatchSession(
             tool_call_id=tool_call_id,
             original_request=edited,
             plan=plan,
             run_worker_step=self._run_worker_internal,
             pending=pending,
-            emit_worker_started=self.workerStarted.emit,
+            emit_worker_started=emit_worker_started,
             emit_worker_finished=self.workerFinished.emit,
             event_bus=self._event_bus,
         )
@@ -300,7 +347,27 @@ class _DispatchProxy(QObject):
         # so late Worker-local TODO events cannot repaint the rail. It is
         # cleared only on the next dispatch for this tool_call_id, cancellation,
         # or conversation reset.
-        result = session.run()
+        try:
+            result = session.run()
+        except Exception as exc:
+            _log.exception(
+                "request_dispatch DispatchSession.run failed tool_call_id=%s worker_started=%s",
+                tool_call_id,
+                worker_started_emitted,
+            )
+            result = self._dispatch_session_failure_result(
+                tool_call_id=tool_call_id,
+                exc=exc,
+                worker_started=worker_started_emitted,
+            )
+            self._store_result_metadata(tool_call_id, result)
+            self.workerFinished.emit(
+                tool_call_id,
+                result.ok,
+                result.summary,
+                result.needs_followup,
+                result.status or "",
+            )
 
         # Create one aggregate WorkerDispatchRecord for the whole dispatch
         # campaign so that conversation replay shows one user-facing
@@ -342,6 +409,7 @@ class _DispatchProxy(QObject):
         acceptance: str,
         summary: str,
     ) -> bool:
+        _log.info("user_dispatched called tool_call_id=%s", tool_call_id)
         if not self._pending_map.resolve_dispatched(
             tool_call_id,
             goal=goal,
@@ -350,10 +418,33 @@ class _DispatchProxy(QObject):
             acceptance=acceptance,
             summary=summary,
         ):
-            logging.warning(
-                f"user_dispatched: tool_call_id '{tool_call_id}' is not pending or has already timed out/resolved."
+            active_pending_ids = self._pending_map.active_ids()
+            pending_existed = tool_call_id in active_pending_ids
+            result = self._pending_resolution_failure_result(
+                tool_call_id=tool_call_id,
+                pending_existed=pending_existed,
+                active_pending_ids=active_pending_ids,
             )
+            failed_ids = self._pending_map.fail_unresolved(result)
+            _log.warning(
+                "user_dispatched resolve failed tool_call_id=%s pending_existed=%s active_pending_ids=%s failed_pending_ids=%s",
+                tool_call_id,
+                pending_existed,
+                active_pending_ids,
+                failed_ids,
+            )
+            if not failed_ids:
+                self._store_result_metadata(tool_call_id, result)
+                self.workerApiError.emit(tool_call_id, -1, result.summary)
+                self.workerFinished.emit(
+                    tool_call_id,
+                    result.ok,
+                    result.summary,
+                    result.needs_followup,
+                    result.status or "",
+                )
             return False
+        _log.info("user_dispatched resolve succeeded tool_call_id=%s", tool_call_id)
         return True
 
     def _merge_session_result_metadata(
@@ -370,6 +461,19 @@ class _DispatchProxy(QObject):
             metadata["modified_files"] = list(result.modified_files)
         if result.validation is not None:
             metadata["validation"] = result.validation
+        self._result_metadata[tool_call_id] = metadata
+
+    def _store_result_metadata(
+        self,
+        tool_call_id: str,
+        result: WorkerDispatchResult,
+    ) -> None:
+        metadata = dict(self._result_metadata.get(tool_call_id, {}))
+        if result.modified_files:
+            metadata["modified_files"] = list(result.modified_files)
+        if result.validation is not None:
+            metadata["validation"] = result.validation
+        metadata["extras"] = dict(result.extras if isinstance(result.extras, dict) else {})
         self._result_metadata[tool_call_id] = metadata
 
     # ---- canonical WorkflowState ownership --------------------------------
@@ -527,10 +631,67 @@ class _DispatchProxy(QObject):
         aggregate campaign result is recorded once after session.run()
         returns.
         """
+        _log.info("_run_worker_internal entered tool_call_id=%s", tool_call_id)
         runner = self._create_worker_dispatch_runner(
             suppress_worker_todo_updates=True,
         )
         return runner.run_worker(tool_call_id, req, pending, record_replayable=False)
+
+    def _pending_resolution_failure_result(
+        self,
+        *,
+        tool_call_id: str,
+        pending_existed: bool,
+        active_pending_ids: list[str],
+    ) -> WorkerDispatchResult:
+        active_text = ", ".join(active_pending_ids) if active_pending_ids else "(none)"
+        summary = (
+            "Dispatch could not start Worker because the pending dispatch was "
+            "not found/resolved. "
+            f"tool_call_id={tool_call_id}; pending_existed={pending_existed}; "
+            f"active_pending_ids={active_text}"
+        )
+        return WorkerDispatchResult(
+            ok=False,
+            summary=summary,
+            needs_followup=True,
+            recoverable=True,
+            status=WorkerOutcomeStatus.harness_error.value,
+            extras={
+                "dispatch_not_started": True,
+                "dispatch_handoff_failed": True,
+                "dispatch_pending_resolution_failed": True,
+                "dispatch_internal_error": True,
+                "requested_tool_call_id": tool_call_id,
+                "pending_existed": pending_existed,
+                "active_pending_ids": list(active_pending_ids),
+            },
+        )
+
+    def _dispatch_session_failure_result(
+        self,
+        *,
+        tool_call_id: str,
+        exc: Exception,
+        worker_started: bool,
+    ) -> WorkerDispatchResult:
+        error = redact_secrets(f"{type(exc).__name__}: {exc}")
+        return WorkerDispatchResult(
+            ok=False,
+            summary="Dispatch could not start Worker because the dispatch session failed.",
+            needs_followup=True,
+            recoverable=True,
+            status=WorkerOutcomeStatus.harness_error.value,
+            extras={
+                "dispatch_session": True,
+                "dispatch_session_failed": True,
+                "dispatch_session_start_failed": not worker_started,
+                "dispatch_internal_error": True,
+                "tool_call_id": tool_call_id,
+                "error_type": type(exc).__name__,
+                "internal_error": error,
+            },
+        )
 
     def _create_worker_dispatch_runner(
         self,
