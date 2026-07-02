@@ -73,6 +73,13 @@ class WorkerEventHandler(QObject):
         self._finish_presenter = WorkerFinishPresenter(chat, playground)
         self._tool_router = WorkerToolEventRouter(playground=playground, chat=chat)
 
+        # Idempotent lifecycle guards — ensure visible lifecycle methods fire
+        # at most once per canonical dispatch tool_call_id, even if the backend
+        # emits duplicate signals (e.g. when DispatchSession runs internal steps
+        # that share the same tool_call_id).
+        self._initialized_worker_campaigns: set[str] = set()
+        self._finalized_worker_campaigns: set[str] = set()
+
     # ---- public property -------------------------------------------------------
 
     @property
@@ -138,10 +145,15 @@ class WorkerEventHandler(QObject):
         card = self._dispatch_ui.get_spec_card(state.tool_call_id)
         if card is not None and hasattr(card, "update_workflow_state"):
             card.update_workflow_state(state)
-        # Forward to the plan writer card for rendering.
-        plan_card = getattr(self._chat, "get_plan_writer_card", lambda tid: None)(state.tool_call_id)
-        if plan_card is not None and hasattr(plan_card, "update_workflow_state"):
-            plan_card.update_workflow_state(state)
+        # Forward to the plan writer card for rendering, but ONLY if the
+        # Worker has not started yet for this tool_call_id.  Once the Worker
+        # is running, the PlanWriterCard is removed and must not be revived
+        # by late-arriving state changes (e.g. tool-driven transitions fired
+        # from the planner thread during a multi-step campaign).
+        if state.tool_call_id not in self._initialized_worker_campaigns:
+            plan_card = getattr(self._chat, "get_plan_writer_card", lambda tid: None)(state.tool_call_id)
+            if plan_card is not None and hasattr(plan_card, "update_workflow_state"):
+                plan_card.update_workflow_state(state)
 
     # ---- dispatch slots --------------------------------------------------------
 
@@ -196,7 +208,20 @@ class WorkerEventHandler(QObject):
 
     def _on_worker_started(self, tool_call_id: str) -> None:
         """Stop the planner aura, remove the plan writer card, and start the
-        playground's assistant aura."""
+        playground's assistant aura.
+
+        Idempotent: only initializes the visible Worker campaign once per
+        tool_call_id.  Subsequent calls (e.g. from back-to-back internal steps
+        of a DispatchSession campaign) are silently ignored so the Worker Log,
+        terminal, and code tabs survive across internal step boundaries.
+        """
+        if tool_call_id in self._initialized_worker_campaigns:
+            _log.debug(
+                "_on_worker_started tool_call_id=%s already initialized — skipping",
+                tool_call_id,
+            )
+            return
+        self._initialized_worker_campaigns.add(tool_call_id)
 
         self._chat.stop_current_aura()
         # Remove any remaining PlanWriterCard — once the Worker is running,
@@ -223,7 +248,21 @@ class WorkerEventHandler(QObject):
         needs_followup: bool | None = None,
         status: str | None = None,
     ) -> None:
-        """Forward worker finished to playground and update spec card."""
+        """Forward worker finished to playground and update spec card.
+
+        Idempotent: only presents the Worker finish outcome once per
+        tool_call_id so that playground.worker_finished() (which closes
+        all tabs and shows the final summary) fires exactly once per
+        visible campaign — not after every internal step.
+        """
+        if tool_call_id in self._finalized_worker_campaigns:
+            _log.debug(
+                "_on_worker_finished tool_call_id=%s already finalized — skipping",
+                tool_call_id,
+            )
+            return
+        self._finalized_worker_campaigns.add(tool_call_id)
+
         _log.info(
             "worker_finished tool_call_id=%s status=%s",
             tool_call_id, status,

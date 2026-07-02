@@ -99,6 +99,7 @@ class WorkerEventRelay(QObject):
         self._ledger = EventRelayExecutionLedger(
             emit_bus_event=self._emit_bus_event,
         )
+        self._suppress_todo_updates = suppress_todo_updates
         self.todo_used: bool = False              # whether update_todo_list was called
         self.final_report_text: str = ""          # last assistant content after Done event
         self._active_tool_names: dict[str, str] = {}
@@ -246,11 +247,17 @@ class WorkerEventRelay(QObject):
                     self.final_report_text = content
             if ev.finish_reason == "stop":
                 self._progress_todo.mark_progress_finished(tool_call_id)
-                self._emit_bus_event(WORKER_FINAL_REPORT_STARTED, {})
-                self._emit_bus_event(WORKER_FINAL_REPORT_FINISHED, {
-                    "ok": True,
-                    "finish_reason": ev.finish_reason or "",
-                })
+                # Only emit final-report activity events at campaign boundaries,
+                # not for internal steps within a multi-step DispatchSession.
+                # The caller sets suppress_todo_updates=True for internal steps;
+                # use the same flag here since the correlation is 1:1 (internal
+                # campaign steps are the only suppressed path).
+                if not self._suppress_todo_updates:
+                    self._emit_bus_event(WORKER_FINAL_REPORT_STARTED, {})
+                    self._emit_bus_event(WORKER_FINAL_REPORT_FINISHED, {
+                        "ok": True,
+                        "finish_reason": ev.finish_reason or "",
+                    })
         elif isinstance(ev, ApiError):
             from aura.config import redact_secrets
             msg = f"{ev.status_code}: {ev.message}" if ev.status_code is not None else ev.message
