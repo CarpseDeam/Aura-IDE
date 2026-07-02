@@ -25,7 +25,6 @@ from aura.conversation.dispatch_plan import validate_dispatch_campaign
 from aura.conversation.dispatch_todo_manifest import ensure_dispatch_todo_checklist
 from aura.conversation.history import History
 from aura.conversation.loop_detection import LoopDetector
-from aura.conversation.spec_quality import validate_worker_dispatch_spec
 from aura.conversation.terminal_policy import worker_terminal_command_allowed
 from aura.conversation.tool_runner_terminal_policy import (
     matches_explicit_validation,
@@ -40,7 +39,6 @@ from aura.conversation.validation_orchestrator import (
 )
 from aura.conversation.verification_progress import VerificationProgressTracker
 from aura.conversation.worker_outcome import WorkerOutcomeStatus
-from aura.conversation.workflow_state import WorkflowStatus
 from aura.project_env import (
     build_project_command,
     build_project_command_rewrite,
@@ -77,7 +75,7 @@ class ToolRunner:
         args: dict[str, Any],
         on_event: Any,
         dispatch_cb: DispatchCallback | None,
-        workflow_state_cb: Callable[[str, str, str, WorkflowStatus], None] | None = None,
+        workflow_state_cb: Callable[[str, str, str, Any], None] | None = None,
     ) -> WorkerDispatchResult | None:
         req = WorkerDispatchRequest.from_dict(args)
         raw_steps = args.get("steps") if isinstance(args.get("steps"), list) else []
@@ -95,73 +93,6 @@ class ToolRunner:
                 campaign.requires_steps,
                 campaign.errors,
             )
-
-        if not campaign.ok and (campaign.requires_steps or req.steps):
-            required_step_fields = "id, title, goal, spec, files, and acceptance"
-            failure_constraint = (
-                "CONSTRAINT FOR NEXT DISPATCH ATTEMPT: The previous "
-                "dispatch_to_worker call was rejected before Worker start "
-                "because this task requires a steps campaign. Re-call "
-                "dispatch_to_worker now with a populated steps array. Every "
-                f"step must include {required_step_fields}. Do not call "
-                "edit/write tools."
-            )
-            error_message = (
-                "Plan incomplete - broad/multi-file/refactor work must be dispatched "
-                "as an ordered steps campaign of bounded objectives. "
-                "The Worker was not started. The Planner must retry "
-                "dispatch_to_worker with a populated steps array whose items "
-                f"each include {required_step_fields}. Campaign errors:\n"
-                + "\n".join(f"- {item}" for item in campaign.errors)
-            )
-            result = WorkerDispatchResult(
-                ok=False,
-                summary=error_message,
-                recoverable=True,
-                extras={
-                    "dispatch_spec_rejected": True,
-                    "campaign_errors": list(campaign.errors),
-                    "failure_constraint": failure_constraint,
-                },
-            )
-            # Manager owns dispatch lifecycle emission — do NOT emit ToolResult
-            # or append tool result here. The returned result flows through
-            # classify_failed_worker_dispatch as a terminal dispatch rejection.
-            if workflow_state_cb:
-                workflow_state_cb(tool_call_id, req.goal, req.summary, WorkflowStatus.planner_resolving)
-            return result
-
-        quality = validate_worker_dispatch_spec(req.spec, req.acceptance, goal=req.goal)
-        if not quality.ok:
-            missing = [
-                item.removesuffix(" is required") for item in quality.errors
-            ]
-            missing_text = ", ".join(missing) if missing else "required details"
-            error_message = (
-                f"Plan incomplete - missing {missing_text}. "
-                "The Worker was not started. Missing required fields:\n"
-                + "\n".join(f"- {item}" for item in quality.errors)
-            )
-            result = WorkerDispatchResult(
-                ok=False,
-                summary=error_message,
-                recoverable=True,
-                extras={
-                    "dispatch_spec_rejected": True,
-                    "quality_errors": list(quality.errors),
-                    "failure_constraint": (
-                        "CONSTRAINT FOR NEXT ATTEMPT: Plan is missing required "
-                        "fields: " + missing_text + ". "
-                        "Revise the dispatch_to_worker call with complete fields."
-                    ),
-                },
-            )
-            # Manager owns dispatch lifecycle emission — do NOT emit ToolResult
-            # or append tool result here. The returned result flows through
-            # classify_failed_worker_dispatch as a terminal dispatch rejection.
-            if workflow_state_cb:
-                workflow_state_cb(tool_call_id, req.goal, req.summary, WorkflowStatus.planner_resolving)
-            return result
 
         if dispatch_cb is None:
             err = (

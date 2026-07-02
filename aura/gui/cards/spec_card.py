@@ -560,7 +560,6 @@ class SpecCard(QFrame):
         elif state.status in {
             WorkflowStatus.done,
             WorkflowStatus.cancelled,
-            WorkflowStatus.planner_resolving,
             WorkflowStatus.failed_retryable,
             WorkflowStatus.failed_nonrecoverable,
         }:
@@ -573,7 +572,7 @@ class SpecCard(QFrame):
         mapping = {
             WorkflowStatus.intent_captured: ("Intent captured", FG_DIM),
             WorkflowStatus.plan_ready: ("Awaiting dispatch", FG_DIM),
-            WorkflowStatus.planner_resolving: ("Continuing", FG_DIM),
+            WorkflowStatus.planner_resolving: ("Needs attention", WARN),
             WorkflowStatus.dispatched: ("Running", FG_DIM),
             WorkflowStatus.editing: ("Editing", ACCENT),
             WorkflowStatus.validating: ("Validating", WARN),

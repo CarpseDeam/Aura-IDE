@@ -150,7 +150,6 @@ class PlanWriterCard(QFrame):
 
         Mapping from WorkflowStatus:
           plan_ready          → done (plan written)
-          planner_resolving   → retrying / working
           dispatched/editing/validating → running
           blocked             → incomplete
           failed_retryable    → retrying
@@ -162,8 +161,6 @@ class PlanWriterCard(QFrame):
         old_state = self._state
         if state.status == WorkflowStatus.plan_ready:
             self._state = self.STATE_DONE
-        elif state.status == WorkflowStatus.planner_resolving:
-            self._state = self.STATE_RETRYING
         elif state.status in {
             WorkflowStatus.dispatched,
             WorkflowStatus.editing,
@@ -182,6 +179,9 @@ class PlanWriterCard(QFrame):
         elif state.status == WorkflowStatus.cancelled:
             self._state = self.STATE_NOT_STARTED
             self._incomplete_text = "⚡ Plan cancelled"
+        elif state.status == WorkflowStatus.planner_resolving:
+            self._state = self.STATE_INCOMPLETE
+            self._incomplete_text = "⚡ Plan incomplete"
         else:
             self._state = self.STATE_RUNNING
 

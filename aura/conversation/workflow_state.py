@@ -256,22 +256,13 @@ class WorkflowState:
         }:
             final_status = WorkflowStatus.failed_nonrecoverable
         else:
-            final_status = WorkflowStatus.planner_resolving
+            final_status = WorkflowStatus.failed_nonrecoverable
 
-        # Compute blocker/failure reason specially for planner_resolving
-        if final_status == WorkflowStatus.planner_resolving and isinstance(extras, dict):
-            mismatch_question = extras.get("mismatch_question", "")
-            if mismatch_question:
-                blocker_reason = mismatch_question
-                failure_reason = ""
-            else:
-                blocker_reason = failure_reason
-        else:
-            blocker_reason = (
-                "" if final_status in {WorkflowStatus.done, WorkflowStatus.cancelled} else failure_reason
-            )
-            if final_status == WorkflowStatus.done:
-                failure_reason = ""
+        blocker_reason = (
+            "" if final_status in {WorkflowStatus.done, WorkflowStatus.cancelled} else failure_reason
+        )
+        if final_status == WorkflowStatus.done:
+            failure_reason = ""
 
         return replace(
             state,
@@ -280,7 +271,7 @@ class WorkflowState:
             blocker_reason=blocker_reason,
             failure_reason=failure_reason,
             follow_up_required=needs_followup
-                or final_status in {WorkflowStatus.failed_retryable, WorkflowStatus.planner_resolving},
+                or final_status == WorkflowStatus.failed_retryable,
             validation_status=state.validation_status,
             write_outcome=write_outcome or state.write_outcome,
             caveats=(*state.caveats, *caveats),
