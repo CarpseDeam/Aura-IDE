@@ -69,15 +69,15 @@ def _valid_steps_dispatch() -> dict:
 
 def _broad_multi_file_dispatch() -> dict:
     return {
-        "goal": "Extract the dispatch checklist projector and wire the bridge.",
+        "goal": "Extract the dispatch lifecycle projector and wire the bridge.",
         "files": [
             "aura/bridge/dispatch.py",
             "aura/bridge/dispatch_session.py",
-            "aura/execution_checklist/controller.py",
+            "aura/bridge/worker_activity.py",
         ],
-        "spec": "Refactor the dispatch checklist flow across bridge, session, and controller.",
-        "acceptance": "The dispatch checklist is projected from lifecycle events and tests pass.",
-        "summary": "Refactor dispatch checklist flow.",
+        "spec": "Refactor the dispatch lifecycle flow across bridge, session, and activity projection.",
+        "acceptance": "The dispatch lifecycle is projected from events and tests pass.",
+        "summary": "Refactor dispatch lifecycle flow.",
     }
 
 
@@ -96,24 +96,24 @@ def _broad_one_vague_step_dispatch() -> dict:
     return args
 
 
-def _broad_valid_steps_no_checklist_dispatch() -> dict:
+def _broad_valid_steps_dispatch() -> dict:
     args = _broad_multi_file_dispatch()
     args["steps"] = [
         {
             "id": "step-1",
-            "title": "Wire bridge checklist projector",
-            "goal": "Use the execution checklist controller from the dispatch bridge.",
-            "spec": "Update aura/bridge/dispatch.py to source dispatchTodoListUpdated from the execution checklist controller.",
+            "title": "Wire bridge lifecycle projector",
+            "goal": "Use the activity controller from the dispatch bridge.",
+            "spec": "Update aura/bridge/dispatch.py to source lifecycle activity from the worker activity controller.",
             "files": ["aura/bridge/dispatch.py"],
-            "acceptance": "The bridge uses the execution checklist controller.",
+            "acceptance": "The bridge uses the activity controller.",
         },
         {
             "id": "step-2",
-            "title": "Declare checklist lifecycle rows",
-            "goal": "Emit checklist declaration facts from DispatchSession without mutating rows.",
-            "spec": "Update aura/bridge/dispatch_session.py to declare checklist rows and emit step lifecycle events only.",
+            "title": "Emit dispatch lifecycle events",
+            "goal": "Emit campaign and step lifecycle facts from DispatchSession.",
+            "spec": "Update aura/bridge/dispatch_session.py to emit step lifecycle events.",
             "files": ["aura/bridge/dispatch_session.py"],
-            "acceptance": "DispatchSession emits lifecycle events and does not mutate checklist rows.",
+            "acceptance": "DispatchSession emits lifecycle events.",
         },
     ]
     return args
@@ -220,9 +220,6 @@ def test_broad_multi_file_dispatch_without_steps_is_rejected_before_worker_reque
     assert result.extras["campaign_errors"] == [
         "Broad implementation dispatches must include a decomposed steps campaign."
     ]
-    assert result.extras["checklist_errors"] == [
-        "Broad implementation dispatches must produce a concrete visible execution checklist."
-    ]
     assert not any(isinstance(event, WorkerDispatchRequested) for event in events)
 
 
@@ -251,7 +248,7 @@ def test_broad_dispatch_with_one_vague_giant_step_is_rejected(tmp_path):
     assert not any(isinstance(event, WorkerDispatchRequested) for event in events)
 
 
-def test_broad_valid_steps_without_checklist_gets_step_fallback_and_starts_worker(tmp_path):
+def test_broad_valid_steps_start_worker(tmp_path):
     runner = ToolRunner(
         History(),
         tmp_path,
@@ -263,7 +260,7 @@ def test_broad_valid_steps_without_checklist_gets_step_fallback_and_starts_worke
 
     result = runner.handle_dispatch(
         "call_dispatch",
-        _broad_valid_steps_no_checklist_dispatch(),
+        _broad_valid_steps_dispatch(),
         on_event=events.append,
         dispatch_cb=lambda tool_id, req: (
             dispatches.append((tool_id, req)),
@@ -274,9 +271,6 @@ def test_broad_valid_steps_without_checklist_gets_step_fallback_and_starts_worke
     assert result is not None
     assert result.ok is True
     assert dispatches and dispatches[0][0] == "call_dispatch"
-    req = dispatches[0][1]
-    assert [item.id for item in req.todo_checklist] == ["step-1", "step-2"]
-    assert [item.owning_step_id for item in req.todo_checklist] == ["step-1", "step-2"]
     assert any(isinstance(event, WorkerDispatchRequested) for event in events)
 
 
@@ -682,9 +676,9 @@ def test_worker_dispatch_requested_not_emitted_during_preflight_rejection(tmp_pa
     )
 
 
-def test_worker_log_todo_not_seeded_for_rejected_preflight_dispatch(tmp_path):
+def test_worker_log_not_started_for_rejected_preflight_dispatch(tmp_path):
     """A rejected preflight dispatch must set workflow status to
-    planner_resolving, not worker_starting. The TODO rail is NOT seeded."""
+    planner_resolving, not worker_starting."""
     runner = ToolRunner(
         History(),
         tmp_path,

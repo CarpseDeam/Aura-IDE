@@ -2,10 +2,9 @@
 
 This is the first real consumer/projector of Aura's event-bus foundation.
 It transforms low-level AuraEvent facts into readable activity entries
-for the bridge/GUI — without mutating TODO state.
+for the bridge/GUI.
 
 Core invariant:
-    TODO = semantic Planner checklist progress.
     Worker Activity = append-only execution heartbeat.
     Final report = truthful proof receipt.
 """
@@ -104,7 +103,7 @@ class WorkerActivityController:
         # ... later, in bridge code that has Qt access:
         controller.set_on_change(lambda snapshot: emit_signal(snapshot))
 
-        # The controller never mutates TODO state and never infers lifecycle.
+        # The controller records activity and never owns lifecycle.
     """
 
     def __init__(

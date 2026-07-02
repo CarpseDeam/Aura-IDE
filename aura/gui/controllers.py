@@ -22,8 +22,6 @@ class ToolStreamController(QObject):
     goal_resolved = Signal(str)
     # Emitted once when "command" is found (for run_terminal_command)
     command_resolved = Signal(str)
-    # Kept for compatibility; TODO updates are emitted from final ToolResult.
-    todo_updated = Signal(list)
     # Emitted whenever the "content" or "new_str" field grows
     content_updated = Signal(str)
     # Emitted whenever arguments are updated (pretty-printed if possible)

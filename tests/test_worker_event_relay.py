@@ -223,15 +223,12 @@ class TestFlagThreading:
         """create_worker_relay passes suppress_final_report_activity to
         WorkerEventRelay."""
         dispatch_proxy = MagicMock()
-        todo_relay_callback = MagicMock()
 
         relay = create_worker_relay(
             approval_proxy=approval_proxy,
             worker_model="test-model",
             dispatch_proxy=dispatch_proxy,
-            todo_relay_callback=todo_relay_callback,
             event_bus=EventBus(),
-            suppress_todo_updates=False,
             suppress_final_report_activity=True,
         )
 
@@ -268,64 +265,6 @@ class TestFlagThreading:
         )
 
 
-# ── suppress_todo_updates decoupling ─────────────────────────────────────
-
-
-class TestTodoDecoupling:
-    """Verify suppress_todo_updates and suppress_final_report_activity are
-    independent flags."""
-
-    def test_suppress_todo_alone_does_not_block_final_report_activity(
-        self, approval_proxy, event_bus
-    ) -> None:
-        """suppress_todo_updates=True alone must NOT block final-report
-        Activity — only suppress_final_report_activity should do that."""
-        ctrl = WorkerActivityController(event_bus)
-        relay = WorkerEventRelay(
-            approval_proxy=approval_proxy,
-            suppress_todo_updates=True,        # TODO suppressed
-            suppress_final_report_activity=False,  # final-report NOT suppressed
-            event_bus=event_bus,
-        )
-
-        relay.relay("tc-1", Done(
-            finish_reason="stop",
-            full_message={"role": "assistant", "content": "work done"},
-        ))
-
-        kinds = [e.kind for e in ctrl.snapshot()]
-        assert "final_report_started" in kinds, (
-            "suppress_todo_updates alone must not suppress final-report Activity"
-        )
-        assert "final_report_completed" in kinds
-
-    def test_final_report_flag_alone_does_blocks_final_report(
-        self, approval_proxy, event_bus
-    ) -> None:
-        """suppress_final_report_activity=True alone (without
-        suppress_todo_updates) blocks final-report Activity."""
-
-        ctrl = WorkerActivityController(event_bus)
-        relay = WorkerEventRelay(
-            approval_proxy=approval_proxy,
-            suppress_todo_updates=False,             # TODO NOT suppressed
-            suppress_final_report_activity=True,      # final-report suppressed
-            event_bus=event_bus,
-        )
-
-        relay.relay("tc-1", Done(
-            finish_reason="stop",
-            full_message={"role": "assistant", "content": "work done"},
-        ))
-
-        kinds = {e.kind for e in ctrl.snapshot()}
-        assert "final_report_started" not in kinds, (
-            "suppress_final_report_activity=True must block final-report "
-            "Activity even when suppress_todo_updates=False"
-        )
-        assert "final_report_completed" not in kinds
-
-
 # ── EventBus integration: both flags in combination ──────────────────────
 
 
@@ -342,7 +281,6 @@ class TestEventBusIntegration:
         # Step 1 (internal)
         relay1 = WorkerEventRelay(
             approval_proxy=approval_proxy,
-            suppress_todo_updates=True,
             suppress_final_report_activity=True,
             event_bus=bus,
         )
@@ -354,7 +292,6 @@ class TestEventBusIntegration:
         # Step 2 (internal)
         relay2 = WorkerEventRelay(
             approval_proxy=approval_proxy,
-            suppress_todo_updates=True,
             suppress_final_report_activity=True,
             event_bus=bus,
         )
@@ -366,7 +303,6 @@ class TestEventBusIntegration:
         # Step 3 (final — no suppression flags)
         relay3 = WorkerEventRelay(
             approval_proxy=approval_proxy,
-            suppress_todo_updates=False,
             suppress_final_report_activity=False,
             event_bus=bus,
         )
@@ -433,7 +369,6 @@ class TestWorkerEventHandlerLifecycle:
             "begin_assistant must be called for the workerStarted signal"
         )
         handler._chat._remove_plan_writer_card.assert_called_once_with("tc-1")
-        handler._playground.render_dispatch_todo_list.assert_called_once_with("tc-1")
 
     def test_on_worker_started_different_ids_not_blocked(self, handler) -> None:
         """_on_worker_started for different tool_call_ids both proceed."""
@@ -460,16 +395,6 @@ class TestWorkerEventHandlerLifecycle:
         assert handler._finish_presenter.present.call_count == 2, (
             "present must be called for each distinct tool_call_id"
         )
-
-    def test_canonical_worker_todo_is_still_suppressed(self, handler) -> None:
-        """Worker-local TODO events cannot repaint a canonical dispatch."""
-        handler._dispatch_ui.is_canonical_dispatch = MagicMock(return_value=True)
-        handler._on_worker_todo_list_updated(
-            "tc-1",
-            [{"id": "worker-local", "description": "Worker-local replacement"}],
-        )
-
-        handler._playground.update_todo_list.assert_not_called()
 
     def test_workflow_state_plan_writer_updates_only_before_dispatch(self, handler) -> None:
         """Only plan_ready WorkflowState snapshots update PlanWriterCard."""

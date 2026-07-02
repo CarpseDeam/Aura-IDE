@@ -8,16 +8,10 @@ user still sees one dispatch card, one Worker run, and one aggregate receipt.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from typing import Any
 
 from aura.conversation.dispatch import WorkerDispatchRequest, WorkerDispatchResult
-from aura.conversation.dispatch_todo_manifest import (
-    DispatchTodoItem,
-    dispatch_todo_manifest_from_request,
-    raw_dispatch_todo_checklist,
-)
-from aura.execution_checklist import build_execution_checklist_items
 
 
 _BROAD_CAMPAIGN_PATTERNS = (
@@ -72,7 +66,6 @@ class CampaignValidationResult:
     ok: bool
     requires_steps: bool = False
     errors: list[str] = field(default_factory=list)
-    checklist_errors: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -136,7 +129,6 @@ class WorkerStepSpec:
     forbidden_public_methods: list[str] = field(default_factory=list)
     risk_notes: list[str] = field(default_factory=list)
     validation_policy: StepValidationPolicy = field(default_factory=StepValidationPolicy)
-    checklist_item_ids: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -159,7 +151,6 @@ class WorkerStepSpec:
             "forbidden_public_methods": list(self.forbidden_public_methods),
             "risk_notes": list(self.risk_notes),
             "validation_policy": self.validation_policy.to_dict(),
-            "checklist_item_ids": list(self.checklist_item_ids),
         }
 
     @classmethod
@@ -183,7 +174,6 @@ class WorkerStepSpec:
             forbidden_public_methods=_str_list(raw.get("forbidden_public_methods")),
             risk_notes=_str_list(raw.get("risk_notes")),
             validation_policy=StepValidationPolicy.from_dict(raw.get("validation_policy")),
-            checklist_item_ids=_str_list(raw.get("checklist_item_ids")),
         )
 
 
@@ -196,7 +186,6 @@ class WorkerDispatchPlan:
     global_files: list[str] = field(default_factory=list)
     global_non_goals: list[str] = field(default_factory=list)
     steps: list[WorkerStepSpec] = field(default_factory=list)
-    visible_checklist: list[DispatchTodoItem] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -205,7 +194,6 @@ class WorkerDispatchPlan:
             "global_files": list(self.global_files),
             "global_non_goals": list(self.global_non_goals),
             "steps": [step.to_dict() for step in self.steps],
-            "visible_checklist": [item.to_dict() for item in self.visible_checklist],
         }
 
     @classmethod
@@ -213,14 +201,12 @@ class WorkerDispatchPlan:
         if not isinstance(raw, dict):
             raw = {}
         steps = raw.get("steps") if isinstance(raw.get("steps"), list) else []
-        checklist = raw_dispatch_todo_checklist(raw)
         return cls(
             overall_goal=str(raw.get("overall_goal") or raw.get("goal") or ""),
             visible_summary=str(raw.get("visible_summary") or raw.get("summary") or ""),
             global_files=_str_list(raw.get("global_files")),
             global_non_goals=_str_list(raw.get("global_non_goals")),
             steps=[WorkerStepSpec.from_dict(step) for step in steps],
-            visible_checklist=[DispatchTodoItem.from_dict(item) for item in checklist],
         )
 
 
@@ -300,14 +286,12 @@ class AggregatedDispatchResult:
 def plan_from_request(req: WorkerDispatchRequest) -> WorkerDispatchPlan:
     """Build a one-step compatibility plan from today's WorkerDispatchRequest."""
     if req.steps:
-        checklist = dispatch_todo_manifest_from_request(req)
         return WorkerDispatchPlan(
             overall_goal=req.goal,
             visible_summary=req.summary,
             global_files=list(req.files),
             global_non_goals=list(req.non_goals),
             steps=list(req.steps),
-            visible_checklist=checklist,
         )
 
     step = WorkerStepSpec(
@@ -342,7 +326,6 @@ def plan_from_request(req: WorkerDispatchRequest) -> WorkerDispatchPlan:
         global_files=list(req.files),
         global_non_goals=list(req.non_goals),
         steps=[step],
-        visible_checklist=dispatch_todo_manifest_from_request(replace(req, steps=[step])),
     )
 
 
@@ -453,13 +436,10 @@ def validate_dispatch_campaign(req: WorkerDispatchRequest) -> CampaignValidation
     if req.steps:
         errors.extend(_step_boundary_errors(req, requires_steps=requires_steps))
 
-    checklist_errors = _checklist_errors(req, requires_steps=requires_steps)
-
     return CampaignValidationResult(
-        ok=not errors and not checklist_errors,
+        ok=not errors,
         requires_steps=requires_steps,
         errors=errors,
-        checklist_errors=checklist_errors,
     )
 
 
@@ -543,33 +523,6 @@ def _step_boundary_errors(
         errors.append("Campaign steps need distinct titles.")
 
     return _dedupe(errors)
-
-
-def _checklist_errors(
-    req: WorkerDispatchRequest,
-    *,
-    requires_steps: bool,
-) -> list[str]:
-    if not requires_steps:
-        return []
-
-    rows = build_execution_checklist_items(req)
-    if not rows:
-        return [
-            "Broad implementation dispatches must produce a concrete visible execution checklist."
-        ]
-
-    if req.steps and len(rows) < len(req.steps):
-        return [
-            "Broad implementation dispatches must produce checklist rows that cover every step."
-        ]
-
-    if not req.steps and len(rows) == 1:
-        return [
-            "Broad implementation dispatches must not collapse to a single campaign-title checklist row."
-        ]
-
-    return []
 
 
 def _request_text(req: WorkerDispatchRequest) -> str:

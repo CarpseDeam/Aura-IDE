@@ -22,7 +22,6 @@ from aura.conversation.dispatch import (
 )
 from aura.conversation.dispatch_contract import enrich_worker_dispatch_contract
 from aura.conversation.dispatch_plan import validate_dispatch_campaign
-from aura.conversation.dispatch_todo_manifest import ensure_dispatch_todo_checklist
 from aura.conversation.history import History
 from aura.conversation.loop_detection import LoopDetector
 from aura.conversation.workflow_state import WorkflowStatus
@@ -85,7 +84,6 @@ class ToolRunner:
 
             req.steps = [WorkerStepSpec.from_dict(step) for step in raw_steps]
         req = enrich_worker_dispatch_contract(req)
-        req = ensure_dispatch_todo_checklist(req)
         campaign = validate_dispatch_campaign(req)
         if not campaign.ok:
             _log.debug(
@@ -97,7 +95,6 @@ class ToolRunner:
             result = _dispatch_preflight_rejection(
                 req,
                 campaign_errors=campaign.errors,
-                checklist_errors=campaign.checklist_errors,
             )
             if workflow_state_cb is not None:
                 workflow_state_cb(
@@ -584,19 +581,15 @@ def _dispatch_preflight_rejection(
     req: WorkerDispatchRequest,
     *,
     campaign_errors: list[str],
-    checklist_errors: list[str],
 ) -> WorkerDispatchResult:
     campaign_errors = [str(error) for error in campaign_errors if str(error or "").strip()]
-    checklist_errors = [str(error) for error in checklist_errors if str(error or "").strip()]
     failure_constraint = _dispatch_recovery_constraint(
         campaign_errors=campaign_errors,
-        checklist_errors=checklist_errors,
     )
     summary = (
         "The Worker was not started because the dispatch_to_worker request is "
         "not a valid bounded campaign yet. Planner must retry "
-        "dispatch_to_worker with a real steps array and a concrete visible "
-        "execution checklist."
+        "dispatch_to_worker with a real steps array."
     )
     return WorkerDispatchResult(
         ok=False,
@@ -611,7 +604,6 @@ def _dispatch_preflight_rejection(
             "internal_planner_handoff": True,
             "user_visible_blocker": False,
             "campaign_errors": campaign_errors,
-            "checklist_errors": checklist_errors,
             "failure_constraint": failure_constraint,
             "requested_goal": req.goal,
             "requested_files": list(req.files),
@@ -622,7 +614,6 @@ def _dispatch_preflight_rejection(
 def _dispatch_recovery_constraint(
     *,
     campaign_errors: list[str],
-    checklist_errors: list[str],
 ) -> str:
     lines = [
         "CONSTRAINT FOR NEXT DISPATCH ATTEMPT:",
@@ -630,11 +621,8 @@ def _dispatch_recovery_constraint(
         "Re-call dispatch_to_worker immediately with a valid steps array.",
         "Every step must include id, title, goal, spec, files, and acceptance.",
         "Each step must be a bounded active-step work order, not the full campaign.",
-        "Provide a concrete execution_checklist or todo_checklist, or rely on one checklist row per valid step.",
         "Do not call edit/write tools.",
     ]
     if campaign_errors:
         lines.append("campaign_errors: " + "; ".join(campaign_errors))
-    if checklist_errors:
-        lines.append("checklist_errors: " + "; ".join(checklist_errors))
     return "\n".join(lines)

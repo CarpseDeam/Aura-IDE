@@ -41,40 +41,7 @@ class LoopDetector:
         content: str,
     ) -> LoopDetectionResult:
         if ok:
-            if tool_name == "update_todo_list":
-                key = _tool_key(tool_name, args)
-                last_output, count = self._no_progress.get(key, ("", 0))
-                count = count + 1 if last_output == content else 1
-                self._no_progress[key] = (content, count)
-                if count >= self.threshold:
-                    phase_boundary = mode == "worker"
-                    info = {
-                        "ok": False,
-                        "loop_detected": True,
-                        "recoverable": phase_boundary,
-                        "phase_boundary": phase_boundary,
-                        "reason": "repeated_no_progress",
-                        "tool": tool_name,
-                        "message": (
-                            "Loop detected: this TODO update has repeated without changing "
-                            "state. Stop calling tools and report completed work, blockers, "
-                            "and remaining work so the planner can adjust the approach."
-                            if phase_boundary
-                            else (
-                                "Loop detected: this TODO update has repeated without changing "
-                                "state. Stop repeating the same call and move to the next step."
-                            )
-                        ),
-                        "loop": {
-                            "tool": tool_name,
-                            "args_signature": key,
-                            "repeated_calls": count,
-                            "threshold": self.threshold,
-                        },
-                    }
-                    return LoopDetectionResult(content=_annotate_content(content, info), info=info)
-            else:
-                self._no_progress.clear()
+            self._no_progress.clear()
             self._failures.clear()
             return LoopDetectionResult(content=content)
 

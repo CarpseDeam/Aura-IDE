@@ -1,4 +1,4 @@
-"""Info hub pane: Worker Log tab with TODO list, activity, and final report."""
+"""Info hub pane: Worker Log tab with activity and final report."""
 
 from __future__ import annotations
 
@@ -20,7 +20,6 @@ from aura.gui.cards._helpers import _mono_font
 from aura.gui.cards.diff_card import DiffCard
 from aura.gui.cards.error_card import ErrorCard
 from aura.gui.theme import ACCENT, BG, BG_RAISED, BORDER, FG
-from aura.gui.widgets.todo_list import TodoListWidget
 from aura.gui.worker_log_stream import WorkerLogStreamBuffer
 
 
@@ -30,7 +29,6 @@ class InfoHubPane(QWidget):
     Public API:
         append_reasoning(text) -> None
         append_content(text) -> None
-        update_todo_list(tasks) -> None
         add_diff_card(rel_path, old, new, decision, is_new_file) -> None
         add_error(message) -> None
         flush_worker_log() -> None
@@ -78,14 +76,6 @@ class InfoHubPane(QWidget):
         log_layout.setContentsMargins(0, 0, 0, 0)
         log_layout.setSpacing(0)
 
-        # TODO list widget
-        self._todo_widget = TodoListWidget(self._log_tab)
-        self._todo_widget.setSizePolicy(
-            QSizePolicy.Policy.Expanding,
-            QSizePolicy.Policy.Maximum,
-        )
-        log_layout.addWidget(self._todo_widget, 0)
-
         # Worker log text area: activity/tool calls first, final report last.
         self._log_view = QPlainTextEdit(self._log_tab)
         self._log_view.setReadOnly(True)
@@ -115,10 +105,9 @@ class InfoHubPane(QWidget):
         footer_layout.addStretch(1)
         self._worker_footer.setVisible(False)
         log_layout.addWidget(self._worker_footer, 0)
-        log_layout.setStretch(0, 0)
-        log_layout.setStretch(1, 1)
+        log_layout.setStretch(0, 1)
+        log_layout.setStretch(1, 0)
         log_layout.setStretch(2, 0)
-        log_layout.setStretch(3, 0)
 
         self._tabs.addTab(self._log_tab, "Worker Log")
 
@@ -148,10 +137,6 @@ class InfoHubPane(QWidget):
         self._log_view.insertPlainText(text)
         sb = self._log_view.verticalScrollBar()
         sb.setValue(sb.maximum())
-
-    def update_todo_list(self, tasks: list[dict]) -> None:
-        """Delegate to the embedded TodoListWidget."""
-        self._todo_widget.update_tasks(tasks)
 
     def update_activity(self, entries: list[dict]) -> None:
         """Append new Worker Activity entries to the single Worker Log stream."""
@@ -248,13 +233,12 @@ class InfoHubPane(QWidget):
         btn.setToolTip("Copy summary")
 
     def clear(self) -> None:
-        """Reset the Worker Log: clear text, todo, activity, and dynamic cards."""
+        """Reset the Worker Log: clear text, activity, and dynamic cards."""
         self.clear_log()
-        self._todo_widget.update_tasks([])
         self.update_activity([])
 
     def clear_log(self) -> None:
-        """Clear log text and dynamic cards without touching the TODO rail."""
+        """Clear log text and dynamic cards."""
         self._log_stream.clear()
         self._log_view.setPlainText("")
         self._activity_entry_count = 0

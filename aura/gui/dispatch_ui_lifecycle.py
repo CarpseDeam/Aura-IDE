@@ -21,7 +21,7 @@ _log = logging.getLogger(__name__)
 
 
 class DispatchUiLifecycle:
-    """Owns SpecCard creation, wiring, removal, and visible dispatch IDs."""
+    """Owns SpecCard creation, wiring, and removal."""
 
     def __init__(
         self,
@@ -36,25 +36,16 @@ class DispatchUiLifecycle:
         self._parent_widget = parent_widget
         self._active_workflow = active_workflow
         self._wired_spec_cards: set[str] = set()
-        self._canonical_dispatch_ids: set[str] = set()
         self._visible_dispatch_card_id: str | None = None
 
     def get_spec_card(self, tool_call_id: str):
         return self._chat.get_spec_card(tool_call_id)
-
-    def is_canonical_dispatch(self, tool_call_id: str) -> bool:
-        return tool_call_id in self._canonical_dispatch_ids
-
-    def discard_canonical_dispatch(self, tool_call_id: str) -> None:
-        self._canonical_dispatch_ids.discard(tool_call_id)
 
     def begin_visible_dispatch(self, tool_call_id: str) -> None:
         previous_card_id = self._visible_dispatch_card_id
         if previous_card_id and previous_card_id != tool_call_id:
             self._chat.remove_spec_card(previous_card_id)
             self._wired_spec_cards.discard(previous_card_id)
-            self._canonical_dispatch_ids.discard(previous_card_id)
-        self._canonical_dispatch_ids.add(tool_call_id)
         self._visible_dispatch_card_id = tool_call_id
 
     def begin_auto_dispatch(self, tool_call_id: str) -> None:
@@ -62,8 +53,6 @@ class DispatchUiLifecycle:
         if previous_card_id:
             self._chat.remove_spec_card(previous_card_id)
             self._wired_spec_cards.discard(previous_card_id)
-            self._canonical_dispatch_ids.discard(previous_card_id)
-        self._canonical_dispatch_ids.add(tool_call_id)
         self._visible_dispatch_card_id = None
 
     def show_spec_card(
@@ -142,7 +131,6 @@ class DispatchUiLifecycle:
         if card:
             card.worker_cancelled()
         self.clear_active_spec_card(tool_call_id)
-        self.discard_canonical_dispatch(tool_call_id)
 
     def clear_active_spec_card(self, tool_call_id: str) -> None:
         """Remove the active plan card once the workflow reaches a terminal state."""

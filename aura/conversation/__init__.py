@@ -21,11 +21,6 @@ from aura.conversation.dispatch_plan import (
     plan_from_request,
     request_for_step,
 )
-from aura.conversation.dispatch_todo_manifest import (
-    DispatchTodoItem,
-    dispatch_todo_manifest_from_request,
-    ensure_dispatch_todo_checklist,
-)
 from aura.conversation.history import History
 from aura.conversation.task_shape import TaskShape, infer_task_shape
 from aura.conversation.worker_outcome import (
@@ -62,7 +57,6 @@ __all__ = [
     "StepResult",
     "StepValidationPolicy",
     "AggregatedDispatchResult",
-    "DispatchTodoItem",
     "TaskShape",
     "DispatchCallback",
     "CriticCallback",
@@ -73,8 +67,6 @@ __all__ = [
     "infer_outcome_status",
     "normalize_outcome_status",
     "normalize_worker_task",
-    "dispatch_todo_manifest_from_request",
-    "ensure_dispatch_todo_checklist",
     "plan_from_request",
     "request_for_step",
     "ValidationCommandRun",

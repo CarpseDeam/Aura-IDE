@@ -56,12 +56,6 @@ Each tool call goes through a circuit breaker that tracks consecutive timeouts o
 
 This tool is available to the Planner and Drones. Worker may also use it. Output is truncated at 100 KB. Rejects mutating or dangerous commands.
 
-## Worker Tools
-
-| Tool               | Description                                          | Parameters                |
-|--------------------|------------------------------------------------------|---------------------------|
-| `update_todo_list` | Update the Worker's TODO list (progress tracking)    | `completed`, `current`    |
-
 ## Dispatch
 
 | Tool                 | Description                                           | Parameters                                                   |

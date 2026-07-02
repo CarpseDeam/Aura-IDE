@@ -101,7 +101,7 @@ class TestWorkerActivityLogLine:
             "final_report_completed",
         ],
     )
-    def test_checklist_and_final_report_activity_is_suppressed(
+    def test_lifecycle_and_final_report_activity_is_suppressed(
         self,
         kind: str,
     ) -> None:

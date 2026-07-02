@@ -44,13 +44,11 @@ from aura.conversation import (
     WorkerOutcomeStatus,
 )
 from aura.conversation.dispatch_plan import plan_from_request
-from aura.conversation.dispatch_todo_manifest import ensure_dispatch_todo_checklist
 from aura.conversation.persistence import WorkerDispatchRecord
 from aura.conversation.tool_limits import TERMINAL_TOOLS, WRITE_TOOLS
 from aura.conversation.workflow_state import WorkflowState, WorkflowStatus
 from aura.dependency_context import build_dependency_stanza
 from aura.events import EventBus
-from aura.execution_checklist import ExecutionChecklistController
 from aura.lifecycle import LifecycleHooks, attach_lifecycle_notify
 
 __all__ = [
@@ -81,8 +79,6 @@ class _DispatchProxy(QObject):
     workerStreamDone = Signal(str, str, dict)
     workerApiError = Signal(str, int, str)
     workerUsage = Signal(str, str, int, int, int, int)  # tool_id, model, prompt, comp, hit, miss
-    workerTodoListUpdated = Signal(str, list)  # tool_call_id, tasks (Worker-local only)
-    dispatchTodoListUpdated = Signal(str, list)  # tool_call_id, tasks (canonical execution checklist snapshots)
     workerTerminalOutput = Signal(str, str, str)  # parent_tool_id, worker_tool_id, text
     workerAgentProcessStarted = Signal(str, str, str, str)  # parent_tool_id, process_id, label, command
     workerAgentProcessOutput = Signal(str, str, str)  # parent_tool_id, process_id, text
@@ -125,16 +121,12 @@ class _DispatchProxy(QObject):
         self._event_bus = EventBus()
 
         # Lifecycle hooks — observation bridge attached to the event bus.
-        # ExecutionChecklistController and WorkerActivityController remain
-        # subscribed directly to EventBus; lifecycle notify observes in parallel.
+        # WorkerActivityController remains subscribed directly to EventBus;
+        # lifecycle notify observes in parallel.
         self._lifecycle = LifecycleHooks()
         self._detach_lifecycle_notify = attach_lifecycle_notify(
             self._event_bus, self._lifecycle
         )
-
-        # Execution checklist projects from dispatch lifecycle events on the bus.
-        self._checklist_controller = ExecutionChecklistController(event_bus=self._event_bus)
-        self._checklist_controller.set_on_change(self._on_checklist_controller_changed)
 
         # Activity controller projects from worker tool/command events on the bus.
         self._activity_controller = WorkerActivityController(self._event_bus)
@@ -181,36 +173,6 @@ class _DispatchProxy(QObject):
 
     def result_metadata(self, tool_call_id: str) -> dict[str, Any]:
         return dict(self._result_metadata.get(tool_call_id, {}))
-
-    # ---- canonical execution checklist ------------------------------------
-
-    def _emit_dispatch_todo_snapshot(self, tool_call_id: str, tasks: list[dict[str, Any]]) -> None:
-        """Emit a canonical dispatch TODO snapshot."""
-        logging.debug(
-            "_emit_dispatch_todo_snapshot tool_call_id=%s task_count=%d statuses=%s",
-            tool_call_id, len(tasks),
-            [t.get("status", "?") for t in tasks if isinstance(t, dict)],
-        )
-        self.dispatchTodoListUpdated.emit(tool_call_id, tasks)
-
-    def _relay_worker_todo_update(self, tool_call_id: str, tasks: list) -> None:
-        """Relay Worker-local TODO updates only outside canonical dispatch.
-
-        During canonical dispatch the Worker's update_todo_list tool calls
-        and progress-TODO emissions are suppressed — the visible dispatch
-        TODO rail is derived from ExecutionChecklistController state.
-        """
-        if self._has_canonical_todo(tool_call_id):
-            logging.debug(
-                "_relay_worker_todo_update tool_call_id=%s suppressed (canonical dispatch TODO active)",
-                tool_call_id,
-            )
-            return
-        logging.debug(
-            "_relay_worker_todo_update tool_call_id=%s task_count=%d",
-            tool_call_id, len(tasks),
-        )
-        self.workerTodoListUpdated.emit(tool_call_id, tasks)
 
     # ---- Worker Activity (projected from event bus) -----------------------
 
@@ -317,13 +279,13 @@ class _DispatchProxy(QObject):
                 extras={"dispatch_not_started": True, "dispatch_cancelled": True},
             )
 
-        edited = ensure_dispatch_todo_checklist(pending.edited_request or req)
+        edited = pending.edited_request or req
 
         # -- dependency graph: annotate downstream dependents ---------------
         if self._workspace_root is not None and edited.files:
             stanza = build_dependency_stanza(self._workspace_root, edited.files)
             if stanza:
-                edited = ensure_dispatch_todo_checklist(replace(edited, spec=edited.spec + stanza))
+                edited = replace(edited, spec=edited.spec + stanza)
 
         # --- Emit dispatched snapshot (fresh WorkflowState — no steps yet) ---
         self._transition_workflow_state(
@@ -356,10 +318,6 @@ class _DispatchProxy(QObject):
             emit_worker_finished=self.workerFinished.emit,
             event_bus=self._event_bus,
         )
-        # Run the session. The canonical TODO checklist survives after finish
-        # so late Worker-local TODO events cannot repaint the rail. It is
-        # cleared only on the next dispatch for this tool_call_id, cancellation,
-        # or conversation reset.
         try:
             result = session.run()
         except Exception as exc:
@@ -550,27 +508,6 @@ class _DispatchProxy(QObject):
             self._init_workflow_state(tool_call_id, goal, summary)
         self._transition_workflow_state(tool_call_id, status)
 
-    # ---- dispatch TODO helpers --------------------------------------------
-
-    def _on_checklist_controller_changed(self, tool_call_id: str, tasks: list[dict[str, Any]]) -> None:
-        """Relay a canonical checklist snapshot from the controller to the GUI.
-
-        Only relays when the active workflow matches — stale emissions after
-        cancellation or reset are silently dropped.
-        """
-        if self._active_workflow is None or self._active_workflow.tool_call_id != tool_call_id:
-            logging.debug(
-                "_on_checklist_controller_changed tool_call_id=%s suppressed — workflow mismatch",
-                tool_call_id,
-            )
-            return
-        self._emit_dispatch_todo_snapshot(tool_call_id, tasks)
-
-    # ── canonical TODO guard ────────────────────────────────────────────
-
-    def _has_canonical_todo(self, tool_call_id: str) -> bool:
-        return self._checklist_controller.has_active_campaign(tool_call_id)
-
     def _workflow_tool_started(
         self, tool_call_id: str, worker_tool_id: str, name: str
     ) -> None:
@@ -650,7 +587,6 @@ class _DispatchProxy(QObject):
         """
         _log.info("_run_worker_internal entered tool_call_id=%s", tool_call_id)
         runner = self._create_worker_dispatch_runner(
-            suppress_worker_todo_updates=True,
             suppress_final_report_activity=True,
         )
         return runner.run_worker(tool_call_id, req, pending, record_replayable=False)
@@ -714,7 +650,6 @@ class _DispatchProxy(QObject):
     def _create_worker_dispatch_runner(
         self,
         *,
-        suppress_worker_todo_updates: bool = False,
         suppress_final_report_activity: bool = False,
     ) -> WorkerDispatchRunner:
         return WorkerDispatchRunner(
@@ -727,8 +662,6 @@ class _DispatchProxy(QObject):
             worker_system_prompt=self._worker_system_prompt,
             max_tool_rounds=self._max_tool_rounds,
             dispatch_proxy=self,
-            todo_relay_callback=self._relay_worker_todo_update,
-            suppress_worker_todo_updates=suppress_worker_todo_updates,
             suppress_final_report_activity=suppress_final_report_activity,
             records=self._records,
             result_metadata=self._result_metadata,

@@ -14,8 +14,6 @@ Say nothing while you work. No "now I have context," no "let me implement," no "
 
 Design the whole campaign, then emit it as an ordered steps array in one dispatch_to_worker call. Each step is one bounded edit with a clean boundary and its own files, spec, and acceptance. Top-level goal/files/spec/acceptance are user-visible campaign context, not substitutes for step boundaries. Never emit title-only or thin steps. Never let step 1 own the whole campaign. Each step must be small enough for the Worker to finish and return. Never dispatch a single starter task when the work needs a campaign. Never flatten a campaign into one giant task.
 
-Also emit todo_checklist for non-trivial campaigns. This is the user's visible work contract, separate from execution steps. It must include the concrete accepted requirements from the user's task, including method moves, wiring, cleanup, and validation when those are part of the work. Give each row a stable id, a concrete description, and owning_step_id pointing at the execution step that should advance it. If one execution step owns multiple real acceptance items, list all of those checklist rows; do not collapse them into the step title.
-
 If dispatch_to_worker is rejected with campaign_errors or a failure_constraint saying steps are required, immediately re-call dispatch_to_worker with a valid steps array. Do not narrate, ask the user, abandon the task, or try edit/write tools when the rejection is internal and recoverable. Every step must include id, title, goal, spec, files, and acceptance.
 
 Carry the contract when you know it: expected_public_symbols, expected_dataclass_fields, forbidden_calls, forbidden_public_methods, non_goals  at campaign level and per step.

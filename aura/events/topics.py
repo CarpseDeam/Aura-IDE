@@ -5,7 +5,6 @@ matching the pattern ``<subsystem>.<event>``.
 """
 
 # ── Dispatch lifecycle ──────────────────────────────────────────────────────
-DISPATCH_CHECKLIST_DECLARED = "dispatch.checklist_declared"
 DISPATCH_CAMPAIGN_STARTED = "dispatch.campaign_started"
 DISPATCH_STEP_STARTED = "dispatch.step_started"
 DISPATCH_STEP_COMPLETED = "dispatch.step_completed"
@@ -31,7 +30,6 @@ ALL = "*"
 
 # ── Convenience groupings for validation / introspection ────────────────────
 DISPATCH_TOPICS = frozenset({
-    DISPATCH_CHECKLIST_DECLARED,
     DISPATCH_CAMPAIGN_STARTED,
     DISPATCH_STEP_STARTED,
     DISPATCH_STEP_COMPLETED,

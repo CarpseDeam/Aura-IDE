@@ -74,11 +74,6 @@ class WorkerFinishPresenter:
                 )
         else:
             self._playground.set_worker_running(False)
-        self._playground.finish_todo_list(
-            tool_call_id,
-            ok=ok,
-            needs_followup=bool(needs_followup),
-        )
         if outcome.is_mismatch:
             self._chat.begin_planner_resolution_aura()
 

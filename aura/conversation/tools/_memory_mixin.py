@@ -1,4 +1,4 @@
-"""Mixin providing project memory and todo-list handler methods for ToolRegistry.
+"""Mixin providing project memory handler methods for ToolRegistry.
 
 Expected on self:
     _root: Path  (workspace root)
@@ -11,7 +11,7 @@ from aura.memory_db import ProjectMemoryDB
 
 
 class MemoryHandlersMixin:
-    """Handlers for project memory and todo-list tools."""
+    """Handlers for project memory tools."""
 
 
     def _handle_search_project_memory(self, args, approval_cb, reject_all) -> ToolExecResult:

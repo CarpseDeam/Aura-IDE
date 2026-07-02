@@ -333,21 +333,17 @@ class TestComprehensiveActivityFlow:
         assert len(snapshots) == 3, f"Expected 3 callback invocations, got {len(snapshots)}"
         assert len(snapshots[-1]) == 3
 
-    # ── no TODO references ─────────────────────────────────────────────────
+    # ── module boundary ────────────────────────────────────────────────────
 
-    def test_no_todo_references(self) -> None:
-        """WorkerActivityController module must not import TODO types."""
+    def test_no_dispatch_row_references(self) -> None:
+        """WorkerActivityController module must not import dispatch row types."""
         # Direct import attempts should fail with ImportError
         from aura.bridge import worker_activity as wa_mod
 
-        # DispatchTodoRow should not exist in the worker_activity module's
-        # namespace.
-        assert not hasattr(wa_mod, "DispatchTodoRow"), (
-            "worker_activity module must not expose DispatchTodoRow"
-        )
+        assert not hasattr(wa_mod, "DispatchRow")
 
         try:
-            from aura.bridge.worker_activity import DispatchTodoRow  # noqa: F401
-            assert False, "DispatchTodoRow should not be importable"
+            from aura.bridge.worker_activity import DispatchRow  # noqa: F401
+            assert False, "DispatchRow should not be importable"
         except ImportError:
             pass

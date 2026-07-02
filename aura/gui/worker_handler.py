@@ -114,8 +114,6 @@ class WorkerEventHandler(QObject):
         self._bridge.workerDiffDecided.connect(self._tool_router.on_worker_diff_decided)
         self._bridge.workerApiError.connect(self._on_worker_api_error)
         self._bridge.workerUsage.connect(self._on_worker_usage)
-        self._bridge.workerTodoListUpdated.connect(self._on_worker_todo_list_updated)
-        self._bridge.dispatchTodoListUpdated.connect(self._on_dispatch_todo_list_updated)
         self._bridge.workerActivityUpdated.connect(self._on_worker_activity_updated)
         self._bridge.workerTerminalOutput.connect(self._tool_router.on_worker_terminal_output)
         self._bridge.workerAgentProcessStarted.connect(self._tool_router.on_worker_agent_process_started)
@@ -170,7 +168,6 @@ class WorkerEventHandler(QObject):
                 tool_call_id, goal[:120],
             )
             self._dispatch_ui.begin_auto_dispatch(tool_call_id)
-            self._playground.begin_canonical_dispatch_tracking(tool_call_id, step_list)
             # Backend _DispatchProxy owns the plan_ready/dispatched snapshot.
             self._bridge.user_dispatched(tool_call_id, goal, file_list, spec, acceptance, summary)
             self._chat.scroll_to_bottom(force=True)
@@ -181,7 +178,6 @@ class WorkerEventHandler(QObject):
             tool_call_id, goal[:120],
         )
         self._dispatch_ui.begin_visible_dispatch(tool_call_id)
-        self._playground.begin_canonical_dispatch_tracking(tool_call_id, step_list)
         # Backend _DispatchProxy owns the plan_ready snapshot (emitted inside
         # request_dispatch after showSpecCard).  No WorkflowState construction here.
         self._dispatch_ui.show_spec_card(
@@ -211,7 +207,6 @@ class WorkerEventHandler(QObject):
         self._chat._remove_plan_writer_card(tool_call_id)
         self._playground.set_glow_state("coding")
         self._playground.begin_assistant()
-        self._playground.render_dispatch_todo_list(tool_call_id)
         self.worker_started.emit()
 
         self._dispatch_ui.mark_worker_started(tool_call_id)
@@ -258,7 +253,6 @@ class WorkerEventHandler(QObject):
         # in request_dispatch after DispatchSession.run().  No finish() call here.
         if outcome.should_clear_dispatch_card:
             self._dispatch_ui.clear_active_spec_card(tool_call_id)
-        self._dispatch_ui.discard_canonical_dispatch(tool_call_id)
         self.worker_running_changed.emit(False)
 
     def _worker_result_metadata(self, tool_call_id: str) -> dict:
@@ -283,15 +277,11 @@ class WorkerEventHandler(QObject):
     def _on_worker_reasoning(self, tool_call_id: str, text: str) -> None:
         """Forward reasoning delta to playground."""
 
-        if self._dispatch_ui.is_canonical_dispatch(tool_call_id):
-            return
         self._playground.append_reasoning(text)
 
     def _on_worker_content(self, tool_call_id: str, text: str) -> None:
         """Forward content delta to playground."""
 
-        if self._dispatch_ui.is_canonical_dispatch(tool_call_id):
-            return
         self._playground.append_content(text)
 
 
@@ -325,37 +315,6 @@ class WorkerEventHandler(QObject):
         bucket["miss"] += miss
         bucket["out"] += completion
         self.usage_updated.emit()
-
-    def _on_worker_todo_list_updated(self, tool_call_id: str, tasks: list) -> None:
-        """Route Worker-local TODO updates (update_todo_list tool + progress TODOs).
-
-        Suppressed during canonical dispatch — the visible dispatch TODO rail
-        is owned by DispatchSession and arrives via _on_dispatch_todo_list_updated.
-        """
-        if self._dispatch_ui.is_canonical_dispatch(tool_call_id):
-            _log.debug(
-                "_on_worker_todo_list_updated tool_call_id=%s suppressed (canonical dispatch)",
-                tool_call_id,
-            )
-            return
-        _log.debug(
-            "_on_worker_todo_list_updated tool_call_id=%s task_count=%d",
-            tool_call_id, len(tasks),
-        )
-        self._playground.update_todo_list(tasks, tool_call_id)
-
-    def _on_dispatch_todo_list_updated(self, tool_call_id: str, tasks: list) -> None:
-        """Route canonical DispatchSession TODO snapshots to the playground.
-
-        Always forwarded — canonical snapshots are the sole source of truth
-        for the visible dispatch TODO rail.
-        """
-        _log.debug(
-            "_on_dispatch_todo_list_updated tool_call_id=%s task_count=%d statuses=%s",
-            tool_call_id, len(tasks),
-            [t.get("status", "?") for t in tasks if isinstance(t, dict)],
-        )
-        self._playground.update_dispatch_todo_list(tasks, tool_call_id)
 
     def _on_worker_activity_updated(self, tool_call_id: str, entries: list) -> None:
         """Route Worker Activity snapshots to playground (append-only heartbeat)."""

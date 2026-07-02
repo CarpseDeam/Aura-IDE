@@ -23,7 +23,7 @@ def generate_handoff_prompt() -> str:
         "- **Current state**: What is working, what is unfinished.\n"
         "- **Relevant files**: Files discussed or changed.\n"
         "- **Validation / tests**: Commands run and results.\n"
-        "- **Next useful step**: A grounded continuation point, not a giant todo pile.\n\n"
+        "- **Next useful step**: A grounded continuation point, not a giant task pile.\n\n"
         "Output ONLY the handoff markdown document — nothing before or after it."
     )
 

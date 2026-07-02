@@ -15,7 +15,6 @@ from aura.events.event import AuraEvent
 from aura.events.topics import (
     DISPATCH_CAMPAIGN_FINISHED,
     DISPATCH_CAMPAIGN_STARTED,
-    DISPATCH_CHECKLIST_DECLARED,
     DISPATCH_STEP_COMPLETED,
     DISPATCH_STEP_STARTED,
     ALL,
@@ -39,7 +38,6 @@ __all__ = [
     "AuraEvent",
     "EventBus",
     # ── individual topic constants ──────────────────────────────
-    "DISPATCH_CHECKLIST_DECLARED",
     "DISPATCH_CAMPAIGN_STARTED",
     "DISPATCH_STEP_STARTED",
     "DISPATCH_STEP_COMPLETED",

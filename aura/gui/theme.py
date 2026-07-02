@@ -49,8 +49,6 @@ LABEL_DRONES = "#9d7cd8"        # soft violet — drone summon toggle label
 LABEL_READ_ONLY = "#e0af68"     # amber/warm — read-only badge
 LABEL_THREAD = "#a8aebb"        # dim gray — thread titles (same as FG_DIM)
 LABEL_THREAD_HOVER = "#eaecef"  # bright — thread title on hover (same as FG)
-LABEL_TODO = "#9d7cd8"          # soft violet — TODO header (matches projects)
-
 
 def apply_theme(app: QApplication) -> None:
     """Apply Fusion + dark palette + global stylesheet."""
@@ -281,7 +279,6 @@ QLabel#paneTitleFiles {{ color: {LABEL_FILES}; font-size: 11px; font-weight: 600
 QLabel#paneTitleProjects {{ color: {LABEL_PROJECTS}; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; padding: 4px 8px; }}
 QLabel#paneTitleModel {{ color: {LABEL_MODEL}; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; padding: 4px 8px; }}
 QLabel#paneTitleDrones {{ color: {LABEL_DRONES}; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; padding: 4px 8px; }}
-QLabel#paneTitleTodo {{ color: {LABEL_TODO}; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; padding: 0 0 4px 0; }}
 QLabel#threadTitle {{ color: {LABEL_THREAD}; font-size: 12px; }}
 QLabel#threadTitle:hover {{ color: {LABEL_THREAD_HOVER}; }}
 

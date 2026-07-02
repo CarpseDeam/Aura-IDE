@@ -98,10 +98,6 @@ class FakePlayground:
     def set_worker_running(self, value: bool) -> None:
         self.events.append(("set_worker_running", value))
 
-    def finish_todo_list(self, *args, **kwargs) -> None:
-        self.events.append(("finish_todo_list", args, kwargs))
-
-
 class FakeSpecCard:
     def __init__(self, goal: str = "Fix the bug") -> None:
         self.goal = goal
@@ -391,7 +387,6 @@ def test_runtime_ui_artifacts_are_not_restored_on_normal_chat_load() -> None:
 
     event_names = [event[0] for event in chat.events]
     assert "worker_log" not in event_names
-    assert "todo" not in event_names
     assert "activity" not in event_names
     assert "terminal" not in event_names
     assert "tool" not in event_names

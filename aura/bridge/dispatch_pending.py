@@ -1,8 +1,7 @@
 """Pending dispatch state owner.
 
 Owns the _DispatchPending dataclass and the thread-safe pending map.
-Does NOT own Worker execution, Qt signals, TODO policy, or result
-classification.
+Does NOT own Worker execution, Qt signals, or result classification.
 """
 
 from __future__ import annotations

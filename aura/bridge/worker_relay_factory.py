@@ -7,7 +7,6 @@ policy, or pending state.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import Any
 
 from PySide6.QtCore import Qt
@@ -21,9 +20,7 @@ def create_worker_relay(
     approval_proxy: Any,
     worker_model: str,
     dispatch_proxy: Any,
-    todo_relay_callback: Callable[[str, list], None],
     event_bus: EventBus,
-    suppress_todo_updates: bool = False,
     suppress_final_report_activity: bool = False,
 ) -> WorkerEventRelay:
     """Construct a WorkerEventRelay and wire every signal to *dispatch_proxy*.
@@ -42,7 +39,6 @@ def create_worker_relay(
     relay = WorkerEventRelay(
         approval_proxy=approval_proxy,
         worker_model=worker_model,
-        suppress_todo_updates=suppress_todo_updates,
         suppress_final_report_activity=suppress_final_report_activity,
         event_bus=event_bus,
     )
@@ -60,9 +56,6 @@ def create_worker_relay(
     # Tool results
     relay.toolResult.connect(dispatch_proxy.workerToolResult)
     relay.diffDecided.connect(dispatch_proxy.workerDiffDecided)
-    # TODO — routed through the caller's relay callback so canonical dispatch
-    # can suppress Worker-local updates.
-    relay.todoListUpdated.connect(todo_relay_callback)
     # Terminal / agent process
     relay.terminalOutput.connect(dispatch_proxy.workerTerminalOutput)
     relay.agentProcessStarted.connect(dispatch_proxy.workerAgentProcessStarted)

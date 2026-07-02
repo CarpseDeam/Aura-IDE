@@ -1,14 +1,4 @@
-"""WorkerEventRelay — maps worker Event objects to PySide6 signals.
-
-LEGACY — Non-canonical progress/TODO overlay (``EventRelayProgressTodo``) is
-extracted into ``aura/bridge/event_relay_progress_todo.py``. During canonical
-DispatchSession campaigns ``suppress_todo_updates`` is set and all TODO
-emissions from this relay are dropped — the visible execution checklist is
-projected by ``ExecutionChecklistController`` from event-bus lifecycle events.
-
-Worker Activity (via ``WorkerActivityController``) is the correct execution
-heartbeat for both canonical and non-canonical paths.
-"""
+"""WorkerEventRelay — maps worker Event objects to PySide6 signals."""
 from __future__ import annotations
 
 import json
@@ -17,12 +7,7 @@ from typing import Any
 from PySide6.QtCore import QObject, Signal
 
 from aura.bridge.event_relay_execution_ledger import EventRelayExecutionLedger
-from aura.bridge.event_relay_progress_todo import EventRelayProgressTodo
 from aura.bridge.event_relay_terminal_tracking import EventRelayTerminalTracker
-from aura.bridge.event_relay_write_tracking import (
-    _tool_progress_details_from_args,
-    _tool_progress_details_from_result,
-)
 from aura.client import (
     AgentProcessFinished,
     AgentProcessOutput,
@@ -70,7 +55,6 @@ class WorkerEventRelay(QObject):
     apiError = Signal(str, int, str)          # tool_call_id, status_code, message
     toolResult = Signal(str, str, str, bool, str, dict)  # tool_id, worker_tc_id, name, ok, result, extras
     diffDecided = Signal(str, str, str, str, str, str, bool)
-    todoListUpdated = Signal(str, list)       # tool_call_id, tasks
     terminalOutput = Signal(str, str, str)    # parent_tool_id, worker_tool_id, text
     agentProcessStarted = Signal(str, str, str, str)  # parent_tool_id, process_id, label, command
     agentProcessOutput = Signal(str, str, str)  # parent_tool_id, process_id, text
@@ -82,7 +66,6 @@ class WorkerEventRelay(QObject):
         event_bus: EventBus,
         worker_model: str = "",
         parent: QObject | None = None,
-        suppress_todo_updates: bool = False,
         suppress_final_report_activity: bool = False,
     ) -> None:
         super().__init__(parent)
@@ -104,21 +87,14 @@ class WorkerEventRelay(QObject):
         # by _emit_bus_event so every EventBus fact carries the parent
         # dispatch tool_call_id as run_id and campaign_id.
         self._dispatch_tool_call_id: str = ""
-        self._suppress_todo_updates = suppress_todo_updates
         # Explicit flag to suppress final-report Activity on the event bus.
         # Internal DispatchSession worker steps must not emit
         # WORKER_FINAL_REPORT_STARTED / WORKER_FINAL_REPORT_FINISHED,
         # because those look like the Worker finished and restarted.
-        # This flag is semantically distinct from suppress_todo_updates.
         self._suppress_final_report_activity = suppress_final_report_activity
-        self.todo_used: bool = False              # whether update_todo_list was called
         self.final_report_text: str = ""          # last assistant content after Done event
         self._active_tool_names: dict[str, str] = {}
         self._tool_arg_fragments: dict[str, str] = {}
-        self._progress_todo = EventRelayProgressTodo(
-            suppress_todo_updates=suppress_todo_updates,
-            emit_todo=lambda tc_id, tasks: self.todoListUpdated.emit(tc_id, tasks),
-        )
 
     @property
     def terminal_results(self) -> list[dict]:
@@ -216,7 +192,6 @@ class WorkerEventRelay(QObject):
             self._active_tool_names[ev.id] = ev.name
             self._tool_arg_fragments[ev.id] = ""
             self.toolCallStart.emit(tool_call_id, ev.id, ev.name)
-            self._progress_todo.mark_progress_tool_started(tool_call_id, ev.name)
             # Emit tool_started for activity projectors.
             # For terminal commands also emit command_started.
             self._emit_bus_event(WORKER_TOOL_STARTED, {
@@ -241,12 +216,6 @@ class WorkerEventRelay(QObject):
                     self._tool_arg_fragments.get(wid, "") + ev.args_chunk
                 )
                 self.toolCallArgs.emit(tool_call_id, wid, ev.args_chunk)
-                name = self._active_tool_names.get(wid, "")
-                if name:
-                    details = _tool_progress_details_from_args(
-                        name, self._tool_arg_fragments[wid]
-                    )
-                    self._progress_todo.mark_progress_tool_active(tool_call_id, name, details)
         elif isinstance(ev, ToolCallEnd):
             wid = self.index_to_id.get(ev.index, "")
             if wid:
@@ -267,12 +236,10 @@ class WorkerEventRelay(QObject):
                 if isinstance(content, str):
                     self.final_report_text = content
             if ev.finish_reason == "stop":
-                self._progress_todo.mark_progress_finished(tool_call_id)
                 # Only emit final-report activity events at campaign boundaries,
                 # not for internal steps within a multi-step DispatchSession.
                 # The caller sets suppress_final_report_activity=True for internal
-                # dispatch steps; this is semantically distinct from
-                # suppress_todo_updates (which covers TODO/progress emissions).
+                # dispatch steps.
                 if not self._suppress_final_report_activity:
                     self._emit_bus_event(WORKER_FINAL_REPORT_STARTED, {})
                     self._emit_bus_event(WORKER_FINAL_REPORT_FINISHED, {
@@ -313,20 +280,6 @@ class WorkerEventRelay(QObject):
                 parsed = json.loads(ev.result)
             except (json.JSONDecodeError, TypeError):
                 parsed = {}
-            progress_details = _tool_progress_details_from_result(
-                ev.name,
-                parsed,
-                self._tool_arg_fragments.get(ev.tool_call_id, ""),
-            )
-            if ev.name == "update_todo_list":
-                tasks = (ev.extras or {}).get("tasks")
-                if not tasks and isinstance(parsed, dict):
-                    tasks = parsed.get("tasks")
-                if not isinstance(tasks, list):
-                    tasks = []
-                self.todo_used = True
-                self._progress_todo.set_model_todo_tasks(tasks)
-                self._progress_todo.emit_todo_progress(tool_call_id, force=True)
             if (
                 isinstance(parsed, dict)
                 and parsed.get("recoverable")
@@ -335,12 +288,6 @@ class WorkerEventRelay(QObject):
                 self.phase_boundary_info = parsed
             self._ledger.handle_tool_result(
                 ev.name, ev.ok, parsed, ev.extras or {}
-            )
-            # Track TODO usage
-            if ev.ok and ev.name == "update_todo_list":
-                self.todo_used = True
-            self._progress_todo.mark_progress_tool_result(
-                tool_call_id, ev.name, ev.ok, parsed, progress_details
             )
             self._active_tool_names.pop(ev.tool_call_id, None)
             self._tool_arg_fragments.pop(ev.tool_call_id, None)
@@ -376,11 +323,9 @@ class WorkerEventRelay(QObject):
         self.failed_tool_results.clear()
         self._terminal_tracker.reset()
         self._ledger.reset()
-        self.todo_used = False
         self.final_report_text = ""
         self._active_tool_names.clear()
         self._tool_arg_fragments.clear()
-        self._progress_todo.reset()
 
     def _tool_result_record(self, ev: ToolResult, parsed: Any) -> dict[str, Any]:
         record: dict[str, Any] = {

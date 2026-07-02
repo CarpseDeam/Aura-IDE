@@ -62,12 +62,10 @@ class WorkerDispatchRunner:
         worker_system_prompt: str,
         max_tool_rounds: int | None,
         dispatch_proxy: Any,
-        todo_relay_callback: Callable[[str, list], None],
         records: list[WorkerDispatchRecord],
         result_metadata: dict[str, dict[str, Any]],
         event_bus: EventBus,
         lifecycle: LifecycleHooks | None = None,
-        suppress_worker_todo_updates: bool = False,
         suppress_final_report_activity: bool = False,
         set_tier1_context: Callable[[str], None] | None = None,
     ) -> None:
@@ -80,8 +78,6 @@ class WorkerDispatchRunner:
         self._worker_system_prompt = worker_system_prompt
         self._max_tool_rounds = max_tool_rounds
         self._dispatch_proxy = dispatch_proxy
-        self._todo_relay_callback = todo_relay_callback
-        self._suppress_worker_todo_updates = suppress_worker_todo_updates
         self._suppress_final_report_activity = suppress_final_report_activity
         self._records = records
         self._result_metadata = result_metadata
@@ -249,8 +245,6 @@ class WorkerDispatchRunner:
             approval_proxy=self._approval_proxy,
             worker_model=str(self._worker_model),
             dispatch_proxy=self._dispatch_proxy,
-            todo_relay_callback=self._todo_relay_callback,
-            suppress_todo_updates=self._suppress_worker_todo_updates,
             suppress_final_report_activity=self._suppress_final_report_activity,
             event_bus=self._event_bus,
         )

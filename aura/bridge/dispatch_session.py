@@ -1,4 +1,4 @@
-"""Internal Worker dispatch session orchestration seam.
+"""Internal Worker dispatch session orchestration.
 
 DispatchSession is the engine boundary between the visible GUI dispatch bridge
 and the step-sized Worker execution model. It executes every WorkerDispatchPlan
@@ -10,16 +10,6 @@ DispatchSession owns the outer workerStarted / workerFinished emission for the
 whole campaign. _run_worker is a pure execution function that no longer emits
 visible lifecycle signals, so a multi-step plan produces exactly one started and
 one finished event regardless of how many internal steps run.
-
-Execution checklist:
-- DispatchSession emits checklist lifecycle facts only.
-- The EventBus checklist projector owns visible row state.
-- Worker-local TODO updates are ignored by the bridge.
-
-Ownership:
-- The primary checklist path is event-driven: lifecycle events flow through
-  the EventBus to ExecutionChecklistController, which projects checklist
-  state.
 
 Event bus:
 - Accepts an EventBus and emits campaign/step lifecycle events
@@ -50,11 +40,9 @@ from aura.events import (
     AuraEvent, EventBus,
     DISPATCH_CAMPAIGN_FINISHED,
     DISPATCH_CAMPAIGN_STARTED,
-    DISPATCH_CHECKLIST_DECLARED,
     DISPATCH_STEP_COMPLETED,
     DISPATCH_STEP_STARTED,
 )
-from aura.execution_checklist import build_execution_checklist_items
 
 RunWorkerStep = Callable[[str, WorkerDispatchRequest, Any], WorkerDispatchResult]
 
@@ -84,14 +72,6 @@ class DispatchSession:
     - Internal steps execute silently inside _run_worker_step without
       re-emitting started/finished to the UI.
 
-    Execution checklist (derived from the accepted visible checklist):
-    - Visible checklist rows start as pending via EventBus declaration.
-    - The active step becomes active while it runs in the EventBus projector.
-    - Completed steps become done before the next step activates in the projector.
-    - If a step fails, the campaign stops (no blocked TODO state).
-    - One final campaign-finished event happens after the loop ends.
-    - Worker-local TODO updates from inside _run_worker_step are ignored
-      for canonical dispatch tool_call_ids.
     """
 
     def __init__(
@@ -115,24 +95,6 @@ class DispatchSession:
         self._emit_worker_finished = emit_worker_finished
         self._event_bus = event_bus
         self.step_results: list[StepResult] = []
-
-    # ------------------------------------------------------------------
-    # Checklist lifecycle emission
-    # ------------------------------------------------------------------
-
-    def _declare_execution_checklist(self) -> None:
-        """Declare canonical checklist rows from the visible checklist."""
-        items = [item.to_dict() for item in build_execution_checklist_items(self.plan)]
-        logging.debug(
-            "DispatchSession._declare_execution_checklist tool_call_id=%s row_count=%d ids=%s",
-            self.tool_call_id, len(items),
-            [o["id"] for o in items],
-        )
-        # Emit checklist_declared on the event bus so projectors can react.
-        self._emit_event(DISPATCH_CHECKLIST_DECLARED, {
-            "items": items,
-            "step_count": len(self.plan.steps),
-        })
 
     # ── Event bus emission ──────────────────────────────────────────────
 
@@ -159,8 +121,7 @@ class DispatchSession:
 
         Steps run sequentially under the same tool_call_id. The first step that
         triggers _step_should_stop halts the campaign. Steps completed before
-        the halt contribute their modified files to the aggregate and appear
-        as done in the final TODO state.
+        the halt contribute their modified files to the aggregate.
         """
         _log.info(
             "DispatchSession.run entered tool_call_id=%s step_count=%d",
@@ -181,9 +142,6 @@ class DispatchSession:
             )
             self._emit_lifecycle_pair(result)
             return result
-
-        # Declare canonical checklist state: all rows pending in the projector.
-        self._declare_execution_checklist()
 
         # Campaign starts — one visible Worker start event for the whole run.
         if self._emit_worker_started is not None:
