@@ -15,10 +15,16 @@ import pytest
 from aura.bridge.event_relay import WorkerEventRelay
 from aura.bridge.worker_activity import WorkerActivityController
 from aura.bridge.worker_relay_factory import create_worker_relay
-from aura.client import Done
+from aura.client import (
+    Done,
+    ToolCallStart,
+    ToolResult,
+)
 from aura.events import (
     WORKER_FINAL_REPORT_FINISHED,
     WORKER_FINAL_REPORT_STARTED,
+    WORKER_TOOL_FINISHED,
+    WORKER_TOOL_STARTED,
     AuraEvent,
     EventBus,
 )
@@ -521,3 +527,118 @@ class TestWorkerEventHandlerLifecycle:
         assert plan_card_b.update_workflow_state.call_count == 1, (
             "PlanWriterCard for tc-b must be updated for its plan_ready snapshot"
         )
+
+
+# ── Dispatch identity propagation ──────────────────────────────────────────
+
+
+class TestDispatchIdentityPropagation:
+    """WorkerEventRelay must propagate dispatch identity to EventBus facts.
+
+    Every AuraEvent emitted by ``_emit_bus_event`` during ``relay()`` must
+    carry the parent dispatch ``tool_call_id`` as ``run_id`` and
+    ``campaign_id``, while preserving the inner Worker tool id in
+    ``payload["tool_call_id"]``.
+    """
+
+    def test_tool_started_carries_dispatch_identity(
+        self, approval_proxy, event_bus,
+    ) -> None:
+        """WORKER_TOOL_STARTED carries run_id/campaign_id == dispatch id."""
+        received: list[AuraEvent] = []
+        event_bus.subscribe(WORKER_TOOL_STARTED, received.append)
+        relay = WorkerEventRelay(
+            approval_proxy=approval_proxy,
+            event_bus=event_bus,
+        )
+
+        relay.relay("dispatch-tc-1", ToolCallStart(
+            index=0, id="worker-tool-1", name="read_file",
+        ))
+
+        assert len(received) == 1
+        assert received[0].run_id == "dispatch-tc-1"
+        assert received[0].campaign_id == "dispatch-tc-1"
+
+    def test_tool_finished_carries_dispatch_identity(
+        self, approval_proxy, event_bus,
+    ) -> None:
+        """WORKER_TOOL_FINISHED carries run_id/campaign_id == dispatch id."""
+        received: list[AuraEvent] = []
+        event_bus.subscribe(WORKER_TOOL_FINISHED, received.append)
+        relay = WorkerEventRelay(
+            approval_proxy=approval_proxy,
+            event_bus=event_bus,
+        )
+
+        relay.relay("dispatch-tc-2", ToolResult(
+            tool_call_id="worker-tool-2",
+            name="write_file",
+            ok=True,
+            result='{"path": "a.py"}',
+            extras={},
+        ))
+
+        assert len(received) == 1
+        assert received[0].run_id == "dispatch-tc-2"
+        assert received[0].campaign_id == "dispatch-tc-2"
+
+    def test_payload_tool_call_id_is_worker_id_not_dispatch_id(
+        self, approval_proxy, event_bus,
+    ) -> None:
+        """payload[tool_call_id] stays as the Worker tool id, not the
+        dispatch id — the two namespaces are distinct."""
+        received: list[AuraEvent] = []
+        event_bus.subscribe(WORKER_TOOL_STARTED, received.append)
+        relay = WorkerEventRelay(
+            approval_proxy=approval_proxy,
+            event_bus=event_bus,
+        )
+
+        relay.relay("dispatch-tc-3", ToolCallStart(
+            index=0, id="worker-inner-id", name="run_terminal_command",
+        ))
+
+        assert len(received) == 1
+        # payload["tool_call_id"] is the Worker tool id
+        assert received[0].payload.get("tool_call_id") == "worker-inner-id"
+        # run_id/campaign_id is the dispatch id
+        assert received[0].run_id == "dispatch-tc-3"
+        assert received[0].campaign_id == "dispatch-tc-3"
+
+    def test_all_worker_topics_carry_identity(
+        self, approval_proxy, event_bus,
+    ) -> None:
+        """Multiple relay() calls — each with a different dispatch id —
+        carry the correct identity on their EventBus emissions."""
+        received: list[AuraEvent] = []
+        event_bus.subscribe(WORKER_TOOL_STARTED, received.append)
+        event_bus.subscribe(WORKER_TOOL_FINISHED, received.append)
+        relay = WorkerEventRelay(
+            approval_proxy=approval_proxy,
+            event_bus=event_bus,
+        )
+
+        relay.relay("dispatch-first", ToolCallStart(
+            index=0, id="wt-1", name="read_file",
+        ))
+        relay.relay("dispatch-second", ToolCallStart(
+            index=1, id="wt-2", name="write_file",
+        ))
+
+        assert len(received) == 2
+        assert received[0].run_id == "dispatch-first"
+        assert received[0].campaign_id == "dispatch-first"
+        assert received[1].run_id == "dispatch-second"
+        assert received[1].campaign_id == "dispatch-second"
+
+        relay.relay("dispatch-second", ToolResult(
+            tool_call_id="wt-2",
+            name="write_file",
+            ok=True,
+            result='{"path": "b.py"}',
+            extras={},
+        ))
+        assert len(received) == 3
+        assert received[2].run_id == "dispatch-second"
+        assert received[2].campaign_id == "dispatch-second"

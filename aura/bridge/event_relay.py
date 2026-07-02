@@ -100,6 +100,10 @@ class WorkerEventRelay(QObject):
         self._ledger = EventRelayExecutionLedger(
             emit_bus_event=self._emit_bus_event,
         )
+        # Current dispatch identity — set at the start of relay() and read
+        # by _emit_bus_event so every EventBus fact carries the parent
+        # dispatch tool_call_id as run_id and campaign_id.
+        self._dispatch_tool_call_id: str = ""
         self._suppress_todo_updates = suppress_todo_updates
         # Explicit flag to suppress final-report Activity on the event bus.
         # Internal DispatchSession worker steps must not emit
@@ -186,11 +190,23 @@ class WorkerEventRelay(QObject):
         self._ledger.edited_existing_files = value
 
     def _emit_bus_event(self, topic: str, payload: dict) -> None:
-        """Emit an event on the event bus (pure-python, no Qt)."""
-        self._event_bus.emit(AuraEvent(topic=topic, payload=dict(payload)))
+        """Emit an event on the event bus (pure-python, no Qt).
+
+        Every emission carries the current dispatch tool_call_id as
+        ``run_id`` and ``campaign_id`` so lifecycle observers and future
+        projectors can correlate Worker activity to the active dispatch
+        campaign.
+        """
+        self._event_bus.emit(AuraEvent(
+            topic=topic,
+            payload=dict(payload),
+            run_id=self._dispatch_tool_call_id,
+            campaign_id=self._dispatch_tool_call_id,
+        ))
 
     def relay(self, tool_call_id: str, ev: Event) -> None:
         """Emit the appropriate signal for the event type and track side effects."""
+        self._dispatch_tool_call_id = tool_call_id
         if isinstance(ev, ReasoningDelta):
             self.reasoningDelta.emit(tool_call_id, ev.text)
         elif isinstance(ev, ContentDelta):
