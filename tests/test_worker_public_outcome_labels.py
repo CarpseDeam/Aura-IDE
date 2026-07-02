@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 
 from aura.conversation.worker_outcome import WorkerOutcomeStatus
-from aura.gui.info_hub_pane import _final_summary_label
+from aura.gui.info_hub_pane import _activity_log_line, _final_summary_label
 
 EXPECTED_LABELS = {
     WorkerOutcomeStatus.completed: "Worker Report.",
@@ -62,3 +62,47 @@ class TestFinalSummaryNoScaryWords:
                 f"Label {label!r} contains forbidden word {word!r} "
                 f"for status={status!r}"
             )
+
+
+class TestWorkerActivityLogLine:
+    """Activity projection keeps the Worker Log focused on tool work."""
+
+    @pytest.mark.parametrize(
+        "entry,expected",
+        [
+            (
+                {"kind": "tool_started", "message": "Tool started: write_file"},
+                "Tool started: write_file",
+            ),
+            (
+                {"kind": "command_finished", "message": "Command exit 0"},
+                "Command exit 0",
+            ),
+            (
+                {"kind": "validation_passed", "message": "Validation passed: pytest"},
+                "Validation passed: pytest",
+            ),
+        ],
+    )
+    def test_tool_and_command_activity_is_visible(
+        self,
+        entry: dict,
+        expected: str,
+    ) -> None:
+        assert _activity_log_line(entry) == expected
+
+    @pytest.mark.parametrize(
+        "kind",
+        [
+            "campaign_started",
+            "step_started",
+            "step_completed",
+            "final_report_started",
+            "final_report_completed",
+        ],
+    )
+    def test_checklist_and_final_report_activity_is_suppressed(
+        self,
+        kind: str,
+    ) -> None:
+        assert _activity_log_line({"kind": kind, "message": "noise"}) == ""

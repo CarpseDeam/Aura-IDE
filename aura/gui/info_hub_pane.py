@@ -1,4 +1,4 @@
-"""Info hub pane: Worker Log tab with TODO list, reasoning, and diff/error cards."""
+"""Info hub pane: Worker Log tab with TODO list, activity, and final report."""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QGuiApplication, QIcon
 from PySide6.QtWidgets import (
     QHBoxLayout,
-    QLabel,
     QPlainTextEdit,
     QPushButton,
     QSizePolicy,
@@ -87,23 +86,7 @@ class InfoHubPane(QWidget):
         )
         log_layout.addWidget(self._todo_widget, 0)
 
-        # Worker Activity feed (append-only heartbeat, under TODO)
-        self._activity_container = QWidget(self._log_tab)
-        self._activity_container.setObjectName("workerActivityFeed")
-        self._activity_container.setStyleSheet(
-            f"#workerActivityFeed {{ background: transparent; border-bottom: 1px solid {BORDER}; padding: 0; }}"
-        )
-        self._activity_container.setSizePolicy(
-            QSizePolicy.Policy.Expanding,
-            QSizePolicy.Policy.Maximum,
-        )
-        self._activity_layout = QVBoxLayout(self._activity_container)
-        self._activity_layout.setContentsMargins(12, 2, 12, 4)
-        self._activity_layout.setSpacing(0)
-        self._activity_container.setVisible(False)
-        log_layout.addWidget(self._activity_container, 0)
-
-        # Worker prose log text area
+        # Worker log text area: activity/tool calls first, final report last.
         self._log_view = QPlainTextEdit(self._log_tab)
         self._log_view.setReadOnly(True)
         self._log_view.setMinimumSize(0, 0)
@@ -115,6 +98,7 @@ class InfoHubPane(QWidget):
         )
         log_layout.addWidget(self._log_view, 1)
         self._log_stream = WorkerLogStreamBuffer(self._append_worker_log_batch, parent=self)
+        self._activity_entry_count = 0
 
         # Dynamic cards area (diff cards, error cards)
         self._cards_layout = QVBoxLayout()
@@ -132,10 +116,9 @@ class InfoHubPane(QWidget):
         self._worker_footer.setVisible(False)
         log_layout.addWidget(self._worker_footer, 0)
         log_layout.setStretch(0, 0)
-        log_layout.setStretch(1, 0)
-        log_layout.setStretch(2, 1)
+        log_layout.setStretch(1, 1)
+        log_layout.setStretch(2, 0)
         log_layout.setStretch(3, 0)
-        log_layout.setStretch(4, 0)
 
         self._tabs.addTab(self._log_tab, "Worker Log")
 
@@ -171,32 +154,27 @@ class InfoHubPane(QWidget):
         self._todo_widget.update_tasks(tasks)
 
     def update_activity(self, entries: list[dict]) -> None:
-        """Render the Worker Activity feed (append-only heartbeat)."""
-        # Clear old activity rows
-        while self._activity_layout.count() > 0:
-            item = self._activity_layout.takeAt(0)
-            if item and item.widget():
-                item.widget().deleteLater()
-
+        """Append new Worker Activity entries to the single Worker Log stream."""
         if not entries:
-            self._activity_container.setVisible(False)
+            self._activity_entry_count = 0
             return
 
-        # Show only the last 15 most recent entries
-        visible = entries[-15:]
-        for entry in visible:
-            label = QLabel(entry.get("message", ""), self._activity_container)
-            label.setMinimumWidth(0)
-            label.setWordWrap(True)
-            label.setSizePolicy(
-                QSizePolicy.Policy.Ignored,
-                QSizePolicy.Policy.Preferred,
-            )
-            label.setFont(_mono_font(9))
-            label.setStyleSheet(f"color: {FG}; padding: 0; border: none; background: transparent;")
-            self._activity_layout.addWidget(label)
+        if len(entries) < self._activity_entry_count:
+            self._activity_entry_count = 0
 
-        self._activity_container.setVisible(True)
+        new_entries = entries[self._activity_entry_count :]
+        self._activity_entry_count = len(entries)
+        lines = [
+            line
+            for line in (_activity_log_line(entry) for entry in new_entries)
+            if line
+        ]
+        if not lines:
+            return
+
+        self._log_stream.flush()
+        prefix = "\n" if self._log_view.toPlainText() else ""
+        self._append_worker_log_batch(prefix + "\n".join(lines) + "\n")
 
     def add_diff_card(
         self,
@@ -279,6 +257,7 @@ class InfoHubPane(QWidget):
         """Clear log text and dynamic cards without touching the TODO rail."""
         self._log_stream.clear()
         self._log_view.setPlainText("")
+        self._activity_entry_count = 0
 
         # Remove all dynamic cards
         while self._cards_layout.count() > 0:
@@ -374,3 +353,27 @@ def _final_summary_label(
     if ok and not needs_followup:
         return "Worker Report."
     return "Worker Report."
+
+
+_SUPPRESSED_ACTIVITY_KINDS = frozenset(
+    {
+        "campaign_started",
+        "step_started",
+        "step_completed",
+        "step_failed",
+        "final_report_started",
+        "final_report_completed",
+        "final_report_failed",
+    }
+)
+
+
+def _activity_log_line(entry: dict) -> str:
+    """Return the user-visible Worker Log line for one activity entry."""
+    if not isinstance(entry, dict):
+        return ""
+    kind = str(entry.get("kind") or "")
+    if kind in _SUPPRESSED_ACTIVITY_KINDS:
+        return ""
+    message = str(entry.get("message") or "").strip()
+    return message
