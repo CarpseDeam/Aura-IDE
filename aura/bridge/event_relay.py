@@ -1,4 +1,14 @@
-"""WorkerEventRelay — maps worker Event objects to PySide6 signals."""
+"""WorkerEventRelay — maps worker Event objects to PySide6 signals.
+
+Progress-TODO machinery (_progress_todo_status, _runtime_todo_status,
+_runtime_todo_phase, _model_todo_tasks, _combined_todo_tasks, and related
+helpers) serves **non-canonical** (free-form) Worker calls only.  During
+canonical DispatchSession campaigns _suppress_todo_updates is set and all
+TODO emissions from this relay are dropped — the visible TODO rail is
+projected by DispatchTodoController from event-bus lifecycle events.
+Worker Activity (via WorkerActivityController) is the correct execution
+heartbeat for both canonical and non-canonical paths.
+"""
 from __future__ import annotations
 
 import json

@@ -115,12 +115,16 @@ class _DispatchProxy(QObject):
         self._records: list[WorkerDispatchRecord] = []
         self._result_metadata: dict[str, dict[str, Any]] = {}
         self._active_workflow: WorkflowState | None = None
-        self._todo_controller = DispatchTodoController(event_bus=self._event_bus)
-        self._todo_controller.set_on_change(self._on_todo_controller_changed)
 
         # Event bus — owned by the dispatch proxy; shared with DispatchSession
         # and WorkerDispatchRunner for activity projection.
         self._event_bus = EventBus()
+
+        # TODO controller projects from dispatch lifecycle events on the bus.
+        self._todo_controller = DispatchTodoController(event_bus=self._event_bus)
+        self._todo_controller.set_on_change(self._on_todo_controller_changed)
+
+        # Activity controller projects from worker tool/command events on the bus.
         self._activity_controller = WorkerActivityController(self._event_bus)
         self._activity_controller.set_on_change(self._on_activity_changed)
 
@@ -445,45 +449,7 @@ class _DispatchProxy(QObject):
             return
         self._emit_dispatch_todo_snapshot(tool_call_id, tasks)
 
-    # ── callback helpers (delegate to controller; _on_change handles emission) ──
-
-    def _dispatch_todo_begin(
-        self, tool_call_id: str, objectives: list[dict[str, Any]]
-    ) -> None:
-        if self._active_workflow is None or self._active_workflow.tool_call_id != tool_call_id:
-            return
-        logging.debug(
-            "_dispatch_todo_begin tool_call_id=%s objective_count=%d",
-            tool_call_id, len(objectives),
-        )
-        self._todo_controller.begin(tool_call_id, objectives)
-
-    def _dispatch_todo_set_active_step(self, tool_call_id: str, step_id: str) -> None:
-        if self._active_workflow is None or self._active_workflow.tool_call_id != tool_call_id:
-            return
-        logging.debug(
-            "_dispatch_todo_set_active_step tool_call_id=%s step_id=%s",
-            tool_call_id, step_id,
-        )
-        self._todo_controller.activate_step(tool_call_id, step_id)
-
-    def _dispatch_todo_mark_step_done(self, tool_call_id: str, step_id: str) -> None:
-        if self._active_workflow is None or self._active_workflow.tool_call_id != tool_call_id:
-            return
-        logging.debug(
-            "_dispatch_todo_mark_step_done tool_call_id=%s step_id=%s",
-            tool_call_id, step_id,
-        )
-        self._todo_controller.complete_step(tool_call_id, step_id)
-
-    def _dispatch_todo_finish(self, tool_call_id: str) -> None:
-        if self._active_workflow is None or self._active_workflow.tool_call_id != tool_call_id:
-            return
-        logging.debug(
-            "_dispatch_todo_finish tool_call_id=%s",
-            tool_call_id,
-        )
-        self._todo_controller.finish(tool_call_id)
+    # ── canonical TODO guard ────────────────────────────────────────────
 
     def _has_canonical_todo(self, tool_call_id: str) -> bool:
         return self._todo_controller.has_active_tool_call(tool_call_id)

@@ -18,6 +18,13 @@ TODO rail:
 - One final TODO emission happens after the loop ends.
 - Worker-local TODO updates are ignored by the bridge.
 
+Ownership:
+- The primary TODO path is event-driven: lifecycle events flow through
+  the EventBus to DispatchTodoController, which projects checklist
+  state.  The four callback parameters (begin_steps, set_active_step,
+  mark_step_done, finish_steps) exist for testing and direct
+  (non-event-bus) consumers only — they are not wired in production.
+
 Event bus:
 - Accepts an optional EventBus and emits campaign/step lifecycle events
   that the WorkerActivityController (or any projector) can subscribe to.

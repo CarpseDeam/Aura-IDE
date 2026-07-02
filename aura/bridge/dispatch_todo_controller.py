@@ -1,15 +1,18 @@
 """Bridge-owned state controller for canonical dispatch TODO snapshots.
 
 DispatchTodoController is the sole owner of visible dispatch checklist state.
-It can be driven either by direct method calls (callbacks from DispatchSession)
-or by subscribing to the event bus — or both.  When an event bus is provided
-the controller projects from these five lifecycle topics:
+The primary path is event-driven: the controller subscribes to the EventBus
+and projects checklist state from these five lifecycle topics:
 
 * ``dispatch.checklist_declared``  →  ``begin()``
 * ``dispatch.campaign_started``    →  (no state change — rows already seeded)
 * ``dispatch.step_started``        →  ``activate_step()``
 * ``dispatch.step_completed``      →  ``complete_step()``
 * ``dispatch.campaign_finished``   →  ``finish()``
+
+Direct method calls (begin/activate_step/complete_step/finish) remain as a
+public API for testing and non-event-bus consumers — they are not used in
+the production dispatch path.
 
 Every state mutation fires the optional ``_on_change`` callback so the
 owning _DispatchProxy can relay a canonical snapshot to the GUI.
