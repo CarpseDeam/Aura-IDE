@@ -11,7 +11,7 @@ from typing import Any, Callable
 from aura.client import Done
 from aura.conversation.critic_verdict import CriticFinding, CriticVerdict
 from aura.conversation.dispatch import WorkerDispatchRequest
-from aura.hooks import hooks
+from aura.model_streams import model_streams
 from aura.paths import safe_is_relative_to, safe_relative_to
 from aura.roles import load_bundled_named_role_capsule
 
@@ -208,7 +208,7 @@ def run_critic_dispatch(
     messages = _critic_messages(request)
     final_message: dict[str, Any] | None = None
     try:
-        for ev in hooks.trigger(
+        for ev in model_streams.trigger(
             hook_name,
             messages=messages,
             tools=safe_tools,

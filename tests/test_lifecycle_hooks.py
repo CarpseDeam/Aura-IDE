@@ -1,0 +1,478 @@
+"""Tests for the lifecycle hooks package (aura.lifecycle)."""
+
+from __future__ import annotations
+
+import asyncio
+from typing import Any
+
+import pytest
+
+from aura.events.event import AuraEvent
+from aura.lifecycle import (
+    GateDecision,
+    GateHookRegistry,
+    HandlerRecord,
+    HookContext,
+    HookMatcher,
+    LifecycleHooks,
+    NotifyHookRegistry,
+)
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+
+def _make_ctx(
+    *,
+    topic: str = "test.topic",
+    category: str = "notify",
+    phase: str = "",
+    role: str = "",
+    tool_name: str = "",
+    **overrides: Any,
+) -> HookContext:
+    return HookContext(
+        topic=topic,
+        category=category,
+        phase=phase,
+        role=role,
+        tool_name=tool_name,
+        **overrides,
+    )
+
+
+def _run_async(coro: object) -> Any:
+    """Run an async function to completion synchronously."""
+    return asyncio.run(coro)  # type: ignore[arg-type]
+
+
+# ── HookContext ──────────────────────────────────────────────────────────────
+
+
+class TestHookContext:
+    """HookContext creation and from_event factory."""
+
+    def test_defaults(self) -> None:
+        ctx = HookContext(topic="t", category="notify")
+        assert ctx.topic == "t"
+        assert ctx.category == "notify"
+        assert ctx.phase == ""
+        assert ctx.role == ""
+        assert ctx.run_id == ""
+        assert ctx.campaign_id == ""
+        assert ctx.step_id == ""
+        assert ctx.tool_call_id == ""
+        assert ctx.parent_tool_call_id == ""
+        assert ctx.tool_name == ""
+        assert ctx.payload == {}
+        assert ctx.metadata == {}
+
+    def test_from_event_copies_identity(self) -> None:
+        ev = AuraEvent(
+            topic="worker.tool.started",
+            payload={"key": "val"},
+            run_id="r1",
+            campaign_id="c1",
+            step_id="s1",
+        )
+        ctx = HookContext.from_event(ev)
+        assert ctx.topic == "worker.tool.started"
+        assert ctx.run_id == "r1"
+        assert ctx.campaign_id == "c1"
+        assert ctx.step_id == "s1"
+        assert ctx.payload == {"key": "val"}
+        assert ctx.category == "notify"  # default
+
+    def test_from_event_accepts_overrides(self) -> None:
+        ev = AuraEvent(topic="t", run_id="r1")
+        ctx = HookContext.from_event(
+            ev,
+            category="gate",
+            phase="pre_tool",
+            role="worker",
+            tool_name="write_file",
+        )
+        assert ctx.category == "gate"
+        assert ctx.phase == "pre_tool"
+        assert ctx.role == "worker"
+        assert ctx.tool_name == "write_file"
+
+    def test_to_dict_includes_all_fields(self) -> None:
+        ctx = HookContext(
+            topic="t",
+            category="notify",
+            run_id="r1",
+            payload={"a": 1},
+        )
+        d = ctx.to_dict()
+        assert d["topic"] == "t"
+        assert d["category"] == "notify"
+        assert d["run_id"] == "r1"
+        assert d["payload"] == {"a": 1}
+
+
+# ── HookMatcher ─────────────────────────────────────────────────────────────
+
+
+class TestHookMatcher:
+    """HookMatcher matching behaviour."""
+
+    def test_exact_topic_match(self) -> None:
+        m = HookMatcher("worker.tool.started")
+        ctx = _make_ctx(topic="worker.tool.started")
+        assert m.matches(ctx)
+
+    def test_exact_topic_no_match(self) -> None:
+        m = HookMatcher("worker.tool.started")
+        ctx = _make_ctx(topic="worker.tool.finished")
+        assert not m.matches(ctx)
+
+    def test_wildcard_matches_everything(self) -> None:
+        m = HookMatcher("*")
+        assert m.matches(_make_ctx(topic="anything"))
+        assert m.matches(_make_ctx(topic="worker.tool.started"))
+
+    def test_phase_filter(self) -> None:
+        m = HookMatcher("*", phase="pre_tool")
+        assert m.matches(_make_ctx(phase="pre_tool"))
+        assert not m.matches(_make_ctx(phase="post_tool"))
+
+    def test_role_filter(self) -> None:
+        m = HookMatcher("*", role="worker")
+        assert m.matches(_make_ctx(role="worker"))
+        assert not m.matches(_make_ctx(role="planner"))
+
+    def test_tool_name_filter(self) -> None:
+        m = HookMatcher("*", tool_name="write_file")
+        assert m.matches(_make_ctx(tool_name="write_file"))
+        assert not m.matches(_make_ctx(tool_name="execute_bash"))
+
+    def test_combined_filters_all_match(self) -> None:
+        m = HookMatcher(
+            "worker.tool.started",
+            phase="pre_tool",
+            role="worker",
+            tool_name="write_file",
+        )
+        ctx = _make_ctx(
+            topic="worker.tool.started",
+            phase="pre_tool",
+            role="worker",
+            tool_name="write_file",
+        )
+        assert m.matches(ctx)
+
+    def test_combined_filters_one_mismatch(self) -> None:
+        m = HookMatcher(
+            "worker.tool.started",
+            phase="pre_tool",
+            role="worker",
+            tool_name="write_file",
+        )
+        ctx = _make_ctx(
+            topic="worker.tool.started",
+            phase="post_tool",  # mismatch
+            role="worker",
+            tool_name="write_file",
+        )
+        assert not m.matches(ctx)
+
+    def test_to_dict(self) -> None:
+        m = HookMatcher("t", phase="p", role="r", tool_name="tn")
+        d = m.to_dict()
+        assert d == {"topic": "t", "phase": "p", "role": "r", "tool_name": "tn"}
+        empty = HookMatcher("*")
+        assert empty.to_dict()["topic"] == "*"
+
+
+# ── HandlerRecord ───────────────────────────────────────────────────────────
+
+
+class TestHandlerRecord:
+    """HandlerRecord carries source/kind metadata for future extension."""
+
+    def test_defaults(self) -> None:
+        matcher = HookMatcher("*")
+        rec = HandlerRecord(name="test", matcher=matcher, callback=lambda ctx: None)
+        assert rec.name == "test"
+        assert rec.handler_kind == "python"
+        assert rec.source == "internal"
+        assert rec.metadata == {}
+
+    def test_explicit_source_and_kind(self) -> None:
+        matcher = HookMatcher("*")
+        rec = HandlerRecord(
+            name="user_hook",
+            matcher=matcher,
+            callback=lambda ctx: None,
+            handler_kind="command",
+            source="user",
+            metadata={"path": "/hooks/hello.sh"},
+        )
+        assert rec.handler_kind == "command"
+        assert rec.source == "user"
+        assert rec.metadata == {"path": "/hooks/hello.sh"}
+
+
+# ── NotifyHookRegistry ──────────────────────────────────────────────────────
+
+
+class TestNotifyHookRegistry:
+    """Notify hook registry behaviour."""
+
+    def test_exact_topic_match(self) -> None:
+        reg = NotifyHookRegistry()
+        received: list[HookContext] = []
+
+        reg.register(HookMatcher("t.a"), received.append)
+        reg.notify(_make_ctx(topic="t.a"))
+
+        assert len(received) == 1
+        assert received[0].topic == "t.a"
+
+    def test_wildcard_match(self) -> None:
+        reg = NotifyHookRegistry()
+        received: list[HookContext] = []
+
+        reg.register(HookMatcher("*"), received.append)
+        reg.notify(_make_ctx(topic="anything"))
+
+        assert len(received) == 1
+
+    def test_no_match_no_fire(self) -> None:
+        reg = NotifyHookRegistry()
+        received: list[HookContext] = []
+
+        reg.register(HookMatcher("t.a"), received.append)
+        reg.notify(_make_ctx(topic="t.b"))
+
+        assert len(received) == 0
+
+    def test_return_value_ignored(self) -> None:
+        reg = NotifyHookRegistry()
+        received: list[HookContext] = []
+
+        reg.register(HookMatcher("*"), lambda ctx: "ignored")
+        reg.register(HookMatcher("*"), received.append)
+
+        reg.notify(_make_ctx())
+        # Both should fire — the first handler's return is silently discarded.
+        assert len(received) == 1
+
+    def test_exception_isolated_next_handler_still_runs(self) -> None:
+        reg = NotifyHookRegistry()
+        received: list[HookContext] = []
+
+        def failing(_ctx: HookContext) -> None:
+            raise RuntimeError("boom")
+
+        reg.register(HookMatcher("*"), failing)
+        reg.register(HookMatcher("*"), received.append)
+
+        reg.notify(_make_ctx())
+        # The second handler should still fire after the first raises.
+        assert len(received) == 1
+
+    def test_unsubscribe_removes_handler(self) -> None:
+        reg = NotifyHookRegistry()
+        received: list[HookContext] = []
+
+        unsub = reg.register(HookMatcher("*"), received.append)
+        reg.notify(_make_ctx())
+        assert len(received) == 1
+
+        unsub()
+        reg.notify(_make_ctx())
+        # Handler should not fire again after unsubscribe.
+        assert len(received) == 1
+
+    def test_handler_order_is_registration_order(self) -> None:
+        reg = NotifyHookRegistry()
+        order: list[str] = []
+
+        reg.register(HookMatcher("*"), lambda _: order.append("first"))
+        reg.register(HookMatcher("*"), lambda _: order.append("second"))
+
+        reg.notify(_make_ctx())
+        assert order == ["first", "second"]
+
+
+# ── GateDecision ────────────────────────────────────────────────────────────
+
+
+class TestGateDecision:
+    """GateDecision constructors."""
+
+    def test_allow_default(self) -> None:
+        d = GateDecision.allow()
+        assert d.allowed
+        assert not d.blocked
+        assert d.reason == ""
+
+    def test_block(self) -> None:
+        d = GateDecision.block("not allowed", severity="warning")
+        assert not d.allowed
+        assert d.blocked
+        assert d.reason == "not allowed"
+        assert d.severity == "warning"
+
+    def test_rewrite(self) -> None:
+        d = GateDecision.rewrite({"new": "payload"}, reason="transformed")
+        assert d.allowed
+        assert not d.blocked
+        assert d.updated_payload == {"new": "payload"}
+        assert d.reason == "transformed"
+
+    def test_inject_context(self) -> None:
+        d = GateDecision.inject_context("extra info", reason="enrich")
+        assert d.allowed
+        assert not d.blocked
+        assert d.additional_context == "extra info"
+        assert d.reason == "enrich"
+
+    def test_force_continue(self) -> None:
+        d = GateDecision.force_continue("proceed anyway")
+        assert d.allowed
+        assert not d.blocked
+        assert d.force_continue
+        assert d.reason == "proceed anyway"
+
+
+# ── GateHookRegistry ────────────────────────────────────────────────────────
+
+
+class TestGateHookRegistry:
+    """Gate hook registry behaviour."""
+
+    def test_default_allows_with_no_handlers(self) -> None:
+        reg = GateHookRegistry()
+        decision = _run_async(reg.ask(_make_ctx()))
+        assert decision.allowed
+        assert not decision.blocked
+
+    def test_block_wins(self) -> None:
+        reg = GateHookRegistry()
+        reg.register(HookMatcher("*"), lambda ctx: GateDecision.block("stop"))
+        reg.register(HookMatcher("*"), lambda ctx: GateDecision.allow())
+
+        decision = _run_async(reg.ask(_make_ctx()))
+        assert decision.blocked
+        assert "stop" in decision.reason
+
+    def test_inject_context_merges(self) -> None:
+        reg = GateHookRegistry()
+        reg.register(
+            HookMatcher("*"),
+            lambda ctx: GateDecision.inject_context("ctx-a"),
+        )
+        reg.register(
+            HookMatcher("*"),
+            lambda ctx: GateDecision.inject_context("ctx-b"),
+        )
+
+        decision = _run_async(reg.ask(_make_ctx()))
+        assert decision.allowed
+        assert "ctx-a" in decision.additional_context
+        assert "ctx-b" in decision.additional_context
+
+    def test_one_rewrite_works(self) -> None:
+        reg = GateHookRegistry()
+        reg.register(
+            HookMatcher("*"),
+            lambda ctx: GateDecision.rewrite({"transformed": True}),
+        )
+
+        decision = _run_async(reg.ask(_make_ctx()))
+        assert decision.allowed
+        assert decision.updated_payload == {"transformed": True}
+
+    def test_multiple_rewrites_blocked(self) -> None:
+        reg = GateHookRegistry()
+        reg.register(
+            HookMatcher("*"),
+            lambda ctx: GateDecision.rewrite({"a": 1}),
+        )
+        reg.register(
+            HookMatcher("*"),
+            lambda ctx: GateDecision.rewrite({"b": 2}),
+        )
+
+        decision = _run_async(reg.ask(_make_ctx()))
+        assert decision.blocked
+        assert decision.reason == "lifecycle_gate_multiple_rewriters"
+
+    def test_matcher_filters_by_tool_name(self) -> None:
+        reg = GateHookRegistry()
+        reg.register(
+            HookMatcher("*", tool_name="write_file"),
+            lambda ctx: GateDecision.block("file writes blocked"),
+        )
+
+        blocked = _run_async(reg.ask(_make_ctx(tool_name="write_file")))
+        assert blocked.blocked
+
+        allowed = _run_async(reg.ask(_make_ctx(tool_name="execute_bash")))
+        assert allowed.allowed
+
+    def test_handler_exception_returns_blocked(self) -> None:
+        reg = GateHookRegistry()
+
+        def failing(_ctx: HookContext) -> GateDecision:
+            raise RuntimeError("oh no")
+
+        reg.register(HookMatcher("*"), failing)
+
+        decision = _run_async(reg.ask(_make_ctx()))
+        assert decision.blocked
+        assert decision.reason == "lifecycle_gate_handler_error"
+
+    def test_force_continue_preserved(self) -> None:
+        reg = GateHookRegistry()
+        reg.register(
+            HookMatcher("*"),
+            lambda ctx: GateDecision.force_continue("keep going"),
+        )
+
+        decision = _run_async(reg.ask(_make_ctx()))
+        assert decision.allowed
+        assert decision.force_continue
+
+    def test_unsubscribe_removes_handler(self) -> None:
+        reg = GateHookRegistry()
+        unsub = reg.register(
+            HookMatcher("*"),
+            lambda ctx: GateDecision.block("should not fire"),
+        )
+        unsub()
+        decision = _run_async(reg.ask(_make_ctx()))
+        assert decision.allowed
+
+
+# ── LifecycleHooks facade ────────────────────────────────────────────────────
+
+
+class TestLifecycleHooksFacade:
+    """LifecycleHooks top-level facade."""
+
+    def test_register_notify_and_notify(self) -> None:
+        lh = LifecycleHooks()
+        received: list[HookContext] = []
+
+        lh.register_notify(HookMatcher("*"), received.append)
+        lh.notify(_make_ctx())
+        assert len(received) == 1
+
+    def test_register_gate_and_ask(self) -> None:
+        lh = LifecycleHooks()
+        lh.register_gate(
+            HookMatcher("*"),
+            lambda ctx: GateDecision.block("nope"),
+        )
+
+        decision = _run_async(lh.ask(_make_ctx()))
+        assert decision.blocked
+
+    def test_gate_returns_allow_when_no_handlers(self) -> None:
+        lh = LifecycleHooks()
+        decision = _run_async(lh.ask(_make_ctx()))
+        assert decision.allowed

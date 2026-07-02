@@ -74,7 +74,7 @@ from aura.conversation.worker_flow import (
     WORKER_FLOW_VALIDATION_REQUIRED_TEXT,
     WORKER_FLOW_ZERO_WORK_RECOVERY_TEXT,
 )
-from aura.hooks import hooks
+from aura.model_streams import model_streams
 from aura.research.policy import decide_research_policy
 
 EventCallback = Callable[[Event], None]
@@ -290,7 +290,7 @@ class ConversationManager:
                 stream_buffer=state.stream_buffer,
             )
 
-            for ev in hooks.trigger(
+            for ev in model_streams.trigger(
                 hook_name,
                 messages=self._history.for_api(),
                 tools=tool_defs,

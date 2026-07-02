@@ -72,7 +72,7 @@ from aura.conversation import (
 from aura.conversation.tools import (
     ToolRegistry,
 )
-from aura.hooks import hooks
+from aura.model_streams import model_streams
 from aura.research.policy import NO_RESEARCH, decide_research_policy
 
 
@@ -261,10 +261,10 @@ class ConversationBridge(QObject):
         self._worker_backend = APIAgentBackend(provider=provider)
         
         # Register the backends for planner and worker
-        hooks.unregister('generate_planner_code')
-        hooks.register('generate_planner_code', self._planner_backend.stream)
-        hooks.unregister('generate_worker_code')
-        hooks.register('generate_worker_code', self._worker_backend.stream)
+        model_streams.unregister('generate_planner_code')
+        model_streams.register('generate_planner_code', self._planner_backend.stream)
+        model_streams.unregister('generate_worker_code')
+        model_streams.register('generate_worker_code', self._worker_backend.stream)
         
         self._history = History()
         self._registry = ToolRegistry(workspace_root=_dummy_root(), mode="single")
@@ -473,15 +473,15 @@ class ConversationBridge(QObject):
         """Update the planner provider and its backend hook."""
         self._planner_provider = provider
         self._planner_backend = APIAgentBackend(provider=provider)
-        hooks.unregister('generate_planner_code')
-        hooks.register('generate_planner_code', self._planner_backend.stream)
+        model_streams.unregister('generate_planner_code')
+        model_streams.register('generate_planner_code', self._planner_backend.stream)
 
     def set_worker_provider(self, provider: ProviderId) -> None:
         """Update the worker provider and its backend hook."""
         self._worker_provider = provider
         self._worker_backend = APIAgentBackend(provider=provider)
-        hooks.unregister('generate_worker_code')
-        hooks.register('generate_worker_code', self._worker_backend.stream)
+        model_streams.unregister('generate_worker_code')
+        model_streams.register('generate_worker_code', self._worker_backend.stream)
 
     def set_provider(self, provider: ProviderId) -> None:
         """Update both planner and worker to the same provider."""

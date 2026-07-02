@@ -15,7 +15,7 @@ from aura.config import redact_secrets
 from aura.conversation import ConversationManager, History
 from aura.conversation.tools import ToolRegistry
 from aura.git_ops import changes_since, snapshot
-from aura.hooks import hooks
+from aura.model_streams import model_streams
 from aura.models import DEFAULT_PLANNER_THINKING
 from aura.prompts import (
     PLANNER_SYSTEM_PROMPT,
@@ -149,12 +149,12 @@ class HarnessLapBridge(QObject):
         workspace_root = self._workspace_root
 
         # Save existing hook handlers
-        saved_planner = hooks._handlers.get("generate_planner_code")
-        saved_worker = hooks._handlers.get("generate_worker_code")
-        hooks.unregister("generate_planner_code")
-        hooks.unregister("generate_worker_code")
-        hooks.register("generate_planner_code", self._planner_backend.stream)
-        hooks.register("generate_worker_code", self._worker_backend.stream)
+        saved_planner = model_streams.get_handler("generate_planner_code")
+        saved_worker = model_streams.get_handler("generate_worker_code")
+        model_streams.unregister("generate_planner_code")
+        model_streams.unregister("generate_worker_code")
+        model_streams.register("generate_planner_code", self._planner_backend.stream)
+        model_streams.register("generate_worker_code", self._worker_backend.stream)
 
         old_approve_all = self._approval_proxy._approve_all_session
         old_registry_mode = self._registry.mode
@@ -364,9 +364,9 @@ class HarnessLapBridge(QObject):
             self._registry.set_mode(old_registry_mode)
 
             # Restore hook handlers
-            hooks.unregister("generate_planner_code")
-            hooks.unregister("generate_worker_code")
+            model_streams.unregister("generate_planner_code")
+            model_streams.unregister("generate_worker_code")
             if saved_planner:
-                hooks.register("generate_planner_code", saved_planner)
+                model_streams.register("generate_planner_code", saved_planner)
             if saved_worker:
-                hooks.register("generate_worker_code", saved_worker)
+                model_streams.register("generate_worker_code", saved_worker)
