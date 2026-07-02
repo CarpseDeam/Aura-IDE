@@ -15,12 +15,10 @@ from typing import Any
 
 from PySide6.QtCore import QObject, Signal
 
+from aura.bridge.event_relay_execution_ledger import EventRelayExecutionLedger
 from aura.bridge.event_relay_progress_todo import EventRelayProgressTodo
 from aura.bridge.event_relay_terminal_tracking import EventRelayTerminalTracker
 from aura.bridge.event_relay_write_tracking import (
-    _file_mutation_was_applied,
-    _is_file_mutation_tool,
-    _result_path,
     _tool_progress_details_from_args,
     _tool_progress_details_from_result,
 )
@@ -43,7 +41,6 @@ from aura.client import (
 from aura.events import (
     WORKER_COMMAND_STARTED,
     WORKER_FAILED,
-    WORKER_FILE_CHANGED,
     WORKER_FINAL_REPORT_FINISHED,
     WORKER_FINAL_REPORT_STARTED,
     WORKER_TOOL_FINISHED,
@@ -91,8 +88,6 @@ class WorkerEventRelay(QObject):
         self._worker_model = worker_model
         self._event_bus = event_bus
         self.index_to_id: dict[int, str] = {}
-        self.write_results: list[dict[str, Any]] = []
-        self.not_applied_writes: list[dict[str, Any]] = []
         self.api_errors: list[str] = []
         self.phase_boundary_info: dict[str, Any] | None = None
         self.tool_results: list[dict] = []
@@ -100,12 +95,9 @@ class WorkerEventRelay(QObject):
         self._terminal_tracker = EventRelayTerminalTracker(
             emit_bus_event=self._emit_bus_event,
         )
-        # Execution ledger
-        self.read_files: set[str] = set()         # paths read via read_file/read_files
-        self.read_outline_files: set[str] = set() # paths read via read_file_outline
-        self.touched_files: set[str] = set()      # all paths touched by writes
-        self.wrote_new_files: list[str] = []      # paths of newly created files
-        self.edited_existing_files: list[str] = []  # paths of existing files that were edited
+        self._ledger = EventRelayExecutionLedger(
+            emit_bus_event=self._emit_bus_event,
+        )
         self.todo_used: bool = False              # whether update_todo_list was called
         self.final_report_text: str = ""          # last assistant content after Done event
         self._active_tool_names: dict[str, str] = {}
@@ -124,6 +116,65 @@ class WorkerEventRelay(QObject):
     def validation_results(self) -> list[dict]:
         """Validation-classified terminal records, owned by _terminal_tracker."""
         return self._terminal_tracker.validation_results
+
+    # ------------------------------------------------------------------
+    # Execution-ledger properties  (delegated to _ledger)
+    # ------------------------------------------------------------------
+
+    @property
+    def write_results(self) -> list[dict[str, Any]]:
+        """Applied file-mutation records, owned by _ledger."""
+        return self._ledger.write_results
+
+    @write_results.setter
+    def write_results(self, value: list[dict[str, Any]]) -> None:
+        self._ledger.write_results = value
+
+    @property
+    def not_applied_writes(self) -> list[dict[str, Any]]:
+        """File-mutation attempts that were not applied, owned by _ledger."""
+        return self._ledger.not_applied_writes
+
+    @not_applied_writes.setter
+    def not_applied_writes(self, value: list[dict[str, Any]]) -> None:
+        self._ledger.not_applied_writes = value
+
+    @property
+    def read_files(self) -> set[str]:
+        """Paths read via read_file / read_files / read_file_range."""
+        return self._ledger.read_files
+
+    @property
+    def read_outline_files(self) -> set[str]:
+        """Paths read via read_file_outline."""
+        return self._ledger.read_outline_files
+
+    @property
+    def touched_files(self) -> set[str]:
+        """All paths touched by applied file mutations."""
+        return self._ledger.touched_files
+
+    @touched_files.setter
+    def touched_files(self, value: set[str]) -> None:
+        self._ledger.touched_files = value
+
+    @property
+    def wrote_new_files(self) -> list[str]:
+        """Paths of newly created files."""
+        return self._ledger.wrote_new_files
+
+    @wrote_new_files.setter
+    def wrote_new_files(self, value: list[str]) -> None:
+        self._ledger.wrote_new_files = value
+
+    @property
+    def edited_existing_files(self) -> list[str]:
+        """Paths of existing files that were edited."""
+        return self._ledger.edited_existing_files
+
+    @edited_existing_files.setter
+    def edited_existing_files(self, value: list[str]) -> None:
+        self._ledger.edited_existing_files = value
 
     def _emit_bus_event(self, topic: str, payload: dict) -> None:
         """Emit an event on the optional event bus (pure-python, no Qt)."""
@@ -253,112 +304,9 @@ class WorkerEventRelay(QObject):
                 and parsed.get("phase_boundary")
             ):
                 self.phase_boundary_info = parsed
-            if (
-                _file_mutation_was_applied(ev.name, ev.ok, parsed, ev.extras or {})
-            ):
-                path = _result_path(parsed, ev.extras or {})
-                is_new_file = bool(parsed.get("is_new_file", False))
-                deleted = bool(parsed.get("deleted"))
-                write_record = {
-                    "tool": ev.name,
-                    "path": path,
-                    "is_new_file": is_new_file,
-                    "deleted": deleted,
-                    "applied": True,
-                    "applied_tool": parsed.get("applied_tool") or ev.name,
-                    "write_outcome": parsed.get("write_outcome") or ("deleted" if deleted else "applied"),
-                    "backup": parsed.get("backup"),
-                }
-                if parsed.get("pre_existing_environment_issues"):
-                    write_record["pre_existing_environment_issues"] = parsed.get("pre_existing_environment_issues")
-                if parsed.get("craft_metadata"):
-                    write_record["craft_metadata"] = parsed.get("craft_metadata")
-                if "start_line" in parsed:
-                    write_record["start_line"] = parsed.get("start_line")
-                if "end_line" in parsed:
-                    write_record["end_line"] = parsed.get("end_line")
-                if "hunk_count" in parsed:
-                    write_record["hunk_count"] = parsed.get("hunk_count")
-                if "operation_count" in parsed:
-                    write_record["operation_count"] = parsed.get("operation_count")
-                self.write_results.append(write_record)
-                if path:
-                    action = "created" if is_new_file else ("deleted" if deleted else "modified")
-                    self._emit_bus_event(WORKER_FILE_CHANGED, {
-                        "path": path,
-                        "action": action,
-                        "tool": ev.name,
-                    })
-                    self.touched_files.add(path)
-                    if is_new_file:
-                        self.wrote_new_files.append(path)
-                    elif not deleted:
-                        self.edited_existing_files.append(path)
-            elif _is_file_mutation_tool(ev.name) and isinstance(parsed, dict):
-                if parsed.get("applied") is False or str(parsed.get("write_outcome") or "").startswith("not_applied_"):
-                    write_record = {
-                        "tool": ev.name,
-                        "path": _result_path(parsed, ev.extras or {}),
-                        "applied": False,
-                        "write_outcome": parsed.get("write_outcome") or "not_applied_edit_mechanics_blocked",
-                        "failure_class": parsed.get("failure_class", ""),
-                        "error": parsed.get("error", ""),
-                        "craft_issues": parsed.get("craft_issues", []),
-                        "pre_existing_environment_issues": parsed.get("pre_existing_environment_issues", []),
-                        "introduced_environment_issues": parsed.get("introduced_environment_issues", []),
-                    }
-                    if parsed.get("craft_metadata"):
-                        write_record["craft_metadata"] = parsed.get("craft_metadata")
-                    for key in (
-                        "operation_index",
-                        "failed_operation",
-                        "reason",
-                        "stale",
-                        "ambiguous",
-                        "not_found",
-                        "candidate_count",
-                        "candidates",
-                    ):
-                        if key in parsed:
-                            write_record[key] = parsed[key]
-                    self.not_applied_writes.append(write_record)
-            # Track reads for read-before-edit enforcement
-            if ev.ok and ev.name == "read_file" and isinstance(parsed, dict):
-                path = parsed.get("path")
-                if (
-                    parsed.get("ok") is True
-                    and parsed.get("truncated") is not True
-                    and isinstance(path, str)
-                    and path
-                ):
-                    self.read_files.add(path)
-            if ev.ok and ev.name == "read_files" and isinstance(parsed, dict):
-                files = parsed.get("files")
-                if isinstance(files, dict):
-                    for path_key, result in files.items():
-                        if not isinstance(result, dict):
-                            continue
-                        path = result.get("path") or path_key
-                        if (
-                            result.get("ok") is True
-                            and result.get("truncated") is not True
-                            and isinstance(path, str)
-                            and path
-                        ):
-                            self.read_files.add(path)
-            if ev.ok and ev.name == "read_file_range" and isinstance(parsed, dict):
-                path = parsed.get("path")
-                if (
-                    parsed.get("ok") is True
-                    and isinstance(parsed.get("content_hash"), str)
-                    and isinstance(path, str)
-                    and path
-                ):
-                    self.read_files.add(path)
-            if ev.ok and ev.name == "read_file_outline" and isinstance(parsed, dict):
-                path = parsed.get("path")
-                if isinstance(path, str) and path:
-                    self.read_outline_files.add(path)
+            self._ledger.handle_tool_result(
+                ev.name, ev.ok, parsed, ev.extras or {}
+            )
             # Track TODO usage
             if ev.ok and ev.name == "update_todo_list":
                 self.todo_used = True
@@ -393,18 +341,12 @@ class WorkerEventRelay(QObject):
     def reset(self) -> None:
         """Clear all tracking fields so the relay can be reused."""
         self.index_to_id.clear()
-        self.write_results.clear()
-        self.not_applied_writes.clear()
         self.api_errors.clear()
         self.phase_boundary_info = None
         self.tool_results.clear()
         self.failed_tool_results.clear()
         self._terminal_tracker.reset()
-        self.read_files.clear()
-        self.read_outline_files.clear()
-        self.touched_files.clear()
-        self.wrote_new_files.clear()
-        self.edited_existing_files.clear()
+        self._ledger.reset()
         self.todo_used = False
         self.final_report_text = ""
         self._active_tool_names.clear()
