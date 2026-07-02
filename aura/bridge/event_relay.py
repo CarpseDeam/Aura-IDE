@@ -15,14 +15,9 @@ from typing import Any
 
 from PySide6.QtCore import QObject, Signal
 
-from aura.bridge.event_relay_errors import (
-    _attach_validation_metadata,
-    _is_validation_terminal_record,
-)
 from aura.bridge.event_relay_progress_todo import EventRelayProgressTodo
+from aura.bridge.event_relay_terminal_tracking import EventRelayTerminalTracker
 from aura.bridge.event_relay_write_tracking import (
-    TERMINAL_OUTPUT_CAPTURE_CHARS,
-    TERMINAL_OUTPUT_PREVIEW_CHARS,
     _file_mutation_was_applied,
     _is_file_mutation_tool,
     _result_path,
@@ -46,7 +41,6 @@ from aura.client import (
     Usage,
 )
 from aura.events import (
-    WORKER_COMMAND_FINISHED,
     WORKER_COMMAND_STARTED,
     WORKER_FAILED,
     WORKER_FILE_CHANGED,
@@ -54,7 +48,6 @@ from aura.events import (
     WORKER_FINAL_REPORT_STARTED,
     WORKER_TOOL_FINISHED,
     WORKER_TOOL_STARTED,
-    WORKER_VALIDATION_FINISHED,
     WORKER_VALIDATION_STARTED,
     AuraEvent,
     EventBus,
@@ -104,8 +97,9 @@ class WorkerEventRelay(QObject):
         self.phase_boundary_info: dict[str, Any] | None = None
         self.tool_results: list[dict] = []
         self.failed_tool_results: list[dict] = []
-        self.terminal_results: list[dict] = []
-        self.validation_results: list[dict] = []
+        self._terminal_tracker = EventRelayTerminalTracker(
+            emit_bus_event=self._emit_bus_event,
+        )
         # Execution ledger
         self.read_files: set[str] = set()         # paths read via read_file/read_files
         self.read_outline_files: set[str] = set() # paths read via read_file_outline
@@ -120,6 +114,16 @@ class WorkerEventRelay(QObject):
             suppress_todo_updates=suppress_todo_updates,
             emit_todo=lambda tc_id, tasks: self.todoListUpdated.emit(tc_id, tasks),
         )
+
+    @property
+    def terminal_results(self) -> list[dict]:
+        """Terminal command result records, owned by _terminal_tracker."""
+        return self._terminal_tracker.terminal_results
+
+    @property
+    def validation_results(self) -> list[dict]:
+        """Validation-classified terminal records, owned by _terminal_tracker."""
+        return self._terminal_tracker.validation_results
 
     def _emit_bus_event(self, topic: str, payload: dict) -> None:
         """Emit an event on the optional event bus (pure-python, no Qt)."""
@@ -375,68 +379,7 @@ class WorkerEventRelay(QObject):
                 self.failed_tool_results.append(tr)
 
             # Track terminal command results, then classify the subset that is meaningful validation.
-            if (
-                ev.name == "run_terminal_command"
-                and isinstance(parsed, dict)
-                and "command" in parsed
-                and "exit_code" in parsed
-                and "ok" in parsed
-            ):
-                output = str(parsed.get("output") or "")
-                record = {
-                    "command": parsed.get("command", ""),
-                    "ok": parsed.get("ok", False),
-                    "exit_code": parsed.get("exit_code", -1),
-                    "output": output[:TERMINAL_OUTPUT_CAPTURE_CHARS],
-                    "output_preview": output[:TERMINAL_OUTPUT_PREVIEW_CHARS],
-                }
-                if parsed.get("auto_validation"):
-                    record["auto_validation"] = True
-                _attach_validation_metadata(record, parsed)
-                self.terminal_results.append(record)
-                self._emit_bus_event(WORKER_COMMAND_FINISHED, {
-                    "command": record["command"],
-                    "exit_code": record["exit_code"],
-                    "ok": record["ok"],
-                })
-                is_validation = _is_validation_terminal_record(record)
-                if is_validation:
-                    self.validation_results.append(record)
-                    self._emit_bus_event(WORKER_VALIDATION_FINISHED, {
-                        "command": record["command"],
-                        "ok": record["ok"],
-                        "exit_code": record["exit_code"],
-                    })
-
-            if (
-                ev.name == "run_and_watch"
-                and isinstance(parsed, dict)
-                and "command" in parsed
-                and "exit_code" in parsed
-                and "ok" in parsed
-            ):
-                output = str(parsed.get("output") or "")
-                record = {
-                    "command": parsed.get("command", ""),
-                    "ok": parsed.get("ok", False),
-                    "exit_code": parsed.get("exit_code", -1),
-                    "output": output[:TERMINAL_OUTPUT_CAPTURE_CHARS],
-                    "output_preview": output[:TERMINAL_OUTPUT_PREVIEW_CHARS],
-                }
-                _attach_validation_metadata(record, parsed)
-                self.terminal_results.append(record)
-                self._emit_bus_event(WORKER_COMMAND_FINISHED, {
-                    "command": record["command"],
-                    "exit_code": record["exit_code"],
-                    "ok": record["ok"],
-                })
-                if _is_validation_terminal_record(record):
-                    self.validation_results.append(record)
-                    self._emit_bus_event(WORKER_VALIDATION_FINISHED, {
-                        "command": record["command"],
-                        "ok": record["ok"],
-                        "exit_code": record["exit_code"],
-                    })
+            self._terminal_tracker.handle_tool_result(ev.name, parsed)
         elif isinstance(ev, TerminalOutput):            self.terminalOutput.emit(tool_call_id, ev.tool_call_id, ev.text)
         elif isinstance(ev, AgentProcessStarted):
             self.agentProcessStarted.emit(
@@ -456,8 +399,7 @@ class WorkerEventRelay(QObject):
         self.phase_boundary_info = None
         self.tool_results.clear()
         self.failed_tool_results.clear()
-        self.terminal_results.clear()
-        self.validation_results.clear()
+        self._terminal_tracker.reset()
         self.read_files.clear()
         self.read_outline_files.clear()
         self.touched_files.clear()
