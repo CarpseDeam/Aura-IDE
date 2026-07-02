@@ -28,6 +28,10 @@ def todo_task_status(task: Any) -> str:
         return "done"
     if raw_status in {"active", "in_progress", "doing", "current"}:
         return "active"
+    if raw_status in {"failed", "fail", "error"}:
+        return "failed"
+    if raw_status in {"skipped", "skip", "cancelled", "canceled"}:
+        return "skipped"
     return "pending"
 
 

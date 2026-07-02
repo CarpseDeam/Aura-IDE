@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+
 from PySide6.QtCore import QEasingCurve, Qt, QVariantAnimation
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from aura.config import media_path
-from aura.gui.theme import BG, BORDER, FG_DIM, SUCCESS, WARN
+from aura.gui.theme import BG, BORDER, DANGER, FG_DIM, FG_MUTED, SUCCESS, WARN
 from aura.todo_state import normalize_todo_tasks, todo_signature
 
 _log = logging.getLogger(__name__)
@@ -164,6 +165,20 @@ class TodoListWidget(QFrame):
             elif status == "active":
                 color = WARN
                 icon_label.setText("\u25ba")
+                icon_label.setFixedSize(16, 16)
+                icon_label.setStyleSheet(f"color: {color}; background: transparent;")
+                desc_label.setText(description)
+                desc_label.setStyleSheet(f"color: {color}; padding: 1px 0;")
+            elif status == "failed":
+                color = DANGER
+                icon_label.setText("\u2715")  # ✕
+                icon_label.setFixedSize(16, 16)
+                icon_label.setStyleSheet(f"color: {color}; background: transparent;")
+                desc_label.setText(description)
+                desc_label.setStyleSheet(f"color: {color}; padding: 1px 0;")
+            elif status == "skipped":
+                color = FG_MUTED
+                icon_label.setText("\u2212")  # −
                 icon_label.setFixedSize(16, 16)
                 icon_label.setStyleSheet(f"color: {color}; background: transparent;")
                 desc_label.setText(description)
