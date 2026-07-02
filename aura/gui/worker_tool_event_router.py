@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from aura.worker_todo import UPDATE_WORKER_TODO_TOOL
+
 if TYPE_CHECKING:
     from aura.gui.chat_view import ChatView
     from aura.gui.playground import AuraPlayground
@@ -28,6 +30,8 @@ class WorkerToolEventRouter:
         self, tool_call_id: str, worker_tool_id: str, name: str
     ) -> None:
         """Forward tool call start to playground."""
+        if name == UPDATE_WORKER_TODO_TOOL:
+            return
         self._playground.add_tool_call(worker_tool_id, name, parent_tool_id=tool_call_id)
 
     def on_worker_tool_args(
@@ -46,6 +50,8 @@ class WorkerToolEventRouter:
         extras: dict,
     ) -> None:
         """Forward tool result to playground."""
+        if name == UPDATE_WORKER_TODO_TOOL:
+            return
         self._playground.set_tool_result(worker_tool_id, ok, result)
 
     def on_worker_diff_decided(

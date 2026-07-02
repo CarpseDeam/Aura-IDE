@@ -18,6 +18,7 @@ from aura.conversation.tools._types import (
     RegistryMode,
     ToolExecResult,
 )
+from aura.conversation.tools._worker_todo_mixin import WorkerTodoHandlersMixin
 from aura.conversation.tools._write_mixin import WriteHandlersMixin
 from aura.conversation.tools.backup import backup_existing  # noqa: F401
 from aura.conversation.tools.catalog import ToolCatalog
@@ -54,6 +55,7 @@ class ToolRegistry(
     SearchHandlersMixin,
     GitHandlersMixin,
     WriteHandlersMixin,
+    WorkerTodoHandlersMixin,
     MemoryHandlersMixin,
     DiagnosticHandlersMixin,
     PlannerHandlersMixin,
@@ -181,6 +183,7 @@ TOOL_HANDLERS["git_stash_show"] = ToolRegistry._handle_git_stash_show
 TOOL_HANDLERS["write_file"] = ToolRegistry._handle_write_file
 TOOL_HANDLERS["delete_file"] = ToolRegistry._handle_delete_file
 TOOL_HANDLERS["patch_file"] = ToolRegistry._handle_patch_file
+TOOL_HANDLERS["update_worker_todo"] = ToolRegistry._handle_update_worker_todo
 
 TOOL_HANDLERS["search_project_memory"] = ToolRegistry._handle_search_project_memory
 TOOL_HANDLERS["save_to_project_memory"] = ToolRegistry._handle_save_to_project_memory

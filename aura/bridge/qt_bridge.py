@@ -233,6 +233,7 @@ class ConversationBridge(QObject):
     workerApiError = Signal(str, int, str)
     workerUsage = Signal(str, str, int, int, int, int)
     workerActivityUpdated = Signal(str, list)  # Activity entries (append-only execution heartbeat)
+    workerTodoUpdated = Signal(str, list)  # Full Worker TODO snapshot
     workflowStateChanged = Signal(object)  # WorkflowState snapshot
     workerTerminalOutput = Signal(str, str, str)  # parent_tool_id, worker_tool_id, text
     workerAgentProcessStarted = Signal(str, str, str, str)
@@ -313,6 +314,7 @@ class ConversationBridge(QObject):
         self._dispatch_proxy.workerApiError.connect(self.workerApiError)
         self._dispatch_proxy.workerUsage.connect(self.workerUsage)
         self._dispatch_proxy.workerActivityUpdated.connect(self.workerActivityUpdated)
+        self._dispatch_proxy.workerTodoUpdated.connect(self.workerTodoUpdated)
         self._dispatch_proxy.workflowStateChanged.connect(self.workflowStateChanged)
         self._dispatch_proxy.workerTerminalOutput.connect(self.workerTerminalOutput)
         self._dispatch_proxy.workerAgentProcessStarted.connect(self.workerAgentProcessStarted)

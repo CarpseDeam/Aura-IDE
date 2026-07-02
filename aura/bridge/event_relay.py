@@ -29,12 +29,16 @@ from aura.events import (
     WORKER_FAILED,
     WORKER_FINAL_REPORT_FINISHED,
     WORKER_FINAL_REPORT_STARTED,
+    WORKER_TODO_UPDATED,
     WORKER_TOOL_FINISHED,
     WORKER_TOOL_STARTED,
     WORKER_VALIDATION_STARTED,
     AuraEvent,
     EventBus,
 )
+from aura.worker_todo import UPDATE_WORKER_TODO_TOOL, parse_worker_todo_snapshot
+
+_PASSIVE_DISPLAY_TOOLS = frozenset({UPDATE_WORKER_TODO_TOOL})
 
 
 class WorkerEventRelay(QObject):
@@ -192,6 +196,8 @@ class WorkerEventRelay(QObject):
             self._active_tool_names[ev.id] = ev.name
             self._tool_arg_fragments[ev.id] = ""
             self.toolCallStart.emit(tool_call_id, ev.id, ev.name)
+            if ev.name in _PASSIVE_DISPLAY_TOOLS:
+                return
             # Emit tool_started for activity projectors.
             # For terminal commands also emit command_started.
             self._emit_bus_event(WORKER_TOOL_STARTED, {
@@ -280,6 +286,16 @@ class WorkerEventRelay(QObject):
                 parsed = json.loads(ev.result)
             except (json.JSONDecodeError, TypeError):
                 parsed = {}
+            if ev.name == UPDATE_WORKER_TODO_TOOL and ev.ok:
+                snapshot, errors = parse_worker_todo_snapshot(parsed)
+                if snapshot is not None and not errors:
+                    self._emit_bus_event(
+                        WORKER_TODO_UPDATED,
+                        {
+                            **snapshot.to_dict(),
+                            "worker_tool_id": ev.tool_call_id,
+                        },
+                    )
             if (
                 isinstance(parsed, dict)
                 and parsed.get("recoverable")
@@ -291,11 +307,12 @@ class WorkerEventRelay(QObject):
             )
             self._active_tool_names.pop(ev.tool_call_id, None)
             self._tool_arg_fragments.pop(ev.tool_call_id, None)
-            self._emit_bus_event(WORKER_TOOL_FINISHED, {
-                "name": ev.name,
-                "tool_call_id": ev.tool_call_id,
-                "ok": ev.ok,
-            })
+            if ev.name not in _PASSIVE_DISPLAY_TOOLS:
+                self._emit_bus_event(WORKER_TOOL_FINISHED, {
+                    "name": ev.name,
+                    "tool_call_id": ev.tool_call_id,
+                    "ok": ev.ok,
+                })
             # Track all tool results
             tr = self._tool_result_record(ev, parsed)
             self.tool_results.append(tr)

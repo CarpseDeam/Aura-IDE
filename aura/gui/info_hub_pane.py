@@ -20,6 +20,7 @@ from aura.gui.cards._helpers import _mono_font
 from aura.gui.cards.diff_card import DiffCard
 from aura.gui.cards.error_card import ErrorCard
 from aura.gui.theme import ACCENT, BG, BG_RAISED, BORDER, FG
+from aura.gui.widgets.worker_todo import WorkerTodoWidget
 from aura.gui.worker_log_stream import WorkerLogStreamBuffer
 
 
@@ -76,6 +77,9 @@ class InfoHubPane(QWidget):
         log_layout.setContentsMargins(0, 0, 0, 0)
         log_layout.setSpacing(0)
 
+        self._todo_widget = WorkerTodoWidget(self._log_tab)
+        log_layout.addWidget(self._todo_widget, 0)
+
         # Worker log text area: activity/tool calls first, final report last.
         self._log_view = QPlainTextEdit(self._log_tab)
         self._log_view.setReadOnly(True)
@@ -105,9 +109,10 @@ class InfoHubPane(QWidget):
         footer_layout.addStretch(1)
         self._worker_footer.setVisible(False)
         log_layout.addWidget(self._worker_footer, 0)
-        log_layout.setStretch(0, 1)
-        log_layout.setStretch(1, 0)
+        log_layout.setStretch(0, 0)
+        log_layout.setStretch(1, 1)
         log_layout.setStretch(2, 0)
+        log_layout.setStretch(3, 0)
 
         self._tabs.addTab(self._log_tab, "Worker Log")
 
@@ -160,6 +165,10 @@ class InfoHubPane(QWidget):
         self._log_stream.flush()
         prefix = "\n" if self._log_view.toPlainText() else ""
         self._append_worker_log_batch(prefix + "\n".join(lines) + "\n")
+
+    def update_worker_todo(self, items: list[dict[str, str]]) -> None:
+        """Render the latest Worker TODO snapshot."""
+        self._todo_widget.update_snapshot(items)
 
     def add_diff_card(
         self,
@@ -242,6 +251,7 @@ class InfoHubPane(QWidget):
         self._log_stream.clear()
         self._log_view.setPlainText("")
         self._activity_entry_count = 0
+        self._todo_widget.clear()
 
         # Remove all dynamic cards
         while self._cards_layout.count() > 0:

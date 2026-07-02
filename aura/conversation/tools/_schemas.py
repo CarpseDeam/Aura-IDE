@@ -1163,6 +1163,54 @@ PROJECT_MEMORY_TOOL_DEFS: list[dict[str, Any]] = [
     },
 ]
 
+WORKER_TODO_TOOL_DEF: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "update_worker_todo",
+        "description": (
+            "Publish the Worker's live TODO checklist as a full snapshot. "
+            "Use this after a quick repo orientation and before the first real file mutation, "
+            "then call it again whenever the active item advances or the concrete work changes. "
+            "Keep three to seven action-shaped rows. Exactly one item should be active unless "
+            "the work is complete, in which case all items may be done. This tool is only a UI "
+            "lens; it never completes, blocks, or gates the task."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "description": "Full ordered TODO snapshot. Reuse each row id across updates.",
+                    "minItems": 1,
+                    "maxItems": 9,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {
+                                "type": "string",
+                                "description": "Stable row identity, e.g. 'inspect-persistence'.",
+                            },
+                            "text": {
+                                "type": "string",
+                                "description": "Short concrete action, e.g. 'Inspect replay paths'.",
+                            },
+                            "status": {
+                                "type": "string",
+                                "enum": ["pending", "active", "done"],
+                                "description": "Current row state.",
+                            },
+                        },
+                        "required": ["id", "text", "status"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "required": ["items"],
+            "additionalProperties": False,
+        },
+    },
+}
+
 TERMINAL_TOOL_DEF: dict[str, Any] = {
     "type": "function",
     "function": {

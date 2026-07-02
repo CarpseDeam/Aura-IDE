@@ -17,15 +17,15 @@ from PySide6.QtCore import (
 )
 
 from aura.bridge.approval_proxy import _ApprovalProxy
-from aura.bridge.dispatch_pending import _DispatchPending, DispatchPendingMap
+from aura.bridge.dispatch_pending import DispatchPendingMap, _DispatchPending
 from aura.bridge.dispatch_session import DispatchSession
 from aura.bridge.worker_activity import WorkerActivityController
-from aura.bridge.worker_recording import record_dispatch_campaign_completion
 from aura.bridge.worker_completion_result import (
     _check_read_before_edit,
     _last_assistant_content,
 )
 from aura.bridge.worker_dispatch_runner import WorkerDispatchRunner
+from aura.bridge.worker_recording import record_dispatch_campaign_completion
 from aura.bridge.worker_report import (
     _build_worker_summary,
     _format_spec_as_user_message,
@@ -35,8 +35,8 @@ from aura.config import (
     DEFAULT_WORKER_THINKING,
     ModelId,
     ProviderId,
-    redact_secrets,
     ThinkingMode,
+    redact_secrets,
 )
 from aura.conversation import (
     WorkerDispatchRequest,
@@ -50,6 +50,7 @@ from aura.conversation.workflow_state import WorkflowState, WorkflowStatus
 from aura.dependency_context import build_dependency_stanza
 from aura.events import EventBus
 from aura.lifecycle import LifecycleHooks, attach_lifecycle_notify
+from aura.worker_todo import WorkerTodoProjector
 
 __all__ = [
     "_DispatchProxy",
@@ -85,6 +86,7 @@ class _DispatchProxy(QObject):
     workerAgentProcessFinished = Signal(str, str, object)  # parent_tool_id, process_id, exit_code
     workflowStateChanged = Signal(object)  # WorkflowState snapshot
     workerActivityUpdated = Signal(str, list)  # tool_call_id, activity snapshot entries
+    workerTodoUpdated = Signal(str, list)  # tool_call_id, full Worker TODO snapshot
 
     def __init__(
         self,
@@ -131,6 +133,8 @@ class _DispatchProxy(QObject):
         # Activity controller projects from worker tool/command events on the bus.
         self._activity_controller = WorkerActivityController(self._event_bus)
         self._activity_controller.set_on_change(self._on_activity_changed)
+        self._todo_projector = WorkerTodoProjector(self._event_bus)
+        self._todo_projector.set_on_change(self._on_todo_changed)
 
     # ---- config -----------------------------------------------------------
 
@@ -184,9 +188,14 @@ class _DispatchProxy(QObject):
             [e.to_dict() for e in entries],
         )
 
+    def _on_todo_changed(self, tool_call_id: str, items: list[dict[str, str]]) -> None:
+        """Emit the latest Worker TODO snapshot whenever the projector updates."""
+        self.workerTodoUpdated.emit(tool_call_id, items)
+
     def clear_activity(self) -> None:
         """Clear activity entries (conversation reset / teardown)."""
         self._activity_controller.clear()
+        self._todo_projector.clear()
 
     # ---- planner-thread side ---------------------------------------------
 

@@ -115,6 +115,7 @@ class WorkerEventHandler(QObject):
         self._bridge.workerApiError.connect(self._on_worker_api_error)
         self._bridge.workerUsage.connect(self._on_worker_usage)
         self._bridge.workerActivityUpdated.connect(self._on_worker_activity_updated)
+        self._bridge.workerTodoUpdated.connect(self._on_worker_todo_updated)
         self._bridge.workerTerminalOutput.connect(self._tool_router.on_worker_terminal_output)
         self._bridge.workerAgentProcessStarted.connect(self._tool_router.on_worker_agent_process_started)
         self._bridge.workerAgentProcessOutput.connect(self._tool_router.on_worker_agent_process_output)
@@ -323,3 +324,11 @@ class WorkerEventHandler(QObject):
             tool_call_id, len(entries),
         )
         self._playground.update_activity(entries, tool_call_id)
+
+    def _on_worker_todo_updated(self, tool_call_id: str, items: list) -> None:
+        """Route Worker TODO snapshots to playground (full replacement lens)."""
+        _log.debug(
+            "_on_worker_todo_updated tool_call_id=%s item_count=%d",
+            tool_call_id, len(items),
+        )
+        self._playground.update_worker_todo(items, tool_call_id)

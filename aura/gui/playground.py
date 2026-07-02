@@ -347,6 +347,10 @@ class AuraPlayground(QWidget):
         """Render a Worker Activity snapshot in the info hub."""
         self._info_hub.update_activity(entries)
 
+    def update_worker_todo(self, items: list[dict[str, str]], tool_call_id: str | None = None) -> None:
+        """Render the latest Worker TODO snapshot in the info hub."""
+        self._info_hub.update_worker_todo(items)
+
     def _on_code_path_resolved(self, worker_tool_id: str, path: str) -> None:
         self._worker_code_paths[worker_tool_id] = path
         self._code_editor.open_or_focus_tab(worker_tool_id, path)
@@ -422,7 +426,6 @@ class AuraPlayground(QWidget):
         self._code_editor.close_all_tabs()
         self._controllers.clear()
         self._controller_parents.clear()
-        self._suppressed_worker_tool_ids.clear()
         self._worker_code_paths.clear()
         self._worker_code_tool_names.clear()
         self._pending_worker_code_content.clear()
@@ -433,7 +436,6 @@ class AuraPlayground(QWidget):
         self._code_editor.close_all_tabs()
         self._controllers.clear()
         self._controller_parents.clear()
-        self._suppressed_worker_tool_ids.clear()
         self._worker_code_paths.clear()
         self._worker_code_tool_names.clear()
         self._pending_worker_code_content.clear()

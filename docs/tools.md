@@ -56,6 +56,14 @@ Each tool call goes through a circuit breaker that tracks consecutive timeouts o
 
 This tool is available to the Planner and Drones. Worker may also use it. Output is truncated at 100 KB. Rejects mutating or dangerous commands.
 
+## Worker Display
+
+| Tool                 | Description                                  | Parameters |
+|----------------------|----------------------------------------------|------------|
+| `update_worker_todo` | (Worker only) Publish the live TODO snapshot | `items`    |
+
+The TODO snapshot is display-only. It does not gate execution, decide completion, or persist as the Worker receipt.
+
 ## Dispatch
 
 | Tool                 | Description                                           | Parameters                                                   |
