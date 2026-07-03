@@ -11,6 +11,17 @@ interface Message {
   final?: boolean;
 }
 
+function isCurrentTurnEvent(msg: any, turnId: string): boolean {
+  const inResp = msg.in_response_to || '';
+  if (turnId) {
+    // Active turn: event must match
+    return inResp === turnId;
+  }
+  // No active turn: accept only events without in_response_to (no way to gate)
+  // Reject events that claim to be for a different turn
+  return !inResp;
+}
+
 function ChatScreen() {
   const navigate = useNavigate();
   const { phase, error: verifyError, retry, goToLogin } = useDesktopVerification();
@@ -57,9 +68,7 @@ function ChatScreen() {
     const unsubDelta = socket.on('chat.message.delta', (msg: any) => {
       clearWatchdog();
       setChatError('');
-      const inResp = msg.in_response_to || '';
-      if (inResp && turnIdRef.current && turnIdRef.current !== inResp) return;
-      if (!turnIdRef.current && inResp) turnIdRef.current = inResp;
+      if (!isCurrentTurnEvent(msg, turnIdRef.current)) return;
       const text = msg.payload?.text || '';
       const kind = msg.payload?.type || 'content';
       if (kind === 'reasoning') return;
@@ -70,14 +79,11 @@ function ChatScreen() {
           updated[updated.length - 1] = { ...last, text: last.text + text };
           return updated;
         }
-        // If the last message is a final assistant from history whose text already starts with this delta text, skip — stale delta for a message we already have.
-        if (last && last.role === 'assistant' && last.final && last.text.startsWith(text)) {
-          return prev;
-        }
         return [...prev, { id: `msg_${Date.now()}`, role: 'assistant', text, final: false }];
       });
     });
     const unsubComplete = socket.on('chat.message.complete', (msg: any) => {
+      if (!isCurrentTurnEvent(msg, turnIdRef.current)) return;
       clearWatchdog();
       const text = msg.payload?.text || '';
       const finishReason = msg.payload?.finish_reason || '';
@@ -106,6 +112,7 @@ function ChatScreen() {
       setTimeout(() => { if (mountedRef.current) refreshHistory(); }, 300);
     });
     const unsubChatErr = socket.on('chat.error', (msg: any) => {
+      if (!isCurrentTurnEvent(msg, turnIdRef.current)) return;
       clearWatchdog();
       setChatError(msg.payload?.message || 'An error occurred');
       streamingRef.current = false;
@@ -147,12 +154,16 @@ function ChatScreen() {
       if (justCompleted) {
         setMessages(prev => {
           if (prev.length === 0) return historyMsgs;
-          const last = prev[prev.length - 1];
-          if (last && last.role === 'assistant' && last.final) {
-            const liveTextSet = new Set(prev.map(m => m.role + ':' + m.text));
-            const extra = historyMsgs.filter(m => !liveTextSet.has(m.role + ':' + m.text));
-            if (extra.length === 0) return prev;
-            return [...prev, ...extra];
+          // History shorter than live — stale, keep live
+          if (historyMsgs.length < prev.length) return prev;
+          // History same length or longer — check it contains our final assistant message
+          const lastLive = prev[prev.length - 1];
+          if (lastLive && lastLive.role === 'assistant' && lastLive.final) {
+            const historyHasSameTail = historyMsgs.some(m =>
+              m.role === 'assistant' && m.text === lastLive.text
+            );
+            if (historyHasSameTail) return historyMsgs; // caught up, safe to replace
+            return prev; // history still stale, keep live
           }
           return historyMsgs;
         });
@@ -198,11 +209,13 @@ function ChatScreen() {
     streamingRef.current = true;
     setStreaming(true);
     setChatError('');
-    socket.send('chat.send', { text }, desktopId, projectId, conversationId);
+    const cmdId = socket.send('chat.send', { text }, desktopId, projectId, conversationId);
+    turnIdRef.current = cmdId;
     clearWatchdog();
     watchdogRef.current = setTimeout(() => {
       streamingRef.current = false;
       setStreaming(false);
+      turnIdRef.current = '';
       setChatError('No response from desktop. Check Aura Desktop.');
       setTimeout(() => { if (mountedRef.current) refreshHistory(); }, 300);
     }, 60_000);
@@ -214,6 +227,8 @@ function ChatScreen() {
     socket.send('chat.cancel', {}, desktopId, projectId, conversationId);
     streamingRef.current = false;
     setStreaming(false);
+    turnIdRef.current = '';
+    recentCompletionRef.current = Date.now();
   }, [desktopId, projectId, conversationId]);
 
   const clearWatchdog = () => {

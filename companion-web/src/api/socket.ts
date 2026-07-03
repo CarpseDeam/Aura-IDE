@@ -173,16 +173,10 @@ class CompanionSocket {
     }
   }
 
-  send(type: string, payload: any = {}, desktopId: string = '', projectId: string = '', conversationId: string = ''): void {
-    this.sendRaw({
-      id: `cmd_${Math.random().toString(36).slice(2, 14)}`,
-      type,
-      desktop_id: desktopId,
-      project_id: projectId,
-      conversation_id: conversationId,
-      in_response_to: '',
-      payload,
-    });
+  send(type: string, payload: any = {}, desktopId: string = '', projectId: string = '', conversationId: string = ''): string {
+    const id = `cmd_${Math.random().toString(36).slice(2, 14)}`;
+    this.sendRaw({ id, type, desktop_id: desktopId, project_id: projectId, conversation_id: conversationId, in_response_to: '', payload });
+    return id;
   }
 
   private sendRaw(msg: object): void {
