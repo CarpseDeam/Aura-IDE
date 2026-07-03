@@ -42,6 +42,7 @@ from aura.gui.debug_report_handler import DebugReportHandler
 from aura.gui.drones.drone_reports_window import DroneReportsWindow
 from aura.gui.edge_rails import EdgeTabRail
 from aura.gui.input_panel import InputPanel, SendPayload
+from aura.gui.gui_event_probe import install_gui_event_probe
 from aura.gui.left_pane import LeftPane
 from aura.gui.main_window_balance import MainWindowBalanceController
 from aura.gui.main_window_companion import MainWindowCompanionController
@@ -58,7 +59,6 @@ from aura.gui.send_handler import SendHandler
 from aura.gui.silent_research_guard import SilentResearchUiGuard
 from aura.gui.status_bar import AuraStatusBar
 from aura.gui.update_dialog import UpdateDialog
-from aura.gui.widgets.aura_glow import AuraWidget
 from aura.gui.window_chrome import WindowChromeMixin
 from aura.gui.worker_handler import WorkerEventHandler
 from aura.prompts import SINGLE_SYSTEM_PROMPT
@@ -237,10 +237,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         )
         self._playground.set_workspace_root(self._workspace_root)
         self._playground.set_read_only_mode(False)
-        self._playground_aura = AuraWidget(
-            self._playground, glow_color="#00e5ff", glow_spread=24, parent=self
-        )
-        self._playground.set_aura_wrapper(self._playground_aura)
 
 
         # Floating Drone Reports window. Active run cards live here instead of
@@ -277,6 +273,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._worker_handler.worker_started.connect(lambda: self._input.set_streaming(False))
         self._playground.stop_worker_requested.connect(self._bridge.request_cancel)
         self._worker_handler.worker_running_changed.connect(self._playground.set_worker_running)
+        self._gui_event_probe = install_gui_event_probe(self, self._bridge)
 
         # Conversation persistence (auto-save, load, restore, replay).
         self._persistence = ConversationPersistence(
@@ -322,7 +319,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
         # Add to splitter (replacing previous center addWidget with stack)
         self._main_splitter.addWidget(self._center_stack)
-        self._main_splitter.addWidget(self._playground_aura)
+        self._main_splitter.addWidget(self._playground)
 
         # Sensible initial distribution: left is narrow, chat is comfortable,
         # and the workspace opens as the primary work surface.
@@ -432,7 +429,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             self._main_splitter.minimumSizeHint().width(), self._main_splitter.minimumSizeHint().height(),
             self._left_pane.minimumSizeHint().width(), self._left_pane.minimumSizeHint().height(),
             self._center_stack.minimumSizeHint().width(), self._center_stack.minimumSizeHint().height(),
-            self._playground_aura.minimumSizeHint().width(), self._playground_aura.minimumSizeHint().height(),
+            self._playground.minimumSizeHint().width(), self._playground.minimumSizeHint().height(),
             self._chat.minimumSizeHint().width(), self._chat.minimumSizeHint().height(),
             self._input.minimumSizeHint().width(), self._input.minimumSizeHint().height(),
         )
