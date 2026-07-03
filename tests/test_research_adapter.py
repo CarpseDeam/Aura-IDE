@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from aura.conversation.tools.registry import ToolRegistry
 from aura.drones.definition import DroneBudget, DroneDefinition
 from aura.drones.background_runner import ReadOnlyDroneBackgroundRunner
-from aura.drones.folder_runner import run_folder_drone_sync
+from aura.drones.folder_runner import _run_command_drone, run_folder_drone_sync
 from aura.research.adapter import WEB_RESEARCH_DRONE_ID, build_adapter_call
 from aura.research.request import build_research_request
 
@@ -110,6 +110,144 @@ def test_web_research_folder_runner_passes_silent_intent_in_payload_and_env(
     assert env["AURA_RESEARCH_UI_MODE"] == "silent"
     assert env["AURA_WEB_RESEARCH_HEADLESS"] == "1"
     assert env["AURA_WEB_RESEARCH_VISIBLE"] == "0"
+
+
+def test_bundled_silent_web_research_runs_in_process_without_popen(
+    tmp_path,
+    monkeypatch,
+):
+    folder = tmp_path / WEB_RESEARCH_DRONE_ID
+    folder.mkdir()
+    for name in ("research_pipeline.py", "browser_search.py"):
+        (folder / name).write_text("", encoding="utf-8")
+    (folder / "drone.json").write_text(
+        json.dumps(
+            {
+                "name": "Web Research",
+                "description": "Probe",
+                "instructions": "Probe",
+                "kind": "command",
+                "write_policy": "read_only",
+                "entrypoint": {
+                    "kind": "command",
+                    "command": [sys.executable, "probe.py"],
+                    "protocol": "json-stdio",
+                },
+                "budget": {"timeout_seconds": 30},
+                "output_contract": {
+                    "type": "object",
+                    "properties": {
+                        "ok": {"type": "boolean"},
+                        "summary": {"type": "string"},
+                    },
+                    "required": ["ok", "summary"],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "aura.drones.folder_runner.DroneStore.drone_folder",
+        lambda workspace_root, drone_id: folder,
+    )
+    monkeypatch.setattr(
+        "aura.drones.folder_runner.subprocess.Popen",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("silent bundled web-research must not spawn Popen")
+        ),
+    )
+    captured = {}
+
+    def fake_in_process(folder_arg, payload_arg, *, extra_env=None):
+        captured["folder"] = folder_arg
+        captured["payload"] = payload_arg
+        captured["extra_env"] = extra_env
+        return {
+            "ok": True,
+            "summary": "done",
+            "route_used": {"browser_discovery": {"browser_visible": False}},
+        }
+
+    monkeypatch.setattr(
+        "aura.drones.folder_runner._run_web_research_drone_in_process",
+        fake_in_process,
+    )
+    monkeypatch.setattr(
+        "aura.drones.folder_runner._is_bundled_web_research_folder",
+        lambda folder_arg: True,
+    )
+    drone = DroneDefinition(
+        id=WEB_RESEARCH_DRONE_ID,
+        name="Web Research",
+        description="Probe",
+        instructions="Probe",
+        write_policy="read_only",
+        output_contract={
+            "type": "object",
+            "properties": {"ok": {"type": "boolean"}, "summary": {"type": "string"}},
+            "required": ["ok", "summary"],
+        },
+        budget=DroneBudget(timeout_seconds=30),
+        entrypoint={
+            "kind": "command",
+            "command": [sys.executable, "probe.py"],
+            "protocol": "json-stdio",
+        },
+    )
+    call = build_adapter_call(
+        build_research_request("Are there any World Cup matches today?")
+    )
+
+    result = run_folder_drone_sync(
+        workspace_root=tmp_path,
+        drone_id=WEB_RESEARCH_DRONE_ID,
+        drone=drone,
+        goal=call.goal,
+        upstream=call.upstream,
+    )
+
+    assert result["ok"] is True
+    assert captured["folder"] == folder
+    assert captured["payload"]["upstream"]["research_ui"]["ui_mode"] == "silent"
+    assert captured["extra_env"]["AURA_RESEARCH_UI_MODE"] == "silent"
+    assert captured["extra_env"]["AURA_WEB_RESEARCH_HEADLESS"] == "1"
+
+
+def test_folder_drone_subprocess_receives_no_window_kwargs(tmp_path, monkeypatch):
+    captured = {}
+    startupinfo = object()
+
+    class FakeProcess:
+        returncode = 0
+        args = ["python", "probe.py"]
+
+        def communicate(self, input=None, timeout=None):
+            return json.dumps({"ok": True, "summary": "done"}), ""
+
+        def poll(self):
+            return 0
+
+    def fake_popen(command, **kwargs):
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        return FakeProcess()
+
+    monkeypatch.setattr(
+        "aura.drones.folder_runner.get_subprocess_kwargs",
+        lambda: {"creationflags": 12345, "startupinfo": startupinfo},
+    )
+    monkeypatch.setattr("aura.drones.folder_runner.subprocess.Popen", fake_popen)
+
+    result = _run_command_drone(
+        tmp_path,
+        {"command": [sys.executable, "probe.py"]},
+        {"goal": "test"},
+        timeout_seconds=30,
+    )
+
+    assert result["ok"] is True
+    assert captured["kwargs"]["creationflags"] == 12345
+    assert captured["kwargs"]["startupinfo"] is startupinfo
 
 
 def test_background_runner_preserves_web_research_silent_upstream(

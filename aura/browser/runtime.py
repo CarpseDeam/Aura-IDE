@@ -192,6 +192,32 @@ class BrowserRuntime:
         self._browser_label = ""
         self._browser_source = ""
 
+        # --- subprocess.Popen guard -----------------------------------
+        # Playwright's ``sync_playwright().start()`` spawns a Node.js
+        # driver via ``subprocess.Popen`` with no ``creationflags``,
+        # which opens a blank console window on Windows.  Temporarily
+        # patch Popen so that *every* caller in this stack gets
+        # CREATE_NO_WINDOW + SW_HIDE.
+        _orig_popen = None
+        if sys.platform == "win32":
+            import subprocess as _sp
+
+            _orig_popen = _sp.Popen
+
+            def _silent_popen(*popen_args, **popen_kwargs):  # noqa: ANN202
+                flags = popen_kwargs.get("creationflags", 0)
+                if isinstance(flags, int) and not (flags & _sp.CREATE_NEW_CONSOLE):
+                    popen_kwargs["creationflags"] = flags | _sp.CREATE_NO_WINDOW
+                if "startupinfo" not in popen_kwargs:
+                    si = _sp.STARTUPINFO()
+                    si.dwFlags |= _sp.STARTF_USESHOWWINDOW
+                    si.wShowWindow = _sp.SW_HIDE
+                    popen_kwargs["startupinfo"] = si
+                return _orig_popen(*popen_args, **popen_kwargs)
+
+            _sp.Popen = _silent_popen
+        # ----------------------------------------------------------------
+
         try:
             try:
                 import playwright.sync_api  # noqa: F401
@@ -276,6 +302,13 @@ class BrowserRuntime:
                 self._pw.stop()
                 self._pw = None
             return False
+
+        # --- restore original Popen ---------------------------------
+        finally:
+            if _orig_popen is not None:
+                import subprocess as _sp2
+                _sp2.Popen = _orig_popen
+        # ------------------------------------------------------------
 
     def close(self) -> None:
         """Shut down the browser and clean up resources."""

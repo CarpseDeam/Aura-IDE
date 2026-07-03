@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import importlib
 import json
 import logging
 import os
@@ -9,6 +10,7 @@ import sys
 import time
 import traceback
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 from aura.config import get_subprocess_kwargs
@@ -23,6 +25,21 @@ _CANCEL_GRACE_SECONDS = 2.0
 _PYTHON_COMMANDS = {"python", "python.exe", "python3", "python3.exe", "py", "py.exe"}
 _WEB_RESEARCH_DRONE_ID = "web-research"
 _log = logging.getLogger(__name__)
+_WEB_RESEARCH_IN_PROCESS_LOCK = Lock()
+_WEB_RESEARCH_MODULE_NAMES = {
+    "browser_search",
+    "evidence",
+    "fetching",
+    "main",
+    "models",
+    "query",
+    "receipt",
+    "research_pipeline",
+    "schedule",
+    "synthesis",
+    "validate",
+}
+_MISSING_MODULE = object()
 
 
 def is_folder_backed_drone(drone: DroneDefinition) -> bool:
@@ -82,14 +99,21 @@ def run_folder_drone_sync(
         )
 
     try:
-        result = _run_command_drone(
-            folder,
-            drone.entrypoint,
-            payload,
-            timeout_seconds=drone.budget.timeout_seconds,
-            cancel_event=run.cancel_event,
-            extra_env=extra_env or None,
-        )
+        if silent_requested and _is_bundled_web_research_folder(folder):
+            result = _run_web_research_drone_in_process(
+                folder,
+                payload,
+                extra_env=extra_env or None,
+            )
+        else:
+            result = _run_command_drone(
+                folder,
+                drone.entrypoint,
+                payload,
+                timeout_seconds=drone.budget.timeout_seconds,
+                cancel_event=run.cancel_event,
+                extra_env=extra_env or None,
+            )
         _raw_result = result
         cargo = _extract_cargo(result)
         if silent_requested:
@@ -297,6 +321,7 @@ def _run_command_drone(
 
     proc: subprocess.Popen[str] | None = None
     try:
+        subprocess_kwargs = get_subprocess_kwargs()
         proc = subprocess.Popen(
             command,
             cwd=str(folder),
@@ -305,7 +330,7 @@ def _run_command_drone(
             stderr=subprocess.PIPE,
             text=True,
             env={**os.environ, **extra_env} if extra_env else None,
-            **get_subprocess_kwargs(),
+            **subprocess_kwargs,
         )
         stdout_text, stderr_text = _communicate_with_cancel(
             proc,
@@ -372,6 +397,97 @@ def _run_command_drone(
         return {"ok": False, "error": f"Command not found: {command[0]}"}
     except Exception as exc:
         return {"ok": False, "error": str(exc), "traceback": traceback.format_exc()}
+
+
+def _is_bundled_web_research_folder(folder: Path) -> bool:
+    bundled = Path(__file__).resolve().parent / "bundled" / "web-research"
+    try:
+        return folder.resolve() == bundled.resolve()
+    except OSError:
+        return False
+
+
+def _run_web_research_drone_in_process(
+    folder: Path,
+    payload: dict[str, Any],
+    *,
+    extra_env: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Run the bundled silent web-research Drone without spawning a console app."""
+    with _WEB_RESEARCH_IN_PROCESS_LOCK:
+        old_env: dict[str, str | None] = {}
+        old_modules = {
+            name: sys.modules.get(name, _MISSING_MODULE)
+            for name in _WEB_RESEARCH_MODULE_NAMES
+        }
+        added_path = False
+        folder_text = str(folder)
+        try:
+            for name in _WEB_RESEARCH_MODULE_NAMES:
+                sys.modules.pop(name, None)
+            if extra_env:
+                for key, value in extra_env.items():
+                    old_env[key] = os.environ.get(key)
+                    os.environ[key] = value
+            if folder_text not in sys.path:
+                sys.path.insert(0, folder_text)
+                added_path = True
+
+            pipeline = importlib.import_module("research_pipeline")
+            query_module = importlib.import_module("query")
+            parse_query = getattr(query_module, "_parse_query_from_goal")
+            run_query = getattr(pipeline, "run_query")
+            build_failure_receipt = getattr(pipeline, "build_failure_receipt")
+
+            query = parse_query(str(payload.get("goal") or ""))
+            if query is None:
+                return _normalize_result(
+                    build_failure_receipt(
+                        "query is required",
+                        "Web Research Drone could not run because no query was provided.",
+                    )
+                )
+
+            _log.info(
+                "web_research_in_process_run folder=%s silent_requested=True",
+                folder,
+            )
+            result = run_query(query)
+            normalized = _normalize_result(result)
+            normalized.setdefault("_returncode", 0)
+            return normalized
+        except Exception as exc:
+            try:
+                if folder_text not in sys.path:
+                    sys.path.insert(0, folder_text)
+                    added_path = True
+                pipeline = importlib.import_module("research_pipeline")
+                build_failure_receipt = getattr(pipeline, "build_failure_receipt")
+                return _normalize_result(
+                    build_failure_receipt(
+                        str(exc),
+                        f"Web Research Drone encountered an error: {exc}",
+                    )
+                )
+            except Exception:
+                return {"ok": False, "error": str(exc), "traceback": traceback.format_exc()}
+        finally:
+            if added_path:
+                try:
+                    sys.path.remove(folder_text)
+                except ValueError:
+                    pass
+            for key, old_value in old_env.items():
+                if old_value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = old_value
+            for name in _WEB_RESEARCH_MODULE_NAMES:
+                previous = old_modules[name]
+                if previous is _MISSING_MODULE:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = previous
 
 
 def _communicate_with_cancel(
