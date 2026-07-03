@@ -341,7 +341,7 @@ def test_worker_finish_presenter_exceptional_statuses_do_not_add_main_chat_summa
 
         assert chat.worker_summaries == []
         assert not any(event[0] == "worker_finished" for event in playground.events)
-        assert not any(event[0] == "stop_aura" for event in playground.events)
+        assert ("stop_aura",) in playground.events
         assert ("set_worker_running", False) in playground.events
 
 
@@ -379,14 +379,30 @@ def test_dispatch_noncomplete_status_keeps_existing_assistant_even_if_ok() -> No
     )
 
 
-def test_dispatch_worker_success_result_can_close_assistant_for_final_continuation() -> None:
+def test_dispatch_not_started_closes_assistant_for_stale_cancelled_or_expired() -> None:
+    data = {
+        "ok": False,
+        "dispatch_not_started": True,
+        "extras": {"dispatch_cancelled": True},
+    }
+
+    assert _should_close_dispatch_assistant(
+        data,
+        event_ok=False,
+        needs_followup=False,
+        status=None,
+        dispatch_not_started=True,
+    )
+
+
+def test_dispatch_worker_success_result_keeps_existing_assistant_for_continuation() -> None:
     data = {
         "ok": True,
         "summary": "done",
         "status": WorkerOutcomeStatus.completed.value,
     }
 
-    assert _should_close_dispatch_assistant(
+    assert not _should_close_dispatch_assistant(
         data,
         event_ok=True,
         needs_followup=False,

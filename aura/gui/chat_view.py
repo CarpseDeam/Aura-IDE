@@ -80,12 +80,7 @@ def _should_close_dispatch_assistant(
         or extras.get("mismatch_question")
     ):
         return False
-    return _is_terminal_worker_success(
-        data,
-        event_ok=event_ok,
-        needs_followup=needs_followup,
-        status=status,
-    )
+    return False
 
 
 class ChatView(QScrollArea):

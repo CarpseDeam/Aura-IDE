@@ -61,8 +61,8 @@ class WorkerFinishPresenter:
             )
             self._active_mismatch_card_id = tool_call_id
 
+        self._playground.stop_aura()
         if outcome.terminal_success:
-            self._playground.stop_aura()
             if needs_followup is None:
                 self._playground.worker_finished(ok, summary, status=status)
             else:
