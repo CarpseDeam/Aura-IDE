@@ -341,6 +341,7 @@ def test_worker_finish_presenter_exceptional_statuses_do_not_add_main_chat_summa
 
         assert chat.worker_summaries == []
         assert not any(event[0] == "worker_finished" for event in playground.events)
+        assert not any(event[0] == "stop_aura" for event in playground.events)
         assert ("set_worker_running", False) in playground.events
 
 

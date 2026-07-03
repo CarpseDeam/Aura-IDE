@@ -407,10 +407,6 @@ class WorkerEventHandler(QObject):
         )
         title = f"API Error {status}" if status > 0 else "Worker Error"
         self._playground.add_error(f"{title}: {message}")
-        self._dispatch_ui.clear_active_spec_card(tool_call_id)
-        self._clear_pending_worker_finish(tool_call_id)
-        if self._active_worker_tool_call_id == tool_call_id:
-            self._active_worker_tool_call_id = None
 
     def _clear_pending_worker_finish(self, tool_call_id: str) -> None:
         if (

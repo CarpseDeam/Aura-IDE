@@ -8,6 +8,7 @@ Validates that:
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock, call, patch
 
 import pytest
@@ -159,6 +160,59 @@ class TestWorkerEventHandlerDuplicateGuard:
 
         handler._finish_presenter.present.assert_called_once()
         assert handler._active_worker_tool_call_id is None
+
+    def test_recoverable_worker_finish_does_not_clear_visible_spec_card(self):
+        handler, _bridge, _chat, _playground, _settings = _make_handler()
+        handler._dispatch_ui.clear_active_spec_card = MagicMock()
+        handler._finish_presenter.present = MagicMock(
+            return_value=SimpleNamespace(
+                outcome=SimpleNamespace(should_clear_dispatch_card=False)
+            )
+        )
+
+        handler._on_worker_started("dispatch-1")
+        handler._on_worker_finished(
+            "dispatch-1",
+            ok=False,
+            summary="Worker Error",
+            needs_followup=True,
+            status="harness_error",
+        )
+        _flush_pending_finish(handler)
+
+        handler._dispatch_ui.clear_active_spec_card.assert_not_called()
+
+    def test_terminal_worker_success_clears_visible_spec_card(self):
+        handler, _bridge, _chat, _playground, _settings = _make_handler()
+        handler._dispatch_ui.clear_active_spec_card = MagicMock()
+        handler._finish_presenter.present = MagicMock(
+            return_value=SimpleNamespace(
+                outcome=SimpleNamespace(should_clear_dispatch_card=True)
+            )
+        )
+
+        handler._on_worker_started("dispatch-1")
+        handler._on_worker_finished(
+            "dispatch-1",
+            ok=True,
+            summary="Done",
+            needs_followup=False,
+            status="completed",
+        )
+        _flush_pending_finish(handler)
+
+        handler._dispatch_ui.clear_active_spec_card.assert_called_once_with("dispatch-1")
+
+    def test_worker_api_error_logs_without_clearing_visible_dispatch_state(self):
+        handler, _bridge, _chat, playground, _settings = _make_handler()
+        handler._dispatch_ui.clear_active_spec_card = MagicMock()
+
+        handler._on_worker_started("dispatch-1")
+        handler._on_worker_api_error("dispatch-1", 500, "temporary failure")
+
+        playground.add_error.assert_called_once()
+        handler._dispatch_ui.clear_active_spec_card.assert_not_called()
+        assert handler._active_worker_tool_call_id == "dispatch-1"
 
     def test_cancelled_clears_active_id(self):
         handler, _bridge, _chat, _playground, _settings = _make_handler()

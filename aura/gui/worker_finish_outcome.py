@@ -16,7 +16,7 @@ class WorkerFinishOutcome:
 
     @property
     def should_clear_dispatch_card(self) -> bool:
-        return True
+        return self.terminal_success
 
     @property
     def should_show_visible_summary(self) -> bool:
