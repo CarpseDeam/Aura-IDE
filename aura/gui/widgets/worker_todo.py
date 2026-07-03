@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
 
 from aura.gui.theme import BG_ALT, BORDER, FG, FG_DIM, SUCCESS, WARN
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -87,7 +90,12 @@ class WorkerTodoWidget(QFrame):
         self.hide()
 
     def update_snapshot(self, items: list[dict[str, str]]) -> None:
-        """Render a full snapshot, reusing existing rows by stable id."""
+        """Render a full snapshot, reusing existing rows by stable id.
+
+        Only repositions a row when its index actually changes — avoids
+        unnecessary Qt layout churn that causes visible blink on every
+        snapshot update.
+        """
         if not items:
             self.clear()
             return
@@ -106,12 +114,18 @@ class WorkerTodoWidget(QFrame):
             if row is None:
                 row = self._create_row()
                 self._rows[item_id] = row
+                self._rows_layout.insertWidget(index, row.widget)
+            else:
+                current_index = self._rows_layout.indexOf(row.widget)
+                if current_index != -1 and current_index != index:
+                    self._rows_layout.insertWidget(index, row.widget)
             self._apply_item(row, item)
-            self._rows_layout.insertWidget(index, row.widget)
 
-        self.show()
+        if self.isHidden():
+            self.show()
 
     def clear(self) -> None:
+        _log.info("DIAGNOSTIC WorkerTodoWidget.clear called row_count=%d", len(self._rows))
         for item_id in list(self._rows):
             self._remove_row(item_id)
         self.hide()

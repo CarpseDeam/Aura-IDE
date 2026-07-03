@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QGuiApplication, QIcon
 from PySide6.QtWidgets import (
@@ -22,6 +24,8 @@ from aura.gui.cards.error_card import ErrorCard
 from aura.gui.theme import ACCENT, BG, BG_RAISED, BORDER, FG
 from aura.gui.widgets.worker_todo import WorkerTodoWidget
 from aura.gui.worker_log_stream import WorkerLogStreamBuffer
+
+_log = logging.getLogger(__name__)
 
 
 class InfoHubPane(QWidget):
@@ -243,11 +247,13 @@ class InfoHubPane(QWidget):
 
     def clear(self) -> None:
         """Reset the Worker Log: clear text, activity, and dynamic cards."""
+        _log.info("DIAGNOSTIC InfoHubPane.clear called")
         self.clear_log()
         self.update_activity([])
 
     def clear_log(self) -> None:
         """Clear log text and dynamic cards."""
+        _log.info("DIAGNOSTIC InfoHubPane.clear_log called — clearing log text, TODO, cards")
         self._log_stream.clear()
         self._log_view.setPlainText("")
         self._activity_entry_count = 0

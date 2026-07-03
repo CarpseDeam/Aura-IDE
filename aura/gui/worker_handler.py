@@ -200,15 +200,24 @@ class WorkerEventHandler(QObject):
 
         DispatchSession emits one workerStarted signal per campaign.
         """
+        _log.info(
+            "DIAGNOSTIC _on_worker_started tool_call_id=%s active_worker_tool_call_id=%s",
+            tool_call_id,
+            self._active_worker_tool_call_id,
+        )
         if self._active_worker_tool_call_id == tool_call_id:
             _log.info(
-                "worker_started_duplicate_ignored tool_call_id=%s",
+                "DIAGNOSTIC worker_started_duplicate_ignored — skipping begin_assistant tool_call_id=%s",
                 tool_call_id,
             )
             self._dispatch_ui.mark_worker_started(tool_call_id)
             self.worker_running_changed.emit(True)
             return
 
+        _log.info(
+            "DIAGNOSTIC worker_started_first_call — calling begin_assistant tool_call_id=%s",
+            tool_call_id,
+        )
         self._active_worker_tool_call_id = tool_call_id
         self._chat.stop_current_aura()
         # Remove any remaining PlanWriterCard — once the Worker is running,

@@ -272,6 +272,9 @@ class AuraPlayground(QWidget):
     def begin_assistant(self):
         """Reset the workspace for a new assistant run (log text, code tabs, terminal).
         """
+        _log.info(
+            "DIAGNOSTIC AuraPlayground.begin_assistant called — clearing code tabs, log, terminal"
+        )
         self._code_editor.close_worker_tabs()
         self._info_hub.clear_log()
         self._terminal_window.clear()
@@ -446,6 +449,7 @@ class AuraPlayground(QWidget):
         self._info_hub.set_worker_running(running)
 
     def clear(self):
+        _log.info("DIAGNOSTIC AuraPlayground.clear called — full workspace reset")
         self._code_editor.close_all_tabs()
         self._info_hub.clear()
         self._terminal_window.clear()

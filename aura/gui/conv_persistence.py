@@ -328,6 +328,10 @@ class ConversationPersistence(QObject):
         Sets history, reconfigures provider/model/thinking, clears the view,
         then replays all messages into the chat.
         """
+        logging.getLogger(__name__).info(
+            "DIAGNOSTIC ConversationPersistence.apply_loaded — full view reset + replay path=%s",
+            loaded.path,
+        )
         self._active_replay_id += 1
         pwm = loaded.planner_worker_mode
         from aura.prompts import PLANNER_SYSTEM_PROMPT, SINGLE_SYSTEM_PROMPT
