@@ -1,10 +1,6 @@
-"""Compatibility facade for Worker production-quality evaluation."""
-from __future__ import annotations
+"""Worker production-quality evaluation package."""
 
-from aura.conversation.quality.evaluator import (
-    evaluate_worker_quality,
-    findings_to_receipt,
-)
+from aura.conversation.quality.evaluator import evaluate_worker_quality
 from aura.conversation.quality.models import (
     QualityFinding,
     QualitySeverity,
@@ -24,5 +20,4 @@ __all__ = [
     "QualitySeverity",
     "WorkerQualityDecision",
     "evaluate_worker_quality",
-    "findings_to_receipt",
 ]

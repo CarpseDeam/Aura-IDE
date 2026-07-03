@@ -53,6 +53,7 @@ def handle_worker_quality_gate(
         changed_files,
         diff_text,
         validation_passed=True,
+        expected_files=state.dispatched_target_files,
     )
     state.last_quality_findings = findings_to_receipt(decision.findings)
 
@@ -66,14 +67,18 @@ def handle_worker_quality_gate(
         return "finished"
 
     if decision.needs_cleanup:
-        if not state.worker_quality_nudge_sent:
+        if not state.worker_quality_cleanup_attempted:
             history.append_user_text(decision.instruction)
             state.worker_quality_nudge_sent = True
             state.worker_quality_cleanup_attempted = True
             return "cleanup"
-        if fingerprint:
-            state.last_quality_ok_fingerprint = fingerprint
-        return "none"
+        _finish_worker_quality_unresolved_findings(
+            history=history,
+            on_event=on_event,
+            changed_files=changed_files,
+            findings=state.last_quality_findings,
+        )
+        return "finished"
 
     if (
         critic_cb is not None
@@ -93,16 +98,20 @@ def handle_worker_quality_gate(
         )
         state.last_quality_findings = _critic_findings_to_receipt(verdict.findings)
         if verdict.route == "worker":
-            if not state.worker_quality_nudge_sent:
+            if not state.worker_quality_cleanup_attempted:
                 history.append_user_text(
                     verdict.instruction or _critic_cleanup_instruction(verdict.findings)
                 )
                 state.worker_quality_nudge_sent = True
                 state.worker_quality_cleanup_attempted = True
                 return "cleanup"
-            if fingerprint:
-                state.last_quality_ok_fingerprint = fingerprint
-            return "none"
+            _finish_worker_quality_unresolved_findings(
+                history=history,
+                on_event=on_event,
+                changed_files=changed_files,
+                findings=state.last_quality_findings,
+            )
+            return "finished"
         if verdict.route == "planner":
             _finish_worker_critic_planner_resolution(
                 history=history,
@@ -271,6 +280,39 @@ def _finish_worker_quality_hard_block(
             "suggested_next_tool": "dispatch_to_worker",
             "suggested_next_action": (
                 "Redispatch a focused repair for the listed hard-block findings."
+            ),
+        },
+    )
+    payload = json.loads(content)
+    payload["phase_boundary"] = True
+    content = json.dumps(payload, ensure_ascii=False)
+    full_message["content"] = content
+    history.append_assistant(full_message)
+    on_event(ContentDelta(text=content))
+    on_event(Done(finish_reason="stop", full_message=full_message))
+
+
+def _finish_worker_quality_unresolved_findings(
+    *,
+    history: History,
+    on_event: EventCallback,
+    changed_files: list[str],
+    findings: list[dict],
+) -> None:
+    content, full_message = build_worker_recoverable_followup_message(
+        failure_class="worker_quality_unresolved_findings",
+        error=(
+            "Worker final candidate still has production-quality findings "
+            "after one cleanup attempt."
+        ),
+        details={
+            "recoverable": True,
+            "phase_boundary": True,
+            "changed_files": changed_files,
+            "findings": findings,
+            "suggested_next_tool": "dispatch_to_worker",
+            "suggested_next_action": (
+                "Redispatch a focused repair for the unresolved quality findings."
             ),
         },
     )
