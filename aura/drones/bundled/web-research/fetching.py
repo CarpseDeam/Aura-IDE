@@ -191,6 +191,14 @@ def _mock_search_page(target: SourceTarget, fetched_at: str, results: list[dict[
 
 
 def _builtin_mock_results(target: SourceTarget) -> list[dict[str, Any]]:
+    """Return hardcoded mock search results for testing.
+
+    These are test fixture data only — they are NOT product behavior and
+    should NOT be mistaken for real source discovery logic.  The examples
+    (World Cup, Python, Nuitka, etc.) are chosen to give tests stable,
+    predictable responses, not to hardcode any real research capability.
+    Only active when ``_AURA_MOCK_WEB_RESEARCH=1`` or a fixture is loaded.
+    """
     query = _search_query_from_url(target.url).lower()
     if "fail" in query or "not found" in query:
         return [{"url": "https://mock.local/fail", "title": "Mock Failure"}]
@@ -208,6 +216,11 @@ def _builtin_mock_results(target: SourceTarget) -> list[dict[str, Any]]:
 
 
 def _builtin_mock_page(url: str) -> dict[str, Any] | None:
+    """Return hardcoded mock page content for testing.
+
+    Test fixture data only — not product behavior.  Only active when
+    ``_AURA_MOCK_WEB_RESEARCH=1``.
+    """
     pages: dict[str, dict[str, Any]] = {
         "https://mock.local/fail": {
             "ok": False,
@@ -247,6 +260,12 @@ def _builtin_mock_page(url: str) -> dict[str, Any] | None:
 
 
 def _mock_fetch_source(target: SourceTarget, fetched_at: str) -> FetchedSource | None:
+    """Try to return a mocked page for *target*.
+
+    Checks the fixture env var first, then built-in test data.
+    Both are test-only — not product behavior.  Returns ``None`` when
+    neither mock mode is active, so the caller falls through to real HTTP.
+    """
     fixture = _load_mock_fixture()
     fixture_page = _mock_fixture_page_for_url(fixture, target.url)
     if fixture_page is not None:
@@ -302,6 +321,11 @@ def _mock_fetch_source(target: SourceTarget, fetched_at: str) -> FetchedSource |
             error="HTTP fetch error: 404 Not Found",
             route="http",
         )
+    # --- Everything below here is builtin test fixture data only ---
+    # None of these examples represent product behavior. They exist so that
+    # tests using _AURA_MOCK_WEB_RESEARCH=1 get stable, predictable responses
+    # regardless of external network state.
+
     if "fifa.com" in lower_url:
         text = "World Cup Matches Today: USA vs ENG 8:00 PM GMT"
         return FetchedSource(

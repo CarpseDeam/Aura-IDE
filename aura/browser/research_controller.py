@@ -91,16 +91,33 @@ class BrowserReceipt:
     final_active_url: str = ""
     page_title: str = ""
     navigation_status: str = "not_started"
+    browser_ready: bool = False
     phase_errors: dict[str, str] = field(default_factory=dict)
 
     @property
     def ok(self) -> bool:
-        """True when the browser was launched, connected, and navigated."""
-        return (
-            bool(self.browser_executable)
-            and bool(self.cdp_url)
-            and self.navigation_status == "success"
-        )
+        """True when the operation completed successfully.
+
+        For ``start()``: true when the browser was detected, launched,
+        connected, and a page was acquired (``browser_ready``) with no
+        phase errors.
+
+        For ``navigate()``: true when the browser is ready, no phase
+        errors, and navigation did not fail (either succeeded or
+        navigation was not required yet).
+        """
+        if self.phase_errors:
+            return False
+        if not self.browser_ready:
+            return False
+        if self.navigation_status == "failed":
+            return False
+        return True
+
+    @property
+    def navigation_ok(self) -> bool:
+        """True specifically when navigation completed successfully."""
+        return self.navigation_status == "success"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -113,6 +130,7 @@ class BrowserReceipt:
             "first_navigated_url": self.first_navigated_url,
             "final_active_url": self.final_active_url,
             "page_title": self.page_title,
+            "browser_ready": self.browser_ready,
             "navigation_status": self.navigation_status,
             "phase_errors": dict(self.phase_errors),
         }
@@ -413,6 +431,7 @@ class ResearchBrowserController:
             return receipt
 
         self._started = True
+        receipt.browser_ready = True
         _log.info(
             "research_browser_started executable=%s port=%d profile=%s",
             self._browser_executable,
@@ -428,10 +447,9 @@ class ResearchBrowserController:
         as a search query and sent to a search engine.
         """
         receipt = self.start()
+        receipt.requested_url = url_or_query
         if not receipt.ok:
             return receipt
-
-        receipt.requested_url = url_or_query
         target_url = self._resolve_target_url(url_or_query)
 
         page = self._page

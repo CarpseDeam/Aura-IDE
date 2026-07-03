@@ -146,9 +146,22 @@ class TestBrowserReceipt:
         r = BrowserReceipt(
             browser_executable="/usr/bin/chrome",
             cdp_url="ws://cdp",
+            browser_ready=True,
             navigation_status="success",
         )
         assert r.ok is True
+        assert r.navigation_ok is True
+
+    def test_ok_true_when_started_but_not_navigated(self):
+        """A plain start() receipt with browser_ready is ok, even before navigation."""
+        r = BrowserReceipt(
+            browser_executable="/usr/bin/chrome",
+            cdp_url="ws://cdp",
+            browser_ready=True,
+            navigation_status="not_started",
+        )
+        assert r.ok is True
+        assert r.navigation_ok is False
 
     def test_phase_errors_prevent_ok(self):
         r = BrowserReceipt(phase_errors={"detect": "Chrome not found"})
@@ -161,10 +174,12 @@ class TestBrowserReceipt:
             cdp_url="ws://127.0.0.1:9222",
             requested_url="test query",
             page_title="Test Page",
+            browser_ready=True,
             navigation_status="success",
         )
         d = r.to_dict()
         assert d["controller_version"] == "1.0"
+        assert d["browser_ready"] is True
         assert d["navigation_status"] == "success"
         assert d["page_title"] == "Test Page"
         assert d["phase_errors"] == {}
@@ -230,16 +245,21 @@ class TestResearchBrowserController:
         ctrl.close()
 
     def test_navigate_returns_receipt_early_when_start_fails(self):
-        """Navigate returns early when start() fails, before setting requested_url."""
+        """Navigate returns early when start() fails, but requested_url is set."""
         ctrl = ResearchBrowserController()
         with patch.object(ctrl, "start", return_value=BrowserReceipt()):
             receipt = ctrl.navigate("test query")
         assert receipt.navigation_status == "not_started"
-        assert receipt.requested_url == ""
+        assert receipt.requested_url == "test query"
         ctrl.close()
 
     def test_navigate_sets_requested_url_when_start_succeeds(self):
-        """Navigate sets requested_url on the receipt when start returns ok."""
+        """Navigate sets requested_url on the receipt when start returns ok.
+
+        Uses a realistic start-style receipt (browser_ready=True,
+        navigation_status=not_started) rather than faking navigation
+        success from start().
+        """
         ctrl = ResearchBrowserController()
         global_nav = {"called": False}
 
@@ -255,12 +275,14 @@ class TestResearchBrowserController:
         good_receipt = BrowserReceipt(
             browser_executable="/usr/bin/chrome",
             cdp_url="ws://cdp",
-            navigation_status="success",
+            browser_ready=True,
+            navigation_status="not_started",
         )
         ctrl._page = FakePage()
         with patch.object(ctrl, "start", return_value=good_receipt):
             receipt = ctrl.navigate("test query")
         assert receipt.requested_url == "test query"
+        assert receipt.navigation_status == "success"
         assert global_nav["called"]
 
     def test_context_manager_closes(self):
@@ -279,6 +301,115 @@ class TestResearchBrowserController:
         resolved = ctrl._resolve_target_url("python version")
         assert "python+version" in resolved
         assert resolved.startswith("https://www.bing.com/search?q=")
+
+
+# ---------------------------------------------------------------------------
+# Regression: start receipt readiness vs navigation status
+# ---------------------------------------------------------------------------
+
+
+class TestStartReceiptReadiness:
+    """Verify that a plain start() receipt is usable without fake navigation success."""
+
+    def test_navigate_proceeds_when_start_returns_ready_receipt(self):
+        """navigate() should proceed when start() returns browser_ready=True,
+        even though navigation_status is still 'not_started'."""
+        ctrl = ResearchBrowserController()
+        nav_log = {"called": False, "url": ""}
+
+        class FakePage:
+            def goto(self, url, **kw):
+                nav_log["called"] = True
+                nav_log["url"] = url
+            def title(self):
+                return "Test Results"
+            @property
+            def url(self):
+                return "https://example.com/result"
+
+        ready_receipt = BrowserReceipt(
+            browser_executable="/usr/bin/chrome",
+            browser_profile_dir="/tmp/profile",
+            cdp_url="ws://127.0.0.1:9222",
+            browser_pid=12345,
+            browser_ready=True,
+            navigation_status="not_started",
+        )
+        ctrl._page = FakePage()
+        with patch.object(ctrl, "start", return_value=ready_receipt):
+            receipt = ctrl.navigate("test query")
+        assert receipt.ok is True
+        assert receipt.navigation_ok is True
+        assert receipt.navigation_status == "success"
+        assert receipt.requested_url == "test query"
+        assert nav_log["called"] is True
+        assert "bing.com/search" in nav_log["url"]
+
+    def test_navigate_sets_requested_url_even_on_start_failure(self):
+        """requested_url should be present on the receipt even when start fails."""
+        ctrl = ResearchBrowserController()
+        failed_receipt = BrowserReceipt(phase_errors={"detect": "Chrome not found"})
+        with patch.object(ctrl, "start", return_value=failed_receipt):
+            receipt = ctrl.navigate("test query")
+        assert receipt.ok is False
+        assert receipt.requested_url == "test query"
+        assert receipt.phase_errors.get("detect") == "Chrome not found"
+
+
+class TestBrowserResearchSessionStart:
+    """BrowserResearchSession.start() should accept a ready-but-not-navigated receipt."""
+
+    def _import_session(self):
+        """Import BrowserResearchSession from the web-research bundle directory.
+
+        The web-research modules use bare imports (``from models import ...``)
+        that require the bundle directory on sys.path.
+        """
+        import importlib
+        bundle_dir = (
+            Path(__file__).resolve().parent.parent
+            / "aura" / "drones" / "bundled" / "web-research"
+        )
+        if str(bundle_dir) not in sys.path:
+            sys.path.insert(0, str(bundle_dir))
+        # Clear any cached imports so the path update takes effect
+        for mod in list(sys.modules):
+            if "browser_search" in mod or "models" in mod:
+                sys.modules.pop(mod, None)
+        mod = importlib.import_module("browser_search")
+        return mod.BrowserResearchSession
+
+    def test_start_accepts_ready_receipt(self):
+        """Session start succeeds when the controller returns browser_ready=True."""
+        BrowserResearchSession = self._import_session()
+
+        class FakePage:
+            pass
+
+        ready_receipt = BrowserReceipt(
+            browser_executable="/usr/bin/chrome",
+            browser_profile_dir="/tmp/profile",
+            cdp_url="ws://127.0.0.1:9222",
+            browser_ready=True,
+            navigation_status="not_started",
+        )
+
+        # The module is imported as bare "browser_search" (not under the aura
+        # package namespace) because the bundle directory is on sys.path.
+        with (
+            patch("browser_search.ResearchBrowserController") as MockCtrl,
+        ):
+            instance = MockCtrl.return_value
+            instance.start.return_value = ready_receipt
+            instance.page = FakePage()
+
+            session = BrowserResearchSession()
+            result = session.start()
+
+        assert result is True
+        assert session._started is True
+        assert session._page is not None
+        session.close()
 
 
 # ---------------------------------------------------------------------------

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import datetime as dt
-import importlib
 import json
 import logging
 import os
@@ -10,7 +9,6 @@ import sys
 import time
 import traceback
 from pathlib import Path
-from threading import Lock
 from typing import Any
 
 from aura.config import get_subprocess_kwargs
@@ -21,7 +19,6 @@ from aura.drones.store import DroneStore, RunHistoryStore
 _PROCESS_POLL_SECONDS = 0.05
 _CANCEL_GRACE_SECONDS = 2.0
 _PYTHON_COMMANDS = {"python", "python.exe", "python3", "python3.exe", "py", "py.exe"}
-_WEB_RESEARCH_DRONE_ID = "web-research"
 _log = logging.getLogger(__name__)
 
 
@@ -191,57 +188,6 @@ def _evidence_for_status(status: str) -> str:
     return ""
 
 
-def _log_web_research_silent_diagnostic(
-    cargo: Any,
-    raw_result: dict[str, Any] | None,
-    folder: Path,
-) -> None:
-    route_used = _route_used_from(cargo, raw_result)
-    browser_metadata = route_used.get("browser_discovery")
-    if not isinstance(browser_metadata, dict):
-        _log.info(
-            "web_research_silent_diagnostic folder=%s silent_requested=True "
-            "browser_visible=unknown",
-            folder,
-        )
-        return
-    browser_visible = browser_metadata.get("browser_visible")
-    if browser_visible is True:
-        _log.warning(
-            "web_research_silent_not_honored folder=%s silent_requested=True "
-            "browser_visible=True",
-            folder,
-        )
-        return
-    _log.info(
-        "web_research_silent_diagnostic folder=%s silent_requested=True "
-        "browser_visible=%s",
-        folder,
-        browser_visible,
-    )
-
-
-def _route_used_from(
-    cargo: Any,
-    raw_result: dict[str, Any] | None,
-) -> dict[str, Any]:
-    if isinstance(cargo, dict):
-        route = cargo.get("route_used")
-        if isinstance(route, dict):
-            return route
-        route = cargo.get("route")
-        if isinstance(route, dict):
-            return route
-    if isinstance(raw_result, dict):
-        route = raw_result.get("route_used")
-        if isinstance(route, dict):
-            return route
-        route = raw_result.get("route")
-        if isinstance(route, dict):
-            return route
-    return {}
-
-
 def _resolve_entrypoint_command(command: list[str]) -> list[str]:
     """Use Aura's current interpreter for manifest Python shims.
 
@@ -353,108 +299,6 @@ def _run_command_drone(
         return {"ok": False, "error": f"Command not found: {command[0]}"}
     except Exception as exc:
         return {"ok": False, "error": str(exc), "traceback": traceback.format_exc()}
-
-
-def _is_bundled_web_research_folder(folder: Path) -> bool:
-    """Return True if *folder* is a known web-research drone that can run in-process.
-
-    Matches the bundled source as well as workspace-registered copies
-    (e.g. ``.aura/drones/web-research/``).  Previously the check was an
-    exact-path comparison against ``bundled/`` only, which meant every
-    workspace-registered copy fell through to the subprocess path and
-    spawned a console window.
-    """
-    bundled = Path(__file__).resolve().parent / "bundled" / "web-research"
-    try:
-        if folder.resolve() == bundled.resolve():
-            return True
-    except OSError:
-        pass
-    # Workspace-registered copy — verify it still has the in-process entrypoint.
-    return (folder / "research_pipeline.py").is_file()
-
-
-def _run_web_research_drone_in_process(
-    folder: Path,
-    payload: dict[str, Any],
-    *,
-    extra_env: dict[str, str] | None = None,
-) -> dict[str, Any]:
-    """Run the bundled silent web-research Drone without spawning a console app."""
-    with _WEB_RESEARCH_IN_PROCESS_LOCK:
-        old_env: dict[str, str | None] = {}
-        old_modules = {
-            name: sys.modules.get(name, _MISSING_MODULE)
-            for name in _WEB_RESEARCH_MODULE_NAMES
-        }
-        added_path = False
-        folder_text = str(folder)
-        try:
-            for name in _WEB_RESEARCH_MODULE_NAMES:
-                sys.modules.pop(name, None)
-            if extra_env:
-                for key, value in extra_env.items():
-                    old_env[key] = os.environ.get(key)
-                    os.environ[key] = value
-            if folder_text not in sys.path:
-                sys.path.insert(0, folder_text)
-                added_path = True
-
-            pipeline = importlib.import_module("research_pipeline")
-            query_module = importlib.import_module("query")
-            parse_query = getattr(query_module, "_parse_query_from_goal")
-            run_query = getattr(pipeline, "run_query")
-            build_failure_receipt = getattr(pipeline, "build_failure_receipt")
-
-            query = parse_query(str(payload.get("goal") or ""))
-            if query is None:
-                return _normalize_result(
-                    build_failure_receipt(
-                        "query is required",
-                        "Web Research Drone could not run because no query was provided.",
-                    )
-                )
-
-            _log.info(
-                "web_research_in_process_run folder=%s silent_requested=True",
-                folder,
-            )
-            result = run_query(query)
-            normalized = _normalize_result(result)
-            normalized.setdefault("_returncode", 0)
-            return normalized
-        except Exception as exc:
-            try:
-                if folder_text not in sys.path:
-                    sys.path.insert(0, folder_text)
-                    added_path = True
-                pipeline = importlib.import_module("research_pipeline")
-                build_failure_receipt = getattr(pipeline, "build_failure_receipt")
-                return _normalize_result(
-                    build_failure_receipt(
-                        str(exc),
-                        f"Web Research Drone encountered an error: {exc}",
-                    )
-                )
-            except Exception:
-                return {"ok": False, "error": str(exc), "traceback": traceback.format_exc()}
-        finally:
-            if added_path:
-                try:
-                    sys.path.remove(folder_text)
-                except ValueError:
-                    pass
-            for key, old_value in old_env.items():
-                if old_value is None:
-                    os.environ.pop(key, None)
-                else:
-                    os.environ[key] = old_value
-            for name in _WEB_RESEARCH_MODULE_NAMES:
-                previous = old_modules[name]
-                if previous is _MISSING_MODULE:
-                    sys.modules.pop(name, None)
-                else:
-                    sys.modules[name] = previous
 
 
 def _communicate_with_cancel(
