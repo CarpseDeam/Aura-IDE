@@ -48,8 +48,8 @@ from aura.conversation.persistence import WorkerDispatchRecord
 from aura.conversation.tool_limits import TERMINAL_TOOLS, WRITE_TOOLS
 from aura.conversation.workflow_state import WorkflowState, WorkflowStatus
 from aura.dependency_context import build_dependency_stanza
-from aura.events import EventBus
-from aura.lifecycle import LifecycleHooks, attach_lifecycle_notify
+from aura.events import DISPATCH_STEP_STARTED, EventBus
+from aura.lifecycle import HookContext, HookMatcher, LifecycleHooks, attach_lifecycle_notify
 from aura.lifecycle.builtin_worker_gates import register_builtin_worker_gates
 from aura.worker_todo import WorkerTodoProjector
 
@@ -140,6 +140,16 @@ class _DispatchProxy(QObject):
         self._todo_projector = WorkerTodoProjector(self._event_bus)
         self._todo_projector.set_on_change(self._on_todo_changed)
 
+        # Step-start TODO reset — clear stale TODO items when a new campaign
+        # step begins.  Only the TODO list resets per step; Worker Log,
+        # Activity, code tabs, terminal, and playground state persist.
+        self._detach_step_todo_reset = self._lifecycle.register_notify(
+            HookMatcher(DISPATCH_STEP_STARTED),
+            self._on_step_started_reset_todo,
+            name="step_todo_reset",
+            source="internal",
+        )
+
     # ---- config -----------------------------------------------------------
 
     def set_workspace_root(self, root: Path) -> None:
@@ -200,6 +210,22 @@ class _DispatchProxy(QObject):
         """Clear activity entries (conversation reset / teardown)."""
         self._activity_controller.clear()
         self._todo_projector.clear()
+
+    # ---- lifecycle hook handlers -----------------------------------------
+
+    def _on_step_started_reset_todo(self, ctx: HookContext) -> None:
+        """Clear the Worker TODO snapshot when a new campaign step starts.
+
+        Registered as a lifecycle notify hook for DISPATCH_STEP_STARTED.
+        Only the TODO list resets per step — Worker Log, Activity, code tabs,
+        terminal, and playground state persist across campaign steps.
+        """
+        run_id = ctx.run_id or ctx.campaign_id
+        if not run_id:
+            return
+        self._todo_projector.clear(run_id)
+        # Emit empty TODO so the GUI clears stale items from the previous step.
+        self._on_todo_changed(run_id, [])
 
     # ---- planner-thread side ---------------------------------------------
 
