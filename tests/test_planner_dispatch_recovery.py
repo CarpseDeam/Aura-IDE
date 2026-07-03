@@ -1,4 +1,5 @@
 import json
+import logging
 import threading
 
 from aura.client import (
@@ -272,6 +273,97 @@ def test_broad_valid_steps_start_worker(tmp_path):
     assert result.ok is True
     assert dispatches and dispatches[0][0] == "call_dispatch"
     assert any(isinstance(event, WorkerDispatchRequested) for event in events)
+
+
+def test_second_dispatch_in_same_planner_turn_is_recoverable_error_not_worker(
+    tmp_path,
+    caplog,
+):
+    runner, history = _round_runner(tmp_path)
+    state = _planner_state()
+    events = []
+    dispatches = []
+    caplog.set_level(logging.INFO, logger="aura.conversation.tool_runner")
+
+    first_call = _dispatch_tool_call(_valid_steps_dispatch(), "call_dispatch_1")
+    history.append_assistant(
+        {
+            "role": "assistant",
+            "content": "",
+            "reasoning_content": None,
+            "tool_calls": [first_call],
+        }
+    )
+    first_outcome = runner.run(
+        tool_calls=[first_call],
+        state=state,
+        on_event=events.append,
+        approval_cb=lambda request: None,
+        cancel_event=threading.Event(),
+        dispatch_cb=lambda tool_id, req: (
+            dispatches.append((tool_id, req)),
+            WorkerDispatchResult(ok=True, summary="Worker completed."),
+        )[1],
+        cleanup_cancelled=lambda on_event: None,
+    )
+
+    assert first_outcome.action == "return"
+    assert state.planner_visible_dispatch_tool_call_id == "call_dispatch_1"
+
+    second_call = _dispatch_tool_call(_valid_steps_dispatch(), "call_dispatch_2")
+    history.append_assistant(
+        {
+            "role": "assistant",
+            "content": "",
+            "reasoning_content": None,
+            "tool_calls": [second_call],
+        }
+    )
+    second_outcome = runner.run(
+        tool_calls=[second_call],
+        state=state,
+        on_event=events.append,
+        approval_cb=lambda request: None,
+        cancel_event=threading.Event(),
+        dispatch_cb=lambda tool_id, req: (
+            dispatches.append((tool_id, req)),
+            WorkerDispatchResult(ok=True, summary="Worker completed."),
+        )[1],
+        cleanup_cancelled=lambda on_event: None,
+    )
+
+    assert second_outcome.action == "continue"
+    assert [tool_id for tool_id, _req in dispatches] == ["call_dispatch_1"]
+    worker_events = [event for event in events if isinstance(event, WorkerDispatchRequested)]
+    assert [event.tool_call_id for event in worker_events] == ["call_dispatch_1"]
+
+    tool_results = [msg for msg in history.messages if msg.get("role") == "tool"]
+    second_payload = json.loads(tool_results[-1]["content"])
+    assert second_payload["ok"] is False
+    assert second_payload["recoverable"] is True
+    assert second_payload["extras"]["planner_dispatch_chain_rejected"] is True
+    assert second_payload["extras"]["previous_dispatch_tool_call_id"] == "call_dispatch_1"
+    assert "already dispatched a Worker campaign" in second_payload["summary"]
+    assert "steps array" in second_payload["extras"]["failure_constraint"]
+
+    dispatch_log_messages = [
+        record.getMessage()
+        for record in caplog.records
+        if "planner_dispatch_entry" in record.getMessage()
+    ]
+    assert any(
+        "tool_call_id=call_dispatch_1" in message
+        and "steps_present=True" in message
+        and "step_count=1" in message
+        and "first_dispatch_in_turn=True" in message
+        for message in dispatch_log_messages
+    )
+    assert any(
+        "tool_call_id=call_dispatch_2" in message
+        and "chained_later_dispatch=True" in message
+        and "previous_dispatch_tool_call_id=call_dispatch_1" in message
+        for message in dispatch_log_messages
+    )
 
 
 def test_failed_dispatch_classification_preserves_campaign_constraint(tmp_path):

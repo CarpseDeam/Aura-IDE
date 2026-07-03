@@ -66,6 +66,9 @@ class _SendState:
     stale_validation_notes: list[str] = field(default_factory=list)
 
     # --- dispatch ---
+    planner_dispatch_attempts: int = 0
+    planner_visible_dispatch_tool_call_id: str = ""
+
     # --- edit recovery ---
     edit_failed_shapes: set[str] = field(default_factory=set)
     edit_fallback_required: dict[str, dict[str, Any]] = field(default_factory=dict)

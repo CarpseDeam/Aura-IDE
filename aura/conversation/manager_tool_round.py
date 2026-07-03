@@ -828,6 +828,25 @@ class ToolRoundRunner:
         workflow_state_cb: Callable[[str, str, str, WorkflowStatus], None] | None = None,
         on_event: EventCallback,
     ) -> dict[str, Any]:
+        state.planner_dispatch_attempts += 1
+        dispatch_attempt = state.planner_dispatch_attempts
+        previous_dispatch_tool_call_id = state.planner_visible_dispatch_tool_call_id
+        if previous_dispatch_tool_call_id:
+            result = self._tool_runner.handle_dispatch(
+                tool_call_id=tool_call_id,
+                args=args,
+                on_event=on_event,
+                dispatch_cb=dispatch_cb,
+                workflow_state_cb=workflow_state_cb,
+                planner_dispatch_attempt=dispatch_attempt,
+                previous_dispatch_tool_call_id=previous_dispatch_tool_call_id,
+            )
+            return self._dispatch_result_to_round_result(
+                tool_call_id=tool_call_id,
+                result=result,
+                state=state,
+            )
+
         if (
             state.research_policy.route == ANSWER_ONLY
             and not _dispatch_args_look_like_local_code_work(args)
@@ -862,7 +881,24 @@ class ToolRoundRunner:
             on_event=on_event,
             dispatch_cb=dispatch_cb,
             workflow_state_cb=workflow_state_cb,
+            planner_dispatch_attempt=dispatch_attempt,
+            previous_dispatch_tool_call_id=previous_dispatch_tool_call_id,
         )
+        if _dispatch_reached_visible_worker(result):
+            state.planner_visible_dispatch_tool_call_id = tool_call_id
+        return self._dispatch_result_to_round_result(
+            tool_call_id=tool_call_id,
+            result=result,
+            state=state,
+        )
+
+    def _dispatch_result_to_round_result(
+        self,
+        *,
+        tool_call_id: str,
+        result: WorkerDispatchResult | None,
+        state: _SendState,
+    ) -> dict[str, Any]:
         terminal_dispatch = False
         if result is not None and not result.cancelled:
             if result.ok:
@@ -1093,6 +1129,13 @@ def _looks_like_local_path(value: Any) -> bool:
         or "." in Path(path).name
         or path.startswith(".")
     )
+
+
+def _dispatch_reached_visible_worker(result: WorkerDispatchResult | None) -> bool:
+    if result is None:
+        return False
+    extras = result.extras if isinstance(result.extras, dict) else {}
+    return not bool(extras.get("dispatch_not_started"))
 
 
 def _internal_constraint_seen(history: History, failure_constraint: str) -> bool:

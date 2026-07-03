@@ -76,6 +76,8 @@ class ToolRunner:
         on_event: Any,
         dispatch_cb: DispatchCallback | None,
         workflow_state_cb: Callable[[str, str, str, Any], None] | None = None,
+        planner_dispatch_attempt: int = 1,
+        previous_dispatch_tool_call_id: str = "",
     ) -> WorkerDispatchResult | None:
         req = WorkerDispatchRequest.from_dict(args)
         raw_steps = args.get("steps") if isinstance(args.get("steps"), list) else []
@@ -84,6 +86,50 @@ class ToolRunner:
 
             req.steps = [WorkerStepSpec.from_dict(step) for step in raw_steps]
         req = enrich_worker_dispatch_contract(req)
+        steps_present = isinstance(args.get("steps"), list)
+        step_count = len(req.steps)
+        first_dispatch_in_turn = planner_dispatch_attempt <= 1
+        chained_later_dispatch = not first_dispatch_in_turn
+        _log.info(
+            (
+                "planner_dispatch_entry tool_call_id=%s steps_present=%s "
+                "step_count=%s dispatch_attempt=%s first_dispatch_in_turn=%s "
+                "chained_later_dispatch=%s previous_dispatch_tool_call_id=%s"
+            ),
+            tool_call_id,
+            steps_present,
+            step_count,
+            planner_dispatch_attempt,
+            first_dispatch_in_turn,
+            chained_later_dispatch,
+            previous_dispatch_tool_call_id,
+        )
+        if previous_dispatch_tool_call_id:
+            result = _dispatch_chained_rejection(
+                req,
+                tool_call_id=tool_call_id,
+                previous_tool_call_id=previous_dispatch_tool_call_id,
+                steps_present=steps_present,
+                step_count=step_count,
+            )
+            payload = json.dumps(result.to_tool_payload(), ensure_ascii=False)
+            self._history.append_tool_result(tool_call_id, payload)
+            on_event(
+                ToolResult(
+                    tool_call_id=tool_call_id,
+                    name="dispatch_to_worker",
+                    ok=False,
+                    result=payload,
+                    extras={
+                        "dispatch": True,
+                        "recoverable": True,
+                        "summary": result.summary,
+                        **result.extras,
+                    },
+                )
+            )
+            return result
+
         campaign = validate_dispatch_campaign(req)
         if not campaign.ok:
             _log.debug(
@@ -608,6 +654,69 @@ def _dispatch_preflight_rejection(
             "requested_goal": req.goal,
             "requested_files": list(req.files),
         },
+    )
+
+
+def _dispatch_chained_rejection(
+    req: WorkerDispatchRequest,
+    *,
+    tool_call_id: str,
+    previous_tool_call_id: str,
+    steps_present: bool,
+    step_count: int,
+) -> WorkerDispatchResult:
+    failure_constraint = _dispatch_chained_constraint(
+        previous_tool_call_id=previous_tool_call_id,
+    )
+    summary = (
+        "The Worker was not started because Planner already dispatched a Worker "
+        "campaign in this user turn. Planner must include all required work in "
+        "the original dispatch_to_worker steps array on retry or in a new user turn."
+    )
+    return WorkerDispatchResult(
+        ok=False,
+        summary=summary,
+        needs_followup=True,
+        recoverable=True,
+        status=WorkerOutcomeStatus.needs_followup.value,
+        extras={
+            "dispatch_not_started": True,
+            "planner_dispatch_chain_rejected": True,
+            "planner_resolution_needed": True,
+            "internal_planner_handoff": True,
+            "user_visible_blocker": False,
+            "failure_class": "planner_dispatch_already_used",
+            "failure_constraint": failure_constraint,
+            "tool_call_id": tool_call_id,
+            "previous_dispatch_tool_call_id": previous_tool_call_id,
+            "requested_goal": req.goal,
+            "requested_files": list(req.files),
+            "steps_present": steps_present,
+            "step_count": step_count,
+        },
+    )
+
+
+def _dispatch_chained_constraint(
+    *,
+    previous_tool_call_id: str,
+) -> str:
+    return "\n".join(
+        [
+            "CONSTRAINT FOR NEXT PLANNER ATTEMPT:",
+            (
+                "This planner turn already used dispatch_to_worker with "
+                f"tool_call_id={previous_tool_call_id}."
+            ),
+            "Do not issue a second dispatch_to_worker call in the same user turn.",
+            (
+                "For non-trivial implementation work, design the whole Worker "
+                "campaign up front and include every required work order in the "
+                "original dispatch_to_worker steps array."
+            ),
+            "DispatchSession owns internal step execution after that single dispatch.",
+            "Do not call edit/write tools.",
+        ]
     )
 
 
