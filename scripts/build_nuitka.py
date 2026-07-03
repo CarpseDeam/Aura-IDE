@@ -738,7 +738,6 @@ def create_nuitka_command(
         "--assume-yes-for-downloads",
         "--python-flag=-m",
         "--nofollow-import-to=google",
-        "--nofollow-import-to=libcst",
         "--nofollow-import-to=scipy",
         "--nofollow-import-to=pytest",
         "--nofollow-import-to=charset_normalizer",
@@ -863,17 +862,6 @@ def build(
         shutil.copytree(google_genai_path, target_genai_dir)
     else:
         print("Warning: google-genai is not installed in the clean environment, skipping manual bundle.")
-
-    # Copy libcst as pure Python files to avoid Nuitka compilation hang/crash
-    libcst_path = get_venv_package_path("libcst")
-    if libcst_path and libcst_path.exists():
-        target_libcst_dir: Path = final_dist_dir / "libcst"
-        print(f"Bundling libcst as raw source: {libcst_path} -> {target_libcst_dir}")
-        if target_libcst_dir.exists():
-            shutil.rmtree(target_libcst_dir)
-        shutil.copytree(libcst_path, target_libcst_dir)
-    else:
-        print("Warning: libcst is not installed in the clean environment, skipping manual bundle.")
 
     # Copy charset_normalizer as pure Python files to avoid Nuitka compilation hang/crash
     charset_normalizer_path = get_venv_package_path("charset_normalizer")

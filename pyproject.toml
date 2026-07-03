@@ -23,7 +23,6 @@ dependencies = [
     "playwright>=1.40",
     "pygments>=2.17",
     "PySide6>=6.6",
-    "libcst>=1.4",
     "tomli>=2.0; python_version < '3.11'",
     "tree_sitter",
     "tree-sitter-language-pack>=1.10.8",
