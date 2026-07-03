@@ -72,6 +72,8 @@ class _SendState:
     recovery_block_counts: dict[str, int] = field(default_factory=dict)
     line_range_reread_required: dict[str, dict[str, Any]] = field(default_factory=dict)
     worker_file_state: dict[str, dict[str, Any]] = field(default_factory=dict)
+    loaded_target_files: list[str] = field(default_factory=list)
+    dispatched_target_files: list[str] = field(default_factory=list)
     patch_failed_cycles: dict[str, int] = field(default_factory=dict)
     patch_invalid_syntax_required: dict[str, dict[str, Any]] = field(default_factory=dict)
     edit_retry_ledger: EditRetryLedger = field(default_factory=EditRetryLedger)

@@ -50,6 +50,7 @@ from aura.conversation.workflow_state import WorkflowState, WorkflowStatus
 from aura.dependency_context import build_dependency_stanza
 from aura.events import EventBus
 from aura.lifecycle import LifecycleHooks, attach_lifecycle_notify
+from aura.lifecycle.builtin_worker_gates import register_builtin_worker_gates
 from aura.worker_todo import WorkerTodoProjector
 
 __all__ = [
@@ -126,6 +127,9 @@ class _DispatchProxy(QObject):
         # WorkerActivityController remains subscribed directly to EventBus;
         # lifecycle notify observes in parallel.
         self._lifecycle = LifecycleHooks()
+        self._detach_builtin_worker_gates = register_builtin_worker_gates(
+            self._lifecycle
+        )
         self._detach_lifecycle_notify = attach_lifecycle_notify(
             self._event_bus, self._lifecycle
         )

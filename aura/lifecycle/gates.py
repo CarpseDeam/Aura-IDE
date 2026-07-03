@@ -104,6 +104,7 @@ class GateHookRegistry:
         blocked = False
         block_reason = ""
         block_severity = "error"
+        block_metadata: dict[str, Any] = {}
         force_continue = False
 
         for record in matching:
@@ -148,6 +149,7 @@ class GateHookRegistry:
                 else:
                     block_reason = decision.reason
                 block_severity = decision.severity
+                block_metadata.update(decision.metadata)
 
             if decision.additional_context:
                 context_parts.append(decision.additional_context)
@@ -174,6 +176,7 @@ class GateHookRegistry:
                 severity=block_severity,
                 additional_context="\n".join(context_parts) if context_parts else "",
                 force_continue=force_continue,
+                metadata=block_metadata,
             )
 
         additional_context = "\n".join(context_parts) if context_parts else ""

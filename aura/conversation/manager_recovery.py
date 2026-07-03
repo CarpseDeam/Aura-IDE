@@ -34,7 +34,6 @@ from aura.conversation.syntax_repair_state import (
 )
 from aura.conversation.terminal_syntax import is_python_path
 from aura.conversation.tool_limits import WRITE_TOOLS
-from aura.conversation.worker_patch_state_policy import patch_file_state_block
 from aura.conversation.worker_recovery_messages import (
     PATCH_CANDIDATE_INVALID_SYNTAX_ACTION,
 )
@@ -256,16 +255,6 @@ def worker_recovery_block(
         return blocked_tool_result(tool_call_id, name, payload)
 
     if name == "patch_file" and path:
-        blocked = worker_patch_file_state_block(
-            tool_call_id=tool_call_id,
-            name=name,
-            path=path,
-            args=args,
-            worker_file_state=worker_file_state,
-            workspace_root=workspace_root,
-        )
-        if blocked is not None:
-            return blocked
         shape = _edit_shapes.edit_shape_signature(name, args)
         failed_cycles = patch_failed_cycles.get(shape, 0)
         if failed_cycles >= 1:
@@ -400,25 +389,6 @@ def worker_patch_invalid_syntax_block(
         recovery_block_counts,
     )
     return blocked_tool_result(tool_call_id, name, payload)
-
-
-def worker_patch_file_state_block(
-    *,
-    tool_call_id: str,
-    name: str,
-    path: str,
-    args: dict[str, Any],
-    worker_file_state: dict[str, dict[str, Any]],
-    workspace_root: Path | None,
-) -> dict[str, Any] | None:
-    return patch_file_state_block(
-        tool_call_id=tool_call_id,
-        name=name,
-        path=path,
-        args=args,
-        worker_file_state=worker_file_state,
-        workspace_root=workspace_root,
-    )
 
 
 def update_worker_recovery_state(

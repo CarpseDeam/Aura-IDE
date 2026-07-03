@@ -37,6 +37,19 @@ def test_target_file_contents_loads_existing_file_contents(tmp_path: Path) -> No
     assert "VALUE = 42" in text
 
 
+def test_loaded_target_files_reports_only_preloadable_files(tmp_path: Path) -> None:
+    target = tmp_path / "aura" / "feature.py"
+    target.parent.mkdir()
+    target.write_text("VALUE = 42\n", encoding="utf-8")
+
+    loaded = sources.loaded_target_files(
+        tmp_path,
+        ("aura/feature.py", "missing.py", "../outside.py"),
+    )
+
+    assert loaded == ["aura/feature.py"]
+
+
 def test_target_file_contents_skips_nonexistent_files_without_error(tmp_path: Path) -> None:
     target = tmp_path / "existing.py"
     target.write_text("print('ok')\n", encoding="utf-8")

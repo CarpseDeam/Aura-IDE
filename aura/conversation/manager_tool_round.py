@@ -595,6 +595,7 @@ class ToolRoundRunner:
         if self._lifecycle is None:
             return None
 
+        workspace_root = getattr(self._tools, "workspace_root", None)
         ctx = HookContext(
             topic="worker.pre_tool_use",
             category="gate",
@@ -607,6 +608,14 @@ class ToolRoundRunner:
                 "tool_name": name,
                 "args": dict(args),
                 "mode": state.mode,
+                "workspace_root": str(workspace_root) if workspace_root is not None else "",
+                "worker_file_state": {
+                    str(path): dict(file_state)
+                    for path, file_state in state.worker_file_state.items()
+                    if isinstance(file_state, dict)
+                },
+                "loaded_target_files": list(state.loaded_target_files),
+                "dispatched_target_files": list(state.dispatched_target_files),
                 "dispatch_tool_call_id": "",
             },
         )
@@ -662,15 +671,32 @@ class ToolRoundRunner:
             self._history.append_internal_user_text(decision.additional_context)
 
         if decision.blocked:
-            blocked_payload = {
-                "ok": False,
-                "blocked": True,
-                "failure_class": "lifecycle_gate_blocked",
-                "reason": decision.reason or "worker_pre_tool_use_blocked",
-                "tool": name,
-                "recoverable": True,
-                "phase_boundary": False,
-            }
+            metadata_payload = decision.metadata.get("blocked_payload")
+            if isinstance(metadata_payload, dict):
+                blocked_payload = dict(metadata_payload)
+                blocked_payload.setdefault("ok", False)
+                blocked_payload.setdefault("blocked", True)
+                blocked_payload.setdefault(
+                    "failure_class",
+                    decision.reason or "worker_pre_tool_use_blocked",
+                )
+                blocked_payload.setdefault(
+                    "reason",
+                    decision.reason or str(blocked_payload.get("failure_class") or ""),
+                )
+                blocked_payload.setdefault("tool", name)
+                blocked_payload.setdefault("recoverable", True)
+                blocked_payload.setdefault("phase_boundary", False)
+            else:
+                blocked_payload = {
+                    "ok": False,
+                    "blocked": True,
+                    "failure_class": "lifecycle_gate_blocked",
+                    "reason": decision.reason or "worker_pre_tool_use_blocked",
+                    "tool": name,
+                    "recoverable": True,
+                    "phase_boundary": False,
+                }
             return {"blocked": True, "blocked_payload": blocked_payload}
 
         if rewritten_args is not None:

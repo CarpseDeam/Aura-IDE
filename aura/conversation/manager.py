@@ -233,6 +233,7 @@ class ConversationManager:
         critic_cb: CriticCallback | None = None,
         worker_dispatch_request: WorkerDispatchRequest | None = None,
         dispatch_tool_call_id: str = "",
+        loaded_target_files: list[str] | None = None,
         temperature: float = 0.7,
         max_tool_rounds: int | None = None,
         hook_name: str = 'generate_planner_code',
@@ -256,6 +257,10 @@ class ConversationManager:
             mode=mode,
             research_policy=decide_research_policy(_latest_user_text(self._history)),
         )
+        if state.mode == "worker":
+            state.loaded_target_files = list(loaded_target_files or [])
+            if worker_dispatch_request is not None:
+                state.dispatched_target_files = list(worker_dispatch_request.files)
 
         while True:
             if (

@@ -541,6 +541,35 @@ def _load_target_file_contents(
     return "\n\n".join(blocks), "live contents of the files this step edits"
 
 
+def loaded_target_files(
+    workspace_root: Path | None,
+    target_files: tuple[str, ...] | None,
+) -> list[str]:
+    """Return normalized target files whose contents can be preloaded."""
+    if workspace_root is None or not target_files:
+        return []
+    loaded: list[str] = []
+    loaded_chars = 0
+    for raw_path in target_files:
+        resolved = _resolve_target_file_path(workspace_root, raw_path)
+        if resolved is None:
+            continue
+        path, relpath = resolved
+        if not path.is_file():
+            continue
+        if loaded_chars >= _TARGET_FILES_TOTAL_CAP:
+            break
+        try:
+            contents = path.read_text(encoding="utf-8")
+        except (OSError, PermissionError, UnicodeError):
+            continue
+        remaining = _TARGET_FILES_TOTAL_CAP - loaded_chars
+        file_text = contents[: min(len(contents), _TARGET_FILE_CHAR_CAP, remaining)]
+        loaded_chars += len(file_text)
+        loaded.append(relpath)
+    return loaded
+
+
 def _resolve_target_file_path(
     workspace_root: Path,
     raw_path: str,

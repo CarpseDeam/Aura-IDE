@@ -27,6 +27,7 @@ from aura.bridge.worker_validation_selector_bridge import (
 from aura.config import ModelId, ThinkingMode, redact_secrets
 from aura.context_gearbox.models import RuntimeRole
 from aura.context_gearbox.runtime import compose_system_prompt, context_gearbox_metadata
+from aura.context_gearbox.sources import loaded_target_files
 from aura.conversation import (
     ConversationManager,
     History,
@@ -204,6 +205,12 @@ class WorkerDispatchRunner:
                 else None
             ),
         )
+        loaded_targets = loaded_target_files(
+            self._workspace_root,
+            tuple(task_spec.files),
+        )
+        if loaded_targets:
+            context_gearbox["loaded_target_files"] = list(loaded_targets)
         if self._set_tier1_context is not None:
             self._set_tier1_context(composed_prompt.context_text)
         _log.info(
@@ -291,6 +298,9 @@ class WorkerDispatchRunner:
                 critic_cb=critic_cb,
                 worker_dispatch_request=req,
                 dispatch_tool_call_id=tool_call_id,
+                loaded_target_files=list(
+                    context_gearbox.get("loaded_target_files") or []
+                ),
                 temperature=self._worker_temperature,
                 hook_name='generate_worker_code',
                 max_tool_rounds=self._max_tool_rounds,
