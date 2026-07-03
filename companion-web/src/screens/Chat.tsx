@@ -25,6 +25,8 @@ function ChatScreen() {
   const mountedRef = useRef(true);
   const streamingRef = useRef(false);
   const refreshHistoryRef = useRef(false);
+  const recentCompletionRef = useRef(0);
+  const turnIdRef = useRef('');
 
   const safeCtx = CompanionSocket.getStoredSafeContext();
   const projectId = safeCtx.project_id || '';
@@ -55,6 +57,9 @@ function ChatScreen() {
     const unsubDelta = socket.on('chat.message.delta', (msg: any) => {
       clearWatchdog();
       setChatError('');
+      const inResp = msg.in_response_to || '';
+      if (inResp && turnIdRef.current && turnIdRef.current !== inResp) return;
+      if (!turnIdRef.current && inResp) turnIdRef.current = inResp;
       const text = msg.payload?.text || '';
       const kind = msg.payload?.type || 'content';
       if (kind === 'reasoning') return;
@@ -96,6 +101,8 @@ function ChatScreen() {
       });
       streamingRef.current = false;
       setStreaming(false);
+      recentCompletionRef.current = Date.now();
+      turnIdRef.current = '';
       setTimeout(() => { if (mountedRef.current) refreshHistory(); }, 300);
     });
     const unsubChatErr = socket.on('chat.error', (msg: any) => {
@@ -103,6 +110,8 @@ function ChatScreen() {
       setChatError(msg.payload?.message || 'An error occurred');
       streamingRef.current = false;
       setStreaming(false);
+      recentCompletionRef.current = Date.now();
+      turnIdRef.current = '';
       setTimeout(() => { if (mountedRef.current) refreshHistory(); }, 300);
     });
     return () => {
@@ -133,7 +142,23 @@ function ChatScreen() {
         text: m.content ?? '',
         final: true,
       }));
-      setMessages(historyMsgs);
+      // Safe merge: protect just-completed assistant message from stale history
+      const justCompleted = recentCompletionRef.current > 0 && (Date.now() - recentCompletionRef.current < 3000);
+      if (justCompleted) {
+        setMessages(prev => {
+          if (prev.length === 0) return historyMsgs;
+          const last = prev[prev.length - 1];
+          if (last && last.role === 'assistant' && last.final) {
+            const liveTextSet = new Set(prev.map(m => m.role + ':' + m.text));
+            const extra = historyMsgs.filter(m => !liveTextSet.has(m.role + ':' + m.text));
+            if (extra.length === 0) return prev;
+            return [...prev, ...extra];
+          }
+          return historyMsgs;
+        });
+      } else {
+        setMessages(historyMsgs);
+      }
     });
 
     socket.send('conversation.history', { project_id: projectId, thread_id: conversationId }, desktopId, projectId, conversationId);
@@ -392,9 +417,9 @@ function ChatScreen() {
           ))
         )}
 
-        {/* MiniAuraThinking — pulsing rainbow glow while waiting for assistant to start */}
+        {/* AuraThinking — card-shaped breathing glow while waiting for assistant to start */}
         {streaming && messages.length > 0 && messages[messages.length - 1].role === 'user' && (
-          <MiniAuraThinking />
+          <AuraThinking />
         )}
 
         {/* Quick prompt chips */}
@@ -527,7 +552,7 @@ function ChatScreen() {
   );
 }
 
-function MiniAuraThinking() {
+function AuraThinking() {
   return (
     <div style={{
       display: 'flex',
@@ -536,21 +561,49 @@ function MiniAuraThinking() {
       padding: '0 0.15rem',
     }}>
       <div style={{
-        width: 44,
-        height: 44,
-        borderRadius: '50%',
-        background: 'conic-gradient(from 0deg, #7aa2f7, #9d7cd8, #7dc8c8, #7aa2f7)',
-        filter: 'blur(6px)',
-        opacity: 0.7,
-        animation: 'aura-breath 2s ease-in-out infinite',
-        boxShadow: '0 0 18px 6px rgba(122,162,247,0.25), 0 0 36px 12px rgba(157,124,216,0.12)',
-      }} />
-      <style>{`
-        @keyframes aura-breath {
-          0%, 100% { opacity: 0.4; transform: scale(0.85); filter: blur(8px); }
-          50% { opacity: 0.85; transform: scale(1.15); filter: blur(4px); }
-        }
-      `}</style>
+        position: 'relative',
+        borderRadius: 16,
+        borderBottomLeftRadius: 6,
+        padding: '0.6rem 0.9rem',
+        background: tokens.assistantBubble,
+        border: `1px solid ${tokens.border}`,
+        minWidth: 100,
+        minHeight: 32,
+        overflow: 'hidden',
+      }}>
+        {/* Breathing radial glow underneath, matching desktop AuraWidget pattern */}
+        <div style={{
+          position: 'absolute',
+          top: '50%',
+          left: '50%',
+          width: '120%',
+          height: '120%',
+          transform: 'translate(-50%, -50%)',
+          background: `radial-gradient(ellipse at 50% 50%, ${tokens.accentGlow} 0%, transparent 70%)`,
+          opacity: 0.5,
+          animation: 'aura-think-glow 2s ease-in-out infinite',
+          pointerEvents: 'none',
+        }} />
+        {/* Content */}
+        <div style={{ position: 'relative', zIndex: 1, display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ color: tokens.fgDim, fontSize: '0.8rem' }}>Aura is thinking</span>
+          <span style={{ display: 'inline-flex', gap: 2 }}>
+            <span style={{ animation: 'aura-think-dot 1.4s infinite', opacity: 0.3 }}>.</span>
+            <span style={{ animation: 'aura-think-dot 1.4s infinite 0.2s', opacity: 0.3 }}>.</span>
+            <span style={{ animation: 'aura-think-dot 1.4s infinite 0.4s', opacity: 0.3 }}>.</span>
+          </span>
+        </div>
+        <style>{`
+          @keyframes aura-think-glow {
+            0%, 100% { opacity: 0.25; transform: translate(-50%, -50%) scale(0.92); }
+            50% { opacity: 0.7; transform: translate(-50%, -50%) scale(1.08); }
+          }
+          @keyframes aura-think-dot {
+            0%, 100% { opacity: 0.2; }
+            50% { opacity: 1; }
+          }
+        `}</style>
+      </div>
     </div>
   );
 }
