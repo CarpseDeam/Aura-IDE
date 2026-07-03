@@ -8,7 +8,7 @@ import socket
 import sys
 import subprocess
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -454,3 +454,191 @@ class TestControllerLaunchCommand:
             "--no-default-browser-check",
         ]
         assert f"--user-data-dir={tmp_path / 'research_profile'}" in cmd
+
+
+# ---------------------------------------------------------------------------
+# Idempotent start and session reuse
+# ---------------------------------------------------------------------------
+
+
+class TestIdempotentStart:
+    def test_repeated_start_reuses_healthy_session(self):
+        """Healthy session is reused, no duplicate process launch."""
+        ctrl = ResearchBrowserController()
+        launch_count = [0]
+        orig_launch = ctrl._launch
+
+        def _counting_launch():
+            launch_count[0] += 1
+            orig_launch()
+
+        ctrl._launch = _counting_launch
+        ctrl._browser_executable = "/usr/bin/chrome"
+        ctrl._port = 9999
+        ctrl._profile_path = Path("/tmp/profile")
+        ctrl._cdp_url = "ws://127.0.0.1:9999"
+        ctrl._started = True
+        ctrl._page = MagicMock()
+        ctrl._page.url = "https://example.com"
+        ctrl._browser = MagicMock()
+        ctrl._browser.contexts = []
+
+        r1 = ctrl.start()
+        assert r1.ok is True
+        assert launch_count[0] == 0  # no new launch — reused
+
+    def test_no_duplicate_process_launch_when_already_started(self):
+        """No subprocess.Popen call when session already healthy."""
+        ctrl = ResearchBrowserController()
+        ctrl._browser_executable = "/usr/bin/chrome"
+        ctrl._port = 9999
+        ctrl._profile_path = Path("/tmp/profile")
+        ctrl._cdp_url = "ws://127.0.0.1:9999"
+        ctrl._started = True
+        ctrl._page = MagicMock()
+        ctrl._page.url = "https://example.com"
+        ctrl._browser = MagicMock()
+        ctrl._browser.contexts = []
+
+        with patch("aura.browser.research_controller.subprocess.Popen") as mock_popen:
+            r = ctrl.start()
+        assert r.ok is True
+        mock_popen.assert_not_called()
+
+    def test_stale_session_cleans_and_relaunches(self, tmp_path):
+        """Stale session (process exited) is cleaned up and relaunched once."""
+        ctrl = ResearchBrowserController()
+
+        class DeadProc:
+            pid = 12345
+
+            def poll(self):
+                return 1  # process exited
+
+        ctrl._process = DeadProc()
+        ctrl._started = True
+        ctrl._browser = None  # stale
+
+        launch_called = [False]
+
+        def _fake_launch():
+            launch_called[0] = True
+
+        ctrl._launch = _fake_launch
+
+        with (
+            patch("aura.browser.research_controller.detect_chrome_executable",
+                  return_value="/usr/bin/chrome"),
+            patch("aura.browser.research_controller._research_profile_dir",
+                  return_value=tmp_path / "profile"),
+            patch("aura.browser.research_controller._allocate_port",
+                  return_value=9999),
+            patch("aura.browser.research_controller.subprocess.Popen"),
+            patch("aura.browser.research_controller._wait_for_cdp",
+                  return_value="ws://cdp"),
+            patch("aura.browser.research_controller._connect_via_playwright",
+                  return_value=(MagicMock(), MagicMock())),
+        ):
+            ctrl.start()
+        assert launch_called[0] is True
+
+    def test_close_clears_all_fields(self):
+        """Close clears Playwright/browser/page/process fields."""
+        ctrl = ResearchBrowserController()
+        ctrl._started = True
+        ctrl._page = MagicMock()
+        ctrl._browser = MagicMock()
+        ctrl._pw = MagicMock()
+
+        class FakeProc:
+            pid = 12345
+
+            def poll(self):
+                return None
+
+        ctrl._process = FakeProc()
+        ctrl._cdp_url = "ws://cdp"
+
+        ctrl.close()
+
+        assert ctrl._page is None
+        assert ctrl._browser is None
+        assert ctrl._pw is None
+        assert ctrl._process is None
+        assert ctrl._started is False
+        assert ctrl._closed is True
+
+
+# ---------------------------------------------------------------------------
+# Session state
+# ---------------------------------------------------------------------------
+
+
+class TestSessionState:
+    def test_session_initialized_on_construction(self):
+        ctrl = ResearchBrowserController()
+        assert ctrl._session.session_id != ""
+
+    def test_session_reflects_closed_state(self):
+        ctrl = ResearchBrowserController()
+        ctrl._started = True
+        ctrl.close()
+        assert ctrl.session.closed is True
+        assert ctrl.session.connected is False
+
+    def test_session_property_returns_copy(self):
+        ctrl = ResearchBrowserController()
+        ctrl._started = True
+        s1 = ctrl.session
+        s2 = ctrl.session
+        assert s1 is not s2  # different objects
+        assert s1.session_id == s2.session_id
+
+
+# ---------------------------------------------------------------------------
+# Search URL pattern
+# ---------------------------------------------------------------------------
+
+
+class TestSearchUrlPattern:
+    def test_default_search_pattern_is_bing(self):
+        ctrl = ResearchBrowserController()
+        assert "bing.com" in ctrl._resolve_target_url("python")
+
+    def test_custom_search_pattern(self):
+        ctrl = ResearchBrowserController(
+            search_url_pattern="https://www.google.com/search?q={query}")
+        result = ctrl._resolve_target_url("python version")
+        assert result.startswith("https://www.google.com/search")
+        assert "python+version" in result
+
+    def test_direct_url_not_wrapped(self):
+        ctrl = ResearchBrowserController(
+            search_url_pattern="https://www.google.com/search?q={query}")
+        result = ctrl._resolve_target_url("https://example.com/page")
+        assert result == "https://example.com/page"
+
+
+# ---------------------------------------------------------------------------
+# Browser config policy
+# ---------------------------------------------------------------------------
+
+
+class TestBrowserConfigPolicy:
+    def test_config_defaults_are_chrome(self):
+        from aura.browser.browser_config import BrowserConfig
+        cfg = BrowserConfig.default()
+        assert cfg.browser_id == "chrome"
+        assert cfg.label == "Google Chrome"
+
+    def test_config_contains_no_playwright_fallback_wording(self):
+        """Docstring and source must not promise a Playwright fallback."""
+        import inspect
+        from aura.browser import browser_config
+        src = inspect.getsource(browser_config.BrowserConfig)
+        # It's fine to mention Playwright Chromium in a negative sentence
+        # ("no hidden fallback to Playwright Chromium").  What must NOT
+        # appear is wording that PROMISES a fallback.
+        assert "fall back to Playwright" not in src
+        assert "Playwright's fallback" not in src
+        assert "fall back to Playwright Chromium" not in src

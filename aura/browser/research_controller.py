@@ -13,6 +13,7 @@ It does *not* import or depend on ``aura.research.ui_contract``,
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import logging
 import os
@@ -26,6 +27,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from aura.browser.receipts import BrowserReceipt, BrowserSession
 from aura.paths import data_dir
 
 _log = logging.getLogger(__name__)
@@ -68,73 +70,8 @@ class NavigationError(ControllerError):
     """Raised when page navigation fails."""
 
 
-# ---------------------------------------------------------------------------
-# Receipt types
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class BrowserReceipt:
-    """Structured receipt returned from every controller operation.
-
-    Every field is populated so that a blank-window issue is obvious
-    from a single receipt.
-    """
-
-    controller_version: str = "1.0"
-    browser_executable: str = ""
-    browser_profile_dir: str = ""
-    browser_pid: int | None = None
-    cdp_url: str = ""
-    requested_url: str = ""
-    first_navigated_url: str = ""
-    final_active_url: str = ""
-    page_title: str = ""
-    navigation_status: str = "not_started"
-    browser_ready: bool = False
-    phase_errors: dict[str, str] = field(default_factory=dict)
-
-    @property
-    def ok(self) -> bool:
-        """True when the operation completed successfully.
-
-        For ``start()``: true when the browser was detected, launched,
-        connected, and a page was acquired (``browser_ready``) with no
-        phase errors.
-
-        For ``navigate()``: true when the browser is ready, no phase
-        errors, and navigation did not fail (either succeeded or
-        navigation was not required yet).
-        """
-        if self.phase_errors:
-            return False
-        if not self.browser_ready:
-            return False
-        if self.navigation_status == "failed":
-            return False
-        return True
-
-    @property
-    def navigation_ok(self) -> bool:
-        """True specifically when navigation completed successfully."""
-        return self.navigation_status == "success"
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "controller_version": self.controller_version,
-            "browser_executable": self.browser_executable,
-            "browser_profile_dir": self.browser_profile_dir,
-            "browser_pid": self.browser_pid,
-            "cdp_url": self.cdp_url,
-            "requested_url": self.requested_url,
-            "first_navigated_url": self.first_navigated_url,
-            "final_active_url": self.final_active_url,
-            "page_title": self.page_title,
-            "browser_ready": self.browser_ready,
-            "navigation_status": self.navigation_status,
-            "phase_errors": dict(self.phase_errors),
-        }
-
+# BrowserReceipt is defined in aura.browser.receipts and re-exported here
+# for backward compatibility.
 
 # ---------------------------------------------------------------------------
 # Utilities
@@ -312,8 +249,10 @@ class ResearchBrowserController:
             ...
     """
 
-    def __init__(self, profile_subdir: str = "research") -> None:
+    def __init__(self, profile_subdir: str = "research",
+                 search_url_pattern: str | None = None) -> None:
         self._profile_subdir = profile_subdir
+        self._search_url_pattern = search_url_pattern or "https://www.bing.com/search?q={query}"
         self._process: subprocess.Popen[str] | None = None
         self._port: int | None = None
         self._cdp_url: str | None = None
@@ -324,6 +263,7 @@ class ResearchBrowserController:
         self._closed = False
         self._browser_executable: str = ""
         self._profile_path: Path | None = None
+        self._session = BrowserSession()
 
     # -- properties ---------------------------------------------------------
 
@@ -349,14 +289,109 @@ class ResearchBrowserController:
         """True once the browser has been launched and connected."""
         return self._started
 
+    @property
+    def session(self) -> BrowserSession:
+        """The current browser session state (read-only snapshot)."""
+        self._sync_session_state()
+        return BrowserSession(**self._session.to_dict())
+
+    @property
+    def search_url_pattern(self) -> str:
+        """The configured search URL pattern."""
+        return self._search_url_pattern
+
     # -- lifecycle ----------------------------------------------------------
+
+    def _session_is_healthy(self) -> bool:
+        """Check whether the existing browser session is still usable."""
+        if not self._started or self._closed:
+            return False
+        if self._process is not None and self._process.poll() is not None:
+            return False
+        if self._cdp_url is None or self._browser is None:
+            return False
+        if self._page is not None:
+            try:
+                self._page.url
+                return True
+            except Exception:
+                pass
+        try:
+            self._acquire_page()
+            return self._page is not None
+        except Exception:
+            return False
+
+    def _sync_session_state(self) -> None:
+        """Refresh live session fields from current objects."""
+        self._session.browser_pid = self.browser_pid
+        self._session.cdp_url = self._cdp_url or ""
+        self._session.connected = self._started
+        self._session.closed = self._closed
+        if self._page is not None:
+            try:
+                self._session.active_page_url = self._page.url or ""
+                self._session.active_page_title = self._page.title() or ""
+            except Exception:
+                pass
+        # Count pages for session state
+        if self._browser is not None:
+            try:
+                count = sum(len(list(ctx.pages)) for ctx in self._browser.contexts)
+                self._session.page_count = count
+            except Exception:
+                pass
+
+    def _cleanup_session(self) -> None:
+        """Clean up a stale session without marking the controller closed."""
+        if self._page is not None:
+            try:
+                self._page.close()
+            except Exception:
+                pass
+            self._page = None
+        if self._browser is not None:
+            try:
+                self._browser.close()
+            except Exception:
+                pass
+            self._browser = None
+        if self._pw is not None:
+            try:
+                self._pw.stop()
+            except Exception:
+                pass
+            self._pw = None
+        self._kill_process()
+        self._cdp_url = None
+        self._port = None
+        self._started = False
 
     def start(self) -> BrowserReceipt:
         """Detect, launch, and connect to the research browser.
 
         Returns a ``BrowserReceipt`` summarising every step.  The receipt
         has ``.ok == True`` when the browser is ready for navigation.
+
+        Repeated calls reuse an existing healthy session.  A stale session
+        is cleaned up and relaunched once.
         """
+        # --- reuse existing healthy session ---
+        if self._session_is_healthy():
+            self._session.reused_existing = True
+            self._session.last_operation = "start"
+            return BrowserReceipt(browser_executable=self._browser_executable,
+                                  browser_profile_dir=str(self._profile_path) if self._profile_path else "",
+                                  browser_pid=self.browser_pid, cdp_url=self._cdp_url or "",
+                                  browser_ready=True, navigation_status="not_started")
+
+        # --- stale session cleanup ---
+        if self._started and not self._session_is_healthy():
+            _log.warning("research_browser_stale_session")
+            self._cleanup_session()
+
+        # --- fresh start ---
+        self._session = BrowserSession()
         receipt = BrowserReceipt()
 
         # --- detect ---
@@ -432,11 +467,19 @@ class ResearchBrowserController:
 
         self._started = True
         receipt.browser_ready = True
+        self._session.browser_executable = self._browser_executable
+        self._session.browser_profile_dir = str(self._profile_path) if self._profile_path else ""
+        self._session.browser_pid = self.browser_pid
+        self._session.cdp_url = self._cdp_url or ""
+        self._session.connected = True
+        self._session.last_operation = "start"
+        self._session.last_phase = "complete"
         _log.info(
-            "research_browser_started executable=%s port=%d profile=%s",
+            "research_browser_started executable=%s port=%d profile=%s session=%s",
             self._browser_executable,
             self._port,
             self._profile_path,
+            self._session.session_id,
         )
         return receipt
 
@@ -484,6 +527,8 @@ class ResearchBrowserController:
             return
         self._closed = True
         self._started = False
+        self._session.closed = True
+        self._session.connected = False
 
         # Tear down Playwright objects first (they hold CDP connections)
         if self._page is not None:
@@ -596,9 +641,9 @@ class ResearchBrowserController:
             raise CdpConnectError(f"Failed to acquire page: {exc}")
 
     def _resolve_target_url(self, url_or_query: str) -> str:
-        """Convert a bare query into a search URL."""
+        """Convert a bare query into a search URL via the configured pattern."""
         import urllib.parse
         if url_or_query.startswith(("http://", "https://", "ftp://", "file://")):
             return url_or_query
-        encoded = urllib.parse.quote_plus(url_or_query)
-        return f"https://www.bing.com/search?q={encoded}"
+        return self._search_url_pattern.replace(
+            "{query}", urllib.parse.quote_plus(url_or_query))

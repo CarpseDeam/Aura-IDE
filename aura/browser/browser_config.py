@@ -12,8 +12,9 @@ from pathlib import Path
 class BrowserConfig:
     """User-selected browser policy for Aura's web research browser.
 
-    The default selects Google Chrome on Windows, macOS, and Linux,
-    preferring the installed system Chrome over Playwright's fallback.
+    The default selects Google Chrome on Windows, macOS, and Linux.
+    If Chrome is not installed, the controller reports the failure —
+    there is no hidden fallback to Playwright Chromium or another browser.
     """
 
     browser_id: str = "chrome"
@@ -47,8 +48,8 @@ class BrowserConfig:
         """Return the path to a Chrome executable, or ``None``.
 
         Checks standard install locations for the current platform.
-        Returns ``None`` when no Chrome is found (the controller will
-        fall back to Playwright Chromium).
+        Returns ``None`` when no Chrome is found — the controller
+        reports the failure rather than falling back.
         """
         is_win = sys.platform == "win32"
 
