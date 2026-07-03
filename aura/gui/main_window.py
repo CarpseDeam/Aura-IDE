@@ -253,6 +253,9 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._drone_reports_window.visibility_changed.connect(
             lambda _visible: self._drone_controller.sync_drone_tab_checked()
         )
+        self._send_handler.answer_only_research_started.connect(
+            self._prepare_answer_only_research_ui
+        )
 
         self.droneRunFinishedOnUiThread.connect(self._drone_controller.on_drone_finished, Qt.ConnectionType.QueuedConnection)
         self.droneStatusChangedOnUiThread.connect(self._drone_controller.on_drone_status_changed)
@@ -833,6 +836,33 @@ class MainWindow(WindowChromeMixin, QMainWindow):
                 worker_provider=self._settings.worker_provider,
             )
             self._drone_controller.refresh_drone_context()
+
+    def _prepare_answer_only_research_ui(self) -> None:
+        """Hide work surfaces before a pure answer-only research turn."""
+        try:
+            terminal_window = self._playground.terminal_window()
+            terminal_window.clear()
+            terminal_window.hide()
+        except Exception:
+            logger.debug("Failed to hide terminal for answer-only research", exc_info=True)
+
+        try:
+            self._drone_reports_window.hide()
+        except Exception:
+            logger.debug("Failed to hide Drone Reports for answer-only research", exc_info=True)
+
+        try:
+            workbay = self._drone_controller.drone_workbay_window
+            if workbay is not None:
+                workbay.hide()
+        except Exception:
+            logger.debug("Failed to hide Drone Workbay for answer-only research", exc_info=True)
+
+        try:
+            self._terminal_controller._sync_terminal_checked_state()
+            self._drone_controller.sync_drone_tab_checked()
+        except Exception:
+            logger.debug("Failed to sync research UI chrome", exc_info=True)
 
     def _on_diff_decided(
         self,

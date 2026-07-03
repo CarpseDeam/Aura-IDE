@@ -72,7 +72,11 @@ def test_answer_only_research_send_does_not_open_drone_workbay(monkeypatch, tmp_
     )
     handler._get_current_model_info = lambda model: None
     drone_bay_requests = []
+    answer_only_research_starts = []
     handler.drone_bay_requested.connect(lambda: drone_bay_requests.append(True))
+    handler.answer_only_research_started.connect(
+        lambda: answer_only_research_starts.append(True)
+    )
 
     handler.handle_send(
         SendPayload("Are there any World Cup matches today?", []),
@@ -81,6 +85,7 @@ def test_answer_only_research_send_does_not_open_drone_workbay(monkeypatch, tmp_
     )
 
     assert drone_bay_requests == []
+    assert answer_only_research_starts == [True]
     assert bridge.send_calls == [
         {"model": "test-model", "thinking": "off", "max_tool_rounds": 3}
     ]

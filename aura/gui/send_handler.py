@@ -42,6 +42,7 @@ class SendHandler(QObject):
 
     vision_done = Signal(object, list, object)  # SendPayload, list[str], str|None
     drone_bay_requested = Signal()  # /drone command → open/toggle Drone Workbay
+    answer_only_research_started = Signal()
 
     def __init__(
         self,
@@ -121,6 +122,10 @@ class SendHandler(QObject):
             self._message_queue.append(payload)
             self._input.set_queued_messages(len(self._message_queue))
             return
+
+        if route.lane == TaskLane.research and route.action == "web_research":
+            self.answer_only_research_started.emit()
+
         # Check if the current model supports native vision
         m_info = self._get_current_model_info(model)
         native_vision = m_info.supports_vision if m_info else False
