@@ -183,14 +183,25 @@ def test_no_progress_step_stops_campaign_before_next_step():
     result = session.run()
 
     assert result.ok is False
+    assert result.recoverable is False
+    assert result.needs_followup is False
+    assert result.status == WorkerOutcomeStatus.harness_error.value
     assert calls == [
         ("call_dispatch", req.steps[0].goal),
         ("call_dispatch", req.steps[0].goal),
     ]
     assert ("active", "call_dispatch", "step-2") not in events
     assert [event for event in events if event[0] == "done"] == []
-    assert result.extras["worker_persistence"]["reason"] == "worker_step_no_progress"
-    assert result.extras["worker_persistence"]["no_progress_threshold"] == 2
+    wp = result.extras["worker_persistence"]
+    assert wp["terminal"] is True
+    assert wp["reason"] == "worker_step_no_progress"
+    assert wp["attempts"] == 2
+    assert wp["max_attempts"] == 5
+    assert wp["no_progress_threshold"] == 2
+    assert isinstance(wp["fingerprint"], str) and len(wp["fingerprint"]) > 0
+    assert len(wp["attempt_history"]) == 2
+    assert wp["attempt_history"][0]["attempt"] == 1
+    assert wp["attempt_history"][1]["attempt"] == 2
 
 
 def test_first_recoverable_no_progress_retries_with_attempt_context():
@@ -202,10 +213,14 @@ def test_first_recoverable_no_progress_retries_with_attempt_context():
         steps=list(req.steps),
     )
     step_specs: list[str] = []
+    tool_ids: list[str] = []
+    step_risk_notes: list[list[str]] = []
     bus = EventBus()
 
     def run_step(tool_id, step_req, pending):
         step_specs.append(step_req.spec)
+        tool_ids.append(tool_id)
+        step_risk_notes.append(list(step_req.risk_notes))
         if len(step_specs) == 1:
             return WorkerDispatchResult(
                 ok=False,
@@ -238,6 +253,53 @@ def test_first_recoverable_no_progress_retries_with_attempt_context():
     assert "Worker Persistence Context" not in step_specs[0]
     assert "Worker Persistence Context" in step_specs[1]
     assert "Previous summary: Worker made no changes." in step_specs[1]
+    assert all(tid == "call_dispatch" for tid in tool_ids)
+    assert "Worker persistence retry" not in " ".join(step_risk_notes[0])
+    assert "Worker persistence retry" in " ".join(step_risk_notes[1])
+    assert "Worker Persistence Context" not in step_specs[2]
+
+
+def test_repeated_no_progress_fingerprint_stops_after_retry():
+    """Prove the repeated identical no-progress fingerprint stops the step
+    after exactly one corrective retry."""
+    req = _request_with_steps()
+    plan = WorkerDispatchPlan(
+        overall_goal=req.goal,
+        visible_summary=req.summary,
+        global_files=list(req.files),
+        steps=list(req.steps),
+    )
+    calls: list[str] = []
+
+    def run_step(tool_id, step_req, pending):
+        calls.append(tool_id)
+        return WorkerDispatchResult(
+            ok=False,
+            summary="No changes.",
+            recoverable=True,
+            needs_followup=True,
+            status=WorkerOutcomeStatus.needs_followup.value,
+            extras={},
+        )
+
+    session = DispatchSession(
+        tool_call_id="call_dispatch",
+        original_request=req,
+        plan=plan,
+        run_worker_step=run_step,
+        pending=SimpleNamespace(),
+        event_bus=EventBus(),
+    )
+
+    result = session.run()
+
+    assert result.ok is False
+    assert len(calls) == 2
+    assert all(cid == "call_dispatch" for cid in calls)
+    assert result.extras["worker_persistence"]["terminal"] is True
+    assert result.extras["worker_persistence"]["reason"] == "worker_step_no_progress"
+    assert result.extras["worker_persistence"]["attempts"] == 2
+    assert len(result.extras["worker_persistence"]["attempt_history"]) == 2
 
 
 def test_external_blocker_surfaces_without_persistence_retry():
@@ -322,6 +384,13 @@ def test_nonfinal_failed_step_missing_applied_does_not_count_as_progress():
         ("call_dispatch", req.steps[0].goal),
     ]
     assert ("active", "call_dispatch", "step-2") not in events
+    assert result.recoverable is False
+    assert result.needs_followup is False
+    assert result.status == WorkerOutcomeStatus.harness_error.value
+    wp = result.extras["worker_persistence"]
+    assert wp["terminal"] is True
+    assert wp["reason"] == "worker_step_no_progress"
+    assert len(wp["attempt_history"]) == 2
 
 
 def test_nonfinal_failed_step_applied_false_stays_on_step():
@@ -369,6 +438,13 @@ def test_nonfinal_failed_step_applied_false_stays_on_step():
         ("call_dispatch", req.steps[0].goal),
     ]
     assert ("active", "call_dispatch", "step-2") not in events
+    assert result.recoverable is False
+    assert result.needs_followup is False
+    assert result.status == WorkerOutcomeStatus.harness_error.value
+    wp = result.extras["worker_persistence"]
+    assert wp["terminal"] is True
+    assert wp["reason"] == "worker_step_no_progress"
+    assert len(wp["attempt_history"]) == 2
 
 
 def test_nonfinal_failed_step_applied_true_advances_to_next_step():
