@@ -11,9 +11,10 @@ stores and forwards the latest canonical snapshot via _on_workflow_state_changed
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, Signal, QTimer
 
 from aura.config import redact_secrets
 
@@ -31,6 +32,17 @@ if TYPE_CHECKING:
     from aura.config import AppSettings
     from aura.gui.chat_view import ChatView
     from aura.gui.playground import AuraPlayground
+
+
+@dataclass(frozen=True)
+class _PendingWorkerFinish:
+    tool_call_id: str
+    ok: bool
+    summary: str
+    needs_followup: bool | None
+    status: str | None
+    generation: int
+
 
 class WorkerEventHandler(QObject):
     """Owns worker signal wiring and forwards bridge worker events to the
@@ -62,6 +74,8 @@ class WorkerEventHandler(QObject):
         self._settings = settings
         self._session_usage: dict[str, dict[str, int]] = {}
         self._active_worker_tool_call_id: str | None = None
+        self._pending_worker_finish: _PendingWorkerFinish | None = None
+        self._pending_worker_finish_generation = 0
         # WorkflowState snapshot — stored from backend emissions only, never
         # constructed or mutated here.
         self._active_workflow: WorkflowState | None = None
@@ -200,12 +214,35 @@ class WorkerEventHandler(QObject):
 
         DispatchSession emits one workerStarted signal per campaign.
         """
+        pending_finish = self._pending_worker_finish
+        if (
+            pending_finish is not None
+            and pending_finish.tool_call_id != tool_call_id
+        ):
+            self._pending_worker_finish = None
+            self._present_worker_finish(
+                tool_call_id=pending_finish.tool_call_id,
+                ok=pending_finish.ok,
+                summary=pending_finish.summary,
+                needs_followup=pending_finish.needs_followup,
+                status=pending_finish.status,
+            )
+
         _log.info(
             "DIAGNOSTIC _on_worker_started tool_call_id=%s active_worker_tool_call_id=%s",
             tool_call_id,
             self._active_worker_tool_call_id,
         )
         if self._active_worker_tool_call_id == tool_call_id:
+            if (
+                self._pending_worker_finish is not None
+                and self._pending_worker_finish.tool_call_id == tool_call_id
+            ):
+                _log.info(
+                    "worker_finish_cancelled_for_continuing_campaign tool_call_id=%s",
+                    tool_call_id,
+                )
+                self._pending_worker_finish = None
             _log.info(
                 "DIAGNOSTIC worker_started_duplicate_ignored — skipping begin_assistant tool_call_id=%s",
                 tool_call_id,
@@ -252,6 +289,57 @@ class WorkerEventHandler(QObject):
             tool_call_id, status,
         )
 
+        if self._active_worker_tool_call_id == tool_call_id:
+            self._pending_worker_finish_generation += 1
+            generation = self._pending_worker_finish_generation
+            self._pending_worker_finish = _PendingWorkerFinish(
+                tool_call_id=tool_call_id,
+                ok=ok,
+                summary=summary,
+                needs_followup=needs_followup,
+                status=status,
+                generation=generation,
+            )
+            QTimer.singleShot(
+                0,
+                lambda: self._flush_pending_worker_finish(tool_call_id, generation),
+            )
+            return
+
+        self._present_worker_finish(
+            tool_call_id=tool_call_id,
+            ok=ok,
+            summary=summary,
+            needs_followup=needs_followup,
+            status=status,
+        )
+
+    def _flush_pending_worker_finish(self, tool_call_id: str, generation: int) -> None:
+        pending = self._pending_worker_finish
+        if (
+            pending is None
+            or pending.tool_call_id != tool_call_id
+            or pending.generation != generation
+        ):
+            return
+        self._pending_worker_finish = None
+        self._present_worker_finish(
+            tool_call_id=pending.tool_call_id,
+            ok=pending.ok,
+            summary=pending.summary,
+            needs_followup=pending.needs_followup,
+            status=pending.status,
+        )
+
+    def _present_worker_finish(
+        self,
+        *,
+        tool_call_id: str,
+        ok: bool,
+        summary: str,
+        needs_followup: bool | None,
+        status: str | None,
+    ) -> None:
         metadata = self._worker_result_metadata(tool_call_id)
         active_workflow = (
             self._active_workflow
@@ -288,6 +376,7 @@ class WorkerEventHandler(QObject):
     def _on_worker_cancelled(self, tool_call_id: str) -> None:
         """Stop worker aura and forward cancel to playground/spec card."""
 
+        self._clear_pending_worker_finish(tool_call_id)
         self._playground.stop_aura()
         self._playground.worker_cancelled()
 
@@ -319,8 +408,16 @@ class WorkerEventHandler(QObject):
         title = f"API Error {status}" if status > 0 else "Worker Error"
         self._playground.add_error(f"{title}: {message}")
         self._dispatch_ui.clear_active_spec_card(tool_call_id)
+        self._clear_pending_worker_finish(tool_call_id)
         if self._active_worker_tool_call_id == tool_call_id:
             self._active_worker_tool_call_id = None
+
+    def _clear_pending_worker_finish(self, tool_call_id: str) -> None:
+        if (
+            self._pending_worker_finish is not None
+            and self._pending_worker_finish.tool_call_id == tool_call_id
+        ):
+            self._pending_worker_finish = None
 
     def _on_worker_usage(
         self,

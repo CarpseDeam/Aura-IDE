@@ -39,6 +39,11 @@ def _run_app(log_path: Path, args: argparse.Namespace, qt_argv: list[str]) -> in
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
+    if args.version:
+        from aura.version import __version__
+        print(f"Aura {__version__}")
+        return 0
+
     if args.companion_relay_only:
         return _run_companion_relay(args.host, args.port)
 
@@ -209,6 +214,11 @@ def _parse_args(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
     )
     parser.add_argument("--dump-ui-tree", type=str, default=None, metavar="PATH",
         help="(Honored only alongside --selfcheck.) Write an accessibility-tree snapshot as JSON to PATH.",
+    )
+    parser.add_argument(
+        "--version",
+        action="store_true",
+        help="Print the Aura version and exit.",
     )
     parser.add_argument("--companion-relay-only", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--host", default="127.0.0.1", help=argparse.SUPPRESS)

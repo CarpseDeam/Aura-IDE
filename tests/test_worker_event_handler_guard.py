@@ -44,6 +44,12 @@ def _workflow_state(tool_call_id="dispatch-1", status=WorkflowStatus.dispatched)
     ).with_status(status)
 
 
+def _flush_pending_finish(handler):
+    pending = handler._pending_worker_finish
+    assert pending is not None
+    handler._flush_pending_worker_finish(pending.tool_call_id, pending.generation)
+
+
 # ── Tests ───────────────────────────────────────────────────────────────
 
 
@@ -87,6 +93,7 @@ class TestWorkerEventHandlerDuplicateGuard:
         handler._on_worker_finished(
             "dispatch-1", ok=True, summary="Done", needs_followup=False, status="completed"
         )
+        _flush_pending_finish(handler)
         assert handler._active_worker_tool_call_id is None
 
         # Second campaign — should call begin_assistant again
@@ -111,6 +118,46 @@ class TestWorkerEventHandlerDuplicateGuard:
         handler._on_worker_finished(
             "dispatch-1", ok=True, summary="Done", needs_followup=False, status="completed"
         )
+        _flush_pending_finish(handler)
+        assert handler._active_worker_tool_call_id is None
+
+    def test_internal_finish_followed_by_same_campaign_start_does_not_present(self):
+        handler, _bridge, _chat, playground, _settings = _make_handler()
+        handler._finish_presenter.present = MagicMock()
+
+        handler._on_worker_started("dispatch-1")
+        handler._on_worker_finished(
+            "dispatch-1",
+            ok=True,
+            summary="Internal step complete.",
+            needs_followup=False,
+            status="completed",
+        )
+        pending = handler._pending_worker_finish
+        assert pending is not None
+
+        handler._on_worker_started("dispatch-1")
+        handler._flush_pending_worker_finish(pending.tool_call_id, pending.generation)
+
+        handler._finish_presenter.present.assert_not_called()
+        playground.begin_assistant.assert_called_once()
+        assert handler._active_worker_tool_call_id == "dispatch-1"
+
+    def test_aggregate_finish_presents_when_no_same_campaign_restart_arrives(self):
+        handler, _bridge, _chat, _playground, _settings = _make_handler()
+        handler._finish_presenter.present = MagicMock()
+
+        handler._on_worker_started("dispatch-1")
+        handler._on_worker_finished(
+            "dispatch-1",
+            ok=True,
+            summary="Campaign complete.",
+            needs_followup=False,
+            status="completed",
+        )
+        _flush_pending_finish(handler)
+
+        handler._finish_presenter.present.assert_called_once()
         assert handler._active_worker_tool_call_id is None
 
     def test_cancelled_clears_active_id(self):
