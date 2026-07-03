@@ -22,7 +22,6 @@ DEFAULT_NUITKA_JOBS = max(1, (os.cpu_count() or 2) // 2)
 
 FINAL_DIST_NAME = f"{APP_NAME}.dist"
 FINAL_EXE_NAME = f"{APP_NAME}.exe"
-ZIP_NAME = "Aura-Windows-x64.zip"
 UPDATER_HELPER_SOURCE = Path(PACKAGE_NAME) / "windows_updater.cmd"
 UPDATER_HELPER_DIST_NAME = "AuraUpdater.cmd"
 TESSERACT_DIST_DIR = "tesseract"
@@ -566,38 +565,6 @@ def validate_playwright_bundle(final_dist_dir: Path, python_exe: Path) -> None:
     print("Playwright bundle validation: OK")
 
 
-def zip_distribution(root: Path, final_dist_dir: Path) -> Path:
-    """Package Aura.dist into a ZIP."""
-    zip_base = root / OUTPUT_DIR / "Aura-Windows-x64"
-    print(f"Creating release archive: {zip_base}.zip")
-    shutil.make_archive(str(zip_base), "zip", root_dir=str(final_dist_dir), base_dir=".")
-    return Path(f"{zip_base}.zip")
-
-
-def copy_to_desktop(zip_path: Path) -> None:
-    """Copy the final ZIP to the user's desktop, handling OneDrive redirects."""
-    home = Path.home()
-
-    # Try common desktop locations, prioritizing OneDrive
-    candidates = [
-        home / "OneDrive" / "Desktop",
-        home / "Desktop",
-    ]
-
-    target_desktop = None
-    for cand in candidates:
-        if cand.exists():
-            target_desktop = cand
-            break
-
-    if target_desktop:
-        target = target_desktop / ZIP_NAME
-        shutil.copy2(zip_path, target)
-        print(f"Success! Release ZIP copied to: {target}")
-    else:
-        print("Could not find Desktop folder to copy the release ZIP.")
-
-
 def find_iscc() -> Path | None:
     """Find Inno Setup's iscc.exe compiler."""
     exe = shutil.which("iscc")
@@ -799,13 +766,11 @@ def build(
     version: str | None = None,
     *,
     skip_version_update: bool = False,
-    copy_desktop: bool = True,
     low_memory: bool = True,
     jobs: int = DEFAULT_NUITKA_JOBS,
     installer: bool | None = None,
     fast: bool = False,
     refresh_build_venv: bool = False,
-    installer_only: bool = False,
     github_release: bool = False,
     create_github_release: bool = False,
 ) -> None:
@@ -904,11 +869,6 @@ def build(
     # Validate Playwright bundle
     validate_playwright_bundle(final_dist_dir, python_exe)
 
-    if not installer_only:
-        zip_path = zip_distribution(root, final_dist_dir)
-        if copy_desktop:
-            copy_to_desktop(zip_path)
-
     installer_path = create_installer(final_dist_dir, new_version, installer)
     if installer_path:
         print(f"Installer created at: {installer_path}")
@@ -918,8 +878,7 @@ def build(
             upload_to_github_release(installer_path, new_version, create_github_release)
         else:
             raise SystemExit(
-                "--github-release requires an installer. Use --installer or --installer-only "
-                "and ensure Inno Setup is available."
+                "--github-release requires an installer. Use --installer and ensure Inno Setup is available."
             )
 
 
@@ -934,11 +893,6 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--skip-version-update",
         action="store_true",
         help="Use the current project version without prompting or editing files.",
-    )
-    parser.add_argument(
-        "--no-copy-desktop",
-        action="store_true",
-        help="Do not copy the release ZIP to the Desktop after packaging.",
     )
     parser.add_argument(
         "--jobs",
@@ -976,11 +930,6 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Force re-creation of the build venv even in fast mode.",
     )
     parser.add_argument(
-        "--installer-only",
-        action="store_true",
-        help="Skip ZIP and desktop copy; build the installer only. Implies --installer.",
-    )
-    parser.add_argument(
         "--github-release",
         action="store_true",
         help="Upload the installer to GitHub Releases using gh CLI after a successful build.",
@@ -1000,23 +949,19 @@ if __name__ == "__main__":
         print("Warning: --create-github-release has no effect without --github-release.")
 
     installer: bool | None = None
-    if args.installer_only:
+    if args.installer:
         installer = True
-    elif args.installer:
-        installer = True
-    if args.no_installer and not args.installer_only:
+    if args.no_installer:
         installer = False
 
     build(
         args.version,
         skip_version_update=args.skip_version_update,
-        copy_desktop=not args.no_copy_desktop,
         low_memory=not args.no_low_memory,
         jobs=args.jobs,
         installer=installer,
         fast=args.fast,
         refresh_build_venv=args.refresh_build_venv,
-        installer_only=args.installer_only,
         github_release=args.github_release,
         create_github_release=args.create_github_release,
     )
