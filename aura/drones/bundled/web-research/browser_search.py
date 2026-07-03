@@ -23,6 +23,11 @@ except ImportError:
     ensure_profile_dir = None  # type: ignore[assignment]
     BROWSER_SUPPORTED = False
 
+try:
+    from aura.research.ui_contract import env_requests_headless
+except ImportError:
+    env_requests_headless = None  # type: ignore[assignment]
+
 
 SEARCH_BLOCKED_GAP = "Browser search was blocked by a CAPTCHA or verification page."
 PAGE_BLOCKED_ERROR = "Page was blocked by a CAPTCHA or verification page."
@@ -51,9 +56,14 @@ def read_browser_settings() -> dict[str, Any]:
 
     raw_profile = permissions.get("browser_profile", "research")
     browser_profile = raw_profile.strip() if isinstance(raw_profile, str) else ""
+    visible = bool(permissions.get("visible", False))
+    if env_requests_headless is not None:
+        headless_override = env_requests_headless()
+        if headless_override is not None:
+            visible = not headless_override
     return {
         "browser_profile": browser_profile or None,
-        "visible": bool(permissions.get("visible", False)),
+        "visible": visible,
     }
 
 

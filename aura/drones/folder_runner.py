@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import logging
+import os
 import subprocess
 import sys
 import time
@@ -14,10 +16,13 @@ from aura.drones.definition import DroneDefinition
 from aura.drones.receipt import DroneReceipt
 from aura.drones.run import DroneRun
 from aura.drones.store import DroneStore, RunHistoryStore
+from aura.research.ui_contract import research_subprocess_env, silent_research_requested
 
 _PROCESS_POLL_SECONDS = 0.05
 _CANCEL_GRACE_SECONDS = 2.0
 _PYTHON_COMMANDS = {"python", "python.exe", "python3", "python3.exe", "py", "py.exe"}
+_WEB_RESEARCH_DRONE_ID = "web-research"
+_log = logging.getLogger(__name__)
 
 
 def is_folder_backed_drone(drone: DroneDefinition) -> bool:
@@ -59,6 +64,22 @@ def run_folder_drone_sync(
         "drone_id": drone.id,
         "upstream": upstream or {},
     }
+    silent_requested = (
+        drone_id == _WEB_RESEARCH_DRONE_ID
+        and silent_research_requested(upstream=upstream, input_payload=input_payload)
+    )
+    extra_env = (
+        research_subprocess_env(upstream=upstream, input_payload=input_payload)
+        if drone_id == _WEB_RESEARCH_DRONE_ID
+        else {}
+    )
+    if drone_id == _WEB_RESEARCH_DRONE_ID:
+        _log.info(
+            "web_research_drone_run drone_id=%s folder=%s silent_requested=%s",
+            drone_id,
+            folder,
+            silent_requested,
+        )
 
     try:
         result = _run_command_drone(
@@ -67,9 +88,12 @@ def run_folder_drone_sync(
             payload,
             timeout_seconds=drone.budget.timeout_seconds,
             cancel_event=run.cancel_event,
+            extra_env=extra_env or None,
         )
         _raw_result = result
         cargo = _extract_cargo(result)
+        if silent_requested:
+            _log_web_research_silent_diagnostic(cargo, _raw_result, folder)
         if isinstance(result, dict) and (
             result.get("cancelled") or result.get("status") == "cancelled"
         ):
@@ -187,6 +211,57 @@ def _evidence_for_status(status: str) -> str:
     return ""
 
 
+def _log_web_research_silent_diagnostic(
+    cargo: Any,
+    raw_result: dict[str, Any] | None,
+    folder: Path,
+) -> None:
+    route_used = _route_used_from(cargo, raw_result)
+    browser_metadata = route_used.get("browser_discovery")
+    if not isinstance(browser_metadata, dict):
+        _log.info(
+            "web_research_silent_diagnostic folder=%s silent_requested=True "
+            "browser_visible=unknown",
+            folder,
+        )
+        return
+    browser_visible = browser_metadata.get("browser_visible")
+    if browser_visible is True:
+        _log.warning(
+            "web_research_silent_not_honored folder=%s silent_requested=True "
+            "browser_visible=True",
+            folder,
+        )
+        return
+    _log.info(
+        "web_research_silent_diagnostic folder=%s silent_requested=True "
+        "browser_visible=%s",
+        folder,
+        browser_visible,
+    )
+
+
+def _route_used_from(
+    cargo: Any,
+    raw_result: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if isinstance(cargo, dict):
+        route = cargo.get("route_used")
+        if isinstance(route, dict):
+            return route
+        route = cargo.get("route")
+        if isinstance(route, dict):
+            return route
+    if isinstance(raw_result, dict):
+        route = raw_result.get("route_used")
+        if isinstance(route, dict):
+            return route
+        route = raw_result.get("route")
+        if isinstance(route, dict):
+            return route
+    return {}
+
+
 def _resolve_entrypoint_command(command: list[str]) -> list[str]:
     """Use Aura's current interpreter for manifest Python shims.
 
@@ -210,6 +285,7 @@ def _run_command_drone(
     payload: dict[str, Any],
     timeout_seconds: int,
     cancel_event: Any = None,
+    extra_env: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Run a Drone command, send JSON payload on stdin, return parsed stdout JSON."""
     command = entrypoint.get("command", [])
@@ -228,6 +304,7 @@ def _run_command_drone(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            env={**os.environ, **extra_env} if extra_env else None,
             **get_subprocess_kwargs(),
         )
         stdout_text, stderr_text = _communicate_with_cancel(

@@ -7,6 +7,7 @@ from typing import Any
 
 from aura.research.adapter import WEB_RESEARCH_DRONE_ID
 from aura.research.intent import ResearchIntent, classify_research_intent
+from aura.research.ui_contract import RESEARCH_UI_MODE_SILENT
 
 
 @dataclass(frozen=True)
@@ -16,6 +17,8 @@ class ResearchRequest:
     drone_id: str = WEB_RESEARCH_DRONE_ID
     intent_category: str = "general"
     route: str = "answer_only"
+    ui_mode: str = RESEARCH_UI_MODE_SILENT
+    headless: bool = True
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:

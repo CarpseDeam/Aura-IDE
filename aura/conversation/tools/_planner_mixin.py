@@ -1,14 +1,20 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from aura.conversation.tools._types import ToolExecResult
 from aura.drones.store import DroneStore
 from aura.research.adapter import WEB_RESEARCH_DRONE_ID
 from aura.research.result import format_research_answer
+from aura.research.ui_contract import (
+    RESEARCH_UI_MODE_SILENT,
+    with_research_ui_contract,
+)
 
 DEFAULT_READ_ONLY_DRONE_LIMIT = 3
 WEB_RESEARCH_DRONE_LIMIT = 6
+_log = logging.getLogger(__name__)
 
 
 class PlannerHandlersMixin:
@@ -160,6 +166,7 @@ class PlannerHandlersMixin:
         """Run a saved read-only Drone directly in the background."""
         drone_id = str(args.get("drone_id") or "").strip()
         goal = str(args.get("goal") or "").strip()
+        ui_mode = str(args.get("ui_mode") or RESEARCH_UI_MODE_SILENT).strip().lower()
 
         if not drone_id:
             return ToolExecResult(
@@ -176,6 +183,15 @@ class PlannerHandlersMixin:
 
         drone = DroneStore.load_drone(self._root, drone_id)
         if drone is None:
+            if drone_id == WEB_RESEARCH_DRONE_ID:
+                folder = DroneStore.drone_folder(self._root, drone_id)
+                _log.warning(
+                    "web_research_drone_unregistered drone_id=%s folder=%s "
+                    "silent_requested=%s",
+                    drone_id,
+                    folder,
+                    ui_mode == RESEARCH_UI_MODE_SILENT,
+                )
             return ToolExecResult(
                 ok=False,
                 payload={"ok": False, "error": f"No drone found with id: {drone_id}"},
@@ -213,11 +229,35 @@ class PlannerHandlersMixin:
         from aura.drones.sync_runner import run_read_only_drone_sync
 
         try:
+            upstream = None
+            if drone_id == WEB_RESEARCH_DRONE_ID:
+                upstream = with_research_ui_contract(
+                    {
+                        "research_request": {
+                            "question": goal,
+                            "original_text": goal,
+                            "drone_id": WEB_RESEARCH_DRONE_ID,
+                            "route": "answer_only",
+                            "ui_mode": ui_mode,
+                        }
+                    },
+                    route="answer_only",
+                    ui_mode=ui_mode,
+                )
+                folder = DroneStore.drone_folder(self._root, drone_id)
+                _log.info(
+                    "answer_only_research_start drone_id=%s folder=%s "
+                    "silent_requested=%s",
+                    drone_id,
+                    folder,
+                    bool(upstream.get("headless")),
+                )
             result = run_read_only_drone_sync(
                 drone_id=drone_id,
                 goal=goal,
                 workspace_root=self._root,
                 drone=drone,
+                upstream=upstream,
             )
             if drone_id == WEB_RESEARCH_DRONE_ID:
                 result = dict(result)
