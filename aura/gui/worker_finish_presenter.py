@@ -62,7 +62,7 @@ class WorkerFinishPresenter:
             self._active_mismatch_card_id = tool_call_id
 
         self._playground.stop_aura()
-        if outcome.should_show_visible_summary:
+        if outcome.terminal_success:
             if needs_followup is None:
                 self._playground.worker_finished(ok, summary, status=status)
             else:
@@ -81,20 +81,6 @@ class WorkerFinishPresenter:
             spec_card.worker_finished(
                 ok,
                 summary,
-                status=status,
-            )
-        goal = self._worker_summary_goal(tool_call_id, spec_card, active_workflow)
-        # Every visible Worker dispatch gets exactly one durable chat completion
-        # card. Runtime details remain in Worker Log/playground diagnostics.
-        # Mismatch prompts may add a separate resolution card, but they do not
-        # replace the completion transcript item.
-        if summary or status is not None:
-            self._chat.add_worker_summary(
-                tool_call_id,
-                goal,
-                ok,
-                summary,
-                needs_followup=bool(needs_followup),
                 status=status,
             )
         return WorkerFinishPresentation(outcome=outcome)

@@ -479,18 +479,9 @@ class ConversationPersistence(QObject):
                 self._chat.append_content(str(item.get("text", "")))
                 self._chat.assistant_done()
             elif kind == WORKER_COMPLETE:
-                self._chat.add_worker_summary(
-                    str(item.get("tool_call_id", "")),
-                    str(item.get("goal", "Worker task")),
-                    bool(item.get("ok", False)),
-                    str(item.get("summary", "")),
-                    needs_followup=bool(item.get("needs_followup", False)),
-                    status=(
-                        str(item.get("status"))
-                        if item.get("status") is not None
-                        else None
-                    ),
-                )
+                # Worker completion records are durable diagnostics only.
+                # Replaying them must not recreate main-chat finish cards.
+                continue
         if hasattr(self._chat, "end_transcript_replay"):
             self._chat.end_transcript_replay(render_items)
         self._chat.end_bulk_update()

@@ -39,6 +39,9 @@ from aura.gui.theme import (
 from aura.gui.widgets.aura_glow import AuraWidget
 
 
+_DISPATCH_COMPLETE_STATUSES = {"completed", "completed_with_caveats"}
+
+
 def _is_terminal_worker_success(
     data: dict,
     *,
@@ -50,6 +53,38 @@ def _is_terminal_worker_success(
     return bool(
         payload_ok
         and not needs_followup
+    )
+
+
+def _should_close_dispatch_assistant(
+    data: dict,
+    *,
+    event_ok: bool,
+    needs_followup: bool,
+    status: str | None,
+    dispatch_not_started: bool,
+) -> bool:
+    if dispatch_not_started:
+        return True
+    if status is not None and status not in _DISPATCH_COMPLETE_STATUSES:
+        return False
+    if bool(data.get("recoverable") or data.get("phase_boundary")):
+        return False
+    extras = data.get("extras", {})
+    if not isinstance(extras, dict):
+        extras = {}
+    if (
+        extras.get("failure_constraint")
+        or extras.get("dispatch_spec_rejected")
+        or extras.get("mismatch_kind")
+        or extras.get("mismatch_question")
+    ):
+        return False
+    return _is_terminal_worker_success(
+        data,
+        event_ok=event_ok,
+        needs_followup=needs_followup,
+        status=status,
     )
 
 
@@ -632,6 +667,7 @@ class ChatView(QScrollArea):
                 dispatch_not_started = False
                 approval_timeout = False
                 cancelled = False
+                should_close_for_continuation = False
                 try:
                     data = json.loads(result_text)
                     extras = data.get("extras", {})
@@ -656,7 +692,6 @@ class ChatView(QScrollArea):
                         needs_followup=needs_followup,
                         status=status,
                     ):
-                        _internal_continuation = False
                         for key in (
                             "mismatch_kind",
                             "mismatch_question",
@@ -664,6 +699,13 @@ class ChatView(QScrollArea):
                             "dispatch_spec_rejected",
                         ):
                             extras.pop(key, None)
+                    should_close_for_continuation = _should_close_dispatch_assistant(
+                        data,
+                        event_ok=ok,
+                        needs_followup=needs_followup,
+                        status=status,
+                        dispatch_not_started=dispatch_not_started,
+                    )
                 except Exception:
                     pass
 
@@ -689,9 +731,10 @@ class ChatView(QScrollArea):
                 # Failed state, remove it so it doesn't appear as the final item.
                 self._cleanup_failed_code_cards(tool_call_id)
 
-                # Close the current assistant turn so the next Planner
-                # continuation starts a fresh card.
-                self.close_current_assistant_for_continuation()
+                # Close only for terminal dispatch states. Recoverable Worker
+                # failures continue in the existing assistant surface.
+                if should_close_for_continuation:
+                    self.close_current_assistant_for_continuation()
 
             else:
                 controller.finalize(ok, result_text)
@@ -910,12 +953,27 @@ class ChatView(QScrollArea):
         self, tool_call_id: str, goal: str, ok: bool, summary: str,
         needs_followup: bool = False, status: str | None = None,
         is_internal: bool = False,
+        visible: bool = False,
+        persist: bool = True,
     ) -> None:
-        """Add a summary card to the chat after a worker completes."""
+        """Record a worker completion, creating visible UI only when explicit."""
         if self._worker_summary_disabled:
             self._remove_plan_writer_card(tool_call_id)
             return
         self._remove_plan_writer_card(tool_call_id)
+        if self._record_transcript and persist:
+            self._chat_items.append(
+                worker_complete_item(
+                    tool_call_id=tool_call_id,
+                    goal=goal,
+                    summary=summary,
+                    status=status,
+                    ok=ok,
+                    needs_followup=needs_followup,
+                )
+            )
+        if not visible:
+            return
         existing = self._worker_summary_cards.get(tool_call_id)
         if existing is not None:
             existing.update_summary(
@@ -928,17 +986,6 @@ class ChatView(QScrollArea):
             )
             self._scroll_after_bottom_layout_change()
             return
-        if self._record_transcript:
-            self._chat_items.append(
-                worker_complete_item(
-                    tool_call_id=tool_call_id,
-                    goal=goal,
-                    summary=summary,
-                    status=status,
-                    ok=ok,
-                    needs_followup=needs_followup,
-                )
-            )
         card = WorkerSummaryCard(
             tool_call_id, goal, ok, summary,
             needs_followup=needs_followup, parent=self,

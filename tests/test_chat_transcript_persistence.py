@@ -13,6 +13,7 @@ from aura.conversation.persistence import (
     save_conversation,
 )
 from aura.conversation.worker_outcome import WorkerOutcomeStatus
+from aura.gui.chat_view import _should_close_dispatch_assistant
 from aura.gui.cards.dispatch_status_labels import worker_summary_status_label
 from aura.gui.conv_persistence import ConversationPersistence
 from aura.gui.worker_finish_presenter import WorkerFinishPresenter
@@ -152,7 +153,7 @@ def test_save_conversation_persists_chat_items(tmp_path: Path) -> None:
     assert data["messages"] == history.messages
 
 
-def test_load_with_chat_items_renders_exact_items_and_no_extra_dispatch_cards(tmp_path: Path) -> None:
+def test_load_with_chat_items_skips_visible_worker_complete_cards(tmp_path: Path) -> None:
     chat_items = [
         {"kind": "user", "text": "u"},
         {"kind": "planner", "text": "p"},
@@ -202,11 +203,10 @@ def test_load_with_chat_items_renders_exact_items_and_no_extra_dispatch_cards(tm
         ("begin_assistant",),
         ("planner", "p"),
         ("assistant_done",),
-        ("worker", "visible", "Visible goal", True, "Visible summary", False, "completed"),
         ("end_replay", chat_items),
         ("end_bulk",),
     ]
-    assert [w["tool_call_id"] for w in chat.worker_summaries] == ["visible"]
+    assert chat.worker_summaries == []
 
 
 def test_legacy_v2_load_skips_worker_dispatch_reconstruction(tmp_path: Path) -> None:
@@ -275,9 +275,11 @@ def test_replay_history_does_not_render_dispatch_records() -> None:
     assert ("planner", "p") in chat.events
 
 
-def test_worker_finish_presenter_adds_one_card_for_normal_completion() -> None:
+def test_worker_finish_presenter_does_not_add_main_chat_summary_for_completion() -> None:
     chat = FakeChat()
-    presenter = WorkerFinishPresenter(chat, FakePlayground())
+    playground = FakePlayground()
+    spec_card = FakeSpecCard("Normal goal")
+    presenter = WorkerFinishPresenter(chat, playground)
 
     presenter.present(
         tool_call_id="tc",
@@ -287,12 +289,12 @@ def test_worker_finish_presenter_adds_one_card_for_normal_completion() -> None:
         status=WorkerOutcomeStatus.completed.value,
         metadata={},
         active_workflow=None,
-        spec_card=FakeSpecCard("Normal goal"),
+        spec_card=spec_card,
     )
 
-    assert len(chat.worker_summaries) == 1
-    assert chat.worker_summaries[0]["goal"] == "Normal goal"
-    assert chat.worker_summaries[0]["status"] == "completed"
+    assert chat.worker_summaries == []
+    assert ("worker_finished", (True, "done"), {"needs_followup": False, "status": "completed"}) in playground.events
+    assert spec_card.finished == [(True, "done", "completed")]
 
 
 @pytest.mark.parametrize(
@@ -318,13 +320,14 @@ def test_worker_complete_card_label_policy(status: str | None, expected_label: s
     assert label == expected_label
 
 
-def test_worker_finish_presenter_exceptional_statuses_add_one_labeled_card() -> None:
-    for status, expected in [
-        (WorkerOutcomeStatus.harness_error.value, "Worker Error"),
-        (WorkerOutcomeStatus.approval_rejected.value, "Changes rejected"),
+def test_worker_finish_presenter_exceptional_statuses_do_not_add_main_chat_summary() -> None:
+    for status in [
+        WorkerOutcomeStatus.harness_error.value,
+        WorkerOutcomeStatus.approval_rejected.value,
     ]:
         chat = FakeChat()
-        presenter = WorkerFinishPresenter(chat, FakePlayground())
+        playground = FakePlayground()
+        presenter = WorkerFinishPresenter(chat, playground)
         presenter.present(
             tool_call_id=status,
             ok=False,
@@ -336,14 +339,59 @@ def test_worker_finish_presenter_exceptional_statuses_add_one_labeled_card() -> 
             spec_card=FakeSpecCard(),
         )
 
-        assert len(chat.worker_summaries) == 1
-        label, _color = worker_summary_status_label(
-            status=chat.worker_summaries[0]["status"],
-            ok=chat.worker_summaries[0]["ok"],
-            needs_followup=chat.worker_summaries[0]["needs_followup"],
-            summary=chat.worker_summaries[0]["summary"],
-        )
-        assert label == expected
+        assert chat.worker_summaries == []
+        assert not any(event[0] == "worker_finished" for event in playground.events)
+        assert ("set_worker_running", False) in playground.events
+
+
+def test_dispatch_worker_failure_result_keeps_existing_assistant_for_continuation() -> None:
+    data = {
+        "ok": False,
+        "summary": "Worker Error",
+        "needs_followup": True,
+        "status": WorkerOutcomeStatus.harness_error.value,
+        "extras": {"failure_constraint": "retry internally"},
+    }
+
+    assert not _should_close_dispatch_assistant(
+        data,
+        event_ok=False,
+        needs_followup=True,
+        status=WorkerOutcomeStatus.harness_error.value,
+        dispatch_not_started=False,
+    )
+
+
+def test_dispatch_noncomplete_status_keeps_existing_assistant_even_if_ok() -> None:
+    data = {
+        "ok": True,
+        "summary": "validation failed",
+        "status": WorkerOutcomeStatus.validation_failed.value,
+    }
+
+    assert not _should_close_dispatch_assistant(
+        data,
+        event_ok=True,
+        needs_followup=False,
+        status=WorkerOutcomeStatus.validation_failed.value,
+        dispatch_not_started=False,
+    )
+
+
+def test_dispatch_worker_success_result_can_close_assistant_for_final_continuation() -> None:
+    data = {
+        "ok": True,
+        "summary": "done",
+        "status": WorkerOutcomeStatus.completed.value,
+    }
+
+    assert _should_close_dispatch_assistant(
+        data,
+        event_ok=True,
+        needs_followup=False,
+        status=WorkerOutcomeStatus.completed.value,
+        dispatch_not_started=False,
+    )
 
 
 def test_forbidden_labels_do_not_appear_in_worker_complete_card_labels() -> None:
