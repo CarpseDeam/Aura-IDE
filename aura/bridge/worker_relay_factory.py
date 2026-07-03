@@ -22,6 +22,7 @@ def create_worker_relay(
     dispatch_proxy: Any,
     event_bus: EventBus,
     suppress_final_report_activity: bool = False,
+    suppress_workflow_state_updates: bool = False,
 ) -> WorkerEventRelay:
     """Construct a WorkerEventRelay and wire every signal to *dispatch_proxy*.
 
@@ -35,6 +36,12 @@ def create_worker_relay(
         on the event bus. Used for internal DispatchSession worker steps
         so the UI does not see false "Final report started/completed"
         Activity entries between steps.
+
+    suppress_workflow_state_updates: When True, Worker tool start/result
+        events still flow to Worker UI and event-bus projectors, but are not
+        projected into planner/spec-card WorkflowState. Used for internal
+        DispatchSession campaign steps so the visible workflow state remains
+        campaign-scoped.
     """
     relay = WorkerEventRelay(
         approval_proxy=approval_proxy,
@@ -66,12 +73,13 @@ def create_worker_relay(
     # These run synchronously on the planner thread so they can update
     # _active_workflow while request_dispatch / session.run() is on the
     # call stack.  The regular (Auto) connections above handle GUI update.
-    relay.toolCallStart.connect(
-        dispatch_proxy._workflow_tool_started, Qt.DirectConnection
-    )
-    relay.toolResult.connect(
-        dispatch_proxy._workflow_tool_result, Qt.DirectConnection
-    )
+    if not suppress_workflow_state_updates:
+        relay.toolCallStart.connect(
+            dispatch_proxy._workflow_tool_started, Qt.DirectConnection
+        )
+        relay.toolResult.connect(
+            dispatch_proxy._workflow_tool_result, Qt.DirectConnection
+        )
 
     return relay
 

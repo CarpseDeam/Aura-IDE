@@ -623,10 +623,16 @@ class _DispatchProxy(QObject):
         They also must not emit final-report Activity entries on the event
         bus, because those would look like the Worker finished and restarted
         between steps.
+
+        Worker tool start/result events are also not projected into
+        WorkflowState here. The visible planner/spec-card workflow is
+        campaign-scoped and receives the terminal aggregate result after
+        session.run() returns.
         """
         _log.info("_run_worker_internal entered tool_call_id=%s", tool_call_id)
         runner = self._create_worker_dispatch_runner(
             suppress_final_report_activity=True,
+            suppress_workflow_state_updates=True,
         )
         return runner.run_worker(tool_call_id, req, pending, record_replayable=False)
 
@@ -690,6 +696,7 @@ class _DispatchProxy(QObject):
         self,
         *,
         suppress_final_report_activity: bool = False,
+        suppress_workflow_state_updates: bool = False,
     ) -> WorkerDispatchRunner:
         return WorkerDispatchRunner(
             approval_proxy=self._approval_proxy,
@@ -702,6 +709,7 @@ class _DispatchProxy(QObject):
             max_tool_rounds=self._max_tool_rounds,
             dispatch_proxy=self,
             suppress_final_report_activity=suppress_final_report_activity,
+            suppress_workflow_state_updates=suppress_workflow_state_updates,
             records=self._records,
             result_metadata=self._result_metadata,
             set_tier1_context=self.set_tier1_context,

@@ -68,6 +68,7 @@ class WorkerDispatchRunner:
         event_bus: EventBus,
         lifecycle: LifecycleHooks | None = None,
         suppress_final_report_activity: bool = False,
+        suppress_workflow_state_updates: bool = False,
         set_tier1_context: Callable[[str], None] | None = None,
     ) -> None:
         self._approval_proxy = approval_proxy
@@ -80,6 +81,7 @@ class WorkerDispatchRunner:
         self._max_tool_rounds = max_tool_rounds
         self._dispatch_proxy = dispatch_proxy
         self._suppress_final_report_activity = suppress_final_report_activity
+        self._suppress_workflow_state_updates = suppress_workflow_state_updates
         self._records = records
         self._result_metadata = result_metadata
         self._set_tier1_context = set_tier1_context
@@ -253,6 +255,7 @@ class WorkerDispatchRunner:
             worker_model=str(self._worker_model),
             dispatch_proxy=self._dispatch_proxy,
             suppress_final_report_activity=self._suppress_final_report_activity,
+            suppress_workflow_state_updates=self._suppress_workflow_state_updates,
             event_bus=self._event_bus,
         )
 

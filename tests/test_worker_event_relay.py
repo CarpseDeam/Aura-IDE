@@ -8,6 +8,7 @@ the event bus, while non-internal steps still do.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -20,6 +21,7 @@ from aura.client import (
     ToolCallStart,
     ToolResult,
 )
+from aura.conversation import WorkerDispatchRequest, WorkerDispatchResult
 from aura.events import (
     WORKER_FINAL_REPORT_FINISHED,
     WORKER_FINAL_REPORT_STARTED,
@@ -263,6 +265,119 @@ class TestFlagThreading:
         assert "final_report_started" in kinds, (
             "Default must emit final-report activity"
         )
+
+    def test_workflow_projection_suppression_keeps_worker_ui_and_bus(
+        self, approval_proxy,
+    ) -> None:
+        """Internal campaign steps suppress only WorkflowState projection."""
+        bus = EventBus()
+        received: list[AuraEvent] = []
+        bus.subscribe(WORKER_TOOL_STARTED, received.append)
+        bus.subscribe(WORKER_TOOL_FINISHED, received.append)
+        dispatch_proxy = MagicMock()
+
+        relay = create_worker_relay(
+            approval_proxy=approval_proxy,
+            worker_model="test-model",
+            dispatch_proxy=dispatch_proxy,
+            event_bus=bus,
+            suppress_workflow_state_updates=True,
+        )
+
+        relay.relay("tc-1", ToolCallStart(
+            index=0,
+            id="worker-tool-1",
+            name="write_file",
+        ))
+        relay.relay("tc-1", ToolResult(
+            tool_call_id="worker-tool-1",
+            name="write_file",
+            ok=True,
+            result='{"path": "a.py"}',
+            extras={"path": "a.py"},
+        ))
+
+        dispatch_proxy.workerToolCallStart.assert_called_once()
+        dispatch_proxy.workerToolResult.assert_called_once()
+        dispatch_proxy._workflow_tool_started.assert_not_called()
+        dispatch_proxy._workflow_tool_result.assert_not_called()
+        assert [event.topic for event in received] == [
+            WORKER_TOOL_STARTED,
+            WORKER_TOOL_FINISHED,
+        ]
+
+    def test_workflow_projection_default_still_updates_workflow_callbacks(
+        self, approval_proxy,
+    ) -> None:
+        """Single-step/default dispatch keeps Worker tool WorkflowState updates."""
+        dispatch_proxy = MagicMock()
+        relay = create_worker_relay(
+            approval_proxy=approval_proxy,
+            worker_model="test-model",
+            dispatch_proxy=dispatch_proxy,
+            event_bus=EventBus(),
+        )
+
+        relay.relay("tc-1", ToolCallStart(
+            index=0,
+            id="worker-tool-1",
+            name="write_file",
+        ))
+        relay.relay("tc-1", ToolResult(
+            tool_call_id="worker-tool-1",
+            name="write_file",
+            ok=True,
+            result='{"path": "a.py"}',
+            extras={"path": "a.py"},
+        ))
+
+        dispatch_proxy._workflow_tool_started.assert_called_once()
+        dispatch_proxy._workflow_tool_result.assert_called_once()
+
+    def test_run_worker_internal_threads_workflow_suppression(
+        self, monkeypatch,
+    ) -> None:
+        """_run_worker_internal creates a runner with both internal-step flags."""
+        from aura.bridge import dispatch as dispatch_module
+        from aura.bridge.dispatch import _DispatchProxy
+
+        captured: dict[str, object] = {}
+        expected = WorkerDispatchResult(ok=True, summary="done")
+
+        class DummyRunner:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+            def run_worker(self, tool_call_id, req, pending, record_replayable=True):
+                captured["run_worker_args"] = (
+                    tool_call_id,
+                    req,
+                    pending,
+                    record_replayable,
+                )
+                return expected
+
+        monkeypatch.setattr(dispatch_module, "WorkerDispatchRunner", DummyRunner)
+        proxy = _DispatchProxy(
+            parent_widget=None,
+            registry_factory=MagicMock(),
+            approval_proxy=MagicMock(),
+        )
+        req = WorkerDispatchRequest(
+            goal="g",
+            files=[],
+            spec="s",
+            acceptance="a",
+            summary="summary",
+        )
+        pending = SimpleNamespace()
+
+        result = proxy._run_worker_internal("tc-1", req, pending)
+
+        assert result is expected
+        assert captured["suppress_final_report_activity"] is True
+        assert captured["suppress_workflow_state_updates"] is True
+        assert captured["run_worker_args"] == ("tc-1", req, pending, False)
 
 
 # ── EventBus integration: both flags in combination ──────────────────────
