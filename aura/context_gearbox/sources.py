@@ -523,7 +523,9 @@ def _load_target_file_contents(
         block_text = file_text
         if marker_lines:
             block_text = block_text.rstrip("\n") + "\n" + "\n".join(marker_lines)
-        blocks.append(f"### Target file: {relpath}\n```\n{block_text}\n```")
+        fence = _fence_for_target_file_block(block_text)
+        closing_separator = "" if block_text.endswith("\n") else "\n"
+        blocks.append(f"### Target file: {relpath}\n{fence}\n{block_text}{closing_separator}{fence}")
 
         if loaded_chars >= _TARGET_FILES_TOTAL_CAP:
             omitted_files.extend(
@@ -559,6 +561,18 @@ def _resolve_target_file_path(
     if not relpath:
         return None
     return resolved, relpath
+
+
+def _fence_for_target_file_block(contents: str) -> str:
+    longest_run = 0
+    current_run = 0
+    for char in contents:
+        if char == "`":
+            current_run += 1
+            longest_run = max(longest_run, current_run)
+        else:
+            current_run = 0
+    return "`" * max(3, longest_run + 1)
 
 
 def _remaining_target_file_labels(

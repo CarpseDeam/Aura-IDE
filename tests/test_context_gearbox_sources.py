@@ -66,6 +66,17 @@ def test_target_file_contents_truncates_file_over_per_file_cap(tmp_path: Path, m
     assert sources._TARGET_FILE_TRUNCATION_MARKER in text
 
 
+def test_target_file_contents_uses_longer_fence_when_contents_include_backticks(tmp_path: Path) -> None:
+    target = tmp_path / "notes.md"
+    target.write_text("before\n```\ninside\n```\nafter\n", encoding="utf-8")
+
+    text, entry, _extra = _collect_target_file_text(tmp_path, ("notes.md",))
+
+    assert entry.included is True
+    assert "### Target file: notes.md\n````\n" in text
+    assert "\nafter\n````" in text
+
+
 def test_target_file_contents_halts_at_total_cap_and_names_omitted_files(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(sources, "_TARGET_FILE_CHAR_CAP", 100)
     monkeypatch.setattr(sources, "_TARGET_FILES_TOTAL_CAP", 8)
