@@ -32,6 +32,7 @@ class DroneJob:
     started_at: float | None = None
     ended_at: float | None = None
     _drone_def: DroneDefinition | None = field(default=None, repr=False)
+    _upstream: dict[str, Any] | None = field(default=None, repr=False)
     _completion_event: threading.Event = field(default_factory=threading.Event, repr=False)
 
 
@@ -56,13 +57,20 @@ class ReadOnlyDroneBackgroundRunner:
         with self._lock:
             return sum(1 for j in self._jobs.values() if j.status == "queued")
 
-    def launch(self, drone: DroneDefinition, goal: str) -> DroneJob:
+    def launch(
+        self,
+        drone: DroneDefinition,
+        goal: str,
+        *,
+        upstream: dict[str, Any] | None = None,
+    ) -> DroneJob:
         job = DroneJob(
             run_id=uuid.uuid4().hex[:12],
             drone_id=drone.id,
             drone_name=drone.name,
             goal=goal,
             _drone_def=drone,
+            _upstream=upstream,
         )
         with self._lock:
             self._jobs[job.run_id] = job
@@ -120,6 +128,7 @@ class ReadOnlyDroneBackgroundRunner:
                 drone=drone,
                 goal=job.goal,
                 timeout_seconds=drone.budget.timeout_seconds,
+                upstream=job._upstream,
             )
             job.status = result.get("status", "completed")
             job.summary = result.get("summary", "")

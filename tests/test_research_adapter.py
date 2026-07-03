@@ -1,6 +1,10 @@
 import json
 import sys
+from types import SimpleNamespace
+
+from aura.conversation.tools.registry import ToolRegistry
 from aura.drones.definition import DroneBudget, DroneDefinition
+from aura.drones.background_runner import ReadOnlyDroneBackgroundRunner
 from aura.drones.folder_runner import run_folder_drone_sync
 from aura.research.adapter import WEB_RESEARCH_DRONE_ID, build_adapter_call
 from aura.research.request import build_research_request
@@ -106,3 +110,109 @@ def test_web_research_folder_runner_passes_silent_intent_in_payload_and_env(
     assert env["AURA_RESEARCH_UI_MODE"] == "silent"
     assert env["AURA_WEB_RESEARCH_HEADLESS"] == "1"
     assert env["AURA_WEB_RESEARCH_VISIBLE"] == "0"
+
+
+def test_background_runner_preserves_web_research_silent_upstream(
+    tmp_path,
+    monkeypatch,
+):
+    captured = {}
+
+    def fake_run_read_only_drone_sync(**kwargs):
+        captured.update(kwargs)
+        return {
+            "status": "completed",
+            "summary": "done",
+            "tool_calls_made": 0,
+            "tool_errors": 0,
+            "elapsed_seconds": 0.0,
+            "receipt": {},
+        }
+
+    monkeypatch.setattr(
+        "aura.drones.background_runner.run_read_only_drone_sync",
+        fake_run_read_only_drone_sync,
+    )
+    runner = ReadOnlyDroneBackgroundRunner(tmp_path, max_parallel=1)
+    drone = DroneDefinition(
+        id=WEB_RESEARCH_DRONE_ID,
+        name="Web Research",
+        description="Probe",
+        instructions="Probe",
+        write_policy="read_only",
+        output_contract={
+            "type": "object",
+            "properties": {"ok": {"type": "boolean"}, "summary": {"type": "string"}},
+            "required": ["ok", "summary"],
+        },
+        budget=DroneBudget(timeout_seconds=30),
+        entrypoint={"kind": "command", "command": [sys.executable], "protocol": "json-stdio"},
+    )
+    call = build_adapter_call(
+        build_research_request("Are there any World Cup matches today?")
+    )
+
+    job = runner.launch(drone, call.goal, upstream=call.upstream)
+    runner.get(job.run_id, wait_seconds=5)
+    runner.shutdown()
+
+    assert captured["upstream"]["research_ui"]["ui_mode"] == "silent"
+    assert captured["upstream"]["research_ui"]["headless"] is True
+    assert captured["upstream"]["research_ui"]["visible"] is False
+
+
+def test_planner_launch_read_only_web_research_passes_silent_upstream(
+    tmp_path,
+    monkeypatch,
+):
+    captured = {}
+    drone = DroneDefinition(
+        id=WEB_RESEARCH_DRONE_ID,
+        name="Web Research",
+        description="Probe",
+        instructions="Probe",
+        write_policy="read_only",
+        output_contract={
+            "type": "object",
+            "properties": {"ok": {"type": "boolean"}, "summary": {"type": "string"}},
+            "required": ["ok", "summary"],
+        },
+        budget=DroneBudget(timeout_seconds=30),
+        entrypoint={"kind": "command", "command": [sys.executable], "protocol": "json-stdio"},
+    )
+
+    class FakeRunner:
+        def launch(self, launched_drone, goal, *, upstream=None):
+            captured["drone"] = launched_drone
+            captured["goal"] = goal
+            captured["upstream"] = upstream
+            return SimpleNamespace(
+                run_id="run-1",
+                status="running",
+                drone_id=launched_drone.id,
+                drone_name=launched_drone.name,
+            )
+
+    monkeypatch.setattr(
+        "aura.drones.store.DroneStore.load_drone",
+        lambda workspace_root, drone_id: drone,
+    )
+    monkeypatch.setattr(
+        "aura.drones.background_runner.get_background_runner",
+        lambda workspace_root: FakeRunner(),
+    )
+    registry = ToolRegistry(tmp_path, mode="planner")
+
+    result = registry._handle_launch_read_only_drone(
+        {
+            "drone_id": WEB_RESEARCH_DRONE_ID,
+            "goal": "Are there any World Cup matches today?",
+        },
+        approval_cb=None,
+        reject_all=False,
+    )
+
+    assert result.ok is True
+    assert captured["upstream"]["research_ui"]["ui_mode"] == "silent"
+    assert captured["upstream"]["research_ui"]["headless"] is True
+    assert captured["upstream"]["research_ui"]["visible"] is False

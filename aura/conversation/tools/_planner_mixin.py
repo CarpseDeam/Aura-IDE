@@ -104,6 +104,7 @@ class PlannerHandlersMixin:
         """Launch a read-only Drone in background, return immediately."""
         drone_id = str(args.get("drone_id") or "").strip()
         goal = str(args.get("goal") or "").strip()
+        ui_mode = str(args.get("ui_mode") or RESEARCH_UI_MODE_SILENT).strip().lower()
 
         if not drone_id:
             return ToolExecResult(
@@ -143,8 +144,31 @@ class PlannerHandlersMixin:
 
         from aura.drones.background_runner import get_background_runner
 
+        upstream = None
+        if drone_id == WEB_RESEARCH_DRONE_ID:
+            upstream = with_research_ui_contract(
+                {
+                    "research_request": {
+                        "question": goal,
+                        "original_text": goal,
+                        "drone_id": WEB_RESEARCH_DRONE_ID,
+                        "route": "answer_only",
+                        "ui_mode": ui_mode,
+                    }
+                },
+                route="answer_only",
+                ui_mode=ui_mode,
+            )
+            folder = DroneStore.drone_folder(self._root, drone_id)
+            _log.info(
+                "answer_only_research_launch drone_id=%s folder=%s "
+                "silent_requested=%s",
+                drone_id,
+                folder,
+                bool(upstream.get("headless")),
+            )
         runner = get_background_runner(self._root)
-        job = runner.launch(drone, goal)
+        job = runner.launch(drone, goal, upstream=upstream)
 
         return ToolExecResult(
             ok=True,

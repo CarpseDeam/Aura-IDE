@@ -32,6 +32,17 @@ LAUNCH_READ_ONLY_DRONE_TOOL_DEF: dict[str, Any] = {
                     "type": "string",
                     "description": "Optional: why you are launching this Drone. Used only for logging.",
                 },
+                "ui_mode": {
+                    "type": "string",
+                    "enum": ["silent", "visible"],
+                    "description": (
+                        "For drone_id='web-research' only. Use 'silent' for "
+                        "answer-only research so no browser, report, Workbay, "
+                        "Terminal, or other work surface is shown. Use "
+                        "'visible' only when the user explicitly asks for a "
+                        "visible browser, login, or research UI."
+                    ),
+                },
             },
             "required": ["drone_id", "goal"],
         },
