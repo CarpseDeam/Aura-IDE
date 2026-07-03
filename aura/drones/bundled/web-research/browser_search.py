@@ -1,4 +1,9 @@
-"""Browser-backed search discovery for the Web Research Drone."""
+"""Browser-backed search discovery for the Web Research Drone.
+
+Uses the ``ResearchBrowserController`` as the sole browser owner.
+All visibility, headless, profile, and runtime-route decisions live in the
+controller — this module only asks for a browser and uses it.
+"""
 
 from __future__ import annotations
 
@@ -14,19 +19,11 @@ from typing import Any
 from models import FetchedSource, SourceTarget
 
 try:
-    from aura.browser.runtime import BrowserRuntime
-    from aura.drones.browse.profiles import ensure_profile_dir
-
-    BROWSER_SUPPORTED = True
+    from aura.browser.research_controller import ResearchBrowserController
+    CONTROLLER_SUPPORTED = True
 except ImportError:
-    BrowserRuntime = None  # type: ignore[assignment]
-    ensure_profile_dir = None  # type: ignore[assignment]
-    BROWSER_SUPPORTED = False
-
-try:
-    from aura.research.ui_contract import env_requests_headless
-except ImportError:
-    env_requests_headless = None  # type: ignore[assignment]
+    ResearchBrowserController = None  # type: ignore[assignment]
+    CONTROLLER_SUPPORTED = False
 
 
 SEARCH_BLOCKED_GAP = "Browser search was blocked by a CAPTCHA or verification page."
@@ -40,45 +37,6 @@ class BrowserSearchResult:
     attempted: bool = False
     blocked: bool = False
     route_metadata: dict[str, Any] = field(default_factory=dict)
-
-
-def read_browser_settings() -> dict[str, Any]:
-    """Read browser settings from the colocated drone manifest."""
-    permissions: dict[str, Any] = {}
-    manifest_path = Path(__file__).with_name("drone.json")
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        raw_permissions = manifest.get("permissions", {})
-        if isinstance(raw_permissions, dict):
-            permissions = raw_permissions
-    except (OSError, json.JSONDecodeError):
-        permissions = {}
-
-    raw_profile = permissions.get("browser_profile", "research")
-    browser_profile = raw_profile.strip() if isinstance(raw_profile, str) else ""
-    visible = bool(permissions.get("visible", False))
-    if env_requests_headless is not None:
-        headless_override = env_requests_headless()
-        if headless_override is not None:
-            visible = not headless_override
-    return {
-        "browser_profile": browser_profile or None,
-        "visible": visible,
-    }
-
-
-def create_browser_runtime():
-    """Create a BrowserRuntime using the drone's browser profile settings."""
-    if not BROWSER_SUPPORTED or BrowserRuntime is None:
-        return None
-
-    settings = read_browser_settings()
-    profile_name = settings.get("browser_profile")
-    visible = bool(settings.get("visible", False))
-    profile_path = None
-    if profile_name and ensure_profile_dir is not None:
-        profile_path = ensure_profile_dir(str(profile_name))
-    return BrowserRuntime(headless=not visible, user_data_dir=profile_path)
 
 
 def _search_url(search_query: str) -> str:
@@ -236,25 +194,27 @@ def extract_visible_result_links(page, base_url: str, max_targets: int = 8) -> l
 
 
 class BrowserResearchSession:
-    """One browser-backed research session for discovery and source reads."""
+    """One browser-backed research session for discovery and source reads.
+
+    Uses ``ResearchBrowserController`` as the single browser owner.
+    """
 
     def __init__(self) -> None:
-        self._runtime = create_browser_runtime()
-        self._context = None
+        self._controller: ResearchBrowserController | None = None
         self._page = None
         self._started = False
         self._closed = False
-        self._route_metadata: dict[str, Any] = {}
+        self._receipt: dict[str, Any] = {}
         self.gaps: list[str] = []
 
     @property
     def route_metadata(self) -> dict[str, Any]:
-        metadata = dict(self._route_metadata)
+        metadata = dict(self._receipt)
         metadata["browser_session_started"] = self._started
         metadata["browser_session_closed"] = self._closed
         return metadata
 
-    def __enter__(self) -> "BrowserResearchSession":
+    def __enter__(self) -> BrowserResearchSession:
         return self
 
     def __exit__(self, _exc_type, _exc, _tb) -> None:
@@ -265,26 +225,36 @@ class BrowserResearchSession:
             self.gaps.append(gap)
 
     def start(self) -> bool:
-        if self._started and self._context is not None and self._page is not None:
+        """Start the research browser via the controller.
+
+        The controller handles browser detection, profile, port, launch,
+        CDP readiness, and page acquisition.  We just ask it to navigate
+        to a blank page to prove the browser is alive.
+        """
+        if self._started and self._page is not None:
             return True
-        if self._runtime is None:
-            self._add_gap("Browser research unavailable: BrowserRuntime could not be imported.")
-            return False
-        if not self._runtime.start():
-            reason = self._runtime.unavailable_reason or "Browser runtime did not start."
-            self._add_gap(f"Browser research unavailable: {reason}")
+        if not CONTROLLER_SUPPORTED or ResearchBrowserController is None:
+            self._add_gap("Browser research unavailable: ResearchBrowserController could not be imported.")
             return False
 
-        self._route_metadata = dict(self._runtime.route_metadata)
-        self._context = self._runtime.context
-        if self._context is None:
-            self._add_gap("Browser research unavailable: Browser context was not created.")
+        self._controller = ResearchBrowserController()
+        receipt = self._controller.start()
+        self._receipt = receipt.to_dict()
+
+        if not receipt.ok:
+            phase_details = "; ".join(
+                f"{phase}: {err}" for phase, err in receipt.phase_errors.items()
+            ) or "Browser controller did not start."
+            self._add_gap(f"Browser research unavailable: {phase_details}")
+            self.close()
             return False
-        try:
-            self._context.set_default_navigation_timeout(12000)
-        except Exception:
-            pass
-        self._page = self._context.pages[0] if self._context.pages else self._context.new_page()
+
+        self._page = self._controller.page
+        if self._page is None:
+            self._add_gap("Browser research unavailable: No page acquired.")
+            self.close()
+            return False
+
         self._started = True
         return True
 
@@ -393,9 +363,9 @@ class BrowserResearchSession:
         if self._closed:
             return
         self._closed = True
-        if self._runtime is not None:
+        if self._controller is not None:
             try:
-                self._runtime.close()
+                self._controller.close()
             except Exception:
                 pass
 

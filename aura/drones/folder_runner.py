@@ -18,28 +18,11 @@ from aura.drones.definition import DroneDefinition
 from aura.drones.receipt import DroneReceipt
 from aura.drones.run import DroneRun
 from aura.drones.store import DroneStore, RunHistoryStore
-from aura.research.ui_contract import research_subprocess_env, silent_research_requested
-
 _PROCESS_POLL_SECONDS = 0.05
 _CANCEL_GRACE_SECONDS = 2.0
 _PYTHON_COMMANDS = {"python", "python.exe", "python3", "python3.exe", "py", "py.exe"}
 _WEB_RESEARCH_DRONE_ID = "web-research"
 _log = logging.getLogger(__name__)
-_WEB_RESEARCH_IN_PROCESS_LOCK = Lock()
-_WEB_RESEARCH_MODULE_NAMES = {
-    "browser_search",
-    "evidence",
-    "fetching",
-    "main",
-    "models",
-    "query",
-    "receipt",
-    "research_pipeline",
-    "schedule",
-    "synthesis",
-    "validate",
-}
-_MISSING_MODULE = object()
 
 
 def is_folder_backed_drone(drone: DroneDefinition) -> bool:
@@ -81,43 +64,16 @@ def run_folder_drone_sync(
         "drone_id": drone.id,
         "upstream": upstream or {},
     }
-    silent_requested = (
-        drone_id == _WEB_RESEARCH_DRONE_ID
-        and silent_research_requested(upstream=upstream, input_payload=input_payload)
-    )
-    extra_env = (
-        research_subprocess_env(upstream=upstream, input_payload=input_payload)
-        if drone_id == _WEB_RESEARCH_DRONE_ID
-        else {}
-    )
-    if drone_id == _WEB_RESEARCH_DRONE_ID:
-        _log.info(
-            "web_research_drone_run drone_id=%s folder=%s silent_requested=%s",
-            drone_id,
-            folder,
-            silent_requested,
-        )
-
     try:
-        if silent_requested and _is_bundled_web_research_folder(folder):
-            result = _run_web_research_drone_in_process(
-                folder,
-                payload,
-                extra_env=extra_env or None,
-            )
-        else:
-            result = _run_command_drone(
-                folder,
-                drone.entrypoint,
-                payload,
-                timeout_seconds=drone.budget.timeout_seconds,
-                cancel_event=run.cancel_event,
-                extra_env=extra_env or None,
-            )
+        result = _run_command_drone(
+            folder,
+            drone.entrypoint,
+            payload,
+            timeout_seconds=drone.budget.timeout_seconds,
+            cancel_event=run.cancel_event,
+        )
         _raw_result = result
         cargo = _extract_cargo(result)
-        if silent_requested:
-            _log_web_research_silent_diagnostic(cargo, _raw_result, folder)
         if isinstance(result, dict) and (
             result.get("cancelled") or result.get("status") == "cancelled"
         ):
@@ -400,11 +356,22 @@ def _run_command_drone(
 
 
 def _is_bundled_web_research_folder(folder: Path) -> bool:
+    """Return True if *folder* is a known web-research drone that can run in-process.
+
+    Matches the bundled source as well as workspace-registered copies
+    (e.g. ``.aura/drones/web-research/``).  Previously the check was an
+    exact-path comparison against ``bundled/`` only, which meant every
+    workspace-registered copy fell through to the subprocess path and
+    spawned a console window.
+    """
     bundled = Path(__file__).resolve().parent / "bundled" / "web-research"
     try:
-        return folder.resolve() == bundled.resolve()
+        if folder.resolve() == bundled.resolve():
+            return True
     except OSError:
-        return False
+        pass
+    # Workspace-registered copy — verify it still has the in-process entrypoint.
+    return (folder / "research_pipeline.py").is_file()
 
 
 def _run_web_research_drone_in_process(

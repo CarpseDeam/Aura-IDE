@@ -69,10 +69,9 @@ def execute_web_research_request(
     if drone is None:
         folder = DroneStore.drone_folder(Path(workspace_root), call.drone_id)
         _log.warning(
-            "answer_only_research_unregistered drone_id=%s folder=%s silent_requested=%s",
+            "answer_only_research_unregistered drone_id=%s folder=%s",
             call.drone_id,
             folder,
-            bool(call.upstream.get("headless")),
         )
         return {
             "ok": False,
@@ -83,10 +82,9 @@ def execute_web_research_request(
 
     folder = DroneStore.drone_folder(Path(workspace_root), call.drone_id)
     _log.info(
-        "answer_only_research_start drone_id=%s folder=%s silent_requested=%s",
+        "answer_only_research_start drone_id=%s folder=%s browser_owned_by_controller=True",
         call.drone_id,
         folder,
-        bool(call.upstream.get("headless")),
     )
     return runner(
         workspace_root=Path(workspace_root),

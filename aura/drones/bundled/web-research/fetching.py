@@ -36,26 +36,6 @@ def _user_provided_url_targets(query: str) -> list[SourceTarget]:
     return targets
 
 
-def _schedule_targets(tags: list[str]) -> list[SourceTarget]:
-    targets: list[SourceTarget] = []
-    if "world_cup" in tags and "schedule" in tags:
-        targets.append(
-            SourceTarget(
-                url="https://www.fifa.com/en/match-center",
-                title="FIFA Match Centre",
-                kind="official_schedule",
-            )
-        )
-        targets.append(
-            SourceTarget(
-                url="https://www.espn.com/soccer/schedule",
-                title="ESPN Soccer Schedule",
-                kind="reputable_schedule",
-            )
-        )
-    return targets
-
-
 def _unique_targets(targets: list[SourceTarget], limit: int = 8) -> list[SourceTarget]:
     seen: set[str] = set()
     unique: list[SourceTarget] = []
@@ -79,20 +59,14 @@ def discover_sources_with_gaps(
     browser_session: BrowserResearchSession | None = None,
 ) -> SourceDiscovery:
     user_targets = _user_provided_url_targets(query)
-    scheduled_targets = _schedule_targets(tags)
     discovered_targets: list[SourceTarget] = []
     gaps: list[str] = []
     route_metadata: dict[str, Any] = {}
-    ddg_fallback_enabled = os.environ.get("_AURA_WEB_RESEARCH_ENABLE_DDG_HTML_FALLBACK") == "1"
 
     if _mock_web_research_enabled():
         discovered_targets = _mock_browser_discovered_targets(query, tags)
     elif os.environ.get("_AURA_WEB_RESEARCH_DISABLE_BROWSER_DISCOVERY") == "1":
         gaps.append("Browser-backed source discovery was disabled for this run.")
-        if ddg_fallback_enabled:
-            fallback_targets, fallback_gaps = _duckduckgo_html_fallback(query, tags)
-            discovered_targets.extend(fallback_targets)
-            gaps.extend(fallback_gaps)
     else:
         owns_session = browser_session is None
         session = browser_session or BrowserResearchSession()
@@ -104,12 +78,8 @@ def discover_sources_with_gaps(
         finally:
             if owns_session:
                 session.close()
-        if not discovered_targets and ddg_fallback_enabled:
-            fallback_targets, fallback_gaps = _duckduckgo_html_fallback(query, tags)
-            discovered_targets.extend(fallback_targets)
-            gaps.extend(fallback_gaps)
 
-    targets = _unique_targets(scheduled_targets + discovered_targets + user_targets)
+    targets = _unique_targets(discovered_targets + user_targets)
     return SourceDiscovery(targets=targets, gaps=gaps, route_metadata=route_metadata)
 
 
@@ -408,37 +378,6 @@ def _extract_links_from_text(text: str) -> list[SourceTarget]:
         if len(links) >= 10:
             break
     return links
-
-
-def _duckduckgo_html_fallback(query: str, tags: list[str]) -> tuple[list[SourceTarget], list[str]]:
-    targets: list[SourceTarget] = []
-    gaps: list[str] = []
-    for search_query in build_search_queries(query, tags):
-        encoded = urllib.parse.quote(search_query)
-        search_url = f"https://html.duckduckgo.com/html/?q={encoded}"
-        req = urllib.request.Request(
-            search_url,
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Aura/1.0"},
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=10) as response:
-                html = response.read().decode("utf-8", errors="ignore")
-        except Exception as exc:
-            gaps.append(f"DuckDuckGo HTML fallback failed for '{search_query}': {exc}")
-            continue
-
-        title_match = re.search(r"(?is)<title[^>]*>(.*?)</title>", html)
-        title = _strip_html(title_match.group(1)) if title_match else ""
-        text = _strip_html(html)
-        if is_captcha_or_verification_page(title, search_url, text):
-            if SEARCH_BLOCKED_GAP not in gaps:
-                gaps.append(SEARCH_BLOCKED_GAP)
-            continue
-
-        targets.extend(_extract_links_from_html(html, search_url))
-        if len(targets) >= 8:
-            break
-    return _unique_targets(targets), gaps
 
 
 def _fetch_source(target: SourceTarget, now: dt.datetime) -> FetchedSource:

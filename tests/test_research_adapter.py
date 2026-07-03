@@ -1,3 +1,11 @@
+"""Tests for the research adapter and folder-runner web-research seam.
+
+These now verify that web-research no longer carries silent/headless
+browser flags — the ResearchBrowserController is the sole browser owner.
+"""
+
+from __future__ import annotations
+
 import json
 import sys
 from types import SimpleNamespace
@@ -10,23 +18,30 @@ from aura.research.adapter import WEB_RESEARCH_DRONE_ID, build_adapter_call
 from aura.research.request import build_research_request
 
 
-def test_answer_only_adapter_call_requests_silent_headless_research():
+def test_answer_only_adapter_call_does_not_set_headless():
+    """The adapter still builds a call, but browser flags are inert defaults.
+
+    The controller, not the upstream contract, owns browser decisions.
+    """
     request = build_research_request("Are there any World Cup matches today?")
 
     call = build_adapter_call(request)
 
     assert call.drone_id == WEB_RESEARCH_DRONE_ID
     assert call.goal == "Are there any World Cup matches today?"
-    assert call.upstream["research_ui"]["ui_mode"] == "silent"
-    assert call.upstream["research_ui"]["headless"] is True
-    assert call.upstream["research_ui"]["visible"] is False
-    assert call.upstream["headless"] is True
+    # The upstream contains inert defaults — not silent/headless
+    assert call.upstream["research_ui"]["ui_mode"] == "visible"
+    assert call.upstream["research_ui"]["headless"] is False
+    assert call.upstream["research_ui"]["visible"] is True
+    # Top-level flags are also inert
+    assert call.upstream.get("headless") is False
 
 
-def test_web_research_folder_runner_passes_silent_intent_in_payload_and_env(
+def test_web_research_folder_runner_no_longer_passes_silent_env(
     tmp_path,
     monkeypatch,
 ):
+    """Folder runner no longer sets silent research env vars."""
     folder = tmp_path / WEB_RESEARCH_DRONE_ID
     folder.mkdir()
     probe = folder / "probe.py"
@@ -47,7 +62,6 @@ def test_web_research_folder_runner_passes_silent_intent_in_payload_and_env(
                 "            'AURA_WEB_RESEARCH_HEADLESS': os.environ.get('AURA_WEB_RESEARCH_HEADLESS'),",
                 "            'AURA_WEB_RESEARCH_VISIBLE': os.environ.get('AURA_WEB_RESEARCH_VISIBLE'),",
                 "        },",
-                "        'route_used': {'browser_discovery': {'browser_visible': False}},",
                 "    },",
                 "}))",
             ]
@@ -104,78 +118,57 @@ def test_web_research_folder_runner_passes_silent_intent_in_payload_and_env(
 
     payload = result["cargo"]["payload"]
     env = result["cargo"]["env"]
-    assert payload["upstream"]["research_ui"]["ui_mode"] == "silent"
-    assert payload["upstream"]["research_ui"]["headless"] is True
-    assert payload["upstream"]["research_ui"]["visible"] is False
-    assert env["AURA_RESEARCH_UI_MODE"] == "silent"
-    assert env["AURA_WEB_RESEARCH_HEADLESS"] == "1"
-    assert env["AURA_WEB_RESEARCH_VISIBLE"] == "0"
+    # Upstream still flows through, but with inert (visible) defaults
+    assert payload["upstream"]["research_ui"]["ui_mode"] == "visible"
+    assert payload["upstream"]["research_ui"]["headless"] is False
+    # No env vars are set by the controller-ownership path
+    assert env["AURA_RESEARCH_UI_MODE"] is None
+    assert env["AURA_WEB_RESEARCH_HEADLESS"] is None
+    assert env["AURA_WEB_RESEARCH_VISIBLE"] is None
 
 
-def test_bundled_silent_web_research_runs_in_process_without_popen(
+def test_web_research_now_runs_via_subprocess(
     tmp_path,
     monkeypatch,
 ):
+    """Web research now always takes the subprocess path (no in-process special case)."""
     folder = tmp_path / WEB_RESEARCH_DRONE_ID
     folder.mkdir()
-    for name in ("research_pipeline.py", "browser_search.py"):
-        (folder / name).write_text("", encoding="utf-8")
-    (folder / "drone.json").write_text(
-        json.dumps(
-            {
-                "name": "Web Research",
-                "description": "Probe",
-                "instructions": "Probe",
-                "kind": "command",
-                "write_policy": "read_only",
-                "entrypoint": {
-                    "kind": "command",
-                    "command": [sys.executable, "probe.py"],
-                    "protocol": "json-stdio",
-                },
-                "budget": {"timeout_seconds": 30},
-                "output_contract": {
-                    "type": "object",
-                    "properties": {
-                        "ok": {"type": "boolean"},
-                        "summary": {"type": "string"},
-                    },
-                    "required": ["ok", "summary"],
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
+    (folder / "drone.json").write_text(json.dumps({
+        "name": "Web Research",
+        "description": "Probe",
+        "instructions": "Probe",
+        "kind": "command",
+        "write_policy": "read_only",
+        "entrypoint": {
+            "kind": "command",
+            "command": ["python", "probe.py"],
+            "protocol": "json-stdio",
+        },
+        "budget": {"timeout_seconds": 30},
+        "output_contract": {
+            "type": "object",
+            "properties": {"ok": {"type": "boolean"}, "summary": {"type": "string"}},
+            "required": ["ok", "summary"],
+        },
+    }), encoding="utf-8")
+
     monkeypatch.setattr(
         "aura.drones.folder_runner.DroneStore.drone_folder",
         lambda workspace_root, drone_id: folder,
     )
-    monkeypatch.setattr(
-        "aura.drones.folder_runner.subprocess.Popen",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("silent bundled web-research must not spawn Popen")
-        ),
-    )
     captured = {}
 
-    def fake_in_process(folder_arg, payload_arg, *, extra_env=None):
+    def fake_command_drone(folder_arg, entrypoint, payload, **kw):
         captured["folder"] = folder_arg
-        captured["payload"] = payload_arg
-        captured["extra_env"] = extra_env
-        return {
-            "ok": True,
-            "summary": "done",
-            "route_used": {"browser_discovery": {"browser_visible": False}},
-        }
+        captured["payload"] = payload
+        return {"ok": True, "summary": "done"}
 
     monkeypatch.setattr(
-        "aura.drones.folder_runner._run_web_research_drone_in_process",
-        fake_in_process,
+        "aura.drones.folder_runner._run_command_drone",
+        fake_command_drone,
     )
-    monkeypatch.setattr(
-        "aura.drones.folder_runner._is_bundled_web_research_folder",
-        lambda folder_arg: True,
-    )
+
     drone = DroneDefinition(
         id=WEB_RESEARCH_DRONE_ID,
         name="Web Research",
@@ -207,10 +200,8 @@ def test_bundled_silent_web_research_runs_in_process_without_popen(
     )
 
     assert result["ok"] is True
+    # Verifies _run_command_drone was called (subprocess path), not in-process
     assert captured["folder"] == folder
-    assert captured["payload"]["upstream"]["research_ui"]["ui_mode"] == "silent"
-    assert captured["extra_env"]["AURA_RESEARCH_UI_MODE"] == "silent"
-    assert captured["extra_env"]["AURA_WEB_RESEARCH_HEADLESS"] == "1"
 
 
 def test_folder_drone_subprocess_receives_no_window_kwargs(tmp_path, monkeypatch):
@@ -250,7 +241,7 @@ def test_folder_drone_subprocess_receives_no_window_kwargs(tmp_path, monkeypatch
     assert captured["kwargs"]["startupinfo"] is startupinfo
 
 
-def test_background_runner_preserves_web_research_silent_upstream(
+def test_background_runner_preserves_web_research_upstream(
     tmp_path,
     monkeypatch,
 ):
@@ -294,12 +285,12 @@ def test_background_runner_preserves_web_research_silent_upstream(
     runner.get(job.run_id, wait_seconds=5)
     runner.shutdown()
 
-    assert captured["upstream"]["research_ui"]["ui_mode"] == "silent"
-    assert captured["upstream"]["research_ui"]["headless"] is True
-    assert captured["upstream"]["research_ui"]["visible"] is False
+    # Upstream flows through, but the browser flags are inert defaults
+    assert captured["upstream"]["research_ui"]["ui_mode"] == "visible"
+    assert captured["upstream"]["research_ui"]["headless"] is False
 
 
-def test_planner_launch_read_only_web_research_passes_silent_upstream(
+def test_planner_launch_read_only_web_research_no_longer_sets_silent_upstream(
     tmp_path,
     monkeypatch,
 ):
@@ -351,6 +342,7 @@ def test_planner_launch_read_only_web_research_passes_silent_upstream(
     )
 
     assert result.ok is True
-    assert captured["upstream"]["research_ui"]["ui_mode"] == "silent"
-    assert captured["upstream"]["research_ui"]["headless"] is True
-    assert captured["upstream"]["research_ui"]["visible"] is False
+    # The upstream no longer has silent/headless browser flags
+    assert "research_ui" not in captured["upstream"]
+    # The research_request is present but without ui_mode/headless
+    assert captured["upstream"]["research_request"]["question"] == "Are there any World Cup matches today?"
