@@ -48,8 +48,10 @@ CODE_QUALITY_CONTRACT = """### code_quality_contract
 - Code must compile or parse when applicable.
 - Do not leave placeholders, stubs, incomplete implementations, or fake fallbacks.
 - Preserve public behavior unless the spec requires a change.
-- Integrate with existing patterns, imports, and types.
-- Prefer narrow edits over broad rewrites.
+- The current contents of your target files are provided in context. Read them before editing.
+- Use the real imports, types, and helpers that already exist. Never invent an API, re-declare a constant, or re-implement a helper the codebase already provides.
+- Do not imitate existing structure for its own sake. Do not extend god files, copy ceremony, or reproduce over-engineering. Put each change where responsibility belongs and leave the code better-shaped than you found it.
+- Prefer narrow edits over broad rewrites, but a narrow edit in the wrong place is not correct — split or relocate when the right home does not exist.
 - Do not swallow errors silently.
 - Keep validation focused on the changed surface."""
 
@@ -124,6 +126,11 @@ _CODING_TASK_KINDS = {
     "cleanup",
     "refactor",
 }
+
+_TARGET_FILE_CHAR_CAP = 24_000
+_TARGET_FILES_TOTAL_CAP = 64_000
+_TARGET_FILE_TRUNCATION_MARKER = "[truncated — read the rest with tools if needed]"
+_TARGET_FILES_TOTAL_CAP_MARKER = "[target file contents total cap reached; omitted files: {files}]"
 
 
 @dataclass(frozen=True)
@@ -260,6 +267,12 @@ CONTEXT_SOURCES: tuple[ContextSource, ...] = (
         kind="workspace_structure",
         roles=(RuntimeRole.PLANNER, RuntimeRole.WORKER, RuntimeRole.SINGLE),
         reason="repository structure overview",
+    ),
+    ContextSource(
+        source_id="target_file_contents",
+        kind="workspace_files",
+        roles=(RuntimeRole.WORKER, RuntimeRole.SINGLE),
+        reason="live contents of the files this step edits",
     ),
     ContextSource(
         source_id="planner_dispatch_contract",
@@ -458,7 +471,109 @@ def _load_source_text(
         if "No Python/TypeScript files found." in repo_map:
             return "", "no Python/TypeScript files found"
         return repo_map, source.reason
+    if source.source_id == "target_file_contents":
+        return _load_target_file_contents(workspace_root, target_files)
     return "", "unknown context source"
+
+
+def _load_target_file_contents(
+    workspace_root: Path | None,
+    target_files: tuple[str, ...] | None,
+) -> tuple[str, str]:
+    if workspace_root is None:
+        return "", "no workspace root"
+    if not target_files:
+        return "", "no target files"
+
+    blocks: list[str] = []
+    omitted_files: list[str] = []
+    loaded_chars = 0
+
+    for index, raw_path in enumerate(target_files):
+        resolved = _resolve_target_file_path(workspace_root, raw_path)
+        if resolved is None:
+            continue
+        path, relpath = resolved
+        if not path.is_file():
+            continue
+        if loaded_chars >= _TARGET_FILES_TOTAL_CAP:
+            omitted_files.extend(
+                _remaining_target_file_labels(workspace_root, target_files[index:])
+            )
+            break
+
+        try:
+            contents = path.read_text(encoding="utf-8")
+        except (OSError, PermissionError, UnicodeError):
+            continue
+
+        remaining = _TARGET_FILES_TOTAL_CAP - loaded_chars
+        file_text = contents[: min(len(contents), _TARGET_FILE_CHAR_CAP, remaining)]
+        loaded_chars += len(file_text)
+
+        marker_lines: list[str] = []
+        if len(contents) > len(file_text):
+            if len(file_text) >= _TARGET_FILE_CHAR_CAP:
+                marker_lines.append(_TARGET_FILE_TRUNCATION_MARKER)
+            elif loaded_chars >= _TARGET_FILES_TOTAL_CAP:
+                marker_lines.append(
+                    "[truncated because target file contents total cap was reached; read the rest with tools if needed]"
+                )
+
+        block_text = file_text
+        if marker_lines:
+            block_text = block_text.rstrip("\n") + "\n" + "\n".join(marker_lines)
+        blocks.append(f"### Target file: {relpath}\n```\n{block_text}\n```")
+
+        if loaded_chars >= _TARGET_FILES_TOTAL_CAP:
+            omitted_files.extend(
+                _remaining_target_file_labels(workspace_root, target_files[index + 1 :])
+            )
+            break
+
+    if omitted_files:
+        blocks.append(_TARGET_FILES_TOTAL_CAP_MARKER.format(files=", ".join(omitted_files)))
+
+    if not blocks:
+        return "", "no readable target files"
+    return "\n\n".join(blocks), "live contents of the files this step edits"
+
+
+def _resolve_target_file_path(
+    workspace_root: Path,
+    raw_path: str,
+) -> tuple[Path, str] | None:
+    path_text = str(raw_path or "").strip()
+    if not path_text:
+        return None
+
+    try:
+        root = workspace_root.resolve()
+        candidate = Path(path_text)
+        if not candidate.is_absolute():
+            candidate = root / candidate
+        resolved = candidate.resolve()
+        relpath = resolved.relative_to(root).as_posix()
+    except (OSError, ValueError):
+        return None
+    if not relpath:
+        return None
+    return resolved, relpath
+
+
+def _remaining_target_file_labels(
+    workspace_root: Path,
+    target_files: tuple[str, ...],
+) -> list[str]:
+    labels: list[str] = []
+    for raw_path in target_files:
+        resolved = _resolve_target_file_path(workspace_root, raw_path)
+        if resolved is None:
+            continue
+        path, relpath = resolved
+        if path.is_file():
+            labels.append(relpath)
+    return labels
 
 
 def _load_quality_contract(
