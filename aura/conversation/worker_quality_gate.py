@@ -53,7 +53,7 @@ def handle_worker_quality_gate(
         changed_files,
         diff_text,
         validation_passed=True,
-        expected_files=state.dispatched_target_files,
+        expected_files=state.dispatched_target_files or None,
     )
     state.last_quality_findings = findings_to_receipt(decision.findings)
 

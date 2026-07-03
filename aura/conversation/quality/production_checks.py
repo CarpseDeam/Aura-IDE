@@ -15,14 +15,14 @@ _RUNTIME_DEBUG_PATTERNS = (
     ("breakpoint()", re.compile(r"\bbreakpoint\s*\(\s*\)")),
     ("pdb.set_trace", re.compile(r"\bpdb\.set_trace\b")),
 )
-_TEMP_TEXT_MARKERS = (
-    "diagnostic",
-    "debug probe",
-    "event probe",
-    "temporary probe",
-    "todo: remove",
-    "hack",
-    "xxx",
+_TEMP_TEXT_PATTERNS = (
+    ("DIAGNOSTIC", re.compile(r"\bDIAGNOSTIC\b")),
+    ("debug probe", re.compile(r"debug probe", re.IGNORECASE)),
+    ("event probe", re.compile(r"event probe", re.IGNORECASE)),
+    ("temporary probe", re.compile(r"temporary probe", re.IGNORECASE)),
+    ("TODO: remove", re.compile(r"TODO:\s*remove", re.IGNORECASE)),
+    ("HACK", re.compile(r"\bHACK\b")),
+    ("XXX", re.compile(r"\bXXX\b")),
 )
 _PLACEHOLDER_PATTERNS = (
     ("NotImplementedError", re.compile(r"\bNotImplementedError\b")),
@@ -184,9 +184,8 @@ def _runtime_debug_marker(text: str) -> str:
 
 
 def _temporary_text_marker(text: str) -> str:
-    lowered = text.lower()
-    for marker in _TEMP_TEXT_MARKERS:
-        if marker in lowered:
+    for marker, pattern in _TEMP_TEXT_PATTERNS:
+        if pattern.search(text):
             return marker
     return ""
 

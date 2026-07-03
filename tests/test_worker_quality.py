@@ -29,6 +29,44 @@ def test_evaluate_worker_quality_flags_debug_temp_production_code(tmp_path: Path
     assert _has_finding(decision, "temporary_production_code", "error")
 
 
+def test_evaluate_worker_quality_does_not_flag_normal_diagnostic_wording(
+    tmp_path: Path,
+):
+    decision = evaluate_worker_quality(
+        tmp_path,
+        ["aura/service.py"],
+        _diff("aura/service.py", [
+            'message = "Diagnostic command completed"',
+            'summary = "Collected diagnostics for the failed run"',
+        ]),
+        validation_passed=True,
+    )
+
+    assert not _has_finding(decision, "temporary_production_code")
+
+
+def test_evaluate_worker_quality_flags_explicit_temp_probe_markers(tmp_path: Path):
+    decision = evaluate_worker_quality(
+        tmp_path,
+        ["aura/service.py"],
+        _diff("aura/service.py", [
+            "# DIAGNOSTIC: temporary state dump",
+            "# debug probe for worker activity",
+            "# event probe marker",
+            "# TODO: remove before release",
+        ]),
+        validation_passed=True,
+    )
+
+    findings = [
+        finding
+        for finding in decision.findings
+        if finding.kind == "temporary_production_code"
+    ]
+    markers = {finding.evidence["marker"] for finding in findings}
+    assert {"DIAGNOSTIC", "debug probe", "event probe", "TODO: remove"} <= markers
+
+
 def test_evaluate_worker_quality_ignores_markers_in_tests_and_docs(tmp_path: Path):
     diff_text = "\n".join([
         _diff("tests/test_service.py", ['print("debug")']),

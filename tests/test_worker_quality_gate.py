@@ -119,6 +119,33 @@ def test_worker_quality_gate_passes_dispatch_scope_to_evaluator(
     assert captured["expected_files"] == ["aura/expected.py"]
 
 
+def test_worker_quality_gate_passes_none_for_empty_dispatch_scope(
+    tmp_path: Path,
+    monkeypatch,
+):
+    state = _state_with_write()
+    state.dispatched_target_files = []
+    history = History()
+    captured = {}
+
+    def fake_evaluate(*args, **kwargs):
+        captured["expected_files"] = kwargs.get("expected_files")
+        return _clean_decision()
+
+    _prepare_gate(monkeypatch, tmp_path, _clean_decision())
+    monkeypatch.setattr(worker_quality_gate, "evaluate_worker_quality", fake_evaluate)
+
+    worker_quality_gate.handle_worker_quality_gate(
+        state=state,
+        workspace_root=tmp_path,
+        history=history,
+        on_event=lambda event: None,
+    )
+
+    assert captured["expected_files"] is None
+    assert state.last_quality_ok_fingerprint == "clean-fingerprint"
+
+
 def _state_with_write() -> _SendState:
     state = _SendState(mode="worker", research_policy=None)
     state.worker_app_writes.add("aura/changed.py")
