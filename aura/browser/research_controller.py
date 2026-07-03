@@ -334,11 +334,22 @@ class ResearchBrowserController:
                 self._session.active_page_title = self._page.title() or ""
             except Exception:
                 pass
-        # Count pages for session state
+        # Count pages and locate active page index from flattened page list
+        self._session.active_page_index = -1
         if self._browser is not None:
             try:
-                count = sum(len(list(ctx.pages)) for ctx in self._browser.contexts)
-                self._session.page_count = count
+                all_pages: list[Any] = []
+                for ctx in self._browser.contexts:
+                    try:
+                        all_pages.extend(list(ctx.pages))
+                    except Exception:
+                        pass
+                self._session.page_count = len(all_pages)
+                if self._page is not None:
+                    for i, p in enumerate(all_pages):
+                        if p is self._page:
+                            self._session.active_page_index = i
+                            break
             except Exception:
                 pass
 
@@ -378,12 +389,23 @@ class ResearchBrowserController:
         """
         # --- reuse existing healthy session ---
         if self._session_is_healthy():
+            self._sync_session_state()
             self._session.reused_existing = True
             self._session.last_operation = "start"
-            return BrowserReceipt(browser_executable=self._browser_executable,
-                                  browser_profile_dir=str(self._profile_path) if self._profile_path else "",
-                                  browser_pid=self.browser_pid, cdp_url=self._cdp_url or "",
-                                  browser_ready=True, navigation_status="not_started")
+            return BrowserReceipt(
+                operation="start", phase="reuse",
+                browser_executable=self._browser_executable,
+                browser_profile_dir=str(self._profile_path) if self._profile_path else "",
+                browser_pid=self.browser_pid, cdp_url=self._cdp_url or "",
+                browser_ready=True, navigation_status="not_started",
+                session_id=self._session.session_id,
+                started_at=self._session.started_at,
+                reused_existing=True,
+                page_count=self._session.page_count,
+                page_index=self._session.active_page_index,
+                final_active_url=self._session.active_page_url,
+                page_title=self._session.active_page_title,
+            )
 
         # --- stale session cleanup ---
         if self._started and not self._session_is_healthy():
@@ -474,6 +496,16 @@ class ResearchBrowserController:
         self._session.connected = True
         self._session.last_operation = "start"
         self._session.last_phase = "complete"
+        # Sync page state before populating the receipt
+        self._sync_session_state()
+        receipt.operation = "start"
+        receipt.phase = "complete"
+        receipt.session_id = self._session.session_id
+        receipt.started_at = self._session.started_at
+        receipt.page_count = self._session.page_count
+        receipt.page_index = self._session.active_page_index
+        receipt.final_active_url = self._session.active_page_url
+        receipt.page_title = self._session.active_page_title
         _log.info(
             "research_browser_started executable=%s port=%d profile=%s session=%s",
             self._browser_executable,
@@ -617,24 +649,77 @@ class ResearchBrowserController:
         self._process = None
 
     def _acquire_page(self) -> None:
-        """Get an existing page or create one."""
+        """Acquire a page using the anti-blank-slab policy.
+
+        Policy (in priority order):
+        1. Keep the current ``_page`` if it is still usable.
+        2. Prefer an existing non-blank page.
+        3. Use an existing blank page.
+        4. Create a new page *only* when no pages exist at all.
+
+        Blank URLs are ``""``, ``"about:blank"``, and browser new-tab pages.
+        """
         if self._browser is None:
             raise CdpConnectError("No browser connected.")
+
+        _BLANK_PREFIXES = ("chrome://newtab", "chrome://new-tab", "about:blank")
+        _BLANK_EXACT = frozenset({"", "about:blank"})
+
+        def _is_blank(p: Any) -> bool:
+            try:
+                u: str = (p.url or "").strip()
+                if u in _BLANK_EXACT:
+                    return True
+                if u.startswith(_BLANK_PREFIXES):
+                    return True
+                return False
+            except Exception:
+                return True  # treat unreachable as blank / discardable
+
+        def _is_usable(p: Any) -> bool:
+            try:
+                p.url  # raises if page is closed / detached
+                return True
+            except Exception:
+                return False
+
+        # (1) Keep current _page if still usable
+        if self._page is not None and _is_usable(self._page):
+            return
+
+        # Flatten all pages across contexts
+        all_pages: list[Any] = []
+        try:
+            for ctx in self._browser.contexts:
+                try:
+                    all_pages.extend(list(ctx.pages))
+                except Exception:
+                    pass
+        except Exception:
+            raise CdpConnectError("Cannot access browser contexts.")
+
+        # (2) Prefer an existing non-blank page
+        for p in all_pages:
+            if _is_usable(p) and not _is_blank(p):
+                self._page = p
+                return
+
+        # (3) Use an existing blank page
+        for p in all_pages:
+            if _is_usable(p):
+                self._page = p
+                return
+
+        # (4) Create a new page only when no pages exist
         try:
             contexts = self._browser.contexts
-            if contexts:
-                pages = contexts[0].pages
-                if pages:
-                    self._page = pages[0]
-                    return
-            # No pages exist yet — create one
             if contexts:
                 self._page = contexts[0].new_page()
             else:
                 ctx = self._browser.new_context(
                     no_viewport=True,
                     user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                                "AppleWebKit/537.36")
+                                "AppleWebKit/537.36"),
                 )
                 self._page = ctx.new_page()
         except Exception as exc:

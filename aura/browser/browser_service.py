@@ -262,25 +262,55 @@ class AuraBrowserService:
     # -- observation API ---------------------------------------------------
 
     def observe(self) -> BrowserReceipt:
-        """Return browser-fact observation: URL, title, visible text, links."""
+        """Return browser-fact observation: URL, title, visible text, links.
+
+        Each extraction phase runs independently so a partial failure
+        (e.g. visible-text times out while URL succeeds) produces
+        ``observation_status="partial"`` with per-phase errors.
+        """
         r = self._make_receipt("observe", "observe")
         page = self._ctrl._page
         if not self.started or page is None:
             return self._fail(r, "observe", "No active page.")
         r.browser_ready = True
+
+        # -- URL ---------------------------------------------------------
         try:
             r.final_active_url = page.url or ""
+        except Exception as exc:
+            r.phase_errors["observe_url"] = str(exc)
+
+        # -- Title -------------------------------------------------------
+        try:
             r.page_title = page.title() or ""
+        except Exception as exc:
+            r.phase_errors["observe_title"] = str(exc)
+
+        # -- Visible text ------------------------------------------------
+        try:
             text = self._visible_text(page)
-            links = self._visible_links(page)
             r.metadata["visible_text"] = text
             r.metadata["visible_text_length"] = len(text)
+        except Exception as exc:
+            r.phase_errors["observe_text"] = str(exc)
+            r.metadata.setdefault("visible_text", "")
+            r.metadata.setdefault("visible_text_length", 0)
+
+        # -- Visible links -----------------------------------------------
+        try:
+            links = self._visible_links(page)
             r.metadata["links"] = [{"text": l["text"], "href": l["href"]} for l in links]
             r.metadata["link_count"] = len(links)
-            r.observation_status = "success"
         except Exception as exc:
-            r.phase_errors["observe"] = str(exc)
+            r.phase_errors["observe_links"] = str(exc)
+            r.metadata.setdefault("links", [])
+            r.metadata.setdefault("link_count", 0)
+
+        # -- Status ------------------------------------------------------
+        if r.phase_errors:
             r.observation_status = "partial"
+        else:
+            r.observation_status = "success"
         return self._ok(r)
 
     def extract_visible_text(self) -> BrowserReceipt:
@@ -394,7 +424,12 @@ class AuraBrowserService:
     })
 
     def _ok(self, r: BrowserReceipt) -> BrowserReceipt:
-        """Sync session facts into the receipt after a successful operation."""
+        """Sync session facts into the receipt after a successful operation.
+
+        Does *not* overwrite a non-default status — if the caller already
+        set ``observation_status`` to ``"partial"`` or ``action_status`` to
+        a specific value, that value is preserved.
+        """
         s = self.session
         r.page_index = s.active_page_index
         r.page_count = s.page_count
@@ -402,9 +437,9 @@ class AuraBrowserService:
             r.final_active_url = s.active_page_url
         if not r.page_title:
             r.page_title = s.active_page_title
-        if r.operation in self._OBSERVATION_OPS:
+        if r.operation in self._OBSERVATION_OPS and r.observation_status == "not_started":
             r.observation_status = "success"
-        if r.operation in self._ACTION_OPS:
+        if r.operation in self._ACTION_OPS and r.action_status == "not_started":
             r.action_status = "success"
         return r
 
