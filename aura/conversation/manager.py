@@ -112,6 +112,9 @@ _ALLOWED_ZERO_WORK_FAILURE_PREFIXES = (
     "permission_",
 )
 
+WORKER_FLOW_ZERO_WORK_RECOVERY_BUDGET = 3
+WORKER_FLOW_THRASH_RECOVERY_BUDGET = 3
+
 _ALLOWED_ZERO_WORK_BLOCKER_RE = re.compile(
     r"\b(?:required\s+)?(?:file|path|directory)\b.{0,80}\b"
     r"(?:missing|not\s+found|does\s+not\s+exist|unavailable)\b|"
@@ -478,7 +481,7 @@ class ConversationManager:
             if _worker_has_zero_applied_writes(state) and not _worker_has_attempted_write(state):
                 if _candidate_final_has_real_zero_work_blocker(state.candidate_final_message):
                     return "none"
-                if not state.worker_flow_zero_work_recovery_sent:
+                if state.worker_flow_zero_work_recovery_count < WORKER_FLOW_ZERO_WORK_RECOVERY_BUDGET:
                     self._append_worker_zero_work_recovery(
                         state,
                         reason=reason,
@@ -495,9 +498,18 @@ class ConversationManager:
                     details={
                         "reason": reason,
                         "steering": steering,
+                        "recovery_count": state.worker_flow_zero_work_recovery_count,
+                        "recovery_budget": WORKER_FLOW_ZERO_WORK_RECOVERY_BUDGET,
                     },
                 )
                 return "finished"
+            if state.worker_flow_thrash_recovery_count < WORKER_FLOW_THRASH_RECOVERY_BUDGET:
+                self._append_worker_thrash_recovery(
+                    state,
+                    reason=reason,
+                    steering=steering,
+                )
+                return "nudged"
             self._finish_worker_unrecoverable(
                 on_event,
                 failure_class="worker_flow_thrash",
@@ -509,11 +521,13 @@ class ConversationManager:
                     "reason": reason,
                     "steering": steering,
                     "counts": state.limits.to_dict(),
+                    "recovery_count": state.worker_flow_thrash_recovery_count,
+                    "recovery_budget": WORKER_FLOW_THRASH_RECOVERY_BUDGET,
                 },
             )
             return "finished"
         self._history.append_user_text(steering)
-        state.worker_flow_nudge_sent = True
+        state.worker_flow_nudge_count += 1
         return "nudged"
 
     def _handle_worker_flow_progress_continuation(
@@ -547,7 +561,7 @@ class ConversationManager:
             return "none"
         if _candidate_final_has_real_zero_work_blocker(state.candidate_final_message):
             return "none"
-        if not state.worker_flow_zero_work_recovery_sent:
+        if state.worker_flow_zero_work_recovery_count < WORKER_FLOW_ZERO_WORK_RECOVERY_BUDGET:
             self._append_worker_zero_work_recovery(
                 state,
                 reason=state.worker_flow_last_reason or "zero_work_final",
@@ -564,6 +578,8 @@ class ConversationManager:
             details={
                 "reason": state.worker_flow_last_reason or "zero_work_final",
                 "steering": state.worker_flow_last_steering,
+                "recovery_count": state.worker_flow_zero_work_recovery_count,
+                "recovery_budget": WORKER_FLOW_ZERO_WORK_RECOVERY_BUDGET,
             },
         )
         return "finished"
@@ -575,17 +591,54 @@ class ConversationManager:
         reason: str,
         steering: str,
     ) -> None:
+        count = state.worker_flow_zero_work_recovery_count + 1
         details = [
             WORKER_FLOW_ZERO_WORK_RECOVERY_TEXT,
             "",
             "Internal recovery context:",
             f"- worker_flow_reason: {reason}",
+            f"- recovery_attempt: {count}/{WORKER_FLOW_ZERO_WORK_RECOVERY_BUDGET}",
+        ]
+        if count > 1:
+            details[2:2] = [
+                (
+                    "This is a repeated internal continuation. Use existing evidence; "
+                    "do not read broadly, do not summarize, and do not stop unless "
+                    "you can name a concrete external blocker."
+                ),
+                "",
+            ]
+        if steering:
+            details.append(f"- last_steering: {steering}")
+        self._history.append_user_text("\n".join(details))
+        state.worker_flow_zero_work_recovery_count = count
+        state.worker_flow_nudge_count += 1
+        state.worker_flow_last_reason = reason
+        state.worker_flow_last_steering = steering
+
+    def _append_worker_thrash_recovery(
+        self,
+        state: _SendState,
+        *,
+        reason: str,
+        steering: str,
+    ) -> None:
+        count = state.worker_flow_thrash_recovery_count + 1
+        details = [
+            "Worker Flow internal continuation:",
+            "Use the context already gathered. Do not restart orientation or restate the plan.",
+            "Choose the next smallest safe edit, make it now, and validate it.",
+            "If no safe edit is possible, return a real blocker with the exact missing file, permission, tool, or dispatch mismatch.",
+            "",
+            "Internal recovery context:",
+            f"- worker_flow_reason: {reason}",
+            f"- recovery_attempt: {count}/{WORKER_FLOW_THRASH_RECOVERY_BUDGET}",
         ]
         if steering:
             details.append(f"- last_steering: {steering}")
         self._history.append_user_text("\n".join(details))
-        state.worker_flow_zero_work_recovery_sent = True
-        state.worker_flow_nudge_sent = True
+        state.worker_flow_thrash_recovery_count = count
+        state.worker_flow_nudge_count += 1
         state.worker_flow_last_reason = reason
         state.worker_flow_last_steering = steering
 

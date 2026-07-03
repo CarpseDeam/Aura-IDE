@@ -61,6 +61,7 @@ class WorkerEventHandler(QObject):
         self._playground = playground
         self._settings = settings
         self._session_usage: dict[str, dict[str, int]] = {}
+        self._active_worker_tool_call_id: str | None = None
         # WorkflowState snapshot — stored from backend emissions only, never
         # constructed or mutated here.
         self._active_workflow: WorkflowState | None = None
@@ -199,6 +200,16 @@ class WorkerEventHandler(QObject):
 
         DispatchSession emits one workerStarted signal per campaign.
         """
+        if self._active_worker_tool_call_id == tool_call_id:
+            _log.info(
+                "worker_started_duplicate_ignored tool_call_id=%s",
+                tool_call_id,
+            )
+            self._dispatch_ui.mark_worker_started(tool_call_id)
+            self.worker_running_changed.emit(True)
+            return
+
+        self._active_worker_tool_call_id = tool_call_id
         self._chat.stop_current_aura()
         # Remove any remaining PlanWriterCard — once the Worker is running,
         # the plan-writing UI is replaced by the Worker Log.  This covers
@@ -254,6 +265,8 @@ class WorkerEventHandler(QObject):
         # in request_dispatch after DispatchSession.run().  No finish() call here.
         if outcome.should_clear_dispatch_card:
             self._dispatch_ui.clear_active_spec_card(tool_call_id)
+        if self._active_worker_tool_call_id == tool_call_id:
+            self._active_worker_tool_call_id = None
         self.worker_running_changed.emit(False)
 
     def _worker_result_metadata(self, tool_call_id: str) -> dict:
@@ -271,6 +284,8 @@ class WorkerEventHandler(QObject):
 
         # Backend _DispatchProxy owns the cancelled snapshot.
         self._dispatch_ui.mark_worker_cancelled(tool_call_id)
+        if self._active_worker_tool_call_id == tool_call_id:
+            self._active_worker_tool_call_id = None
         self.worker_running_changed.emit(False)
 
     # ---- worker content slots --------------------------------------------------
@@ -295,6 +310,8 @@ class WorkerEventHandler(QObject):
         title = f"API Error {status}" if status > 0 else "Worker Error"
         self._playground.add_error(f"{title}: {message}")
         self._dispatch_ui.clear_active_spec_card(tool_call_id)
+        if self._active_worker_tool_call_id == tool_call_id:
+            self._active_worker_tool_call_id = None
 
     def _on_worker_usage(
         self,

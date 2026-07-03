@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
 
-from aura.gui.theme import ACCENT, BG_ALT, BORDER, FG, FG_DIM, SUCCESS
+from aura.gui.theme import BG_ALT, BORDER, FG, FG_DIM, SUCCESS, WARN
 
 
 @dataclass
@@ -30,8 +30,14 @@ class WorkerTodoWidget(QFrame):
 
     _COLOR_BY_STATUS = {
         "pending": FG_DIM,
-        "active": ACCENT,
+        "active": WARN,
         "done": SUCCESS,
+    }
+
+    _TEXT_COLOR_BY_STATUS = {
+        "pending": FG_DIM,
+        "active": WARN,
+        "done": FG_DIM,
     }
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -64,8 +70,8 @@ class WorkerTodoWidget(QFrame):
         )
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 8, 10, 8)
-        layout.setSpacing(6)
+        layout.setContentsMargins(10, 6, 10, 6)
+        layout.setSpacing(4)
 
         title = QLabel("Worker TODO", self)
         title.setObjectName("workerTodoTitle")
@@ -74,7 +80,7 @@ class WorkerTodoWidget(QFrame):
         self._rows_host = QWidget(self)
         self._rows_layout = QVBoxLayout(self._rows_host)
         self._rows_layout.setContentsMargins(0, 0, 0, 0)
-        self._rows_layout.setSpacing(3)
+        self._rows_layout.setSpacing(2)
         layout.addWidget(self._rows_host)
 
         self._rows: dict[str, _TodoRow] = {}
@@ -114,7 +120,7 @@ class WorkerTodoWidget(QFrame):
         row_widget = QWidget(self._rows_host)
         row_layout = QHBoxLayout(row_widget)
         row_layout.setContentsMargins(0, 0, 0, 0)
-        row_layout.setSpacing(7)
+        row_layout.setSpacing(6)
 
         icon = QLabel(row_widget)
         icon.setObjectName("workerTodoIcon")
@@ -135,9 +141,13 @@ class WorkerTodoWidget(QFrame):
         text = str(item.get("text") or "")
         if row.status != status:
             color = self._COLOR_BY_STATUS.get(status, FG_DIM)
+            text_color = self._TEXT_COLOR_BY_STATUS.get(status, FG_DIM)
             row.icon.setText(self._ICON_BY_STATUS.get(status, "□"))
             row.icon.setStyleSheet(f"color: {color};")
-            row.text.setStyleSheet(f"color: {FG_DIM if status == 'done' else FG};")
+            row.text.setStyleSheet(f"color: {text_color};")
+            font = row.text.font()
+            font.setStrikeOut(status == "done")
+            row.text.setFont(font)
             row.status = status
         if row.text_value != text:
             row.text.setText(text)

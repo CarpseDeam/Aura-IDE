@@ -370,6 +370,15 @@ class TestWorkerEventHandlerLifecycle:
         )
         handler._chat._remove_plan_writer_card.assert_called_once_with("tc-1")
 
+    def test_on_worker_started_duplicate_same_campaign_does_not_clear_again(self, handler) -> None:
+        """Duplicate workerStarted for the active campaign is a no-op for reset choreography."""
+        handler._on_worker_started("tc-1")
+        handler._on_worker_started("tc-1")
+
+        assert handler._playground.begin_assistant.call_count == 1
+        assert handler._chat.stop_current_aura.call_count == 1
+        assert handler._chat._remove_plan_writer_card.call_count == 1
+
     def test_on_worker_started_different_ids_not_blocked(self, handler) -> None:
         """_on_worker_started for different tool_call_ids both proceed."""
         handler._on_worker_started("tc-1")

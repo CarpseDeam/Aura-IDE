@@ -1181,8 +1181,8 @@ WORKER_TODO_TOOL_DEF: dict[str, Any] = {
                 "items": {
                     "type": "array",
                     "description": "Full ordered TODO snapshot. Reuse each row id across updates.",
-                    "minItems": 1,
-                    "maxItems": 9,
+                    "minItems": 3,
+                    "maxItems": 7,
                     "items": {
                         "type": "object",
                         "properties": {

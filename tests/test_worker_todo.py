@@ -68,6 +68,49 @@ class TestWorkerTodoModel:
         assert errors == []
         assert snapshot is not None
 
+    def test_rejects_fewer_than_three_items(self) -> None:
+        for count in (0, 1, 2):
+            payload = {"items": [
+                {"id": f"i{n}", "text": f"Item {n}", "status": "pending"}
+                for n in range(count)
+            ]}
+            snapshot, errors = parse_worker_todo_snapshot(payload)
+            assert snapshot is None
+            assert any("at least 3" in e for e in errors)
+
+    def test_rejects_more_than_seven_items(self) -> None:
+        items = [
+            {"id": f"i{n}", "text": f"Item {n}", "status": "active" if n == 0 else "pending"}
+            for n in range(9)
+        ]
+        payload = {"items": items}
+        snapshot, errors = parse_worker_todo_snapshot(payload)
+        assert snapshot is None
+        assert any("no more than 7" in e for e in errors)
+
+    def test_accepts_exactly_three_items(self) -> None:
+        payload = {"items": [
+            {"id": "a", "text": "First", "status": "done"},
+            {"id": "b", "text": "Second", "status": "active"},
+            {"id": "c", "text": "Third", "status": "pending"},
+        ]}
+        snapshot, errors = parse_worker_todo_snapshot(payload)
+        assert errors == []
+        assert snapshot is not None
+        assert len(snapshot.items) == 3
+
+    def test_accepts_exactly_seven_items(self) -> None:
+        items = [
+            {"id": f"i{n}", "text": f"Item {n}", "status": "done"}
+            for n in range(7)
+        ]
+        items[0]["status"] = "active"
+        payload = {"items": items}
+        snapshot, errors = parse_worker_todo_snapshot(payload)
+        assert errors == []
+        assert snapshot is not None
+        assert len(snapshot.items) == 7
+
 
 class TestWorkerTodoTool:
     def test_worker_catalog_exposes_update_worker_todo(self) -> None:
@@ -151,3 +194,17 @@ class TestWorkerTodoRelay:
         ))
 
         assert activity.snapshot() == []
+
+    def test_invalid_worker_todo_result_is_passive_not_failed_work(self) -> None:
+        relay = WorkerEventRelay(approval_proxy=_ApprovalProxy(), event_bus=EventBus())
+
+        relay.relay("dispatch-1", ToolResult(
+            tool_call_id="todo-tool-1",
+            name=UPDATE_WORKER_TODO_TOOL,
+            ok=False,
+            result=json.dumps({"ok": False, "error": "items must contain at least 3 items"}),
+            extras={"worker_todo": True},
+        ))
+
+        assert relay.tool_results == []
+        assert relay.failed_tool_results == []

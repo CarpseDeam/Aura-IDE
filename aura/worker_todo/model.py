@@ -11,7 +11,8 @@ TODO_PENDING = "pending"
 TODO_ACTIVE = "active"
 TODO_DONE = "done"
 TODO_STATUSES = frozenset({TODO_PENDING, TODO_ACTIVE, TODO_DONE})
-MAX_TODO_ITEMS = 9
+MAX_TODO_ITEMS = 7
+MIN_TODO_ITEMS = 3
 
 
 @dataclass(frozen=True)
@@ -57,8 +58,8 @@ def parse_worker_todo_snapshot(payload: Any) -> tuple[WorkerTodoSnapshot | None,
     raw_items = payload.get("items")
     if not isinstance(raw_items, list):
         return None, ["items must be a list"]
-    if not raw_items:
-        return None, ["items must contain at least one item"]
+    if len(raw_items) < MIN_TODO_ITEMS:
+        return None, [f"items must contain at least {MIN_TODO_ITEMS} items"]
     if len(raw_items) > MAX_TODO_ITEMS:
         return None, [f"items must contain no more than {MAX_TODO_ITEMS} items"]
 

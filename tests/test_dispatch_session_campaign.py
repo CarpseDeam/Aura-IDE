@@ -183,9 +183,98 @@ def test_no_progress_step_stops_campaign_before_next_step():
     result = session.run()
 
     assert result.ok is False
-    assert calls == [("call_dispatch", req.steps[0].goal)]
+    assert calls == [
+        ("call_dispatch", req.steps[0].goal),
+        ("call_dispatch", req.steps[0].goal),
+    ]
     assert ("active", "call_dispatch", "step-2") not in events
     assert [event for event in events if event[0] == "done"] == []
+    assert result.extras["worker_persistence"]["reason"] == "worker_step_no_progress"
+    assert result.extras["worker_persistence"]["no_progress_threshold"] == 2
+
+
+def test_first_recoverable_no_progress_retries_with_attempt_context():
+    req = _request_with_steps()
+    plan = WorkerDispatchPlan(
+        overall_goal=req.goal,
+        visible_summary=req.summary,
+        global_files=list(req.files),
+        steps=list(req.steps),
+    )
+    step_specs: list[str] = []
+    bus = EventBus()
+
+    def run_step(tool_id, step_req, pending):
+        step_specs.append(step_req.spec)
+        if len(step_specs) == 1:
+            return WorkerDispatchResult(
+                ok=False,
+                summary="Worker made no changes.",
+                recoverable=True,
+                needs_followup=True,
+                status=WorkerOutcomeStatus.needs_followup.value,
+                extras={"errors": ["No files were changed."]},
+            )
+        return WorkerDispatchResult(
+            ok=True,
+            summary="Recovered and completed.",
+            status=WorkerOutcomeStatus.completed.value,
+            modified_files=["aura/bridge/_shell_pipeline.py"],
+        )
+
+    session = DispatchSession(
+        tool_call_id="call_dispatch",
+        original_request=req,
+        plan=plan,
+        run_worker_step=run_step,
+        pending=SimpleNamespace(),
+        event_bus=bus,
+    )
+
+    result = session.run()
+
+    assert result.ok is True
+    assert len(step_specs) == 3
+    assert "Worker Persistence Context" not in step_specs[0]
+    assert "Worker Persistence Context" in step_specs[1]
+    assert "Previous summary: Worker made no changes." in step_specs[1]
+
+
+def test_external_blocker_surfaces_without_persistence_retry():
+    req = _request_with_steps()
+    plan = WorkerDispatchPlan(
+        overall_goal=req.goal,
+        visible_summary=req.summary,
+        global_files=list(req.files),
+        steps=list(req.steps),
+    )
+    calls = []
+
+    def run_step(tool_id, step_req, pending):
+        calls.append((tool_id, step_req.goal))
+        return WorkerDispatchResult(
+            ok=False,
+            summary="Permission denied writing required file.",
+            recoverable=True,
+            needs_followup=True,
+            status=WorkerOutcomeStatus.harness_error.value,
+            extras={"terminal_environment_blocker": True},
+        )
+
+    session = DispatchSession(
+        tool_call_id="call_dispatch",
+        original_request=req,
+        plan=plan,
+        run_worker_step=run_step,
+        pending=SimpleNamespace(),
+        event_bus=EventBus(),
+    )
+
+    result = session.run()
+
+    assert result.ok is False
+    assert calls == [("call_dispatch", req.steps[0].goal)]
+    assert result.extras.get("worker_persistence") is None
 
 
 def test_nonfinal_failed_step_missing_applied_does_not_count_as_progress():
@@ -228,7 +317,10 @@ def test_nonfinal_failed_step_missing_applied_does_not_count_as_progress():
     result = session.run()
 
     assert result.ok is False
-    assert calls == [("call_dispatch", req.steps[0].goal)]
+    assert calls == [
+        ("call_dispatch", req.steps[0].goal),
+        ("call_dispatch", req.steps[0].goal),
+    ]
     assert ("active", "call_dispatch", "step-2") not in events
 
 
@@ -272,7 +364,10 @@ def test_nonfinal_failed_step_applied_false_stays_on_step():
     result = session.run()
 
     assert result.ok is False
-    assert calls == [("call_dispatch", req.steps[0].goal)]
+    assert calls == [
+        ("call_dispatch", req.steps[0].goal),
+        ("call_dispatch", req.steps[0].goal),
+    ]
     assert ("active", "call_dispatch", "step-2") not in events
 
 

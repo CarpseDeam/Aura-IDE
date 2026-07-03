@@ -313,11 +313,13 @@ class WorkerEventRelay(QObject):
                     "tool_call_id": ev.tool_call_id,
                     "ok": ev.ok,
                 })
-            # Track all tool results
+            # Track all tool results (passive display tools excluded — they
+            # emit display facts only and must not influence outcome classification)
             tr = self._tool_result_record(ev, parsed)
-            self.tool_results.append(tr)
-            if not ev.ok:
-                self.failed_tool_results.append(tr)
+            if ev.name not in _PASSIVE_DISPLAY_TOOLS:
+                self.tool_results.append(tr)
+                if not ev.ok:
+                    self.failed_tool_results.append(tr)
 
             # Track terminal command results, then classify the subset that is meaningful validation.
             self._terminal_tracker.handle_tool_result(ev.name, parsed)

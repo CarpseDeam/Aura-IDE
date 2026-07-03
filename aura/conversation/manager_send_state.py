@@ -52,8 +52,9 @@ class _SendState:
     worker_recovery_nudge_sent: bool = False
     worker_validation_nudge_sent: bool = False
     worker_final_report_proof_nudge_sent: bool = False
-    worker_flow_nudge_sent: bool = False
-    worker_flow_zero_work_recovery_sent: bool = False
+    worker_flow_nudge_count: int = 0
+    worker_flow_zero_work_recovery_count: int = 0
+    worker_flow_thrash_recovery_count: int = 0
     worker_flow_last_steering: str = ""
     worker_flow_last_reason: str = ""
     worker_quality_nudge_sent: bool = False
@@ -100,3 +101,21 @@ class _SendState:
         self.candidate_final_message = None
         if self.stream_buffer is not None:
             self.stream_buffer.discard()
+
+    @property
+    def worker_flow_nudge_sent(self) -> bool:
+        return self.worker_flow_nudge_count > 0
+
+    @worker_flow_nudge_sent.setter
+    def worker_flow_nudge_sent(self, value: bool) -> None:
+        self.worker_flow_nudge_count = max(1, self.worker_flow_nudge_count) if value else 0
+
+    @property
+    def worker_flow_zero_work_recovery_sent(self) -> bool:
+        return self.worker_flow_zero_work_recovery_count > 0
+
+    @worker_flow_zero_work_recovery_sent.setter
+    def worker_flow_zero_work_recovery_sent(self, value: bool) -> None:
+        self.worker_flow_zero_work_recovery_count = (
+            max(1, self.worker_flow_zero_work_recovery_count) if value else 0
+        )

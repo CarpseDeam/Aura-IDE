@@ -54,7 +54,7 @@ _EmitStarted = Callable[[str], None]
 _EmitFinished = Callable[[str, bool, str, bool, str], None]
 
 MAX_WORKER_STEP_ATTEMPTS = 5
-NO_PROGRESS_FINGERPRINT_THRESHOLD = 1
+NO_PROGRESS_FINGERPRINT_THRESHOLD = 2
 _log = logging.getLogger(__name__)
 
 
@@ -265,6 +265,13 @@ class DispatchSession:
                 *result.modified_files,
                 *_applied_write_paths(result),
             ])
+
+            if result.ok or not _worker_step_failure_is_recoverable(result):
+                return replace(
+                    result,
+                    modified_files=_dedupe([*modified_files, *result.modified_files]),
+                )
+
             result = _with_persistence_metadata(
                 result,
                 attempt_number=attempt_number,
@@ -272,9 +279,6 @@ class DispatchSession:
                 attempts=attempts,
                 modified_files=modified_files,
             )
-
-            if result.ok or not _worker_step_failure_is_recoverable(result):
-                return result
 
             if _step_has_file_progress(result):
                 return _partial_progress_persistence_result(
