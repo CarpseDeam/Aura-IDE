@@ -41,14 +41,15 @@ from aura.gui.conv_persistence import ConversationPersistence
 from aura.gui.debug_report_handler import DebugReportHandler
 from aura.gui.drones.drone_reports_window import DroneReportsWindow
 from aura.gui.edge_rails import EdgeTabRail
-from aura.gui.input_panel import InputPanel, SendPayload
 from aura.gui.gui_event_probe import install_gui_event_probe
+from aura.gui.input_panel import InputPanel, SendPayload
 from aura.gui.left_pane import LeftPane
 from aura.gui.main_window_balance import MainWindowBalanceController
 from aura.gui.main_window_companion import MainWindowCompanionController
 from aura.gui.main_window_drones import MainWindowDroneController
 from aura.gui.main_window_handoff import MainWindowHandoffController
 from aura.gui.main_window_settings import MainWindowSettingsController
+from aura.gui.main_window_signal_wiring import MainWindowSignalWiring
 from aura.gui.main_window_terminal import MainWindowTerminalController
 from aura.gui.main_window_toolbar import MainWindowToolbar
 from aura.gui.main_window_update import MainWindowUpdateController
@@ -128,20 +129,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self._toolbar)
         self._settings_controller = MainWindowSettingsController(self)
         self._debug_report_handler = DebugReportHandler(window=self, parent=self)
-        self._toolbar.new_conversation_requested.connect(self._on_new_conversation)
-        self._toolbar.open_conversation_requested.connect(self._on_open_conversation)
-        self._toolbar.read_only_toggled.connect(self._on_read_only_toggled)
-        self._toolbar.auto_dispatch_toggled.connect(self._settings_controller.on_auto_dispatch_toggled)
-        self._toolbar.auto_approve_toggled.connect(self._settings_controller.on_auto_approve_toggled)
-        self._toolbar.auto_summon_drones_toggled.connect(self._settings_controller.on_auto_summon_drones_toggled)
-        self._toolbar.update_requested.connect(self._on_open_update)
-        self._toolbar.settings_requested.connect(self._settings_controller.open_settings)
-        self._toolbar.logs_requested.connect(self._open_logs_folder)
-        self._toolbar.debug_report_requested.connect(self._debug_report_handler.on_send_debug_report)
-        self._toolbar.minimize_requested.connect(self.showMinimized)
-        self._toolbar.maximize_requested.connect(self._toggle_maximize)
-        self._toolbar.close_requested.connect(self.close)
-
         self._update_controller = MainWindowUpdateController(self._toolbar, parent=self)
 
         # ----- status bar -----
@@ -152,9 +139,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self.setStatusBar(self._status_bar)
 
         self._balance_controller = MainWindowBalanceController(self)
-        self._balance_controller.balance_changed.connect(self._refresh_status_bar)
-        self._status_bar.credits_chip_clicked.connect(self._settings_controller.open_credits_popout)
-
         self._drone_controller = MainWindowDroneController(self)
         self._terminal_controller = MainWindowTerminalController(self)
 
@@ -166,15 +150,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._left_pane = LeftPane(self._workspace_root, parent=self)
         self._left_pane.populate_models(self._settings.planner_provider, self._settings.worker_provider)
         self._workspace_controller = MainWindowWorkspaceController(self)
-        self._left_pane.change_root_requested.connect(self._workspace_controller.on_change_root)
-        self._left_pane.project_selected.connect(self._workspace_controller._on_project_selected)
-        self._left_pane.new_project_requested.connect(self._workspace_controller.on_create_new_project)
-        self._left_pane.planner_model_changed.connect(lambda: self._refresh_status_bar())
-        self._left_pane.planner_thinking_changed.connect(lambda: self._refresh_status_bar())
-        self._left_pane.worker_model_changed.connect(self._on_sidebar_worker_model_changed)
-        self._left_pane.worker_thinking_changed.connect(self._on_sidebar_worker_thinking_changed)
-        self._left_pane.drone_selected.connect(lambda folder: self._drone_controller.on_drone_folder_selected(folder.name))
-        self._left_pane.new_drone_requested.connect(self._drone_controller.on_create_drone)
         self._main_splitter.addWidget(self._left_pane)
 
         # Center column: stacked launchpad / workspace view
@@ -187,17 +162,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._launchpad = ProjectLaunchpad(self)
         self._center_stack.addWidget(self._launchpad)
 
-        # Wire launchpad signals
-        self._launchpad.open_existing_requested.connect(
-            self._workspace_controller.on_open_existing
-        )
-        self._launchpad.create_new_requested.connect(
-            self._workspace_controller.on_create_new_project
-        )
-        self._launchpad.create_demo_requested.connect(
-            self._workspace_controller.on_create_demo_project
-        )
-
         # Page 1: Chat + Input (normal workspace view)
         center = QWidget()
         center.setMinimumWidth(280)
@@ -207,7 +171,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
         self._chat = ChatView()
         self._chat.setParent(self)
-        self._chat.droneRunFocusRequested.connect(self._drone_controller.on_focus_drone_run)
         if self._settings.planner_worker_mode:
             self._chat.set_compact_tools(True)
         center_layout.addWidget(self._chat, 1)
@@ -226,8 +189,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             workspace_root=self._workspace_root,
             parent=self,
         )
-        self._send_handler.drone_bay_requested.connect(self._drone_controller.on_drone_bay_requested)
-
         # Companion (mobile control plane)
         self._companion_controller = MainWindowCompanionController(self)
 
@@ -253,20 +214,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             self,
             initial_geometry=self._settings.drone_reports_window_geometry,
         )
-        self._drone_reports_window.geometry_saved.connect(
-            self._terminal_controller._on_drone_reports_geometry_saved
-        )
-        self._drone_reports_window.visibility_changed.connect(
-            lambda _visible: self._drone_controller.sync_drone_tab_checked()
-        )
-        self._send_handler.answer_only_research_started.connect(
-            self._prepare_answer_only_research_ui
-        )
-
-        self.droneRunFinishedOnUiThread.connect(self._drone_controller.on_drone_finished, Qt.ConnectionType.QueuedConnection)
-        self.droneStatusChangedOnUiThread.connect(self._drone_controller.on_drone_status_changed)
-        self.droneReceiptReadyOnUiThread.connect(self._drone_controller.on_drone_receipt)
-
         # Worker event handler — owns session usage, forwards bridge signals
         # to chat / playground UI components.
         self._worker_handler = WorkerEventHandler(
@@ -276,11 +223,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             settings=self._settings,
             parent=self,
         )
-        self._worker_handler.usage_updated.connect(self._refresh_status_bar)
-        self._worker_handler.usage_updated.connect(lambda: self._balance_controller.refresh(self._settings))
-        self._worker_handler.worker_started.connect(lambda: self._input.set_streaming(False))
-        self._playground.stop_worker_requested.connect(self._bridge.request_cancel)
-        self._worker_handler.worker_running_changed.connect(self._playground.set_worker_running)
         self._gui_event_probe = install_gui_event_probe(self, self._bridge)
 
         # Conversation persistence (auto-save, load, restore, replay).
@@ -293,8 +235,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             settings=self._settings,
             parent=self,
         )
-        self._persistence.needs_status_refresh.connect(self._refresh_status_bar)
-
         # Handoff flow controller
         self._handoff_controller = MainWindowHandoffController(
             bridge=self._bridge,
@@ -365,15 +305,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._terminal_tab = self._edge_rail.terminal_tab
         self._terminal_container = self._edge_rail.terminal_container
         self._corner_widget = self._edge_rail.corner_widget
-        self._edge_rail.terminalTabToggled.connect(self._terminal_controller._on_terminal_toggle)
-        # Wire checkpoint tab click to the existing handler on MainWindow.
-        checkpoint_tab = self._edge_rail.checkpoint_tab
-        if checkpoint_tab is not None:
-            checkpoint_tab.clicked.connect(lambda: self._on_open_checkpoints())
-        self._edge_rail.droneBayRequested.connect(self._drone_controller.on_drone_bay_requested)
-        self._edge_rail.droneRunFocusRequested.connect(self._drone_controller.on_focus_drone_run)
         self._drone_controller.sync_drone_tab_checked()
-        self._edge_rail.companionRequested.connect(self._on_open_companion_popout)
 
         # Sync companion badge after rail exists (status may have fired before rail was created)
         self._companion_controller.sync_edge_rail_status()
@@ -382,47 +314,16 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         if not self._use_native_chrome:
             self.setWindowFlags(self.windowFlags() | Qt.WindowType.FramelessWindowHint)
 
-        # ----- wire bridge ↔ view -----
-        self._bridge.started.connect(self._on_started)
-        self._bridge.finished.connect(self._on_finished)
-        self._bridge.reasoningDelta.connect(self._chat.append_reasoning)
-        self._bridge.contentDelta.connect(self._chat.append_content)
-        self._bridge.toolCallStart.connect(self._chat.add_tool_call)
-        self._bridge.toolCallArgs.connect(self._chat.append_tool_args)
-        self._bridge.toolCallEnd.connect(lambda _id: None)
-        self._bridge.toolResult.connect(self._on_tool_result)
-        self._bridge.diffDecided.connect(self._on_diff_decided)
-        self._bridge.streamDone.connect(self._on_stream_done)
-        self._bridge.apiError.connect(self._on_api_error)
-        self._bridge.usageWithModel.connect(self._on_usage)
-        self._chat.retry_requested.connect(self._on_retry)
-
-        self._input.sent.connect(lambda p: self._send_handler.handle_send(p, self.current_model(), self.current_thinking()))
-        self._input.stop_requested.connect(self._send_handler.handle_stop)
-        self._input.handoff_requested.connect(self._on_handoff_requested)
-
         self._tree = self._playground.file_tree()
-        self._tree.file_activated.connect(self._playground.open_file)
-        self._playground.focused_action_requested.connect(self._on_focused_action_requested)
-        terminal_window = self._playground.terminal_window()
-        terminal_window.terminal_started.connect(self._terminal_controller._on_terminal_started)
-        terminal_window.terminal_finished.connect(self._terminal_controller._on_terminal_finished)
-        terminal_window.visibility_changed.connect(self._terminal_controller._on_terminal_visibility_changed)
-        terminal_window.terminal_cleared.connect(self._terminal_controller._on_terminal_cleared)
-        terminal_window.geometry_saved.connect(self._terminal_controller._on_terminal_geometry_saved)
 
         # Worker signal wiring (delegated to WorkerEventHandler).
         self._worker_handler.connect_bridge_signals()
 
-        # Mermaid diagram detection from chat → playground
-        self._chat.mermaid_detected.connect(self._playground.add_mermaid_artifact)
-
         self._workspace_controller.update_workspace_label()
 
-        # Wire project thread selection from left pane
-        self._left_pane.thread_selected.connect(self._on_thread_selected)
-        self._persistence.project_thread_updated.connect(self._on_project_thread_updated)
-        self._persistence.current_context_changed.connect(self._on_current_context_changed)
+        # Signal wiring — extracted for clarity.
+        self._signal_wiring = MainWindowSignalWiring(self)
+        self._signal_wiring.wire()
 
         QTimer.singleShot(0, lambda: self._left_pane.refresh_projects(self._workspace_root))
         QTimer.singleShot(0, lambda: self._left_pane.refresh_drones(self._workspace_root))
