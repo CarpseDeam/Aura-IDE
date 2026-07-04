@@ -25,6 +25,10 @@ from aura.conversation.path_utils import (
     normalize_worker_path as _normalize_worker_path,
 )
 from aura.conversation.tool_limits import WRITE_TOOLS
+from aura.conversation.detected_validation import (
+    behavioral_required_commands,
+    normalize_command as _normalize_command,
+)
 from aura.conversation.validation_orchestrator import (
     MALFORMED_VALIDATION_COMMAND,
     MISSING_DEPENDENCY,
@@ -201,6 +205,78 @@ def prepare_worker_completion_result(
     )
 
 
+def _assess_required_behavioral_validation(
+    validation_commands: list[str],
+    validation_results: list[dict[str, Any]],
+    validation_command_issues: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Categorise each required behavioural command against what actually ran.
+
+    Returns a dict with four lists:
+        * ``passed`` — commands that ran and reported ``ok=True``.
+        * ``failed`` — commands that ran and reported ``counts_as_product_failure=True``
+          (existing validation-failure logic remains in charge).
+        * ``skipped`` — commands for which there is no result *and* no issue record.
+        * ``could_not_run`` — commands for which there is no result but there
+          *is* a validation-command issue (e.g. missing executable, timeout).
+    """
+    required = behavioral_required_commands(validation_commands)
+    passed: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
+    skipped: list[str] = []
+    could_not_run: list[dict[str, Any]] = []
+
+    for cmd in required:
+        norm = _normalize_command(cmd)
+
+        # 1. Check validation results.
+        matching_results = [
+            r for r in validation_results
+            if _normalize_command(str(r.get("command") or "")) == norm
+        ]
+        if matching_results:
+            if any(r.get("ok") for r in matching_results):
+                passed.append({"command": cmd})
+                continue
+            if any(r.get("counts_as_product_failure") for r in matching_results):
+                failed.append({"command": cmd})
+                continue
+            # Ran but failed with *non*-product outcome (e.g. infra error).
+            # Treat as could-not-run — the result record's status is the reason.
+            # (A timeout, missing-dep, etc. that the terminal classified as
+            # non-product-failure will also have a matching issue entry, but we
+            # already have the direct result so prefer it.)
+            reason = "command failed with non-product outcome"
+            could_not_run.append({"command": cmd, "reason": reason})
+            continue
+
+        # 2. Check validation-command issues (command never ran successfully).
+        matching_issues = [
+            i for i in validation_command_issues
+            if _normalize_command(str(i.get("command") or "")) == norm
+        ]
+        if matching_issues:
+            issue = matching_issues[0]
+            classification = str(
+                issue.get("validation_classification") or issue.get("classification") or ""
+            )
+            # Prefer a human-readable reason from the issue record.
+            from aura.conversation.validation_orchestrator import validation_issue_message
+            reason = validation_issue_message(issue) or classification
+            could_not_run.append({"command": cmd, "reason": reason})
+            continue
+
+        # 3. No result, no issue → skipped.
+        skipped.append(cmd)
+
+    return {
+        "passed": passed,
+        "failed": failed,
+        "skipped": skipped,
+        "could_not_run": could_not_run,
+    }
+
+
 def _collect_worker_completion_data(
     *,
     req: WorkerDispatchRequest,
@@ -273,12 +349,19 @@ def _collect_worker_completion_data(
         or "diagnostic" in req.goal.lower()[:100]
     )
 
+    behavioral_validation = _assess_required_behavioral_validation(
+        validation_commands=final_validation_commands,
+        validation_results=validation_results,
+        validation_command_issues=validation_command_issues,
+    )
+
     return {
         "final_report": final_report,
         "continuation": continuation,
         "diagnostic_environment_caveats": diagnostic_environment_caveats,
         "validation_results": validation_results,
         "validation_command_issues": validation_command_issues,
+        "behavioral_validation": behavioral_validation,
         "has_writes": has_writes,
         "internal_recovery_steers": internal_recovery_steers,
         "write_failures": write_failures,
@@ -405,7 +488,23 @@ def _build_worker_completion_messages(
     if validation_not_run:
         result_caveats.append("Files changed but validation did not run.")
     if validation_command_issues:
-        result_caveats.append("Validation command issue(s) were recorded; code validation failures are reported separately.")
+        result_caveats.append("Validation command issue(s) were recorded; code validation failures are reported separately.")    # ── Required behavioral validation enforcement ────────────────
+    behavioral = completion.get("behavioral_validation", {})
+    behavioral_skipped = behavioral.get("skipped", [])
+    behavioral_could_not_run = behavioral.get("could_not_run", [])
+    if behavioral_skipped:
+        skipped_str = ", ".join(behavioral_skipped[:5])
+        result_errors.append(
+            f"Required behavioral validation skipped: {skipped_str}"
+        )
+    for entry in behavioral_could_not_run:
+        cmd = entry.get("command", "")
+        reason = entry.get("reason", "")
+        caveat = f"Required behavioral check could not run: {cmd}"
+        if reason:
+            caveat += f" ({reason})"
+        if caveat not in result_caveats:
+            result_caveats.append(caveat)
     for caveat in diagnostic_environment_caveats:
         if caveat not in result_caveats:
             result_caveats.append(caveat)
@@ -558,8 +657,15 @@ def _classify_worker_completion(
         (has_no_work or has_no_implementation_work) and is_implementation and not structured_failure
     )
     has_unverified_acceptance = acceptance_unverified or validation_not_run
+    behavioral = completion.get("behavioral_validation", {})
+    has_required_behavioral_skipped = bool(behavioral.get("skipped", []))
+    has_required_behavioral_could_not_run = bool(behavioral.get("could_not_run", []))
 
     if has_planner_resolution_mismatch:
+        ok = False
+        needs_followup = True
+        recoverable = True
+    elif has_required_behavioral_skipped and not has_internal_failure:
         ok = False
         needs_followup = True
         recoverable = True
@@ -630,6 +736,11 @@ def _classify_worker_completion(
     if has_diagnostic_environment_blocker and not summary_continuation.get("status"):
         summary_continuation["status"] = "harness_error"
         summary_continuation["reason"] = diagnostic_environment_caveats[0]
+    if has_required_behavioral_skipped and not summary_continuation.get("status"):
+        summary_continuation["status"] = "validation_failed"
+        skipped_cmds = behavioral.get("skipped", [])
+        reason = "Required behavioral validation skipped: " + (skipped_cmds[0] if skipped_cmds else "(unknown)")
+        summary_continuation["reason"] = reason
 
     status = _compute_outcome_status(
         ok=ok,
@@ -651,6 +762,7 @@ def _classify_worker_completion(
         continuation=summary_continuation,
         structured_failure=structured_failure,
         write_failures=write_failures,
+        has_required_behavioral_skipped=has_required_behavioral_skipped,
     )
     return {
         "mismatch": mismatch,
@@ -697,6 +809,8 @@ def _build_worker_result_payload(
     phase_boundary = outcome["phase_boundary"]
     mismatch = outcome["mismatch"]
 
+    behavioral_validation = completion.get("behavioral_validation", {})
+
     summary = _build_worker_summary(
         req,
         worker_history,
@@ -709,6 +823,7 @@ def _build_worker_result_payload(
         not_applied_writes=unrecovered_not_applied_writes,
         status=status,
         internal_error=internal_error,
+        behavioral_validation=behavioral_validation,
     )
     modified_files = _applied_modified_files(relay.write_results)
     task_shape_summary = (
@@ -735,6 +850,7 @@ def _build_worker_result_payload(
         "terminal_results": getattr(relay, "terminal_results", []),
         "validation_results": validation_results,
         "validation_command_issues": validation_command_issues,
+        "required_behavioral_validation": behavioral_validation,
         "errors": result_errors,
         "caveats": result_caveats,
         "worker_internal_error": bool(internal_error),
@@ -814,6 +930,7 @@ def _compute_outcome_status(
     structured_failure: dict[str, Any] | None = None,
     write_failures: list[dict[str, Any]] | None = None,
     has_environment_setup_blocker: bool = False,
+    has_required_behavioral_skipped: bool = False,
 ) -> str:
     """Map the boolean severity classification to a WorkerOutcomeStatus."""
     structured_failure = structured_failure or {}
@@ -839,7 +956,7 @@ def _compute_outcome_status(
         )
     ):
         return WorkerOutcomeStatus.edit_mechanics_blocked.value
-    if has_validation_failure or any(fc.startswith("validation_") for fc in failure_classes):
+    if has_validation_failure or has_required_behavioral_skipped or any(fc.startswith("validation_") for fc in failure_classes):
         return WorkerOutcomeStatus.validation_failed.value
     if (
         has_internal_failure

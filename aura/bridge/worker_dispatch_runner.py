@@ -38,6 +38,10 @@ from aura.conversation import (
 )
 from aura.conversation.critic_dispatch import CriticCallback, CriticRequest, run_critic_dispatch
 from aura.conversation.persistence import WorkerDispatchRecord
+from aura.conversation.detected_validation import (
+    merge_validation_commands,
+    runnable_detected_validation_commands,
+)
 from aura.conversation.project_profile import detect_project_profile
 from aura.events import EventBus
 from aura.lifecycle import LifecycleHooks
@@ -228,6 +232,19 @@ class WorkerDispatchRunner:
                 task_spec = replace(task_spec, project_profile=profile)
             except Exception:
                 logging.exception("Failed to detect project profile for worker context")
+                profile = None
+
+            # Merge detected runnable validation commands into the task spec.
+            # This ensures detected project checks appear even when the Planner
+            # did not echo them, without modifying Planner behavior.
+            if profile is not None and profile.validation_commands:
+                detected_runnable = runnable_detected_validation_commands(profile)
+                if detected_runnable:
+                    merged = merge_validation_commands(
+                        task_spec.validation_commands,
+                        detected_runnable,
+                    )
+                    task_spec = replace(task_spec, validation_commands=merged)
         _log.info(
             "worker_profile_detect_end tool_call_id=%s duration_ms=%.0f",
             tool_call_id, (time.monotonic() - t2) * 1000,

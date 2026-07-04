@@ -185,6 +185,32 @@ def _target_line_text(start_line: int | None, end_line: int | None) -> str:
     return ""
 
 
+def _render_required_behavioral_summary(
+    lines: list[str],
+    behavioral: dict[str, Any],
+) -> None:
+    """Append required behavioral validation status lines to *lines*."""
+    passed = behavioral.get("passed", [])
+    skipped = behavioral.get("skipped", [])
+    could_not_run = behavioral.get("could_not_run", [])
+
+    if not passed and not skipped and not could_not_run:
+        return
+
+    lines.append("")
+    lines.append(" Required behavioral checks:")
+    for entry in passed:
+        cmd = entry.get("command", "")
+        lines.append(f"  • {cmd}  →  passed")
+    for entry in could_not_run:
+        cmd = entry.get("command", "")
+        reason = entry.get("reason", "")
+        suffix = f" ({reason})" if reason else ""
+        lines.append(f"  • {cmd}  →  could not run{suffix}")
+    for cmd in skipped:
+        lines.append(f"  • {cmd}  →  required but skipped")
+
+
 def _build_worker_summary(
     req: WorkerDispatchRequest,
     history: History,
@@ -197,12 +223,14 @@ def _build_worker_summary(
     not_applied_writes: list[dict[str, Any]] | None = None,
     status: str | None = None,
     internal_error: str | None = None,
+    behavioral_validation: dict[str, Any] | None = None,
 ) -> str:
     continuation = continuation or {}
     caveats = caveats or []
     validation_results = validation_results or []
     validation_command_issues = validation_command_issues or []
     not_applied_writes = not_applied_writes or []
+    behavioral_validation = behavioral_validation or {}
 
     # Derive status if not provided (backward compat for callers without status)
     if not status:
@@ -327,6 +355,9 @@ def _build_worker_summary(
         lines.append(" Validation command issues:")
         for issue in validation_command_issues[:5]:
             lines.append(f"  \u2022 {validation_issue_message(issue)}")
+
+    # \u2500\u2500 Required behavioral validation \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    _render_required_behavioral_summary(lines, behavioral_validation)
 
     # === Harness errors ===
     if internal_error:
