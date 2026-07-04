@@ -3,7 +3,7 @@
 [![Python](https://img.shields.io/badge/python-3.10+-blue)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)]()
-[![Version](https://img.shields.io/badge/version-1.9.9-orange)]()
+[![Version](https://img.shields.io/badge/version-latest-orange)]()
 [![Discord](https://img.shields.io/badge/Discord-Join%20Aura-5865F2?logo=discord&logoColor=white)](https://discord.gg/aGSthBX2Bg)
 
 <a href="https://www.producthunt.com/products/aura-ide?embed=true&utm_source=badge-featured&utm_medium=badge&utm_campaign=badge-aura-ide" target="_blank" rel="noopener noreferrer">
@@ -78,7 +78,7 @@ aura
 **First run:**
 1. Open a workspace (File → Open Workspace).
 2. Choose your model path:
-   - **Aura Credits** — click the Credits status pill in the toolbar to open the standalone Credits popout. Buy credits ($5, $10, $20, $50 packs) and select Aura as your Planner or Worker provider. No API keys needed.
+   - **Aura Credits** — click the Credits status pill in the toolbar to open the standalone Credits popout. Buy credits, check your balance, and select Aura as your Planner or Worker provider. No API keys needed.
    - **BYOK** — open Settings → API Keys and add your key for DeepSeek, OpenAI, Anthropic, Gemini, or OpenRouter.
 3. Ask for something small — "fix a typo in README.md" or "add a docstring to this function."
 4. Review the Planner's spec, then click dispatch.
@@ -87,15 +87,13 @@ aura
 
 ---
 
-## What's new in v1.9.8
+## Current focus
 
-- **Polished standalone Aura Credits popout** — Credits live in their own clean window. Buy packs, check balance, see session cost — all from one place.
-- **Aura Credits status-bar pill** — Your balance and session spend are visible at a glance in the toolbar. Click to open the full Credits popout.
-- **More precise session cost display** — Token counts and cost estimates are sharper across both Planner and Worker roles.
-- **Companion can create new chat threads from phone** — Start a fresh conversation right from your mobile browser. The desktop picks it up instantly.
-- **Duplicate New Chat button fixed** — Empty projects no longer show a redundant button on mobile.
-- **Compact New Chat shortcut** — A quick-access control in the mobile chat header so you can start a thread without navigating away.
-- **Worker Flow anti-thrash guard** — The Worker now detects and breaks out of repetitive recovery loops, reducing wasted tokens on unrecoverable validation failures.
+Aura is focused on making the core coding loop steadier, clearer, and easier to trust.
+
+Recent work has improved Worker execution, validation reporting, noisy command handling, project-aware validation, Companion control, Aura Credits, and long-session stability.
+
+The goal stays the same: plan the work, do the work, validate the work, and leave a clear receipt.
 
 ---
 
@@ -131,7 +129,7 @@ Aura gives you two paths to model access. Choose what fits you.
 Credits are a pay-as-you-go balance that works across all Aura-hosted models. No API keys. No provider accounts. No configuration.
 
 - Open the Credits popout from the toolbar status pill
-- Buy a pack ($5, $10, $20, $50)
+- Buy credits
 - Select "Aura" as your Planner or Worker provider
 - Start building
 
