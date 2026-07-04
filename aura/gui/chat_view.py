@@ -23,6 +23,7 @@ from aura.gui.cards.plan_writer_card import PlanWriterCard
 from aura.gui.cards.spec_card import SpecCard
 from aura.gui.cards.terminal_card import TerminalCard
 from aura.gui.cards.user_card import UserCard
+from aura.gui.cards.work_artifact_card import WorkArtifactCard
 from aura.gui.cards.worker_summary_card import WorkerSummaryCard
 from aura.conversation.chat_transcript import (
     clone_chat_items,
@@ -132,6 +133,7 @@ class ChatView(QScrollArea):
         self._programmatic_scroll_depth = 0
         self._plan_writer_cards: dict[str, PlanWriterCard] = {}
         self._worker_summary_cards: dict[str, WorkerSummaryCard] = {}
+        self._artifact_cards: dict[str, WorkArtifactCard] = {}
         self._worker_summary_disabled: bool = False
         self._chat_items: list[dict] = []
         self._record_transcript: bool = True
@@ -934,6 +936,43 @@ class ChatView(QScrollArea):
         card.setParent(None)
         card.deleteLater()
         self._scroll_after_bottom_layout_change()
+
+    # ── artifact card ─────────────────────────────────────────────────
+
+    def add_or_update_artifact_card(self, projection) -> WorkArtifactCard | None:
+        """Create or update a WorkArtifactCard from a projection.  Returns the card."""
+        from aura.work_artifact.projection import WorkArtifactProjection
+
+        if not isinstance(projection, WorkArtifactProjection):
+            return None
+        tool_call_id = projection.artifact_id
+        existing = self._artifact_cards.get(tool_call_id)
+        if existing is not None:
+            existing.update_projection(projection)
+            self._scroll_after_bottom_layout_change()
+            return existing
+
+        card = WorkArtifactCard(projection, parent=self)
+        self._artifact_cards[tool_call_id] = card
+        self._add_card(card)
+        return card
+
+    def get_artifact_card(self, tool_call_id: str) -> WorkArtifactCard | None:
+        """Return the WorkArtifactCard for *tool_call_id*, or None."""
+        return self._artifact_cards.get(tool_call_id)
+
+    def remove_artifact_card(self, tool_call_id: str) -> None:
+        """Remove and delete the WorkArtifactCard for *tool_call_id*."""
+        card = self._artifact_cards.pop(tool_call_id, None)
+        if card is None:
+            return
+        parent = card.parentWidget()
+        if parent is not None:
+            layout = parent.layout()
+            if layout is not None:
+                layout.removeWidget(card)
+        card.setParent(None)
+        card.deleteLater()
 
     @property
     def worker_summary_disabled(self) -> bool:

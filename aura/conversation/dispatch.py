@@ -68,6 +68,7 @@ class WorkerDispatchRequest:
     task_shape: TaskShape | None = None
     artifact_id: str = ""
     artifact_item_id: str = ""
+    work_artifact_payload: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload = {
@@ -95,6 +96,8 @@ class WorkerDispatchRequest:
             payload["artifact_id"] = self.artifact_id
         if self.artifact_item_id:
             payload["artifact_item_id"] = self.artifact_item_id
+        if self.work_artifact_payload is not None:
+            payload["work_artifact_payload"] = dict(self.work_artifact_payload)
         return payload
 
     @classmethod
@@ -128,6 +131,7 @@ class WorkerDispatchRequest:
             task_shape=task_shape,
             artifact_id=str(data.get("artifact_id", "")),
             artifact_item_id=str(data.get("artifact_item_id", "")),
+            work_artifact_payload=data.get("work_artifact_payload") if isinstance(data.get("work_artifact_payload"), dict) else None,
         )
 
 

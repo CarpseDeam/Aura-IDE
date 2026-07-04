@@ -91,6 +91,7 @@ class _DispatchProxy(QObject):
     workflowStateChanged = Signal(object)  # WorkflowState snapshot
     workerActivityUpdated = Signal(str, list)  # tool_call_id, activity snapshot entries
     workerTodoUpdated = Signal(str, list)  # tool_call_id, full Worker TODO snapshot
+    artifactProjectionUpdated = Signal(object)  # WorkArtifactProjection
 
     def __init__(
         self,
@@ -221,21 +222,31 @@ class _DispatchProxy(QObject):
             "WorkArtifact projection updated artifact_id=%s",
             projection.artifact_id,
         )
-        # This is where GUI updates would be triggered — e.g. update
-        # an artifact card in the chat view.
+        self.artifactProjectionUpdated.emit(projection)
 
     # ---- planner-thread side ---------------------------------------------
 
     def _register_artifact_from_request(self, tool_call_id: str, req: WorkerDispatchRequest) -> None:
         """Register a WorkArtifact for this dispatch request.
 
-        If the request already has an artifact_id, it means the ToolRunner
-        already created the artifact. Otherwise, create a one-item
-        compatibility artifact.
+        Priority:
+        1. If the controller already has an artifact for this ID, skip.
+        2. If the request carries a ``work_artifact_payload`` (multi-item
+           artifact from the Planner), create the full artifact from it.
+        3. Otherwise, create a one-item compatibility artifact.
         """
         if self._artifact_controller.get_artifact(tool_call_id) is not None:
             return  # Already registered.
-        self._artifact_controller.create_one_item_artifact(tool_call_id, req)
+        if req.work_artifact_payload is not None:
+            self._artifact_controller.create_artifact_from_payload(
+                tool_call_id, req.work_artifact_payload,
+            )
+            _log.info(
+                "Full WorkArtifact created from payload tool_call_id=%s",
+                tool_call_id,
+            )
+        else:
+            self._artifact_controller.create_one_item_artifact(tool_call_id, req)
 
     def request_dispatch(
         self, tool_call_id: str, req: WorkerDispatchRequest
@@ -423,6 +434,50 @@ class _DispatchProxy(QObject):
         self._store_result_metadata(tool_call_id, result)
         self._pending_map.pop(tool_call_id)
         return result
+
+    # ---- next-item dispatch (item 2+, no Planner thread) -------------------
+
+    def dispatch_next_item(self, tool_call_id: str) -> WorkerDispatchResult | None:
+        """Dispatch the next pending artifact item for *tool_call_id*.
+
+        Called from a background thread (spawned by the bridge) when the user
+        clicks "Review current item" on the WorkArtifactCard.
+
+        Gets the current item from the existing artifact, creates a bounded
+        WorkerDispatchRequest, and re-enters the dispatch flow (SpecCard →
+        user review → Worker → receipt → advance).
+
+        Returns None if there is no artifact or no current item.
+        """
+        artifact = self._artifact_controller.get_artifact(tool_call_id)
+        if artifact is None:
+            _log.warning("dispatch_next_item: no artifact for tool_call_id=%s", tool_call_id)
+            return None
+        item = artifact.current_item()
+        if item is None:
+            _log.info("dispatch_next_item: no current item artifact_id=%s", tool_call_id)
+            return None
+
+        _log.info(
+            "dispatch_next_item artifact_id=%s item=%s",
+            tool_call_id, item.id,
+        )
+
+        # Build a bounded WorkerDispatchRequest from the artifact item.
+        req = WorkerDispatchRequest(
+            goal=item.intent,
+            files=list(item.target_files),
+            spec=item.intent,
+            acceptance=item.acceptance,
+            summary=item.title,
+            artifact_id=tool_call_id,
+            artifact_item_id=item.id,
+        )
+
+        # Re-enter the dispatch flow.  request_dispatch() will find the
+        # existing artifact, register a fresh pending entry, show SpecCard,
+        # wait for user decision, run Worker, attach receipt, and advance.
+        return self.request_dispatch(tool_call_id, req)
 
     # ---- GUI-thread side --------------------------------------------------
 

@@ -113,6 +113,8 @@ class ToolRunner:
                 len(work_items),
                 current_item_id,
             )
+            # Attach the raw payload so DispatchProxy can create the full artifact
+            req.work_artifact_payload = raw_artifact
             # Convert current item into a bounded WorkerDispatchRequest
             req.artifact_id = artifact.artifact_id
             if artifact.current_item() is not None:

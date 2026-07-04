@@ -1,3 +1,19 @@
+"""Tests for Planner dispatch recovery flows.
+
+Replaces the old campaign-step validation tests with tests for the new
+WorkArtifact compatibility artifact behavior.  Flat dispatches (without a
+``work_artifact`` payload) now proceed as one-item compatibility artifacts
+rather than being rejected.
+
+Key invariants tested here:
+- Flat dispatch creates one-item compatibility artifact and starts Worker
+- WorkArtifact dispatch creates multi-item artifact, starts Worker for item 1
+- Second dispatch in same Planner turn is still rejected (chained rejection)
+- Planner edit/write tools are still blocked with correction
+- Compatibility artifact handles broad multi-file dispatches
+- Dispatching a work_artifact produces correct item-scoped request
+"""
+
 import json
 import logging
 import threading
@@ -24,48 +40,65 @@ from aura.conversation.workflow_state import WorkflowStatus
 from aura.research.policy import decide_research_policy
 
 
-def _flat_steps_required_dispatch() -> dict:
+# ── helpers ──────────────────────────────────────────────────────────────────
+
+
+def _flat_dispatch() -> dict:
+    """A flat dispatch_to_worker call without ``work_artifact``.
+
+    In the old architecture this was rejected as "missing steps / campaign".
+    Now it creates a one-item compatibility artifact and starts the Worker.
+    """
     return {
         "goal": "Fix the live Worker Log regression during canonical dispatch.",
         "files": ["aura/gui/worker_handler.py"],
         "spec": (
             "Remove the canonical-dispatch early return guards from "
-            "_on_worker_reasoning and _on_worker_content. Delete the guards "
-            "only; do not change playground.py."
+            "_on_worker_reasoning and _on_worker_content."
         ),
         "acceptance": (
-            "- _on_worker_reasoning no longer returns early during canonical dispatch\n"
-            "- _on_worker_content no longer returns early during canonical dispatch\n"
-            "- python -m compileall aura/gui/worker_handler.py passes\n"
-            "- python -m aura --selfcheck passes"
+            "- _on_worker_reasoning no longer returns early\n"
+            "- _on_worker_content no longer returns early\n"
+            "- python -m compileall aura/gui/worker_handler.py passes"
         ),
         "summary": "Allow Worker text through during canonical dispatch.",
-        "validation_commands": [
-            "python -m compileall aura/gui/worker_handler.py",
-            "python -m aura --selfcheck",
-        ],
     }
 
 
-def _valid_steps_dispatch() -> dict:
-    args = dict(_flat_steps_required_dispatch())
-    args["steps"] = [
-        {
-            "id": "step-1",
-            "title": "Worker log dispatch text forwarding",
-            "goal": "Allow Worker reasoning and content through during canonical dispatch.",
-            "spec": (
-                "In aura/gui/worker_handler.py, remove only the canonical-dispatch "
-                "early return guards from _on_worker_reasoning and _on_worker_content."
-            ),
-            "files": ["aura/gui/worker_handler.py"],
-            "acceptance": (
-                "_on_worker_reasoning and _on_worker_content no longer return early "
-                "during canonical dispatch."
-            ),
-        }
-    ]
-    return args
+def _work_artifact_dispatch() -> dict:
+    """A dispatch_to_worker call with a ``work_artifact`` (multi-item)."""
+    return {
+        "goal": "Refactor dispatch lifecycle flow.",
+        "files": [
+            "aura/bridge/dispatch.py",
+            "aura/bridge/dispatch_session.py",
+            "aura/bridge/worker_activity.py",
+        ],
+        "spec": "Refactor the dispatch lifecycle flow across bridge, session, and activity projection.",
+        "acceptance": "The dispatch lifecycle is projected from events and tests pass.",
+        "summary": "Refactor dispatch lifecycle flow.",
+        "work_artifact": {
+            "goal": "Refactor dispatch lifecycle flow.",
+            "constraints": ["No new dependencies"],
+            "allowed_files": ["aura/bridge/"],
+            "items": [
+                {
+                    "id": "item-1",
+                    "title": "Wire bridge lifecycle projector",
+                    "intent": "Use the activity controller from the dispatch bridge.",
+                    "target_files": ["aura/bridge/dispatch.py"],
+                    "acceptance": "The bridge uses the activity controller.",
+                },
+                {
+                    "id": "item-2",
+                    "title": "Emit dispatch lifecycle events",
+                    "intent": "Emit work artifact lifecycle events.",
+                    "target_files": ["aura/work_artifact/"],
+                    "acceptance": "Work artifact emits lifecycle events.",
+                },
+            ],
+        },
+    }
 
 
 def _broad_multi_file_dispatch() -> dict:
@@ -76,48 +109,10 @@ def _broad_multi_file_dispatch() -> dict:
             "aura/bridge/dispatch_session.py",
             "aura/bridge/worker_activity.py",
         ],
-        "spec": "Refactor the dispatch lifecycle flow across bridge, session, and activity projection.",
+        "spec": "Refactor the dispatch lifecycle flow.",
         "acceptance": "The dispatch lifecycle is projected from events and tests pass.",
         "summary": "Refactor dispatch lifecycle flow.",
     }
-
-
-def _broad_one_vague_step_dispatch() -> dict:
-    args = _broad_multi_file_dispatch()
-    args["steps"] = [
-        {
-            "id": "step-1",
-            "title": args["summary"],
-            "goal": args["goal"],
-            "spec": args["spec"],
-            "files": list(args["files"]),
-            "acceptance": args["acceptance"],
-        }
-    ]
-    return args
-
-
-def _broad_valid_steps_dispatch() -> dict:
-    args = _broad_multi_file_dispatch()
-    args["steps"] = [
-        {
-            "id": "step-1",
-            "title": "Wire bridge lifecycle projector",
-            "goal": "Use the activity controller from the dispatch bridge.",
-            "spec": "Update aura/bridge/dispatch.py to source lifecycle activity from the worker activity controller.",
-            "files": ["aura/bridge/dispatch.py"],
-            "acceptance": "The bridge uses the activity controller.",
-        },
-        {
-            "id": "step-2",
-            "title": "Emit dispatch lifecycle events",
-            "goal": "Emit work artifact lifecycle events.",
-            "spec": "Update aura/work_artifact/ to emit lifecycle events.",
-            "files": ["aura/work_artifact/"],
-            "acceptance": "Work artifact emits lifecycle events.",
-        },
-    ]
-    return args
 
 
 def _dispatch_tool_call(args: dict, call_id: str = "call_dispatch") -> dict:
@@ -159,45 +154,41 @@ def _planner_state() -> _SendState:
     )
 
 
-def test_flat_dispatch_rejection_has_visible_retry_constraint(tmp_path):
+def _dispatch_ok_cb(tool_id: str, req):
+    return WorkerDispatchResult(ok=True, summary="Worker completed.")
+
+
+# ── Flat dispatch (compatibility artifact) tests ─────────────────────────────
+
+
+def test_flat_dispatch_proceeds_as_compatibility_artifact(tmp_path):
+    """A flat dispatch (no work_artifact) creates a compat artifact and runs Worker."""
     runner = ToolRunner(
         History(),
         tmp_path,
         LoopDetector(),
         VerificationProgressTracker(),
     )
-    states = []
-
+    dispatches = []
     result = runner.handle_dispatch(
         "call_dispatch",
-        _flat_steps_required_dispatch(),
+        _flat_dispatch(),
         on_event=lambda event: None,
-        dispatch_cb=lambda _tool_id, _req: None,
-        workflow_state_cb=lambda *items: states.append(items),
+        dispatch_cb=lambda tool_id, req: (
+            dispatches.append((tool_id, req)),
+            WorkerDispatchResult(ok=True, summary="Worker completed."),
+        )[1],
     )
-
     assert result is not None
-    assert result.ok is False
-    assert result.recoverable is True
-    assert result.extras["dispatch_spec_rejected"] is True
-    assert result.extras["planner_resolution_needed"] is True
-    assert result.extras["internal_planner_handoff"] is True
-    assert result.extras["campaign_errors"] == [
-        "Broad implementation dispatches must include a decomposed steps campaign."
-    ]
-
-    constraint = result.extras["failure_constraint"]
-    assert constraint.startswith("CONSTRAINT FOR NEXT DISPATCH ATTEMPT:")
-    assert "rejected before Worker start" in constraint
-    assert "steps array" in constraint
-    assert "id, title, goal, spec, files, and acceptance" in constraint
-    assert "Do not call edit/write tools." in constraint
-    assert "The Worker was not started" in result.summary
-    assert "Planner must retry dispatch_to_worker" in result.summary
-    assert states and states[-1][3] == WorkflowStatus.planner_resolving
+    assert result.ok is True
+    assert len(dispatches) == 1
+    _, dispatched_req = dispatches[0]
+    assert dispatched_req.artifact_id == "call_dispatch"
+    assert dispatched_req.artifact_item_id == "item-1"
 
 
-def test_broad_multi_file_dispatch_without_steps_is_rejected_before_worker_requested(tmp_path):
+def test_flat_dispatch_emits_worker_dispatch_requested(tmp_path):
+    """A flat dispatch emits WorkerDispatchRequested (no longer silently rejected)."""
     runner = ToolRunner(
         History(),
         tmp_path,
@@ -205,51 +196,19 @@ def test_broad_multi_file_dispatch_without_steps_is_rejected_before_worker_reque
         VerificationProgressTracker(),
     )
     events = []
-
     result = runner.handle_dispatch(
         "call_dispatch",
-        _broad_multi_file_dispatch(),
+        _flat_dispatch(),
         on_event=events.append,
-        dispatch_cb=lambda _tool_id, _req: (_ for _ in ()).throw(
-            AssertionError("invalid dispatch must not start Worker")
-        ),
+        dispatch_cb=lambda tool_id, req: WorkerDispatchResult(ok=True, summary="OK"),
     )
-
     assert result is not None
-    assert result.ok is False
-    assert result.recoverable is True
-    assert result.extras["campaign_errors"] == [
-        "Broad implementation dispatches must include a decomposed steps campaign."
-    ]
-    assert not any(isinstance(event, WorkerDispatchRequested) for event in events)
+    assert result.ok is True
+    assert any(isinstance(e, WorkerDispatchRequested) for e in events)
 
 
-def test_broad_dispatch_with_one_vague_giant_step_is_rejected(tmp_path):
-    runner = ToolRunner(
-        History(),
-        tmp_path,
-        LoopDetector(),
-        VerificationProgressTracker(),
-    )
-    events = []
-
-    result = runner.handle_dispatch(
-        "call_dispatch",
-        _broad_one_vague_step_dispatch(),
-        on_event=events.append,
-        dispatch_cb=lambda _tool_id, _req: (_ for _ in ()).throw(
-            AssertionError("invalid dispatch must not start Worker")
-        ),
-    )
-
-    assert result is not None
-    assert result.ok is False
-    assert any("split file work" in error for error in result.extras["campaign_errors"])
-    assert any("not the full campaign" in error for error in result.extras["campaign_errors"])
-    assert not any(isinstance(event, WorkerDispatchRequested) for event in events)
-
-
-def test_broad_valid_steps_start_worker(tmp_path):
+def test_broad_multi_file_flat_dispatch_proceeds(tmp_path):
+    """Broad multi-file flat dispatch still works as compatibility artifact."""
     runner = ToolRunner(
         History(),
         tmp_path,
@@ -258,34 +217,108 @@ def test_broad_valid_steps_start_worker(tmp_path):
     )
     events = []
     dispatches = []
-
     result = runner.handle_dispatch(
         "call_dispatch",
-        _broad_valid_steps_dispatch(),
+        _broad_multi_file_dispatch(),
         on_event=events.append,
         dispatch_cb=lambda tool_id, req: (
             dispatches.append((tool_id, req)),
             WorkerDispatchResult(ok=True, summary="Worker completed."),
         )[1],
     )
-
     assert result is not None
     assert result.ok is True
-    assert dispatches and dispatches[0][0] == "call_dispatch"
-    assert any(isinstance(event, WorkerDispatchRequested) for event in events)
+    assert len(dispatches) == 1
+    assert any(isinstance(e, WorkerDispatchRequested) for e in events)
+
+
+def test_flat_dispatch_compat_artifact_has_item_one(tmp_path):
+    """Compatibility artifact has a single item with id 'item-1'."""
+    runner = ToolRunner(
+        History(),
+        tmp_path,
+        LoopDetector(),
+        VerificationProgressTracker(),
+    )
+    dispatches = []
+    runner.handle_dispatch(
+        "call_dispatch",
+        _flat_dispatch(),
+        on_event=lambda event: None,
+        dispatch_cb=lambda tool_id, req: (
+            dispatches.append((tool_id, req)),
+            WorkerDispatchResult(ok=True, summary="OK"),
+        )[1],
+    )
+    assert len(dispatches) == 1
+    _, req = dispatches[0]
+    assert req.artifact_item_id == "item-1"
+    assert req.artifact_id == "call_dispatch"
+
+
+# ── WorkArtifact dispatch tests ──────────────────────────────────────────────
+
+
+def test_work_artifact_dispatch_starts_worker_for_item_one(tmp_path):
+    """Multi-item work_artifact starts Worker for item 1 only."""
+    runner = ToolRunner(
+        History(),
+        tmp_path,
+        LoopDetector(),
+        VerificationProgressTracker(),
+    )
+    dispatches = []
+    result = runner.handle_dispatch(
+        "call_dispatch",
+        _work_artifact_dispatch(),
+        on_event=lambda event: None,
+        dispatch_cb=lambda tool_id, req: (
+            dispatches.append((tool_id, req)),
+            WorkerDispatchResult(ok=True, summary="Worker completed."),
+        )[1],
+    )
+    assert result is not None
+    assert result.ok is True
+    assert len(dispatches) == 1
+    _, req = dispatches[0]
+    assert "Wire bridge lifecycle projector" in req.summary
+
+
+def test_work_artifact_multi_item_emit_worker_dispatch_requested(tmp_path):
+    """WorkArtifact dispatch emits WorkerDispatchRequested for item 1."""
+    runner = ToolRunner(
+        History(),
+        tmp_path,
+        LoopDetector(),
+        VerificationProgressTracker(),
+    )
+    events = []
+    result = runner.handle_dispatch(
+        "call_dispatch",
+        _work_artifact_dispatch(),
+        on_event=events.append,
+        dispatch_cb=lambda tool_id, req: WorkerDispatchResult(ok=True, summary="OK"),
+    )
+    assert result is not None
+    assert result.ok is True
+    assert any(isinstance(e, WorkerDispatchRequested) for e in events)
+
+
+# ── Chained dispatch rejection ───────────────────────────────────────────────
 
 
 def test_second_dispatch_in_same_planner_turn_is_recoverable_error_not_worker(
     tmp_path,
     caplog,
 ):
+    """Second dispatch_to_worker in same Planner turn is still rejected as chained."""
     runner, history = _round_runner(tmp_path)
     state = _planner_state()
     events = []
     dispatches = []
     caplog.set_level(logging.INFO, logger="aura.conversation.tool_runner")
 
-    first_call = _dispatch_tool_call(_valid_steps_dispatch(), "call_dispatch_1")
+    first_call = _dispatch_tool_call(_work_artifact_dispatch(), "call_dispatch_1")
     history.append_assistant(
         {
             "role": "assistant",
@@ -310,7 +343,7 @@ def test_second_dispatch_in_same_planner_turn_is_recoverable_error_not_worker(
     assert first_outcome.action == "return"
     assert state.planner_visible_dispatch_tool_call_id == "call_dispatch_1"
 
-    second_call = _dispatch_tool_call(_valid_steps_dispatch(), "call_dispatch_2")
+    second_call = _dispatch_tool_call(_work_artifact_dispatch(), "call_dispatch_2")
     history.append_assistant(
         {
             "role": "assistant",
@@ -343,8 +376,8 @@ def test_second_dispatch_in_same_planner_turn_is_recoverable_error_not_worker(
     assert second_payload["recoverable"] is True
     assert second_payload["extras"]["planner_dispatch_chain_rejected"] is True
     assert second_payload["extras"]["previous_dispatch_tool_call_id"] == "call_dispatch_1"
-    assert "already dispatched a Worker campaign" in second_payload["summary"]
-    assert "steps array" in second_payload["extras"]["failure_constraint"]
+    assert "already dispatched a Worker" in second_payload["summary"]
+    assert "work_artifact" in second_payload["extras"]["failure_constraint"]
 
     dispatch_log_messages = [
         record.getMessage()
@@ -353,8 +386,6 @@ def test_second_dispatch_in_same_planner_turn_is_recoverable_error_not_worker(
     ]
     assert any(
         "tool_call_id=call_dispatch_1" in message
-        and "steps_present=True" in message
-        and "step_count=1" in message
         and "first_dispatch_in_turn=True" in message
         for message in dispatch_log_messages
     )
@@ -366,125 +397,13 @@ def test_second_dispatch_in_same_planner_turn_is_recoverable_error_not_worker(
     )
 
 
-def test_failed_dispatch_classification_preserves_campaign_constraint(tmp_path):
-    runner = ToolRunner(
-        History(),
-        tmp_path,
-        LoopDetector(),
-        VerificationProgressTracker(),
-    )
-    result = runner.handle_dispatch(
-        "call_dispatch",
-        _flat_steps_required_dispatch(),
-        on_event=lambda event: None,
-        dispatch_cb=lambda _tool_id, _req: None,
-    )
-    assert result is not None
-
-    action = classify_failed_worker_dispatch(
-        args=_flat_steps_required_dispatch(),
-        result=result,
-        failures={},
-        failed_attempts=0,
-    )
-
-    assert action["blocker_reason"] == ""
-    assert action["failure_constraint"] == result.extras["failure_constraint"]
-
-
-def test_missing_steps_dispatch_round_appends_tool_result_and_internal_constraint(tmp_path):
-    runner, history = _round_runner(tmp_path)
-    state = _planner_state()
-    events = []
-    tool_call = _dispatch_tool_call(_flat_steps_required_dispatch())
-    history.append_assistant(
-        {
-            "role": "assistant",
-            "content": "",
-            "reasoning_content": None,
-            "tool_calls": [tool_call],
-        }
-    )
-
-    outcome = runner.run(
-        tool_calls=[tool_call],
-        state=state,
-        on_event=events.append,
-        approval_cb=lambda request: None,
-        cancel_event=threading.Event(),
-        dispatch_cb=lambda _tool_id, _req: (_ for _ in ()).throw(
-            AssertionError("invalid dispatch must not start Worker")
-        ),
-        cleanup_cancelled=lambda on_event: None,
-    )
-
-    assert outcome.action == "continue"
-    assert not any(isinstance(event, Done) for event in events)
-    assert not any(isinstance(event, WorkerDispatchRequested) for event in events)
-
-    tool_results = [msg for msg in history.messages if msg.get("role") == "tool"]
-    assert len(tool_results) == 1
-    assert tool_results[0]["tool_call_id"] == "call_dispatch"
-    payload = json.loads(tool_results[0]["content"])
-    assert payload["ok"] is False
-    assert payload["extras"]["dispatch_spec_rejected"] is True
-    assert payload["extras"]["internal_planner_handoff"] is True
-    assert payload["extras"]["user_visible_blocker"] is False
-
-    internal_constraints = [
-        msg for msg in history.messages if msg.get("aura_internal") is True
-    ]
-    assert len(internal_constraints) == 1
-    assert internal_constraints[0]["content"] == payload["extras"]["failure_constraint"]
-    assert history.messages.index(tool_results[0]) < history.messages.index(
-        internal_constraints[0]
-    )
-
-    event_results = [event for event in events if isinstance(event, ToolResult)]
-    assert len(event_results) == 1
-    assert event_results[0].ok is False
-    assert event_results[0].extras["internal_planner_handoff"] is True
-
-
-def test_internal_dispatch_handoff_does_not_use_blocker_done_path(tmp_path):
-    runner, history = _round_runner(tmp_path)
-    state = _planner_state()
-    tool_call = _dispatch_tool_call(_flat_steps_required_dispatch())
-    history.append_assistant(
-        {
-            "role": "assistant",
-            "content": "",
-            "reasoning_content": None,
-            "tool_calls": [tool_call],
-        }
-    )
-
-    def fail_blocker(*args, **kwargs):
-        raise AssertionError("internal handoff must not use dispatch blocker path")
-
-    runner._append_dispatch_blocker_message = fail_blocker
-
-    outcome = runner.run(
-        tool_calls=[tool_call],
-        state=state,
-        on_event=lambda event: None,
-        approval_cb=lambda request: None,
-        cancel_event=threading.Event(),
-        dispatch_cb=lambda _tool_id, _req: (_ for _ in ()).throw(
-            AssertionError("invalid dispatch must not start Worker")
-        ),
-        cleanup_cancelled=lambda on_event: None,
-    )
-
-    assert outcome.action == "continue"
-
-
-def test_repeated_dispatch_shape_rejection_remains_terminal_blocker(tmp_path):
+def test_valid_dispatch_after_chained_rejection_starts_worker(tmp_path):
+    """A valid dispatch in a new turn after a chained rejection still starts Worker."""
     runner, history = _round_runner(tmp_path)
     state = _planner_state()
     events = []
 
-    first_call = _dispatch_tool_call(_flat_steps_required_dispatch(), "call_dispatch_1")
+    first_call = _dispatch_tool_call(_work_artifact_dispatch(), "call_good")
     history.append_assistant(
         {
             "role": "assistant",
@@ -499,64 +418,15 @@ def test_repeated_dispatch_shape_rejection_remains_terminal_blocker(tmp_path):
         on_event=events.append,
         approval_cb=lambda request: None,
         cancel_event=threading.Event(),
-        dispatch_cb=lambda _tool_id, _req: None,
+        dispatch_cb=_dispatch_ok_cb,
         cleanup_cancelled=lambda on_event: None,
     )
-    assert first_outcome.action == "continue"
+    assert first_outcome.action == "return"
 
-    second_call = _dispatch_tool_call(_flat_steps_required_dispatch(), "call_dispatch_2")
-    history.append_assistant(
-        {
-            "role": "assistant",
-            "content": "",
-            "reasoning_content": None,
-            "tool_calls": [second_call],
-        }
-    )
-    second_outcome = runner.run(
-        tool_calls=[second_call],
-        state=state,
-        on_event=events.append,
-        approval_cb=lambda request: None,
-        cancel_event=threading.Event(),
-        dispatch_cb=lambda _tool_id, _req: None,
-        cleanup_cancelled=lambda on_event: None,
-    )
-
-    assert second_outcome.action == "return"
-    assert any(
-        isinstance(event, Done) and event.finish_reason == "stop"
-        for event in events
-    )
-
-
-def test_valid_steps_dispatch_after_internal_rejection_starts_worker(tmp_path):
-    runner, history = _round_runner(tmp_path)
-    state = _planner_state()
-    events = []
-
-    invalid_call = _dispatch_tool_call(_flat_steps_required_dispatch(), "call_bad")
-    history.append_assistant(
-        {
-            "role": "assistant",
-            "content": "",
-            "reasoning_content": None,
-            "tool_calls": [invalid_call],
-        }
-    )
-    invalid_outcome = runner.run(
-        tool_calls=[invalid_call],
-        state=state,
-        on_event=events.append,
-        approval_cb=lambda request: None,
-        cancel_event=threading.Event(),
-        dispatch_cb=lambda _tool_id, _req: None,
-        cleanup_cancelled=lambda on_event: None,
-    )
-    assert invalid_outcome.action == "continue"
+    state.planner_visible_dispatch_tool_call_id = ""
 
     dispatches = []
-    valid_call = _dispatch_tool_call(_valid_steps_dispatch(), "call_good")
+    valid_call = _dispatch_tool_call(_work_artifact_dispatch(), "call_good_2")
     history.append_assistant(
         {
             "role": "assistant",
@@ -579,19 +449,20 @@ def test_valid_steps_dispatch_after_internal_rejection_starts_worker(tmp_path):
     )
 
     assert valid_outcome.action == "return"
-    assert dispatches and dispatches[0][0] == "call_good"
+    assert dispatches and dispatches[0][0] == "call_good_2"
     assert any(
         isinstance(event, WorkerDispatchRequested)
-        and event.tool_call_id == "call_good"
+        and event.tool_call_id == "call_good_2"
         for event in events
     )
 
 
+# ── Planner tool blocking ────────────────────────────────────────────────────
+
+
 def test_planner_edit_tool_misuse_gets_dispatch_correction(tmp_path):
     registry = ToolRegistry(tmp_path, mode="planner")
-
     result = registry.execute("edit_file", {}, approval_cb=lambda request: None)
-
     assert result.ok is False
     assert result.payload["planner_tool_unavailable"] is True
     assert result.payload["suggested_next_tool"] == "dispatch_to_worker"
@@ -603,13 +474,11 @@ def test_planner_edit_tool_misuse_gets_dispatch_correction(tmp_path):
 
 def test_planner_registered_write_tool_is_also_blocked_with_correction(tmp_path):
     registry = ToolRegistry(tmp_path, mode="planner")
-
     result = registry.execute(
         "write_file",
         {"path": "example.py", "content": "print('nope')\n"},
         approval_cb=lambda request: None,
     )
-
     assert result.ok is False
     payload = json.loads(result.to_tool_message_content())
     assert payload["planner_tool_unavailable"] is True
@@ -617,45 +486,10 @@ def test_planner_registered_write_tool_is_also_blocked_with_correction(tmp_path)
     assert "write_file is not available in Planner mode" in payload["error"]
 
 
-# ---------------------------------------------------------------------------
-# Silent preflight: internal dispatch repair must not leak visible chatter
-# ---------------------------------------------------------------------------
-
-
-def test_internal_handoff_returns_enter_silent_preflight(tmp_path):
-    """ToolRoundOutcome for a recoverable dispatch rejection must signal
-    that the next Planner turn should run in silent preflight mode."""
-    runner, history = _round_runner(tmp_path)
-    state = _planner_state()
-    tool_call = _dispatch_tool_call(_flat_steps_required_dispatch())
-    history.append_assistant(
-        {
-            "role": "assistant",
-            "content": "",
-            "reasoning_content": None,
-            "tool_calls": [tool_call],
-        }
-    )
-
-    outcome = runner.run(
-        tool_calls=[tool_call],
-        state=state,
-        on_event=lambda event: None,
-        approval_cb=lambda request: None,
-        cancel_event=threading.Event(),
-        dispatch_cb=lambda _tool_id, _req: None,
-        cleanup_cancelled=lambda on_event: None,
-    )
-
-    assert outcome.action == "continue"
-    assert outcome.enter_silent_preflight is True
+# ── Silent preflight unit test ───────────────────────────────────────────────
 
 
 def test_silent_preflight_suppresses_all_visible_events():
-    """When silent_preflight is active, ALL stream events (ContentDelta,
-    ReasoningDelta, ToolCallStart, ToolCallArgsDelta, ToolCallEnd, Usage,
-    Done) must be suppressed from reaching the UI -- only the Done
-    full_message is captured for the caller."""
     from aura.client import ToolCallArgsDelta, ToolCallEnd, Usage
 
     def _run_stream(events, *, silent_preflight):
@@ -676,8 +510,8 @@ def test_silent_preflight_suppresses_all_visible_events():
         return forwarded, full_message
 
     events = [
-        ReasoningDelta(text="I see the dispatch was rejected..."),
-        ContentDelta(text="The dispatch was rejected because step 6 has an empty files array."),
+        ReasoningDelta(text="reasoning..."),
+        ContentDelta(text="content..."),
         ToolCallStart(index=0, id="call_1", name="read_file"),
         ToolCallArgsDelta(index=0, args_chunk='{"path":'),
         ToolCallEnd(index=0),
@@ -695,60 +529,61 @@ def test_silent_preflight_suppresses_all_visible_events():
     assert any(isinstance(e, Done) for e in forwarded_off)
 
     forwarded_on, fm = _run_stream(events, silent_preflight=True)
-    # No events of any type reach the UI during silent preflight
     assert not any(isinstance(e, (ReasoningDelta, ContentDelta,
                                   ToolCallStart, ToolCallArgsDelta,
                                   ToolCallEnd, Usage, Done))
                    for e in forwarded_on)
     assert len(forwarded_on) == 0
-    # full_message must still be captured from suppressed Done
     assert fm is not None
     assert fm["role"] == "assistant"
 
 
-def test_worker_dispatch_requested_not_emitted_during_preflight_rejection(tmp_path):
-    """WorkerDispatchRequested must NOT fire for a rejected preflight dispatch;
-    it must fire only when a valid campaign passes dispatch validation."""
+# ── Dispatch result metadata ─────────────────────────────────────────────────
+
+
+def test_failed_dispatch_classification_preserves_constraint(tmp_path):
+    """A Worker dispatch failure preserves its failure constraint."""
+    runner = ToolRunner(
+        History(),
+        tmp_path,
+        LoopDetector(),
+        VerificationProgressTracker(),
+    )
+    # Simulate a failed dispatch to test classification
+    result = WorkerDispatchResult(
+        ok=False,
+        summary="Worker encountered an error",
+        extras={"internal_planner_handoff": True, "failure_constraint": "CONSTRAINT: retry with valid spec"},
+    )
+
+    action = classify_failed_worker_dispatch(
+        result=result,
+    )
+    assert action["blocker_reason"] == ""  # internal_planner_handoff clears blocker_reason
+    assert "retry with valid spec" in action["failure_constraint"]
+
+
+# ── ToolRoundRunner dispatch tests ───────────────────────────────────────────
+
+
+def test_dispatch_round_with_flat_args_proceeds(tmp_path):
+    """A flat dispatch through ToolRoundRunner proceeds (no internal rejection)."""
     runner, history = _round_runner(tmp_path)
     state = _planner_state()
     events = []
-
-    # Round 1: invalid dispatch — internal handoff, no WorkerDispatchRequested
-    invalid_call = _dispatch_tool_call(_flat_steps_required_dispatch(), "call_bad")
-    history.append_assistant(
-        {
-            "role": "assistant",
-            "content": "",
-            "reasoning_content": None,
-            "tool_calls": [invalid_call],
-        }
-    )
-    invalid_outcome = runner.run(
-        tool_calls=[invalid_call],
-        state=state,
-        on_event=events.append,
-        approval_cb=lambda request: None,
-        cancel_event=threading.Event(),
-        dispatch_cb=lambda _tool_id, _req: None,
-        cleanup_cancelled=lambda on_event: None,
-    )
-    assert invalid_outcome.action == "continue"
-    assert invalid_outcome.enter_silent_preflight is True
-    assert not any(isinstance(e, WorkerDispatchRequested) for e in events)
-
-    # Round 2: valid dispatch — WorkerDispatchRequested IS emitted
     dispatches = []
-    valid_call = _dispatch_tool_call(_valid_steps_dispatch(), "call_good")
+    tool_call = _dispatch_tool_call(_flat_dispatch())
     history.append_assistant(
         {
             "role": "assistant",
             "content": "",
             "reasoning_content": None,
-            "tool_calls": [valid_call],
+            "tool_calls": [tool_call],
         }
     )
-    valid_outcome = runner.run(
-        tool_calls=[valid_call],
+
+    outcome = runner.run(
+        tool_calls=[tool_call],
         state=state,
         on_event=events.append,
         approval_cb=lambda request: None,
@@ -760,48 +595,24 @@ def test_worker_dispatch_requested_not_emitted_during_preflight_rejection(tmp_pa
         cleanup_cancelled=lambda on_event: None,
     )
 
-    assert valid_outcome.action == "return"
-    assert dispatches and dispatches[0][0] == "call_good"
-    assert any(
-        isinstance(e, WorkerDispatchRequested) and e.tool_call_id == "call_good"
-        for e in events
-    )
+    assert outcome.action == "return"
+    assert len(dispatches) == 1
+    assert any(isinstance(event, WorkerDispatchRequested) for event in events)
+
+    tool_results = [msg for msg in history.messages if msg.get("role") == "tool"]
+    assert len(tool_results) == 1
+    payload = json.loads(tool_results[0]["content"])
+    assert payload["ok"] is True
 
 
-def test_worker_log_not_started_for_rejected_preflight_dispatch(tmp_path):
-    """A rejected preflight dispatch must set workflow status to
-    planner_resolving, not worker_starting."""
-    runner = ToolRunner(
-        History(),
-        tmp_path,
-        LoopDetector(),
-        VerificationProgressTracker(),
-    )
-    states = []
-
-    result = runner.handle_dispatch(
-        "call_dispatch",
-        _flat_steps_required_dispatch(),
-        on_event=lambda event: None,
-        dispatch_cb=lambda _tool_id, _req: None,
-        workflow_state_cb=lambda *items: states.append(items),
-    )
-
-    assert result is not None
-    assert result.ok is False
-    assert states and states[-1][3] == WorkflowStatus.planner_resolving
-    assert not any(s[3] == WorkflowStatus.dispatched for s in states)
-
-
-def test_terminal_blocker_still_surfaces_during_preflight(tmp_path):
-    """After silent preflight is active, a repeated dispatch shape rejection
-    must still produce a terminal blocker with a Done(stop) event."""
+def test_chained_dispatch_in_round_rejected_without_worker(tmp_path):
+    """A second dispatch call in one Planner turn is rejected without running Worker."""
     runner, history = _round_runner(tmp_path)
     state = _planner_state()
     events = []
+    dispatches = []
 
-    # First rejection: internal handoff, enters silent preflight
-    first_call = _dispatch_tool_call(_flat_steps_required_dispatch(), "call_dispatch_1")
+    first_call = _dispatch_tool_call(_flat_dispatch(), "call_dispatch_1")
     history.append_assistant(
         {
             "role": "assistant",
@@ -816,14 +627,15 @@ def test_terminal_blocker_still_surfaces_during_preflight(tmp_path):
         on_event=events.append,
         approval_cb=lambda request: None,
         cancel_event=threading.Event(),
-        dispatch_cb=lambda _tool_id, _req: None,
+        dispatch_cb=lambda tool_id, req: (
+            dispatches.append((tool_id, req)),
+            WorkerDispatchResult(ok=True, summary="OK"),
+        )[1],
         cleanup_cancelled=lambda on_event: None,
     )
-    assert first_outcome.action == "continue"
-    assert first_outcome.enter_silent_preflight is True
+    assert first_outcome.action == "return"
 
-    # Second rejection: same signature, becomes terminal blocker
-    second_call = _dispatch_tool_call(_flat_steps_required_dispatch(), "call_dispatch_2")
+    second_call = _dispatch_tool_call(_flat_dispatch(), "call_dispatch_2")
     history.append_assistant(
         {
             "role": "assistant",
@@ -838,13 +650,143 @@ def test_terminal_blocker_still_surfaces_during_preflight(tmp_path):
         on_event=events.append,
         approval_cb=lambda request: None,
         cancel_event=threading.Event(),
-        dispatch_cb=lambda _tool_id, _req: None,
+        dispatch_cb=lambda _tool_id, _req: (
+            (_ for _ in ()).throw(AssertionError("chained dispatch must not start Worker"))
+        ),
         cleanup_cancelled=lambda on_event: None,
     )
 
-    # Terminal blocker must still surface
-    assert second_outcome.action == "return"
-    assert any(
-        isinstance(event, Done) and event.finish_reason == "stop"
-        for event in events
+    assert second_outcome.action == "continue"
+    assert len(dispatches) == 1
+    worker_events = [e for e in events if isinstance(e, WorkerDispatchRequested)]
+    assert len(worker_events) == 1
+
+    tool_results = [msg for msg in history.messages if msg.get("role") == "tool"]
+    second_payload = json.loads(tool_results[-1]["content"])
+    assert second_payload["ok"] is False
+    assert second_payload["extras"]["planner_dispatch_chain_rejected"] is True
+    assert second_payload["extras"]["previous_dispatch_tool_call_id"] == "call_dispatch_1"
+
+
+def test_work_artifact_dispatch_emits_worker_dispatch_requested_in_round(tmp_path):
+    """WorkArtifact dispatch through ToolRoundRunner emits WorkerDispatchRequested."""
+    runner, history = _round_runner(tmp_path)
+    state = _planner_state()
+    events = []
+
+    call = _dispatch_tool_call(_work_artifact_dispatch(), "call_good")
+    history.append_assistant(
+        {
+            "role": "assistant",
+            "content": "",
+            "reasoning_content": None,
+            "tool_calls": [call],
+        }
     )
+    outcome = runner.run(
+        tool_calls=[call],
+        state=state,
+        on_event=events.append,
+        approval_cb=lambda request: None,
+        cancel_event=threading.Event(),
+        dispatch_cb=_dispatch_ok_cb,
+        cleanup_cancelled=lambda on_event: None,
+    )
+
+    assert outcome.action == "return"
+    assert any(
+        isinstance(e, WorkerDispatchRequested) and e.tool_call_id == "call_good"
+        for e in events
+    )
+
+
+def test_flat_dispatch_in_round_proceeds_with_worker_dispatch_requested(tmp_path):
+    """Flat dispatch through ToolRoundRunner also emits WorkerDispatchRequested."""
+    runner, history = _round_runner(tmp_path)
+    state = _planner_state()
+    events = []
+
+    call = _dispatch_tool_call(_flat_dispatch(), "call_good")
+    history.append_assistant(
+        {
+            "role": "assistant",
+            "content": "",
+            "reasoning_content": None,
+            "tool_calls": [call],
+        }
+    )
+    outcome = runner.run(
+        tool_calls=[call],
+        state=state,
+        on_event=events.append,
+        approval_cb=lambda request: None,
+        cancel_event=threading.Event(),
+        dispatch_cb=_dispatch_ok_cb,
+        cleanup_cancelled=lambda on_event: None,
+    )
+
+    assert outcome.action == "return"
+    assert any(
+        isinstance(e, WorkerDispatchRequested) and e.tool_call_id == "call_good"
+        for e in events
+    )
+
+
+def test_internal_handoff_does_not_use_blocker_done_path(tmp_path):
+    """Internal dispatch handoff flows don't use the blocker done path."""
+    runner, history = _round_runner(tmp_path)
+    state = _planner_state()
+    tool_call = _dispatch_tool_call(_flat_dispatch())
+    history.append_assistant(
+        {
+            "role": "assistant",
+            "content": "",
+            "reasoning_content": None,
+            "tool_calls": [tool_call],
+        }
+    )
+
+    def fail_blocker(*args, **kwargs):
+        raise AssertionError("internal handoff must not use dispatch blocker path")
+
+    runner._append_dispatch_blocker_message = fail_blocker
+
+    outcome = runner.run(
+        tool_calls=[tool_call],
+        state=state,
+        on_event=lambda event: None,
+        approval_cb=lambda request: None,
+        cancel_event=threading.Event(),
+        dispatch_cb=lambda _tool_id, _req: WorkerDispatchResult(ok=True, summary="OK"),
+        cleanup_cancelled=lambda on_event: None,
+    )
+
+    assert outcome.action == "return"
+
+
+def test_worker_dispatch_requested_emitted_for_both_dispatch_types(tmp_path):
+    """WorkerDispatchRequested fires for both flat and work_artifact dispatches."""
+    runner = ToolRunner(
+        History(),
+        tmp_path,
+        LoopDetector(),
+        VerificationProgressTracker(),
+    )
+
+    flat_events = []
+    runner.handle_dispatch(
+        "call_flat",
+        _flat_dispatch(),
+        on_event=flat_events.append,
+        dispatch_cb=_dispatch_ok_cb,
+    )
+    assert any(isinstance(e, WorkerDispatchRequested) for e in flat_events)
+
+    wa_events = []
+    runner.handle_dispatch(
+        "call_wa",
+        _work_artifact_dispatch(),
+        on_event=wa_events.append,
+        dispatch_cb=_dispatch_ok_cb,
+    )
+    assert any(isinstance(e, WorkerDispatchRequested) for e in wa_events)

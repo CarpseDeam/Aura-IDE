@@ -16,6 +16,7 @@ Planner / worker mode:
 from __future__ import annotations
 
 import copy
+import logging
 import threading
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -74,6 +75,8 @@ from aura.conversation.tools import (
 )
 from aura.model_streams import model_streams
 from aura.research.policy import NO_RESEARCH, decide_research_policy
+
+_log = logging.getLogger(__name__)
 
 
 class _Worker(QObject):
@@ -197,6 +200,25 @@ class _Worker(QObject):
             self.agentProcessFinished.emit(ev.process_id, ev.exit_code)
 
 
+class _ArtifactItemDispatchWorker(QObject):
+    """Short-lived worker that dispatches the next artifact item on a background thread."""
+
+    def __init__(
+        self,
+        dispatch_proxy: "_DispatchProxy",
+        tool_call_id: str,
+    ) -> None:
+        super().__init__()
+        self._dispatch_proxy = dispatch_proxy
+        self._tool_call_id = tool_call_id
+
+    def run(self) -> None:
+        result = self._dispatch_proxy.dispatch_next_item(self._tool_call_id)
+        _log.info(
+            "dispatch_next_item completed tool_call_id=%s result_ok=%s",
+            self._tool_call_id, result.ok if result is not None else "None",
+        )
+        self.thread().quit()
 
 
 class ConversationBridge(QObject):
@@ -239,6 +261,7 @@ class ConversationBridge(QObject):
     workerAgentProcessStarted = Signal(str, str, str, str)
     workerAgentProcessOutput = Signal(str, str, str)
     workerAgentProcessFinished = Signal(str, str, object)
+    artifactProjectionUpdated = Signal(object)  # WorkArtifactProjection
 
     # Terminal output (single mode)
     terminalOutput = Signal(str, str)  # tool_call_id, text
@@ -320,6 +343,7 @@ class ConversationBridge(QObject):
         self._dispatch_proxy.workerAgentProcessStarted.connect(self.workerAgentProcessStarted)
         self._dispatch_proxy.workerAgentProcessOutput.connect(self.workerAgentProcessOutput)
         self._dispatch_proxy.workerAgentProcessFinished.connect(self.workerAgentProcessFinished)
+        self._dispatch_proxy.artifactProjectionUpdated.connect(self.artifactProjectionUpdated)
 
     # ---- config -----------------------------------------------------------
 
@@ -549,6 +573,22 @@ class ConversationBridge(QObject):
 
     def user_cancelled_dispatch(self, tool_call_id: str) -> bool:
         return self._dispatch_proxy.user_cancelled(tool_call_id)
+
+    def dispatch_next_artifact_item(self, tool_call_id: str) -> None:
+        """Review and dispatch the next artifact item on a background thread.
+
+        Called from the GUI thread when the user clicks "Review current item"
+        on the WorkArtifactCard.  Spawns a short-lived QThread that calls
+        DispatchProxy.dispatch_next_item() (which blocks on user decision).
+        """
+        thread = QThread(self)
+        worker = _ArtifactItemDispatchWorker(
+            self._dispatch_proxy, tool_call_id,
+        )
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        thread.finished.connect(thread.deleteLater)
+        thread.start()
 
     # ---- send / cancel ----------------------------------------------------
 
