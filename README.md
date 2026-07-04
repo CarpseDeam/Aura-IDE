@@ -6,7 +6,7 @@
 [![Discord](https://img.shields.io/badge/Discord-Join%20Aura-5865F2?logo=discord&logoColor=white)](https://discord.gg/aGSthBX2Bg)
 [![Latest release](https://img.shields.io/github/v/release/CarpseDeam/Aura-IDE?label=release&color=orange)](https://github.com/CarpseDeam/Aura-IDE/releases/latest)
 <a href="https://www.producthunt.com/products/aura-ide?embed=true&utm_source=badge-featured&utm_medium=badge&utm_campaign=badge-aura-ide" target="_blank" rel="noopener noreferrer">
-  <img alt="Aura IDE - Open source AI coding harness you control | Product Hunt" width="150" height="54" src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1162818&theme=light&t=1780584703498">
+  <img alt="Aura IDE - Open source AI coding harness you control | Product Hunt" width="100" height="50" src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1162818&theme=light&t=1780584703498">
 </a>
 
 **A desktop coding agent with a phone-side command center.**
