@@ -364,6 +364,76 @@ class TestRefreshProjectsInPlace:
         assert row_after.title_label.full_text() == "Renamed"
         assert row_after.title_label.toolTip() == "Renamed"
 
+    def test_active_project_not_last_still_updates_in_place(self, pane, mock_store):
+        """Multiple projects with active first — snapshot detects correct active
+        project via ``row.is_active``, not position."""
+        root = Path("/tmp/test-workspace")
+        p1 = _make_project("p1", "Active Project", root)
+        p2 = _make_project("p2", "Inactive Project", Path("/tmp/other"))
+        threads_p1 = [
+            _make_thread("t1", "p1", "Active Thread 1", "s1"),
+            _make_thread("t2", "p1", "Active Thread 2", "s2"),
+        ]
+        threads_p2: list[ProjectThread] = []
+
+        mock_store.list_projects.return_value = [p1, p2]
+        mock_store.load_project.side_effect = lambda pid: {  # type: ignore[attr-defined]
+            "p1": p1,
+            "p2": p2,
+        }.get(pid)
+
+        # list_threads depends on which project
+        def _list_threads(proj, **kw):
+            if proj.id == "p1":
+                return list(threads_p1)
+            return list(threads_p2)
+
+        mock_store.list_threads.side_effect = _list_threads
+
+        # First call — build
+        pane.refresh_projects(root)
+        prows = _project_rows(pane)
+        assert len(prows) == 2
+        assert prows[0].is_active is True   # p1 is active, first in layout
+        assert prows[1].is_active is False  # p2 is inactive
+
+        trows_before = _thread_rows(pane)
+        assert len(trows_before) == 2
+        row_t1_before = trows_before[0]
+        row_t2_before = trows_before[1]
+
+        # Second call — same structure, only thread metadata changed
+        threads_p1_updated = [
+            _make_thread("t1", "p1", "Active Thread 1 Updated", "s1 updated"),
+            _make_thread("t2", "p1", "Active Thread 2 Updated", "s2 updated"),
+        ]
+        # Update the side_effect closure
+        def _list_threads_v2(proj, **kw):
+            if proj.id == "p1":
+                return list(threads_p1_updated)
+            return list(threads_p2)
+
+        mock_store.list_threads.side_effect = _list_threads_v2
+
+        pane.refresh_projects(root)
+        trows_after = _thread_rows(pane)
+        assert len(trows_after) == 2
+
+        # Same widget objects — not recreated
+        assert trows_after[0] is row_t1_before
+        assert trows_after[1] is row_t2_before
+
+        # Labels updated in place
+        assert trows_after[0].title_label.full_text() == "Active Thread 1 Updated"
+        assert trows_after[0].title_label.toolTip() == "s1 updated"
+        assert trows_after[1].title_label.full_text() == "Active Thread 2 Updated"
+        assert trows_after[1].title_label.toolTip() == "s2 updated"
+
+        # Snapshot captures active correctly from is_active, not position
+        snap = pane._capture_layout_snapshot()
+        assert snap["active_project_id"] == "p1"
+        assert snap["project_ids"] == ["p1", "p2"]
+
 
 class TestRefreshProjectsRebuild:
     def test_workspace_root_change_rebuilds(self, pane, mock_store):

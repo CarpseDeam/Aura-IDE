@@ -467,6 +467,7 @@ class LeftPane(QFrame):
         collapsed: dict[str, bool] = {}
         visible_thread_ids: dict[str, list[str]] = {}
         has_more: dict[str, bool] = {}
+        active_project_id: str | None = None
 
         current_project_id: str | None = None
 
@@ -483,6 +484,8 @@ class LeftPane(QFrame):
                 project_ids.append(pid)
                 collapsed[pid] = w._collapsed
                 current_project_id = pid
+                if w.is_active:
+                    active_project_id = pid
                 visible_thread_ids[pid] = []
                 has_more[pid] = False
             elif isinstance(w, _ThreadRow) and current_project_id is not None:
@@ -493,9 +496,7 @@ class LeftPane(QFrame):
         return {
             "workspace_root": self._last_workspace_root,
             "project_ids": project_ids,
-            "active_project_id": (
-                project_ids[-1] if project_ids else None
-            ),  # last project row is active (current code pattern)
+            "active_project_id": active_project_id,
             "collapsed": collapsed,
             "show_all": self._show_all_active_threads,
             "visible_thread_ids": visible_thread_ids,
