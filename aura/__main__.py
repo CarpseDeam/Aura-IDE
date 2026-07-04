@@ -64,6 +64,10 @@ def _run_app(log_path: Path, args: argparse.Namespace, qt_argv: list[str]) -> in
     logger.info("data path: %s", data_dir())
     logger.info("startup log path: %s", log_path)
 
+    from aura.windows_app_id import set_current_process_app_user_model_id
+
+    set_current_process_app_user_model_id()
+
     from PySide6.QtCore import QCoreApplication, Qt, QTimer
     from PySide6.QtGui import QGuiApplication, QIcon
     from PySide6.QtWidgets import QApplication, QMessageBox
