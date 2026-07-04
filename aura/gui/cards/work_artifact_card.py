@@ -75,11 +75,11 @@ class WorkArtifactCard(QFrame):
         )
         if projection.is_complete:
             summary_text += " · ✅ Complete"
-        summary_label = QLabel(summary_text)
-        summary_label.setStyleSheet(
+        self._summary_label = QLabel(summary_text)
+        self._summary_label.setStyleSheet(
             f"color: {FG_DIM}; font-size: 11px; background: transparent; border: none;"
         )
-        outer.addWidget(summary_label)
+        outer.addWidget(self._summary_label)
 
         # ── Constraints section ──
         if projection.constraints:
@@ -217,11 +217,48 @@ class WorkArtifactCard(QFrame):
     # ── public API ────────────────────────────────────────────────────────
 
     def update_projection(self, projection: WorkArtifactProjection) -> None:
-        """Update the card with a new projection snapshot."""
+        """Update the card with a new projection snapshot — rebuilds item rows and summary."""
         self._projection = projection
-        # For simplicity, we'd rebuild the card. In practice, this would
-        # update in-place. The card is typically replaced on projection changes.
-        self._review_btn.setText("Review current item" if not projection.is_complete else "All items complete")
+
+        # Update summary counts
+        summary_text = (
+            f"{projection.completed_count} done · "
+            f"{projection.blocked_count} blocked · "
+            f"{projection.pending_count} pending"
+        )
+        if projection.is_complete:
+            summary_text += " · ✅ Complete"
+        self._summary_label.setText(summary_text)
+
+        # Tear down old item widgets
+        layout = self.layout()
+        for widget in self._item_widgets:
+            layout.removeWidget(widget)
+            widget.deleteLater()
+        self._item_widgets.clear()
+
+        # Find insertion point — just before the review button
+        btn_idx = -1
+        for i in range(layout.count()):
+            if layout.itemAt(i) and layout.itemAt(i).widget() is self._review_btn:
+                btn_idx = i
+                break
+
+        # Rebuild item rows from the new projection
+        if btn_idx >= 0:
+            insert_at = btn_idx
+            for item_dict in projection.items:
+                frame = self._build_item_row(item_dict)
+                self._item_widgets.append(frame)
+                layout.insertWidget(insert_at, frame)
+                insert_at += 1
+        else:
+            # Fallback — shouldn't happen, but just append
+            for item_dict in projection.items:
+                frame = self._build_item_row(item_dict)
+                self._item_widgets.append(frame)
+                layout.addWidget(frame)
+
         self._update_button_state()
 
     def tool_call_id(self) -> str:

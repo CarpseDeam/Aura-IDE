@@ -13,6 +13,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from aura.conversation.chat_transcript import (
+    clone_chat_items,
+    planner_item,
+    user_item,
+    worker_complete_item,
+)
 from aura.gui.cards._helpers import _fade_in_widget
 from aura.gui.cards.assistant_card import AssistantCard
 from aura.gui.cards.code_writer_card import CodeWriterCard
@@ -25,12 +31,6 @@ from aura.gui.cards.terminal_card import TerminalCard
 from aura.gui.cards.user_card import UserCard
 from aura.gui.cards.work_artifact_card import WorkArtifactCard
 from aura.gui.cards.worker_summary_card import WorkerSummaryCard
-from aura.conversation.chat_transcript import (
-    clone_chat_items,
-    planner_item,
-    user_item,
-    worker_complete_item,
-)
 from aura.gui.controllers import ToolStreamController
 from aura.gui.theme import (
     ACCENT,
@@ -38,7 +38,6 @@ from aura.gui.theme import (
     FG_ITALIC,
 )
 from aura.gui.widgets.aura_glow import AuraWidget
-
 
 _DISPATCH_COMPLETE_STATUSES = {"completed", "completed_with_caveats"}
 
@@ -658,7 +657,6 @@ class ChatView(QScrollArea):
         controller = self._controllers.pop(tool_call_id, None)
         if controller:
             if controller.tool_name == "dispatch_to_worker":
-                summary = ""
                 needs_followup = False
                 status = None
                 dispatch_not_started = False
@@ -680,7 +678,6 @@ class ChatView(QScrollArea):
                         approval_timeout = extras.get("dispatch_approval_timeout", False)
                         cancelled = extras.get("dispatch_cancelled", False)
                     else:
-                        summary = data.get("summary", "")
                         needs_followup = bool(data.get("needs_followup", False))
                         status = data.get("status")
                     if _is_terminal_worker_success(
@@ -886,7 +883,6 @@ class ChatView(QScrollArea):
         spec: str,
         acceptance: str,
         summary: str = "",
-        steps: list | None = None,
     ) -> SpecCard:
         # Remove the in-flight plan writer card for this call ID (baton pass).
         self._remove_plan_writer_card(tool_call_id)

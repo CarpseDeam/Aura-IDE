@@ -25,7 +25,7 @@ from aura.prompts import (
 from aura.settings import resolve_role_default_model
 
 if TYPE_CHECKING:
-    from aura.config import ProviderId
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -192,7 +192,7 @@ class HarnessLapBridge(QObject):
 
             # Auto-dispatch: connect showSpecCard to user_dispatched
             self._dispatch_proxy.showSpecCard.connect(
-                lambda tool_id, goal, files, spec, acceptance, summary, steps: (
+                lambda tool_id, goal, files, spec, acceptance, summary: (
                     self._dispatch_proxy.user_dispatched(
                         tool_id, goal, list(files), spec, acceptance, summary
                     )

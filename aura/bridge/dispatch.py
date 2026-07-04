@@ -49,11 +49,10 @@ from aura.conversation.tool_limits import TERMINAL_TOOLS, WRITE_TOOLS
 from aura.conversation.workflow_state import WorkflowState, WorkflowStatus
 from aura.dependency_context import build_dependency_stanza
 from aura.events import EventBus
-from aura.lifecycle import HookContext, HookMatcher, LifecycleHooks, attach_lifecycle_notify
+from aura.lifecycle import LifecycleHooks, attach_lifecycle_notify
 from aura.lifecycle.builtin_worker_gates import register_builtin_worker_gates
 from aura.work_artifact.controller import WorkArtifactController
 from aura.work_artifact.projection import WorkArtifactProjection
-from aura.work_artifact.receipt import worker_result_to_receipt
 from aura.worker_todo import WorkerTodoProjector
 
 __all__ = [
@@ -70,7 +69,7 @@ _log = logging.getLogger(__name__)
 
 
 class _DispatchProxy(QObject):
-    showSpecCard = Signal(str, str, list, str, str, str, list)  # tool_id, goal, files, spec, acceptance, summary, steps (legacy, always [])
+    showSpecCard = Signal(str, str, list, str, str, str)  # tool_id, goal, files, spec, acceptance, summary
     workerStarted = Signal(str)  # tool_id
     workerFinished = Signal(str, bool, str, bool, str)  # tool_id, ok, summary, needs_followup, status
     workerCancelled = Signal(str)
@@ -267,7 +266,6 @@ class _DispatchProxy(QObject):
             req.spec,
             req.acceptance,
             req.summary,
-            [],  # legacy steps — always empty
         )
         _log.info("request_dispatch showSpecCard emitted tool_call_id=%s", tool_call_id)
 

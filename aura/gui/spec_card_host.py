@@ -38,7 +38,6 @@ class SpecCardHost(QWidget):
         spec: str,
         acceptance: str,
         summary: str = "",
-        steps: list | None = None,
     ) -> SpecCard:
         existing = self._cards.get(tool_call_id)
         if existing is not None:

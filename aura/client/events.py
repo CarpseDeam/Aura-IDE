@@ -85,7 +85,6 @@ class WorkerDispatchRequested:
     spec: str
     acceptance: str
     summary: str
-    steps: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass

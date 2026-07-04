@@ -143,10 +143,9 @@ def _planner_write_tool_correction(name: str) -> ToolExecResult:
     failure_constraint = (
         "CONSTRAINT FOR NEXT DISPATCH ATTEMPT: Planner cannot edit files or "
         f"call {name}. Do not call edit/write tools. Use dispatch_to_worker "
-        "as the implementation deliverable. If a previous dispatch_to_worker "
-        "call was rejected for missing steps, re-call dispatch_to_worker now "
-        "with a steps array where every step includes id, title, goal, spec, "
-        "files, and acceptance."
+        "as the implementation deliverable. For multi-part work, include a "
+        "work_artifact_payload in the dispatch_to_worker call to define "
+        "multiple related items for sequential implementation."
     )
     payload = {
         "ok": False,

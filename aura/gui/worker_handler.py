@@ -14,7 +14,7 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QObject, Signal, QTimer
+from PySide6.QtCore import QObject, QTimer, Signal
 
 from aura.config import redact_secrets
 
@@ -172,7 +172,6 @@ class WorkerEventHandler(QObject):
         spec: str,
         acceptance: str,
         summary: str,
-        steps: list | None = None,
     ) -> None:
         """Route Planner dispatch requests through auto or manual review."""
         if self._finish_presenter.resolve_active_mismatch():

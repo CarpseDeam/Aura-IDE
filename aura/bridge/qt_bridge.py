@@ -91,7 +91,7 @@ class _Worker(QObject):
     apiError = Signal(int, str)
     streamDone = Signal(str, dict)
     toolResultEmitted = Signal(str, str, bool, str, dict)
-    workerDispatchRequested = Signal(str, str, list, str, str, str, list)
+    workerDispatchRequested = Signal(str, str, list, str, str, str)
     terminalOutput = Signal(str, str)  # (tool_call_id, text)
     agentProcessStarted = Signal(str, str, str)  # process_id, label, command
     agentProcessOutput = Signal(str, str)  # process_id, text
@@ -188,7 +188,6 @@ class _Worker(QObject):
                 ev.spec,
                 ev.acceptance,
                 ev.summary,
-                list(ev.steps),
             )
         elif isinstance(ev, TerminalOutput):
             self.terminalOutput.emit(ev.tool_call_id, ev.text)
@@ -241,7 +240,7 @@ class ConversationBridge(QObject):
 
     # Planner / worker signals (re-exposed from the dispatch proxy so the GUI
     # binds to a single object).
-    workerDispatchRequested = Signal(str, str, list, str, str, str, list)
+    workerDispatchRequested = Signal(str, str, list, str, str, str)
     workerStarted = Signal(str)
     workerFinished = Signal(str, bool, str, bool, str)
     workerCancelled = Signal(str)
@@ -587,6 +586,7 @@ class ConversationBridge(QObject):
         )
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
+        thread.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
         thread.start()
 
@@ -697,7 +697,7 @@ class ConversationBridge(QObject):
                 )
         self.toolResult.emit(tool_id, name, ok, result, extras)
 
-    @Slot(str, str, list, str, str, str, list)
+    @Slot(str, str, list, str, str, str)
     def _on_worker_dispatch_requested(
         self,
         tool_call_id: str,
@@ -706,7 +706,6 @@ class ConversationBridge(QObject):
         spec: str,
         acceptance: str,
         summary: str,
-        steps: list,
     ) -> None:
         # The proxy's showSpecCard is the GUI's source of truth for spec
         # cards — the manager event arrives milliseconds earlier on the same
