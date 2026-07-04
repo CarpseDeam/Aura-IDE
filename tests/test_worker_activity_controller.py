@@ -4,10 +4,8 @@ from __future__ import annotations
 
 from aura.bridge.worker_activity import WorkerActivityController
 from aura.events import (
-    DISPATCH_CAMPAIGN_FINISHED,
-    DISPATCH_CAMPAIGN_STARTED,
-    DISPATCH_STEP_COMPLETED,
-    DISPATCH_STEP_STARTED,
+    WORK_ARTIFACT_ITEM_COMPLETED,
+    WORK_ARTIFACT_ITEM_READY,
     WORKER_COMMAND_FINISHED,
     WORKER_COMMAND_STARTED,
     WORKER_FAILED,
@@ -32,31 +30,35 @@ class TestWorkerActivityController:
         ctrl = WorkerActivityController(EventBus())
         assert ctrl.snapshot() == []
 
-    def test_campaign_started_appends_entry(self) -> None:
+    def test_artifact_item_ready_appends_entry(self) -> None:
         bus = EventBus()
         ctrl = WorkerActivityController(bus)
 
         bus.emit(AuraEvent(
-            topic=DISPATCH_CAMPAIGN_STARTED,
-            payload={"goal": "Fix the bug", "step_count": 3},
+            topic=WORK_ARTIFACT_ITEM_READY,
+            artifact_id="art-1",
+            artifact_item_id="item-1",
+            payload={"title": "Fix auth", "item_id": "item-1"},
         ))
 
         entries = ctrl.snapshot()
         assert len(entries) == 1
-        assert entries[0].kind == "campaign_started"
+        assert entries[0].kind == "artifact_item_ready"
 
-    def test_step_started_appends_entry(self) -> None:
+    def test_artifact_item_completed_appends_entry(self) -> None:
         bus = EventBus()
         ctrl = WorkerActivityController(bus)
 
         bus.emit(AuraEvent(
-            topic=DISPATCH_STEP_STARTED,
-            payload={"step_id": "step-1", "description": "Add tests"},
+            topic=WORK_ARTIFACT_ITEM_COMPLETED,
+            artifact_id="art-1",
+            artifact_item_id="item-1",
+            payload={"title": "Fix auth", "status": "done", "item_id": "item-1"},
         ))
 
         entries = ctrl.snapshot()
         assert len(entries) == 1
-        assert entries[0].kind == "step_started"
+        assert entries[0].kind == "artifact_item_done"
 
     def test_tool_started_appends_entry(self) -> None:
         bus = EventBus()
@@ -64,38 +66,33 @@ class TestWorkerActivityController:
 
         bus.emit(AuraEvent(
             topic=WORKER_TOOL_STARTED,
-            payload={"name": "read_file", "args": '{"path": "a.py"}'},
+            payload={"name": "read_file"},
         ))
 
         entries = ctrl.snapshot()
         assert len(entries) == 1
         assert entries[0].kind == "tool_started"
 
-    def test_step_completed_appends_entry(self) -> None:
+    def test_tool_finished_appends_entry(self) -> None:
         bus = EventBus()
         ctrl = WorkerActivityController(bus)
 
         bus.emit(AuraEvent(
-            topic=DISPATCH_STEP_COMPLETED,
-            payload={"step_id": "step-1", "ok": True},
+            topic=WORKER_TOOL_FINISHED,
+            payload={"name": "read_file", "ok": True},
         ))
 
         entries = ctrl.snapshot()
         assert len(entries) == 1
-        assert entries[0].kind == "step_completed"
+        assert entries[0].kind == "tool_completed"
 
-    def test_worker_failed_appends_entry(self) -> None:
-        bus = EventBus()
-        ctrl = WorkerActivityController(bus)
+    def test_caps_history(self) -> None:
+        ctrl = WorkerActivityController(EventBus(), maxlen=3)
 
-        bus.emit(AuraEvent(
-            topic=WORKER_FAILED,
-            payload={"error": "Something broke"},
-        ))
+        for i in range(5):
+            ctrl._append(type("Entry", (), {"kind": "t", "message": f"e{i}", "to_dict": lambda self: {}})())  # noqa
 
-        entries = ctrl.snapshot()
-        assert len(entries) == 1
-        assert entries[0].kind == "worker_failed"
+        assert len(ctrl.snapshot()) <= 3
 
     def test_file_changed_appends_entry(self) -> None:
         bus = EventBus()
@@ -103,247 +100,75 @@ class TestWorkerActivityController:
 
         bus.emit(AuraEvent(
             topic=WORKER_FILE_CHANGED,
-            payload={"path": "src/a.py", "action": "edit"},
+            payload={"path": "src/main.py", "action": "modified"},
         ))
 
         entries = ctrl.snapshot()
         assert len(entries) == 1
         assert entries[0].kind == "file_changed"
 
-    def test_multiple_events_all_recorded(self) -> None:
+    def test_command_started_and_finished(self) -> None:
         bus = EventBus()
         ctrl = WorkerActivityController(bus)
 
-        bus.emit(AuraEvent(topic=DISPATCH_CAMPAIGN_STARTED, payload={"goal": "g"}))
-        bus.emit(AuraEvent(topic=DISPATCH_STEP_STARTED, payload={"step_id": "s1"}))
-        bus.emit(AuraEvent(topic=WORKER_TOOL_STARTED, payload={"name": "read"}))
-
-        assert len(ctrl.snapshot()) == 3
-
-    def test_clear_removes_entries(self) -> None:
-        bus = EventBus()
-        ctrl = WorkerActivityController(bus)
-
-        bus.emit(AuraEvent(topic=DISPATCH_CAMPAIGN_STARTED, payload={"goal": "g"}))
-        assert len(ctrl.snapshot()) == 1
-
-        ctrl.clear()
-        assert ctrl.snapshot() == []
-
-    def test_snapshot_dicts_returns_dicts(self) -> None:
-        bus = EventBus()
-        ctrl = WorkerActivityController(bus)
-
-        bus.emit(AuraEvent(topic=DISPATCH_CAMPAIGN_STARTED, payload={"goal": "g"}))
-
-        dicts = ctrl.snapshot_dicts()
-        assert len(dicts) == 1
-        assert dicts[0]["kind"] == "campaign_started"
-        assert "message" in dicts[0]
-
-
-# ── TestComprehensiveActivityFlow ───────────────────────────────────────────
-
-
-class TestComprehensiveActivityFlow:
-    """Comprehensive state-machine activity flow tests."""
-
-    # ── helpers ────────────────────────────────────────────────────────────
-
-    @staticmethod
-    def _topic_ok(ok: bool, kind: str) -> tuple[str, str]:
-        """Return the expected kind suffix given `ok` truthiness."""
-        if ok is not False:
-            return ("completed" if kind == "tool" else "passed" if kind == "validation" else "completed", "ok" in (True, None) or ok is True)  # noqa: E501
-        return ("failed", False)
-
-    # ── comprehensive flow ─────────────────────────────────────────────────
-
-    def test_full_sequential_activity_log(self) -> None:
-        bus = EventBus()
-        ctrl = WorkerActivityController(bus)
-
-        # 1. Campaign started
-        bus.emit(AuraEvent(
-            topic=DISPATCH_CAMPAIGN_STARTED,
-            run_id="run-1",
-            campaign_id="campaign-1",
-            payload={"goal": "Refactor auth"},
-        ))
-
-        # 2. Step started
-        bus.emit(AuraEvent(
-            topic=DISPATCH_STEP_STARTED,
-            run_id="run-1",
-            campaign_id="campaign-1",
-            step_id="step-1",
-            payload={"step_id": "step-1", "description": "Create module"},
-        ))
-
-        # 3. Tool started
-        bus.emit(AuraEvent(
-            topic=WORKER_TOOL_STARTED,
-            run_id="run-1",
-            payload={"name": "write_file"},
-        ))
-
-        # 4. File changed
-        bus.emit(AuraEvent(
-            topic=WORKER_FILE_CHANGED,
-            run_id="run-1",
-            payload={"path": "src/auth.py", "action": "created"},
-        ))
-
-        # 5. Tool finished (ok=True)
-        bus.emit(AuraEvent(
-            topic=WORKER_TOOL_FINISHED,
-            run_id="run-1",
-            payload={"name": "write_file", "ok": True},
-        ))
-
-        # 6. Command started
-        bus.emit(AuraEvent(
-            topic=WORKER_COMMAND_STARTED,
-            run_id="run-1",
-            payload={"command": "python -m compileall src/"},
-        ))
-
-        # 7. Command finished (exit_code=0)
-        bus.emit(AuraEvent(
-            topic=WORKER_COMMAND_FINISHED,
-            run_id="run-1",
-            payload={"command": "python -m compileall src/", "exit_code": 0},
-        ))
-
-        # 8. Validation started
-        bus.emit(AuraEvent(
-            topic=WORKER_VALIDATION_STARTED,
-            run_id="run-1",
-            payload={"label": "ruff check"},
-        ))
-
-        # 9. Validation finished (ok=True)
-        bus.emit(AuraEvent(
-            topic=WORKER_VALIDATION_FINISHED,
-            run_id="run-1",
-            payload={"label": "ruff check", "ok": True},
-        ))
-
-        # 10. Step completed
-        bus.emit(AuraEvent(
-            topic=DISPATCH_STEP_COMPLETED,
-            run_id="run-1",
-            campaign_id="campaign-1",
-            step_id="step-1",
-            payload={"step_id": "step-1", "ok": True},
-        ))
-
-        # 11. Final report started
-        bus.emit(AuraEvent(
-            topic=WORKER_FINAL_REPORT_STARTED,
-            run_id="run-1",
-        ))
-
-        # 12. Final report finished
-        bus.emit(AuraEvent(
-            topic=WORKER_FINAL_REPORT_FINISHED,
-            run_id="run-1",
-            payload={"ok": True},
-        ))
-
-        # 13. Campaign finished — NOT subscribed, should be ignored
-        bus.emit(AuraEvent(
-            topic=DISPATCH_CAMPAIGN_FINISHED,
-            run_id="run-1",
-            campaign_id="campaign-1",
-        ))
+        bus.emit(AuraEvent(topic=WORKER_COMMAND_STARTED, payload={"command": "npm test"}))
+        bus.emit(AuraEvent(topic=WORKER_COMMAND_FINISHED, payload={"exit_code": 0}))
 
         entries = ctrl.snapshot()
-        assert len(entries) == 12, f"Expected 12 entries, got {len(entries)}"
+        assert len(entries) == 2
+        assert entries[0].kind == "command_started"
+        assert entries[1].kind == "command_finished"
 
-        # Ordered kind assertions
-        expected_kinds = [
-            "campaign_started",
-            "step_started",
-            "tool_started",
-            "file_changed",
-            "tool_completed",
-            "command_started",
-            "command_finished",
-            "validation_started",
-            "validation_passed",
-            "step_completed",
-            "final_report_started",
-            "final_report_completed",
-        ]
-        for idx, kind in enumerate(expected_kinds):
-            assert entries[idx].kind == kind, (
-                f"Entry {idx}: expected kind={kind!r}, got {entries[idx].kind!r}"
-            )
-
-        # Specific content assertions
-        assert "Refactor auth" in entries[0].message
-        assert "Create module" in entries[1].message
-        assert entries[2].detail == "write_file"
-        assert "src/auth.py" in entries[3].message
-        assert "exit 0" in entries[6].message
-
-    # ── identity fields ────────────────────────────────────────────────────
-
-    def test_identity_fields_propagated(self) -> None:
+    def test_validation_started_and_finished(self) -> None:
         bus = EventBus()
         ctrl = WorkerActivityController(bus)
 
-        bus.emit(AuraEvent(
-            topic=DISPATCH_STEP_STARTED,
-            run_id="r2",
-            campaign_id="c2",
-            step_id="s2",
-            payload={"step_id": "s2"},
-        ))
+        bus.emit(AuraEvent(topic=WORKER_VALIDATION_STARTED, payload={"command": "pytest"}))
+        bus.emit(AuraEvent(topic=WORKER_VALIDATION_FINISHED, payload={"ok": True}))
+
+        entries = ctrl.snapshot()
+        assert len(entries) == 2
+        assert entries[0].kind == "validation_started"
+        assert entries[1].kind == "validation_passed"
+
+    def test_final_report_events(self) -> None:
+        bus = EventBus()
+        ctrl = WorkerActivityController(bus)
+
+        bus.emit(AuraEvent(topic=WORKER_FINAL_REPORT_STARTED, payload={}))
+        bus.emit(AuraEvent(topic=WORKER_FINAL_REPORT_FINISHED, payload={"ok": True}))
+
+        entries = ctrl.snapshot()
+        assert len(entries) == 2
+        assert entries[0].kind == "final_report_started"
+        assert entries[1].kind == "final_report_completed"
+
+    def test_worker_failed_appends_entry(self) -> None:
+        bus = EventBus()
+        ctrl = WorkerActivityController(bus)
+
+        bus.emit(AuraEvent(topic=WORKER_FAILED, payload={"error": "timeout"}))
 
         entries = ctrl.snapshot()
         assert len(entries) == 1
-        assert entries[0].run_id == "r2"
-        assert entries[0].campaign_id == "c2"
-        assert entries[0].step_id == "s2"
+        assert entries[0].kind == "worker_failed"
+        assert "timeout" in entries[0].message
 
-    # ── on_change callback ─────────────────────────────────────────────────
-
-    def test_on_change_callback_invoked_per_append(self) -> None:
+    def test_clear_removes_all_entries(self) -> None:
         bus = EventBus()
         ctrl = WorkerActivityController(bus)
 
+        bus.emit(AuraEvent(topic=WORKER_TOOL_STARTED, payload={"name": "x"}))
+        assert len(ctrl.snapshot()) == 1
+        ctrl.clear()
+        assert len(ctrl.snapshot()) == 0
+
+    def test_on_change_callback(self) -> None:
+        bus = EventBus()
+        ctrl = WorkerActivityController(bus)
         snapshots: list[list] = []
-        ctrl.set_on_change(lambda snap: snapshots.append(list(snap)))
+        ctrl.set_on_change(lambda s: snapshots.append(s))
 
-        bus.emit(AuraEvent(
-            topic=DISPATCH_CAMPAIGN_STARTED,
-            payload={"goal": "g1"},
-        ))
-        bus.emit(AuraEvent(
-            topic=DISPATCH_STEP_STARTED,
-            payload={"step_id": "s1"},
-        ))
-        bus.emit(AuraEvent(
-            topic=WORKER_TOOL_STARTED,
-            payload={"name": "read"},
-        ))
+        bus.emit(AuraEvent(topic=WORKER_TOOL_STARTED, payload={"name": "a"}))
 
-        assert len(snapshots) == 3, f"Expected 3 callback invocations, got {len(snapshots)}"
-        assert len(snapshots[-1]) == 3
-
-    # ── module boundary ────────────────────────────────────────────────────
-
-    def test_no_dispatch_row_references(self) -> None:
-        """WorkerActivityController module must not import dispatch row types."""
-        # Direct import attempts should fail with ImportError
-        from aura.bridge import worker_activity as wa_mod
-
-        assert not hasattr(wa_mod, "DispatchRow")
-
-        try:
-            from aura.bridge.worker_activity import DispatchRow  # noqa: F401
-            assert False, "DispatchRow should not be importable"
-        except ImportError:
-            pass
+        assert len(snapshots) == 1

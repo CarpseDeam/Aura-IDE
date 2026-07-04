@@ -26,6 +26,7 @@ class ContextSource:
     kind: str
     roles: tuple[RuntimeRole, ...]
     reason: str
+    origin_paths: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

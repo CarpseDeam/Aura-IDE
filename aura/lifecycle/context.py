@@ -12,7 +12,7 @@ from aura.events.event import AuraEvent
 class HookContext:
     """Immutable context snapshot delivered to lifecycle hook handlers.
 
-    Fields carry identity context (run, campaign, step, tool-call) so that
+    Fields carry identity context (run, artifact, tool-call) so that
     handlers can make decisions without reaching into other subsystems.
     """
 
@@ -21,8 +21,8 @@ class HookContext:
     phase: str = ""
     role: str = ""
     run_id: str = ""
-    campaign_id: str = ""
-    step_id: str = ""
+    artifact_id: str = ""
+    artifact_item_id: str = ""
     tool_call_id: str = ""
     parent_tool_call_id: str = ""
     tool_name: str = ""
@@ -46,15 +46,15 @@ class HookContext:
     ) -> "HookContext":
         """Build a ``HookContext`` from an ``AuraEvent``.
 
-        Copies *topic*, *payload*, *run_id*, *campaign_id*, and *step_id*
+        Copies *topic*, *payload*, *run_id*, *artifact_id*, and *artifact_item_id*
         from the event, then applies explicit *overrides*.
         """
         kwargs: dict[str, Any] = {
             "topic": event.topic,
             "category": category,
             "run_id": event.run_id,
-            "campaign_id": event.campaign_id,
-            "step_id": event.step_id,
+            "artifact_id": event.artifact_id,
+            "artifact_item_id": event.artifact_item_id,
             "payload": dict(event.payload),
         }
         kwargs.update(overrides)
@@ -72,8 +72,8 @@ class HookContext:
             "phase": self.phase,
             "role": self.role,
             "run_id": self.run_id,
-            "campaign_id": self.campaign_id,
-            "step_id": self.step_id,
+            "artifact_id": self.artifact_id,
+            "artifact_item_id": self.artifact_item_id,
             "tool_call_id": self.tool_call_id,
             "parent_tool_call_id": self.parent_tool_call_id,
             "tool_name": self.tool_name,

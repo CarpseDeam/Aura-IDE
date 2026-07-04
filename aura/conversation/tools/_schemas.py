@@ -623,10 +623,10 @@ DISPATCH_TOOL_DEF: dict[str, Any] = {
             "implementation details here; the worker owns those decisions. Include a "
             "self-terminating run_command smoke check for any change that affects whether "
             "the app boots or a runnable entry point behaves. The worker will return a "
-            "summary of what it did. For implementation work that is multi-file, high-risk, "
-            "subsystem/architecture/feature oriented, refactor-like, validation-heavy, or "
-            "otherwise non-trivial, provide a decomposed steps campaign. Flat fields without "
-            "steps are only a compatibility path for tiny one-file work. Fill structured contract fields when knowable from "
+            "summary of what it did. For multi-part work, create a visible work_artifact "
+            "with independently reviewable and executable items. Flat fields without "
+            "work_artifact are only a compatibility path for tiny one-file work. "
+            "Fill structured contract fields when knowable from "
             "the request or repo context; they power Aura's pre-release quality gate."
         ),
         "parameters": {
@@ -701,96 +701,72 @@ DISPATCH_TOOL_DEF: dict[str, Any] = {
                         "conversation, so include necessary context."
                     ),
                 },
-                "steps": {
-                    "type": "array",
+                "work_artifact": {
+                    "type": "object",
                     "description": (
-                        "Optional ordered campaign for multi-step work, but required for "
-                        "non-trivial implementation work: multi-file, high-risk, subsystem, "
-                        "architecture, refactor, feature, validation-heavy, or multi-stage "
-                        "tasks. Each item is one self-contained bounded Worker run with "
-                        "its own id, title, goal, spec, files, and acceptance. Step items "
-                        "must not rely on top-level files, spec, or acceptance; those "
-                        "top-level fields are campaign context only once steps are present. "
-                        "Do not use one giant step that restates the top-level summary. "
-                        "When omitted or empty, the top-level flat fields are the "
-                        "single-step dispatch path for tiny one-file compatibility work only."
+                        "Optional visible Work Artifact for multi-part work. "
+                        "For trivial one-file work, omit this and use flat fields. "
+                        "For multi-part work, supply a work_artifact so the user sees "
+                        "every bounded item before any Worker runs. The first item "
+                        "becomes the current SpecCard item. Later items are visible "
+                        "in the artifact and must still pass through SpecCard before "
+                        "Worker execution."
                     ),
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "id": {
-                                "type": "string",
-                                "minLength": 1,
-                                "description": "Stable non-empty step id, e.g. 'step-1'.",
-                            },
-                            "title": {
-                                "type": "string",
-                                "minLength": 1,
-                                "description": "Short specific user-readable title for this bounded edit; do not reuse the top-level summary.",
-                            },
-                            "goal": {
-                                "type": "string",
-                                "minLength": 1,
-                                "description": "What this specific step should accomplish, narrower than the campaign goal.",
-                            },
-                            "spec": {
-                                "type": "string",
-                                "minLength": 1,
-                                "description": "Self-contained bounded work order for this step, not the full campaign pasted into one paragraph and not dependent on top-level spec.",
-                            },
-                            "files": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                                "minItems": 1,
-                                "description": "Workspace-relative files for this step. Every step must name its own bounded file scope.",
-                            },
-                            "acceptance": {
-                                "type": "string",
-                                "minLength": 1,
-                                "description": "Concrete pass/fail acceptance for this step, not inherited from top-level acceptance.",
-                            },
-                            "validation_commands": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                                "description": "Focused validation commands for this step.",
-                            },
-                            "required_outputs": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                                "description": "Concrete artifacts or behaviors this step must produce.",
-                            },
-                            "non_goals": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                                "description": "Scope fences specific to this step.",
-                            },
-                            "expected_public_symbols": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                                "description": "Public symbols this step must define or preserve.",
-                            },
-                            "expected_dataclass_fields": {
+                    "properties": {
+                        "goal": {
+                            "type": "string",
+                            "description": "Overall goal of the work artifact.",
+                        },
+                        "constraints": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Artifact-level constraints and non-goals.",
+                        },
+                        "allowed_files": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Workspace-relative files the artifact may touch.",
+                        },
+                        "items": {
+                            "type": "array",
+                            "description": "Ordered list of independently reviewable and executable work items.",
+                            "items": {
                                 "type": "object",
-                                "additionalProperties": {
-                                    "type": "array",
-                                    "items": {"type": "string"},
+                                "properties": {
+                                    "id": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "description": "Stable non-empty item id, e.g. 'item-1'.",
+                                    },
+                                    "title": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "description": "Short user-readable title for this bounded item.",
+                                    },
+                                    "intent": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "description": "What this specific item should accomplish.",
+                                    },
+                                    "target_files": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                        "minItems": 1,
+                                        "description": "Workspace-relative files for this item.",
+                                    },
+                                    "acceptance": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "description": "Concrete pass/fail acceptance for this item.",
+                                    },
                                 },
-                                "description": "Required dataclass fields by class name for this step.",
-                            },
-                            "forbidden_calls": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                                "description": "Function calls this step must not introduce.",
-                            },
-                            "forbidden_public_methods": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                                "description": "Public class methods this step must not introduce.",
+                                "required": ["id", "title", "intent", "target_files", "acceptance"],
+                                "additionalProperties": False,
                             },
                         },
-                        "required": ["id", "title", "goal", "spec", "files", "acceptance"],
-                        "additionalProperties": False,
                     },
+                    "required": ["goal", "items"],
+                    "additionalProperties": False,
                 },
                 "acceptance": {
                     "type": "string",

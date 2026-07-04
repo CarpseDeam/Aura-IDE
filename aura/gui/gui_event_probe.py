@@ -96,12 +96,12 @@ class GuiEventProbe(QObject):
             if not isinstance(entry, dict):
                 continue
             kind = str(entry.get("kind") or "")
-            if kind in {"campaign_started", "step_started", "step_completed", "step_failed"}:
+            if kind in {"artifact_item_ready", "artifact_item_completed", "artifact_item_blocked", "artifact_item_done"}:
                 self.mark_and_dump(
                     f"activity_{kind}",
                     tool_call_id=tool_call_id,
-                    step_id=entry.get("step_id", ""),
-                    campaign_id=entry.get("campaign_id", ""),
+                    artifact_item_id=entry.get("artifact_item_id", ""),
+                    artifact_id=entry.get("artifact_id", ""),
                     message=entry.get("message", ""),
                 )
 

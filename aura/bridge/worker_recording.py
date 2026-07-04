@@ -11,46 +11,7 @@ from aura.skills.outcome_log import record_outcome_join
 
 __all__ = [
     "_record_worker_completion",
-    "record_dispatch_campaign_completion",
 ]
-
-
-def record_dispatch_campaign_completion(
-    *,
-    records: list[WorkerDispatchRecord],
-    workspace_root: Path | None,
-    tool_call_id: str,
-    edited_request: WorkerDispatchRequest,
-    result: WorkerDispatchResult,
-) -> WorkerDispatchRecord | None:
-    """Record one aggregate WorkerDispatchRecord for a completed dispatch campaign.
-
-    This replaces inline campaign-record creation in ``dispatch.py`` so that all
-    persistence logic lives in one place. Internal step records are not appended;
-    only this aggregate diagnostic record is persisted with
-    ``replay_kind="dispatch_campaign"`` for compatibility with existing files.
-    """
-    aggregate_spec = edited_request.to_dict()
-    if isinstance(result.extras, dict):
-        aggregate_spec["extras"] = dict(result.extras)
-    if result.modified_files:
-        aggregate_spec["modified_files"] = list(result.modified_files)
-    aggregate_spec["replay_kind"] = "dispatch_campaign"
-    aggregate_spec["replayable"] = True
-
-    record = WorkerDispatchRecord(
-        after_message_index=-1,
-        tool_call_id=tool_call_id,
-        spec=aggregate_spec,
-        worker_history=[],
-        result_summary=result.summary or "",
-    )
-    records.append(record)
-    if workspace_root is not None:
-        from aura.conversation.persistence import save_dispatch_record_to_memory
-
-        save_dispatch_record_to_memory(record, workspace_root)
-    return record
 
 
 def _record_worker_completion(
@@ -79,15 +40,19 @@ def _record_worker_completion(
     Args:
         replayable: Historical name for whether the diagnostic
             WorkerDispatchRecord is appended to *records* and persisted to
-            project memory. Hazard and outcome logging still run when this is
-            false. Used for internal dispatch steps whose aggregate result is
-            recorded separately after the campaign completes.
+            project memory. Now always True since every Worker run is visible
+            and reviewable.
     """
     spec_dict = req.to_dict()
     spec_dict["task_spec"] = task_spec.to_dict()
     if replayable:
         spec_dict["replay_kind"] = "worker_dispatch"
         spec_dict["replayable"] = True
+    # Include artifact metadata in the record when available.
+    if req.artifact_id:
+        spec_dict["artifact_id"] = req.artifact_id
+        spec_dict["artifact_item_id"] = req.artifact_item_id
+        spec_dict["artifact_item_title"] = req.summary
     record = WorkerDispatchRecord(
         after_message_index=-1,
         tool_call_id=tool_call_id,

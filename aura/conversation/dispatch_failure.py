@@ -43,8 +43,8 @@ def _compute_failure_constraint(result: WorkerDispatchResult) -> str:
     extras = result.extras or {}
 
     # Passthrough: a pre-computed failure_constraint in extras always wins
-    # over synthesised messages.  ToolRunner and DispatchSession set this
-    # when they already know the exact constraint for the Planner.
+    # over synthesised messages.  ToolRunner sets this
+    # when it already knows the exact constraint for the Planner.
     if extras.get("failure_constraint"):
         return str(extras["failure_constraint"])
 

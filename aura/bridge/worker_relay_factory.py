@@ -33,15 +33,11 @@ def create_worker_relay(
 
     suppress_final_report_activity: When True, the relay will not emit
         WORKER_FINAL_REPORT_STARTED / WORKER_FINAL_REPORT_FINISHED events
-        on the event bus. Used for internal DispatchSession worker steps
-        so the UI does not see false "Final report started/completed"
-        Activity entries between steps.
+        on the event bus.
 
     suppress_workflow_state_updates: When True, Worker tool start/result
         events still flow to Worker UI and event-bus projectors, but are not
-        projected into planner/spec-card WorkflowState. Used for internal
-        DispatchSession campaign steps so the visible workflow state remains
-        campaign-scoped.
+        projected into planner/spec-card WorkflowState.
     """
     relay = WorkerEventRelay(
         approval_proxy=approval_proxy,

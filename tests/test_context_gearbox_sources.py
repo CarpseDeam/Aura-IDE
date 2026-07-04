@@ -130,6 +130,42 @@ def test_target_file_contents_is_worker_context_not_planner_context(tmp_path: Pa
     assert planner_entry.reason == "not scoped to planner role"
 
 
+def test_worker_context_for_normal_target_includes_code_quality_contract(tmp_path: Path) -> None:
+    target = tmp_path / "app.py"
+    target.write_text("VALUE = 1\n", encoding="utf-8")
+
+    worker = build_context_text(RuntimeRole.WORKER, tmp_path, target_files=("app.py",))
+
+    assert "### code_quality_contract" in worker.context_text
+    entry = next(entry for entry in worker.ledger if entry.source_id == "code_quality_contract")
+    assert entry.included is True
+    assert entry.reason == "coding quality contract for implementation work"
+
+
+def test_worker_context_for_context_source_owner_skips_code_quality_contract(tmp_path: Path) -> None:
+    target = tmp_path / "aura" / "context_gearbox" / "sources.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("LIVE_SOURCE_FILE = True\n", encoding="utf-8")
+
+    worker = build_context_text(
+        RuntimeRole.WORKER,
+        tmp_path,
+        target_files=("aura/context_gearbox/sources.py",),
+    )
+
+    assert "### Target file: aura/context_gearbox/sources.py" in worker.context_text
+    assert "LIVE_SOURCE_FILE = True" in worker.context_text
+    assert "### code_quality_contract" not in worker.context_text
+
+    target_entry = next(entry for entry in worker.ledger if entry.source_id == "target_file_contents")
+    contract_entry = next(entry for entry in worker.ledger if entry.source_id == "code_quality_contract")
+    assert target_entry.included is True
+    assert contract_entry.included is False
+    assert contract_entry.reason == "skipped because target file owns this context source"
+    assert contract_entry.char_count == 0
+    assert contract_entry.error is None
+
+
 def test_target_file_contents_unreadable_file_skips_without_ledger_error(tmp_path: Path, monkeypatch) -> None:
     target = tmp_path / "unreadable.py"
     target.write_text("SECRET = True\n", encoding="utf-8")

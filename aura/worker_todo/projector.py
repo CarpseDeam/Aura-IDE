@@ -39,7 +39,7 @@ class WorkerTodoProjector:
         if snapshot is None or errors:
             return
 
-        run_id = ev.run_id or ev.campaign_id
+        run_id = ev.run_id or ev.artifact_id
         if not run_id:
             return
 

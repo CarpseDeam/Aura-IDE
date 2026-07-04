@@ -111,10 +111,10 @@ def _broad_valid_steps_dispatch() -> dict:
         {
             "id": "step-2",
             "title": "Emit dispatch lifecycle events",
-            "goal": "Emit campaign and step lifecycle facts from DispatchSession.",
-            "spec": "Update aura/bridge/dispatch_session.py to emit step lifecycle events.",
-            "files": ["aura/bridge/dispatch_session.py"],
-            "acceptance": "DispatchSession emits lifecycle events.",
+            "goal": "Emit work artifact lifecycle events.",
+            "spec": "Update aura/work_artifact/ to emit lifecycle events.",
+            "files": ["aura/work_artifact/"],
+            "acceptance": "Work artifact emits lifecycle events.",
         },
     ]
     return args

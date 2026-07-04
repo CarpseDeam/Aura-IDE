@@ -89,12 +89,10 @@ class WorkerEventRelay(QObject):
         )
         # Current dispatch identity — set at the start of relay() and read
         # by _emit_bus_event so every EventBus fact carries the parent
-        # dispatch tool_call_id as run_id and campaign_id.
+        # dispatch tool_call_id as run_id and artifact_id.
         self._dispatch_tool_call_id: str = ""
         # Explicit flag to suppress final-report Activity on the event bus.
-        # Internal DispatchSession worker steps must not emit
-        # WORKER_FINAL_REPORT_STARTED / WORKER_FINAL_REPORT_FINISHED,
-        # because those look like the Worker finished and restarted.
+        # Used when a Worker run should not emit final-report events.
         self._suppress_final_report_activity = suppress_final_report_activity
         self.final_report_text: str = ""          # last assistant content after Done event
         self._active_tool_names: dict[str, str] = {}
@@ -173,15 +171,14 @@ class WorkerEventRelay(QObject):
         """Emit an event on the event bus (pure-python, no Qt).
 
         Every emission carries the current dispatch tool_call_id as
-        ``run_id`` and ``campaign_id`` so lifecycle observers and future
-        projectors can correlate Worker activity to the active dispatch
-        campaign.
+        ``run_id`` and ``artifact_id`` so lifecycle observers and future
+        projectors can correlate Worker activity to the active dispatch.
         """
         self._event_bus.emit(AuraEvent(
             topic=topic,
             payload=dict(payload),
             run_id=self._dispatch_tool_call_id,
-            campaign_id=self._dispatch_tool_call_id,
+            artifact_id=self._dispatch_tool_call_id,
         ))
 
     def relay(self, tool_call_id: str, ev: Event) -> None:
@@ -242,10 +239,9 @@ class WorkerEventRelay(QObject):
                 if isinstance(content, str):
                     self.final_report_text = content
             if ev.finish_reason == "stop":
-                # Only emit final-report activity events at campaign boundaries,
-                # not for internal steps within a multi-step DispatchSession.
-                # The caller sets suppress_final_report_activity=True for internal
-                # dispatch steps.
+                # Only emit final-report activity events when not suppressed.
+                # The caller sets suppress_final_report_activity=True to defer
+                # final-report events.
                 if not self._suppress_final_report_activity:
                     self._emit_bus_event(WORKER_FINAL_REPORT_STARTED, {})
                     self._emit_bus_event(WORKER_FINAL_REPORT_FINISHED, {

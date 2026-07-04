@@ -968,4 +968,10 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._companion_controller.sync_context(project_id, thread_id)
 
     def _on_project_thread_updated(self) -> None:
-        self._left_pane.refresh_projects(self._workspace_root)
+        # Use a fine-grained update for the current thread row instead of a
+        # full project refresh. Full refresh is reserved for project
+        # create/delete/rename/workspace changes.
+        if hasattr(self._left_pane, "refresh_current_thread") and self._workspace_root is not None:
+            self._left_pane.refresh_current_thread(self._workspace_root)
+        else:
+            self._left_pane.refresh_projects(self._workspace_root)

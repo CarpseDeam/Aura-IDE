@@ -15,11 +15,11 @@ from aura.events.event import AuraEvent
 from aura.events.topics import (
     ALL,
     ALL_TOPICS,
-    DISPATCH_CAMPAIGN_FINISHED,
-    DISPATCH_CAMPAIGN_STARTED,
-    DISPATCH_STEP_COMPLETED,
-    DISPATCH_STEP_STARTED,
-    DISPATCH_TOPICS,
+    WORK_ARTIFACT_CREATED,
+    WORK_ARTIFACT_ITEM_COMPLETED,
+    WORK_ARTIFACT_ITEM_READY,
+    WORK_ARTIFACT_UPDATED,
+    WORK_ARTIFACT_TOPICS,
     WORKER_COMMAND_FINISHED,
     WORKER_COMMAND_STARTED,
     WORKER_FAILED,
@@ -39,10 +39,10 @@ __all__ = [
     "AuraEvent",
     "EventBus",
     # ── individual topic constants ──────────────────────────────
-    "DISPATCH_CAMPAIGN_STARTED",
-    "DISPATCH_STEP_STARTED",
-    "DISPATCH_STEP_COMPLETED",
-    "DISPATCH_CAMPAIGN_FINISHED",
+    "WORK_ARTIFACT_CREATED",
+    "WORK_ARTIFACT_UPDATED",
+    "WORK_ARTIFACT_ITEM_READY",
+    "WORK_ARTIFACT_ITEM_COMPLETED",
     "WORKER_TOOL_STARTED",
     "WORKER_TOOL_FINISHED",
     "WORKER_FILE_CHANGED",
@@ -58,7 +58,7 @@ __all__ = [
     # ── sentinel ────────────────────────────────────────────────
     "ALL",
     # ── convenience groupings ───────────────────────────────────
-    "DISPATCH_TOPICS",
+    "WORK_ARTIFACT_TOPICS",
     "WORKER_TOPICS",
     "ALL_TOPICS",
 ]

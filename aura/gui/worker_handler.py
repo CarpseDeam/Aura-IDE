@@ -176,7 +176,6 @@ class WorkerEventHandler(QObject):
             self._chat.stop_current_aura()
 
         file_list = list(files)
-        step_list = list(steps or [])
 
         if self._bridge.auto_dispatch:
             _log.info(
@@ -203,7 +202,6 @@ class WorkerEventHandler(QObject):
             spec=spec,
             acceptance=acceptance,
             summary=summary,
-            step_list=step_list,
         )
 
     # ---- worker lifecycle slots ------------------------------------------------
@@ -212,7 +210,7 @@ class WorkerEventHandler(QObject):
         """Stop the planner aura, remove the plan writer card, and start the
         playground's assistant aura.
 
-        DispatchSession emits one workerStarted signal per campaign.
+        DispatchProxy emits one workerStarted signal per dispatch.
         """
         pending_finish = self._pending_worker_finish
         if (
@@ -269,7 +267,7 @@ class WorkerEventHandler(QObject):
 
         self._dispatch_ui.mark_worker_started(tool_call_id)
         # The backend _DispatchProxy emitted the dispatched status in
-        # request_dispatch before DispatchSession.run().  No transition needed.
+        # request_dispatch before WorkArtifactController is used.  No transition needed.
         self.worker_running_changed.emit(True)
 
     def _on_worker_finished(
@@ -282,7 +280,7 @@ class WorkerEventHandler(QObject):
     ) -> None:
         """Forward worker finished to playground and update spec card.
 
-        DispatchSession emits one workerFinished signal per campaign.
+        DispatchProxy emits one workerFinished signal per dispatch.
         """
         _log.info(
             "worker_finished tool_call_id=%s status=%s",
@@ -359,7 +357,7 @@ class WorkerEventHandler(QObject):
         )
         outcome = presentation.outcome
         # The backend _DispatchProxy emits the finished WorkflowState snapshot
-        # in request_dispatch after DispatchSession.run().  No finish() call here.
+        # in request_dispatch after WorkArtifactController is used.  No finish() call here.
         if outcome.should_clear_dispatch_card:
             self._dispatch_ui.clear_active_spec_card(tool_call_id)
         if self._active_worker_tool_call_id == tool_call_id:

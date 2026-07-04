@@ -64,30 +64,18 @@ class DispatchUiLifecycle:
         spec: str,
         acceptance: str,
         summary: str,
-        step_list: list,
     ) -> bool:
         try:
             if hasattr(self._chat, "prepare_spec_card"):
                 self._chat.prepare_spec_card(tool_call_id)
-            if step_list:
-                card = self._chat.add_spec_card(
-                    tool_call_id,
-                    goal,
-                    file_list,
-                    spec,
-                    acceptance,
-                    summary,
-                    steps=step_list,
-                )
-            else:
-                card = self._chat.add_spec_card(
-                    tool_call_id,
-                    goal,
-                    file_list,
-                    spec,
-                    acceptance,
-                    summary,
-                )
+            card = self._chat.add_spec_card(
+                tool_call_id,
+                goal,
+                file_list,
+                spec,
+                acceptance,
+                summary,
+            )
         except Exception as exc:
             logging.exception("Failed to render worker dispatch spec card")
             try:

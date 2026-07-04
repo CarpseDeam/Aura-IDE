@@ -1,6 +1,7 @@
 """Worker dispatch spec — collapsible cockpit-style Plan Ready card.
 
 After dispatch, the buttons collapse into a status header.
+SpecCard reviews exactly one bounded Worker request — no campaign mode.
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ class SpecCard(QFrame):
     """Worker dispatch spec — collapsible, with Dispatch/Edit/Cancel buttons.
 
     After dispatch, the buttons collapse into a status header.
+    Reviews exactly one bounded Worker request.
     """
 
     dispatch_clicked = Signal(str)  # tool_call_id (with current spec values)
@@ -48,7 +50,6 @@ class SpecCard(QFrame):
         spec: str,
         acceptance: str,
         summary: str = "",
-        steps: list[dict[str, Any]] | None = None,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -59,8 +60,6 @@ class SpecCard(QFrame):
         self._spec = spec
         self._acceptance = acceptance
         self._summary = summary
-        self._steps = [dict(step) for step in (steps or []) if isinstance(step, dict)]
-        self._is_campaign = bool(self._steps)
         self._dispatched = False
         self._cancelled = False
         self._worker_running = False
@@ -84,18 +83,11 @@ class SpecCard(QFrame):
         outer.addWidget(self._goal_label)
 
         outer.addSpacing(6)
-        self._strategy_label: _MarkdownTextBlock | None = None
-        self._acceptance_label: _MarkdownTextBlock | None = None
-        self._campaign_label: _MarkdownTextBlock | None = None
-        if self._is_campaign:
-            campaign_header, self._campaign_label = self._build_campaign_section()
-            outer.addWidget(campaign_header)
-            outer.addWidget(self._campaign_label)
-        else:
-            # ---- STRATEGY section ----
-            strategy_header, self._strategy_label = self._build_strategy_section()
-            outer.addWidget(strategy_header)
-            outer.addWidget(self._strategy_label)
+
+        # ---- STRATEGY section ----
+        strategy_header, self._strategy_label = self._build_strategy_section()
+        outer.addWidget(strategy_header)
+        outer.addWidget(self._strategy_label)
 
         # ---- SCOPE section ----
         outer.addSpacing(6)
@@ -103,12 +95,11 @@ class SpecCard(QFrame):
         outer.addWidget(files_header)
         outer.addWidget(self._files_container)
 
-        if not self._is_campaign:
-            # ---- VALIDATION section ----
-            outer.addSpacing(6)
-            acc_header, self._acceptance_label = self._build_validation_section()
-            outer.addWidget(acc_header)
-            outer.addWidget(self._acceptance_label)
+        # ---- VALIDATION section ----
+        outer.addSpacing(6)
+        acc_header, self._acceptance_label = self._build_validation_section()
+        outer.addWidget(acc_header)
+        outer.addWidget(self._acceptance_label)
 
         # ---- FULL WORKER SPEC collapsible section ----
         outer.addSpacing(6)
@@ -199,17 +190,6 @@ class SpecCard(QFrame):
         )
         return acc_header, acceptance_label
 
-    def _build_campaign_section(self) -> tuple[QLabel, _MarkdownTextBlock]:
-        """Create CAMPAIGN header and ordered step list. Returns both."""
-        campaign_header = self._make_section_header("CAMPAIGN")
-        campaign_label = _MarkdownTextBlock(
-            _render_markdown_with_code(self._format_campaign_steps()), parent=self
-        )
-        campaign_label.setStyleSheet(
-            f"background: transparent; border: none; color: {FG};"
-        )
-        return campaign_header, campaign_label
-
     def _build_full_spec_section(self) -> _CollapsibleSection:
         """Create the FULL WORKER SPEC collapsible section.
 
@@ -234,7 +214,7 @@ class SpecCard(QFrame):
         )
         return section
 
-    def _build_button_row(self) -> tuple[QWidget, QPushButton, QPushButton | None, QPushButton]:
+    def _build_button_row(self) -> tuple[QWidget, QPushButton, QPushButton, QPushButton]:
         """Create the button row widget. Returns (row_widget, dispatch_btn, edit_btn, cancel_btn)."""
         buttons_row = QWidget(self)
         btn_layout = QHBoxLayout(buttons_row)
@@ -248,13 +228,11 @@ class SpecCard(QFrame):
         dispatch_btn.clicked.connect(self._on_dispatch)
         btn_layout.addWidget(dispatch_btn)
 
-        edit_btn: QPushButton | None = None
-        if not self._is_campaign:
-            edit_btn = QPushButton("Edit Spec", parent=buttons_row)
-            edit_btn.setMinimumHeight(32)
-            edit_btn.setMinimumWidth(96)
-            edit_btn.clicked.connect(lambda: self.edit_clicked.emit(self._tool_call_id))
-            btn_layout.addWidget(edit_btn)
+        edit_btn = QPushButton("Edit Spec", parent=buttons_row)
+        edit_btn.setMinimumHeight(32)
+        edit_btn.setMinimumWidth(96)
+        edit_btn.clicked.connect(lambda: self.edit_clicked.emit(self._tool_call_id))
+        btn_layout.addWidget(edit_btn)
 
         btn_layout.addStretch(1)
 
@@ -300,10 +278,7 @@ class SpecCard(QFrame):
     def _compute_chips(self) -> None:
         """Update mode, risk, and scope chip text and styling."""
         # --- Mode chip ---
-        if self._is_campaign:
-            mode_text = "Campaign"
-            mode_color = WARN
-        elif len(self._files) <= 2 and len(self._spec) < 800:
+        if len(self._files) <= 2 and len(self._spec) < 800:
             mode_text = "Fast Plan"
             mode_color = SUCCESS
         else:
@@ -399,24 +374,9 @@ class SpecCard(QFrame):
                 return line
         return "No summary available."
 
-    def _format_campaign_steps(self) -> str:
-        lines: list[str] = []
-        for index, step in enumerate(self._steps, start=1):
-            title = str(step.get("title") or step.get("goal") or f"Step {index}").strip()
-            files = step.get("files") if isinstance(step.get("files"), list) else []
-            file_text = ", ".join(str(path) for path in files if str(path).strip())
-            lines.append(f"{index}. **{title}**")
-            if file_text:
-                lines.append(f"   Files: {file_text}")
-            else:
-                lines.append("   Files: discovered as needed")
-        return "\n".join(lines) if lines else "No campaign steps provided."
-
     def _refresh_all_content(self) -> None:
         """Refresh all derived display: markdown blocks, files list, chips."""
         self._goal_label.setHtml(_render_markdown_with_code(self._goal))
-        if self._campaign_label is not None:
-            self._campaign_label.setHtml(_render_markdown_with_code(self._format_campaign_steps()))
         if self._strategy_label is not None:
             strategy_text = self._compute_strategy_text()
             self._strategy_label.setHtml(_render_markdown_with_code(strategy_text))
@@ -436,7 +396,6 @@ class SpecCard(QFrame):
         spec: str,
         acceptance: str,
         summary: str = "",
-        steps: list[dict[str, Any]] | None = None,
     ) -> None:
         """Update all stored values and refresh all derived display."""
         self._goal = goal
@@ -444,8 +403,6 @@ class SpecCard(QFrame):
         self._spec = spec
         self._acceptance = acceptance
         self._summary = summary
-        if steps is not None:
-            self._steps = [dict(step) for step in steps if isinstance(step, dict)]
         self._refresh_all_content()
 
     def current_spec(self) -> tuple[str, list[str], str, str, str]:
@@ -566,7 +523,6 @@ class SpecCard(QFrame):
             self._buttons_row.setVisible(False)
 
 
-
     @staticmethod
     def _workflow_status_label(status: WorkflowStatus) -> tuple[str, str]:
         mapping = {
@@ -583,10 +539,6 @@ class SpecCard(QFrame):
             WorkflowStatus.cancelled: ("Cancelled", DANGER),
         }
         return mapping[status]
-
-
-
-
 
     def set_dispatched_and_finished(self, ok: bool, *, is_internal: bool = False) -> None:
         """Force the card into a read-only finished state (for history replay)."""

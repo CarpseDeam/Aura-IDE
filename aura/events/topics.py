@@ -4,11 +4,11 @@ Topics are grouped by subsystem. Each constant is a dotted string
 matching the pattern ``<subsystem>.<event>``.
 """
 
-# ── Dispatch lifecycle ──────────────────────────────────────────────────────
-DISPATCH_CAMPAIGN_STARTED = "dispatch.campaign_started"
-DISPATCH_STEP_STARTED = "dispatch.step_started"
-DISPATCH_STEP_COMPLETED = "dispatch.step_completed"
-DISPATCH_CAMPAIGN_FINISHED = "dispatch.campaign_finished"
+# ── Work Artifact lifecycle ────────────────────────────────────────────────────
+WORK_ARTIFACT_CREATED = "work_artifact.created"
+WORK_ARTIFACT_UPDATED = "work_artifact.updated"
+WORK_ARTIFACT_ITEM_READY = "work_artifact.item_ready"
+WORK_ARTIFACT_ITEM_COMPLETED = "work_artifact.item_completed"
 
 # ── Worker / tool execution ─────────────────────────────────────────────────
 WORKER_TOOL_STARTED = "worker.tool_started"
@@ -30,11 +30,11 @@ WORKER_PRE_TOOL_GATE_DECIDED = "worker.pre_tool_gate_decided"
 ALL = "*"
 
 # ── Convenience groupings for validation / introspection ────────────────────
-DISPATCH_TOPICS = frozenset({
-    DISPATCH_CAMPAIGN_STARTED,
-    DISPATCH_STEP_STARTED,
-    DISPATCH_STEP_COMPLETED,
-    DISPATCH_CAMPAIGN_FINISHED,
+WORK_ARTIFACT_TOPICS = frozenset({
+    WORK_ARTIFACT_CREATED,
+    WORK_ARTIFACT_UPDATED,
+    WORK_ARTIFACT_ITEM_READY,
+    WORK_ARTIFACT_ITEM_COMPLETED,
 })
 
 WORKER_TOPICS = frozenset({
@@ -52,4 +52,4 @@ WORKER_TOPICS = frozenset({
     WORKER_PRE_TOOL_GATE_DECIDED,
 })
 
-ALL_TOPICS = DISPATCH_TOPICS | WORKER_TOPICS
+ALL_TOPICS = WORK_ARTIFACT_TOPICS | WORKER_TOPICS

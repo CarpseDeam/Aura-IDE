@@ -42,7 +42,7 @@ class SpecCardHost(QWidget):
     ) -> SpecCard:
         existing = self._cards.get(tool_call_id)
         if existing is not None:
-            existing.update_spec(goal, files, spec, acceptance, summary, steps=steps)
+            existing.update_spec(goal, files, spec, acceptance, summary)
             self.setVisible(True)
             return existing
 
@@ -56,7 +56,6 @@ class SpecCardHost(QWidget):
             spec,
             acceptance,
             summary=summary,
-            steps=steps,
             parent=self,
         )
         self._cards[tool_call_id] = card

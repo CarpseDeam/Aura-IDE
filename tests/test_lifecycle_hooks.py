@@ -62,8 +62,8 @@ class TestHookContext:
         assert ctx.phase == ""
         assert ctx.role == ""
         assert ctx.run_id == ""
-        assert ctx.campaign_id == ""
-        assert ctx.step_id == ""
+        assert ctx.artifact_id == ""
+        assert ctx.artifact_item_id == ""
         assert ctx.tool_call_id == ""
         assert ctx.parent_tool_call_id == ""
         assert ctx.tool_name == ""
@@ -80,14 +80,14 @@ class TestHookContext:
             topic="worker.tool.started",
             payload={"key": "val"},
             run_id="r1",
-            campaign_id="c1",
-            step_id="s1",
+            artifact_id="art-1",
+            artifact_item_id="item-1",
         )
         ctx = HookContext.from_event(ev)
         assert ctx.topic == "worker.tool.started"
         assert ctx.run_id == "r1"
-        assert ctx.campaign_id == "c1"
-        assert ctx.step_id == "s1"
+        assert ctx.artifact_id == "art-1"
+        assert ctx.artifact_item_id == "item-1"
         assert ctx.payload == {"key": "val"}
         assert ctx.category == "notify"  # default
 
@@ -597,13 +597,13 @@ class TestAttachLifecycleNotify:
         lh.register_notify(HookMatcher("*"), lifecycle.append)
         unsub = attach_lifecycle_notify(bus, lh)
 
-        ev = AuraEvent(topic="dispatch.step_started", step_id="s1")
+        ev = AuraEvent(topic="work_artifact.item_ready", artifact_id="art-1", artifact_item_id="item-1")
         bus.emit(ev)
 
         assert len(direct) == 1
         assert direct[0] is ev
         assert len(lifecycle) == 1
-        assert lifecycle[0].topic == "dispatch.step_started"
+        assert lifecycle[0].topic == "work_artifact.item_ready"
 
         unsub()
 

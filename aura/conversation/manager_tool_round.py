@@ -721,7 +721,7 @@ class ToolRoundRunner:
             AuraEvent(
                 topic=WORKER_PRE_TOOL_GATE_DECIDED,
                 run_id=tool_call_id,
-                campaign_id=tool_call_id,
+                artifact_id=tool_call_id,
                 payload={
                     "tool_call_id": tool_call_id,
                     "tool_name": name,

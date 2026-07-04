@@ -21,10 +21,9 @@ from aura.conversation.dispatch import (
     WorkerDispatchResult,
 )
 from aura.conversation.dispatch_contract import enrich_worker_dispatch_contract
-from aura.conversation.dispatch_plan import validate_dispatch_campaign
+from aura.work_artifact import WorkArtifact, WorkArtifactItem
 from aura.conversation.history import History
 from aura.conversation.loop_detection import LoopDetector
-from aura.conversation.workflow_state import WorkflowStatus
 from aura.conversation.terminal_policy import worker_terminal_command_allowed
 from aura.conversation.tool_runner_terminal_policy import (
     matches_explicit_validation,
@@ -80,25 +79,84 @@ class ToolRunner:
         previous_dispatch_tool_call_id: str = "",
     ) -> WorkerDispatchResult | None:
         req = WorkerDispatchRequest.from_dict(args)
-        raw_steps = args.get("steps") if isinstance(args.get("steps"), list) else []
-        if raw_steps:
-            from aura.conversation.dispatch_plan import WorkerStepSpec
-
-            req.steps = [WorkerStepSpec.from_dict(step) for step in raw_steps]
         req = enrich_worker_dispatch_contract(req)
-        steps_present = isinstance(args.get("steps"), list)
-        step_count = len(req.steps)
+
+        # ── Work Artifact handling ───────────────────────────────────────────
+        raw_artifact = args.get("work_artifact") if isinstance(args.get("work_artifact"), dict) else None
+        artifact: WorkArtifact | None = None
+
+        if raw_artifact:
+            # Multi-item artifact from Planner
+            items_raw = raw_artifact.get("items") if isinstance(raw_artifact.get("items"), list) else []
+            work_items = [
+                WorkArtifactItem(
+                    id=str(item.get("id", f"item-{idx}")),
+                    title=str(item.get("title", "")),
+                    intent=str(item.get("intent", "")),
+                    target_files=[str(f) for f in (item.get("target_files") or item.get("files") or [])],
+                    acceptance=str(item.get("acceptance", "")),
+                )
+                for idx, item in enumerate(items_raw)
+            ]
+            current_item_id = work_items[0].id if work_items else ""
+            artifact = WorkArtifact(
+                artifact_id=tool_call_id,
+                goal=str(raw_artifact.get("goal", "")),
+                constraints=[str(c) for c in (raw_artifact.get("constraints") or [])],
+                allowed_files=[str(f) for f in (raw_artifact.get("allowed_files") or [])],
+                work_items=work_items,
+                current_item_id=current_item_id,
+            )
+            _log.info(
+                "WorkArtifact parsed tool_call_id=%s item_count=%d current_item=%s",
+                tool_call_id,
+                len(work_items),
+                current_item_id,
+            )
+            # Convert current item into a bounded WorkerDispatchRequest
+            req.artifact_id = artifact.artifact_id
+            if artifact.current_item() is not None:
+                item = artifact.current_item()
+                req.artifact_item_id = item.id
+                req = replace(
+                    req,
+                    goal=item.intent or req.goal,
+                    files=list(item.target_files) if item.target_files else req.files,
+                    acceptance=item.acceptance or req.acceptance,
+                    summary=item.title or req.summary,
+                )
+        else:
+            # One-item compatibility artifact from flat dispatch request
+            compat_item = WorkArtifactItem(
+                id="item-1",
+                title=req.summary or req.goal or "Worker dispatch",
+                intent=req.goal,
+                target_files=list(req.files),
+                acceptance=req.acceptance,
+            )
+            artifact = WorkArtifact(
+                artifact_id=tool_call_id,
+                goal=req.goal,
+                allowed_files=list(req.files),
+                work_items=[compat_item],
+                current_item_id=compat_item.id,
+            )
+            req.artifact_id = artifact.artifact_id
+            req.artifact_item_id = compat_item.id
+            _log.info(
+                "One-item compatibility artifact created tool_call_id=%s",
+                tool_call_id,
+            )
+
         first_dispatch_in_turn = planner_dispatch_attempt <= 1
         chained_later_dispatch = not first_dispatch_in_turn
         _log.info(
             (
-                "planner_dispatch_entry tool_call_id=%s steps_present=%s "
-                "step_count=%s dispatch_attempt=%s first_dispatch_in_turn=%s "
+                "planner_dispatch_entry tool_call_id=%s "
+                "dispatch_attempt=%s first_dispatch_in_turn=%s "
                 "chained_later_dispatch=%s previous_dispatch_tool_call_id=%s"
             ),
             tool_call_id,
-            steps_present,
-            step_count,
             planner_dispatch_attempt,
             first_dispatch_in_turn,
             chained_later_dispatch,
@@ -109,46 +167,7 @@ class ToolRunner:
                 req,
                 tool_call_id=tool_call_id,
                 previous_tool_call_id=previous_dispatch_tool_call_id,
-                steps_present=steps_present,
-                step_count=step_count,
             )
-            payload = json.dumps(result.to_tool_payload(), ensure_ascii=False)
-            self._history.append_tool_result(tool_call_id, payload)
-            on_event(
-                ToolResult(
-                    tool_call_id=tool_call_id,
-                    name="dispatch_to_worker",
-                    ok=False,
-                    result=payload,
-                    extras={
-                        "dispatch": True,
-                        "recoverable": True,
-                        "summary": result.summary,
-                        **result.extras,
-                    },
-                )
-            )
-            return result
-
-        campaign = validate_dispatch_campaign(req)
-        if not campaign.ok:
-            _log.debug(
-                "dispatch_campaign_shape_warning tool_call_id=%s requires_steps=%s errors=%s",
-                tool_call_id,
-                campaign.requires_steps,
-                campaign.errors,
-            )
-            result = _dispatch_preflight_rejection(
-                req,
-                campaign_errors=campaign.errors,
-            )
-            if workflow_state_cb is not None:
-                workflow_state_cb(
-                    tool_call_id,
-                    req.goal,
-                    req.summary,
-                    WorkflowStatus.planner_resolving,
-                )
             payload = json.dumps(result.to_tool_payload(), ensure_ascii=False)
             self._history.append_tool_result(tool_call_id, payload)
             on_event(
@@ -192,38 +211,22 @@ class ToolRunner:
                 spec=req.spec,
                 acceptance=req.acceptance,
                 summary=req.summary,
-                steps=[step.to_dict() for step in req.steps],
             )
         )
         try:
             result = dispatch_cb(tool_call_id, req)
         except Exception as exc:
-            if req.steps:
-                result = WorkerDispatchResult(
-                    ok=False,
-                    summary="Harness error due to an internal Worker dispatch exception.",
-                    needs_followup=True,
-                    recoverable=True,
-                    status=WorkerOutcomeStatus.harness_error.value,
-                    extras={
-                        "worker_internal_error": True,
-                        "error_type": type(exc).__name__,
-                        "internal_error": redact_secrets(f"{type(exc).__name__}: {exc}"),
-                        "dispatch_session": True,
-                    },
-                )
-            else:
-                result = WorkerDispatchResult(
-                    ok=False,
-                    summary="Harness error due to an internal Worker dispatch exception.",
-                    cancelled=False,
-                    recoverable=False,
-                    extras={
-                        "worker_internal_error": True,
-                        "error_type": type(exc).__name__,
-                        "internal_error": redact_secrets(f"{type(exc).__name__}: {exc}"),
-                    },
-                )
+            result = WorkerDispatchResult(
+                ok=False,
+                summary="Harness error due to an internal Worker dispatch exception.",
+                cancelled=False,
+                recoverable=False,
+                extras={
+                    "worker_internal_error": True,
+                    "error_type": type(exc).__name__,
+                    "internal_error": redact_secrets(f"{type(exc).__name__}: {exc}"),
+                },
+            )
 
         payload = json.dumps(result.to_tool_payload(), ensure_ascii=False)
         self._history.append_tool_result(tool_call_id, payload)
@@ -623,55 +626,19 @@ class ToolRunner:
         return {"_terminal_payload": payload_dict}
 
 
-def _dispatch_preflight_rejection(
-    req: WorkerDispatchRequest,
-    *,
-    campaign_errors: list[str],
-) -> WorkerDispatchResult:
-    campaign_errors = [str(error) for error in campaign_errors if str(error or "").strip()]
-    failure_constraint = _dispatch_recovery_constraint(
-        campaign_errors=campaign_errors,
-    )
-    summary = (
-        "The Worker was not started because the dispatch_to_worker request is "
-        "not a valid bounded campaign yet. Planner must retry "
-        "dispatch_to_worker with a real steps array."
-    )
-    return WorkerDispatchResult(
-        ok=False,
-        summary=summary,
-        needs_followup=True,
-        recoverable=True,
-        status=WorkerOutcomeStatus.needs_followup.value,
-        extras={
-            "dispatch_not_started": True,
-            "dispatch_spec_rejected": True,
-            "planner_resolution_needed": True,
-            "internal_planner_handoff": True,
-            "user_visible_blocker": False,
-            "campaign_errors": campaign_errors,
-            "failure_constraint": failure_constraint,
-            "requested_goal": req.goal,
-            "requested_files": list(req.files),
-        },
-    )
-
-
 def _dispatch_chained_rejection(
     req: WorkerDispatchRequest,
     *,
     tool_call_id: str,
     previous_tool_call_id: str,
-    steps_present: bool,
-    step_count: int,
 ) -> WorkerDispatchResult:
     failure_constraint = _dispatch_chained_constraint(
         previous_tool_call_id=previous_tool_call_id,
     )
     summary = (
         "The Worker was not started because Planner already dispatched a Worker "
-        "campaign in this user turn. Planner must include all required work in "
-        "the original dispatch_to_worker steps array on retry or in a new user turn."
+        "in this user turn. Planner must include all required work in "
+        "the original dispatch_to_worker work_artifact on retry or in a new user turn."
     )
     return WorkerDispatchResult(
         ok=False,
@@ -691,8 +658,6 @@ def _dispatch_chained_rejection(
             "previous_dispatch_tool_call_id": previous_tool_call_id,
             "requested_goal": req.goal,
             "requested_files": list(req.files),
-            "steps_present": steps_present,
-            "step_count": step_count,
         },
     )
 
@@ -710,28 +675,10 @@ def _dispatch_chained_constraint(
             ),
             "Do not issue a second dispatch_to_worker call in the same user turn.",
             (
-                "For non-trivial implementation work, design the whole Worker "
-                "campaign up front and include every required work order in the "
-                "original dispatch_to_worker steps array."
+                "For multi-part work, include all required items in the "
+                "original dispatch_to_worker work_artifact."
             ),
-            "DispatchSession owns internal step execution after that single dispatch.",
+            "Each item is independently reviewed through SpecCard before Worker execution.",
             "Do not call edit/write tools.",
         ]
     )
-
-
-def _dispatch_recovery_constraint(
-    *,
-    campaign_errors: list[str],
-) -> str:
-    lines = [
-        "CONSTRAINT FOR NEXT DISPATCH ATTEMPT:",
-        "The previous dispatch_to_worker call was rejected before Worker start.",
-        "Re-call dispatch_to_worker immediately with a valid steps array.",
-        "Every step must include id, title, goal, spec, files, and acceptance.",
-        "Each step must be a bounded active-step work order, not the full campaign.",
-        "Do not call edit/write tools.",
-    ]
-    if campaign_errors:
-        lines.append("campaign_errors: " + "; ".join(campaign_errors))
-    return "\n".join(lines)

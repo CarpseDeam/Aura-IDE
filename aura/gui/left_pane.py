@@ -585,6 +585,17 @@ class LeftPane(QFrame):
                 if new_thread is not None:
                     w.update_thread(new_thread)
 
+    def refresh_current_thread(self, workspace_root: Path | None) -> None:
+        """Fine-grained update for the current thread row only.
+
+        Delegates to refresh_projects, which already updates thread-row
+        metadata in place when project/thread structure is unchanged.
+        This wrapper provides the semantic boundary so calling code
+        clearly distinguishes thread metadata updates from full project
+        refresh (create/delete/rename/workspace change).
+        """
+        self.refresh_projects(workspace_root)
+
     def refresh_projects(self, workspace_root: Path | None, *, schedule_backfill: bool = False) -> None:
         """Update the projects list and show threads for the active project.
 

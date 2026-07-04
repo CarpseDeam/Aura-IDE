@@ -9,6 +9,7 @@ from aura.gui.cards.spec_card import SpecCard
 from aura.gui.cards.terminal_card import TerminalCard
 from aura.gui.cards.error_card import ErrorCard
 from aura.gui.cards.worker_summary_card import WorkerSummaryCard
+from aura.gui.cards.work_artifact_card import WorkArtifactCard
 
 # Deprecated — kept for backward compatibility
 from aura.gui.cards.artifact_card import ArtifactCard  # noqa: F401
@@ -25,4 +26,5 @@ __all__ = [
     "TerminalCard",
     "ErrorCard",
     "WorkerSummaryCard",
+    "WorkArtifactCard",
 ]

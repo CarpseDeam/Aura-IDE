@@ -2,6 +2,9 @@
 
 Routes dispatch_to_worker calls through the GUI (SpecCard) and runs
 the worker manager when the user clicks Dispatch.
+
+Uses WorkArtifactController instead of the old DispatchSession campaign
+orchestration. Every Worker run is visible, reviewable, and recorded.
 """
 
 from __future__ import annotations
@@ -18,14 +21,12 @@ from PySide6.QtCore import (
 
 from aura.bridge.approval_proxy import _ApprovalProxy
 from aura.bridge.dispatch_pending import DispatchPendingMap, _DispatchPending
-from aura.bridge.dispatch_session import DispatchSession
 from aura.bridge.worker_activity import WorkerActivityController
 from aura.bridge.worker_completion_result import (
     _check_read_before_edit,
     _last_assistant_content,
 )
 from aura.bridge.worker_dispatch_runner import WorkerDispatchRunner
-from aura.bridge.worker_recording import record_dispatch_campaign_completion
 from aura.bridge.worker_report import (
     _build_worker_summary,
     _format_spec_as_user_message,
@@ -43,14 +44,16 @@ from aura.conversation import (
     WorkerDispatchResult,
     WorkerOutcomeStatus,
 )
-from aura.conversation.dispatch_plan import plan_from_request
 from aura.conversation.persistence import WorkerDispatchRecord
 from aura.conversation.tool_limits import TERMINAL_TOOLS, WRITE_TOOLS
 from aura.conversation.workflow_state import WorkflowState, WorkflowStatus
 from aura.dependency_context import build_dependency_stanza
-from aura.events import DISPATCH_STEP_STARTED, EventBus
+from aura.events import EventBus
 from aura.lifecycle import HookContext, HookMatcher, LifecycleHooks, attach_lifecycle_notify
 from aura.lifecycle.builtin_worker_gates import register_builtin_worker_gates
+from aura.work_artifact.controller import WorkArtifactController
+from aura.work_artifact.projection import WorkArtifactProjection
+from aura.work_artifact.receipt import worker_result_to_receipt
 from aura.worker_todo import WorkerTodoProjector
 
 __all__ = [
@@ -67,7 +70,7 @@ _log = logging.getLogger(__name__)
 
 
 class _DispatchProxy(QObject):
-    showSpecCard = Signal(str, str, list, str, str, str, list)  # tool_id, goal, files, spec, acceptance, summary, steps
+    showSpecCard = Signal(str, str, list, str, str, str, list)  # tool_id, goal, files, spec, acceptance, summary, steps (legacy, always [])
     workerStarted = Signal(str)  # tool_id
     workerFinished = Signal(str, bool, str, bool, str)  # tool_id, ok, summary, needs_followup, status
     workerCancelled = Signal(str)
@@ -119,13 +122,13 @@ class _DispatchProxy(QObject):
         self._result_metadata: dict[str, dict[str, Any]] = {}
         self._active_workflow: WorkflowState | None = None
 
-        # Event bus — owned by the dispatch proxy; shared with DispatchSession
-        # and WorkerDispatchRunner for activity projection.
+        # Work Artifact controller — owns active artifacts for the session.
+        self._artifact_controller = WorkArtifactController()
+
+        # Event bus — owned by the dispatch proxy.
         self._event_bus = EventBus()
 
         # Lifecycle hooks — observation bridge attached to the event bus.
-        # WorkerActivityController remains subscribed directly to EventBus;
-        # lifecycle notify observes in parallel.
         self._lifecycle = LifecycleHooks()
         self._detach_builtin_worker_gates = register_builtin_worker_gates(
             self._lifecycle
@@ -140,14 +143,9 @@ class _DispatchProxy(QObject):
         self._todo_projector = WorkerTodoProjector(self._event_bus)
         self._todo_projector.set_on_change(self._on_todo_changed)
 
-        # Step-start TODO reset — clear stale TODO items when a new campaign
-        # step begins.  Only the TODO list resets per step; Worker Log,
-        # Activity, code tabs, terminal, and playground state persist.
-        self._detach_step_todo_reset = self._lifecycle.register_notify(
-            HookMatcher(DISPATCH_STEP_STARTED),
-            self._on_step_started_reset_todo,
-            name="step_todo_reset",
-            source="internal",
+        # Listen for artifact projection updates.
+        self._artifact_controller.set_on_projection_updated(
+            self._on_artifact_projection_updated
         )
 
     # ---- config -----------------------------------------------------------
@@ -192,13 +190,16 @@ class _DispatchProxy(QObject):
     def result_metadata(self, tool_call_id: str) -> dict[str, Any]:
         return dict(self._result_metadata.get(tool_call_id, {}))
 
+    def artifact_controller(self) -> WorkArtifactController:
+        """Return the WorkArtifactController for test inspection."""
+        return self._artifact_controller
+
     # ---- Worker Activity (projected from event bus) -----------------------
 
     def _on_activity_changed(self, entries: list) -> None:
         """Emit the latest activity snapshot whenever the controller appends."""
-        # Forward as a dict snapshot for bridge relay & GUI consumption.
         self.workerActivityUpdated.emit(
-            entries[0].campaign_id if entries else "",
+            entries[0].artifact_id if entries else "",
             [e.to_dict() for e in entries],
         )
 
@@ -210,29 +211,39 @@ class _DispatchProxy(QObject):
         """Clear activity entries (conversation reset / teardown)."""
         self._activity_controller.clear()
         self._todo_projector.clear()
+        self._artifact_controller.clear()
 
-    # ---- lifecycle hook handlers -----------------------------------------
+    # ---- artifact projection updates ------------------------------------
 
-    def _on_step_started_reset_todo(self, ctx: HookContext) -> None:
-        """Clear the Worker TODO snapshot when a new campaign step starts.
-
-        Registered as a lifecycle notify hook for DISPATCH_STEP_STARTED.
-        Only the TODO list resets per step — Worker Log, Activity, code tabs,
-        terminal, and playground state persist across campaign steps.
-        """
-        run_id = ctx.run_id or ctx.campaign_id
-        if not run_id:
-            return
-        self._todo_projector.clear(run_id)
-        # Emit empty TODO so the GUI clears stale items from the previous step.
-        self._on_todo_changed(run_id, [])
+    def _on_artifact_projection_updated(self, projection: WorkArtifactProjection) -> None:
+        """React to WorkArtifact projection changes from the controller."""
+        _log.debug(
+            "WorkArtifact projection updated artifact_id=%s",
+            projection.artifact_id,
+        )
+        # This is where GUI updates would be triggered — e.g. update
+        # an artifact card in the chat view.
 
     # ---- planner-thread side ---------------------------------------------
+
+    def _register_artifact_from_request(self, tool_call_id: str, req: WorkerDispatchRequest) -> None:
+        """Register a WorkArtifact for this dispatch request.
+
+        If the request already has an artifact_id, it means the ToolRunner
+        already created the artifact. Otherwise, create a one-item
+        compatibility artifact.
+        """
+        if self._artifact_controller.get_artifact(tool_call_id) is not None:
+            return  # Already registered.
+        self._artifact_controller.create_one_item_artifact(tool_call_id, req)
 
     def request_dispatch(
         self, tool_call_id: str, req: WorkerDispatchRequest
     ) -> WorkerDispatchResult:
         """Called from the planner's worker thread. Blocks."""
+        # Register the artifact (idempotent — tool_runner may have created it).
+        self._register_artifact_from_request(tool_call_id, req)
+
         pending = self._pending_map.register(tool_call_id, req)
         _log.info("request_dispatch registered pending tool_call_id=%s", tool_call_id)
 
@@ -245,7 +256,7 @@ class _DispatchProxy(QObject):
             req.spec,
             req.acceptance,
             req.summary,
-            [step.to_dict() for step in req.steps],
+            [],  # legacy steps — always empty
         )
         _log.info("request_dispatch showSpecCard emitted tool_call_id=%s", tool_call_id)
 
@@ -326,72 +337,67 @@ class _DispatchProxy(QObject):
             if stanza:
                 edited = replace(edited, spec=edited.spec + stanza)
 
-        # --- Emit dispatched snapshot (fresh WorkflowState — no steps yet) ---
+        # --- Mark artifact item active ---
+        artifact = self._artifact_controller.get_artifact(tool_call_id)
+        if artifact is not None and artifact.current_item_id:
+            self._artifact_controller.mark_item_active(
+                tool_call_id, artifact.current_item_id
+            )
+
+        # --- Emit dispatched snapshot ---
         self._transition_workflow_state(
             tool_call_id,
             WorkflowStatus.dispatched,
             pending_user_action="",
         )
 
-        plan = plan_from_request(edited)
-        _log.info(
-            "request_dispatch DispatchSession constructed tool_call_id=%s step_count=%d",
-            tool_call_id,
-            len(plan.steps),
-        )
-        worker_started_emitted = False
+        # --- Emit workerStarted ---
+        _log.info("workerStarted emitted tool_call_id=%s", tool_call_id)
+        self.workerStarted.emit(tool_call_id)
 
-        def emit_worker_started(started_tool_call_id: str) -> None:
-            nonlocal worker_started_emitted
-            worker_started_emitted = True
-            _log.info("workerStarted emitted tool_call_id=%s", started_tool_call_id)
-            self.workerStarted.emit(started_tool_call_id)
-
-        session = DispatchSession(
-            tool_call_id=tool_call_id,
-            original_request=edited,
-            plan=plan,
-            run_worker_step=self._run_worker_internal,
-            pending=pending,
-            emit_worker_started=emit_worker_started,
-            emit_worker_finished=self.workerFinished.emit,
-            event_bus=self._event_bus,
-        )
+        # --- Run Worker exactly once ---
         try:
-            result = session.run()
+            result = self._run_worker(tool_call_id, edited, pending)
         except Exception as exc:
             _log.exception(
-                "request_dispatch DispatchSession.run failed tool_call_id=%s worker_started=%s",
+                "request_dispatch _run_worker failed tool_call_id=%s",
                 tool_call_id,
-                worker_started_emitted,
             )
-            result = self._dispatch_session_failure_result(
-                tool_call_id=tool_call_id,
-                exc=exc,
-                worker_started=worker_started_emitted,
-            )
-            self._store_result_metadata(tool_call_id, result)
-            self.workerFinished.emit(
-                tool_call_id,
-                result.ok,
-                result.summary,
-                result.needs_followup,
-                result.status or "",
+            result = WorkerDispatchResult(
+                ok=False,
+                summary=f"Harness error: {type(exc).__name__}",
+                cancelled=False,
+                recoverable=False,
+                status=WorkerOutcomeStatus.harness_error.value,
+                extras={
+                    "worker_internal_error": True,
+                    "error_type": type(exc).__name__,
+                    "internal_error": redact_secrets(f"{type(exc).__name__}: {exc}"),
+                },
             )
 
-        # Create one aggregate WorkerDispatchRecord for the whole dispatch
-        # campaign so that conversation replay shows one user-facing
-        # WorkerSummaryCard rather than one card per internal step.
-        if isinstance(result.extras, dict) and result.extras.get("dispatch_session"):
-            record_dispatch_campaign_completion(
-                records=self._records,
-                workspace_root=self._workspace_root,
-                tool_call_id=tool_call_id,
-                edited_request=edited,
-                result=result,
-            )
+        # --- Convert result to receipt and attach to artifact ---
+        self._artifact_controller.attach_receipt(tool_call_id, result)
 
-        # Emit the finished WorkflowState snapshot for the terminal outcome.
+        # --- Emit artifact projection update ---
+        projection = WorkArtifactProjection.from_artifact(artifact) if artifact else None
+        if projection is not None:
+            self._on_artifact_projection_updated(projection)
+
+        # --- Emit workerFinished ---
+        _log.info(
+            "workerFinished emitted tool_call_id=%s ok=%s",
+            tool_call_id, result.ok,
+        )
+        self.workerFinished.emit(
+            tool_call_id,
+            result.ok,
+            result.summary,
+            result.needs_followup,
+            result.status or "",
+        )
+
+        # --- Emit finished WorkflowState snapshot ---
         if self._active_workflow is not None and self._active_workflow.tool_call_id == tool_call_id:
             extras = result.extras if isinstance(result.extras, dict) else {}
             self._set_workflow_state(
@@ -405,9 +411,19 @@ class _DispatchProxy(QObject):
                     extras=extras,
                 )
             )
-        self._merge_session_result_metadata(tool_call_id, result)
+
+        # --- Advance to next item if available (review only, no auto-dispatch) ---
+        has_next = self._artifact_controller.advance_to_next_item(tool_call_id)
+        if has_next:
+            _log.info(
+                "WorkArtifact has next pending item tool_call_id=%s — ready for review",
+                tool_call_id,
+            )
+
+        self._store_result_metadata(tool_call_id, result)
         self._pending_map.pop(tool_call_id)
         return result
+
     # ---- GUI-thread side --------------------------------------------------
 
     def user_dispatched(
@@ -456,22 +472,6 @@ class _DispatchProxy(QObject):
             return False
         _log.info("user_dispatched resolve succeeded tool_call_id=%s", tool_call_id)
         return True
-
-    def _merge_session_result_metadata(
-        self,
-        tool_call_id: str,
-        result: WorkerDispatchResult,
-    ) -> None:
-        if not isinstance(result.extras, dict) or not result.extras.get("dispatch_session"):
-            return
-        metadata = dict(self._result_metadata.get(tool_call_id, {}))
-        extras = metadata.get("extras") if isinstance(metadata.get("extras"), dict) else {}
-        metadata["extras"] = {**extras, **result.extras}
-        if result.modified_files:
-            metadata["modified_files"] = list(result.modified_files)
-        if result.validation is not None:
-            metadata["validation"] = result.validation
-        self._result_metadata[tool_call_id] = metadata
 
     def _store_result_metadata(
         self,
@@ -537,12 +537,7 @@ class _DispatchProxy(QObject):
         summary: str,
         status: WorkflowStatus,
     ) -> None:
-        """Callback suitable for threading through to ToolRunner.
-
-        Creates a WorkflowState if none exists for this tool_call_id, then
-        transitions to *status*.  Used by the campaign/quality reject paths
-        that fire before ``request_dispatch`` is ever called.
-        """
+        """Callback suitable for threading through to ToolRunner."""
         if self._active_workflow is None or self._active_workflow.tool_call_id != tool_call_id:
             self._init_workflow_state(tool_call_id, goal, summary)
         self._transition_workflow_state(tool_call_id, status)
@@ -550,11 +545,7 @@ class _DispatchProxy(QObject):
     def _workflow_tool_started(
         self, tool_call_id: str, worker_tool_id: str, name: str
     ) -> None:
-        """Transition workflow state when a Worker tool starts.
-
-        Called synchronously on the planner thread via DirectConnection
-        from WorkerEventRelay.toolCallStart.
-        """
+        """Transition workflow state when a Worker tool starts."""
         if self._active_workflow is None or self._active_workflow.tool_call_id != tool_call_id:
             return
         if name in WRITE_TOOLS:
@@ -571,11 +562,7 @@ class _DispatchProxy(QObject):
         result: str,
         extras: dict,
     ) -> None:
-        """Absorb a Worker tool result into the canonical WorkflowState.
-
-        Called synchronously on the planner thread via DirectConnection
-        from WorkerEventRelay.toolResult.
-        """
+        """Absorb a Worker tool result into the canonical WorkflowState."""
         if self._active_workflow is None or self._active_workflow.tool_call_id != parent_tool_id:
             return
         new_state = self._active_workflow.absorb_worker_tool_result(name, ok, result, extras)
@@ -607,35 +594,6 @@ class _DispatchProxy(QObject):
         runner = self._create_worker_dispatch_runner()
         return runner.run_worker(tool_call_id, req, pending)
 
-    def _run_worker_internal(
-        self,
-        tool_call_id: str,
-        req: WorkerDispatchRequest,
-        pending: "_DispatchPending",
-    ) -> WorkerDispatchResult:
-        """Run a single dispatch step without creating a durable diagnostic record.
-
-        Internal steps (part of a multi-step DispatchSession campaign) must
-        not create durable WorkerDispatchRecord entries, because the
-        aggregate campaign diagnostic is recorded once after session.run()
-        returns.
-
-        They also must not emit final-report Activity entries on the event
-        bus, because those would look like the Worker finished and restarted
-        between steps.
-
-        Worker tool start/result events are also not projected into
-        WorkflowState here. The visible planner/spec-card workflow is
-        campaign-scoped and receives the terminal aggregate result after
-        session.run() returns.
-        """
-        _log.info("_run_worker_internal entered tool_call_id=%s", tool_call_id)
-        runner = self._create_worker_dispatch_runner(
-            suppress_final_report_activity=True,
-            suppress_workflow_state_updates=True,
-        )
-        return runner.run_worker(tool_call_id, req, pending, record_replayable=False)
-
     def _pending_resolution_failure_result(
         self,
         *,
@@ -664,31 +622,6 @@ class _DispatchProxy(QObject):
                 "requested_tool_call_id": tool_call_id,
                 "pending_existed": pending_existed,
                 "active_pending_ids": list(active_pending_ids),
-            },
-        )
-
-    def _dispatch_session_failure_result(
-        self,
-        *,
-        tool_call_id: str,
-        exc: Exception,
-        worker_started: bool,
-    ) -> WorkerDispatchResult:
-        error = redact_secrets(f"{type(exc).__name__}: {exc}")
-        return WorkerDispatchResult(
-            ok=False,
-            summary="Dispatch could not start Worker because the dispatch session failed.",
-            needs_followup=True,
-            recoverable=True,
-            status=WorkerOutcomeStatus.harness_error.value,
-            extras={
-                "dispatch_session": True,
-                "dispatch_session_failed": True,
-                "dispatch_session_start_failed": not worker_started,
-                "dispatch_internal_error": True,
-                "tool_call_id": tool_call_id,
-                "error_type": type(exc).__name__,
-                "internal_error": error,
             },
         )
 

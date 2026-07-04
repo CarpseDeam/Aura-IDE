@@ -79,11 +79,11 @@ def _format_spec_as_user_message(task: WorkerTaskSpec | WorkerDispatchRequest) -
         parts.extend([*task_shape_contract_lines(task.task_shape), ""])
 
     parts.extend([
-        "Active Dispatch Step",
+        "Active Dispatch Item",
         (
-            "This is one bounded step from a Planner-owned campaign. Do only "
-            "this step. Do not plan, decompose, or schedule the whole task; "
-            "DispatchSession will start the next step after this Worker returns."
+            "This is one bounded Work Artifact item. Do only "
+            "this item. Do not plan, decompose, or schedule the next item; "
+            "the next item requires user review before Worker execution."
         ),
         "",
     ])

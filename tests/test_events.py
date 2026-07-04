@@ -10,10 +10,10 @@ import pytest
 
 from aura.events import (
     ALL,
-    DISPATCH_CAMPAIGN_FINISHED,
-    DISPATCH_CAMPAIGN_STARTED,
-    DISPATCH_STEP_COMPLETED,
-    DISPATCH_STEP_STARTED,
+    WORK_ARTIFACT_CREATED,
+    WORK_ARTIFACT_ITEM_COMPLETED,
+    WORK_ARTIFACT_ITEM_READY,
+    WORK_ARTIFACT_UPDATED,
     WORKER_FAILED,
     WORKER_FILE_CHANGED,
     WORKER_TOOL_STARTED,
@@ -21,7 +21,7 @@ from aura.events import (
     AuraEvent,
     EventBus,
     ALL_TOPICS,
-    DISPATCH_TOPICS,
+    WORK_ARTIFACT_TOPICS,
     WORKER_TOPICS,
 )
 from aura.bridge.worker_activity import (
@@ -41,8 +41,8 @@ class TestAuraEvent:
         assert ev.payload == {}
         assert ev.source == ""
         assert ev.run_id == ""
-        assert ev.campaign_id == ""
-        assert ev.step_id == ""
+        assert ev.artifact_id == ""
+        assert ev.artifact_item_id == ""
         # timestamp should have been auto-stamped
         assert ev.timestamp > 0
 
@@ -58,8 +58,8 @@ class TestAuraEvent:
             payload={"key": "val"},
             source="test",
             run_id="r1",
-            campaign_id="c1",
-            step_id="s1",
+            artifact_id="art-1",
+            artifact_item_id="item-1",
             timestamp=0.0,
         )
         d = ev.to_dict()
@@ -68,8 +68,8 @@ class TestAuraEvent:
         assert d["payload"] == {"key": "val"}
         assert d["source"] == "test"
         assert d["run_id"] == "r1"
-        assert d["campaign_id"] == "c1"
-        assert d["step_id"] == "s1"
+        assert d["artifact_id"] == "art-1"
+        assert d["artifact_item_id"] == "item-1"
         # timestamp was 0.0 so __post_init__ should have set it
         assert d["timestamp"] > 0
 
@@ -97,10 +97,10 @@ class TestEventBus:
         bus = EventBus()
         received: list[AuraEvent] = []
 
-        bus.subscribe(DISPATCH_CAMPAIGN_STARTED, received.append)
-        bus.subscribe(DISPATCH_STEP_STARTED, received.append)
+        bus.subscribe(WORK_ARTIFACT_CREATED, received.append)
+        bus.subscribe(WORK_ARTIFACT_ITEM_READY, received.append)
 
-        ev = AuraEvent(topic=DISPATCH_CAMPAIGN_STARTED)
+        ev = AuraEvent(topic=WORK_ARTIFACT_CREATED)
         bus.emit(ev)
 
         assert received == [ev]
@@ -109,7 +109,7 @@ class TestEventBus:
         bus = EventBus()
         received: list[AuraEvent] = []
 
-        bus.subscribe(DISPATCH_CAMPAIGN_STARTED, received.append)
+        bus.subscribe(WORK_ARTIFACT_CREATED, received.append)
         bus.emit(AuraEvent(topic=WORKER_FAILED))
 
         assert received == []
@@ -207,7 +207,7 @@ class TestWildcardSubscriber:
 
         bus.subscribe(ALL, received.append)
 
-        e1 = AuraEvent(topic="dispatch.campaign_started")
+        e1 = AuraEvent(topic="work_artifact.created")
         e2 = AuraEvent(topic="worker.tool_started")
         bus.emit(e1)
         bus.emit(e2)
@@ -220,9 +220,9 @@ class TestWildcardSubscriber:
         topic: list[AuraEvent] = []
 
         bus.subscribe(ALL, wild.append)
-        bus.subscribe(DISPATCH_CAMPAIGN_STARTED, topic.append)
+        bus.subscribe(WORK_ARTIFACT_CREATED, topic.append)
 
-        ev = AuraEvent(topic=DISPATCH_CAMPAIGN_STARTED)
+        ev = AuraEvent(topic=WORK_ARTIFACT_CREATED)
         bus.emit(ev)
 
         assert wild == [ev]
@@ -270,8 +270,8 @@ class TestBusLifecycle:
 
 
 class TestTopics:
-    def test_all_topics_includes_dispatch_and_worker(self) -> None:
-        assert DISPATCH_TOPICS | WORKER_TOPICS == ALL_TOPICS
+    def test_all_topics_includes_work_artifact_and_worker(self) -> None:
+        assert WORK_ARTIFACT_TOPICS | WORKER_TOPICS == ALL_TOPICS
 
     def test_topic_strings_are_dotted(self) -> None:
         for topic in ALL_TOPICS:
@@ -459,30 +459,30 @@ class TestWorkerActivityController:
         entries = ctrl.snapshot()
         assert all(hasattr(e, "kind") for e in entries)
 
-    def test_campaign_started_event(self) -> None:
+    def test_artifact_item_ready_event(self) -> None:
         bus = EventBus()
         ctrl = WorkerActivityController(bus)
 
-        bus.emit(AuraEvent(topic=DISPATCH_CAMPAIGN_STARTED, payload={
-            "goal": "Fix the auth bug",
-            "step_count": 3,
-        }))
+        bus.emit(AuraEvent(topic=WORK_ARTIFACT_ITEM_READY, payload={
+            "title": "Add auth feature",
+            "item_id": "item-1",
+        }, artifact_id="art-1", artifact_item_id="item-1"))
 
         entries = ctrl.snapshot()
         assert len(entries) == 1
-        assert entries[0].kind == "campaign_started"
-        assert "Fix the auth bug" in entries[0].message
+        assert entries[0].kind == "artifact_item_ready"
+        assert "Add auth feature" in entries[0].message
 
-    def test_step_started_event(self) -> None:
+    def test_artifact_item_completed_event(self) -> None:
         bus = EventBus()
         ctrl = WorkerActivityController(bus)
 
-        bus.emit(AuraEvent(topic=DISPATCH_STEP_STARTED, payload={
-            "step_id": "step-1",
-            "description": "Add tests for auth",
-        }))
+        bus.emit(AuraEvent(topic=WORK_ARTIFACT_ITEM_COMPLETED, payload={
+            "title": "Add auth feature",
+            "status": "done",
+        }, artifact_id="art-1", artifact_item_id="item-1"))
 
         entries = ctrl.snapshot()
         assert len(entries) == 1
-        assert entries[0].kind == "step_started"
-        assert "Add tests for auth" in entries[0].message
+        assert entries[0].kind == "artifact_item_done"
+        assert "Add auth feature" in entries[0].message

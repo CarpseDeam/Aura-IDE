@@ -891,7 +891,7 @@ class ChatView(QScrollArea):
 
         existing = self._spec_cards.get(tool_call_id)
         if existing is not None:
-            existing.update_spec(goal, files, spec, acceptance, summary, steps=steps)
+            existing.update_spec(goal, files, spec, acceptance, summary)
             self._scroll_after_bottom_layout_change()
             return existing
         card = SpecCard(
@@ -901,7 +901,6 @@ class ChatView(QScrollArea):
             spec,
             acceptance,
             summary=summary,
-            steps=steps,
             parent=self,
         )
         ac = self.current_assistant()

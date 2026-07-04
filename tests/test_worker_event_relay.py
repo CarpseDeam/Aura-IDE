@@ -8,7 +8,7 @@ the event bus, while non-internal steps still do.
 
 from __future__ import annotations
 
-from types import SimpleNamespace
+
 from unittest.mock import MagicMock
 
 import pytest
@@ -334,62 +334,17 @@ class TestFlagThreading:
         dispatch_proxy._workflow_tool_started.assert_called_once()
         dispatch_proxy._workflow_tool_result.assert_called_once()
 
-    def test_run_worker_internal_threads_workflow_suppression(
-        self, monkeypatch,
-    ) -> None:
-        """_run_worker_internal creates a runner with both internal-step flags."""
-        from aura.bridge import dispatch as dispatch_module
-        from aura.bridge.dispatch import _DispatchProxy
-
-        captured: dict[str, object] = {}
-        expected = WorkerDispatchResult(ok=True, summary="done")
-
-        class DummyRunner:
-            def __init__(self, **kwargs):
-                captured.update(kwargs)
-
-            def run_worker(self, tool_call_id, req, pending, record_replayable=True):
-                captured["run_worker_args"] = (
-                    tool_call_id,
-                    req,
-                    pending,
-                    record_replayable,
-                )
-                return expected
-
-        monkeypatch.setattr(dispatch_module, "WorkerDispatchRunner", DummyRunner)
-        proxy = _DispatchProxy(
-            parent_widget=None,
-            registry_factory=MagicMock(),
-            approval_proxy=MagicMock(),
-        )
-        req = WorkerDispatchRequest(
-            goal="g",
-            files=[],
-            spec="s",
-            acceptance="a",
-            summary="summary",
-        )
-        pending = SimpleNamespace()
-
-        result = proxy._run_worker_internal("tc-1", req, pending)
-
-        assert result is expected
-        assert captured["suppress_final_report_activity"] is True
-        assert captured["suppress_workflow_state_updates"] is True
-        assert captured["run_worker_args"] == ("tc-1", req, pending, False)
 
 
-# ── EventBus integration: both flags in combination ──────────────────────
+# ── EventBus integration: suppression in combination ──────────────────────
 
 
 class TestEventBusIntegration:
-    """End-to-end verification that internal dispatch steps don't leak
-    final-report Activity onto the event bus."""
+    """End-to-end verification that suppression flags work correctly."""
 
-    def test_three_step_campaign_no_leak(self, approval_proxy) -> None:
-        """Simulate a 3-step campaign: internal steps do not emit
-        final-report Activity, only the final one does."""
+    def test_suppressed_final_report_does_not_leak(self, approval_proxy) -> None:
+        """Simulate suppressed steps: no final-report Activity emitted
+        while suppress_final_report_activity=True."""
         bus = EventBus()
         ctrl = WorkerActivityController(bus)
 
@@ -586,14 +541,14 @@ class TestDispatchIdentityPropagation:
 
     Every AuraEvent emitted by ``_emit_bus_event`` during ``relay()`` must
     carry the parent dispatch ``tool_call_id`` as ``run_id`` and
-    ``campaign_id``, while preserving the inner Worker tool id in
+    ``artifact_id``, while preserving the inner Worker tool id in
     ``payload["tool_call_id"]``.
     """
 
     def test_tool_started_carries_dispatch_identity(
         self, approval_proxy, event_bus,
     ) -> None:
-        """WORKER_TOOL_STARTED carries run_id/campaign_id == dispatch id."""
+        """WORKER_TOOL_STARTED carries run_id/artifact_id == dispatch id."""
         received: list[AuraEvent] = []
         event_bus.subscribe(WORKER_TOOL_STARTED, received.append)
         relay = WorkerEventRelay(
@@ -607,12 +562,12 @@ class TestDispatchIdentityPropagation:
 
         assert len(received) == 1
         assert received[0].run_id == "dispatch-tc-1"
-        assert received[0].campaign_id == "dispatch-tc-1"
+        assert received[0].artifact_id == "dispatch-tc-1"
 
     def test_tool_finished_carries_dispatch_identity(
         self, approval_proxy, event_bus,
     ) -> None:
-        """WORKER_TOOL_FINISHED carries run_id/campaign_id == dispatch id."""
+        """WORKER_TOOL_FINISHED carries run_id/artifact_id == dispatch id."""
         received: list[AuraEvent] = []
         event_bus.subscribe(WORKER_TOOL_FINISHED, received.append)
         relay = WorkerEventRelay(
@@ -630,7 +585,7 @@ class TestDispatchIdentityPropagation:
 
         assert len(received) == 1
         assert received[0].run_id == "dispatch-tc-2"
-        assert received[0].campaign_id == "dispatch-tc-2"
+        assert received[0].artifact_id == "dispatch-tc-2"
 
     def test_payload_tool_call_id_is_worker_id_not_dispatch_id(
         self, approval_proxy, event_bus,
@@ -651,9 +606,9 @@ class TestDispatchIdentityPropagation:
         assert len(received) == 1
         # payload["tool_call_id"] is the Worker tool id
         assert received[0].payload.get("tool_call_id") == "worker-inner-id"
-        # run_id/campaign_id is the dispatch id
+        # run_id/artifact_id is the dispatch id
         assert received[0].run_id == "dispatch-tc-3"
-        assert received[0].campaign_id == "dispatch-tc-3"
+        assert received[0].artifact_id == "dispatch-tc-3"
 
     def test_all_worker_topics_carry_identity(
         self, approval_proxy, event_bus,
@@ -677,9 +632,9 @@ class TestDispatchIdentityPropagation:
 
         assert len(received) == 2
         assert received[0].run_id == "dispatch-first"
-        assert received[0].campaign_id == "dispatch-first"
+        assert received[0].artifact_id == "dispatch-first"
         assert received[1].run_id == "dispatch-second"
-        assert received[1].campaign_id == "dispatch-second"
+        assert received[1].artifact_id == "dispatch-second"
 
         relay.relay("dispatch-second", ToolResult(
             tool_call_id="wt-2",
@@ -690,4 +645,4 @@ class TestDispatchIdentityPropagation:
         ))
         assert len(received) == 3
         assert received[2].run_id == "dispatch-second"
-        assert received[2].campaign_id == "dispatch-second"
+        assert received[2].artifact_id == "dispatch-second"

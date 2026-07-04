@@ -16,9 +16,8 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from aura.events import (
-    DISPATCH_CAMPAIGN_STARTED,
-    DISPATCH_STEP_COMPLETED,
-    DISPATCH_STEP_STARTED,
+    WORK_ARTIFACT_ITEM_COMPLETED,
+    WORK_ARTIFACT_ITEM_READY,
     WORKER_TOOL_STARTED,
     WORKER_TOOL_FINISHED,
     WORKER_FILE_CHANGED,
@@ -54,8 +53,8 @@ class ActivityEntry:
     detail: str = ""
     timestamp: float = 0.0
     run_id: str = ""
-    campaign_id: str = ""
-    step_id: str = ""
+    artifact_id: str = ""
+    artifact_item_id: str = ""
 
     def __post_init__(self) -> None:
         if self.timestamp == 0.0:
@@ -68,8 +67,8 @@ class ActivityEntry:
             "detail": self.detail,
             "timestamp": self.timestamp,
             "run_id": self.run_id,
-            "campaign_id": self.campaign_id,
-            "step_id": self.step_id,
+            "artifact_id": self.artifact_id,
+            "artifact_item_id": self.artifact_item_id,
         }
 
 
@@ -142,9 +141,8 @@ class WorkerActivityController:
     # ── event subscriptions ─────────────────────────────────────────────────
 
     def _subscribe(self, bus: EventBus) -> None:
-        bus.subscribe(DISPATCH_CAMPAIGN_STARTED, self._on_campaign_started)
-        bus.subscribe(DISPATCH_STEP_STARTED, self._on_step_started)
-        bus.subscribe(DISPATCH_STEP_COMPLETED, self._on_step_completed)
+        bus.subscribe(WORK_ARTIFACT_ITEM_READY, self._on_artifact_item_ready)
+        bus.subscribe(WORK_ARTIFACT_ITEM_COMPLETED, self._on_artifact_item_completed)
         bus.subscribe(WORKER_TOOL_STARTED, self._on_tool_started)
         bus.subscribe(WORKER_TOOL_FINISHED, self._on_tool_finished)
         bus.subscribe(WORKER_FILE_CHANGED, self._on_file_changed)
@@ -165,46 +163,32 @@ class WorkerActivityController:
         if self._on_change is not None:
             self._on_change(self._entries)
 
-    def _on_campaign_started(self, ev: AuraEvent) -> None:
-        goal = str(ev.payload.get("goal") or ev.message or "")
-        msg = f"Campaign started"
-        if goal:
-            msg += f": {goal[:120]}"
+    def _on_artifact_item_ready(self, ev: AuraEvent) -> None:
+        title = str(ev.payload.get("title") or ev.payload.get("item_id") or "")
+        msg = "Work item ready"
+        if title:
+            msg += f": {title[:120]}"
         self._append(ActivityEntry(
-            kind="campaign_started",
+            kind="artifact_item_ready",
             message=msg,
-            detail=goal[:120] if goal else "",
-            campaign_id=ev.campaign_id or ev.run_id,
+            detail=title[:120] if title else "",
+            artifact_id=ev.artifact_id,
+            artifact_item_id=ev.artifact_item_id,
             run_id=ev.run_id or self._run_id,
         ))
 
-    def _on_step_started(self, ev: AuraEvent) -> None:
-        desc = str(ev.payload.get("description") or ev.payload.get("step_id") or "")
-        msg = f"Step started"
-        if desc:
-            msg += f": {desc[:120]}"
+    def _on_artifact_item_completed(self, ev: AuraEvent) -> None:
+        title = str(ev.payload.get("title") or ev.payload.get("item_id") or "")
+        status = str(ev.payload.get("status") or "completed")
+        msg = f"Work item {status}"
+        if title:
+            msg += f": {title[:120]}"
         self._append(ActivityEntry(
-            kind="step_started",
+            kind=f"artifact_item_{status}",
             message=msg,
-            detail=desc[:120] if desc else "",
-            step_id=ev.step_id,
-            campaign_id=ev.campaign_id,
-            run_id=ev.run_id or self._run_id,
-        ))
-
-    def _on_step_completed(self, ev: AuraEvent) -> None:
-        desc = str(ev.payload.get("description") or ev.payload.get("step_id") or ev.step_id or "")
-        ok = ev.payload.get("ok")
-        status = "completed" if ok is not False else "failed"
-        msg = f"Step {status}"
-        if desc:
-            msg += f": {desc[:120]}"
-        self._append(ActivityEntry(
-            kind=f"step_{status}",
-            message=msg,
-            detail=desc[:120] if desc else "",
-            step_id=ev.step_id,
-            campaign_id=ev.campaign_id,
+            detail=title[:120] if title else "",
+            artifact_id=ev.artifact_id,
+            artifact_item_id=ev.artifact_item_id,
             run_id=ev.run_id or self._run_id,
         ))
 

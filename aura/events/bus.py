@@ -25,11 +25,11 @@ class EventBus:
 
         bus = EventBus()
 
-        def on_step(event: AuraEvent) -> None:
-            print(f"  step {event.step_id} changed")
+        def on_artifact(event: AuraEvent) -> None:
+            print(f"  artifact {event.artifact_id} item {event.artifact_item_id}")
 
-        unsub = bus.subscribe("dispatch.step_started", on_step)
-        bus.emit(AuraEvent(topic="dispatch.step_started", step_id="abc-123"))
+        unsub = bus.subscribe("work_artifact.item_ready", on_artifact)
+        bus.emit(AuraEvent(topic="work_artifact.item_ready", artifact_id="art-1", artifact_item_id="item-1"))
         unsub()
     """
 

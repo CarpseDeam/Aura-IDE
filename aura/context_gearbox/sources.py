@@ -35,8 +35,8 @@ WEB_RESEARCH_RULES = """### web_research_rules
 - Keep chat output compact and sourced; keep raw metadata in tool logs."""
 
 WORKER_EXECUTION_CONTRACT = """### worker_execution_contract
-- Implement only the dispatched spec and current step.
-- If the task is part of a campaign, DispatchSession starts each step sequentially; Worker must not plan or schedule the whole campaign.
+- Implement only the dispatched spec.
+- Worker receives one reviewed Work Artifact item at a time; do not plan or schedule next items.
 - Do not ask the user to resolve implementation ambiguity; use repository facts, recover internally, or return a blocker.
 - Inspect live files with tools before editing.
 - Use patch_file for existing-file edits unless full replacement is explicitly justified.
@@ -297,6 +297,7 @@ CONTEXT_SOURCES: tuple[ContextSource, ...] = (
         kind="quality_contract",
         roles=(RuntimeRole.WORKER, RuntimeRole.SINGLE),
         reason="coding quality contract for implementation work",
+        origin_paths=("aura/context_gearbox/sources.py",),
     ),
     ContextSource(
         source_id="validation_selection_contract",
@@ -359,7 +360,9 @@ def collect_source_text(
 ) -> tuple[str, ContextLedgerEntry, list[ContextLedgerEntry]]:
     try:
         skill_ids: list[str] = []
-        if source.kind == "skill_pack":
+        if _source_origin_matches_target_file(source, role, target_files, workspace_root):
+            text, reason = "", "skipped because target file owns this context source"
+        elif source.kind == "skill_pack":
             if role not in source.roles:
                 text, reason = "", f"not scoped to {role.value} role"
             else:
@@ -739,6 +742,25 @@ def _normalize_target_file_paths(
         if path:
             normalized.append(path)
     return tuple(normalized)
+
+
+def _source_origin_matches_target_file(
+    source: ContextSource,
+    role: RuntimeRole,
+    target_files: tuple[str, ...] | None,
+    workspace_root: Path | None,
+) -> bool:
+    if role not in source.roles:
+        return False
+    if role not in {RuntimeRole.WORKER, RuntimeRole.SINGLE}:
+        return False
+    if not source.origin_paths or not target_files:
+        return False
+    normalized_targets = set(_normalize_target_file_paths(target_files, workspace_root))
+    if not normalized_targets:
+        return False
+    normalized_origins = set(_normalize_target_file_paths(source.origin_paths, workspace_root))
+    return bool(normalized_targets & normalized_origins)
 
 
 def _normalize_path_string(value: Any) -> str:
