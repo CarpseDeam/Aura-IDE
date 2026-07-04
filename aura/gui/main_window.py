@@ -59,6 +59,7 @@ from aura.gui.send_handler import SendHandler
 from aura.gui.silent_research_guard import SilentResearchUiGuard
 from aura.gui.status_bar import AuraStatusBar
 from aura.gui.update_dialog import UpdateDialog
+from aura.gui.widgets.aura_glow import AuraWidget
 from aura.gui.window_chrome import WindowChromeMixin
 from aura.gui.worker_handler import WorkerEventHandler
 from aura.prompts import SINGLE_SYSTEM_PROMPT
@@ -235,6 +236,13 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             parent=self,
             terminal_window_geometry=self._settings.terminal_window_geometry,
         )
+        self._playground_aura = AuraWidget(
+            self._playground,
+            glow_color="#00e5ff",
+            glow_spread=24,
+            parent=self,
+        )
+        self._playground.set_aura_wrapper(self._playground_aura)
         self._playground.set_workspace_root(self._workspace_root)
         self._playground.set_read_only_mode(False)
 
@@ -319,7 +327,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
         # Add to splitter (replacing previous center addWidget with stack)
         self._main_splitter.addWidget(self._center_stack)
-        self._main_splitter.addWidget(self._playground)
+        self._main_splitter.addWidget(self._playground_aura)
 
         # Sensible initial distribution: left is narrow, chat is comfortable,
         # and the workspace opens as the primary work surface.
@@ -429,7 +437,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             self._main_splitter.minimumSizeHint().width(), self._main_splitter.minimumSizeHint().height(),
             self._left_pane.minimumSizeHint().width(), self._left_pane.minimumSizeHint().height(),
             self._center_stack.minimumSizeHint().width(), self._center_stack.minimumSizeHint().height(),
-            self._playground.minimumSizeHint().width(), self._playground.minimumSizeHint().height(),
+            self._playground_aura.minimumSizeHint().width(), self._playground_aura.minimumSizeHint().height(),
             self._chat.minimumSizeHint().width(), self._chat.minimumSizeHint().height(),
             self._input.minimumSizeHint().width(), self._input.minimumSizeHint().height(),
         )

@@ -165,6 +165,18 @@ class _ThreadRow(QFrame):
             }}
         """)
 
+    def update_thread(self, thread) -> None:
+        """Update row in place with new thread metadata.
+
+        Only title, summary, and updated_at change — the row widget is not
+        replaced.  Stored thread reference, label text, elision, and tooltip
+        are all refreshed.
+        """
+        self.thread = thread
+        self.title_label.set_full_text(thread.title)
+        tooltip = thread.summary if thread.summary else thread.title
+        self.title_label.setToolTip(tooltip)
+
     def contextMenuEvent(self, event) -> None:
         menu = QMenu(self)
         rename_act = menu.addAction("Rename Chat")
@@ -435,23 +447,167 @@ class LeftPane(QFrame):
             if item.widget():
                 item.widget().deleteLater()
 
+    # ------------------------------------------------------------------
+    # Structural snapshot helpers for in-place-update optimisation
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _visible_thread_slice(
+        threads: list, show_all: bool, *, limit: int = 10
+    ) -> tuple[list, bool]:
+        """Return ``(visible_threads, has_more)`` for the given thread list."""
+        if len(threads) > limit and not show_all:
+            return threads[:limit], True
+        return list(threads), False
+
+    def _capture_layout_snapshot(self) -> dict:
+        """Walk the current ``_projects_layout`` widgets and return a
+        lightweight structural snapshot suitable for comparison."""
+        project_ids: list[str] = []
+        collapsed: dict[str, bool] = {}
+        visible_thread_ids: dict[str, list[str]] = {}
+        has_more: dict[str, bool] = {}
+
+        current_project_id: str | None = None
+
+        for i in range(self._projects_layout.count()):
+            item = self._projects_layout.itemAt(i)
+            if item is None:
+                continue
+            w = item.widget()
+            if w is None:
+                # Spacer item — ignore.
+                continue
+            if isinstance(w, _ProjectRow):
+                pid = w.project.id
+                project_ids.append(pid)
+                collapsed[pid] = w._collapsed
+                current_project_id = pid
+                visible_thread_ids[pid] = []
+                has_more[pid] = False
+            elif isinstance(w, _ThreadRow) and current_project_id is not None:
+                visible_thread_ids[current_project_id].append(w.thread.id)
+            elif isinstance(w, _ShowMoreRow) and current_project_id is not None:
+                has_more[current_project_id] = True
+
+        return {
+            "workspace_root": self._last_workspace_root,
+            "project_ids": project_ids,
+            "active_project_id": (
+                project_ids[-1] if project_ids else None
+            ),  # last project row is active (current code pattern)
+            "collapsed": collapsed,
+            "show_all": self._show_all_active_threads,
+            "visible_thread_ids": visible_thread_ids,
+            "has_more": has_more,
+        }
+
+    def _compute_target_snapshot(
+        self, workspace_root: Path | None, projects: list
+    ) -> dict:
+        """Compute what the structural snapshot *would* be from the given
+        project list without touching the widget tree."""
+        project_ids: list[str] = []
+        collapsed: dict[str, bool] = {}
+        visible_thread_ids: dict[str, list[str]] = {}
+        has_more: dict[str, bool] = {}
+        active_project_id: str | None = None
+
+        store = ProjectStore()
+
+        for project in projects:
+            pid = project.id
+            project_ids.append(pid)
+            is_active = (
+                workspace_root is not None
+                and project.root_path.resolve() == workspace_root.resolve()
+            )
+            if is_active:
+                active_project_id = pid
+
+            col = self._project_collapsed.get(pid, False)
+            collapsed[pid] = col
+
+            if is_active and not col:
+                try:
+                    threads = store.list_threads(project, include_archived=False)
+                except Exception:
+                    threads = []
+                vt, hm = self._visible_thread_slice(threads, self._show_all_active_threads)
+                visible_thread_ids[pid] = [t.id for t in vt]
+                has_more[pid] = hm
+            else:
+                visible_thread_ids[pid] = []
+                has_more[pid] = False
+
+        return {
+            "workspace_root": workspace_root,
+            "project_ids": project_ids,
+            "active_project_id": active_project_id,
+            "collapsed": collapsed,
+            "show_all": self._show_all_active_threads,
+            "visible_thread_ids": visible_thread_ids,
+            "has_more": has_more,
+        }
+
+    @staticmethod
+    def _snapshots_equal(old: dict, new: dict) -> bool:
+        """Return True when *old* and *new* structural snapshots are identical."""
+        if old["workspace_root"] != new["workspace_root"]:
+            return False
+        if old["project_ids"] != new["project_ids"]:
+            return False
+        if old["active_project_id"] != new["active_project_id"]:
+            return False
+        if old["show_all"] != new["show_all"]:
+            return False
+        for pid in old["project_ids"]:
+            if old["collapsed"].get(pid) != new["collapsed"].get(pid):
+                return False
+            if old["visible_thread_ids"].get(pid) != new["visible_thread_ids"].get(pid):
+                return False
+            if old["has_more"].get(pid) != new["has_more"].get(pid):
+                return False
+        return True
+
+    def _apply_in_place_thread_updates(self, threads_by_id: dict) -> None:
+        """Walk the layout's ``_ThreadRow`` widgets and call ``update_thread``
+        when a matching thread is found in *threads_by_id*."""
+        for i in range(self._projects_layout.count()):
+            item = self._projects_layout.itemAt(i)
+            if item is None:
+                continue
+            w = item.widget()
+            if isinstance(w, _ThreadRow):
+                tid = w.thread.id
+                new_thread = threads_by_id.get(tid)
+                if new_thread is not None:
+                    w.update_thread(new_thread)
+
     def refresh_projects(self, workspace_root: Path | None, *, schedule_backfill: bool = False) -> None:
-        """Update the projects list and show threads for the active project."""
+        """Update the projects list and show threads for the active project.
+
+        When the project/thread *structure* is unchanged (same projects, same
+        active project, same visible thread IDs in the same order), only
+        thread-row metadata is updated in place — no widgets are destroyed or
+        recreated.  A full rebuild is triggered whenever the structure
+        actually changes (workspace root, project list, active project,
+        collapsed state, or "show more" toggle).
+        """
+        # ---- workspace-root change resets transient state -----------------
         if workspace_root != self._last_workspace_root:
             self._show_all_active_threads = False
             self._last_workspace_root = workspace_root
             self._project_collapsed = {}
 
-        self._clear_projects_layout()
-
-        # Ensure the current workspace is registered as a project before listing
+        # ---- resolve project list from store ------------------------------
         if workspace_root is not None:
             try:
-                # Use a single ProjectStore instance for efficiency
                 store = ProjectStore()
                 store.create_or_update_project(workspace_root)
             except Exception:
                 logging.warning("Failed to register workspace as project")
+                self._clear_projects_layout()
                 self._projects_layout.addStretch(1)
                 return
         else:
@@ -461,11 +617,43 @@ class LeftPane(QFrame):
             projects = store.list_projects()
         except Exception:
             logging.warning("Failed to list projects")
+            self._clear_projects_layout()
             self._projects_layout.addStretch(1)
             return
 
+        # ---- structural snapshot comparison -------------------------------
+        old_snapshot = self._capture_layout_snapshot()
+        new_snapshot = self._compute_target_snapshot(workspace_root, projects)
+
+        if old_snapshot["project_ids"] and self._snapshots_equal(old_snapshot, new_snapshot):
+            # Structure unchanged — update thread rows in place only.
+            active_pid = new_snapshot["active_project_id"]
+            if active_pid is not None:
+                try:
+                    threads = store.list_threads(
+                        store.load_project(active_pid), include_archived=False
+                    )
+                except Exception:
+                    threads = []
+                vt, _ = self._visible_thread_slice(threads, self._show_all_active_threads)
+                threads_by_id = {t.id: t for t in vt}
+                self._apply_in_place_thread_updates(threads_by_id)
+            # Still honour backfill request (structure may need refresh
+            # after backfill discovers new threads).
+            if schedule_backfill:
+                self._schedule_backfill(projects, store)
+            return
+
+        # ---- structure changed — full rebuild -----------------------------
+        self._clear_projects_layout()
+
+        INITIAL_VISIBLE_THREADS = 10
+
         for project in projects:
-            is_active = (workspace_root is not None and project.root_path.resolve() == workspace_root.resolve())
+            is_active = (
+                workspace_root is not None
+                and project.root_path.resolve() == workspace_root.resolve()
+            )
 
             row = _ProjectRow(project, is_active, parent=self._projects_container)
             row.clicked.connect(self.project_selected.emit)
@@ -481,13 +669,9 @@ class LeftPane(QFrame):
                     logging.warning("Failed to list threads")
                     threads = []
 
-                INITIAL_VISIBLE_THREADS = 10
-                visible_threads = threads
-                has_more = False
-
-                if len(threads) > INITIAL_VISIBLE_THREADS and not self._show_all_active_threads:
-                    visible_threads = threads[:INITIAL_VISIBLE_THREADS]
-                    has_more = True
+                visible_threads, has_more = self._visible_thread_slice(
+                    threads, self._show_all_active_threads, limit=INITIAL_VISIBLE_THREADS
+                )
 
                 for t in visible_threads:
                     t_row = _ThreadRow(t, parent=self._projects_container)
@@ -503,17 +687,20 @@ class LeftPane(QFrame):
         self._projects_layout.addStretch(1)
 
         if schedule_backfill:
-            def _do_backfill():
-                for project in projects:
-                    try:
-                        store.backfill_threads_from_conversations(project)
-                    except Exception:
-                        logging.warning("Failed to backfill threads")
-                # Refresh to show any newly discovered threads
-                if self._last_workspace_root is not None:
-                    self.refresh_projects(self._last_workspace_root)
+            self._schedule_backfill(projects, store)
 
-            QTimer.singleShot(0, _do_backfill)
+    def _schedule_backfill(self, projects, store: ProjectStore) -> None:
+        def _do_backfill():
+            for project in projects:
+                try:
+                    store.backfill_threads_from_conversations(project)
+                except Exception:
+                    logging.warning("Failed to backfill threads")
+            # Refresh to show any newly discovered threads
+            if self._last_workspace_root is not None:
+                self.refresh_projects(self._last_workspace_root)
+
+        QTimer.singleShot(0, _do_backfill)
 
     def _on_show_more_clicked(self) -> None:
         self._show_all_active_threads = True
