@@ -193,3 +193,17 @@ def test_code_quality_contract_replaces_existing_patterns_rule() -> None:
     assert "existing patterns" not in contract
     assert "leave the code better-shaped than you found it" in contract
     assert "Do not extend god files" in contract
+
+
+def test_planner_dispatch_contract_uses_work_artifact_language() -> None:
+    contract = sources.PLANNER_DISPATCH_CONTRACT
+
+    # Stale Campaign/Steps wording must not appear
+    assert "visible campaign" not in contract
+    assert "ordered Worker steps" not in contract
+    assert "Each Worker step" not in contract
+
+    # Current WorkArtifact/item wording must be present
+    assert "Work Artifact" in contract
+    assert "independently reviewable" in contract
+    assert "independently reviewable items" in contract

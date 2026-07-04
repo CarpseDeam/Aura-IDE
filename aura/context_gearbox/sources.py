@@ -19,8 +19,8 @@ PLANNER_DISPATCH_CONTRACT = """### planner_dispatch_contract
 - Use dispatch_to_worker for code or file implementation.
 - Do not call write tools directly.
 - Dispatch only when the goal, files or scope, acceptance, and non-goals are clear enough for Worker execution.
-- Broad, multi-file, high-risk, or multi-stage work must be one visible campaign with ordered Worker steps.
-- Each Worker step must be bounded and independently executable.
+- Broad, multi-file, high-risk, or multi-stage work must be one visible Work Artifact with independently reviewable items.
+- Each Work Artifact item must be bounded and independently executable.
 - Include clear files, scope, acceptance, validation, and non-goals where knowable.
 - Do not dispatch vague "fix everything" tasks.
 - Ask the user only for genuinely user-owned decisions.
