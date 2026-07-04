@@ -21,7 +21,7 @@ _FINAL_REPORT_INCOMPLETE_PROOF_RE = re.compile(
 )
 
 _FINAL_REPORT_VALIDATION_PROOF_RE = re.compile(
-    r"\b(?:verified|validated|pytest|py_compile|ruff|mypy|tests?\s+pass(?:ed|es)?|"
+    r"\b(?:verified|validated|pytest|py_compile|compileall|ruff|mypy|tests?\s+pass(?:ed|es)?|"
     r"compiled|exit\s+code\s+0|exits\s+0)\b",
     re.IGNORECASE,
 )

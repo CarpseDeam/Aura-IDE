@@ -36,6 +36,7 @@ MISSING_EXECUTABLE = "missing_executable"
 POLICY_BLOCKED = "policy_blocked"
 TIMEOUT = "timeout"
 ENVIRONMENT_ERROR = "environment_error"
+TRACEBACK_DETECTED = "traceback_detected"
 UNKNOWN_FAILURE = "unknown_failure"
 VALIDATION_COMMAND_UNRUNNABLE = "validation_command_unrunnable"
 VALIDATION_WRONG_WORKING_DIRECTORY = "validation_wrong_working_directory"
@@ -45,6 +46,13 @@ ACTION_FIX_CODE = "fix_code"
 ACTION_FIX_VALIDATION_COMMAND = "fix_validation_command"
 ACTION_INSTALL_DEPENDENCY = "install_dependency"
 ACTION_RETRY = "retry"
+
+TERMINAL_ROLE_COMMAND = "command"
+TERMINAL_ROLE_SEARCH = "inspection_search"
+TERMINAL_PASSED = "passed"
+TERMINAL_SEARCH_NO_MATCH = "search_no_match"
+TERMINAL_COMMAND_FAILED = "command_failed"
+TERMINAL_EXECUTION_FAILED = "execution_failed"
 
 
 @dataclass(frozen=True)
@@ -92,6 +100,9 @@ class ValidationRunResult:
     source: str = "worker_command"
     normalized: bool = False
     normalization_reason: str = ""
+    command_outcome_classification: str = ""
+    traceback_detected: bool = False
+    was_timeout: bool = False
 
     @property
     def ok(self) -> bool:
@@ -113,6 +124,12 @@ class ValidationRunResult:
             "validation_command_normalized": self.normalized,
             "normalized": self.normalized,
         }
+        if self.command_outcome_classification:
+            payload["command_outcome_classification"] = self.command_outcome_classification
+        if self.traceback_detected:
+            payload["validation_traceback_detected"] = self.traceback_detected
+        if self.was_timeout:
+            payload["validation_was_timeout"] = self.was_timeout
         if self.classification in {VALIDATION_COMMAND_UNRUNNABLE, VALIDATION_WRONG_WORKING_DIRECTORY}:
             payload.update(
                 {
@@ -127,6 +144,26 @@ class ValidationRunResult:
         if self.normalization_reason:
             payload["normalization_reason"] = self.normalization_reason
         return payload
+
+
+@dataclass(frozen=True)
+class TerminalRunClassification:
+    role: str
+    classification: str
+    command_success: bool
+    no_matches: bool = False
+    traceback_detected: bool = False
+    was_timeout: bool = False
+
+    def metadata(self) -> dict[str, Any]:
+        return {
+            "terminal_command_role": self.role,
+            "terminal_classification": self.classification,
+            "command_success": self.command_success,
+            "terminal_no_matches": self.no_matches,
+            "terminal_traceback_detected": self.traceback_detected,
+            "terminal_was_timeout": self.was_timeout,
+        }
 
 
 def parse_validation_command(raw_text: str, *, source: str = "worker_command") -> ValidationCommand:
@@ -355,6 +392,7 @@ def looks_like_validation_command(command: str) -> bool:
     python_exe = r"(?:(?:\"[^\"]*python3?(?:\.exe)?\")|(?:'[^']*python3?(?:\.exe)?')|\S*python3?(?:\.exe)?|py)"
     patterns = (
         rf"(^|[;&|]\s*){python_exe}\s+-m\s+py_compile\b",
+        rf"(^|[;&|]\s*){python_exe}\s+-m\s+compileall\b",
         rf"(^|[;&|]\s*){python_exe}\s+-m\s+(?:pytest|unittest|ruff|mypy)\b",
         r"(^|[;&|]\s*)pytest\b",
         r"(^|[;&|]\s*)unittest\b",
@@ -365,6 +403,217 @@ def looks_like_validation_command(command: str) -> bool:
         r"(^|[;&|]\s*)go\s+test\b",
     )
     return any(re.search(pattern, normalized) for pattern in patterns)
+
+
+def classify_terminal_run(
+    command: str,
+    *,
+    exit_code: int | None,
+    output: str = "",
+    was_timeout: bool = False,
+) -> TerminalRunClassification:
+    role = (
+        TERMINAL_ROLE_SEARCH
+        if _is_search_command(command)
+        else TERMINAL_ROLE_COMMAND
+    )
+    has_tb = "Traceback (most recent call last):" in output
+
+    if was_timeout or exit_code == 124:
+        return TerminalRunClassification(
+            role=role,
+            classification=TIMEOUT,
+            command_success=False,
+            was_timeout=True,
+        )
+
+    if exit_code == 0:
+        if has_tb and role != TERMINAL_ROLE_SEARCH:
+            return TerminalRunClassification(
+                role=role,
+                classification=TRACEBACK_DETECTED,
+                command_success=True,
+                traceback_detected=True,
+            )
+        return TerminalRunClassification(
+            role=role,
+            classification=TERMINAL_PASSED,
+            command_success=True,
+        )
+    if role == TERMINAL_ROLE_SEARCH and exit_code == 1:
+        return TerminalRunClassification(
+            role=role,
+            classification=TERMINAL_SEARCH_NO_MATCH,
+            command_success=False,
+            no_matches=True,
+        )
+    if has_tb:
+        return TerminalRunClassification(
+            role=role,
+            classification=TRACEBACK_DETECTED,
+            command_success=False,
+            traceback_detected=True,
+        )
+    if exit_code is None or exit_code == -1:
+        return TerminalRunClassification(
+            role=role,
+            classification=TERMINAL_EXECUTION_FAILED,
+            command_success=False,
+        )
+    return TerminalRunClassification(
+        role=role,
+        classification=TERMINAL_COMMAND_FAILED,
+        command_success=False,
+    )
+
+
+@dataclass(frozen=True)
+class CommandOutcome:
+    """Structured classification of a terminal command outcome.
+
+    Provides stable, contextual classification that downstream logic
+    (Worker, finalization, event relay) can use without re-parsing
+    raw terminal output.
+
+    Attributes:
+        classification: Stable name from the constants above.
+        command_success: Whether the underlying process exited with 0.
+        counts_as_validation: Whether this outcome counts as a
+            validation attempt.
+        counts_as_product_failure: Whether this outcome should be
+            treated as a product (code) failure.
+        traceback_detected: Whether output contained a Python traceback.
+        no_matches: Whether this was a search command with no matches.
+        was_timeout: Whether the command was killed by timeout.
+    """
+    classification: str
+    command_success: bool
+    counts_as_validation: bool = False
+    counts_as_product_failure: bool = False
+    traceback_detected: bool = False
+    no_matches: bool = False
+    was_timeout: bool = False
+
+    def metadata(self) -> dict[str, Any]:
+        return {
+            "command_outcome_classification": self.classification,
+            "command_success": self.command_success,
+            "counts_as_validation": self.counts_as_validation,
+            "counts_as_product_failure": self.counts_as_product_failure,
+            "command_traceback_detected": self.traceback_detected,
+            "command_no_matches": self.no_matches,
+            "command_was_timeout": self.was_timeout,
+        }
+
+
+def classify_command_outcome(
+    command: str,
+    *,
+    exit_code: int | None,
+    output: str,
+    is_validation_command: bool = False,
+    is_launch_watch: bool = False,
+    was_timeout: bool = False,
+) -> CommandOutcome:
+    """Classify a terminal command outcome with structured metadata.
+
+    This top-level classification accounts for the command's role and
+    context (validation, launch watch, search/inspection) to produce
+    a stable result that downstream logic can act on without parsing
+    raw terminal output.
+
+    Args:
+        command: The command string that was executed.
+        exit_code: The process exit code, or None / -1 for sandbox errors.
+        output: The full merged stdout/stderr output.
+        is_validation_command: True if this is a validation command
+            (pytest, compileall, etc.).
+        is_launch_watch: True if this is a launch-watch (run-and-watch)
+            command where tracebacks are always product failures.
+        was_timeout: True if the command was killed due to timeout.
+
+    Returns:
+        CommandOutcome with stable classification fields.
+    """
+    has_tb = "Traceback (most recent call last):" in output
+    is_search = _is_search_command(command)
+
+    # --- Timeout -----------------------------------------------------------
+    if was_timeout or exit_code == 124:
+        return CommandOutcome(
+            classification=TIMEOUT,
+            command_success=False,
+            was_timeout=True,
+        )
+
+    # --- Exit code 0 (process-level success) --------------------------------
+    if exit_code == 0:
+        if is_launch_watch and has_tb:
+            return CommandOutcome(
+                classification=TRACEBACK_DETECTED,
+                command_success=True,
+                counts_as_product_failure=True,
+                traceback_detected=True,
+            )
+        return CommandOutcome(
+            classification=PASSED,
+            command_success=True,
+            counts_as_validation=is_validation_command,
+        )
+
+    # --- Non-zero exit (process-level failure) ------------------------------
+
+    # Search / inspection: exit code 1 is typically "no matches"
+    if is_search and exit_code == 1:
+        return CommandOutcome(
+            classification=TERMINAL_SEARCH_NO_MATCH,
+            command_success=False,
+            no_matches=True,
+        )
+
+    # Traceback in failed output
+    if has_tb:
+        if is_launch_watch:
+            return CommandOutcome(
+                classification=TRACEBACK_DETECTED,
+                command_success=False,
+                counts_as_product_failure=True,
+                traceback_detected=True,
+            )
+        if is_validation_command:
+            return CommandOutcome(
+                classification=PRODUCT_VALIDATION_FAILED,
+                command_success=False,
+                counts_as_validation=True,
+                counts_as_product_failure=True,
+                traceback_detected=True,
+            )
+        return CommandOutcome(
+            classification=TRACEBACK_DETECTED,
+            command_success=False,
+            traceback_detected=True,
+        )
+
+    # Sandbox / environment error
+    if exit_code is None or exit_code == -1:
+        return CommandOutcome(
+            classification=ENVIRONMENT_ERROR,
+            command_success=False,
+        )
+
+    # Generic command failure
+    if is_validation_command:
+        return CommandOutcome(
+            classification=PRODUCT_VALIDATION_FAILED,
+            command_success=False,
+            counts_as_validation=True,
+            counts_as_product_failure=True,
+        )
+
+    return CommandOutcome(
+        classification=TERMINAL_COMMAND_FAILED,
+        command_success=False,
+    )
 
 
 def validation_issue_message(record: dict[str, Any]) -> str:
@@ -398,6 +647,16 @@ def validation_issue_message(record: dict[str, Any]) -> str:
     return f"Validation command issue: `{raw or command}`."
 
 
+def _is_search_command(command: str) -> bool:
+    tokens = _split_tokens(command)
+    if not tokens:
+        return False
+    executable = _clean_token(tokens[0]).lower().replace("\\", "/").rsplit("/", 1)[-1]
+    if executable.endswith(".exe"):
+        executable = executable[:-4]
+    return executable in {"rg", "grep", "findstr"}
+
+
 def _result(
     command: ValidationCommand,
     exit_code: int | None,
@@ -407,6 +666,9 @@ def _result(
     counts_as_validation: bool = False,
     counts_as_product_failure: bool = False,
     user_action: str,
+    command_outcome_classification: str = "",
+    traceback_detected: bool = False,
+    was_timeout: bool = False,
 ) -> ValidationRunResult:
     return ValidationRunResult(
         command=command.command,
@@ -422,6 +684,9 @@ def _result(
         source=command.source,
         normalized=command.normalized,
         normalization_reason=command.normalization_reason,
+        command_outcome_classification=command_outcome_classification,
+        traceback_detected=traceback_detected,
+        was_timeout=was_timeout,
     )
 
 
@@ -441,13 +706,24 @@ __all__ = [
     "PRODUCT_VALIDATION_FAILED",
     "TEST_SELECTION_EMPTY",
     "TIMEOUT",
+    "TRACEBACK_DETECTED",
+    "TERMINAL_COMMAND_FAILED",
+    "TERMINAL_EXECUTION_FAILED",
+    "TERMINAL_PASSED",
+    "TERMINAL_ROLE_COMMAND",
+    "TERMINAL_ROLE_SEARCH",
+    "TERMINAL_SEARCH_NO_MATCH",
     "UNKNOWN_FAILURE",
     "VALIDATION_COMMAND_UNRUNNABLE",
     "VALIDATION_WRONG_WORKING_DIRECTORY",
     "ValidationCommand",
     "ValidationRunResult",
+    "TerminalRunClassification",
+    "CommandOutcome",
     "classify_validation_payload",
     "classify_validation_run",
+    "classify_terminal_run",
+    "classify_command_outcome",
     "looks_like_validation_command",
     "parse_validation_command",
     "validation_issue_message",

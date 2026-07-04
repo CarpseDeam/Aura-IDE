@@ -73,7 +73,6 @@ from aura.conversation.worker_finish import (
     build_worker_unrecoverable_message,
 )
 from aura.conversation.worker_flow import (
-    WORKER_FLOW_VALIDATION_REQUIRED_TEXT,
     WORKER_FLOW_ZERO_WORK_RECOVERY_TEXT,
 )
 from aura.model_streams import model_streams
@@ -546,7 +545,9 @@ class ConversationManager:
         state.worker_flow.mark_non_thrashing()
         if state.worker_flow.requires_validation_before_final():
             if not state.worker_validation_nudge_sent:
-                self._history.append_user_text(WORKER_FLOW_VALIDATION_REQUIRED_TEXT)
+                self._history.append_user_text(
+                    state.worker_flow.validation_required_text()
+                )
                 state.worker_validation_nudge_sent = True
                 return "nudged"
             return "none"

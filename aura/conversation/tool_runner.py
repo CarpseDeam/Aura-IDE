@@ -32,6 +32,7 @@ from aura.conversation.tool_runner_terminal_policy import (
 from aura.conversation.validation_orchestrator import (
     MALFORMED_VALIDATION_COMMAND,
     VALIDATION_COMMAND_UNRUNNABLE,
+    classify_terminal_run,
     classify_validation_run,
     looks_like_validation_command,
     parse_validation_command,
@@ -480,6 +481,12 @@ class ToolRunner:
             "cwd": relative_cwd,
             "working_directory": relative_cwd,
         }
+        terminal_classification = classify_terminal_run(
+            str(command),
+            exit_code=exit_code,
+            output=full_output,
+        )
+        payload_dict.update(terminal_classification.metadata())
         if validation_command.normalized:
             payload_dict.update(validation_command.metadata())
         should_classify_validation = (

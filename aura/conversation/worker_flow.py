@@ -11,6 +11,7 @@ import enum
 import re
 from collections import Counter
 from dataclasses import dataclass, field
+from pathlib import PurePosixPath
 from typing import Any
 
 from aura.conversation.worker_flow_helpers import (
@@ -72,12 +73,86 @@ WORKER_FLOW_VALIDATION_REQUIRED_TEXT = (
     "command, then finish only after it passes."
 )
 
+WORKER_FLOW_DOCS_VALIDATION_REQUIRED_TEXT = (
+    "Worker Flow: documentation/text files were changed and validation has not "
+    "run yet. Run a docs-appropriate validation command now if one is available "
+    "or explicitly requested, such as a docs build/check or python -m compileall "
+    "docs/ when that is the accepted project check. Do not run Python AST or "
+    "py_compile checks against markdown/text files. Then finish only after it "
+    "passes, or state that no Python/source files changed and no docs-specific "
+    "command is available."
+)
+
 KNOWN_LARGE_SOURCE_PATHS: frozenset[str] = frozenset(
     {
         "aura/conversation/dispatch.py",
         "aura/conversation/manager.py",
     }
 )
+
+PYTHON_SOURCE_EXTENSIONS: frozenset[str] = frozenset({".py", ".pyw"})
+SOURCE_EXTENSIONS: frozenset[str] = frozenset(
+    {
+        ".py",
+        ".pyw",
+        ".js",
+        ".jsx",
+        ".ts",
+        ".tsx",
+        ".css",
+        ".scss",
+        ".html",
+        ".htm",
+        ".go",
+        ".rs",
+        ".java",
+        ".cs",
+        ".c",
+        ".h",
+        ".cpp",
+        ".hpp",
+        ".sh",
+        ".ps1",
+    }
+)
+DOC_EXTENSIONS: frozenset[str] = frozenset(
+    {".md", ".markdown", ".mdown", ".rst", ".txt", ".adoc"}
+)
+DOC_PATH_PREFIXES: tuple[str, ...] = (
+    "docs/",
+    "doc/",
+    "documentation/",
+)
+DOC_FILENAMES: frozenset[str] = frozenset(
+    {
+        "readme",
+        "changelog",
+        "changes",
+        "license",
+        "notice",
+        "contributing",
+        "authors",
+    }
+)
+
+
+@dataclass(frozen=True)
+class ChangedFileClassification:
+    paths: tuple[str, ...] = ()
+    has_python: bool = False
+    has_source: bool = False
+    has_docs: bool = False
+    has_other: bool = False
+
+    @property
+    def docs_only(self) -> bool:
+        return bool(
+            self.paths
+            and self.has_docs
+            and not self.has_python
+            and not self.has_source
+            and not self.has_other
+        )
 
 
 class WorkerFlowPhase(str, enum.Enum):
@@ -168,6 +243,7 @@ class WorkerFlowState:
     protected_large_file_danger_signs: int = 0
     broad_orientation_restricted: bool = False
     validation_required_before_final: bool = False
+    changed_paths: set[str] = field(default_factory=set)
     pending_steering_message: str = ""
     pending_steering_reason: str = ""
 
@@ -289,6 +365,15 @@ class WorkerFlowHarness:
     def requires_validation_before_final(self) -> bool:
         return bool(self.state.validation_required_before_final)
 
+    def changed_file_classification(self) -> ChangedFileClassification:
+        return classify_changed_files(self.state.changed_paths)
+
+    def validation_required_text(self) -> str:
+        classification = self.changed_file_classification()
+        if classification.docs_only:
+            return WORKER_FLOW_DOCS_VALIDATION_REQUIRED_TEXT
+        return WORKER_FLOW_VALIDATION_REQUIRED_TEXT
+
     def mark_validation_satisfied(self) -> None:
         self.state.validation_required_before_final = False
         self._clear_broad_orientation_restriction()
@@ -359,6 +444,8 @@ class WorkerFlowHarness:
         if name in WRITE_TOOLS:
             if _write_was_applied(name, ok, payload):
                 self.state.write_actions += 1
+                for path in _tool_paths(name, args, payload):
+                    self.state.changed_paths.add(self._normalize_path(path))
                 self.state.validation_required_before_final = True
                 self._advance_to(WorkerFlowPhase.editing)
                 self._reduce_orientation_pressure()
@@ -568,11 +655,66 @@ class WorkerFlowHarness:
         return normalized
 
 
+def classify_changed_files(
+    paths: set[str] | list[str] | tuple[str, ...],
+) -> ChangedFileClassification:
+    normalized = tuple(
+        dict.fromkeys(
+            path
+            for raw in paths
+            if (path := _normalize_changed_path(raw))
+        )
+    )
+    has_python = False
+    has_source = False
+    has_docs = False
+    has_other = False
+    for path in normalized:
+        suffix = PurePosixPath(path).suffix.lower()
+        if suffix in PYTHON_SOURCE_EXTENSIONS:
+            has_python = True
+            has_source = True
+        elif _is_docs_path(path):
+            has_docs = True
+        elif suffix in SOURCE_EXTENSIONS:
+            has_source = True
+        else:
+            has_other = True
+    return ChangedFileClassification(
+        paths=normalized,
+        has_python=has_python,
+        has_source=has_source,
+        has_docs=has_docs,
+        has_other=has_other,
+    )
+
+
+def _normalize_changed_path(path: object) -> str:
+    normalized = str(path or "").strip().replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    while "//" in normalized:
+        normalized = normalized.replace("//", "/")
+    return normalized
+
+
+def _is_docs_path(path: str) -> bool:
+    normalized = _normalize_changed_path(path).lower()
+    if any(normalized.startswith(prefix) for prefix in DOC_PATH_PREFIXES):
+        return True
+    pure = PurePosixPath(normalized)
+    if pure.suffix in DOC_EXTENSIONS:
+        return True
+    return pure.name in DOC_FILENAMES
+
+
 __all__ = [
     "BROAD_ORIENTATION_TOOLS",
+    "ChangedFileClassification",
     "KNOWN_LARGE_SOURCE_PATHS",
     "TARGETED_READ_TOOLS",
     "VALIDATION_TOOLS",
+    "WORKER_FLOW_DOCS_VALIDATION_REQUIRED_TEXT",
     "WORKER_FLOW_LARGE_SOURCE_READ_TEXT",
     "WORKER_FLOW_VALIDATION_REQUIRED_TEXT",
     "WORKER_FLOW_STEERING_TEXT",
@@ -582,4 +724,5 @@ __all__ = [
     "WorkerFlowHarness",
     "WorkerFlowPhase",
     "WorkerFlowState",
+    "classify_changed_files",
 ]

@@ -22,6 +22,7 @@ from aura.conversation.syntax_repair_state import (
     set_syntax_repair_state,
     syntax_repair_paths,
 )
+from aura.conversation.terminal_syntax import is_python_path
 from aura.conversation.worker_final_report_guard import (
     WORKER_FINAL_REPORT_PROOF_REQUIRED_TEXT,
     worker_final_report_missing_proof,
@@ -33,7 +34,6 @@ from aura.conversation.worker_final_validation import (
     run_explicit_validation_commands,
 )
 from aura.conversation.worker_fingerprints import fingerprint_paths
-from aura.conversation.worker_flow import WORKER_FLOW_VALIDATION_REQUIRED_TEXT
 from aura.conversation.worker_quality_gate import handle_worker_quality_gate
 from aura.conversation.worker_recovery_messages import (
     PATCH_CANDIDATE_INVALID_SYNTAX_ACTION,
@@ -227,10 +227,15 @@ def handle_worker_candidate_finalization(
         path for path in set(state.syntax_validation_required)
         if _is_validation_scratch_path(path)
     )
+    state.syntax_validation_required.difference_update(
+        path for path in set(state.syntax_validation_required)
+        if not is_python_path(_normalize_worker_path(path))
+    )
     if state.syntax_validation_required:
         product_paths = sorted(
             _normalize_worker_path(path) for path in state.syntax_validation_required
             if not _is_validation_scratch_path(path)
+            and is_python_path(_normalize_worker_path(path))
         )
         if product_paths:
             action = _run_syntax_and_import_validation(
@@ -269,11 +274,22 @@ def handle_worker_candidate_finalization(
         and state.worker_flow.requires_validation_before_final()
     ):
         if not state.worker_validation_nudge_sent:
-            history.append_user_text(WORKER_FLOW_VALIDATION_REQUIRED_TEXT)
+            history.append_user_text(state.worker_flow.validation_required_text())
             state.worker_validation_nudge_sent = True
             state.discard_worker_candidate_final()
             return "continue"
         state.discard_worker_candidate_final()
+        classification = state.worker_flow.changed_file_classification()
+        suggested_next_action = (
+            "Run a docs-appropriate validation command if available, or state "
+            "that no Python/source files changed and no docs-specific command "
+            "is available, then provide the final report."
+            if classification.docs_only
+            else (
+                "Run the smallest relevant py_compile or pytest "
+                "command, then provide the final report."
+            )
+        )
         finish_worker_recoverable_followup(
             on_event,
             failure_class="worker_validation_required",
@@ -283,10 +299,7 @@ def handle_worker_candidate_finalization(
             ),
             details={
                 "suggested_next_tool": "run_terminal_command",
-                "suggested_next_action": (
-                    "Run the smallest relevant py_compile or pytest "
-                    "command, then provide the final report."
-                ),
+                "suggested_next_action": suggested_next_action,
                 "dispatch_mismatch": True,
             },
         )

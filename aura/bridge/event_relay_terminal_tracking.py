@@ -58,6 +58,14 @@ class EventRelayTerminalTracker:
             "output": output[:TERMINAL_OUTPUT_CAPTURE_CHARS],
             "output_preview": output[:TERMINAL_OUTPUT_PREVIEW_CHARS],
         }
+        for key in (
+            "terminal_command_role",
+            "terminal_classification",
+            "command_success",
+            "terminal_no_matches",
+        ):
+            if key in parsed:
+                record[key] = parsed[key]
         if tool_name == "run_terminal_command" and parsed.get("auto_validation"):
             record["auto_validation"] = True
 

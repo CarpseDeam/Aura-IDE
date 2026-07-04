@@ -38,6 +38,10 @@ _KNOWN_COMMANDS = {
     "dotnet",
     "mvn",
     "gradle",
+    "rg",
+    "grep",
+    "findstr",
+    "find",
     "cd",
     "chdir",
 }

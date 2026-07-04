@@ -4,7 +4,7 @@ candidate final message.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable
 
@@ -12,6 +12,7 @@ from aura.client import Event, ToolResult
 from aura.conversation.validation_orchestrator import (
     VALIDATION_COMMAND_UNRUNNABLE,
     ValidationRunResult,
+    classify_command_outcome,
     classify_validation_run,
     parse_validation_command,
 )
@@ -104,12 +105,30 @@ def run_explicit_validation_commands(
                 runs=runs,
             )
 
-        ok = bool(watch.ok and watch.exited_early)
+        # Explicit validation is judged by the command's final exit status.
+        # Sandbox run_and_watch also marks any traceback-looking output as a
+        # launch crash; that strictness is correct for app launch verification,
+        # but validation commands may try a failing fallback before exiting 0.
+        ok = bool(watch.exited_early and watch.exit_code == 0)
         run = classify_validation_run(
             validation_command,
             exit_code=watch.exit_code,
             output=watch.output,
             ok=ok,
+        )
+        # Compute terminal-level outcome for structured metadata so
+        # downstream Workers do not need to re-parse raw output.
+        outcome = classify_command_outcome(
+            validation_command.command,
+            exit_code=watch.exit_code,
+            output=watch.output,
+            is_validation_command=True,
+        )
+        run = replace(
+            run,
+            command_outcome_classification=outcome.classification,
+            traceback_detected=outcome.traceback_detected,
+            was_timeout=outcome.was_timeout,
         )
         runs.append(run)
         if not ok:

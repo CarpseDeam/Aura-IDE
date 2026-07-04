@@ -25,6 +25,7 @@ def _is_validation_terminal_record(record: dict[str, Any]) -> bool:
 
     known_patterns = (
         rf"(^|[;&|]\s*){python_exe}\s+-m\s+py_compile\b",
+        rf"(^|[;&|]\s*){python_exe}\s+-m\s+compileall\b",
         rf"(^|[;&|]\s*){python_exe}\s+-m\s+(?:pytest|unittest|ruff|mypy)\b",
         r"(^|[;&|]\s*)pytest\b",
         r"(^|[;&|]\s*)unittest\b",
@@ -41,6 +42,14 @@ def _is_validation_terminal_record(record: dict[str, Any]) -> bool:
     if _is_search_command_with_explicit_shell_assertion(normalized):
         return True
     return False
+
+
+def _is_nonfatal_terminal_record(record: dict[str, Any]) -> bool:
+    return (
+        record.get("terminal_command_role") == "inspection_search"
+        and record.get("terminal_classification") == "search_no_match"
+        and record.get("terminal_no_matches") is True
+    )
 
 
 def _is_python_assertion_command(normalized_command: str) -> bool:
