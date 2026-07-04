@@ -6,8 +6,6 @@ inspecting the filesystem or running product validation.
 
 from __future__ import annotations
 
-import pytest
-
 from aura.conversation.detected_validation import (
     behavioral_required_commands,
     is_behavioral_required_command,

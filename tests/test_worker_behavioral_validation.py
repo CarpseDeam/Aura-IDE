@@ -8,9 +8,6 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
-from typing import Any
-
-import pytest
 
 from aura.bridge.event_relay import WorkerEventRelay
 from aura.bridge.worker_completion_result import (

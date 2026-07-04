@@ -114,10 +114,7 @@ def is_behavioral_required_command(command: str) -> bool:
         if normalized.startswith(prefix):
             return False
 
-    # Anything that looks like a "selfcheck" or "check" style command.
-    # We treat ambiguous commands conservatively — if the project itself
-    # emitted it as a validation command it might be behavioral.
-    # But pure formatters/checkers at the end of the list are excluded.
+    # No known behavioral pattern matched — exclude.
     return False
 
 

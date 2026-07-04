@@ -18,6 +18,12 @@ from aura.conversation import (
     WorkerMismatch,
     WorkerTaskSpec,
 )
+from aura.conversation.detected_validation import (
+    behavioral_required_commands,
+)
+from aura.conversation.detected_validation import (
+    normalize_command as _normalize_command,
+)
 from aura.conversation.path_utils import (
     is_validation_scratch_path as _is_validation_scratch_path,
 )
@@ -25,10 +31,6 @@ from aura.conversation.path_utils import (
     normalize_worker_path as _normalize_worker_path,
 )
 from aura.conversation.tool_limits import WRITE_TOOLS
-from aura.conversation.detected_validation import (
-    behavioral_required_commands,
-    normalize_command as _normalize_command,
-)
 from aura.conversation.validation_orchestrator import (
     MALFORMED_VALIDATION_COMMAND,
     MISSING_DEPENDENCY,
@@ -37,6 +39,7 @@ from aura.conversation.validation_orchestrator import (
     POLICY_BLOCKED,
     TEST_SELECTION_EMPTY,
     TIMEOUT,
+    validation_issue_message,
 )
 from aura.conversation.worker_completion._shell_pipeline import (
     _is_benign_search_no_match,
@@ -261,7 +264,6 @@ def _assess_required_behavioral_validation(
                 issue.get("validation_classification") or issue.get("classification") or ""
             )
             # Prefer a human-readable reason from the issue record.
-            from aura.conversation.validation_orchestrator import validation_issue_message
             reason = validation_issue_message(issue) or classification
             could_not_run.append({"command": cmd, "reason": reason})
             continue
@@ -659,7 +661,6 @@ def _classify_worker_completion(
     has_unverified_acceptance = acceptance_unverified or validation_not_run
     behavioral = completion.get("behavioral_validation", {})
     has_required_behavioral_skipped = bool(behavioral.get("skipped", []))
-    has_required_behavioral_could_not_run = bool(behavioral.get("could_not_run", []))
 
     if has_planner_resolution_mismatch:
         ok = False
