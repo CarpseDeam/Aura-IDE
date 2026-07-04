@@ -530,7 +530,7 @@
 
     .screenshot-grid {
       display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
+      grid-template-columns: repeat(3, minmax(0, 1fr));
       gap: 12px;
       margin-top: 14px;
     }
@@ -653,13 +653,6 @@
       color: var(--fg-dim);
     }
 
-    .drone-panel {
-      display: grid;
-      grid-template-columns: minmax(0, 0.85fr) minmax(300px, 1.15fr);
-      gap: 28px;
-      align-items: stretch;
-    }
-
     .metric-stack {
       display: grid;
       gap: 12px;
@@ -682,40 +675,6 @@
     .metric span {
       color: var(--fg-dim);
       font-size: 14px;
-    }
-
-    .receipt {
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      background: var(--terminal);
-      overflow: hidden;
-    }
-
-    .receipt-body {
-      padding: 18px;
-      color: var(--fg-dim);
-      font-family: Consolas, "SFMono-Regular", Menlo, monospace;
-      font-size: 13px;
-    }
-
-    .receipt-row {
-      display: grid;
-      grid-template-columns: 116px 1fr;
-      gap: 14px;
-      padding: 8px 0;
-      border-bottom: 1px solid rgba(55, 61, 78, 0.55);
-    }
-
-    .receipt-row:last-child {
-      border-bottom: 0;
-    }
-
-    .receipt-row span:first-child {
-      color: var(--fg-muted);
-    }
-
-    .receipt-row span:last-child {
-      color: var(--fg);
     }
 
     .support-band {
@@ -782,7 +741,6 @@
       .flow,
       .screenshot-grid,
       .choice-grid,
-      .drone-panel,
       .two-col,
       .support-box {
         grid-template-columns: 1fr;
@@ -861,11 +819,6 @@
 
       .phone {
         width: min(100%, 230px);
-      }
-
-      .receipt-row {
-        grid-template-columns: 1fr;
-        gap: 2px;
       }
 
       .footer-inner {
@@ -1003,10 +956,6 @@
             <img src="assets/diff-view.png" alt="Aura IDE unified diff review before file writes are applied.">
             <figcaption>Review diffs before writes.</figcaption>
           </figure>
-          <figure class="shot">
-            <img src="assets/workflow-complete.png" alt="Aura IDE completed workflow screen with final status and receipt information.">
-            <figcaption>Validated completion with receipts.</figcaption>
-          </figure>
         </div>
       </div>
     </section>
@@ -1058,7 +1007,7 @@
     </section>
 
     <section id="drones" class="section" aria-labelledby="drones-title">
-      <div class="section-inner drone-panel">
+      <div class="section-inner">
         <div>
           <p class="section-eyebrow">Drones</p>
           <h2 id="drones-title">Bounded background automation with the same accountability.</h2>
@@ -1076,19 +1025,6 @@
               <strong>Saved receipts</strong>
               <span>Every run leaves status, elapsed time, errors, and output metadata.</span>
             </div>
-          </div>
-        </div>
-        <div class="receipt" aria-label="Drone receipt example">
-          <div class="window-bar">
-            <div class="window-controls" aria-hidden="true"><span></span><span></span><span></span></div>
-            <span>.aura/drones/runs/latest.json</span>
-          </div>
-          <div class="receipt-body">
-            <div class="receipt-row"><span>kind</span><span>harness-lap</span></div>
-            <div class="receipt-row"><span>policy</span><span>normal_diff_approval</span></div>
-            <div class="receipt-row"><span>scope</span><span>bounded repository maintenance</span></div>
-            <div class="receipt-row"><span>validation</span><span>completed before success</span></div>
-            <div class="receipt-row"><span>receipt</span><span>saved for review</span></div>
           </div>
         </div>
       </div>
