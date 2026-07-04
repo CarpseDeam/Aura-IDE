@@ -542,3 +542,180 @@ class TestCommandOutcomeMetadata:
         assert meta["command_outcome_classification"] == TERMINAL_SEARCH_NO_MATCH
         assert meta["command_no_matches"] is True
         assert meta["counts_as_product_failure"] is False
+
+
+# =========================================================================
+# Integration: tool_runner payload_dict merging (contextual override)
+# =========================================================================
+# These simulate the aggregation that tool_runner.py performs in
+# handle_run_terminal_command: classify_terminal_run → add raw metadata
+# → classify_validation_run → add validation metadata → classify_command_outcome
+# → override raw terminal fields with contextual outcome.
+
+
+class TestToolRunnerValidationPayloadAggregation:
+    """Simulate the payload_dict merging logic from tool_runner.py.
+
+    Validates that contextual classify_command_outcome overrides raw
+    terminal_classification for validation commands, so Workers do not
+    see a scary terminal_classification alongside passed validation.
+    """
+
+    def _simulate_payload(
+        self,
+        command: str,
+        exit_code: int | None,
+        output: str,
+        ok: bool = True,
+        looks_like_validation: bool = True,
+    ) -> dict[str, object]:
+        """Aggregate metadata the same way tool_runner.handle_run_terminal_command does."""
+        pd: dict[str, object] = {"exit_code": exit_code, "output": output, "command": command}
+
+        # Step 1: raw terminal classification
+        trc = classify_terminal_run(command, exit_code=exit_code, output=output)
+        pd.update(trc.metadata())
+
+        if looks_like_validation:
+            # Step 2: validation-level classification
+            vc = parse_validation_command(command)
+            run = classify_validation_run(vc, exit_code=exit_code, output=output, ok=ok)
+            pd.update(run.metadata())
+
+            # Step 3: contextual command outcome & override
+            outcome = classify_command_outcome(
+                command,
+                exit_code=exit_code,
+                output=output,
+                is_validation_command=True,
+            )
+            pd.update(outcome.metadata())
+            pd["terminal_classification"] = outcome.classification
+            pd["terminal_traceback_detected"] = outcome.traceback_detected
+
+        return pd
+
+    # --- Intermediate traceback (the key case) -----------------------------
+
+    def test_intermediate_traceback_validation_passes_contextual(self) -> None:
+        """Validation command with intermediate traceback, exit 0.
+
+        Raw terminal_classification would be traceback_detected, but
+        contextual override must set it to passed.
+        """
+        output = (
+            "Traceback (most recent call last):\n"
+            "  File 'compileall.py', line 1\n"
+            "    compile(file, doraise=True)\n"
+            "py_compile: 1 errors in 1 files\n"
+            "fallback: retrying without doraise...\n"
+            "Success: no issues found\n"
+        )
+        pd = self._simulate_payload(
+            "python -m compileall docs/", exit_code=0, output=output,
+        )
+        # Raw terminal sees traceback
+        assert pd["terminal_traceback_detected"] is False  # overridden by outcome
+        # Contextual override must say PASSED (not traceback_detected)
+        assert pd["terminal_classification"] == PASSED
+        assert pd["command_outcome_classification"] == PASSED
+        # Validation classification also says passed
+        assert pd["validation_classification"] == PASSED
+        assert pd["counts_as_product_failure"] is False
+        assert pd["command_success"] is True
+
+    def test_intermediate_traceback_raw_terminal_is_scary(self) -> None:
+        """The raw terminal classification (without override) IS traceback_detected."""
+        trc = classify_terminal_run(
+            "python -m compileall docs/",
+            exit_code=0,
+            output=(
+                "Traceback (most recent call last):\n"
+                "  File 'compileall.py', line 1\n"
+                "Success: no issues found\n"
+            ),
+        )
+        assert trc.classification == TRACEBACK_DETECTED  # raw is scary
+        assert trc.traceback_detected is True
+
+    # --- Validation passes cleanly ----------------------------------------
+
+    def test_clean_validation_passes_through(self) -> None:
+        """Clean validation pass — terminal stays passed."""
+        pd = self._simulate_payload(
+            "pytest tests/", exit_code=0, output="=== 1 passed ===",
+        )
+        assert pd["terminal_classification"] == PASSED
+        assert pd["validation_classification"] == PASSED
+        assert pd["command_outcome_classification"] == PASSED
+        assert pd["command_success"] is True
+
+    # --- Validation product failure ---------------------------------------
+
+    def test_validation_failure_contextual(self) -> None:
+        """Validation that fails with exit 1 -> product_validation_failed."""
+        pd = self._simulate_payload(
+            "pytest tests/", exit_code=1,
+            output="FAILED test_foo.py::test_bar",
+            ok=False,
+        )
+        # Raw terminal would say command_failed; contextual uses product_validation_failed
+        assert pd["terminal_classification"] == PRODUCT_VALIDATION_FAILED
+        assert pd["validation_classification"] == PRODUCT_VALIDATION_FAILED
+        assert pd["command_outcome_classification"] == PRODUCT_VALIDATION_FAILED
+        assert pd["counts_as_product_failure"] is True
+
+    def test_validation_failure_with_traceback_contextual(self) -> None:
+        """Validation failure with traceback -> product_validation_failed."""
+        pd = self._simulate_payload(
+            "pytest tests/", exit_code=1,
+            output="Traceback (most recent call last):\n  assert False",
+            ok=False,
+        )
+        assert pd["terminal_classification"] == PRODUCT_VALIDATION_FAILED
+        assert pd["validation_classification"] == PRODUCT_VALIDATION_FAILED
+        assert pd["command_outcome_classification"] == PRODUCT_VALIDATION_FAILED
+        assert pd["command_traceback_detected"] is True
+        # Override leaves terminal_traceback_detected in sync with outcome
+        assert pd["terminal_traceback_detected"] is True
+
+    # --- Timeout ----------------------------------------------------------
+
+    def test_validation_timeout_contextual(self) -> None:
+        """Timeout with validation classification -> timeout."""
+        pd = self._simulate_payload(
+            "pytest tests/", exit_code=124, output="timed out",
+            ok=False,
+        )
+        assert pd["terminal_classification"] == TIMEOUT
+        assert pd["validation_classification"] == TIMEOUT
+        assert pd["command_outcome_classification"] == TIMEOUT
+        assert pd["command_was_timeout"] is True
+        assert pd["command_success"] is False
+
+    # --- Search / no-match not affected (not validation) ------------------
+
+    def test_search_not_validation_no_override(self) -> None:
+        """Search commands not classified as validation pass through raw."""
+        pd = self._simulate_payload(
+            "rg missing_func", exit_code=1, output="",
+            looks_like_validation=False,
+        )
+        # Without validation classification, terminal runs raw:
+        assert pd["terminal_classification"] == TERMINAL_SEARCH_NO_MATCH
+        assert pd["terminal_no_matches"] is True
+        # No validation or outcome keys added
+        assert "validation_classification" not in pd
+        assert "command_outcome_classification" not in pd
+
+    # --- Non-validation generic command -----------------------------------
+
+    def test_generic_command_not_validation(self) -> None:
+        """Generic command unrelated to validation is not overridden."""
+        pd = self._simulate_payload(
+            "npm install", exit_code=0, output="added 10 packages",
+            looks_like_validation=False,
+        )
+        assert pd["terminal_classification"] == PASSED
+        assert pd["command_success"] is True
+        assert "validation_classification" not in pd

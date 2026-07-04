@@ -32,6 +32,7 @@ from aura.conversation.tool_runner_terminal_policy import (
 from aura.conversation.validation_orchestrator import (
     MALFORMED_VALIDATION_COMMAND,
     VALIDATION_COMMAND_UNRUNNABLE,
+    classify_command_outcome,
     classify_terminal_run,
     classify_validation_run,
     looks_like_validation_command,
@@ -511,6 +512,22 @@ class ToolRunner:
                 classification=run_result.classification,
                 output=full_output,
             )
+            # Compute contextual command outcome so that Workers see
+            # a classification that accounts for command role (e.g.
+            # "passed" for validation commands that exit 0 despite
+            # intermediate traceback output in a fallback branch).
+            outcome = classify_command_outcome(
+                command,
+                exit_code=exit_code,
+                output=full_output,
+                is_validation_command=True,
+            )
+            payload_dict.update(outcome.metadata())
+            # Override the raw terminal fields with the contextual
+            # outcome so successful validation does not carry a scary
+            # terminal_classification alongside validation_classification.
+            payload_dict["terminal_classification"] = outcome.classification
+            payload_dict["terminal_traceback_detected"] = outcome.traceback_detected
         payload = json.dumps(payload_dict, ensure_ascii=False)
 
         observed = self._loop_detector.observe(
