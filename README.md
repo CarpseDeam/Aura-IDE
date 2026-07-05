@@ -9,7 +9,7 @@
 
 **Bring any model. Aura makes it plan, prove, and validate its work.**
 
-Aura is an open-source desktop coding harness that makes any model better at coding than it is alone. It plans before writing, edits through reviewable diffs, validates the result, recovers or aborts cleanly when validation fails, and leaves receipts for every run. You bring your own keys, choose your providers, and keep full control of your repo and workspace.
+Aura is an open source desktop coding harness that makes any model better at coding than it is alone. It plans before writing, edits through reviewable diffs, validates the result, recovers or aborts cleanly when validation fails, and leaves receipts for every run. You bring your own keys, choose your providers, and keep full control of your repo and workspace.
 
 [Start Here](https://aura-ide.hashnode.dev/start-here) · [Download](https://github.com/CarpseDeam/Aura-IDE/releases/latest) · [Discord](https://discord.gg/aGSthBX2Bg) · [Build Log](https://aura-ide.hashnode.dev/) · [Support](https://buymeacoffee.com/snowballkori)
 
@@ -35,10 +35,10 @@ Aura works differently. Every change is visible, reviewable, and verifiable.
 - **Plan** — the Planner reads your workspace and writes a structured spec before any code is touched. You see the plan, you approve it.
 - **Dispatch** — send the approved spec to the Worker.
 - **Review** — the Worker executes through controlled file tools. Every proposed edit shows as a unified diff. Approve or reject before anything touches disk.
-- **Validate** — checks run after every change. If something breaks, the Worker inspects the error and retries. If recovery fails, the change is aborted cleanly — no broken state.
+- **Validate** — checks run after every change. If something breaks, the Worker inspects the error and retries. If recovery fails, the change is aborted cleanly, no broken state.
 - **Done** — receipts show every tool call, token cost, and file changed. You know exactly what happened and what it cost.
 
-This is not a chat wrapper. This is a two-agent harness with guardrails, visibility, and accountability.
+This is not a chat wrapper. This is a two agent harness with guardrails, visibility, and accountability.
 
 ---
 
