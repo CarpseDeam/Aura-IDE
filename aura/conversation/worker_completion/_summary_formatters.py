@@ -66,6 +66,8 @@ def _parse_structured_worker_failure(content: str) -> dict[str, Any]:
     # Recognize mismatch_detected as structured metadata, not a failure.
     if parsed.get("status") == "mismatch_detected" and isinstance(parsed.get("mismatch"), dict):
         return parsed
+    if _is_recoverable_worker_continuation_payload(parsed):
+        return {}
     if parsed.get("ok") is not False:
         return {}
     failure_class = parsed.get("failure_class")
@@ -73,6 +75,22 @@ def _parse_structured_worker_failure(content: str) -> dict[str, Any]:
     if not failure_class or not error:
         return {}
     return parsed
+
+
+def _is_recoverable_worker_continuation_payload(parsed: dict[str, Any]) -> bool:
+    details = parsed.get("details")
+    detail_payload = details if isinstance(details, dict) else {}
+    suggested_next_tool = str(
+        parsed.get("suggested_next_tool")
+        or detail_payload.get("suggested_next_tool")
+        or ""
+    )
+    return bool(
+        parsed.get("ok") is False
+        and parsed.get("recoverable")
+        and (parsed.get("phase_boundary") or detail_payload.get("phase_boundary"))
+        and suggested_next_tool == "dispatch_to_worker"
+    )
 
 
 def _format_structured_worker_failure(result: dict[str, Any]) -> str:

@@ -72,6 +72,8 @@ def handle_worker_quality_gate(
             state.worker_quality_nudge_sent = True
             state.worker_quality_cleanup_attempted = True
             return "cleanup"
+        if _warning_only_findings(state.last_quality_findings):
+            return "none"
         _finish_worker_quality_unresolved_findings(
             history=history,
             on_event=on_event,
@@ -105,6 +107,8 @@ def handle_worker_quality_gate(
                 state.worker_quality_nudge_sent = True
                 state.worker_quality_cleanup_attempted = True
                 return "cleanup"
+            if _warning_only_findings(state.last_quality_findings):
+                return "none"
             _finish_worker_quality_unresolved_findings(
                 history=history,
                 on_event=on_event,
@@ -125,6 +129,14 @@ def handle_worker_quality_gate(
         state.last_quality_ok_fingerprint = fingerprint
     state.last_quality_findings = []
     return "none"
+
+
+def _warning_only_findings(findings: list[dict]) -> bool:
+    return bool(findings) and all(
+        isinstance(finding, dict)
+        and str(finding.get("severity") or "") == "warning"
+        for finding in findings
+    )
 
 
 def _diff_changed_files(workspace_root: Path, changed_files: list[str]) -> str:

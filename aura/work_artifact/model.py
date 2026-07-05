@@ -246,15 +246,17 @@ class WorkArtifact:
     def attach_receipt(self, item_id: str, receipt: WorkArtifactReceipt) -> None:
         """Attach a receipt to an item and update its status.
 
-        Marks item ``done`` when the Worker result is successful.
-        Marks item ``blocked`` when the Worker result is blocked,
-        cancelled, failed, mismatched, or unrecoverable.
+        Marks item ``done`` when the Worker result is successful,
+        keeps it ``active`` for recoverable continuation receipts, and
+        marks it ``blocked`` for terminal failures.
         """
         for item in self.work_items:
             if item.id == item_id:
                 item.receipt = receipt
                 if receipt.status == "ok":
                     item.status = WorkItemStatus.done
+                elif receipt.status == "continuing":
+                    item.status = WorkItemStatus.active
                 else:
                     item.status = WorkItemStatus.blocked
                 self.updated_at = time.time()

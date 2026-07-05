@@ -7,6 +7,7 @@ from __future__ import annotations
 from typing import Any
 
 from aura.conversation.dispatch import WorkerDispatchResult
+from aura.conversation.dispatch_failure import is_recoverable_worker_continuation
 from aura.work_artifact.model import WorkArtifactReceipt
 
 
@@ -40,6 +41,8 @@ def worker_result_to_receipt(
         status = "cancelled"
     elif result.mismatch is not None:
         status = "mismatch"
+    elif is_recoverable_worker_continuation(result):
+        status = "continuing"
     elif extras.get("unrecoverable"):
         status = "failed"
     else:

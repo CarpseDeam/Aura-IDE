@@ -71,6 +71,7 @@ class WorkArtifactCard(QFrame):
         summary_text = (
             f"{projection.completed_count} done · "
             f"{projection.blocked_count} blocked · "
+            f"{projection.active_count} active · "
             f"{projection.pending_count} pending"
         )
         if projection.is_complete:
@@ -224,6 +225,7 @@ class WorkArtifactCard(QFrame):
         summary_text = (
             f"{projection.completed_count} done · "
             f"{projection.blocked_count} blocked · "
+            f"{projection.active_count} active · "
             f"{projection.pending_count} pending"
         )
         if projection.is_complete:

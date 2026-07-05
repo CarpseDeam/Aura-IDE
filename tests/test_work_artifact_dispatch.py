@@ -120,6 +120,37 @@ def test_worker_result_to_receipt_cancelled():
     assert receipt.status == "cancelled"
 
 
+def test_worker_result_to_receipt_recoverable_continuation():
+    """A recoverable phase-boundary dispatch result becomes a continuing receipt."""
+    result = _recoverable_quality_continuation_result()
+    receipt = worker_result_to_receipt(result)
+    assert receipt.status == "continuing"
+    assert receipt.metadata["failure_class"] == "worker_quality_unresolved_findings"
+
+
+def test_recoverable_quality_payload_does_not_mark_artifact_item_blocked():
+    """The exact worker_quality_unresolved_findings payload keeps the item active."""
+    ctrl = WorkArtifactController()
+    payload = _make_two_item_payload()
+    ctrl.create_artifact_from_payload("call_123", payload)
+    ctrl.mark_item_active("call_123", "item-1")
+
+    ctrl.attach_receipt("call_123", _recoverable_quality_continuation_result())
+
+    artifact = ctrl.get_artifact("call_123")
+    assert artifact is not None
+    item = artifact.work_items[0]
+    assert item.status == WorkItemStatus.active
+    assert item.receipt is not None
+    assert item.receipt.status == "continuing"
+
+    projection = WorkArtifactProjection.from_artifact(artifact)
+    assert projection.active_count == 1
+    assert projection.blocked_count == 0
+    assert projection.pending_count == 1
+    assert not projection.is_complete
+
+
 # ── Multi-item artifact tests ────────────────────────────────────────────────
 
 
@@ -395,6 +426,30 @@ def test_projection_from_multi_item_artifact():
     assert proj3.is_complete
 
 
+def test_projection_with_active_only_item_is_not_complete():
+    """Active/continuing items must not make the artifact complete."""
+    artifact = WorkArtifact(
+        artifact_id="call_123",
+        goal="Test",
+        work_items=[
+            WorkArtifactItem(
+                id="item-1",
+                title="Item 1",
+                intent="Do 1",
+                target_files=["a.py"],
+                acceptance="OK",
+                status=WorkItemStatus.active,
+            ),
+        ],
+        current_item_id="item-1",
+    )
+
+    projection = WorkArtifactProjection.from_artifact(artifact)
+    assert projection.pending_count == 0
+    assert projection.active_count == 1
+    assert not projection.is_complete
+
+
 def _ok_result():
     from aura.conversation.dispatch import WorkerDispatchResult
     return WorkerDispatchResult(
@@ -402,4 +457,34 @@ def _ok_result():
         summary="All good",
         modified_files=["a.py"],
         status="completed",
+    )
+
+
+def _recoverable_quality_continuation_result():
+    from aura.conversation.dispatch import WorkerDispatchResult
+
+    return WorkerDispatchResult(
+        ok=False,
+        summary="Worker quality findings are recoverable.",
+        recoverable=True,
+        phase_boundary=True,
+        needs_followup=True,
+        extras={
+            "failure_class": "worker_quality_unresolved_findings",
+            "recoverable": True,
+            "phase_boundary": True,
+            "suggested_next_tool": "dispatch_to_worker",
+            "details": {
+                "recoverable": True,
+                "phase_boundary": True,
+                "suggested_next_tool": "dispatch_to_worker",
+                "findings": [
+                    {
+                        "kind": "large_diff_whole_file_rewrite",
+                        "severity": "warning",
+                        "file": "a.py",
+                    }
+                ],
+            },
+        },
     )

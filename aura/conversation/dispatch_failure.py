@@ -4,6 +4,7 @@ from aura.conversation.dispatch import WorkerDispatchResult
 
 __all__ = [
     "classify_failed_worker_dispatch",
+    "is_recoverable_worker_continuation",
 ]
 
 
@@ -22,6 +23,8 @@ def classify_failed_worker_dispatch(
     """
     if _is_worker_internal_error(result):
         return {"blocker_reason": "internal", "failure_constraint": ""}
+    if is_recoverable_worker_continuation(result):
+        return {"blocker_reason": "", "failure_constraint": ""}
     if result.extras.get("internal_planner_handoff"):
         return {
             "blocker_reason": "",
@@ -108,4 +111,25 @@ def _is_worker_internal_error(result: WorkerDispatchResult) -> bool:
     return bool(
         result.extras.get("worker_internal_error")
         or result.extras.get("dispatch_internal_error")
+    )
+
+
+def is_recoverable_worker_continuation(result: WorkerDispatchResult) -> bool:
+    """Return True for non-terminal Worker findings that should loop back."""
+    extras = result.extras if isinstance(result.extras, dict) else {}
+    phase_info = extras.get("phase_boundary")
+    phase_payload = phase_info if isinstance(phase_info, dict) else {}
+    details = extras.get("details")
+    detail_payload = details if isinstance(details, dict) else {}
+    suggested_next_tool = str(
+        extras.get("suggested_next_tool")
+        or phase_payload.get("suggested_next_tool")
+        or detail_payload.get("suggested_next_tool")
+        or ""
+    )
+    return bool(
+        not result.cancelled
+        and (result.recoverable or extras.get("recoverable"))
+        and (result.phase_boundary or extras.get("phase_boundary"))
+        and suggested_next_tool == "dispatch_to_worker"
     )

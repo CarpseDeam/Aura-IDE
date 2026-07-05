@@ -563,6 +563,27 @@ def test_failed_dispatch_classification_preserves_constraint(tmp_path):
     assert "retry with valid spec" in action["failure_constraint"]
 
 
+def test_recoverable_quality_continuation_dispatch_is_not_blocker():
+    result = WorkerDispatchResult(
+        ok=False,
+        summary="Worker quality findings are recoverable.",
+        recoverable=True,
+        phase_boundary=True,
+        needs_followup=True,
+        extras={
+            "failure_class": "worker_quality_unresolved_findings",
+            "recoverable": True,
+            "phase_boundary": True,
+            "suggested_next_tool": "dispatch_to_worker",
+        },
+    )
+
+    action = classify_failed_worker_dispatch(result=result)
+
+    assert action["blocker_reason"] == ""
+    assert action["failure_constraint"] == ""
+
+
 # ── ToolRoundRunner dispatch tests ───────────────────────────────────────────
 
 

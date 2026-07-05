@@ -24,6 +24,7 @@ class WorkArtifactProjection:
     current_item: dict[str, Any] | None = None
     completed_count: int = 0
     blocked_count: int = 0
+    active_count: int = 0
     pending_count: int = 0
     is_complete: bool = False
 
@@ -38,6 +39,7 @@ class WorkArtifactProjection:
             "current_item": self.current_item,
             "completed_count": self.completed_count,
             "blocked_count": self.blocked_count,
+            "active_count": self.active_count,
             "pending_count": self.pending_count,
             "is_complete": self.is_complete,
         }
@@ -47,6 +49,7 @@ class WorkArtifactProjection:
         """Build a projection from a WorkArtifact instance."""
         completed_count = 0
         blocked_count = 0
+        active_count = 0
         pending_count = 0
 
         items: list[dict[str, Any]] = []
@@ -66,6 +69,8 @@ class WorkArtifactProjection:
                 completed_count += 1
             elif item.status.value == "blocked":
                 blocked_count += 1
+            elif item.status.value == "active":
+                active_count += 1
             elif item.status.value == "pending":
                 pending_count += 1
 
@@ -95,6 +100,7 @@ class WorkArtifactProjection:
             current_item=current_dict,
             completed_count=completed_count,
             blocked_count=blocked_count,
+            active_count=active_count,
             pending_count=pending_count,
-            is_complete=pending_count == 0,
+            is_complete=pending_count == 0 and active_count == 0,
         )

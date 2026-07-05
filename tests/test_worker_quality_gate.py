@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
+from aura.client import Done
 from aura.conversation.history import History
 from aura.conversation.manager_send_state import _SendState
 from aura.conversation.worker_quality import QualityFinding, WorkerQualityDecision
@@ -28,7 +28,7 @@ def test_worker_quality_gate_sends_cleanup_on_first_warning(tmp_path: Path, monk
     assert "Findings:" in history.messages[-1]["content"]
 
 
-def test_worker_quality_gate_blocks_unresolved_warnings_after_cleanup(
+def test_worker_quality_gate_releases_warning_findings_after_cleanup(
     tmp_path: Path,
     monkeypatch,
 ):
@@ -46,12 +46,15 @@ def test_worker_quality_gate_blocks_unresolved_warnings_after_cleanup(
         on_event=events.append,
     )
 
-    assert action == "finished"
+    assert action == "none"
     assert state.last_quality_ok_fingerprint is None
-    payload = json.loads(history.messages[-1]["content"])
-    assert payload["failure_class"] == "worker_quality_unresolved_findings"
-    assert payload["details"]["findings"][0]["kind"] == "large_diff_whole_file_rewrite"
-    assert events
+    assert state.last_quality_findings[0]["kind"] == "large_diff_whole_file_rewrite"
+    assert state.last_quality_findings[0]["severity"] == "warning"
+    assert not any(isinstance(event, Done) and event.finish_reason == "stop" for event in events)
+    assert all(
+        "worker_quality_unresolved_findings" not in str(message.get("content", ""))
+        for message in history.messages
+    )
 
 
 def test_worker_quality_gate_does_not_set_clean_fingerprint_when_findings_remain(

@@ -194,3 +194,21 @@ class TestWorkArtifact:
         item = artifact.current_item()
         assert item is not None
         assert item.status == WorkItemStatus.blocked
+
+    def test_attach_continuing_receipt_keeps_item_active(self) -> None:
+        artifact = WorkArtifact(
+            artifact_id="art-1",
+            goal="Test",
+            work_items=[
+                WorkArtifactItem(id="item-1", title="A", intent="I1", target_files=["a.py"], acceptance="A1"),
+            ],
+            current_item_id="item-1",
+        )
+        artifact.mark_active("item-1")
+        receipt = WorkArtifactReceipt(status="continuing", summary="Worker needs a follow-up pass")
+        artifact.attach_receipt("item-1", receipt)
+        item = artifact.current_item()
+        assert item is not None
+        assert item.status == WorkItemStatus.active
+        assert item.receipt is not None
+        assert item.receipt.status == "continuing"
