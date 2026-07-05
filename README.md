@@ -66,10 +66,10 @@ The key moments, captured:
 
 Aura wrote most of itself through the same harness loop. During May/June 2026 it processed **2+ billion DeepSeek tokens** across nearly **30,000 API requests** while building its own codebase.
 
-This is proof that the harness delta is large enough to turn any model into a real shipping system. The harness produces the quality, not the model. Swap models, swap providers, change thinking depth — the workflow stays the same and the output stays consistent.
-
+This is proof that the harness delta can turn model output into a real shipping workflow.
 <p align="center">
   <img src="media/aura-may.png" alt="Aura May token usage" width="650">
+  <img src="media/deepseek-june.png" alt="Aura May token usage" width="650">
 </p>
 
 ---
