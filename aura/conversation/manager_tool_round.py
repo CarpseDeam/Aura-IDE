@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from aura.client import Done, Event, ToolResult
-from aura.conversation.workflow_state import WorkflowStatus
+from aura.conversation.attempt_brief import build_attempt_brief, render_for_planner
 from aura.conversation.completion_guard import (
     terminal_result_completed,
     tool_result_completes_action,
@@ -29,6 +29,7 @@ from aura.conversation.manager_recovery import (
 )
 from aura.conversation.manager_send_state import _SendState
 from aura.conversation.planner_refresh import PlannerRefreshState
+from aura.conversation.spec_quality import validate_planner_dispatch
 from aura.conversation.syntax_terminal_state import update_syntax_state_from_terminal
 from aura.conversation.tool_limits import WRITE_TOOLS, limit_reached_payload
 from aura.conversation.tool_runner import ToolRunner
@@ -39,8 +40,9 @@ from aura.conversation.worker_recovery_payload import (
     is_recoverable_phase_boundary,
     parse_tool_payload,
 )
-from aura.events import AuraEvent, EventBus, WORKER_PRE_TOOL_GATE_DECIDED
-from aura.lifecycle import GateDecision, HookContext, LifecycleHooks
+from aura.conversation.workflow_state import WorkflowStatus
+from aura.events import WORKER_PRE_TOOL_GATE_DECIDED, AuraEvent, EventBus
+from aura.lifecycle import HookContext, LifecycleHooks
 from aura.research.policy import ANSWER_ONLY
 
 EventCallback = Callable[[Event], None]
@@ -246,6 +248,7 @@ class ToolRoundRunner:
                     blocker_reason,
                     on_event,
                     failure_constraint,
+                    attempt_brief=res.get("attempt_brief"),
                 )
                 return ToolRoundOutcome(action="return")
             if res.get("completed_dispatch_for_final"):
@@ -270,7 +273,12 @@ class ToolRoundRunner:
                 ):
                     state.worker_flow_nudge_sent = False
             planner_constraint = str(res.get("planner_internal_constraint", "") or "")
-            if planner_constraint:
+            attempt_brief = res.get("attempt_brief")
+            if attempt_brief is not None:
+                self._history.append_internal_user_text(
+                    render_for_planner(attempt_brief)
+                )
+            elif planner_constraint:
                 self._history.append_internal_user_text(planner_constraint)
             if res.get("skip"):
                 continue
@@ -804,8 +812,13 @@ class ToolRoundRunner:
         reason: str,
         on_event: EventCallback,
         failure_constraint: str = "",
+        attempt_brief: Any = None,
     ) -> None:
-        if failure_constraint:
+        if attempt_brief is not None:
+            self._history.append_internal_user_text(
+                render_for_planner(attempt_brief)
+            )
+        elif failure_constraint:
             self._history.append_internal_user_text(failure_constraint)
         on_event(
             Done(
@@ -875,6 +888,30 @@ class ToolRoundRunner:
                 "completed_dispatch_for_final": False,
                 "terminal_dispatch": False,
             }
+
+        # ── Planner dispatch scope validation ─────────────────────
+        if state.mode in {"planner", "single"}:
+            latest_user_text = _get_latest_user_text(self._history)
+            quality = validate_planner_dispatch(args, latest_user_text)
+            if not quality.ok:
+                result = WorkerDispatchResult(
+                    ok=False,
+                    summary="Planner dispatch scope incomplete.",
+                    recoverable=True,
+                    extras={
+                        "internal_planner_handoff": True,
+                        "failure_constraint": quality.failure_constraint,
+                        "dispatch_not_started": True,
+                        "user_visible_blocker": False,
+                        "planner_dispatch_scope_incomplete": True,
+                    },
+                )
+                return self._dispatch_result_to_round_result(
+                    tool_call_id=tool_call_id,
+                    result=result,
+                    state=state,
+                )
+
         result = self._tool_runner.handle_dispatch(
             tool_call_id=tool_call_id,
             args=args,
@@ -906,9 +943,10 @@ class ToolRoundRunner:
             else:
                 extras = result.extras if isinstance(result.extras, dict) else {}
                 failure_constraint = str(extras.get("failure_constraint") or "")
+                attempt_brief = build_attempt_brief(result)
                 if extras.get("internal_planner_handoff") and failure_constraint:
-                    if _internal_constraint_seen(self._history, failure_constraint):
-                        return {
+                    if failure_constraint in state.seen_internal_constraints:
+                        d = {
                             "id": tool_call_id,
                             "blocker": True,
                             "result": result,
@@ -916,7 +954,11 @@ class ToolRoundRunner:
                             "failure_constraint": failure_constraint,
                             "terminal_dispatch": False,
                         }
-                    return {
+                        if attempt_brief is not None:
+                            d["attempt_brief"] = attempt_brief
+                        return d
+                    state.seen_internal_constraints.add(failure_constraint)
+                    d = {
                         "id": tool_call_id,
                         "skip": True,
                         "completed_dispatch_for_final": False,
@@ -924,13 +966,16 @@ class ToolRoundRunner:
                         "planner_internal_constraint": failure_constraint,
                         "enter_silent_preflight": True,
                     }
+                    if attempt_brief is not None:
+                        d["attempt_brief"] = attempt_brief
+                    return d
                 action = classify_failed_worker_dispatch(
                     result=result,
                 )
                 blocker_reason = action["blocker_reason"]
                 failure_constraint = action.get("failure_constraint", "")
                 if blocker_reason or failure_constraint:
-                    return {
+                    d = {
                         "id": tool_call_id,
                         "blocker": True,
                         "result": result,
@@ -943,6 +988,9 @@ class ToolRoundRunner:
                         ),
                         "terminal_dispatch": False,
                     }
+                    if attempt_brief is not None:
+                        d["attempt_brief"] = attempt_brief
+                    return d
         return {
             "id": tool_call_id,
             "skip": True,
@@ -1046,6 +1094,23 @@ class ToolRoundRunner:
         return {"content": observed.content, "info": observed.info}
 
 
+def _get_latest_user_text(history: History) -> str:
+    """Extract the most recent user message text from history."""
+    for message in reversed(history.messages):
+        if message.get("role") != "user":
+            continue
+        content = message.get("content")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts: list[str] = []
+            for item in content:
+                if isinstance(item, dict) and item.get("type") == "text":
+                    parts.append(str(item.get("text") or ""))
+            return "\n".join(part for part in parts if part)
+    return ""
+
+
 def _terminal_payload(loop_info: dict[str, Any] | None) -> dict[str, Any]:
     if not isinstance(loop_info, dict):
         return {}
@@ -1136,15 +1201,6 @@ def _dispatch_reached_visible_worker(result: WorkerDispatchResult | None) -> boo
         return False
     extras = result.extras if isinstance(result.extras, dict) else {}
     return not bool(extras.get("dispatch_not_started"))
-
-
-def _internal_constraint_seen(history: History, failure_constraint: str) -> bool:
-    if not failure_constraint:
-        return False
-    for message in history.messages:
-        if message.get("aura_internal") is True and message.get("content") == failure_constraint:
-            return True
-    return False
 
 
 __all__ = ["ToolRoundOutcome", "ToolRoundRunner"]

@@ -68,6 +68,7 @@ class _SendState:
     # --- dispatch ---
     planner_dispatch_attempts: int = 0
     planner_visible_dispatch_tool_call_id: str = ""
+    seen_internal_constraints: set[str] = field(default_factory=set)
 
     # --- edit recovery ---
     edit_failed_shapes: set[str] = field(default_factory=set)

@@ -6,11 +6,16 @@ unresolved dependencies in changed files.
 
 from __future__ import annotations
 
+import importlib.util
 import logging
+import sys
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from aura.code_intel.index import get_cached_index
+
+if TYPE_CHECKING:
+    from aura.code_intel.index import CodeIntelIndex
 
 logger = logging.getLogger(__name__)
 
@@ -349,6 +354,10 @@ def _detect_unresolved_dependencies(
             if "/" not in dep_path and dep_path.endswith(".py"):
                 continue
 
+            resolution = _resolve_python_dependency_candidate(dep_path, workspace_root)
+            if resolution is not False:
+                continue
+
             findings.append(
                 AuditFinding(
                     file=path_str,
@@ -360,3 +369,80 @@ def _detect_unresolved_dependencies(
             )
     return findings
 
+
+def _resolve_python_dependency_candidate(
+    dep_path: str, workspace_root: Path
+) -> bool | None:
+    """Return whether a dependency candidate resolves as a Python import.
+
+    ``True`` means the import is resolvable, ``False`` means it is clearly
+    unresolved, and ``None`` means the candidate is not safely recognizable as
+    a Python import dependency.  The audit is intentionally conservative:
+    callers should only warn on ``False``.
+    """
+    module_name = _dependency_candidate_to_module_name(dep_path)
+    if module_name is None:
+        return None
+
+    top_level = module_name.split(".", 1)[0]
+    if _is_stdlib_module(top_level):
+        return True
+
+    return _find_python_spec(module_name, workspace_root)
+
+
+def _dependency_candidate_to_module_name(dep_path: str) -> str | None:
+    """Convert obvious path/module dependency forms to dotted module names."""
+    candidate = dep_path.strip().replace("\\", "/")
+    if not candidate or candidate.startswith("."):
+        return None
+
+    if candidate.endswith("/__init__.py"):
+        candidate = candidate[: -len("/__init__.py")]
+    elif candidate.endswith("/__init__"):
+        candidate = candidate[: -len("/__init__")]
+    elif candidate.endswith(".py"):
+        candidate = candidate[:-3]
+    elif "/" not in candidate:
+        # Existing logic skips bare imports before this helper.  If another
+        # adapter sends one here, only dotted module names are import-style.
+        if "." not in candidate:
+            return None
+
+    module_name = candidate.replace("/", ".").strip(".")
+    if not module_name:
+        return None
+
+    parts = module_name.split(".")
+    if any(not part.isidentifier() for part in parts):
+        return None
+    return module_name
+
+
+def _is_stdlib_module(top_level: str) -> bool:
+    """Return True when *top_level* is a builtin or stdlib module name."""
+    if top_level in sys.builtin_module_names:
+        return True
+
+    stdlib_names = getattr(sys, "stdlib_module_names", ())
+    return top_level in stdlib_names
+
+
+def _find_python_spec(module_name: str, workspace_root: Path) -> bool | None:
+    """Resolve *module_name* with the workspace root temporarily importable."""
+    root = str(workspace_root.resolve())
+    inserted = False
+
+    try:
+        if root not in sys.path:
+            sys.path.insert(0, root)
+            inserted = True
+        return importlib.util.find_spec(module_name) is not None
+    except (ImportError, AttributeError, ValueError):
+        return None
+    finally:
+        if inserted:
+            try:
+                sys.path.remove(root)
+            except ValueError:
+                pass
