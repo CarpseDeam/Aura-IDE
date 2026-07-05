@@ -187,17 +187,10 @@ def _detect_removed_exports(
                 continue
 
             # Genuinely gone from the workspace — hard error for public,
-            # warning for private.
+            # silently skip private (stale-reference audit catches actual
+            # broken references to removed private symbols).
             if is_private:
-                findings.append(
-                    AuditFinding(
-                        file=path_str,
-                        line=line,
-                        message=f"Removed private symbol '{name}'",
-                        severity="warning",
-                        kind="removed_export",
-                    )
-                )
+                continue
             else:
                 findings.append(
                     AuditFinding(
