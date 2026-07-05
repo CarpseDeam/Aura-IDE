@@ -53,13 +53,12 @@ Watch the full loop: the Planner reads your repo, writes a spec, the Worker edit
 The key moments, captured:
 
 <p align="center">
-  <img src="media/working.png" alt="Aura worker running" width="420">
-</p>
-
-<p align="center">
   <img src="media/diff-view.png" alt="Aura diff review" width="420">
 </p>
 
+<p align="center">
+  <img src="media/the-receipt.png" alt="Aura diff review" width="420">
+</p>
 ---
 
 ## Built with Aura
