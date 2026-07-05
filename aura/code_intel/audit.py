@@ -102,6 +102,40 @@ def _find_symbol_line(symbols, name: str) -> int | None:
     return None
 
 
+def _check_name_re_exported(content: str, name: str) -> bool:
+    """Return True when *name* is bound by a top-level import/re-export in *content*.
+
+    Checks the AST of a Python source string and returns ``True`` if any
+    top-level ``import`` or ``from … import`` statement binds *name* in the
+    local scope.
+
+    Supported forms::
+
+        from module import name
+        from module import original as name
+        import name
+        import module as name
+    """
+    try:
+        import ast
+        tree = ast.parse(content)
+    except SyntaxError:
+        return False
+
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                bound = alias.asname if alias.asname else alias.name
+                if bound == name:
+                    return True
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                bound = alias.asname if alias.asname else alias.name.split(".", 1)[0]
+                if bound == name:
+                    return True
+    return False
+
+
 def _detect_parse_failures(
     index: CodeIntelIndex, changed_files: list[str]
 ) -> list[Any]:
@@ -163,7 +197,25 @@ def _detect_removed_exports(
         post_names = {s.name for s in post_symbols}
 
         removed = pre_names - post_names
+
+        # Read post-change source for re-export check (Python only)
+        _post_content: str | None = None
+        if path_str.endswith(".py"):
+            try:
+                _post_content = (workspace_root / path_str).read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                pass
+
         for name in sorted(removed):
+            # Private symbol re-exported via import is still accessible —
+            # skip entirely (no removed_export, no defined_elsewhere warning).
+            if (
+                name.startswith("_")
+                and _post_content is not None
+                and _check_name_re_exported(_post_content, name)
+            ):
+                continue
+
             line = _find_symbol_line(pre_symbols, name)
             is_private = name.startswith("_")
             defined_elsewhere = index._symbol_defs.get((adapter.language_id, name), set()) - {path_str}
@@ -237,6 +289,14 @@ def _detect_stale_references(
         if not removed_here:
             continue
 
+        # Read post-change source for re-export check (Python only)
+        _post_content: str | None = None
+        if path_str.endswith(".py"):
+            try:
+                _post_content = (workspace_root / path_str).read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                pass
+
         # --- Derive dotted module path ---
         # e.g. "aura/repo_map.py"         -> "aura.repo_map"
         #      "aura/code_intel/__init__.py" -> "aura.code_intel"
@@ -273,6 +333,13 @@ def _detect_stale_references(
 
                 bare = ref.target_symbol.rsplit(".", 1)[-1]
                 if bare in removed_here:
+                    # Symbol re-exported from the changed module still
+                    # resolves — skip stale reference.
+                    if (
+                        _post_content is not None
+                        and _check_name_re_exported(_post_content, bare)
+                    ):
+                        continue
                     findings.append(
                         AuditFinding(
                             file=ref.source_file,
