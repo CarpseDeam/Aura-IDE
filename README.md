@@ -225,11 +225,6 @@ Aura wrote most of itself. During May/June 2026 it processed **2+ billion DeepSe
 
 The harness produces the quality, not the model. Swap models, swap providers, change thinking depth — the workflow stays the same and the output stays consistent.
 
----
-
-## Video walkthrough
-
-[Watch Aura working](media/Aura-Working.mp4) — a quick walkthrough of the full workflow from prompt to receipt.
 
 ---
 
