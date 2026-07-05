@@ -18,10 +18,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from aura.conversation.edit_orchestrator import PATCH_TOOL_NAMES
 from aura.gui.controllers import ToolStreamController
 from aura.gui.theme import BORDER
 from aura.gui.widgets.aura_glow import AuraWidget
 from aura.gui.workspace_tree import WorkspaceTree
+
+CODE_ANIMATION_TOOLS = frozenset({"write_file", *PATCH_TOOL_NAMES})
 
 
 class AuraPlayground(QWidget):
@@ -298,7 +301,7 @@ class AuraPlayground(QWidget):
         self._controllers[worker_tool_id] = c
         self._controller_parents[worker_tool_id] = parent_tool_id or ""
 
-        if name in ("write_file", "apply_edit_transaction", "edit_file", "edit_symbol"):
+        if name in CODE_ANIMATION_TOOLS:
             self._worker_code_tool_names[worker_tool_id] = name
             c.path_resolved.connect(
                 lambda path, tid=worker_tool_id: self._on_code_path_resolved(
@@ -358,17 +361,17 @@ class AuraPlayground(QWidget):
         self._worker_code_paths[worker_tool_id] = path
         self._code_editor.open_or_focus_tab(worker_tool_id, path)
         tool_name = self._worker_code_tool_names.get(worker_tool_id)
-        if tool_name in ("apply_edit_transaction", "edit_file", "edit_symbol"):
+        if tool_name in PATCH_TOOL_NAMES:
             current_content = self._read_workspace_text(path)
             if current_content is not None:
                 self._code_editor.set_content(worker_tool_id, current_content)
         pending_content = self._pending_worker_code_content.pop(worker_tool_id, None)
-        if pending_content is not None and tool_name not in ("apply_edit_transaction", "edit_file", "edit_symbol"):
+        if pending_content is not None and tool_name not in PATCH_TOOL_NAMES:
             self._code_editor.stream_content(worker_tool_id, pending_content)
 
     def _on_code_content_updated(self, worker_tool_id: str, content: str) -> None:
         tool_name = self._worker_code_tool_names.get(worker_tool_id)
-        if tool_name in ("apply_edit_transaction", "edit_file", "edit_symbol"):
+        if tool_name in PATCH_TOOL_NAMES:
             return
         if worker_tool_id not in self._worker_code_paths:
             self._pending_worker_code_content[worker_tool_id] = content
