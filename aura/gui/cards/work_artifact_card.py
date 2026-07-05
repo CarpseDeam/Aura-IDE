@@ -14,14 +14,25 @@ from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLay
 
 from aura.gui.cards._helpers import _MarkdownTextBlock
 from aura.gui.markdown_renderer import _render_markdown_with_code
-from aura.gui.theme import ACCENT, BG_ALT, BG_RAISED, BORDER, DANGER, FG, FG_DIM, FG_MUTED, SUCCESS, WARN
+from aura.gui.theme import ACCENT, BG_ALT, BG_RAISED, BORDER, FG, FG_DIM, FG_MUTED, SUCCESS
 from aura.work_artifact.projection import WorkArtifactProjection
+
+_ALLOWED_DISPLAY_STATUSES = {"pending", "active", "done"}
+
+
+def _normalize_status(status: str) -> str:
+    """Map any status to one of the three allowed display statuses.
+
+    Unknown/legacy statuses become ``pending`` so stale serialized data
+    never renders a dead-end state the new model does not support.
+    """
+    return status if status in _ALLOWED_DISPLAY_STATUSES else "pending"
+
 
 _ITEM_STATUS_COLORS = {
     "pending": FG_DIM,
     "active": ACCENT,
     "done": SUCCESS,
-    "blocked": DANGER,
 }
 
 
@@ -70,7 +81,6 @@ class WorkArtifactCard(QFrame):
         # ── Summary row ──
         summary_text = (
             f"{projection.completed_count} done · "
-            f"{projection.blocked_count} blocked · "
             f"{projection.active_count} active · "
             f"{projection.pending_count} pending"
         )
@@ -147,13 +157,13 @@ class WorkArtifactCard(QFrame):
     def _build_item_row(self, item_dict: dict[str, Any]) -> QFrame:
         """Build a horizontal row for one work item."""
         frame = QFrame(self)
-        status = str(item_dict.get("status", "pending"))
+        raw_status = str(item_dict.get("status", "pending"))
+        status = _normalize_status(raw_status)
         color = _ITEM_STATUS_COLORS.get(status, FG_DIM)
         status_icon = {
             "pending": "⏳",
             "active": "▶",
             "done": "✅",
-            "blocked": "❌",
         }.get(status, "⏳")
 
         frame.setStyleSheet(
@@ -224,7 +234,6 @@ class WorkArtifactCard(QFrame):
         # Update summary counts
         summary_text = (
             f"{projection.completed_count} done · "
-            f"{projection.blocked_count} blocked · "
             f"{projection.active_count} active · "
             f"{projection.pending_count} pending"
         )

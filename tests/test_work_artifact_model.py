@@ -163,6 +163,11 @@ class TestWorkArtifact:
         assert next_item.id == "item-2"
         assert artifact.current_item_id == "item-2"
 
+    def test_work_item_status_has_exactly_three_members(self) -> None:
+        """WorkItemStatus values are only pending, active, done."""
+        values = {s.value for s in WorkItemStatus}
+        assert values == {"pending", "active", "done"}
+
     def test_attach_done_receipt_marks_item_done(self) -> None:
         artifact = WorkArtifact(
             artifact_id="art-1",
@@ -179,21 +184,6 @@ class TestWorkArtifact:
         assert item.status == WorkItemStatus.done
         assert item.receipt is not None
         assert item.receipt.status == "ok"
-
-    def test_attach_blocked_receipt_marks_item_blocked(self) -> None:
-        artifact = WorkArtifact(
-            artifact_id="art-1",
-            goal="Test",
-            work_items=[
-                WorkArtifactItem(id="item-1", title="A", intent="I1", target_files=["a.py"], acceptance="A1"),
-            ],
-            current_item_id="item-1",
-        )
-        receipt = WorkArtifactReceipt(status="failed", summary="Something broke")
-        artifact.attach_receipt("item-1", receipt)
-        item = artifact.current_item()
-        assert item is not None
-        assert item.status == WorkItemStatus.blocked
 
     def test_attach_continuing_receipt_keeps_item_active(self) -> None:
         artifact = WorkArtifact(
@@ -212,3 +202,67 @@ class TestWorkArtifact:
         assert item.status == WorkItemStatus.active
         assert item.receipt is not None
         assert item.receipt.status == "continuing"
+
+    def test_attach_failed_receipt_returns_item_to_pending(self) -> None:
+        artifact = WorkArtifact(
+            artifact_id="art-1",
+            goal="Test",
+            work_items=[
+                WorkArtifactItem(id="item-1", title="A", intent="I1", target_files=["a.py"], acceptance="A1"),
+            ],
+            current_item_id="item-1",
+        )
+        receipt = WorkArtifactReceipt(status="failed", summary="Something broke")
+        artifact.attach_receipt("item-1", receipt)
+        item = artifact.current_item()
+        assert item is not None
+        assert item.status == WorkItemStatus.pending
+        assert item.receipt is not None
+        assert item.receipt.status == "failed"
+
+    def test_attach_cancelled_receipt_returns_item_to_pending(self) -> None:
+        artifact = WorkArtifact(
+            artifact_id="art-1",
+            goal="Test",
+            work_items=[
+                WorkArtifactItem(id="item-1", title="A", intent="I1", target_files=["a.py"], acceptance="A1"),
+            ],
+            current_item_id="item-1",
+        )
+        receipt = WorkArtifactReceipt(status="cancelled", summary="Cancelled")
+        artifact.attach_receipt("item-1", receipt)
+        item = artifact.current_item()
+        assert item is not None
+        assert item.status == WorkItemStatus.pending
+        assert item.receipt is not None
+        assert item.receipt.status == "cancelled"
+
+    def test_attach_mismatch_receipt_returns_item_to_pending(self) -> None:
+        artifact = WorkArtifact(
+            artifact_id="art-1",
+            goal="Test",
+            work_items=[
+                WorkArtifactItem(id="item-1", title="A", intent="I1", target_files=["a.py"], acceptance="A1"),
+            ],
+            current_item_id="item-1",
+        )
+        receipt = WorkArtifactReceipt(status="mismatch", summary="Tool mismatch")
+        artifact.attach_receipt("item-1", receipt)
+        item = artifact.current_item()
+        assert item is not None
+        assert item.status == WorkItemStatus.pending
+        assert item.receipt is not None
+        assert item.receipt.status == "mismatch"
+
+    def test_from_dict_legacy_blocked_status_becomes_pending(self) -> None:
+        """Old serialized 'blocked' status deserializes as pending."""
+        raw = {
+            "id": "item-1",
+            "title": "Item",
+            "intent": "Do it",
+            "target_files": ["a.py"],
+            "acceptance": "OK",
+            "status": "blocked",
+        }
+        item = WorkArtifactItem.from_dict(raw)
+        assert item.status == WorkItemStatus.pending

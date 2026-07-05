@@ -46,7 +46,7 @@ def worker_result_to_receipt(
     elif extras.get("unrecoverable"):
         status = "failed"
     else:
-        status = "blocked"
+        status = "interrupted"
 
     return WorkArtifactReceipt(
         status=status,

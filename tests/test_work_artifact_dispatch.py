@@ -96,8 +96,8 @@ def test_worker_result_to_receipt_ok():
     assert receipt.modified_files == ["a.py"]
 
 
-def test_worker_result_to_receipt_failed():
-    """A failed Worker result becomes a 'blocked' receipt."""
+def test_worker_result_to_receipt_interrupted():
+    """An unknown non-ok Worker result becomes an 'interrupted' receipt."""
     from aura.conversation.dispatch import WorkerDispatchResult
     result = WorkerDispatchResult(
         ok=False,
@@ -105,7 +105,7 @@ def test_worker_result_to_receipt_failed():
         modified_files=[],
     )
     receipt = worker_result_to_receipt(result)
-    assert receipt.status == "blocked"
+    assert receipt.status == "interrupted"
 
 
 def test_worker_result_to_receipt_cancelled():
@@ -128,7 +128,7 @@ def test_worker_result_to_receipt_recoverable_continuation():
     assert receipt.metadata["failure_class"] == "worker_quality_unresolved_findings"
 
 
-def test_recoverable_quality_payload_does_not_mark_artifact_item_blocked():
+def test_recoverable_quality_payload_keeps_item_active():
     """The exact worker_quality_unresolved_findings payload keeps the item active."""
     ctrl = WorkArtifactController()
     payload = _make_two_item_payload()
@@ -146,7 +146,6 @@ def test_recoverable_quality_payload_does_not_mark_artifact_item_blocked():
 
     projection = WorkArtifactProjection.from_artifact(artifact)
     assert projection.active_count == 1
-    assert projection.blocked_count == 0
     assert projection.pending_count == 1
     assert not projection.is_complete
 
@@ -448,6 +447,96 @@ def test_projection_with_active_only_item_is_not_complete():
     assert projection.pending_count == 0
     assert projection.active_count == 1
     assert not projection.is_complete
+
+
+def test_interrupted_receipt_returns_item_to_pending():
+    """An interrupted receipt through WorkArtifactController returns item to pending with receipt."""
+    ctrl = WorkArtifactController()
+    payload = _make_two_item_payload()
+    ctrl.create_artifact_from_payload("call_123", payload)
+    ctrl.mark_item_active("call_123", "item-1")
+
+    from aura.conversation.dispatch import WorkerDispatchResult
+    result = WorkerDispatchResult(
+        ok=False,
+        summary="Worker was interrupted",
+        modified_files=[],
+    )
+    ctrl.attach_receipt("call_123", result)
+
+    artifact = ctrl.get_artifact("call_123")
+    assert artifact is not None
+    item = artifact.work_items[0]
+    assert item.status == WorkItemStatus.pending
+    assert item.receipt is not None
+    assert item.receipt.status == "interrupted"
+
+
+def test_interrupted_then_pending_item_not_complete():
+    """An artifact with one done and one interrupted-then-pending item has is_complete == False."""
+    ctrl = WorkArtifactController()
+    payload = _make_two_item_payload()
+    ctrl.create_artifact_from_payload("call_123", payload)
+    ctrl.mark_item_active("call_123", "item-1")
+
+    from aura.conversation.dispatch import WorkerDispatchResult
+
+    # Complete item 1
+    ctrl.attach_receipt("call_123", WorkerDispatchResult(ok=True, summary="Done"))
+    ctrl.advance_to_next_item("call_123")
+
+    # Item 2 gets interrupted — returns to pending
+    ctrl.mark_item_active("call_123", "item-2")
+    ctrl.attach_receipt("call_123", WorkerDispatchResult(
+        ok=False,
+        summary="Interrupted",
+        modified_files=[],
+    ))
+
+    artifact = ctrl.get_artifact("call_123")
+    assert artifact is not None
+    projection = WorkArtifactProjection.from_artifact(artifact)
+    assert projection.completed_count == 1
+    assert projection.pending_count == 1
+    assert not projection.is_complete
+
+
+def test_projection_counts_only_done_active_pending():
+    """Projection summary counts only done, active, pending — no blocked count."""
+    from aura.work_artifact.model import WorkArtifactReceipt
+
+    artifact = WorkArtifact(
+        artifact_id="art-1",
+        goal="Test",
+        work_items=[
+            WorkArtifactItem(
+                id="item-1", title="A", intent="I1",
+                target_files=["a.py"], acceptance="A1",
+            ),
+            WorkArtifactItem(
+                id="item-2", title="B", intent="I2",
+                target_files=["b.py"], acceptance="A2",
+            ),
+            WorkArtifactItem(
+                id="item-3", title="C", intent="I3",
+                target_files=["c.py"], acceptance="A3",
+            ),
+        ],
+        current_item_id="item-1",
+    )
+
+    # item-1: done
+    artifact.attach_receipt("item-1", WorkArtifactReceipt(status="ok"))
+    # item-2: active
+    artifact.mark_active("item-2")
+    # item-3: pending (default)
+
+    proj = WorkArtifactProjection.from_artifact(artifact)
+    assert proj.completed_count == 1
+    assert proj.active_count == 1
+    assert proj.pending_count == 1
+    assert not proj.is_complete
+    assert not hasattr(proj, "blocked_count")
 
 
 def _ok_result():

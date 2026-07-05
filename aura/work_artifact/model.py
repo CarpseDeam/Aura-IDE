@@ -19,12 +19,11 @@ class WorkItemStatus(enum.Enum):
     pending = "pending"
     active = "active"
     done = "done"
-    blocked = "blocked"
 
 
 @dataclass
 class WorkArtifactReceipt:
-    """Result receipt attached to a completed or blocked WorkArtifactItem."""
+    """Result receipt attached to a WorkArtifactItem."""
 
     status: str
     summary: str = ""
@@ -246,9 +245,12 @@ class WorkArtifact:
     def attach_receipt(self, item_id: str, receipt: WorkArtifactReceipt) -> None:
         """Attach a receipt to an item and update its status.
 
-        Marks item ``done`` when the Worker result is successful,
-        keeps it ``active`` for recoverable continuation receipts, and
-        marks it ``blocked`` for terminal failures.
+        Work Artifact item states are only pending, active, done.
+        ``ok`` receipts mark the item done.
+        ``continuing`` receipts keep the item active.
+        All other receipts (cancelled, failed, mismatch, interrupted, etc.)
+        return the item to pending with the receipt attached so it remains
+        re-dispatchable. Interruptions are a run-level concern, not an item state.
         """
         for item in self.work_items:
             if item.id == item_id:
@@ -258,7 +260,7 @@ class WorkArtifact:
                 elif receipt.status == "continuing":
                     item.status = WorkItemStatus.active
                 else:
-                    item.status = WorkItemStatus.blocked
+                    item.status = WorkItemStatus.pending
                 self.updated_at = time.time()
                 self.current_item_id = item_id
                 return
