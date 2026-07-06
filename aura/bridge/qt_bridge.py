@@ -199,27 +199,6 @@ class _Worker(QObject):
             self.agentProcessFinished.emit(ev.process_id, ev.exit_code)
 
 
-class _ArtifactItemDispatchWorker(QObject):
-    """Deprecated — no longer used. WorkArtifact items run internally."""
-
-    def __init__(
-        self,
-        dispatch_proxy: "_DispatchProxy",
-        tool_call_id: str,
-    ) -> None:
-        super().__init__()
-        self._dispatch_proxy = dispatch_proxy
-        self._tool_call_id = tool_call_id
-
-    def run(self) -> None:
-        _log.warning(
-            "_ArtifactItemDispatchWorker.run called but deprecated — "
-            "artifact items now run internally. tool_call_id=%s",
-            self._tool_call_id,
-        )
-        self.thread().quit()
-
-
 class ConversationBridge(QObject):
     """Public Qt-facing facade for one running conversation."""
 
@@ -572,19 +551,6 @@ class ConversationBridge(QObject):
 
     def user_cancelled_dispatch(self, tool_call_id: str) -> bool:
         return self._dispatch_proxy.user_cancelled(tool_call_id)
-
-    def dispatch_next_artifact_item(self, tool_call_id: str) -> None:
-        """Deprecated — artifact items now run internally under one approval.
-
-        Previously, this dispatched the next artifact item on a background thread
-        when the user clicked "Review current item". Now Aura runs all items
-        internally. This method is kept as a no-op for call compatibility.
-        """
-        _log.warning(
-            "dispatch_next_artifact_item called but deprecated — "
-            "artifact items now run internally. tool_call_id=%s",
-            tool_call_id,
-        )
 
     # ---- send / cancel ----------------------------------------------------
 

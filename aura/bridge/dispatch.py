@@ -351,9 +351,15 @@ class _DispatchProxy(QObject):
             if stanza:
                 edited = replace(edited, spec=edited.spec + stanza)
 
-        # --- Mark artifact item active ---
+        # --- Determine if this is a WorkArtifact job ---
         artifact = self._artifact_controller.get_artifact(tool_call_id)
-        if artifact is not None and artifact.current_item_id:
+        is_artifact_job = (
+            artifact is not None
+            and req.work_artifact_payload is not None
+        )
+
+        # --- Mark artifact item active (flat only; artifact job marks internally) ---
+        if not is_artifact_job and artifact is not None and artifact.current_item_id:
             self._artifact_controller.mark_item_active(
                 tool_call_id, artifact.current_item_id
             )
@@ -369,9 +375,17 @@ class _DispatchProxy(QObject):
         _log.info("workerStarted emitted tool_call_id=%s", tool_call_id)
         self.workerStarted.emit(tool_call_id)
 
-        # --- Run Worker exactly once ---
+        # --- Run Worker ---
         try:
-            result = self._run_worker(tool_call_id, edited, pending)
+            if is_artifact_job:
+                # WorkArtifact: run all items internally as bounded requests
+                self._artifact_job_cancel_event.clear()
+                result = self._run_approved_artifact_job(
+                    tool_call_id, edited, pending,
+                )
+            else:
+                # Flat dispatch: single Worker run on the edited request
+                result = self._run_worker(tool_call_id, edited, pending)
         except Exception as exc:
             _log.exception(
                 "request_dispatch _run_worker failed tool_call_id=%s",
@@ -390,24 +404,9 @@ class _DispatchProxy(QObject):
                 },
             )
 
-        # --- Convert result to receipt and attach to artifact ---
-        self._artifact_controller.attach_receipt(tool_call_id, result)
-
-        # --- Run remaining items for multi-item artifact job ---
-        artifact = self._artifact_controller.get_artifact(tool_call_id)
-        has_remaining = (
-            artifact is not None
-            and artifact.work_artifact_payload is not None
-            and result.ok
-            and not result.cancelled
-        )
-        if has_remaining:
-            pending_items = self._artifact_controller.pending_items(tool_call_id)
-            if pending_items:
-                self._artifact_job_cancel_event.clear()
-                result = self._run_approved_artifact_job(
-                    tool_call_id, edited, result, pending,
-                )
+        # --- Attach receipt for flat dispatch (artifact job handles its own receipts) ---
+        if not is_artifact_job:
+            self._artifact_controller.attach_receipt(tool_call_id, result)
 
         # --- Emit artifact projection update ---
         projection = WorkArtifactProjection.from_artifact(artifact) if artifact else None
@@ -445,50 +444,6 @@ class _DispatchProxy(QObject):
         self._store_result_metadata(tool_call_id, result)
         self._pending_map.pop(tool_call_id)
         return result
-
-    # ---- next-item dispatch (item 2+, no Planner thread) -------------------
-
-    def dispatch_next_item(self, tool_call_id: str) -> WorkerDispatchResult | None:
-        """Dispatch the next pending artifact item for *tool_call_id*.
-
-        Called from a background thread (spawned by the bridge) when the user
-        clicks "Review current item" on the WorkArtifactCard.
-
-        Gets the current item from the existing artifact, creates a bounded
-        WorkerDispatchRequest, and re-enters the dispatch flow (SpecCard →
-        user review → Worker → receipt → advance).
-
-        Returns None if there is no artifact or no current item.
-        """
-        artifact = self._artifact_controller.get_artifact(tool_call_id)
-        if artifact is None:
-            _log.warning("dispatch_next_item: no artifact for tool_call_id=%s", tool_call_id)
-            return None
-        item = artifact.current_item()
-        if item is None:
-            _log.info("dispatch_next_item: no current item artifact_id=%s", tool_call_id)
-            return None
-
-        _log.info(
-            "dispatch_next_item artifact_id=%s item=%s",
-            tool_call_id, item.id,
-        )
-
-        # Build a bounded WorkerDispatchRequest from the artifact item.
-        req = WorkerDispatchRequest(
-            goal=item.intent,
-            files=list(item.target_files),
-            spec=item.intent,
-            acceptance=item.acceptance,
-            summary=item.title,
-            artifact_id=tool_call_id,
-            artifact_item_id=item.id,
-        )
-
-        # Re-enter the dispatch flow.  request_dispatch() will find the
-        # existing artifact, register a fresh pending entry, show SpecCard,
-        # wait for user decision, run Worker, attach receipt, and advance.
-        return self.request_dispatch(tool_call_id, req)
 
     # ---- GUI-thread side --------------------------------------------------
 
@@ -659,27 +614,25 @@ class _DispatchProxy(QObject):
         self,
         tool_call_id: str,
         approved_req: WorkerDispatchRequest,
-        initial_result: WorkerDispatchResult,
         pending: "_DispatchPending",
     ) -> WorkerDispatchResult:
-        """Run remaining pending artifact items internally after item 1.
+        """Run all artifact items internally as bounded Worker requests.
 
-        Iterates pending items in order, runs the Worker through the existing
-        ``_run_worker`` path for each, and aggregates results. Does not emit
-        per-item ``workerStarted`` or ``workerFinished``. Does not show a
-        SpecCard for item 2+.
+        Iterates all pending items in order, including item 1, and runs
+        the Worker through the existing ``_run_worker`` path for each.
+        Does not emit per-item ``workerStarted`` or ``workerFinished``.
+        Does not show a SpecCard for any item.
         """
         item_results: list[tuple[str, WorkerDispatchResult]] = []
         recovered_item_ids: list[str] = []
         failed_attempts: dict[str, int] = {}
 
-        # Track the first item result
-        item_results.append(("item-1", initial_result))
-
         pending_items = self._artifact_controller.pending_items(tool_call_id)
-        total = len(pending_items) + 1  # +1 for item 1 already done
+        total = len(pending_items)
 
         for idx, item in enumerate(pending_items):
+            item_index = idx + 1  # 1-based index
+
             # Check for external cancellation between items
             if self._artifact_job_cancel_event.is_set():
                 cancelled_result = WorkerDispatchResult(
@@ -690,11 +643,10 @@ class _DispatchProxy(QObject):
                 )
                 return self._aggregate_artifact_results(
                     tool_call_id, approved_req, item_results,
-                    recovered_item_ids, failed_attempts,
+                    recovered_item_ids, failed_attempts, total,
                     cancelled_result,
                 )
 
-            item_index = idx + 2  # 1-based index, item 1 already done
             _log.info(
                 "WorkArtifact internal item %d/%d tool_call_id=%s item=%s",
                 item_index, total, tool_call_id, item.id,
@@ -776,7 +728,7 @@ class _DispatchProxy(QObject):
         # Build and return aggregate result
         return self._aggregate_artifact_results(
             tool_call_id, approved_req, item_results,
-            recovered_item_ids, failed_attempts,
+            recovered_item_ids, failed_attempts, total,
         )
 
     def _build_artifact_item_request(
@@ -823,19 +775,26 @@ class _DispatchProxy(QObject):
         item_results: list[tuple[str, WorkerDispatchResult]],
         recovered_item_ids: list[str],
         failed_attempts: dict[str, int],
+        total_items: int,
         terminal_override: WorkerDispatchResult | None = None,
     ) -> WorkerDispatchResult:
         """Aggregate per-item Worker results into one terminal result.
 
         Returns ok=True only when every required item succeeded.
+        ``total_items`` is the artifact's total item count (may differ
+        from ``len(item_results)`` when items were never started).
         """
         if terminal_override is not None:
             return terminal_override
 
         all_ok = all(r.ok for _item_id, r in item_results)
         all_cancelled = any(r.cancelled for _item_id, r in item_results)
-        first_bad = next(
-            (r for _item_id, r in item_results if not r.ok),
+        first_not_ok = next(
+            ((item_id, r) for item_id, r in item_results if not r.ok and not r.cancelled),
+            None,
+        )
+        cancelled_item_id = next(
+            (item_id for item_id, r in item_results if r.cancelled),
             None,
         )
 
@@ -861,17 +820,23 @@ class _DispatchProxy(QObject):
         completed_items = [
             item_id for item_id, r in item_results if r.ok
         ]
-        total_items = len(item_results)
+        failed_item_id = first_not_ok[0] if first_not_ok else None
+        cancel_item_id = cancelled_item_id if all_cancelled else None
+        # current_item_id is the failed/cancelled item when stopped,
+        # otherwise the last successful item
+        current_item_id = failed_item_id or cancel_item_id or (item_results[-1][0] if item_results else "")
 
         extras: dict[str, Any] = {
             "work_artifact_job": True,
             "completed_items": completed_items,
             "total_items": total_items,
-            "current_item_id": item_results[-1][0] if item_results else "",
+            "current_item_id": current_item_id,
             "recovered_item_ids": list(recovered_item_ids),
             "failed_attempts": dict(failed_attempts),
             "item_summaries": item_summaries,
         }
+        if failed_item_id:
+            extras["failed_item_id"] = failed_item_id
         if failed_attempts:
             extras["recovery_exhausted"] = True
 
@@ -895,12 +860,12 @@ class _DispatchProxy(QObject):
             )
         else:
             # Non-ok aggregate from item failure
-            status = first_bad.status if first_bad else WorkerOutcomeStatus.harness_error.value
-            summary_parts = [f"WorkArtifact job failed at item {completed_items[-1] if completed_items else '?'}."]
+            status = first_not_ok[1].status if first_not_ok else WorkerOutcomeStatus.harness_error.value
+            summary_parts = [f"WorkArtifact job failed at item {current_item_id}."]
             if failed_attempts:
                 summary_parts.append("Recovery exhausted for some items.")
-            if first_bad and first_bad.summary:
-                summary_parts.append(first_bad.summary)
+            if first_not_ok and first_not_ok[1].summary:
+                summary_parts.append(first_not_ok[1].summary)
             return WorkerDispatchResult(
                 ok=False,
                 summary=" ".join(summary_parts),

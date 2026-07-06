@@ -130,36 +130,6 @@ class WorkArtifactController:
         """Return the active artifact for *tool_call_id*, or None."""
         return self._artifacts.get(tool_call_id)
 
-    def current_dispatch_request(
-        self,
-        tool_call_id: str,
-        original_req: WorkerDispatchRequest,
-    ) -> WorkerDispatchRequest | None:
-        """Return the current item as a bounded WorkerDispatchRequest.
-
-        Returns None if no artifact exists for *tool_call_id* or no current
-        item is set.
-        """
-        artifact = self._artifacts.get(tool_call_id)
-        if artifact is None:
-            return None
-        item = artifact.current_item()
-        if item is None:
-            return None
-
-        from dataclasses import replace
-
-        return replace(
-            original_req,
-            goal=item.intent or original_req.goal,
-            files=list(item.target_files) if item.target_files else original_req.files,
-            spec=original_req.spec,
-            acceptance=item.acceptance or original_req.acceptance,
-            summary=item.title or original_req.summary,
-            artifact_id=tool_call_id,
-            artifact_item_id=item.id,
-        )
-
     def mark_item_active(self, tool_call_id: str, item_id: str) -> None:
         """Mark an artifact item as active (execution started for this item)."""
         artifact = self._artifacts.get(tool_call_id)
@@ -199,39 +169,6 @@ class WorkArtifactController:
         receipt = worker_result_to_receipt(result, status_override=status_override)
         artifact.attach_receipt(target_id, receipt)
         self._emit_projection(tool_call_id)
-
-    def advance_to_next_item(self, tool_call_id: str) -> bool:
-        """Advance artifact to the next pending item for review.
-
-        Returns True if a next item was found, False if the artifact is
-        complete (no more pending items).
-
-        This only advances the cursor for review. It must NOT dispatch
-        the Worker.
-        """
-        artifact = self._artifacts.get(tool_call_id)
-        if artifact is None:
-            return False
-        next_item = artifact.advance()
-        if next_item is not None:
-            _log.info(
-                "WorkArtifact advanced tool_call_id=%s next_item=%s",
-                tool_call_id,
-                next_item.id,
-            )
-            self._emit_projection(tool_call_id)
-            return True
-
-        _log.info("WorkArtifact complete tool_call_id=%s (no more pending items)", tool_call_id)
-        self._emit_projection(tool_call_id)
-        return False
-
-    def has_more_items(self, tool_call_id: str) -> bool:
-        """Return True if the artifact has more pending items."""
-        artifact = self._artifacts.get(tool_call_id)
-        if artifact is None:
-            return False
-        return artifact.next_pending_item() is not None
 
     # ── item query helpers ───────────────────────────────────────────────
 

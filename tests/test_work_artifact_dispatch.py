@@ -282,7 +282,7 @@ def test_aggregate_artifact_results_all_ok():
         ("item-2", _ok_result("Done 2", modified=["b.py"])),
     ]
 
-    result = proxy._aggregate_artifact_results("call_1", approved_req, item_results, [], {})
+    result = proxy._aggregate_artifact_results("call_1", approved_req, item_results, [], {}, 2)
 
     assert result.ok is True
     assert result.extras["completed_items"] == ["item-1", "item-2"]
@@ -313,14 +313,16 @@ def test_aggregate_artifact_results_cancelled():
         ("item-2", cancelled),
     ]
 
-    result = proxy._aggregate_artifact_results("call_1", approved_req, item_results, [], {})
+    result = proxy._aggregate_artifact_results("call_1", approved_req, item_results, [], {}, 2)
 
     assert result.ok is False
     assert result.cancelled is True
+    assert result.extras["current_item_id"] == "item-2"
+    assert result.extras["total_items"] == 2
 
 
 def test_aggregate_artifact_results_non_ok():
-    """Aggregate returns non-ok with recovery exhaustion metadata."""
+    """Aggregate returns non-ok with correct truth — 3 items, item-2 failed, item-3 never run."""
     from aura.bridge.dispatch import _DispatchProxy
 
     proxy = _DispatchProxy(
@@ -332,6 +334,7 @@ def test_aggregate_artifact_results_non_ok():
     approved_req = WorkerDispatchRequest(
         goal="G", files=[], spec="S", acceptance="A", summary="Sum",
     )
+    # 3-item artifact: item-1 ok, item-2 fails, item-3 never started
     item_results = [
         ("item-1", _ok_result("Done 1")),
         ("item-2", _non_recoverable_result("Fatal")),
@@ -339,12 +342,95 @@ def test_aggregate_artifact_results_non_ok():
 
     result = proxy._aggregate_artifact_results(
         "call_1", approved_req, item_results, [],
-        {"item-2": 1},
+        {"item-2": 1}, 3,
     )
 
     assert result.ok is False
+    assert result.extras["total_items"] == 3
+    assert result.extras["completed_items"] == ["item-1"]
+    assert result.extras["failed_item_id"] == "item-2"
+    assert result.extras["current_item_id"] == "item-2"
     assert "recovery_exhausted" in result.extras
+    assert "item-2" in result.summary
     assert "Fatal" in result.summary
+    # Summary must not name item-1 as failed
+    assert "item-1" not in result.summary.split("failed")[0] if "failed" in result.summary else True
+
+
+# ── C/D. request_dispatch integration ─────────────────────────────────────────
+
+def test_request_dispatch_work_artifact_runs_item_one_as_bounded_request(tmp_path):
+    """Item 1 receives a bounded item request, not the full approved job.
+
+    Regression: item 1 must NOT run on the top-level approved request.
+    Every item, including item 1, must be a bounded WorkerDispatchRequest
+    scoped to that item's target files.
+    """
+    from aura.bridge.dispatch import _DispatchProxy
+
+    captured: list[WorkerDispatchRequest] = []
+
+    proxy = _DispatchProxy(
+        parent_widget=None,
+        registry_factory=lambda mode: None,
+        approval_proxy=None,
+        workspace_root=tmp_path,
+    )
+
+    payload = _make_two_item_payload()
+    req = WorkerDispatchRequest(
+        goal="Full feature",
+        files=["src/a.py", "src/b.py"],
+        spec="Implement the full feature with all parts.",
+        acceptance="Everything works.",
+        summary="Full feature implementation",
+        work_artifact_payload=payload,
+    )
+
+    # Capture every _run_worker request
+    def capturing_run_worker(
+        tool_call_id: str, worker_req: WorkerDispatchRequest, pending,
+    ) -> WorkerDispatchResult:
+        captured.append(worker_req)
+        return _ok_result(modified=list(worker_req.files))
+    proxy._run_worker = capturing_run_worker
+
+    # Bypass Qt signal: auto-resolve the pending dispatch immediately
+    original_register = proxy._pending_map.register
+    def auto_register(tool_call_id, req):
+        pending = original_register(tool_call_id, req)
+        pending.edited_request = req
+        pending.decision_event.set()
+        return pending
+    proxy._pending_map.register = auto_register
+
+    result = proxy.request_dispatch("call_regression", req)
+
+    assert result.ok is True
+    assert len(captured) == 2
+
+    # Item 1 is a bounded request scoped to its target files
+    r1 = captured[0]
+    assert r1.artifact_item_id == "item-1"
+    assert r1.files == ["src/model.py"], f"Expected item-1 files [src/model.py], got {r1.files}"
+    assert "WorkArtifact Item 1/2" in r1.spec
+    assert "Complete only this item" in r1.spec
+
+    # Item 2 is a bounded request scoped to its target files
+    r2 = captured[1]
+    assert r2.artifact_item_id == "item-2"
+    assert r2.files == ["src/view.py"], f"Expected item-2 files [src/view.py], got {r2.files}"
+
+    # No captured request uses the top-level files or has empty artifact_item_id
+    for r in captured:
+        assert r.files != ["src/a.py", "src/b.py"], (
+            f"Item {r.artifact_item_id} used top-level files instead of item files"
+        )
+        assert r.artifact_item_id != "", "Item has empty artifact_item_id"
+
+    # Both artifact items are internally done
+    ctrl = proxy.artifact_controller()
+    assert ctrl.all_required_items_done("call_regression")
 
 
 # ── E. Projection truth ────────────────────────────────────────────────────────

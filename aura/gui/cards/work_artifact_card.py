@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtCore import Signal
+
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout
 
 from aura.gui.cards._helpers import _MarkdownTextBlock
@@ -34,8 +34,6 @@ _ITEM_STATUS_COLORS = {
 
 class WorkArtifactCard(QFrame):
     """Visible Work Artifact card — shows multi-item work breakdown."""
-
-    review_requested = Signal(str)  # Kept for compatibility but not emitted.
 
     def __init__(
         self,
