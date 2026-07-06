@@ -982,6 +982,14 @@ class _DispatchProxy(QObject):
             "",
             "This is one bounded item inside an already approved WorkArtifact job.",
             "Complete only this item. Do not execute other artifact items.",
+            "Other items of this approved job may have already modified files "
+            "in the workspace. Those changes are NOT yours. Do not inspect, "
+            "verify, revert, re-implement, or report on them. They are approved "
+            "background, identical to any other pre-existing code. When this "
+            "item's acceptance criteria are met and its validation commands "
+            "pass, report done immediately. Do not continue checking other "
+            "items or the overall job goal — the harness owns job-level "
+            "completion, not you.",
             "Aura will continue the approved job after this item succeeds.",
         ]
         spec = "\n".join(spec_parts)

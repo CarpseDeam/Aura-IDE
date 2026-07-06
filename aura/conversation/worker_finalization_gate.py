@@ -644,6 +644,7 @@ def _run_behavioral_tier(
             ))
         else:
             state.explicit_validation_failure_counts.clear()
+            state.worker_explicit_validation_passed = True
             if state.worker_flow is not None:
                 state.worker_flow.mark_validation_satisfied()
 

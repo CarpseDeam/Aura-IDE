@@ -64,6 +64,7 @@ class _SendState:
     last_quality_findings: list[dict[str, Any]] = field(default_factory=list)
     worker_quality_enabled: bool = True
     stale_validation_notes: list[str] = field(default_factory=list)
+    worker_explicit_validation_passed: bool = False
 
     # --- dispatch ---
     planner_dispatch_attempts: int = 0

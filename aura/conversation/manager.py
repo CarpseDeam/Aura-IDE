@@ -460,6 +460,37 @@ class ConversationManager:
         on_event(ContentDelta(text=content))
         on_event(Done(finish_reason="stop", full_message=full_message))
 
+    def _finish_worker_as_validated_completed(
+        self,
+        on_event: EventCallback,
+        *,
+        summary: str = "",
+    ) -> None:
+        """Terminate the worker's run as completed when validations are green.
+
+        Used by the zero-work detection: when the worker has passed all
+        item validation commands but produces no further edits, the run
+        is treated as completed rather than stalled. The worker receives
+        an ``ok`` receipt with a note that post-completion activity was
+        truncated.
+        """
+        payload = {
+            "status": "ok",
+            "summary": summary or (
+                "Item completed. Post-completion activity was truncated "
+                "because validation already passed."
+            ),
+        }
+        content = json.dumps(payload, ensure_ascii=False)
+        full_message = {
+            "role": "assistant",
+            "content": content,
+            "reasoning_content": None,
+        }
+        self._history.append_assistant(full_message)
+        on_event(ContentDelta(text=content))
+        on_event(Done(finish_reason="stop", full_message=full_message))
+
     def _handle_worker_flow_steering(
         self,
         state: _SendState,
@@ -492,6 +523,16 @@ class ConversationManager:
                         steering=steering,
                     )
                     return "nudged"
+                # Before failing on zero-work, check if validations are green.
+                if state.worker_explicit_validation_passed:
+                    self._finish_worker_as_validated_completed(
+                        on_event,
+                        summary=(
+                            "Item completed. Post-completion activity was "
+                            "truncated because validation already passed."
+                        ),
+                    )
+                    return "finished"
                 self._finish_worker_unrecoverable(
                     on_event,
                     failure_class="worker_flow_zero_work_no_progress",
@@ -574,6 +615,16 @@ class ConversationManager:
                 steering=state.worker_flow_last_steering,
             )
             return "nudged"
+        # Before failing on zero-work, check if validations are green.
+        if state.worker_explicit_validation_passed:
+            self._finish_worker_as_validated_completed(
+                on_event,
+                summary=(
+                    "Item completed. Post-completion activity was "
+                    "truncated because validation already passed."
+                ),
+            )
+            return "finished"
         self._finish_worker_unrecoverable(
             on_event,
             failure_class="worker_flow_zero_work_no_progress",
