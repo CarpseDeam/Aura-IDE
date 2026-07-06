@@ -1,9 +1,8 @@
 """Work Artifact domain model.
 
 A WorkArtifact is one visible approved job structure. A WorkArtifactItem
-is one bounded internal execution unit. The user does not advance item-by-item
-in the normal path. Aura executes item-sized requests internally under one
-approved job.
+is one bounded internal execution unit. There is no per-item user review
+path. Aura executes item-sized requests internally under one approved job.
 """
 from __future__ import annotations
 
@@ -71,7 +70,7 @@ class WorkArtifactReceipt:
 
 @dataclass
 class WorkArtifactItem:
-    """One bounded, reviewable, executable work item."""
+    """One bounded internal execution unit."""
 
     id: str
     title: str
@@ -125,7 +124,7 @@ class WorkArtifact:
     same approval. Items are bounded internal execution units. The Worker
     executes one item-sized request at a time. The artifact advances to
     the next pending item for internal execution only — no per-item user
-    review in the normal path.
+    review path.
     """
 
     artifact_id: str

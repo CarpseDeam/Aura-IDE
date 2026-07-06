@@ -1,8 +1,7 @@
-"""Work Artifact — visible, reviewable, bounded work items.
+"""Work Artifact — one visible approved WorkArtifact job.
 
-A WorkArtifact replaces Aura's hidden campaign orchestration with a visible
-artifact that the Planner creates, the GUI renders, and the user reviews
-item-by-item through SpecCard before each Worker dispatch.
+Items are bounded internal Worker execution units. One user approval covers
+the job. There is no per-item SpecCard or manual item review path.
 """
 from aura.work_artifact.model import (
     WorkArtifact,

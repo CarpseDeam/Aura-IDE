@@ -6,7 +6,7 @@ tool payload, the dispatch bridge, and the GUI projection.
 Responsibilities:
 - Create artifact from Planner tool payload.
 - Create a one-item compatibility artifact from a flat dispatch request.
-- Return current item as a normal bounded WorkerDispatchRequest.
+- Track item state for internal artifact execution.
 - Mark item active when execution starts.
 - Attach receipt on Worker finish.
 - Emit artifact projection updates for GUI.
