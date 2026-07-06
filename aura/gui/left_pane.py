@@ -95,17 +95,30 @@ class _ProjectRow(QFrame):
         self.name_label.setToolTip(f"{project.name}\n{project.root_path}")
         layout.addWidget(self.name_label, 1)
 
-        border_left_style = f"3px solid {ACCENT}" if is_active else "3px solid transparent"
-        bg_style = BG_ALT if is_active else "transparent"
-        self.setStyleSheet(f"""
-            QFrame {{
-                background-color: {bg_style};
-                border-left: {border_left_style};
-            }}
-            QFrame:hover {{
-                background-color: {BG_RAISED};
-            }}
-        """)
+        if is_active:
+            self.setStyleSheet(f"""
+                QFrame {{
+                    background: {BG_ALT};
+                    border-top: 1px solid rgba(255, 255, 255, 0.06);
+                    border-right: 1px solid rgba(0, 0, 0, 0.18);
+                    border-bottom: 1px solid rgba(0, 0, 0, 0.25);
+                    border-left: 3px solid {ACCENT};
+                    border-radius: 8px;
+                }}
+                QFrame:hover {{
+                    background: {BG_RAISED};
+                }}
+            """)
+        else:
+            self.setStyleSheet(f"""
+                QFrame {{
+                    background: transparent;
+                    border-left: 3px solid transparent;
+                }}
+                QFrame:hover {{
+                    background: {BG_RAISED};
+                }}
+            """)
 
     def set_collapsed(self, collapsed: bool) -> None:
         self._collapsed = collapsed
