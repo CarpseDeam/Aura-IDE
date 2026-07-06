@@ -596,3 +596,390 @@ def test_work_artifact_payload_not_in_flat_request():
     )
     d = req.to_dict()
     assert "work_artifact_payload" not in d
+
+
+# ── H. Four-outcome aggregate ──────────────────────────────────────────────────
+
+
+def test_aggregate_artifact_results_infrastructure_pause():
+    """Infrastructure pause returns recoverable result with work_artifact_unfinished."""
+    from aura.bridge.dispatch import _DispatchProxy
+
+    proxy = _DispatchProxy(
+        parent_widget=None,
+        registry_factory=lambda mode: None,
+        approval_proxy=None,
+    )
+
+    approved_req = WorkerDispatchRequest(
+        goal="G", files=[], spec="S", acceptance="A", summary="Sum",
+    )
+    harness_result = WorkerDispatchResult(
+        ok=False, summary="API error: 503 Service Unavailable",
+        status="harness_error",
+        extras={"api_errors": ["timeout"], "failure_class": "provider_unavailable"},
+    )
+    item_results = [
+        ("item-1", _ok_result("Done 1")),
+        ("item-2", harness_result),
+    ]
+
+    result = proxy._aggregate_artifact_results(
+        "call_1", approved_req, item_results, [], {}, 2,
+        terminal_override=harness_result, infrastructure_pause=True,
+    )
+
+    assert result.ok is False
+    assert result.cancelled is False
+    assert result.recoverable is True
+    assert result.extras["work_artifact_unfinished"] is True
+    assert "pending_item_ids" in result.extras
+    assert result.extras["total_items"] == 2
+    assert result.extras["completed_items"] == ["item-1"]
+    assert "resume" in result.summary.lower() or "reachable" in result.summary.lower()
+
+
+def test_aggregate_artifact_results_exhausted():
+    """Exhausted result uses new summary with per-item ✓/✗ detail."""
+    from aura.bridge.dispatch import _DispatchProxy
+
+    proxy = _DispatchProxy(
+        parent_widget=None,
+        registry_factory=lambda mode: None,
+        approval_proxy=None,
+    )
+
+    approved_req = WorkerDispatchRequest(
+        goal="G", files=[], spec="S", acceptance="A", summary="Sum",
+    )
+    item_results = [
+        ("item-1", _ok_result("Done 1")),
+        ("item-2", _non_recoverable_result("Stalled after syntax retry")),
+    ]
+
+    result = proxy._aggregate_artifact_results(
+        "call_1", approved_req, item_results, [],
+        {"item-2": 3}, 2,
+    )
+
+    assert result.ok is False
+    assert result.extras["recovery_exhausted"] is True
+    assert "recovery exhausted" in result.summary.lower()
+    assert "✓ item-1" in result.summary
+    assert "✗ item-2" in result.summary
+    assert "Stalled" in result.summary
+
+
+# ── I. Infrastructure failure detection ────────────────────────────────────────
+
+
+def test_is_infrastructure_failure_harness_error():
+    """harness_error status is classified as infrastructure failure."""
+    from aura.bridge.dispatch import _DispatchProxy
+    result = WorkerDispatchResult(ok=False, summary="Err", status="harness_error")
+    assert _DispatchProxy._is_infrastructure_failure(result) is True
+
+
+def test_is_infrastructure_failure_api_errors():
+    """api_errors in extras is infrastructure failure."""
+    from aura.bridge.dispatch import _DispatchProxy
+    result = WorkerDispatchResult(
+        ok=False, summary="Err",
+        extras={"api_errors": ["timeout"]},
+    )
+    assert _DispatchProxy._is_infrastructure_failure(result) is True
+
+
+def test_is_infrastructure_failure_failure_class():
+    """provider/network/auth failure classes are infrastructure."""
+    from aura.bridge.dispatch import _DispatchProxy
+    for fc in ("provider_unavailable", "network_error", "auth_error"):
+        result = WorkerDispatchResult(
+            ok=False, summary="Err",
+            extras={"failure_class": fc},
+        )
+        assert _DispatchProxy._is_infrastructure_failure(result) is True
+
+
+def test_is_infrastructure_failure_regular_failure():
+    """A regular non-ok worker result is NOT infrastructure."""
+    from aura.bridge.dispatch import _DispatchProxy
+    result = WorkerDispatchResult(
+        ok=False, summary="Validation failed",
+        status="validation_failed",
+    )
+    assert _DispatchProxy._is_infrastructure_failure(result) is False
+
+
+# ── J. Failure signature (stall detection) ─────────────────────────────────────
+
+
+def test_failure_signature():
+    """_failure_signature returns (failure_class, summary_core)."""
+    from aura.bridge.dispatch import _failure_signature
+    result = WorkerDispatchResult(
+        ok=False, summary="Something went wrong",
+        extras={"failure_class": "validation_error"},
+    )
+    sig = _failure_signature(result)
+    assert sig[0] == "validation_error"
+    assert sig[1] == "Something went wrong"
+    assert len(sig) == 2
+
+
+def test_failure_signature_empty_failure_class():
+    """Empty failure_class is handled gracefully."""
+    from aura.bridge.dispatch import _failure_signature
+    result = WorkerDispatchResult(ok=False, summary="Something wrong")
+    sig = _failure_signature(result)
+    assert sig[0] == ""
+    assert sig[1] == "Something wrong"
+
+
+def test_failure_signature_truncates_long_summary():
+    """Summary is truncated to 200 characters."""
+    from aura.bridge.dispatch import _failure_signature
+    long_summary = "x" * 500
+    result = WorkerDispatchResult(ok=False, summary=long_summary)
+    sig = _failure_signature(result)
+    assert len(sig[1]) == 200
+    assert sig[1] == long_summary[:200]
+
+
+def test_failure_signature_persists_across_identical_failures():
+    """Identical (failure_class, summary) produces identical signatures."""
+    from aura.bridge.dispatch import _failure_signature
+    r1 = WorkerDispatchResult(
+        ok=False, summary="Error: X",
+        extras={"failure_class": "edit_failure"},
+    )
+    r2 = WorkerDispatchResult(
+        ok=False, summary="Error: X",
+        extras={"failure_class": "edit_failure"},
+    )
+    assert _failure_signature(r1) == _failure_signature(r2)
+
+
+def test_failure_signature_changes_when_summary_differs():
+    """Different summary produces different signature."""
+    from aura.bridge.dispatch import _failure_signature
+    r1 = WorkerDispatchResult(
+        ok=False, summary="Error: X",
+        extras={"failure_class": "edit_failure"},
+    )
+    r2 = WorkerDispatchResult(
+        ok=False, summary="Error: Y after retry",
+        extras={"failure_class": "edit_failure"},
+    )
+    assert _failure_signature(r1) != _failure_signature(r2)
+
+
+# ── K. _build_artifact_item_request prior-receipt appendix ─────────────────────
+
+
+def test_build_artifact_item_request_with_prior_receipt():
+    """Item with non-ok receipt gets prior-attempt context in spec."""
+    from aura.bridge.dispatch import _DispatchProxy
+    from aura.work_artifact.model import WorkArtifactItem, WorkArtifactReceipt
+
+    proxy = _DispatchProxy(
+        parent_widget=None,
+        registry_factory=lambda mode: None,
+        approval_proxy=None,
+    )
+
+    item = WorkArtifactItem(
+        id="item-2",
+        title="Add view",
+        intent="Create the view",
+        target_files=["src/view.py"],
+        acceptance="View works",
+        receipt=WorkArtifactReceipt(
+            status="failed",
+            summary="Failed due to syntax error",
+            modified_files=["src/view.py"],
+        ),
+    )
+    approved_req = WorkerDispatchRequest(
+        goal="Full feature",
+        files=["src/a.py"],
+        spec="Top-level constraints",
+        acceptance="Everything works",
+        summary="Full feature",
+    )
+
+    item_req = proxy._build_artifact_item_request("call_abc", approved_req, item, 2, 3)
+
+    assert "Previous attempt on this item" in item_req.spec
+    assert "failed" in item_req.spec
+    assert "syntax error" in item_req.spec
+    assert "src/view.py" in item_req.spec
+
+
+def test_build_artifact_item_request_ok_receipt_skips_appendix():
+    """Item with OK receipt does NOT get prior-attempt context."""
+    from aura.bridge.dispatch import _DispatchProxy
+    from aura.work_artifact.model import WorkArtifactItem, WorkArtifactReceipt
+
+    proxy = _DispatchProxy(
+        parent_widget=None,
+        registry_factory=lambda mode: None,
+        approval_proxy=None,
+    )
+
+    item = WorkArtifactItem(
+        id="item-1",
+        title="Add model",
+        intent="Create the model",
+        target_files=["src/model.py"],
+        acceptance="Model works",
+        receipt=WorkArtifactReceipt(status="ok", summary="Done"),
+    )
+    approved_req = WorkerDispatchRequest(
+        goal="G", files=[], spec="S", acceptance="A", summary="Sum",
+    )
+
+    item_req = proxy._build_artifact_item_request("call", approved_req, item, 1, 2)
+
+    assert "Previous attempt" not in item_req.spec
+
+
+def test_build_artifact_item_request_continuing_receipt_skips_appendix():
+    """Item with continuing receipt does NOT get prior-attempt context."""
+    from aura.bridge.dispatch import _DispatchProxy
+    from aura.work_artifact.model import WorkArtifactItem, WorkArtifactReceipt
+
+    proxy = _DispatchProxy(
+        parent_widget=None,
+        registry_factory=lambda mode: None,
+        approval_proxy=None,
+    )
+
+    item = WorkArtifactItem(
+        id="item-1",
+        title="Long task",
+        intent="Do the thing",
+        target_files=["src/t.py"],
+        acceptance="Works",
+        receipt=WorkArtifactReceipt(status="continuing", summary="In progress"),
+    )
+    approved_req = WorkerDispatchRequest(
+        goal="G", files=[], spec="S", acceptance="A", summary="Sum",
+    )
+
+    item_req = proxy._build_artifact_item_request("call", approved_req, item, 1, 1)
+
+    assert "Previous attempt" not in item_req.spec
+
+
+# ── L. Resume binding guard ────────────────────────────────────────────────────
+
+
+def test_request_dispatch_resumes_paused_artifact_job(tmp_path):
+    """Binding guard resumes a paused artifact job under the original id.
+
+    The incoming dispatch triggers the guard, which redirects to the
+    original tool_call_id and runs the remaining items. The result
+    carries ``resumed_artifact_id`` so the Planner can correlate.
+    """
+    from aura.bridge.dispatch import _DispatchProxy
+
+    proxy = _DispatchProxy(
+        parent_widget=None,
+        registry_factory=lambda mode: None,
+        approval_proxy=None,
+        workspace_root=tmp_path,
+    )
+
+    # ── Set up a paused artifact job with pending items ──
+    payload = _make_two_item_payload()
+    original_id = "call_original"
+    original_req = WorkerDispatchRequest(
+        goal="Full feature",
+        files=["src/a.py", "src/b.py"],
+        spec="Implement the full feature with all parts.",
+        acceptance="Everything works.",
+        summary="Full feature implementation",
+        work_artifact_payload=payload,
+    )
+
+    # Register the artifact and approved request manually (simulating a
+    # prior infrastructure pause that left the job in progress).
+    proxy._register_artifact_from_request(original_id, original_req)
+    proxy._approved_artifact_requests[original_id] = original_req
+
+    # ── Incoming dispatch triggers the binding guard ──
+    captured: list[WorkerDispatchRequest] = []
+
+    def capturing_run_worker(tid: str, req: WorkerDispatchRequest, pending) -> WorkerDispatchResult:
+        captured.append(req)
+        return _ok_result(modified=list(req.files))
+    proxy._run_worker = capturing_run_worker
+
+    incoming_id = "call_new"
+    incoming_req = WorkerDispatchRequest(
+        goal="G", files=[], spec="S", acceptance="A", summary="Resume",
+    )
+
+    result = proxy.request_dispatch(incoming_id, incoming_req)
+
+    # The result is tagged with the resumed artifact id.
+    assert result.ok is True
+    assert result.extras.get("resumed_artifact_id") == original_id
+
+    # Both items were run as bounded requests (no top-level request).
+    assert len(captured) == 2
+    for r in captured:
+        assert r.artifact_item_id != ""
+        assert "WorkArtifact Item" in r.spec
+
+    # Artifact under the original id is fully completed; the incoming id
+    # has no artifact (it was cleaned up by the resume path).
+    ctrl = proxy.artifact_controller()
+    assert ctrl.get_artifact(incoming_id) is None
+    assert ctrl.all_required_items_done(original_id)
+
+
+def test_resume_guard_does_not_fire_on_first_dispatch(tmp_path):
+    """Binding guard does NOT fire when no approved request has pending items."""
+    from aura.bridge.dispatch import _DispatchProxy
+
+    captured: list[WorkerDispatchRequest] = []
+
+    proxy = _DispatchProxy(
+        parent_widget=None,
+        registry_factory=lambda mode: None,
+        approval_proxy=None,
+        workspace_root=tmp_path,
+    )
+
+    def capturing_run_worker(tid, req, pending):
+        captured.append(req)
+        return _ok_result(modified=list(req.files))
+    proxy._run_worker = capturing_run_worker
+
+    # Bypass Qt signal: auto-resolve the pending dispatch immediately.
+    original_register = proxy._pending_map.register
+
+    def auto_register(tool_call_id, req):
+        pending = original_register(tool_call_id, req)
+        pending.edited_request = req
+        pending.decision_event.set()
+        return pending
+    proxy._pending_map.register = auto_register
+
+    payload = _make_two_item_payload()
+    req = WorkerDispatchRequest(
+        goal="Full feature",
+        files=["src/a.py"],
+        spec="Implement the full feature.",
+        acceptance="Works.",
+        summary="Feature",
+        work_artifact_payload=payload,
+    )
+
+    result = proxy.request_dispatch("call_first", req)
+
+    assert result.ok is True
+    assert "resumed_artifact_id" not in (result.extras or {})
+    assert len(captured) == 2
