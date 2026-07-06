@@ -1,8 +1,8 @@
 """WorkArtifactCard — shows the visible Work Artifact with item statuses.
 
 Displays artifact goal, constraints, allowed files, work items with statuses,
-current item, and receipt summaries. Provides a "Review current item" action
-but does not dispatch Worker directly — opens SpecCard for user review first.
+and receipt summaries. Provides a single run-level view without individual
+dispatchable units.
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout
 
 from aura.gui.cards._helpers import _MarkdownTextBlock
 from aura.gui.markdown_renderer import _render_markdown_with_code
@@ -21,11 +21,7 @@ _ALLOWED_DISPLAY_STATUSES = {"pending", "active", "done"}
 
 
 def _normalize_status(status: str) -> str:
-    """Map any status to one of the three allowed display statuses.
-
-    Unknown/legacy statuses become ``pending`` so stale serialized data
-    never renders a dead-end state the new model does not support.
-    """
+    """Map any status to one of the three allowed display statuses."""
     return status if status in _ALLOWED_DISPLAY_STATUSES else "pending"
 
 
@@ -39,7 +35,7 @@ _ITEM_STATUS_COLORS = {
 class WorkArtifactCard(QFrame):
     """Visible Work Artifact card — shows multi-item work breakdown."""
 
-    review_requested = Signal(str)  # tool_call_id — user wants to review the current item
+    review_requested = Signal(str)  # Kept for compatibility but not emitted.
 
     def __init__(
         self,
@@ -79,13 +75,14 @@ class WorkArtifactCard(QFrame):
         outer.addWidget(goal_label)
 
         # ── Summary row ──
-        summary_text = (
-            f"{projection.completed_count} done · "
-            f"{projection.active_count} active · "
-            f"{projection.pending_count} pending"
-        )
-        if projection.is_complete:
-            summary_text += " · ✅ Complete"
+        status = _normalize_status(projection.artifact_status)
+        if status == "done":
+            summary_text = "✅ Done"
+        elif status == "active":
+            summary_text = "▶ Active"
+        else:
+            summary_text = "⏳ Pending"
+
         self._summary_label = QLabel(summary_text)
         self._summary_label.setStyleSheet(
             f"color: {FG_DIM}; font-size: 11px; background: transparent; border: none;"
@@ -142,23 +139,12 @@ class WorkArtifactCard(QFrame):
             self._item_widgets.append(item_frame)
             outer.addWidget(item_frame)
 
-        # ── Review/advance button ──
-        outer.addSpacing(8)
-        self._review_btn = QPushButton("Review current item", parent=self)
-        self._review_btn.setObjectName("primary")
-        self._review_btn.setMinimumHeight(34)
-        self._review_btn.clicked.connect(self._on_review_clicked)
-        outer.addWidget(self._review_btn)
-
-        self._update_button_state()
-
     # ── building blocks ───────────────────────────────────────────────────
 
     def _build_item_row(self, item_dict: dict[str, Any]) -> QFrame:
         """Build a horizontal row for one work item."""
         frame = QFrame(self)
-        raw_status = str(item_dict.get("status", "pending"))
-        status = _normalize_status(raw_status)
+        status = _normalize_status(self._projection.artifact_status)
         color = _ITEM_STATUS_COLORS.get(status, FG_DIM)
         status_icon = {
             "pending": "⏳",
@@ -190,40 +176,7 @@ class WorkArtifactCard(QFrame):
 
         row.addStretch(1)
 
-        status_label = QLabel(status.upper())
-        status_label.setStyleSheet(
-            f"color: {color}; font-size: 10px; font-weight: 700; "
-            f"background: transparent; border: none;"
-        )
-        row.addWidget(status_label)
-
-        # If it's the current item, add a marker
-        item_id = str(item_dict.get("id", ""))
-        if item_id == self._projection.current_item_id:
-            current_marker = QLabel("← current")
-            current_marker.setStyleSheet(
-                f"color: {ACCENT}; font-size: 10px; font-weight: 600; "
-                f"background: transparent; border: none;"
-            )
-            row.addWidget(current_marker)
-
         return frame
-
-    def _on_review_clicked(self) -> None:
-        """Emit review_requested signal to open SpecCard for current item."""
-        self.review_requested.emit(self._tool_call_id)
-
-    def _update_button_state(self) -> None:
-        """Enable/disable review button based on artifact state."""
-        if self._projection.is_complete:
-            self._review_btn.setText("All items complete")
-            self._review_btn.setEnabled(False)
-        elif not self._projection.current_item_id:
-            self._review_btn.setText("No current item")
-            self._review_btn.setEnabled(False)
-        else:
-            self._review_btn.setText("Review current item")
-            self._review_btn.setEnabled(True)
 
     # ── public API ────────────────────────────────────────────────────────
 
@@ -232,13 +185,13 @@ class WorkArtifactCard(QFrame):
         self._projection = projection
 
         # Update summary counts
-        summary_text = (
-            f"{projection.completed_count} done · "
-            f"{projection.active_count} active · "
-            f"{projection.pending_count} pending"
-        )
-        if projection.is_complete:
-            summary_text += " · ✅ Complete"
+        status = _normalize_status(projection.artifact_status)
+        if status == "done":
+            summary_text = "✅ Done"
+        elif status == "active":
+            summary_text = "▶ Active"
+        else:
+            summary_text = "⏳ Pending"
         self._summary_label.setText(summary_text)
 
         # Tear down old item widgets
@@ -248,29 +201,11 @@ class WorkArtifactCard(QFrame):
             widget.deleteLater()
         self._item_widgets.clear()
 
-        # Find insertion point — just before the review button
-        btn_idx = -1
-        for i in range(layout.count()):
-            if layout.itemAt(i) and layout.itemAt(i).widget() is self._review_btn:
-                btn_idx = i
-                break
-
         # Rebuild item rows from the new projection
-        if btn_idx >= 0:
-            insert_at = btn_idx
-            for item_dict in projection.items:
-                frame = self._build_item_row(item_dict)
-                self._item_widgets.append(frame)
-                layout.insertWidget(insert_at, frame)
-                insert_at += 1
-        else:
-            # Fallback — shouldn't happen, but just append
-            for item_dict in projection.items:
-                frame = self._build_item_row(item_dict)
-                self._item_widgets.append(frame)
-                layout.addWidget(frame)
-
-        self._update_button_state()
+        for item_dict in projection.items:
+            frame = self._build_item_row(item_dict)
+            self._item_widgets.append(frame)
+            layout.addWidget(frame)
 
     def tool_call_id(self) -> str:
         return self._tool_call_id

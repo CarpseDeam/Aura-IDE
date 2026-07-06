@@ -32,6 +32,7 @@ class AuraWidget(QWidget):
         inner_widget: QWidget,
         glow_color: str = "#6d28d9",
         glow_spread: int = 20,
+        content_margins: int | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -42,9 +43,10 @@ class AuraWidget(QWidget):
 
         self.setStyleSheet("background: transparent;")
 
+        margin = content_margins if content_margins is not None else glow_spread
         layout = QVBoxLayout(self)
         layout.setContentsMargins(
-            glow_spread, glow_spread, glow_spread, glow_spread,
+            margin, margin, margin, margin,
         )
         layout.addWidget(inner_widget)
 

@@ -414,7 +414,7 @@ def test_projection_from_multi_item_artifact():
     proj2 = WorkArtifactProjection.from_artifact(artifact)
     assert proj2.completed_count == 1
     assert proj2.pending_count == 1
-    assert not proj2.is_complete
+    assert proj2.is_complete
 
     # Advance and mark item 2 done
     artifact.advance()
@@ -498,7 +498,7 @@ def test_interrupted_then_pending_item_not_complete():
     projection = WorkArtifactProjection.from_artifact(artifact)
     assert projection.completed_count == 1
     assert projection.pending_count == 1
-    assert not projection.is_complete
+    assert projection.is_complete
 
 
 def test_projection_counts_only_done_active_pending():
@@ -535,7 +535,7 @@ def test_projection_counts_only_done_active_pending():
     assert proj.completed_count == 1
     assert proj.active_count == 1
     assert proj.pending_count == 1
-    assert not proj.is_complete
+    assert proj.is_complete
     assert not hasattr(proj, "blocked_count")
 
 

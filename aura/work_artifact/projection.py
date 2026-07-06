@@ -25,6 +25,7 @@ class WorkArtifactProjection:
     completed_count: int = 0
     active_count: int = 0
     pending_count: int = 0
+    artifact_status: str = "pending"
     is_complete: bool = False
 
     def to_dict(self) -> dict[str, Any]:
@@ -39,6 +40,7 @@ class WorkArtifactProjection:
             "completed_count": self.completed_count,
             "active_count": self.active_count,
             "pending_count": self.pending_count,
+            "artifact_status": self.artifact_status,
             "is_complete": self.is_complete,
         }
 
@@ -49,6 +51,14 @@ class WorkArtifactProjection:
         active_count = 0
         pending_count = 0
 
+        artifact_status = "pending"
+        for item in artifact.work_items:
+            if item.status.value == "done":
+                artifact_status = "done"
+                break
+            elif item.status.value == "active":
+                artifact_status = "active"
+
         items: list[dict[str, Any]] = []
         for item in artifact.work_items:
             item_dict: dict[str, Any] = {
@@ -57,7 +67,7 @@ class WorkArtifactProjection:
                 "intent": item.intent,
                 "target_files": list(item.target_files),
                 "acceptance": item.acceptance,
-                "status": item.status.value,
+                "status": artifact_status,
             }
             if item.receipt is not None:
                 item_dict["receipt"] = item.receipt.to_dict()
@@ -80,7 +90,7 @@ class WorkArtifactProjection:
                 "intent": current.intent,
                 "target_files": list(current.target_files),
                 "acceptance": current.acceptance,
-                "status": current.status.value,
+                "status": artifact_status,
             }
             if current.receipt is not None:
                 current_dict["receipt"] = current.receipt.to_dict()
@@ -96,5 +106,6 @@ class WorkArtifactProjection:
             completed_count=completed_count,
             active_count=active_count,
             pending_count=pending_count,
-            is_complete=bool(items) and completed_count == len(items),
+            artifact_status=artifact_status,
+            is_complete=(artifact_status == "done"),
         )
