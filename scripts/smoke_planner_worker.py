@@ -137,7 +137,12 @@ def make_dispatch_cb(client: DeepSeekClient, root: Path, worker_counters: dict):
         )
         worker_history = History()
         worker_history.set_system(WORKER_SYSTEM_PROMPT)
-        worker_history.append_user_text(_format_spec_as_user_message(req))
+        is_artifact_item = bool(req.artifact_id and req.artifact_item_id)
+        worker_history.append_user_text(_format_spec_as_user_message(
+            req,
+            artifact_item_index=1 if is_artifact_item else None,
+            artifact_item_total=None,
+        ))
         worker_registry = ToolRegistry(root, mode="worker")
         worker_manager = ConversationManager(client, worker_history, worker_registry)
 

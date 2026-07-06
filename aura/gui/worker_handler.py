@@ -76,7 +76,6 @@ class WorkerEventHandler(QObject):
         self._active_worker_tool_call_id: str | None = None
         self._pending_worker_finish: _PendingWorkerFinish | None = None
         self._pending_worker_finish_generation = 0
-        self._wired_artifact_cards: set[str] = set()
         # WorkflowState snapshot — stored from backend emissions only, never
         # constructed or mutated here.
         self._active_workflow: WorkflowState | None = None
@@ -469,11 +468,3 @@ class WorkerEventHandler(QObject):
             projection.artifact_id, len(projection.items),
         )
         card = self._chat.add_or_update_artifact_card(projection)
-        if card is not None and projection.artifact_id not in self._wired_artifact_cards:
-            card.review_requested.connect(self._on_artifact_review_requested)
-            self._wired_artifact_cards.add(projection.artifact_id)
-
-    def _on_artifact_review_requested(self, tool_call_id: str) -> None:
-        """Handle 'Review current item' from WorkArtifactCard."""
-        _log.info("artifact_review_requested tool_call_id=%s", tool_call_id)
-        self._bridge.dispatch_next_artifact_item(tool_call_id)

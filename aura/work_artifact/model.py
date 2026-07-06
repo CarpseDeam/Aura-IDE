@@ -1,8 +1,9 @@
 """Work Artifact domain model.
 
-A WorkArtifact is a visible, reviewable collection of bounded work items.
-It replaces the hidden campaign orchestration with an explicit artifact that
-the Planner creates, the GUI renders, and the user advances item-by-item.
+A WorkArtifact is one visible approved job structure. A WorkArtifactItem
+is one bounded internal execution unit. The user does not advance item-by-item
+in the normal path. Aura executes item-sized requests internally under one
+approved job.
 """
 from __future__ import annotations
 
@@ -117,13 +118,14 @@ class WorkArtifactItem:
 
 @dataclass
 class WorkArtifact:
-    """A visible, reviewable collection of bounded work items.
+    """One visible approved job structure.
 
-    The Planner creates one WorkArtifact per multi-part task. The GUI
-    renders it. The user reviews and dispatches one item at a time
-    through SpecCard. Worker executes exactly one reviewed item per
-    dispatch, and the artifact advances to the next pending item for
-    review only — never automatic execution.
+    The Planner creates one WorkArtifact per multi-part task. The user
+    approves the job once. Aura executes item runs internally under the
+    same approval. Items are bounded internal execution units. The Worker
+    executes one item-sized request at a time. The artifact advances to
+    the next pending item for internal execution only — no per-item user
+    review in the normal path.
     """
 
     artifact_id: str
@@ -267,10 +269,10 @@ class WorkArtifact:
         raise ValueError(f"Item '{item_id}' not found in artifact.")
 
     def advance(self) -> WorkArtifactItem | None:
-        """Advance to the next pending item for review.
+        """Advance to the next pending item.
 
-        This selects the next pending item as current for user review.
-        It must NOT dispatch the Worker.
+        This selects the next pending item as current for internal
+        execution. It must NOT dispatch the Worker.
         """
         next_item = self.next_pending_item()
         if next_item is not None:

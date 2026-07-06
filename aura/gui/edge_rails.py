@@ -81,7 +81,9 @@ class EdgeTabRail(QFrame):
 
         self._terminal_tab = QToolButton(self)
         self._terminal_tab.setObjectName("edgeTerminalTab")
-        self._terminal_tab.setText("$")
+        self._terminal_tab.setIcon(QIcon(str(media_path("terminal_2_24dp.svg"))))
+        self._terminal_tab.setIconSize(QSize(22, 22))
+        self._terminal_tab.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
         self._terminal_tab.setToolTip("Toggle terminal output")
         self._terminal_tab.setCursor(Qt.CursorShape.PointingHandCursor)
         self._terminal_tab.setCheckable(True)
@@ -350,8 +352,6 @@ class EdgeTabRail(QFrame):
             "  border-bottom-left-radius: 8px;"
             "  border-top-right-radius: 0px;"
             "  border-bottom-right-radius: 0px;"
-            "  font-size: 18px;"
-            "  font-weight: 700;"
             "  padding: 0px;"
             "}"
             "QToolButton#edgeTerminalTab:hover {"

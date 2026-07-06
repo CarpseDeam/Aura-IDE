@@ -29,9 +29,18 @@ __all__ = [
 ]
 
 
-def _format_spec_as_user_message(task: WorkerTaskSpec | WorkerDispatchRequest) -> str:
+def _format_spec_as_user_message(
+    task: WorkerTaskSpec | WorkerDispatchRequest,
+    *,
+    artifact_item_index: int | None = None,
+    artifact_item_total: int | None = None,
+) -> str:
     """Format a structured task spec (or raw dispatch request) as a user message
-    for the worker. Accepts both types for backward compatibility."""
+    for the worker. Accepts both types for backward compatibility.
+
+    When *artifact_item_index* is set, the message uses WorkArtifact item
+    wording. Otherwise it uses flat/standalone Worker job wording.
+    """
     if isinstance(task, WorkerDispatchRequest):
         task = normalize_worker_task(task)
 
@@ -78,15 +87,25 @@ def _format_spec_as_user_message(task: WorkerTaskSpec | WorkerDispatchRequest) -
     if task.task_shape is not None:
         parts.extend([*task_shape_contract_lines(task.task_shape), ""])
 
-    parts.extend([
-        "Active Dispatch Item",
-        (
-            "This is one bounded Work Artifact item. Do only "
-            "this item. Do not plan, decompose, or schedule the next item; "
-            "the next item requires user review before Worker execution."
-        ),
-        "",
-    ])
+    if artifact_item_index is not None:
+        # Artifact item — bounded internal execution unit
+        parts.extend([
+            "Approved WorkArtifact Item",
+            (
+                "This is one bounded item inside an already approved "
+                "WorkArtifact job. Complete only this bounded item. "
+                "Do not execute other artifact items. "
+                "Aura will continue the approved job after this item succeeds."
+            ),
+            "",
+        ])
+    else:
+        # Flat / single-item dispatch — standalone Worker job
+        parts.extend([
+            "Approved Worker Job",
+            "Complete the approved job described below.",
+            "",
+        ])
 
     parts.extend([
         "Goal",

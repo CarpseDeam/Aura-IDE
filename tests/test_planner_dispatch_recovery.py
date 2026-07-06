@@ -161,8 +161,8 @@ def _dispatch_ok_cb(tool_id: str, req):
 # ── Flat dispatch (compatibility artifact) tests ─────────────────────────────
 
 
-def test_flat_dispatch_proceeds_as_compatibility_artifact(tmp_path):
-    """A flat dispatch (no work_artifact) creates a compat artifact and runs Worker."""
+def test_flat_dispatch_proceeds_as_worker_job(tmp_path):
+    """A flat dispatch (no work_artifact) runs Worker as a normal job."""
     runner = ToolRunner(
         History(),
         tmp_path,
@@ -183,8 +183,9 @@ def test_flat_dispatch_proceeds_as_compatibility_artifact(tmp_path):
     assert result.ok is True
     assert len(dispatches) == 1
     _, dispatched_req = dispatches[0]
-    assert dispatched_req.artifact_id == "call_dispatch"
-    assert dispatched_req.artifact_item_id == "item-1"
+    # ToolRunner does not set artifact fields for flat dispatches
+    assert dispatched_req.artifact_id == ""
+    assert dispatched_req.artifact_item_id == ""
 
 
 def test_flat_dispatch_emits_worker_dispatch_requested(tmp_path):
@@ -232,8 +233,8 @@ def test_broad_multi_file_flat_dispatch_proceeds(tmp_path):
     assert any(isinstance(e, WorkerDispatchRequested) for e in events)
 
 
-def test_flat_dispatch_compat_artifact_has_item_one(tmp_path):
-    """Compatibility artifact has a single item with id 'item-1'."""
+def test_flat_dispatch_preserves_top_level_fields(tmp_path):
+    """Flat dispatch preserves top-level goal/files/spec through ToolRunner."""
     runner = ToolRunner(
         History(),
         tmp_path,
@@ -252,15 +253,18 @@ def test_flat_dispatch_compat_artifact_has_item_one(tmp_path):
     )
     assert len(dispatches) == 1
     _, req = dispatches[0]
-    assert req.artifact_item_id == "item-1"
-    assert req.artifact_id == "call_dispatch"
+    assert req.goal == "Fix the live Worker Log regression during canonical dispatch."
+    assert req.files == ["aura/gui/worker_handler.py"]
+    assert req.artifact_id == ""
+    assert req.artifact_item_id == ""
+    assert req.work_artifact_payload is None
 
 
 # ── WorkArtifact dispatch tests ──────────────────────────────────────────────
 
 
-def test_work_artifact_dispatch_starts_worker_for_item_one(tmp_path):
-    """Multi-item work_artifact starts Worker for item 1 only."""
+def test_work_artifact_dispatch_preserves_top_level_envelope(tmp_path):
+    """Multi-item work_artifact preserves the top-level envelope through ToolRunner."""
     runner = ToolRunner(
         History(),
         tmp_path,
@@ -281,7 +285,11 @@ def test_work_artifact_dispatch_starts_worker_for_item_one(tmp_path):
     assert result.ok is True
     assert len(dispatches) == 1
     _, req = dispatches[0]
-    assert "Wire bridge lifecycle projector" in req.summary
+    # Top-level summary preserved, not replaced by item-1 title
+    assert req.summary == "Refactor dispatch lifecycle flow."
+    assert req.artifact_id == "call_dispatch"
+    assert req.artifact_item_id == ""
+    assert req.work_artifact_payload is not None
 
 
 def test_work_artifact_multi_item_emit_worker_dispatch_requested(tmp_path):
@@ -377,7 +385,7 @@ def test_second_dispatch_in_same_planner_turn_is_recoverable_error_not_worker(
     assert second_payload["extras"]["planner_dispatch_chain_rejected"] is True
     assert second_payload["extras"]["previous_dispatch_tool_call_id"] == "call_dispatch_1"
     assert "already dispatched a Worker" in second_payload["summary"]
-    assert "work_artifact" in second_payload["extras"]["failure_constraint"]
+    assert "internal execution" in second_payload["extras"]["failure_constraint"]
 
     dispatch_log_messages = [
         record.getMessage()

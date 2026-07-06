@@ -200,7 +200,7 @@ class _Worker(QObject):
 
 
 class _ArtifactItemDispatchWorker(QObject):
-    """Short-lived worker that dispatches the next artifact item on a background thread."""
+    """Deprecated — no longer used. WorkArtifact items run internally."""
 
     def __init__(
         self,
@@ -212,10 +212,10 @@ class _ArtifactItemDispatchWorker(QObject):
         self._tool_call_id = tool_call_id
 
     def run(self) -> None:
-        result = self._dispatch_proxy.dispatch_next_item(self._tool_call_id)
-        _log.info(
-            "dispatch_next_item completed tool_call_id=%s result_ok=%s",
-            self._tool_call_id, result.ok if result is not None else "None",
+        _log.warning(
+            "_ArtifactItemDispatchWorker.run called but deprecated — "
+            "artifact items now run internally. tool_call_id=%s",
+            self._tool_call_id,
         )
         self.thread().quit()
 
@@ -574,21 +574,17 @@ class ConversationBridge(QObject):
         return self._dispatch_proxy.user_cancelled(tool_call_id)
 
     def dispatch_next_artifact_item(self, tool_call_id: str) -> None:
-        """Review and dispatch the next artifact item on a background thread.
+        """Deprecated — artifact items now run internally under one approval.
 
-        Called from the GUI thread when the user clicks "Review current item"
-        on the WorkArtifactCard.  Spawns a short-lived QThread that calls
-        DispatchProxy.dispatch_next_item() (which blocks on user decision).
+        Previously, this dispatched the next artifact item on a background thread
+        when the user clicked "Review current item". Now Aura runs all items
+        internally. This method is kept as a no-op for call compatibility.
         """
-        thread = QThread(self)
-        worker = _ArtifactItemDispatchWorker(
-            self._dispatch_proxy, tool_call_id,
+        _log.warning(
+            "dispatch_next_artifact_item called but deprecated — "
+            "artifact items now run internally. tool_call_id=%s",
+            tool_call_id,
         )
-        worker.moveToThread(thread)
-        thread.started.connect(worker.run)
-        thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-        thread.start()
 
     # ---- send / cancel ----------------------------------------------------
 

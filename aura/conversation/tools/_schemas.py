@@ -623,9 +623,10 @@ DISPATCH_TOOL_DEF: dict[str, Any] = {
             "implementation details here; the worker owns those decisions. Include a "
             "self-terminating run_command smoke check for any change that affects whether "
             "the app boots or a runnable entry point behaves. The worker will return a "
-            "summary of what it did. For multi-part work, create a visible work_artifact "
-            "with independently reviewable and executable items. Flat fields without "
-            "work_artifact are only a compatibility path for tiny one-file work. "
+            "summary of what it did. For multi-part work, create a visible work_artifact. "
+            "The work_artifact is a visible scope/progress/receipt structure for one approved job. "
+            "The user approves the WorkArtifact job once. Aura executes item runs internally under the same approval. "
+            "Flat fields remain valid for any task the Planner can express as one bounded Worker job. "
             "Fill structured contract fields when knowable from "
             "the request or repo context; they power Aura's pre-release quality gate."
         ),
@@ -705,12 +706,15 @@ DISPATCH_TOOL_DEF: dict[str, Any] = {
                     "type": "object",
                     "description": (
                         "Optional visible Work Artifact for multi-part work. "
-                        "For trivial one-file work, omit this and use flat fields. "
+                        "For bounded single-item work, omit this and use flat fields. "
                         "For multi-part work, supply a work_artifact so the user sees "
-                        "every bounded item before any Worker runs. The first item "
-                        "becomes the current SpecCard item. Later items are visible "
-                        "in the artifact and must still pass through SpecCard before "
-                        "Worker execution."
+                        "every bounded item before any Worker runs. "
+                        "Items are bounded internal execution units. "
+                        "Aura executes item runs internally under the same approval. "
+                        "The user approves the WorkArtifact job once. "
+                        "There is no manual later-item approval. "
+                        "Item acceptance proves the item. "
+                        "Top-level acceptance proves the whole job."
                     ),
                     "properties": {
                         "goal": {
@@ -729,7 +733,7 @@ DISPATCH_TOOL_DEF: dict[str, Any] = {
                         },
                         "items": {
                             "type": "array",
-                            "description": "Ordered list of independently reviewable and executable work items.",
+                            "description": "Ordered list of bounded internal execution units for the job.",
                             "items": {
                                 "type": "object",
                                 "properties": {
@@ -776,8 +780,7 @@ DISPATCH_TOOL_DEF: dict[str, Any] = {
                         "validation commands when possible, concrete output/content checks "
                         "for generated or transformed output, and failure behavior checks "
                         "when parsing, config, user input, or batch processing is involved. "
-                        "For sliced large refactors, acceptance must prove only the first "
-                        "slice that this dispatch owns."
+                        "Item acceptance proves the item. Top-level acceptance proves the whole job."
                     ),
                 },
                 "summary": {

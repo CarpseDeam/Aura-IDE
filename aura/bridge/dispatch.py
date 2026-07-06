@@ -10,6 +10,7 @@ orchestration. Every Worker run is visible, reviewable, and recorded.
 from __future__ import annotations
 
 import logging
+import threading
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -44,6 +45,7 @@ from aura.conversation import (
     WorkerDispatchResult,
     WorkerOutcomeStatus,
 )
+from aura.conversation.dispatch_failure import is_recoverable_worker_continuation
 from aura.conversation.persistence import WorkerDispatchRecord
 from aura.conversation.tool_limits import TERMINAL_TOOLS, WRITE_TOOLS
 from aura.conversation.workflow_state import WorkflowState, WorkflowStatus
@@ -142,6 +144,9 @@ class _DispatchProxy(QObject):
         self._activity_controller.set_on_change(self._on_activity_changed)
         self._todo_projector = WorkerTodoProjector(self._event_bus)
         self._todo_projector.set_on_change(self._on_todo_changed)
+
+        # Cancel event for internal artifact item jobs.
+        self._artifact_job_cancel_event = threading.Event()
 
         # Listen for artifact projection updates.
         self._artifact_controller.set_on_projection_updated(
@@ -388,12 +393,28 @@ class _DispatchProxy(QObject):
         # --- Convert result to receipt and attach to artifact ---
         self._artifact_controller.attach_receipt(tool_call_id, result)
 
+        # --- Run remaining items for multi-item artifact job ---
+        artifact = self._artifact_controller.get_artifact(tool_call_id)
+        has_remaining = (
+            artifact is not None
+            and artifact.work_artifact_payload is not None
+            and result.ok
+            and not result.cancelled
+        )
+        if has_remaining:
+            pending_items = self._artifact_controller.pending_items(tool_call_id)
+            if pending_items:
+                self._artifact_job_cancel_event.clear()
+                result = self._run_approved_artifact_job(
+                    tool_call_id, edited, result, pending,
+                )
+
         # --- Emit artifact projection update ---
         projection = WorkArtifactProjection.from_artifact(artifact) if artifact else None
         if projection is not None:
             self._on_artifact_projection_updated(projection)
 
-        # --- Emit workerFinished ---
+        # --- Emit workerFinished (once for the whole job) ---
         _log.info(
             "workerFinished emitted tool_call_id=%s ok=%s",
             tool_call_id, result.ok,
@@ -419,14 +440,6 @@ class _DispatchProxy(QObject):
                     validation=result.validation,
                     extras=extras,
                 )
-            )
-
-        # --- Advance to next item if available (review only, no auto-dispatch) ---
-        has_next = self._artifact_controller.advance_to_next_item(tool_call_id)
-        if has_next:
-            _log.info(
-                "WorkArtifact has next pending item tool_call_id=%s — ready for review",
-                tool_call_id,
             )
 
         self._store_result_metadata(tool_call_id, result)
@@ -635,8 +648,275 @@ class _DispatchProxy(QObject):
         if self._approval_proxy is not None:
             self._approval_proxy.cancel_active_dialog()
         self._pending_map.cancel_all()
+        self._artifact_job_cancel_event.set()
 
     # ---- worker run ------
+
+    # Internal limit for recoverable retries per artifact item.
+    _ARTIFACT_ITEM_MAX_RETRIES = 1
+
+    def _run_approved_artifact_job(
+        self,
+        tool_call_id: str,
+        approved_req: WorkerDispatchRequest,
+        initial_result: WorkerDispatchResult,
+        pending: "_DispatchPending",
+    ) -> WorkerDispatchResult:
+        """Run remaining pending artifact items internally after item 1.
+
+        Iterates pending items in order, runs the Worker through the existing
+        ``_run_worker`` path for each, and aggregates results. Does not emit
+        per-item ``workerStarted`` or ``workerFinished``. Does not show a
+        SpecCard for item 2+.
+        """
+        item_results: list[tuple[str, WorkerDispatchResult]] = []
+        recovered_item_ids: list[str] = []
+        failed_attempts: dict[str, int] = {}
+
+        # Track the first item result
+        item_results.append(("item-1", initial_result))
+
+        pending_items = self._artifact_controller.pending_items(tool_call_id)
+        total = len(pending_items) + 1  # +1 for item 1 already done
+
+        for idx, item in enumerate(pending_items):
+            # Check for external cancellation between items
+            if self._artifact_job_cancel_event.is_set():
+                cancelled_result = WorkerDispatchResult(
+                    ok=False,
+                    summary="WorkArtifact job cancelled during internal items.",
+                    cancelled=True,
+                    extras={"work_artifact_job": True, "work_artifact_cancelled": True},
+                )
+                return self._aggregate_artifact_results(
+                    tool_call_id, approved_req, item_results,
+                    recovered_item_ids, failed_attempts,
+                    cancelled_result,
+                )
+
+            item_index = idx + 2  # 1-based index, item 1 already done
+            _log.info(
+                "WorkArtifact internal item %d/%d tool_call_id=%s item=%s",
+                item_index, total, tool_call_id, item.id,
+            )
+
+            # Mark this exact item active
+            self._artifact_controller.mark_item_active(tool_call_id, item.id)
+            self._emit_projection(tool_call_id)
+
+            # Build a bounded WorkerDispatchRequest for this item
+            item_req = self._build_artifact_item_request(
+                tool_call_id, approved_req, item, item_index, total,
+            )
+
+            # Run the Worker, with optional recovery retry
+            retries = 0
+            item_result = None
+
+            while retries <= self._ARTIFACT_ITEM_MAX_RETRIES:
+                item_result = self._run_worker(tool_call_id, item_req, pending)
+
+                if item_result.ok:
+                    break
+                if item_result.cancelled:
+                    _log.info(
+                        "WorkArtifact item cancelled tool_call_id=%s item=%s",
+                        tool_call_id, item.id,
+                    )
+                    break
+                if retries < self._ARTIFACT_ITEM_MAX_RETRIES and is_recoverable_worker_continuation(item_result):
+                    recovered_item_ids.append(item.id)
+                    retries += 1
+                    _log.info(
+                        "WorkArtifact recoverable item %s retry %d/%d",
+                        item.id, retries, self._ARTIFACT_ITEM_MAX_RETRIES,
+                    )
+                    # Append recovery context to the item spec
+                    extras = item_result.extras if isinstance(item_result.extras, dict) else {}
+                    recovery_note = (
+                        f"\n\n--- Recovery attempt {retries} for this item ---\n"
+                        f"Previous result: {item_result.summary}\n"
+                        f"Failure class: {extras.get('failure_class', 'unknown')}\n"
+                        f"Suggested next action: {extras.get('suggested_next_action', '')}\n"
+                        "Complete only this item. Aura will continue the approved job after this item succeeds."
+                    )
+                    item_req = replace(item_req, spec=item_req.spec + recovery_note)
+                    continue
+                # Non-recoverable or retries exhausted
+                failed_attempts[item.id] = retries + 1
+                break
+
+            if item_result is None:
+                item_result = WorkerDispatchResult(
+                    ok=False,
+                    summary="WorkArtifact internal item was not started.",
+                    extras={"work_artifact_item_not_started": True},
+                )
+
+            # Attach receipt to this exact item
+            self._artifact_controller.attach_receipt(
+                tool_call_id, item_result, item_id=item.id,
+            )
+            item_results.append((item.id, item_result))
+
+            # Stop on cancellation or non-recoverable failure
+            if item_result.cancelled:
+                _log.info(
+                    "WorkArtifact job stopping after cancelled item tool_call_id=%s",
+                    tool_call_id,
+                )
+                break
+            if not item_result.ok:
+                _log.info(
+                    "WorkArtifact job stopping after failed item tool_call_id=%s item=%s",
+                    tool_call_id, item.id,
+                )
+                break
+
+        # Build and return aggregate result
+        return self._aggregate_artifact_results(
+            tool_call_id, approved_req, item_results,
+            recovered_item_ids, failed_attempts,
+        )
+
+    def _build_artifact_item_request(
+        self,
+        tool_call_id: str,
+        approved_req: WorkerDispatchRequest,
+        item: Any,
+        index: int,
+        total: int,
+    ) -> WorkerDispatchRequest:
+        """Build a bounded WorkerDispatchRequest for one artifact item.
+
+        Preserves the approved top-level context while scoping to the item.
+        """
+        spec_parts = [
+            f"WorkArtifact Item {index}/{total}: {item.title}",
+            "",
+            f"Approved job goal: {approved_req.goal}",
+            f"Top-level constraints: {approved_req.spec}",
+            "",
+            f"Item intent: {item.intent}",
+            "",
+            "This is one bounded item inside an already approved WorkArtifact job.",
+            "Complete only this item. Do not execute other artifact items.",
+            "Aura will continue the approved job after this item succeeds.",
+        ]
+        spec = "\n".join(spec_parts)
+
+        return WorkerDispatchRequest(
+            goal=item.intent or approved_req.goal,
+            files=list(item.target_files) if item.target_files else list(approved_req.files),
+            spec=spec,
+            acceptance=item.acceptance or approved_req.acceptance,
+            summary=item.title or approved_req.summary,
+            artifact_id=tool_call_id,
+            artifact_item_id=item.id,
+            validation_commands=list(approved_req.validation_commands),
+        )
+
+    def _aggregate_artifact_results(
+        self,
+        tool_call_id: str,
+        approved_req: WorkerDispatchRequest,
+        item_results: list[tuple[str, WorkerDispatchResult]],
+        recovered_item_ids: list[str],
+        failed_attempts: dict[str, int],
+        terminal_override: WorkerDispatchResult | None = None,
+    ) -> WorkerDispatchResult:
+        """Aggregate per-item Worker results into one terminal result.
+
+        Returns ok=True only when every required item succeeded.
+        """
+        if terminal_override is not None:
+            return terminal_override
+
+        all_ok = all(r.ok for _item_id, r in item_results)
+        all_cancelled = any(r.cancelled for _item_id, r in item_results)
+        first_bad = next(
+            (r for _item_id, r in item_results if not r.ok),
+            None,
+        )
+
+        # Collect modified files (ordered union)
+        modified_files: list[str] = []
+        seen_files: set[str] = set()
+        for _item_id, r in item_results:
+            for f in (r.modified_files or []):
+                if f not in seen_files:
+                    seen_files.add(f)
+                    modified_files.append(f)
+
+        # Collect validation summaries
+        validation_parts: list[str] = []
+        for _item_id, r in item_results:
+            if r.validation:
+                validation_parts.append(r.validation)
+        validation = "\n".join(validation_parts) if validation_parts else None
+
+        item_summaries = {
+            item_id: r.summary for item_id, r in item_results
+        }
+        completed_items = [
+            item_id for item_id, r in item_results if r.ok
+        ]
+        total_items = len(item_results)
+
+        extras: dict[str, Any] = {
+            "work_artifact_job": True,
+            "completed_items": completed_items,
+            "total_items": total_items,
+            "current_item_id": item_results[-1][0] if item_results else "",
+            "recovered_item_ids": list(recovered_item_ids),
+            "failed_attempts": dict(failed_attempts),
+            "item_summaries": item_summaries,
+        }
+        if failed_attempts:
+            extras["recovery_exhausted"] = True
+
+        if all_ok:
+            return WorkerDispatchResult(
+                ok=True,
+                summary=f"WorkArtifact job completed: {total_items} item(s) done.",
+                modified_files=modified_files,
+                validation=validation,
+                status=WorkerOutcomeStatus.completed.value,
+                extras=extras,
+            )
+        elif all_cancelled:
+            return WorkerDispatchResult(
+                ok=False,
+                summary="WorkArtifact job cancelled during internal items.",
+                cancelled=True,
+                modified_files=modified_files,
+                status=WorkerOutcomeStatus.cancelled.value,
+                extras=extras,
+            )
+        else:
+            # Non-ok aggregate from item failure
+            status = first_bad.status if first_bad else WorkerOutcomeStatus.harness_error.value
+            summary_parts = [f"WorkArtifact job failed at item {completed_items[-1] if completed_items else '?'}."]
+            if failed_attempts:
+                summary_parts.append("Recovery exhausted for some items.")
+            if first_bad and first_bad.summary:
+                summary_parts.append(first_bad.summary)
+            return WorkerDispatchResult(
+                ok=False,
+                summary=" ".join(summary_parts),
+                modified_files=modified_files,
+                validation=validation,
+                status=status or WorkerOutcomeStatus.harness_error.value,
+                extras=extras,
+            )
+
+    def _emit_projection(self, tool_call_id: str) -> None:
+        """Helper to emit artifact projection from the current state."""
+        artifact = self._artifact_controller.get_artifact(tool_call_id)
+        if artifact is None:
+            return
+        projection = WorkArtifactProjection.from_artifact(artifact)
+        self._on_artifact_projection_updated(projection)
 
     def _run_worker(
         self,

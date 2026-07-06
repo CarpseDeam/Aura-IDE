@@ -21,7 +21,6 @@ from aura.conversation.dispatch import (
     WorkerDispatchResult,
 )
 from aura.conversation.dispatch_contract import enrich_worker_dispatch_contract
-from aura.work_artifact import WorkArtifact, WorkArtifactItem
 from aura.conversation.history import History
 from aura.conversation.loop_detection import LoopDetector
 from aura.conversation.terminal_policy import worker_terminal_command_allowed
@@ -85,72 +84,20 @@ class ToolRunner:
 
         # ── Work Artifact handling ───────────────────────────────────────────
         raw_artifact = args.get("work_artifact") if isinstance(args.get("work_artifact"), dict) else None
-        artifact: WorkArtifact | None = None
 
         if raw_artifact:
             # Multi-item artifact from Planner
             items_raw = raw_artifact.get("items") if isinstance(raw_artifact.get("items"), list) else []
-            work_items = [
-                WorkArtifactItem(
-                    id=str(item.get("id", f"item-{idx}")),
-                    title=str(item.get("title", "")),
-                    intent=str(item.get("intent", "")),
-                    target_files=[str(f) for f in (item.get("target_files") or item.get("files") or [])],
-                    acceptance=str(item.get("acceptance", "")),
-                )
-                for idx, item in enumerate(items_raw)
-            ]
-            current_item_id = work_items[0].id if work_items else ""
-            artifact = WorkArtifact(
-                artifact_id=tool_call_id,
-                goal=str(raw_artifact.get("goal", "")),
-                constraints=[str(c) for c in (raw_artifact.get("constraints") or [])],
-                allowed_files=[str(f) for f in (raw_artifact.get("allowed_files") or [])],
-                work_items=work_items,
-                current_item_id=current_item_id,
-            )
+            
             _log.info(
-                "WorkArtifact parsed tool_call_id=%s item_count=%d current_item=%s",
+                "WorkArtifact parsed tool_call_id=%s item_count=%d",
                 tool_call_id,
-                len(work_items),
-                current_item_id,
+                len(items_raw),
             )
+            
             # Attach the raw payload so DispatchProxy can create the full artifact
             req.work_artifact_payload = raw_artifact
-            # Convert current item into a bounded WorkerDispatchRequest
-            req.artifact_id = artifact.artifact_id
-            if artifact.current_item() is not None:
-                item = artifact.current_item()
-                req.artifact_item_id = item.id
-                req = replace(
-                    req,
-                    goal=item.intent or req.goal,
-                    files=list(item.target_files) if item.target_files else req.files,
-                    acceptance=item.acceptance or req.acceptance,
-                    summary=item.title or req.summary,
-                )
-        else:
-            # One-item compatibility artifact from flat dispatch request
-            compat_item = WorkArtifactItem(
-                id="item-1",
-                title=req.summary or req.goal or "Worker dispatch",
-                intent=req.goal,
-                target_files=list(req.files),
-                acceptance=req.acceptance,
-            )
-            artifact = WorkArtifact(
-                artifact_id=tool_call_id,
-                goal=req.goal,
-                allowed_files=list(req.files),
-                work_items=[compat_item],
-                current_item_id=compat_item.id,
-            )
-            req.artifact_id = artifact.artifact_id
-            req.artifact_item_id = compat_item.id
-            _log.info(
-                "One-item compatibility artifact created tool_call_id=%s",
-                tool_call_id,
-            )
+            req.artifact_id = tool_call_id
 
         first_dispatch_in_turn = planner_dispatch_attempt <= 1
         chained_later_dispatch = not first_dispatch_in_turn
@@ -704,7 +651,7 @@ def _dispatch_chained_constraint(
                 "For multi-part work, include all required items in the "
                 "original dispatch_to_worker work_artifact."
             ),
-            "Each item is independently reviewed through SpecCard before Worker execution.",
+            "Items are bounded internal execution units and Aura executes them internally.",
             "Do not call edit/write tools.",
         ]
     )

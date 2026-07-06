@@ -7,11 +7,10 @@ Responsibilities:
 - Create artifact from Planner tool payload.
 - Create a one-item compatibility artifact from a flat dispatch request.
 - Return current item as a normal bounded WorkerDispatchRequest.
-- Mark item active when user dispatches through SpecCard.
+- Mark item active when execution starts.
 - Attach receipt on Worker finish.
 - Emit artifact projection updates for GUI.
 - Never run Worker itself.
-- Never loop through items internally.
 """
 from __future__ import annotations
 
@@ -162,7 +161,7 @@ class WorkArtifactController:
         )
 
     def mark_item_active(self, tool_call_id: str, item_id: str) -> None:
-        """Mark an artifact item as active (user dispatched through SpecCard)."""
+        """Mark an artifact item as active (execution started for this item)."""
         artifact = self._artifacts.get(tool_call_id)
         if artifact is None:
             _log.warning("mark_item_active: no artifact for tool_call_id=%s", tool_call_id)
@@ -174,22 +173,31 @@ class WorkArtifactController:
         self,
         tool_call_id: str,
         result: WorkerDispatchResult,
+        item_id: str | None = None,
         *,
         status_override: str | None = None,
     ) -> None:
-        """Attach a Worker result receipt to the current artifact item."""
+        """Attach a Worker result receipt to an artifact item.
+
+        When *item_id* is provided, attaches to that exact item.
+        Otherwise attaches to ``artifact.current_item()``.
+        """
         artifact = self._artifacts.get(tool_call_id)
         if artifact is None:
             _log.warning("attach_receipt: no artifact for tool_call_id=%s", tool_call_id)
             return
 
-        item = artifact.current_item()
-        if item is None:
-            _log.warning("attach_receipt: no current item for tool_call_id=%s", tool_call_id)
-            return
+        if item_id:
+            target_id = item_id
+        else:
+            item = artifact.current_item()
+            if item is None:
+                _log.warning("attach_receipt: no current item for tool_call_id=%s", tool_call_id)
+                return
+            target_id = item.id
 
         receipt = worker_result_to_receipt(result, status_override=status_override)
-        artifact.attach_receipt(item.id, receipt)
+        artifact.attach_receipt(target_id, receipt)
         self._emit_projection(tool_call_id)
 
     def advance_to_next_item(self, tool_call_id: str) -> bool:
@@ -224,6 +232,37 @@ class WorkArtifactController:
         if artifact is None:
             return False
         return artifact.next_pending_item() is not None
+
+    # ── item query helpers ───────────────────────────────────────────────
+
+    def pending_items(self, tool_call_id: str) -> list[Any]:
+        """Return all pending work items for the given artifact."""
+        artifact = self._artifacts.get(tool_call_id)
+        if artifact is None:
+            return []
+        return [item for item in artifact.work_items if item.status.value == "pending"]
+
+    def next_pending_item(self, tool_call_id: str) -> Any | None:
+        """Return the first pending item, or None if no pending items remain."""
+        items = self.pending_items(tool_call_id)
+        return items[0] if items else None
+
+    def all_required_items_done(self, tool_call_id: str) -> bool:
+        """Return True if every item in the artifact is done."""
+        artifact = self._artifacts.get(tool_call_id)
+        if artifact is None or not artifact.work_items:
+            return False
+        return all(item.status.value == "done" for item in artifact.work_items)
+
+    def set_final_receipt(self, tool_call_id: str, result: WorkerDispatchResult) -> None:
+        """Set an aggregate final receipt on the artifact for display."""
+        artifact = self._artifacts.get(tool_call_id)
+        if artifact is None:
+            return
+        from aura.work_artifact.receipt import worker_result_to_receipt
+        artifact.final_receipt = worker_result_to_receipt(result)
+
+    # ── lifecycle ────────────────────────────────────────────────────────
 
     def remove_artifact(self, tool_call_id: str) -> None:
         """Remove an artifact (conversation reset / teardown)."""

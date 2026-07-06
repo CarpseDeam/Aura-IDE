@@ -190,7 +190,13 @@ class WorkerDispatchRunner:
     ) -> tuple[History, WorkerTaskSpec, dict[str, Any], ConversationManager]:
         worker_history = History()
         task_spec = normalize_worker_task(req)
-        skill_content = _format_spec_as_user_message(task_spec)
+        # Determine if this is an artifact item request
+        is_artifact_item = bool(req.artifact_id and req.artifact_item_id)
+        skill_content = _format_spec_as_user_message(
+            task_spec,
+            artifact_item_index=1 if is_artifact_item else None,
+            artifact_item_total=None,
+        )
         _log.info("worker_context_build_start tool_call_id=%s", tool_call_id)
         t1 = time.monotonic()
         composed_prompt = compose_system_prompt(
@@ -249,7 +255,11 @@ class WorkerDispatchRunner:
             "worker_profile_detect_end tool_call_id=%s duration_ms=%.0f",
             tool_call_id, (time.monotonic() - t2) * 1000,
         )
-        base_message = _format_spec_as_user_message(task_spec)
+        base_message = _format_spec_as_user_message(
+            task_spec,
+            artifact_item_index=1 if is_artifact_item else None,
+            artifact_item_total=None,
+        )
         worker_history.append_user_text(base_message)
 
         worker_registry = self._registry_factory("worker")

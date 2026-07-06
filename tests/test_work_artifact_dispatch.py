@@ -1,21 +1,460 @@
 """Tests for WorkArtifact dispatch integration.
 
-Verifies that:
-- Planner tool payload with work_artifact creates artifact
-- First item becomes bounded WorkerDispatchRequest
-- Request has artifact_id and artifact_item_id
-- No hidden second item dispatch occurs
-- Flat dispatch creates one-item compatibility artifact
-- Multi-item artifact preserves all items through controller
-- Projection callback fires on all mutation events
-- WorkerDispatchRequest serializes/deserializes work_artifact_payload
+Verifies the new contract:
+- ToolRunner preserves the full approved job envelope.
+- DispatchProxy runs all items internally under one approval.
+- Recoverable item failures retry on the same item.
+- Projection and card rendering report item-level truth.
+- Worker prompt uses artifact-aware wording.
 """
 
-from aura.conversation.dispatch import WorkerDispatchRequest
-from aura.work_artifact.model import WorkArtifact, WorkArtifactItem, WorkItemStatus
+from typing import Any
+
+from aura.conversation.dispatch import WorkerDispatchRequest, WorkerDispatchResult
+from aura.conversation.dispatch_failure import is_recoverable_worker_continuation
+from aura.conversation.loop_detection import LoopDetector
+from aura.conversation.tool_runner import ToolRunner
+from aura.conversation.verification_progress import VerificationProgressTracker
+from aura.conversation.history import History
+from aura.work_artifact.model import WorkArtifact, WorkArtifactItem, WorkItemStatus, WorkArtifactReceipt
 from aura.work_artifact.receipt import worker_result_to_receipt
 from aura.work_artifact.controller import WorkArtifactController
 from aura.work_artifact.projection import WorkArtifactProjection
+from aura.bridge.worker_report import _format_spec_as_user_message
+
+
+# ── Helpers ────────────────────────────────────────────────────────────────────
+
+
+def _make_two_item_payload() -> dict:
+    return {
+        "goal": "Implement feature",
+        "constraints": ["No new deps"],
+        "allowed_files": ["src/"],
+        "items": [
+            {"id": "item-1", "title": "Add model", "intent": "Create the model", "target_files": ["src/model.py"], "acceptance": "Model works"},
+            {"id": "item-2", "title": "Add view", "intent": "Create the view", "target_files": ["src/view.py"], "acceptance": "View works"},
+        ],
+    }
+
+
+def _make_three_item_payload() -> dict:
+    return {
+        "goal": "Implement feature",
+        "constraints": [],
+        "allowed_files": ["src/"],
+        "items": [
+            {"id": "item-1", "title": "Add model", "intent": "Create the model", "target_files": ["src/model.py"], "acceptance": "Model works"},
+            {"id": "item-2", "title": "Add view", "intent": "Create the view", "target_files": ["src/view.py"], "acceptance": "View works"},
+            {"id": "item-3", "title": "Add controller", "intent": "Create the controller", "target_files": ["src/controller.py"], "acceptance": "Controller works"},
+        ],
+    }
+
+
+def _ok_result(summary: str = "OK", modified: list[str] | None = None) -> WorkerDispatchResult:
+    return WorkerDispatchResult(
+        ok=True,
+        summary=summary,
+        modified_files=modified or [],
+        status="completed",
+    )
+
+
+def _recoverable_result() -> WorkerDispatchResult:
+    return WorkerDispatchResult(
+        ok=False,
+        summary="Worker quality findings are recoverable.",
+        recoverable=True,
+        phase_boundary=True,
+        needs_followup=True,
+        extras={
+            "failure_class": "worker_quality_unresolved_findings",
+            "recoverable": True,
+            "phase_boundary": True,
+            "suggested_next_tool": "dispatch_to_worker",
+        },
+    )
+
+
+def _non_recoverable_result(summary: str = "Fatal error") -> WorkerDispatchResult:
+    return WorkerDispatchResult(
+        ok=False,
+        summary=summary,
+        recoverable=False,
+        extras={"failure_class": "fatal_error"},
+    )
+
+
+# ── A. ToolRunner preserves full approved job envelope ─────────────────────────
+
+
+def test_toolrunner_preserves_full_envelope(tmp_path):
+    """Given work_artifact with 3 items, ToolRunner passes the top-level envelope."""
+    runner = ToolRunner(
+        History(), tmp_path, LoopDetector(), VerificationProgressTracker(),
+    )
+    dispatches: list[tuple[str, WorkerDispatchRequest]] = []
+
+    args: dict[str, Any] = {
+        "goal": "Full feature",
+        "files": ["src/a.py", "src/b.py"],
+        "spec": "Implement full feature with all parts.",
+        "acceptance": "Everything works.",
+        "summary": "Full feature implementation",
+        "work_artifact": _make_three_item_payload(),
+    }
+
+    runner.handle_dispatch(
+        "call_xyz",
+        args,
+        on_event=lambda e: None,
+        dispatch_cb=lambda tid, req: (
+            dispatches.append((tid, req)),
+            _ok_result(),
+        )[1],
+    )
+
+    assert len(dispatches) == 1
+    _, req = dispatches[0]
+    assert req.goal == "Full feature"
+    assert req.files == ["src/a.py", "src/b.py"]
+    assert req.spec == "Implement full feature with all parts."
+    assert req.acceptance == "Everything works."
+    assert req.summary == "Full feature implementation"
+
+    # artifact payload and id are preserved
+    assert req.work_artifact_payload is not None
+    assert req.artifact_id == "call_xyz"
+    # artifact_item_id must NOT be set at ToolRunner level
+    assert req.artifact_item_id == ""
+
+
+def test_toolrunner_flat_dispatch_no_artifact_fields(tmp_path):
+    """Flat dispatch does not get artifact_id/artifact_item_id set by ToolRunner."""
+    runner = ToolRunner(
+        History(), tmp_path, LoopDetector(), VerificationProgressTracker(),
+    )
+    dispatches: list[tuple[str, WorkerDispatchRequest]] = []
+
+    runner.handle_dispatch(
+        "call_flat",
+        {
+            "goal": "Fix bug",
+            "files": ["bug.py"],
+            "spec": "Fix the bug",
+            "acceptance": "Bug fixed",
+            "summary": "Bug fix",
+        },
+        on_event=lambda e: None,
+        dispatch_cb=lambda tid, req: (
+            dispatches.append((tid, req)),
+            _ok_result(),
+        )[1],
+    )
+
+    assert len(dispatches) == 1
+    _, req = dispatches[0]
+    assert req.artifact_id == ""
+    assert req.artifact_item_id == ""
+    assert req.work_artifact_payload is None
+
+
+# ── B. Controller tests (building blocks for DispatchProxy) ────────────────────
+
+
+def test_controller_pending_items():
+    """pending_items returns only items with pending status."""
+    ctrl = WorkArtifactController()
+    payload = _make_two_item_payload()
+    ctrl.create_artifact_from_payload("call_123", payload)
+    ctrl.mark_item_active("call_123", "item-1")
+
+    pending = ctrl.pending_items("call_123")
+    assert len(pending) == 1
+    assert pending[0].id == "item-2"
+
+    ctrl.attach_receipt("call_123", _ok_result(modified=["src/model.py"]))
+    pending2 = ctrl.pending_items("call_123")
+    assert len(pending2) == 1  # item-1 done, item-2 still pending
+    assert pending2[0].id == "item-2"
+
+    # Mark item-2 done
+    ctrl.mark_item_active("call_123", "item-2")
+    ctrl.attach_receipt("call_123", _ok_result(modified=["src/view.py"]), item_id="item-2")
+    assert ctrl.pending_items("call_123") == []
+
+
+def test_controller_all_required_items_done():
+    """all_required_items_done returns True only when all items are done."""
+    ctrl = WorkArtifactController()
+    ctrl.create_artifact_from_payload("call_123", _make_two_item_payload())
+
+    assert not ctrl.all_required_items_done("call_123")
+
+    ctrl.mark_item_active("call_123", "item-1")
+    ctrl.attach_receipt("call_123", _ok_result())
+    assert not ctrl.all_required_items_done("call_123")
+
+    ctrl.mark_item_active("call_123", "item-2")
+    ctrl.attach_receipt("call_123", _ok_result(), item_id="item-2")
+    assert ctrl.all_required_items_done("call_123")
+
+
+def test_controller_attach_receipt_with_explicit_item_id():
+    """attach_receipt with item_id attaches to the correct item, not current_item."""
+    ctrl = WorkArtifactController()
+    ctrl.create_artifact_from_payload("call_123", _make_two_item_payload())
+
+    # Attach to item-2 explicitly while item-1 is current
+    ctrl.attach_receipt("call_123", _ok_result(modified=["src/view.py"]), item_id="item-2")
+    artifact = ctrl.get_artifact("call_123")
+    assert artifact is not None
+    assert artifact.work_items[1].status == WorkItemStatus.done  # item-2 done
+    assert artifact.work_items[0].status == WorkItemStatus.pending  # item-1 still pending
+
+
+# ── C. DispatchProxy tests (use fake _run_worker) ──────────────────────────────
+
+# B: DispatchProxy runs all items under one approval
+# C: Continue same item after recoverable result
+# D: Aggregate non-ok only when recovery exhausted
+#
+# These require a DispatchProxy with a controllable _run_worker.
+# We test through the proxy's building blocks directly.
+
+
+def test_build_artifact_item_request(tmp_path):
+    """_build_artifact_item_request produces a correctly scoped request."""
+    from aura.bridge.dispatch import _DispatchProxy
+    from aura.conversation.dispatch import WorkerDispatchRequest
+
+    # Minimal proxy setup for testing the helper
+    proxy = _DispatchProxy(
+        parent_widget=None,
+        registry_factory=lambda mode: None,
+        approval_proxy=None,
+        workspace_root=tmp_path,
+    )
+
+    item = WorkArtifactItem(
+        id="item-2",
+        title="Add view",
+        intent="Create the view",
+        target_files=["src/view.py"],
+        acceptance="View works",
+    )
+    approved_req = WorkerDispatchRequest(
+        goal="Full feature",
+        files=["src/a.py"],
+        spec="Top-level constraints",
+        acceptance="Everything works",
+        summary="Full feature",
+    )
+
+    item_req = proxy._build_artifact_item_request("call_abc", approved_req, item, 2, 3)
+
+    assert item_req.artifact_id == "call_abc"
+    assert item_req.artifact_item_id == "item-2"
+    assert item_req.goal == "Create the view"
+    assert item_req.files == ["src/view.py"]
+    assert item_req.acceptance == "View works"
+    assert item_req.summary == "Add view"
+    assert "WorkArtifact Item 2/3" in item_req.spec
+    assert "already approved WorkArtifact job" in item_req.spec
+    assert "Complete only this item" in item_req.spec
+
+
+def test_aggregate_artifact_results_all_ok():
+    """Aggregate returns ok=True when every item succeeded."""
+    from aura.bridge.dispatch import _DispatchProxy
+
+    proxy = _DispatchProxy(
+        parent_widget=None,
+        registry_factory=lambda mode: None,
+        approval_proxy=None,
+    )
+
+    approved_req = WorkerDispatchRequest(
+        goal="G", files=[], spec="S", acceptance="A", summary="Sum",
+    )
+    item_results = [
+        ("item-1", _ok_result("Done 1", modified=["a.py"])),
+        ("item-2", _ok_result("Done 2", modified=["b.py"])),
+    ]
+
+    result = proxy._aggregate_artifact_results("call_1", approved_req, item_results, [], {})
+
+    assert result.ok is True
+    assert result.extras["completed_items"] == ["item-1", "item-2"]
+    assert result.extras["total_items"] == 2
+    assert result.extras["work_artifact_job"] is True
+    assert "a.py" in result.modified_files
+    assert "b.py" in result.modified_files
+
+
+def test_aggregate_artifact_results_cancelled():
+    """Aggregate returns cancelled when an item was cancelled."""
+    from aura.bridge.dispatch import _DispatchProxy
+
+    proxy = _DispatchProxy(
+        parent_widget=None,
+        registry_factory=lambda mode: None,
+        approval_proxy=None,
+    )
+
+    approved_req = WorkerDispatchRequest(
+        goal="G", files=[], spec="S", acceptance="A", summary="Sum",
+    )
+    cancelled = WorkerDispatchResult(
+        ok=False, summary="Cancelled", cancelled=True,
+    )
+    item_results = [
+        ("item-1", _ok_result("Done 1")),
+        ("item-2", cancelled),
+    ]
+
+    result = proxy._aggregate_artifact_results("call_1", approved_req, item_results, [], {})
+
+    assert result.ok is False
+    assert result.cancelled is True
+
+
+def test_aggregate_artifact_results_non_ok():
+    """Aggregate returns non-ok with recovery exhaustion metadata."""
+    from aura.bridge.dispatch import _DispatchProxy
+
+    proxy = _DispatchProxy(
+        parent_widget=None,
+        registry_factory=lambda mode: None,
+        approval_proxy=None,
+    )
+
+    approved_req = WorkerDispatchRequest(
+        goal="G", files=[], spec="S", acceptance="A", summary="Sum",
+    )
+    item_results = [
+        ("item-1", _ok_result("Done 1")),
+        ("item-2", _non_recoverable_result("Fatal")),
+    ]
+
+    result = proxy._aggregate_artifact_results(
+        "call_1", approved_req, item_results, [],
+        {"item-2": 1},
+    )
+
+    assert result.ok is False
+    assert "recovery_exhausted" in result.extras
+    assert "Fatal" in result.summary
+
+
+# ── E. Projection truth ────────────────────────────────────────────────────────
+
+
+def test_projection_item_counts():
+    """Projection counts reflect per-item status, not aggregate guesses."""
+    payload = _make_two_item_payload()
+    items = [
+        WorkArtifactItem(
+            id=str(raw.get("id", "")),
+            title=str(raw.get("title", "")),
+            intent=str(raw.get("intent", "")),
+            target_files=[str(f) for f in (raw.get("target_files") or [])],
+            acceptance=str(raw.get("acceptance", "")),
+        )
+        for raw in payload.get("items", [])
+    ]
+    artifact = WorkArtifact(
+        artifact_id="art-1",
+        goal=payload.get("goal", ""),
+        constraints=payload.get("constraints", []),
+        allowed_files=payload.get("allowed_files", []),
+        work_items=items,
+        current_item_id=items[0].id if items else "",
+    )
+
+    proj = WorkArtifactProjection.from_artifact(artifact)
+    assert proj.pending_count == 2
+    assert proj.completed_count == 0
+    assert proj.is_complete is False
+    assert proj.artifact_status == "pending"
+
+    # Mark item 1 done
+    artifact.attach_receipt("item-1", WorkArtifactReceipt(status="ok"))
+    proj2 = WorkArtifactProjection.from_artifact(artifact)
+    assert proj2.completed_count == 1
+    assert proj2.pending_count == 1
+    assert proj2.is_complete is False  # not all done
+    assert proj2.artifact_status == "active"  # some items still pending
+
+    # Mark all done
+    artifact.mark_active("item-2")
+    artifact.attach_receipt("item-2", WorkArtifactReceipt(status="ok"))
+    proj3 = WorkArtifactProjection.from_artifact(artifact)
+    assert proj3.completed_count == 2
+    assert proj3.pending_count == 0
+    assert proj3.is_complete is True
+    assert proj3.artifact_status == "done"
+
+
+def test_projection_item_status_vs_aggregate():
+    """Each projected item uses its own status, not the aggregate artifact_status."""
+    artifact = WorkArtifact(
+        artifact_id="art-1",
+        goal="Test",
+        work_items=[
+            WorkArtifactItem(id="item-1", title="A", intent="I1", target_files=["a.py"], acceptance="A1"),
+            WorkArtifactItem(id="item-2", title="B", intent="I2", target_files=["b.py"], acceptance="A2"),
+        ],
+        current_item_id="item-1",
+    )
+    artifact.attach_receipt("item-1", WorkArtifactReceipt(status="ok"))
+
+    proj = WorkArtifactProjection.from_artifact(artifact)
+    assert len(proj.items) == 2
+    assert proj.items[0]["status"] == "done"
+    assert proj.items[1]["status"] == "pending"
+
+
+# ── G. Worker prompt wording ───────────────────────────────────────────────────
+
+
+def test_worker_prompt_artifact_item_wording():
+    """Artifact item request uses 'Approved WorkArtifact Item' wording."""
+    req = WorkerDispatchRequest(
+        goal="Test goal",
+        files=["a.py"],
+        spec="Do the thing",
+        acceptance="Ok",
+        summary="Test",
+        artifact_id="call_1",
+        artifact_item_id="item-2",
+    )
+    msg = _format_spec_as_user_message(req, artifact_item_index=1, artifact_item_total=None)
+    assert "Approved WorkArtifact Item" in msg
+    assert "already approved WorkArtifact job" in msg
+    assert "Complete only this bounded item" in msg
+    assert "Aura will continue the approved job" in msg
+    assert "next item requires user review" not in msg
+    assert "Active Dispatch Item" not in msg
+
+
+def test_worker_prompt_flat_wording():
+    """Flat dispatch request uses 'Approved Worker Job' wording."""
+    req = WorkerDispatchRequest(
+        goal="Test goal",
+        files=["a.py"],
+        spec="Do the thing",
+        acceptance="Ok",
+        summary="Test",
+    )
+    msg = _format_spec_as_user_message(req)
+    assert "Approved Worker Job" in msg
+    assert "Active Dispatch Item" not in msg
+    assert "WorkArtifact" not in msg
+    assert "Aura will continue" not in msg
+
+
+# ── Serialization / backward compat ────────────────────────────────────────────
 
 
 def test_artifact_id_and_item_id_on_request():
@@ -38,298 +477,7 @@ def test_artifact_id_and_item_id_on_request():
     assert restored.artifact_item_id == "item-1"
 
 
-def test_flat_request_does_not_have_steps():
-    """A flat dispatch request should not contain a 'steps' field."""
-    req = WorkerDispatchRequest(
-        goal="Test",
-        files=["a.py"],
-        spec="Do the thing",
-        acceptance="Works",
-        summary="Test",
-    )
-    d = req.to_dict()
-    assert "steps" not in d
-
-
-def test_work_artifact_from_payload():
-    """Test creating a WorkArtifact from a tool payload shape."""
-    payload = {
-        "goal": "Implement feature",
-        "constraints": ["No new deps"],
-        "allowed_files": ["src/"],
-        "items": [
-            {"id": "item-1", "title": "Add model", "intent": "Create the model", "target_files": ["src/model.py"], "acceptance": "Model works"},
-        ],
-    }
-    items = []
-    for raw in payload.get("items", []):
-        items.append(WorkArtifactItem(
-            id=str(raw.get("id", "")),
-            title=str(raw.get("title", "")),
-            intent=str(raw.get("intent", "")),
-            target_files=[str(f) for f in (raw.get("target_files") or [])],
-            acceptance=str(raw.get("acceptance", "")),
-        ))
-    artifact = WorkArtifact(
-        artifact_id="call_123",
-        goal=str(payload.get("goal", "")),
-        constraints=[str(c) for c in (payload.get("constraints") or [])],
-        allowed_files=[str(f) for f in (payload.get("allowed_files") or [])],
-        work_items=items,
-        current_item_id=items[0].id if items else "",
-    )
-    assert artifact.artifact_id == "call_123"
-    assert len(artifact.work_items) == 1
-    assert artifact.current_item_id == "item-1"
-    item = artifact.current_item()
-    assert item is not None
-    assert item.title == "Add model"
-    assert item.intent == "Create the model"
-
-
-def test_worker_result_to_receipt_ok():
-    """A successful Worker result becomes an 'ok' receipt."""
-    result = _ok_result()
-    receipt = worker_result_to_receipt(result)
-    assert receipt.status == "ok"
-    assert receipt.summary == "All good"
-    assert receipt.modified_files == ["a.py"]
-
-
-def test_worker_result_to_receipt_interrupted():
-    """An unknown non-ok Worker result becomes an 'interrupted' receipt."""
-    from aura.conversation.dispatch import WorkerDispatchResult
-    result = WorkerDispatchResult(
-        ok=False,
-        summary="Something broke",
-        modified_files=[],
-    )
-    receipt = worker_result_to_receipt(result)
-    assert receipt.status == "interrupted"
-
-
-def test_worker_result_to_receipt_cancelled():
-    """A cancelled Worker result becomes a 'cancelled' receipt."""
-    from aura.conversation.dispatch import WorkerDispatchResult
-    result = WorkerDispatchResult(
-        ok=False,
-        summary="Cancelled",
-        cancelled=True,
-    )
-    receipt = worker_result_to_receipt(result)
-    assert receipt.status == "cancelled"
-
-
-def test_worker_result_to_receipt_recoverable_continuation():
-    """A recoverable phase-boundary dispatch result becomes a continuing receipt."""
-    result = _recoverable_quality_continuation_result()
-    receipt = worker_result_to_receipt(result)
-    assert receipt.status == "continuing"
-    assert receipt.metadata["failure_class"] == "worker_quality_unresolved_findings"
-
-
-def test_recoverable_quality_payload_keeps_item_active():
-    """The exact worker_quality_unresolved_findings payload keeps the item active."""
-    ctrl = WorkArtifactController()
-    payload = _make_two_item_payload()
-    ctrl.create_artifact_from_payload("call_123", payload)
-    ctrl.mark_item_active("call_123", "item-1")
-
-    ctrl.attach_receipt("call_123", _recoverable_quality_continuation_result())
-
-    artifact = ctrl.get_artifact("call_123")
-    assert artifact is not None
-    item = artifact.work_items[0]
-    assert item.status == WorkItemStatus.active
-    assert item.receipt is not None
-    assert item.receipt.status == "continuing"
-
-    projection = WorkArtifactProjection.from_artifact(artifact)
-    assert projection.active_count == 1
-    assert projection.pending_count == 1
-    assert not projection.is_complete
-
-
-# ── Multi-item artifact tests ────────────────────────────────────────────────
-
-
-def _make_two_item_payload() -> dict:
-    return {
-        "goal": "Implement feature",
-        "constraints": ["No new deps"],
-        "allowed_files": ["src/"],
-        "items": [
-            {"id": "item-1", "title": "Add model", "intent": "Create the model", "target_files": ["src/model.py"], "acceptance": "Model works"},
-            {"id": "item-2", "title": "Add view", "intent": "Create the view", "target_files": ["src/view.py"], "acceptance": "View works"},
-        ],
-    }
-
-
-def test_multi_item_artifact_created_with_both_items():
-    """Controller.create_artifact_from_payload creates artifact with all items."""
-    ctrl = WorkArtifactController()
-    payload = _make_two_item_payload()
-    artifact = ctrl.create_artifact_from_payload("call_123", payload)
-
-    assert len(artifact.work_items) == 2
-    assert artifact.current_item_id == "item-1"
-    assert artifact.current_item() is not None
-    assert artifact.current_item().id == "item-1"
-    assert artifact.work_items[1].id == "item-2"
-    assert artifact.work_items[1].status == WorkItemStatus.pending
-
-
-def test_multi_item_artifact_preserved_after_receipt():
-    """After attaching receipt to item 1, item 2 still exists and advance makes it current."""
-    ctrl = WorkArtifactController()
-    payload = _make_two_item_payload()
-    ctrl.create_artifact_from_payload("call_123", payload)
-
-    # Simulate Worker completion for item 1
-    from aura.conversation.dispatch import WorkerDispatchResult
-    result = WorkerDispatchResult(ok=True, summary="Done", modified_files=["src/model.py"])
-    ctrl.attach_receipt("call_123", result)
-
-    artifact = ctrl.get_artifact("call_123")
-    assert artifact is not None
-    item1 = artifact.work_items[0]
-    assert item1.status == WorkItemStatus.done
-    assert item1.receipt is not None
-    assert item1.receipt.status == "ok"
-
-    # Item 2 should still exist as pending
-    assert len(artifact.work_items) == 2
-    assert artifact.work_items[1].id == "item-2"
-    assert artifact.work_items[1].status == WorkItemStatus.pending
-
-    # Advance to make item 2 current
-    has_next = ctrl.advance_to_next_item("call_123")
-    assert has_next is True
-
-    artifact = ctrl.get_artifact("call_123")
-    assert artifact.current_item_id == "item-2"
-    assert artifact.current_item().id == "item-2"
-
-
-def test_no_auto_dispatch_on_advance():
-    """advance_to_next_item returns True for next item but does not dispatch Worker."""
-    ctrl = WorkArtifactController()
-    payload = _make_two_item_payload()
-    ctrl.create_artifact_from_payload("call_123", payload)
-
-    from aura.conversation.dispatch import WorkerDispatchResult
-    result = WorkerDispatchResult(ok=True, summary="Done")
-    ctrl.attach_receipt("call_123", result)
-
-    # advance_to_next_item should return True and set current to item 2
-    has_next = ctrl.advance_to_next_item("call_123")
-    assert has_next is True
-
-    # The current item should be item 2 (still pending, not active)
-    artifact = ctrl.get_artifact("call_123")
-    assert artifact.current_item().status == WorkItemStatus.pending
-
-
-def test_complete_artifact_advance_returns_false():
-    """advance_to_next_item returns False when all items are done."""
-    ctrl = WorkArtifactController()
-    payload = _make_two_item_payload()
-    ctrl.create_artifact_from_payload("call_123", payload)
-
-    from aura.conversation.dispatch import WorkerDispatchResult
-
-    # Complete item 1
-    ctrl.attach_receipt("call_123", WorkerDispatchResult(ok=True, summary="Done"))
-    ctrl.advance_to_next_item("call_123")
-
-    # Complete item 2
-    ctrl.mark_item_active("call_123", "item-2")
-    ctrl.attach_receipt("call_123", WorkerDispatchResult(ok=True, summary="Done"))
-
-    # No more items
-    has_next = ctrl.advance_to_next_item("call_123")
-    assert has_next is False
-
-
-def test_projection_callback_fires_on_mutations():
-    """Projection callback fires on create, mark_active, attach_receipt, advance."""
-    ctrl = WorkArtifactController()
-    payload = _make_two_item_payload()
-    calls = []
-
-    ctrl.set_on_projection_updated(lambda p: calls.append(p))
-
-    # create
-    ctrl.create_artifact_from_payload("call_123", payload)
-    assert len(calls) == 1
-    assert calls[-1].artifact_id == "call_123"
-    assert len(calls[-1].items) == 2
-
-    # mark_active
-    ctrl.mark_item_active("call_123", "item-1")
-    assert len(calls) == 2
-
-    # attach_receipt
-    from aura.conversation.dispatch import WorkerDispatchResult
-    ctrl.attach_receipt("call_123", WorkerDispatchResult(ok=True, summary="Done"))
-    assert len(calls) == 3
-    assert calls[-1].completed_count == 1
-
-    # advance
-    ctrl.advance_to_next_item("call_123")
-    assert len(calls) == 4
-    assert calls[-1].current_item_id == "item-2"
-
-
-def test_one_item_compatibility_artifact():
-    """Flat dispatch creates one-item compatibility artifact through controller."""
-    ctrl = WorkArtifactController()
-    req = WorkerDispatchRequest(
-        goal="Test goal",
-        files=["a.py"],
-        spec="Do it",
-        acceptance="Works",
-        summary="Test",
-        artifact_id="call_123",
-        artifact_item_id="item-1",
-    )
-    artifact = ctrl.create_one_item_artifact("call_123", req)
-
-    assert len(artifact.work_items) == 1
-    assert artifact.work_items[0].id == "item-1"
-    assert artifact.work_items[0].status == WorkItemStatus.pending
-
-
-def test_current_dispatch_request_returns_correct_item():
-    """current_dispatch_request returns bounded request for the current artifact item."""
-    ctrl = WorkArtifactController()
-    payload = _make_two_item_payload()
-    ctrl.create_artifact_from_payload("call_123", payload)
-
-    original_req = WorkerDispatchRequest(
-        goal="Original goal",
-        files=[],
-        spec="Spec",
-        acceptance="Accept",
-        summary="Summary",
-    )
-    bounded = ctrl.current_dispatch_request("call_123", original_req)
-    assert bounded is not None
-    assert bounded.artifact_item_id == "item-1"
-    assert bounded.goal == "Create the model"  # item-1 intent
-
-    # After advance, current_dispatch_request should return item 2
-    from aura.conversation.dispatch import WorkerDispatchResult
-    ctrl.attach_receipt("call_123", WorkerDispatchResult(ok=True, summary="Done"))
-    ctrl.advance_to_next_item("call_123")
-
-    bounded2 = ctrl.current_dispatch_request("call_123", original_req)
-    assert bounded2 is not None
-    assert bounded2.artifact_item_id == "item-2"
-    assert bounded2.goal == "Create the view"
-
-
-def test_work_artifact_payload_serializes_through_worker_dispatch_request():
+def test_work_artifact_payload_serializes():
     """work_artifact_payload survives to_dict/from_dict round-trip."""
     payload = {
         "goal": "Test",
@@ -362,218 +510,3 @@ def test_work_artifact_payload_not_in_flat_request():
     )
     d = req.to_dict()
     assert "work_artifact_payload" not in d
-
-
-def test_missing_artifact_returns_none():
-    """Controller methods return None gracefully for missing artifact IDs."""
-    ctrl = WorkArtifactController()
-    from aura.conversation.dispatch import WorkerDispatchResult
-
-    assert ctrl.get_artifact("nonexistent") is None
-    assert ctrl.advance_to_next_item("nonexistent") is False
-    assert ctrl.has_more_items("nonexistent") is False
-    # These should not raise
-    ctrl.mark_item_active("nonexistent", "item-1")
-    ctrl.attach_receipt("nonexistent", WorkerDispatchResult(ok=True, summary="OK"))
-    ctrl.remove_artifact("nonexistent")
-    ctrl.clear()
-
-
-def test_projection_from_multi_item_artifact():
-    """WorkArtifactProjection.from_artifact reflects item status counts."""
-    payload = _make_two_item_payload()
-    items = []
-    for raw in payload.get("items", []):
-        items.append(WorkArtifactItem(
-            id=str(raw.get("id", "")),
-            title=str(raw.get("title", "")),
-            intent=str(raw.get("intent", "")),
-            target_files=[str(f) for f in (raw.get("target_files") or [])],
-            acceptance=str(raw.get("acceptance", "")),
-        ))
-    artifact = WorkArtifact(
-        artifact_id="call_123",
-        goal=payload.get("goal", ""),
-        constraints=payload.get("constraints", []),
-        allowed_files=payload.get("allowed_files", []),
-        work_items=items,
-        current_item_id=items[0].id if items else "",
-    )
-
-    proj = WorkArtifactProjection.from_artifact(artifact)
-    assert proj.artifact_id == "call_123"
-    assert len(proj.items) == 2
-    assert proj.current_item_id == "item-1"
-    assert proj.pending_count == 2
-    assert proj.completed_count == 0
-    assert not proj.is_complete
-
-    # Mark item 1 done
-    from aura.work_artifact.model import WorkArtifactReceipt
-    artifact.attach_receipt("item-1", WorkArtifactReceipt(status="ok"))
-    proj2 = WorkArtifactProjection.from_artifact(artifact)
-    assert proj2.completed_count == 1
-    assert proj2.pending_count == 1
-    assert proj2.is_complete
-
-    # Advance and mark item 2 done
-    artifact.advance()
-    artifact.attach_receipt("item-2", WorkArtifactReceipt(status="ok"))
-    proj3 = WorkArtifactProjection.from_artifact(artifact)
-    assert proj3.completed_count == 2
-    assert proj3.pending_count == 0
-    assert proj3.is_complete
-
-
-def test_projection_with_active_only_item_is_not_complete():
-    """Active/continuing items must not make the artifact complete."""
-    artifact = WorkArtifact(
-        artifact_id="call_123",
-        goal="Test",
-        work_items=[
-            WorkArtifactItem(
-                id="item-1",
-                title="Item 1",
-                intent="Do 1",
-                target_files=["a.py"],
-                acceptance="OK",
-                status=WorkItemStatus.active,
-            ),
-        ],
-        current_item_id="item-1",
-    )
-
-    projection = WorkArtifactProjection.from_artifact(artifact)
-    assert projection.pending_count == 0
-    assert projection.active_count == 1
-    assert not projection.is_complete
-
-
-def test_interrupted_receipt_returns_item_to_pending():
-    """An interrupted receipt through WorkArtifactController returns item to pending with receipt."""
-    ctrl = WorkArtifactController()
-    payload = _make_two_item_payload()
-    ctrl.create_artifact_from_payload("call_123", payload)
-    ctrl.mark_item_active("call_123", "item-1")
-
-    from aura.conversation.dispatch import WorkerDispatchResult
-    result = WorkerDispatchResult(
-        ok=False,
-        summary="Worker was interrupted",
-        modified_files=[],
-    )
-    ctrl.attach_receipt("call_123", result)
-
-    artifact = ctrl.get_artifact("call_123")
-    assert artifact is not None
-    item = artifact.work_items[0]
-    assert item.status == WorkItemStatus.pending
-    assert item.receipt is not None
-    assert item.receipt.status == "interrupted"
-
-
-def test_interrupted_then_pending_item_not_complete():
-    """An artifact with one done and one interrupted-then-pending item has is_complete == False."""
-    ctrl = WorkArtifactController()
-    payload = _make_two_item_payload()
-    ctrl.create_artifact_from_payload("call_123", payload)
-    ctrl.mark_item_active("call_123", "item-1")
-
-    from aura.conversation.dispatch import WorkerDispatchResult
-
-    # Complete item 1
-    ctrl.attach_receipt("call_123", WorkerDispatchResult(ok=True, summary="Done"))
-    ctrl.advance_to_next_item("call_123")
-
-    # Item 2 gets interrupted — returns to pending
-    ctrl.mark_item_active("call_123", "item-2")
-    ctrl.attach_receipt("call_123", WorkerDispatchResult(
-        ok=False,
-        summary="Interrupted",
-        modified_files=[],
-    ))
-
-    artifact = ctrl.get_artifact("call_123")
-    assert artifact is not None
-    projection = WorkArtifactProjection.from_artifact(artifact)
-    assert projection.completed_count == 1
-    assert projection.pending_count == 1
-    assert projection.is_complete
-
-
-def test_projection_counts_only_done_active_pending():
-    """Projection summary counts only done, active, pending — no blocked count."""
-    from aura.work_artifact.model import WorkArtifactReceipt
-
-    artifact = WorkArtifact(
-        artifact_id="art-1",
-        goal="Test",
-        work_items=[
-            WorkArtifactItem(
-                id="item-1", title="A", intent="I1",
-                target_files=["a.py"], acceptance="A1",
-            ),
-            WorkArtifactItem(
-                id="item-2", title="B", intent="I2",
-                target_files=["b.py"], acceptance="A2",
-            ),
-            WorkArtifactItem(
-                id="item-3", title="C", intent="I3",
-                target_files=["c.py"], acceptance="A3",
-            ),
-        ],
-        current_item_id="item-1",
-    )
-
-    # item-1: done
-    artifact.attach_receipt("item-1", WorkArtifactReceipt(status="ok"))
-    # item-2: active
-    artifact.mark_active("item-2")
-    # item-3: pending (default)
-
-    proj = WorkArtifactProjection.from_artifact(artifact)
-    assert proj.completed_count == 1
-    assert proj.active_count == 1
-    assert proj.pending_count == 1
-    assert proj.is_complete
-    assert not hasattr(proj, "blocked_count")
-
-
-def _ok_result():
-    from aura.conversation.dispatch import WorkerDispatchResult
-    return WorkerDispatchResult(
-        ok=True,
-        summary="All good",
-        modified_files=["a.py"],
-        status="completed",
-    )
-
-
-def _recoverable_quality_continuation_result():
-    from aura.conversation.dispatch import WorkerDispatchResult
-
-    return WorkerDispatchResult(
-        ok=False,
-        summary="Worker quality findings are recoverable.",
-        recoverable=True,
-        phase_boundary=True,
-        needs_followup=True,
-        extras={
-            "failure_class": "worker_quality_unresolved_findings",
-            "recoverable": True,
-            "phase_boundary": True,
-            "suggested_next_tool": "dispatch_to_worker",
-            "details": {
-                "recoverable": True,
-                "phase_boundary": True,
-                "suggested_next_tool": "dispatch_to_worker",
-                "findings": [
-                    {
-                        "kind": "large_diff_whole_file_rewrite",
-                        "severity": "warning",
-                        "file": "a.py",
-                    }
-                ],
-            },
-        },
-    )

@@ -50,14 +50,7 @@ class WorkArtifactProjection:
         completed_count = 0
         active_count = 0
         pending_count = 0
-
-        artifact_status = "pending"
-        for item in artifact.work_items:
-            if item.status.value == "done":
-                artifact_status = "done"
-                break
-            elif item.status.value == "active":
-                artifact_status = "active"
+        failed_count = 0
 
         items: list[dict[str, Any]] = []
         for item in artifact.work_items:
@@ -67,7 +60,7 @@ class WorkArtifactProjection:
                 "intent": item.intent,
                 "target_files": list(item.target_files),
                 "acceptance": item.acceptance,
-                "status": artifact_status,
+                "status": item.status.value,
             }
             if item.receipt is not None:
                 item_dict["receipt"] = item.receipt.to_dict()
@@ -78,8 +71,27 @@ class WorkArtifactProjection:
                 active_count += 1
             elif item.status.value == "pending":
                 pending_count += 1
+            elif item.status.value == "failed":
+                failed_count += 1
 
             items.append(item_dict)
+
+        total = len(artifact.work_items)
+        is_complete = total > 0 and all(
+            item.status.value == "done" for item in artifact.work_items
+        )
+        # Artifact status derived from aggregate state
+        if is_complete:
+            artifact_status = "done"
+        elif active_count > 0:
+            artifact_status = "active"
+        elif completed_count > 0 and not is_complete:
+            # Some items done, more remain — overall work in progress
+            artifact_status = "active"
+        elif failed_count > 0 and completed_count == 0 and active_count == 0:
+            artifact_status = "failed"
+        else:
+            artifact_status = "pending"
 
         current = artifact.current_item()
         current_dict: dict[str, Any] | None = None
@@ -90,7 +102,7 @@ class WorkArtifactProjection:
                 "intent": current.intent,
                 "target_files": list(current.target_files),
                 "acceptance": current.acceptance,
-                "status": artifact_status,
+                "status": current.status.value,
             }
             if current.receipt is not None:
                 current_dict["receipt"] = current.receipt.to_dict()
@@ -107,5 +119,5 @@ class WorkArtifactProjection:
             active_count=active_count,
             pending_count=pending_count,
             artifact_status=artifact_status,
-            is_complete=(artifact_status == "done"),
+            is_complete=is_complete,
         )

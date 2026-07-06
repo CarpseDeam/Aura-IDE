@@ -74,15 +74,8 @@ class WorkArtifactCard(QFrame):
         )
         outer.addWidget(goal_label)
 
-        # ── Summary row ──
-        status = _normalize_status(projection.artifact_status)
-        if status == "done":
-            summary_text = "✅ Done"
-        elif status == "active":
-            summary_text = "▶ Active"
-        else:
-            summary_text = "⏳ Pending"
-
+        # ── Summary row with progress counts ──
+        summary_text = self._build_summary_text(projection)
         self._summary_label = QLabel(summary_text)
         self._summary_label.setStyleSheet(
             f"color: {FG_DIM}; font-size: 11px; background: transparent; border: none;"
@@ -141,10 +134,30 @@ class WorkArtifactCard(QFrame):
 
     # ── building blocks ───────────────────────────────────────────────────
 
+    @staticmethod
+    def _build_summary_text(projection: WorkArtifactProjection) -> str:
+        """Build a progress summary line from projection counts."""
+        done = projection.completed_count
+        active = projection.active_count
+        pending = projection.pending_count
+        total = done + active + pending
+
+        if projection.is_complete:
+            return f"✅ {done}/{total} done"
+        if done > 0 or active > 0:
+            parts = [f"{done}/{total} done"]
+            if active:
+                parts.append(f"{active} active")
+            if pending:
+                parts.append(f"{pending} pending")
+            return "▶ " + ", ".join(parts)
+        return f"⏳ {total} pending" if total > 0 else "⏳ Pending"
+
     def _build_item_row(self, item_dict: dict[str, Any]) -> QFrame:
-        """Build a horizontal row for one work item."""
+        """Build a horizontal row for one work item using its own status."""
         frame = QFrame(self)
-        status = _normalize_status(self._projection.artifact_status)
+        raw_status = str(item_dict.get("status", "pending"))
+        status = _normalize_status(raw_status)
         color = _ITEM_STATUS_COLORS.get(status, FG_DIM)
         status_icon = {
             "pending": "⏳",
@@ -184,15 +197,8 @@ class WorkArtifactCard(QFrame):
         """Update the card with a new projection snapshot — rebuilds item rows and summary."""
         self._projection = projection
 
-        # Update summary counts
-        status = _normalize_status(projection.artifact_status)
-        if status == "done":
-            summary_text = "✅ Done"
-        elif status == "active":
-            summary_text = "▶ Active"
-        else:
-            summary_text = "⏳ Pending"
-        self._summary_label.setText(summary_text)
+        # Update summary with progress counts
+        self._summary_label.setText(self._build_summary_text(projection))
 
         # Tear down old item widgets
         layout = self.layout()
