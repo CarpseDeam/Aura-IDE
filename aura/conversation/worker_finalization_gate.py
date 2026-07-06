@@ -402,15 +402,15 @@ def _run_structural_tier(
             Path(workspace_root),
             compiled_paths,
         )
-        emit_auto_import_result(
-            paths=compiled_paths,
-            diagnostics=import_diag,
-            on_event=on_event,
-            workspace_root=workspace_root,
-        )
         if import_ok:
             imported_paths = compiled_paths
         else:
+            emit_auto_import_result(
+                paths=compiled_paths,
+                diagnostics=import_diag,
+                on_event=on_event,
+                workspace_root=workspace_root,
+            )
             for path in compiled_paths:
                 path_ok, path_diag = run_focused_import_check(
                     Path(workspace_root),
@@ -426,9 +426,6 @@ def _run_structural_tier(
         state.import_verification_required.discard(path)
 
     if imported_paths:
-        if state.worker_flow is not None:
-            state.worker_flow.mark_validation_satisfied()
-
         fp_dep = fingerprint_paths(set(imported_paths), workspace_root)
         try:
             if fp_dep and fp_dep == state.last_dependent_ok_fingerprint:
@@ -484,6 +481,8 @@ def _run_structural_tier(
     if not findings:
         if fp_struct:
             state.last_structural_ok_fingerprint = fp_struct
+        if state.worker_flow is not None:
+            state.worker_flow.mark_validation_satisfied()
         return "none"
 
     if len(findings) == 1:
