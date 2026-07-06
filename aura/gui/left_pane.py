@@ -75,14 +75,15 @@ class _ProjectRow(QFrame):
         self._collapsed = False
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFixedHeight(32)
+        self.setObjectName("projectRowActive" if is_active else "projectRow")
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 0, 8, 0)
-        layout.setSpacing(4)
+        layout.setContentsMargins(8, 0, 10, 0)
+        layout.setSpacing(6)
 
         self.toggle_btn = _ToggleToolButton(self)
         self.toggle_btn.setObjectName("sectionToggle")
-        self.toggle_btn.setFixedWidth(16)
+        self.toggle_btn.setFixedWidth(18)
         self.toggle_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.toggle_btn.clicked.connect(self._on_toggle_clicked)
         layout.addWidget(self.toggle_btn)
@@ -97,26 +98,46 @@ class _ProjectRow(QFrame):
 
         if is_active:
             self.setStyleSheet(f"""
-                QFrame {{
+                QFrame#projectRowActive {{
                     background: {BG_ALT};
-                    border-top: 1px solid rgba(255, 255, 255, 0.06);
-                    border-right: 1px solid rgba(0, 0, 0, 0.18);
-                    border-bottom: 1px solid rgba(0, 0, 0, 0.25);
-                    border-left: 3px solid {ACCENT};
+                    border: 1px solid rgba(122, 162, 247, 0.22);
                     border-radius: 8px;
                 }}
-                QFrame:hover {{
+                QFrame#projectRowActive:hover {{
                     background: {BG_RAISED};
+                }}
+                QFrame#projectRowActive QToolButton#sectionToggle {{
+                    background: transparent;
+                    border: none;
+                    padding: 0;
+                    margin: 0;
+                    color: {ACCENT};
+                }}
+                QFrame#projectRowActive QToolButton#sectionToggle:hover {{
+                    background: transparent;
+                    border: none;
                 }}
             """)
         else:
             self.setStyleSheet(f"""
-                QFrame {{
+                QFrame#projectRow {{
                     background: transparent;
-                    border-left: 3px solid transparent;
+                    border: 1px solid transparent;
+                    border-radius: 8px;
                 }}
-                QFrame:hover {{
+                QFrame#projectRow:hover {{
                     background: {BG_RAISED};
+                }}
+                QFrame#projectRow QToolButton#sectionToggle {{
+                    background: transparent;
+                    border: none;
+                    padding: 0;
+                    margin: 0;
+                    color: {FG_MUTED};
+                }}
+                QFrame#projectRow QToolButton#sectionToggle:hover {{
+                    background: transparent;
+                    border: none;
                 }}
             """)
 
@@ -307,7 +328,7 @@ class LeftPane(QFrame):
 
         self._projects_container = QWidget()
         self._projects_layout = QVBoxLayout(self._projects_container)
-        self._projects_layout.setContentsMargins(0, 0, 0, 0)
+        self._projects_layout.setContentsMargins(8, 0, 8, 0)
         self._projects_layout.setSpacing(2)
 
         self._projects_scroll.setWidget(self._projects_container)
