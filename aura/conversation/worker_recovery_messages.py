@@ -8,6 +8,7 @@ __all__ = [
     "WORKER_IMPORT_FAILURE_INSTRUCTION",
     "WORKER_DEPENDENT_CONTRACT_INSTRUCTION",
     "WORKER_LAUNCH_FAILURE_INSTRUCTION",
+    "WORKER_BATCHED_VALIDATION_INSTRUCTION",
 ]
 
 PATCH_CANDIDATE_INVALID_SYNTAX_ACTION = (
@@ -58,4 +59,11 @@ WORKER_LAUNCH_FAILURE_INSTRUCTION = (
     "then finish again.\n\n"
     "Command: {command}\n\n"
     "Diagnostic output:\n{output}"
+)
+
+WORKER_BATCHED_VALIDATION_INSTRUCTION = (
+    "Validation found {num_problems} problems. All must be fixed before finishing.\n\n"
+    "{findings_sections}\n"
+    "Fix all of the above problems, re-run the smallest relevant check per fix, "
+    "and only then provide the final report."
 )

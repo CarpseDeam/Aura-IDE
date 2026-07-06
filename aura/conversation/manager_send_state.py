@@ -93,6 +93,7 @@ class _SendState:
     # --- launch / dependency fingerprints (skip-optimisation) ---
     last_launch_ok_fingerprint: str | None = None
     last_dependent_ok_fingerprint: str | None = None
+    last_structural_ok_fingerprint: str | None = None
 
     def __post_init__(self) -> None:
         self.limits = ToolLimitState(mode=self.mode)

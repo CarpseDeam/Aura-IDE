@@ -35,6 +35,7 @@ from aura.conversation.worker_final_validation import (
 )
 from aura.conversation.worker_fingerprints import fingerprint_paths
 from aura.conversation.worker_quality_gate import handle_worker_quality_gate
+from dataclasses import dataclass
 from aura.conversation.worker_recovery_messages import (
     PATCH_CANDIDATE_INVALID_SYNTAX_ACTION,
     WORKER_AUTO_PY_COMPILE_INSTRUCTION,
@@ -42,6 +43,7 @@ from aura.conversation.worker_recovery_messages import (
     WORKER_EDIT_RECOVERY_INSTRUCTION,
     WORKER_IMPORT_FAILURE_INSTRUCTION,
     WORKER_LAUNCH_FAILURE_INSTRUCTION,
+    WORKER_BATCHED_VALIDATION_INSTRUCTION,
 )
 from aura.conversation.worker_validation import (
     emit_auto_dependent_import_info,
@@ -53,6 +55,15 @@ from aura.conversation.worker_validation import (
 from aura.dependency_context import compute_dependents
 from aura.verify import run_dependent_import_check, run_focused_import_check
 
+
+
+@dataclass(frozen=True)
+class _ValidationFinding:
+    rung: str
+    paths: tuple[str, ...]
+    diagnostics: str
+    dependent_paths: tuple[str, ...] = ()
+    command: str | None = None
 
 EventCallback = Callable[[Event], None]
 WorkerFinalizationAction = Literal["continue", "finished", "none"]
@@ -238,7 +249,7 @@ def handle_worker_candidate_finalization(
             and is_python_path(_normalize_worker_path(path))
         )
         if product_paths:
-            action = _run_syntax_and_import_validation(
+            action = _run_structural_tier(
                 state=state,
                 history=history,
                 workspace_root=workspace_root,
@@ -248,22 +259,13 @@ def handle_worker_candidate_finalization(
             if action != "none":
                 return action
 
-    action = _run_launch_verification(
-        state=state,
-        history=history,
-        workspace_root=workspace_root,
-        on_event=on_event,
-        declared_run_command=declared_run_command,
-    )
-    if action != "none":
-        return action
-
-    action = _run_explicit_validation(
+    action = _run_behavioral_tier(
         state=state,
         history=history,
         workspace_root=workspace_root,
         on_event=on_event,
         finish_worker_recoverable_followup=finish_worker_recoverable_followup,
+        declared_run_command=declared_run_command,
         explicit_validation_commands=explicit_validation_commands,
     )
     if action != "none":
@@ -342,7 +344,7 @@ def handle_worker_candidate_finalization(
     )
 
 
-def _run_syntax_and_import_validation(
+def _run_structural_tier(
     *,
     state: _SendState,
     history: History,
@@ -350,6 +352,18 @@ def _run_syntax_and_import_validation(
     on_event: EventCallback,
     product_paths: list[str],
 ) -> WorkerFinalizationAction:
+    fp_struct = fingerprint_paths(set(product_paths), workspace_root)
+    if fp_struct and fp_struct == state.last_structural_ok_fingerprint:
+        state.syntax_validation_required.clear()
+        for path in product_paths:
+            state.import_verification_required.discard(path)
+        if state.worker_flow is not None:
+            state.worker_flow.mark_validation_satisfied()
+        logging.getLogger(__name__).info("Skipping structural validation: fingerprint match")
+        return "none"
+
+    findings: list[_ValidationFinding] = []
+
     all_ok, diagnostics = run_focused_py_compile(
         product_paths,
         workspace_root=workspace_root,
@@ -361,249 +375,316 @@ def _run_syntax_and_import_validation(
         on_event=on_event,
         workspace_root=workspace_root,
     )
+
+    compiled_paths = []
     if all_ok:
-        state.syntax_validation_required.clear()
-        if state.worker_flow is not None:
-            state.worker_flow.mark_validation_satisfied()
-        import_ok, import_diag = run_focused_import_check(
-            Path(workspace_root),
-            product_paths,
-        )
-        if not import_ok:
-            for path in product_paths:
-                state.import_verification_required.add(path)
-            emit_auto_import_result(
-                paths=product_paths,
-                diagnostics=import_diag,
-                on_event=on_event,
+        compiled_paths = product_paths
+    else:
+        for path in product_paths:
+            path_ok, path_diag = run_focused_py_compile(
+                [path],
                 workspace_root=workspace_root,
             )
-            instruction = WORKER_IMPORT_FAILURE_INSTRUCTION.format(
-                diagnostics=import_diag,
-            )
-            history.append_user_text(instruction)
-            state.discard_worker_candidate_final()
-            return "continue"
+            if path_ok:
+                compiled_paths.append(path)
+            else:
+                findings.append(_ValidationFinding(rung="py_compile", paths=(path,), diagnostics=path_diag))
+                set_syntax_repair_state(state.syntax_repair_required, path, {
+                    "error": path_diag,
+                    "failed_repairs": 0,
+                })
 
-        for path in product_paths:
-            state.import_verification_required.discard(path)
-        return _run_dependent_import_validation(
-            state=state,
-            history=history,
-            workspace_root=workspace_root,
-            on_event=on_event,
-            product_paths=product_paths,
-        )
-
-    # Auto-py_compile failed — feed diagnostics back for repair.
-    for path in product_paths:
-        set_syntax_repair_state(state.syntax_repair_required, path, {
-            "error": diagnostics,
-            "failed_repairs": 0,
-        })
     state.syntax_validation_required.clear()
-    instruction = WORKER_AUTO_PY_COMPILE_INSTRUCTION.format(
-        diagnostics=diagnostics,
+
+    imported_paths = []
+    if compiled_paths:
+        import_ok, import_diag = run_focused_import_check(
+            Path(workspace_root),
+            compiled_paths,
+        )
+        emit_auto_import_result(
+            paths=compiled_paths,
+            diagnostics=import_diag,
+            on_event=on_event,
+            workspace_root=workspace_root,
+        )
+        if import_ok:
+            imported_paths = compiled_paths
+        else:
+            for path in compiled_paths:
+                path_ok, path_diag = run_focused_import_check(
+                    Path(workspace_root),
+                    [path],
+                )
+                if path_ok:
+                    imported_paths.append(path)
+                else:
+                    findings.append(_ValidationFinding(rung="import", paths=(path,), diagnostics=path_diag))
+                    state.import_verification_required.add(path)
+
+    for path in imported_paths:
+        state.import_verification_required.discard(path)
+
+    if imported_paths:
+        if state.worker_flow is not None:
+            state.worker_flow.mark_validation_satisfied()
+
+        fp_dep = fingerprint_paths(set(imported_paths), workspace_root)
+        try:
+            if fp_dep and fp_dep == state.last_dependent_ok_fingerprint:
+                pass
+            else:
+                deps = compute_dependents(Path(workspace_root), imported_paths)
+                deps = deps[:15]
+                if deps:
+                    gating_paths, gating_diag, info_diag = run_dependent_import_check(
+                        Path(workspace_root),
+                        imported_paths,
+                        deps,
+                    )
+                    if info_diag:
+                        emit_auto_dependent_import_info(
+                            paths=deps,
+                            diagnostics=info_diag,
+                            on_event=on_event,
+                            workspace_root=workspace_root,
+                        )
+                    if gating_paths:
+                        emit_auto_import_result(
+                            paths=gating_paths,
+                            diagnostics=gating_diag,
+                            on_event=on_event,
+                            workspace_root=workspace_root,
+                        )
+                        for path in imported_paths:
+                            path_deps = compute_dependents(Path(workspace_root), [path])[:15]
+                            if path_deps:
+                                path_gating, path_gating_diag, _ = run_dependent_import_check(
+                                    Path(workspace_root),
+                                    [path],
+                                    path_deps,
+                                )
+                                if path_gating:
+                                    findings.append(_ValidationFinding(
+                                        rung="dependent_import",
+                                        paths=(path,),
+                                        diagnostics=path_gating_diag,
+                                        dependent_paths=tuple(path_gating)
+                                    ))
+                                    state.import_verification_required.add(path)
+                    else:
+                        if fp_dep:
+                            state.last_dependent_ok_fingerprint = fp_dep
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "Dependent import check failed non-fatally",
+                exc_info=True,
+            )
+
+    if not findings:
+        if fp_struct:
+            state.last_structural_ok_fingerprint = fp_struct
+        return "none"
+
+    if len(findings) == 1:
+        f = findings[0]
+        if f.rung == "py_compile":
+            instruction = WORKER_AUTO_PY_COMPILE_INSTRUCTION.format(diagnostics=f.diagnostics)
+        elif f.rung == "import":
+            instruction = WORKER_IMPORT_FAILURE_INSTRUCTION.format(diagnostics=f.diagnostics)
+        elif f.rung == "dependent_import":
+            instruction = WORKER_DEPENDENT_CONTRACT_INSTRUCTION.format(
+                edited_files=", ".join(f.paths),
+                dependent_files=", ".join(f.dependent_paths),
+                diagnostics=f.diagnostics,
+            )
+        history.append_user_text(instruction)
+        state.discard_worker_candidate_final()
+        return "continue"
+
+    sections = []
+    for f in findings:
+        title = {
+            "py_compile": "Syntax Error",
+            "import": "Import Error",
+            "dependent_import": "Dependent Import Error",
+        }.get(f.rung, f.rung)
+        
+        path_str = ", ".join(f.paths)
+        if f.rung == "dependent_import" and f.dependent_paths:
+            path_str += f" (broke {', '.join(f.dependent_paths)})"
+            
+        sections.append(f"### {title}\nPaths: {path_str}\n\n{f.diagnostics.strip()}")
+        
+    instruction = WORKER_BATCHED_VALIDATION_INSTRUCTION.format(
+        num_problems=len(findings),
+        findings_sections="\n\n".join(sections),
     )
     history.append_user_text(instruction)
     state.discard_worker_candidate_final()
     return "continue"
 
-
-def _run_dependent_import_validation(
-    *,
-    state: _SendState,
-    history: History,
-    workspace_root,
-    on_event: EventCallback,
-    product_paths: list[str],
-) -> WorkerFinalizationAction:
-    fp_dep = fingerprint_paths(set(product_paths), workspace_root)
-    try:
-        gating_paths: list[str] = []
-        if fp_dep and fp_dep == state.last_dependent_ok_fingerprint:
-            pass
-        else:
-            deps = compute_dependents(Path(workspace_root), product_paths)
-            deps = deps[:15]
-            if deps:
-                gating_paths, gating_diag, info_diag = run_dependent_import_check(
-                    Path(workspace_root),
-                    product_paths,
-                    deps,
-                )
-                if info_diag:
-                    emit_auto_dependent_import_info(
-                        paths=deps,
-                        diagnostics=info_diag,
-                        on_event=on_event,
-                        workspace_root=workspace_root,
-                    )
-                if gating_paths:
-                    for path in product_paths:
-                        state.import_verification_required.add(path)
-                    emit_auto_import_result(
-                        paths=gating_paths,
-                        diagnostics=gating_diag,
-                        on_event=on_event,
-                        workspace_root=workspace_root,
-                    )
-                    instruction = WORKER_DEPENDENT_CONTRACT_INSTRUCTION.format(
-                        edited_files=", ".join(product_paths),
-                        dependent_files=", ".join(gating_paths),
-                        diagnostics=gating_diag,
-                    )
-                    history.append_user_text(instruction)
-                    state.discard_worker_candidate_final()
-                    return "continue"
-        if fp_dep and not gating_paths:
-            state.last_dependent_ok_fingerprint = fp_dep
-    except Exception:
-        logging.getLogger(__name__).warning(
-            "Dependent import check failed non-fatally",
-            exc_info=True,
-        )
-    return "none"
-
-
-def _run_launch_verification(
-    *,
-    state: _SendState,
-    history: History,
-    workspace_root,
-    on_event: EventCallback,
-    declared_run_command: str | None,
-) -> WorkerFinalizationAction:
-    if not declared_run_command:
-        return "none"
-    fp = fingerprint_paths(state.worker_app_writes, workspace_root)
-    try:
-        if fp and fp == state.last_launch_ok_fingerprint:
-            emit_auto_launch_result(
-                command=declared_run_command,
-                ok=True,
-                output="(skipped: no app-source change since last successful launch)",
-                on_event=on_event,
-                workspace_root=workspace_root,
-            )
-        else:
-            from aura.sandbox import SandboxExecutor
-            sandbox = SandboxExecutor(
-                mode="host",
-                workspace_root=Path(workspace_root),
-            )
-            watch = sandbox.run_and_watch(
-                declared_run_command,
-                window_seconds=10,
-            )
-            if not (watch.ok and watch.exited_early):
-                emit_auto_launch_result(
-                    command=declared_run_command,
-                    ok=False,
-                    output=watch.output,
-                    on_event=on_event,
-                    workspace_root=workspace_root,
-                )
-                instruction = WORKER_LAUNCH_FAILURE_INSTRUCTION.format(
-                    command=declared_run_command,
-                    output=watch.output,
-                )
-                history.append_user_text(instruction)
-                state.discard_worker_candidate_final()
-                return "continue"
-            if fp:
-                state.last_launch_ok_fingerprint = fp
-            emit_auto_launch_result(
-                command=declared_run_command,
-                ok=True,
-                output=watch.output,
-                on_event=on_event,
-                workspace_root=workspace_root,
-            )
-    except Exception:
-        logging.getLogger(__name__).warning(
-            "Launch verification failed non-fatally",
-            exc_info=True,
-        )
-    return "none"
-
-
-def _run_explicit_validation(
+def _run_behavioral_tier(
     *,
     state: _SendState,
     history: History,
     workspace_root,
     on_event: EventCallback,
     finish_worker_recoverable_followup: Callable[..., None],
+    declared_run_command: str | None,
     explicit_validation_commands: list[str] | None,
 ) -> WorkerFinalizationAction:
-    if not explicit_validation_commands:
-        return "none"
-    val_result = run_explicit_validation_commands(
-        workspace_root=Path(workspace_root),
-        commands=explicit_validation_commands,
-    )
-    validation_runs = getattr(val_result, "runs", None)
-    if validation_runs:
-        emit_explicit_validation_runs(
-            runs=validation_runs,
-            on_event=on_event,
-            workspace_root=workspace_root,
+    findings: list[_ValidationFinding] = []
+    
+    if declared_run_command:
+        fp = fingerprint_paths(state.worker_app_writes, workspace_root)
+        try:
+            if fp and fp == state.last_launch_ok_fingerprint:
+                emit_auto_launch_result(
+                    command=declared_run_command,
+                    ok=True,
+                    output="(skipped: no app-source change since last successful launch)",
+                    on_event=on_event,
+                    workspace_root=workspace_root,
+                )
+            else:
+                from aura.sandbox import SandboxExecutor
+                sandbox = SandboxExecutor(
+                    mode="host",
+                    workspace_root=Path(workspace_root),
+                )
+                watch = sandbox.run_and_watch(
+                    declared_run_command,
+                    window_seconds=10,
+                )
+                if not (watch.ok and watch.exited_early):
+                    emit_auto_launch_result(
+                        command=declared_run_command,
+                        ok=False,
+                        output=watch.output,
+                        on_event=on_event,
+                        workspace_root=workspace_root,
+                    )
+                    findings.append(_ValidationFinding(
+                        rung="launch",
+                        paths=(),
+                        diagnostics=watch.output,
+                        command=declared_run_command
+                    ))
+                else:
+                    if fp:
+                        state.last_launch_ok_fingerprint = fp
+                    emit_auto_launch_result(
+                        command=declared_run_command,
+                        ok=True,
+                        output=watch.output,
+                        on_event=on_event,
+                        workspace_root=workspace_root,
+                    )
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "Launch verification failed non-fatally",
+                exc_info=True,
+            )
+
+    if explicit_validation_commands:
+        val_result = run_explicit_validation_commands(
+            workspace_root=Path(workspace_root),
+            commands=explicit_validation_commands,
         )
-    if not val_result.ok:
-        if not validation_runs:
-            emit_explicit_validation_result(
-                command=val_result.command,
-                ok=False,
-                output=val_result.diagnostics,
+        validation_runs = getattr(val_result, "runs", None)
+        if validation_runs:
+            emit_explicit_validation_runs(
+                runs=validation_runs,
                 on_event=on_event,
                 workspace_root=workspace_root,
             )
-        validation_key = val_result.command or "\n".join(
-            explicit_validation_commands
-        )
-        failure_count = state.explicit_validation_failure_counts.get(
-            validation_key,
-            0,
-        ) + 1
-        state.explicit_validation_failure_counts[validation_key] = failure_count
-        if failure_count > 1:
-            finish_worker_recoverable_followup(
-                on_event,
-                failure_class="product_validation_failed",
-                error=(
-                    "Final acceptance validation still fails after one focused "
-                    "repair attempt."
-                ),
-                details={
-                    "command": val_result.command,
-                    "diagnostics": val_result.diagnostics,
-                    "suggested_next_tool": "dispatch_to_worker",
-                    "suggested_next_action": (
-                        "Redispatch a focused repair, or revise the "
-                        "acceptance command if it is misdeclared."
+        if not val_result.ok:
+            if not validation_runs:
+                emit_explicit_validation_result(
+                    command=val_result.command,
+                    ok=False,
+                    output=val_result.diagnostics,
+                    on_event=on_event,
+                    workspace_root=workspace_root,
+                )
+            validation_key = val_result.command or "\n".join(explicit_validation_commands)
+            failure_count = state.explicit_validation_failure_counts.get(validation_key, 0) + 1
+            state.explicit_validation_failure_counts[validation_key] = failure_count
+            if failure_count > 1:
+                finish_worker_recoverable_followup(
+                    on_event,
+                    failure_class="product_validation_failed",
+                    error=(
+                        "Final acceptance validation still fails after one focused "
+                        "repair attempt."
                     ),
-                    "dispatch_mismatch": True,
-                    "worker_confusion_question": (
-                        "Worker could not make acceptance validation "
-                        "pass after one focused repair attempt"
-                        + (": " + str(val_result.command) if val_result.command else ".")
-                    ),
-                },
+                    details={
+                        "command": val_result.command,
+                        "diagnostics": val_result.diagnostics,
+                        "suggested_next_tool": "dispatch_to_worker",
+                        "suggested_next_action": (
+                            "Redispatch a focused repair, or revise the "
+                            "acceptance command if it is misdeclared."
+                        ),
+                        "dispatch_mismatch": True,
+                        "worker_confusion_question": (
+                            "Worker could not make acceptance validation "
+                            "pass after one focused repair attempt"
+                            + (": " + str(val_result.command) if val_result.command else ".")
+                        ),
+                    },
+                )
+                return "finished"
+            
+            findings.append(_ValidationFinding(
+                rung="explicit_validation",
+                paths=(),
+                diagnostics=val_result.diagnostics,
+                command=val_result.command
+            ))
+        else:
+            state.explicit_validation_failure_counts.clear()
+            if state.worker_flow is not None:
+                state.worker_flow.mark_validation_satisfied()
+
+    if not findings:
+        return "none"
+
+    if len(findings) == 1:
+        f = findings[0]
+        if f.rung == "launch":
+            instruction = WORKER_LAUNCH_FAILURE_INSTRUCTION.format(
+                command=f.command,
+                output=f.diagnostics,
             )
-            return "finished"
-        instruction = WORKER_EXPLICIT_VALIDATION_FAILURE_INSTRUCTION.format(
-            command=val_result.command,
-            diagnostics=val_result.diagnostics,
-        )
+        elif f.rung == "explicit_validation":
+            instruction = WORKER_EXPLICIT_VALIDATION_FAILURE_INSTRUCTION.format(
+                command=f.command,
+                diagnostics=f.diagnostics,
+            )
         history.append_user_text(instruction)
         state.discard_worker_candidate_final()
         return "continue"
-    state.explicit_validation_failure_counts.clear()
-    if state.worker_flow is not None:
-        state.worker_flow.mark_validation_satisfied()
-    return "none"
 
+    sections = []
+    for f in findings:
+        title = {
+            "launch": "Launch Failure",
+            "explicit_validation": "Explicit Validation Failure",
+        }.get(f.rung, f.rung)
+        
+        diag = f.diagnostics.strip()
+        cmd = f"Command: {f.command}\n\n" if f.command else ""
+        sections.append(f"### {title}\n{cmd}{diag}")
+        
+    instruction = WORKER_BATCHED_VALIDATION_INSTRUCTION.format(
+        num_problems=len(findings),
+        findings_sections="\n\n".join(sections),
+    )
+    history.append_user_text(instruction)
+    state.discard_worker_candidate_final()
+    return "continue"
 
 def _release_candidate_final(
     *,
