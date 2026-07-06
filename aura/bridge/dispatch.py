@@ -54,6 +54,7 @@ from aura.events import EventBus
 from aura.lifecycle import LifecycleHooks, attach_lifecycle_notify
 from aura.lifecycle.builtin_worker_gates import register_builtin_worker_gates
 from aura.work_artifact.controller import WorkArtifactController
+from aura.work_artifact.model import WorkItemStatus
 from aura.work_artifact.projection import WorkArtifactProjection
 from aura.worker_todo import WorkerTodoProjector
 
@@ -1003,6 +1004,38 @@ class _DispatchProxy(QObject):
                 f"Summary: {receipt.summary}\n"
                 f"Modified files: {', '.join(receipt.modified_files) if receipt.modified_files else '(none)'}"
             )
+
+        # Append manifest of prior done items so each worker knows what already
+        # changed in the workspace and why — derived from verified receipts, not
+        # from planner narration.
+        artifact = self._artifact_controller.get_artifact(tool_call_id)
+        if artifact is not None:
+            done_items = [
+                it for it in artifact.work_items
+                if it.status == WorkItemStatus.done and it.receipt is not None
+            ]
+            if done_items:
+                manifest_parts = [
+                    "",
+                    "--- Changes already made by prior items of this job ---",
+                ]
+                for done_item in done_items:
+                    files_str = (
+                        ", ".join(done_item.receipt.modified_files)
+                        if done_item.receipt.modified_files
+                        else "(none recorded)"
+                    )
+                    manifest_parts.append(
+                        f"Item: {done_item.title}\n"
+                        f"  Modified files: {files_str}\n"
+                        f"  Summary: {done_item.receipt.summary}"
+                    )
+                manifest_parts.append(
+                    "These changes are complete, verified, and expected in the working tree "
+                    "and in git status/diff output. Treat them as existing code. Do not revert, "
+                    "re-verify, or re-implement them."
+                )
+                spec += "\n".join(manifest_parts)
 
         return WorkerDispatchRequest(
             goal=item.intent or approved_req.goal,
