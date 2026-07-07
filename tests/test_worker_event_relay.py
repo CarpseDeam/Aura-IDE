@@ -8,7 +8,6 @@ the event bus, while non-internal steps still do.
 
 from __future__ import annotations
 
-
 from unittest.mock import MagicMock
 
 import pytest
@@ -21,10 +20,8 @@ from aura.client import (
     ToolCallStart,
     ToolResult,
 )
-from aura.conversation import WorkerDispatchRequest, WorkerDispatchResult
 from aura.events import (
     WORKER_FINAL_REPORT_FINISHED,
-    WORKER_FINAL_REPORT_STARTED,
     WORKER_TOOL_FINISHED,
     WORKER_TOOL_STARTED,
     AuraEvent,
@@ -406,6 +403,7 @@ class TestWorkerEventHandlerLifecycle:
     def handler(self):
         """Create a WorkerEventHandler with mocked dependencies."""
         from unittest.mock import MagicMock
+
         from aura.gui.worker_handler import WorkerEventHandler
 
         bridge = MagicMock()

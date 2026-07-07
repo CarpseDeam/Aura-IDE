@@ -13,7 +13,11 @@ from aura.conversation.manager_send_state import _SendState
 from aura.conversation.manager_tool_round import ToolRoundRunner
 from aura.conversation.tools._types import ToolExecResult
 from aura.conversation.tools.registry import ToolRegistry
-from aura.events import EventBus, WORKER_PRE_TOOL_GATE_DECIDED
+from aura.conversation.worker_pre_tool_gate import (
+    WorkerPreToolGateContext,
+    run_worker_pre_tool_gate,
+)
+from aura.events import WORKER_PRE_TOOL_GATE_DECIDED, EventBus
 from aura.lifecycle import LifecycleHooks
 from aura.lifecycle.builtin_worker_gates import register_builtin_worker_gates
 
@@ -67,7 +71,13 @@ def _run_gate(
     name: str,
     args: dict,
 ) -> dict | None:
-    return runner._run_worker_pre_tool_gate(
+    return run_worker_pre_tool_gate(
+        context=WorkerPreToolGateContext(
+            history=runner._history,
+            tools=runner._tools,
+            lifecycle=runner._lifecycle,
+            event_bus=runner._event_bus,
+        ),
         tool_call_id="tc_gate",
         name=name,
         args=args,

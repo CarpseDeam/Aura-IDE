@@ -6,23 +6,20 @@ propagation of structured metadata through ValidationRunResult.
 
 from __future__ import annotations
 
-from dataclasses import replace
-
 from aura.conversation.validation_orchestrator import (
     ENVIRONMENT_ERROR,
     PASSED,
     PRODUCT_VALIDATION_FAILED,
-    TIMEOUT,
-    TRACEBACK_DETECTED,
     TERMINAL_COMMAND_FAILED,
     TERMINAL_EXECUTION_FAILED,
     TERMINAL_PASSED,
     TERMINAL_ROLE_COMMAND,
     TERMINAL_ROLE_SEARCH,
     TERMINAL_SEARCH_NO_MATCH,
+    TIMEOUT,
+    TRACEBACK_DETECTED,
     CommandOutcome,
     TerminalRunClassification,
-    ValidationCommand,
     ValidationRunResult,
     classify_command_outcome,
     classify_terminal_run,

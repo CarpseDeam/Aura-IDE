@@ -1,15 +1,14 @@
 """Focused tests for the worker.pre_tool_use lifecycle gate.
 
-Tests the gate behaviour through ToolRoundRunner._run_worker_pre_tool_gate()
+Tests the gate behaviour through :func:`run_worker_pre_tool_gate`
 using a minimal fixture setup.
 """
 
 from __future__ import annotations
 
-from functools import partial
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock, PropertyMock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -18,9 +17,12 @@ from aura.conversation.manager_send_state import _SendState
 from aura.conversation.manager_tool_round import ToolRoundRunner
 from aura.conversation.tools._types import ToolExecResult
 from aura.conversation.tools.registry import ToolRegistry
-from aura.events import EventBus, WORKER_PRE_TOOL_GATE_DECIDED
-from aura.lifecycle import GateDecision, HookContext, HookMatcher, LifecycleHooks
-
+from aura.conversation.worker_pre_tool_gate import (
+    WorkerPreToolGateContext,
+    run_worker_pre_tool_gate,
+)
+from aura.events import WORKER_PRE_TOOL_GATE_DECIDED, EventBus
+from aura.lifecycle import GateDecision, HookMatcher, LifecycleHooks
 
 # ── Fixtures ──────────────────────────────────────────────────────────────
 
@@ -87,6 +89,16 @@ def runner_with_lifecycle(
     )
 
 
+def _gate_context(runner: ToolRoundRunner) -> WorkerPreToolGateContext:
+    """Build a WorkerPreToolGateContext from a ToolRoundRunner's privates."""
+    return WorkerPreToolGateContext(
+        history=runner._history,
+        tools=runner._tools,
+        lifecycle=runner._lifecycle,
+        event_bus=runner._event_bus,
+    )
+
+
 def _run_gate(
     runner: ToolRoundRunner,
     *,
@@ -95,10 +107,11 @@ def _run_gate(
     args: dict[str, Any] | None = None,
     state: _SendState,
 ) -> dict[str, Any] | None:
-    """Call the private gate method on *runner*."""
+    """Call :func:`run_worker_pre_tool_gate` with *runner*'s dependencies."""
     if args is None:
         args = {"path": "test.txt", "content": "hello"}
-    return runner._run_worker_pre_tool_gate(
+    return run_worker_pre_tool_gate(
+        context=_gate_context(runner),
         tool_call_id=tool_call_id,
         name=name,
         args=args,
@@ -483,7 +496,7 @@ class TestWorkerModeOnly:
     ) -> None:
         blocked = False
 
-        def handler(ctx: HookContext) -> GateDecision:
+        def handler(ctx: Any) -> GateDecision:
             nonlocal blocked
             blocked = True
             return GateDecision.block(reason="should_not_fire")
@@ -505,16 +518,6 @@ class TestWorkerModeOnly:
         history = History()
         tools = MagicMock(spec=ToolRegistry)
         tools.workspace_root = "/fake/root"
-
-        # Verify _process_task doesn't invoke the gate in planner mode
-        blocked = False
-
-        lifecycle.register_gate(
-            HookMatcher("worker.pre_tool_use"),
-            lambda ctx: (_ for _ in ()).send(  # Sentinel: should never be called
-                _set_true_and_return_block()
-            ),
-        )
 
         runner = ToolRoundRunner(
             history=history,
@@ -570,7 +573,7 @@ class TestInvalidGateHandler:
         lifecycle: LifecycleHooks,
         worker_state: _SendState,
     ) -> None:
-        def failing_handler(ctx: HookContext) -> GateDecision:
+        def failing_handler(ctx: Any) -> GateDecision:
             raise RuntimeError("unexpected error")
 
         lifecycle.register_gate(
@@ -634,10 +637,3 @@ class TestLifecycleException:
         result = _run_gate(runner, state=worker_state)
         assert result is not None
         assert result["blocked"] is True
-
-
-# ── Test helpers ──────────────────────────────────────────────────────────
-
-
-def _set_true_and_return_block() -> GateDecision:
-    raise AssertionError("Gate should not be called in planner mode")

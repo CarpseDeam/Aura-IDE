@@ -17,15 +17,16 @@ Key invariants tested here:
 import json
 import logging
 import threading
+from unittest.mock import patch
 
 from aura.client import (
     ContentDelta,
     Done,
     ReasoningDelta,
     ToolCallStart,
-    ToolResult,
     WorkerDispatchRequested,
 )
+from aura.conversation.dispatch import WorkerDispatchResult
 from aura.conversation.dispatch_failure import classify_failed_worker_dispatch
 from aura.conversation.history import History
 from aura.conversation.loop_detection import LoopDetector
@@ -33,12 +34,9 @@ from aura.conversation.manager_send_state import _SendState
 from aura.conversation.manager_tool_round import ToolRoundRunner
 from aura.conversation.planner_refresh import PlannerRefreshState
 from aura.conversation.tool_runner import ToolRunner
-from aura.conversation.dispatch import WorkerDispatchResult
 from aura.conversation.tools.registry import ToolRegistry
 from aura.conversation.verification_progress import VerificationProgressTracker
-from aura.conversation.workflow_state import WorkflowStatus
 from aura.research.policy import decide_research_policy
-
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -551,12 +549,6 @@ def test_silent_preflight_suppresses_all_visible_events():
 
 def test_failed_dispatch_classification_preserves_constraint(tmp_path):
     """A Worker dispatch failure preserves its failure constraint."""
-    runner = ToolRunner(
-        History(),
-        tmp_path,
-        LoopDetector(),
-        VerificationProgressTracker(),
-    )
     # Simulate a failed dispatch to test classification
     result = WorkerDispatchResult(
         ok=False,
@@ -778,17 +770,19 @@ def test_internal_handoff_does_not_use_blocker_done_path(tmp_path):
     def fail_blocker(*args, **kwargs):
         raise AssertionError("internal handoff must not use dispatch blocker path")
 
-    runner._append_dispatch_blocker_message = fail_blocker
-
-    outcome = runner.run(
-        tool_calls=[tool_call],
-        state=state,
-        on_event=lambda event: None,
-        approval_cb=lambda request: None,
-        cancel_event=threading.Event(),
-        dispatch_cb=lambda _tool_id, _req: WorkerDispatchResult(ok=True, summary="OK"),
-        cleanup_cancelled=lambda on_event: None,
-    )
+    with patch(
+        "aura.conversation.manager_tool_round.append_dispatch_blocker_message",
+        fail_blocker,
+    ):
+        outcome = runner.run(
+            tool_calls=[tool_call],
+            state=state,
+            on_event=lambda event: None,
+            approval_cb=lambda request: None,
+            cancel_event=threading.Event(),
+            dispatch_cb=lambda _tool_id, _req: WorkerDispatchResult(ok=True, summary="OK"),
+            cleanup_cancelled=lambda on_event: None,
+        )
 
     assert outcome.action == "return"
 
