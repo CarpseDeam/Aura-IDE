@@ -93,6 +93,38 @@ def _compute_digest(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Diagnostics preview helper
+# ---------------------------------------------------------------------------
+
+
+def validation_diagnostics_preview(text: str, limit: int = 2000) -> dict[str, object]:
+    """Build bounded diagnostics preview fields for handback details.
+
+    The preview keeps failure output actionable without flooding visible
+    Planner logs with multi-thousand-line escaped payloads.
+
+    Parameters
+    ----------
+    text
+        The raw diagnostics string to preview.
+    limit
+        Maximum number of characters to include in the preview.
+
+    Returns
+    -------
+    dict
+        With keys ``diagnostics_preview``, ``diagnostics_truncated``,
+        and ``diagnostics_char_count``.
+    """
+    raw = text or ""
+    return {
+        "diagnostics_preview": raw[:limit],
+        "diagnostics_truncated": len(raw) > limit,
+        "diagnostics_char_count": len(raw),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -188,7 +220,7 @@ def route_validation_failure(
             ),
             "details": {
                 "command": val_result.command,
-                "diagnostics": val_result.diagnostics,
+                **validation_diagnostics_preview(val_result.diagnostics),
                 "suggested_next_tool": "dispatch_to_worker",
                 "suggested_next_action": (
                     "Redispatch a focused repair, or revise the "
@@ -208,6 +240,7 @@ def route_validation_failure(
 __all__ = [
     "ValidationFailureVerdict",
     "route_validation_failure",
+    "validation_diagnostics_preview",
     "VALIDATION_INFRA_FAILURE_INSTRUCTION",
     "VALIDATION_REPAIR_INSTRUCTION",
 ]

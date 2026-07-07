@@ -1,16 +1,14 @@
 """Tests for aura/conversation/validation_failure_routing.py."""
 from __future__ import annotations
 
-import hashlib
 import re
 
 from aura.conversation.validation_failure_routing import (
-    VALIDATION_INFRA_FAILURE_INSTRUCTION,
-    VALIDATION_REPAIR_INSTRUCTION,
     ValidationFailureVerdict,
     _compute_digest,
     _normalize_diagnostics,
     route_validation_failure,
+    validation_diagnostics_preview,
 )
 from aura.conversation.validation_orchestrator import (
     ENVIRONMENT_ERROR,
@@ -18,7 +16,6 @@ from aura.conversation.validation_orchestrator import (
     ValidationRunResult,
 )
 from aura.conversation.worker_final_validation import WorkerFinalValidationResult
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -152,7 +149,7 @@ class TestStallDetection:
         assert verdict.handback_details["failure_class"] == "product_validation_failed"
         assert "details" in verdict.handback_details
 
-    def test_handback_details_contain_command_and_diagnostics(self):
+    def test_handback_details_contain_command_and_diagnostics_preview(self):
         result = _make_result(
             command="pytest tests/",
             diagnostics="FAILED test_foo.py::test_bar - AssertionError",
@@ -162,7 +159,11 @@ class TestStallDetection:
         verdict = route_validation_failure(result, mem, False)
         details = verdict.handback_details["details"]
         assert details["command"] == "pytest tests/"
-        assert "AssertionError" in details["diagnostics"]
+        assert "AssertionError" in details["diagnostics_preview"]
+        assert details["diagnostics_truncated"] is False
+        assert details["diagnostics_char_count"] == len(
+            "FAILED test_foo.py::test_bar - AssertionError"
+        )
 
     def test_handback_details_suggest_redispatch(self):
         result = _make_result()
@@ -351,6 +352,68 @@ class TestEdgeCases:
         verdict = route_validation_failure(result, mem, False)
         assert verdict.action == "fix_command"
         assert "<unknown>" in mem  # key was stored under the fallback
+
+
+# ---------------------------------------------------------------------------
+# validation_diagnostics_preview unit tests
+# ---------------------------------------------------------------------------
+
+class TestValidationDiagnosticsPreview:
+    """``validation_diagnostics_preview`` bounds huge diagnostics without
+    hiding the failure."""
+
+    def test_huge_diagnostics_produce_preview(self):
+        """Very long diagnostics produce a bounded preview."""
+        huge = "X" * 10000
+        result = validation_diagnostics_preview(huge, limit=2000)
+        assert len(result["diagnostics_preview"]) == 2000
+        assert result["diagnostics_preview"] == "X" * 2000
+
+    def test_huge_diagnostics_set_truncated_true(self):
+        huge = "X" * 10000
+        result = validation_diagnostics_preview(huge, limit=2000)
+        assert result["diagnostics_truncated"] is True
+
+    def test_huge_diagnostics_include_char_count(self):
+        huge = "X" * 10000
+        result = validation_diagnostics_preview(huge, limit=2000)
+        assert result["diagnostics_char_count"] == 10000
+
+    def test_full_raw_diagnostics_not_in_handback_details(self):
+        """Stall-path handback details must NOT contain the raw full
+        diagnostics string — only bounded preview fields."""
+        huge = "Y" * 50000
+        result = _make_result(diagnostics=huge)
+        fp = _fingerprint_for(result)
+        mem = {result.command: fp}
+        verdict = route_validation_failure(result, mem, False)
+        details = verdict.handback_details["details"]
+        assert "diagnostics" not in details, (
+            "raw diagnostics key must not appear in handback details"
+        )
+        assert "diagnostics_preview" in details
+        assert details["diagnostics_char_count"] == 50000
+        assert details["diagnostics_truncated"] is True
+
+    def test_small_diagnostics_remain_readable(self):
+        """Short diagnostics pass through unchanged and not truncated."""
+        small = "AssertionError: expected 3 got 5"
+        result = validation_diagnostics_preview(small, limit=2000)
+        assert result["diagnostics_preview"] == small
+        assert result["diagnostics_truncated"] is False
+        assert result["diagnostics_char_count"] == len(small)
+
+    def test_empty_diagnostics(self):
+        result = validation_diagnostics_preview("", limit=2000)
+        assert result["diagnostics_preview"] == ""
+        assert result["diagnostics_truncated"] is False
+        assert result["diagnostics_char_count"] == 0
+
+    def test_none_diagnostics(self):
+        result = validation_diagnostics_preview(None, limit=2000)  # type: ignore[arg-type]
+        assert result["diagnostics_preview"] == ""
+        assert result["diagnostics_truncated"] is False
+        assert result["diagnostics_char_count"] == 0
 
 
 # ---------------------------------------------------------------------------
