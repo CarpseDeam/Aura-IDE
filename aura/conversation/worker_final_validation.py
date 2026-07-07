@@ -55,8 +55,11 @@ def run_explicit_validation_commands(
 ) -> WorkerFinalValidationResult:
     """Run validation commands sequentially through SandboxExecutor.
 
-    Stops at the first failure. Returns ok=True with empty diagnostics if all
-    commands pass or if the command list is empty.
+    Returns ok=True with empty diagnostics if all commands pass or if the
+    command list is empty.  Stops at the first *product* failure (a failure
+    where ``counts_as_product_failure`` is true).  Infra-classified failures
+    (environment, unconfigured tools, etc.) do *not* stop iteration —
+    remaining commands still run so the result carries a complete run list.
     """
     if not commands:
         return WorkerFinalValidationResult(ok=True)
