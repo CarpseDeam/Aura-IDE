@@ -58,8 +58,8 @@ class WorkerValidationLedger:
     are silently ignored.
 
     The ledger is append-only: records accumulate in observation order.
-    ``clear_after_write`` removes all records when a write invalidates
-    prior proof.
+    Snapshot equality is the sole invalidation mechanism — when a write
+    changes the snapshot, stale records are ignored by freshness checks.
     """
 
     def __init__(self) -> None:
@@ -91,7 +91,7 @@ class WorkerValidationLedger:
         preview = raw_output[:500]
 
         record = ValidationLedgerRecord(
-            command_key=normalize_validation_command_key(command, cwd=cwd),
+            command_key=normalize_validation_command_key(command),
             command=command,
             cwd=cwd,
             ok=validation_payload_passed(payload),
@@ -109,14 +109,6 @@ class WorkerValidationLedger:
             source=source,
         )
         self._records.append(record)
-
-    # ------------------------------------------------------------------
-    # Invalidation
-    # ------------------------------------------------------------------
-
-    def clear_after_write(self) -> None:
-        """Remove all records — a write invalidates prior proof."""
-        self._records.clear()
 
     # ------------------------------------------------------------------
     # Queries
@@ -157,8 +149,9 @@ class WorkerValidationLedger:
         most recent matching record is stale (snapshot < current), or
         it has a fresh snapshot but ``ok is False``.
         """
+        key = normalize_validation_command_key(command)
         for r in reversed(self._records):
-            if r.command_key != command:
+            if r.command_key != key:
                 continue
             if r.write_snapshot == write_snapshot:
                 return r.ok

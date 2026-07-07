@@ -591,7 +591,7 @@ def _run_behavioral_tier(
             )
 
     if explicit_validation_commands:
-        current_snapshot = sum(state.write_attempts_by_path.values())
+        current_snapshot = state.applied_write_count()
 
         # ── Ledger skip: avoid duplicate rerun when all explicit
         #    commands already have fresh passed proof. ──────────────
@@ -600,7 +600,7 @@ def _run_behavioral_tier(
         ):
             state.explicit_validation_fingerprints.clear()
             state.explicit_validation_edit_snapshot = current_snapshot
-            state.worker_explicit_validation_passed = True
+            state.mark_explicit_validation_passed()
             if state.worker_flow is not None:
                 state.worker_flow.mark_validation_satisfied()
         else:
@@ -630,12 +630,10 @@ def _run_behavioral_tier(
                     )
 
                 edits_since_last_pass = (
-                    sum(state.write_attempts_by_path.values())
+                    state.write_attempt_count()
                     > state.explicit_validation_edit_snapshot
                 )
-                state.explicit_validation_edit_snapshot = sum(
-                    state.write_attempts_by_path.values()
-                )
+                state.explicit_validation_edit_snapshot = state.write_attempt_count()
                 verdict = route_validation_failure(
                     val_result=val_result,
                     fingerprint_memory=state.explicit_validation_fingerprints,
@@ -655,7 +653,7 @@ def _run_behavioral_tier(
             else:
                 state.explicit_validation_fingerprints.clear()
                 state.explicit_validation_edit_snapshot = current_snapshot
-                state.worker_explicit_validation_passed = True
+                state.mark_explicit_validation_passed()
                 if state.worker_flow is not None:
                     state.worker_flow.mark_validation_satisfied()
 

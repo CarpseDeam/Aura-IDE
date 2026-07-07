@@ -65,7 +65,8 @@ class _SendState:
     last_quality_findings: list[dict[str, Any]] = field(default_factory=list)
     worker_quality_enabled: bool = True
     stale_validation_notes: list[str] = field(default_factory=list)
-    worker_explicit_validation_passed: bool = False
+    explicit_validation_passed_at_writes: int | None = None
+    """Write-snapshot value when explicit validation last passed, or ``None``."""
     validation_ledger: WorkerValidationLedger = field(
         default_factory=WorkerValidationLedger
     )
@@ -134,3 +135,34 @@ class _SendState:
         self.worker_flow_zero_work_recovery_count = (
             max(1, self.worker_flow_zero_work_recovery_count) if value else 0
         )
+
+    # ── Write-count helpers (honest signals from WorkerFlowHarness) ──
+
+    def applied_write_count(self) -> int:
+        """Return applied writes (``write_actions``), or 0 outside worker mode."""
+        if self.worker_flow is not None:
+            return self.worker_flow.state.write_actions
+        return 0
+
+    def write_attempt_count(self) -> int:
+        """Return attempted writes (``write_intents``), or 0 outside worker mode."""
+        if self.worker_flow is not None:
+            return self.worker_flow.state.write_intents
+        return 0
+
+    def mark_explicit_validation_passed(self) -> None:
+        """Record that explicit validation passed at the current applied-write count."""
+        self.explicit_validation_passed_at_writes = self.applied_write_count()
+
+    @property
+    def worker_explicit_validation_passed(self) -> bool:
+        """``True`` when explicit validation passed and no applied writes since.
+
+        Read-only: the backing field ``explicit_validation_passed_at_writes``
+        is set by ``mark_explicit_validation_passed()``.  Any direct assignment
+        ``state.worker_explicit_validation_passed = ...`` will raise
+        ``AttributeError`` — use the method instead.
+        """
+        if self.explicit_validation_passed_at_writes is None:
+            return False
+        return self.explicit_validation_passed_at_writes == self.applied_write_count()

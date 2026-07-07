@@ -270,11 +270,15 @@ def test_stale_ledger_proof_does_not_skip(tmp_path: Path, monkeypatch):
     s.worker_flow = WorkerFlowHarness()
     # Pre-populate but at snapshot 0 while current writes advance it.
     _make_ledger_with_fresh_proof(s.validation_ledger, ["pytest"], snapshot=0)
-    s.write_attempts_by_path["a.py"] = 1  # advanced write snapshot
+    # Advance write_actions via the honest signal (an applied write).
+    s.worker_flow.observe_tool_result(
+        "write_file", {"path": "a.py"}, True,
+        {"ok": True, "path": "a.py", "applied": True},
+    )
 
     _finalize(s, tmp_path, explicit_validation_commands=["pytest"])
 
-    # The ledger proof is stale (snapshot 0 < current sum-of-writes 1)
+    # The ledger proof is stale (snapshot 0 < current write_actions 1)
     # so run_explicit_validation_commands should still be called.
     assert mock_func.call_count == 1
 

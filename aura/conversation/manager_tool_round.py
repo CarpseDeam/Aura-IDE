@@ -1128,7 +1128,7 @@ def _maybe_record_validation_to_ledger(
     payload = _terminal_payload(loop_info)
     if not payload:
         return
-    write_snapshot = sum(state.write_attempts_by_path.values())
+    write_snapshot = state.applied_write_count()
     state.validation_ledger.observe_tool_payload(payload, write_snapshot)
 
 

@@ -50,8 +50,8 @@ class TestWorkerValidationLedger:
         assert r is not None
         assert r.ok is False
 
-    def test_records_with_cwd_normalizes_key(self):
-        """The command key includes cwd when the payload has one."""
+    def test_records_with_cwd_does_not_normalize_key(self):
+        """The command key is cwd-independent; cwd is stored separately."""
         ledger = WorkerValidationLedger()
         ledger.observe_tool_payload(
             {
@@ -62,12 +62,12 @@ class TestWorkerValidationLedger:
             },
             write_snapshot=1,
         )
-        r = ledger.latest_for_command("pytest|cwd=/project")
-        # The normalized key includes the cwd suffix.
+        r = ledger.latest_for_command("pytest")
+        # The normalized key does NOT include cwd.
         assert r is not None
-        assert r.command_key == "pytest|cwd=/project"
-        # Without the cwd suffix the key does not match.
-        assert ledger.latest_for_command("pytest") is None
+        assert r.command_key == "pytest"
+        # cwd is stored on the record itself.
+        assert r.cwd == "/project"
 
     def test_non_validation_payload_not_recorded(self):
         """A terminal result that does not count as validation is silently
@@ -188,34 +188,6 @@ class TestWorkerValidationLedger:
             ledger.has_fresh_passed_commands(["unknown"], write_snapshot=5)
             is False
         )
-
-    # ------------------------------------------------------------------
-    # clear_after_write
-    # ------------------------------------------------------------------
-
-    def test_clear_after_write_clears_all_records(self):
-        ledger = WorkerValidationLedger()
-        ledger.observe_tool_payload(
-            {
-                "command": "pytest",
-                "validation_classification": "passed",
-                "exit_code": 0,
-            },
-            write_snapshot=1,
-        )
-        ledger.observe_tool_payload(
-            {
-                "command": "npm test",
-                "validation_classification": "passed",
-                "exit_code": 0,
-            },
-            write_snapshot=1,
-        )
-        assert len(ledger) == 2
-        ledger.clear_after_write()
-        assert len(ledger) == 0
-        assert ledger.latest_for_command("pytest") is None
-        assert ledger.latest_for_command("npm test") is None
 
     # ------------------------------------------------------------------
     # latest_failures
