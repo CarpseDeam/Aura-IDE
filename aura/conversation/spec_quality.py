@@ -49,6 +49,9 @@ def validate_planner_dispatch(args: dict[str, Any], latest_user_text: str) -> Di
     """Check that the Planner's dispatch covers all explicit steps in the user request."""
     errors: list[str] = []
 
+    # Validate structured validation_commands (top-level and per-item).
+    _validate_structured_validation_commands(args, errors)
+
     # Count dispatch items
     work_artifact = args.get("work_artifact")
     if isinstance(work_artifact, dict):
@@ -146,6 +149,45 @@ def _detect_explicit_step_count(text: str) -> int | None:
             return len(found_markers)
 
     return None
+
+
+def _validate_structured_validation_commands(args: dict[str, Any], errors: list[str]) -> None:
+    """Validate structured validation_commands entries in dispatch *args*.
+
+    Each entry must have a non-empty ``command``.  Supports both the new
+    structured format (list of dicts) and legacy flat strings.  Mutates
+    *errors* in-place.
+    """
+    # Top-level validation_commands
+    _check_command_list(args.get("validation_commands"), "validation_commands", errors)
+
+    # Per-item validation_commands inside work_artifact
+    work_artifact = args.get("work_artifact")
+    if isinstance(work_artifact, dict):
+        items = work_artifact.get("items")
+        if isinstance(items, list):
+            for idx, item in enumerate(items):
+                if isinstance(item, dict):
+                    _check_command_list(
+                        item.get("validation_commands"),
+                        f"work_artifact.items[{idx}].validation_commands",
+                        errors,
+                    )
+
+
+def _check_command_list(raw: Any, path: str, errors: list[str]) -> None:
+    """Check that each entry in a validation_commands list is non-empty."""
+    if not isinstance(raw, list):
+        return
+    for idx, entry in enumerate(raw):
+        if isinstance(entry, dict):
+            cmd = str(entry.get("command") or "").strip()
+        elif isinstance(entry, str):
+            cmd = entry.strip()
+        else:
+            cmd = ""
+        if not cmd:
+            errors.append(f"{path}[{idx}] has an empty command.")
 
 
 def _is_vague_acceptance(text: str) -> bool:

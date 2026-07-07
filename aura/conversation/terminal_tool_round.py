@@ -4,6 +4,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from aura.work_artifact.model import ValidationCommandSpec
+
 from aura.conversation.completion_guard import terminal_result_completed
 from aura.conversation.syntax_terminal_state import update_syntax_state_from_terminal
 from aura.conversation.worker_recovery_payload import is_recoverable_phase_boundary
@@ -72,7 +74,7 @@ def handle_run_terminal_command_round(
     workspace_root: Path,
     on_event: Any,
     cancel_event: Any,
-    explicit_validation_commands: list[str] | None,
+    explicit_validation_commands: list[ValidationCommandSpec] | None,
 ) -> dict[str, Any]:
     """Handle a ``run_terminal_command`` tool round.
 

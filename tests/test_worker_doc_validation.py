@@ -54,7 +54,6 @@ def _finalize(
         on_event=events.append,
         finish_worker_recoverable_followup=finish,
         handle_worker_flow_steering=lambda _state, _on_event: "none",
-        handle_worker_zero_work_final=lambda _state, _on_event: "none",
         explicit_validation_commands=explicit_validation_commands,
     )
     return action, history, finish

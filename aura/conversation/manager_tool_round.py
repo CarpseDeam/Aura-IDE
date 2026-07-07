@@ -23,6 +23,7 @@ from aura.conversation.manager_recovery import (
     worker_recovery_block,
 )
 from aura.conversation.manager_send_state import _SendState
+from aura.work_artifact.model import ValidationCommandSpec
 from aura.conversation.planner_refresh import PlannerRefreshState
 from aura.conversation.terminal_tool_round import (
     handle_run_and_watch_round,
@@ -102,7 +103,7 @@ class ToolRoundRunner:
         dispatch_cb: DispatchCallback | None,
         workflow_state_cb: Callable[[str, str, str, WorkflowStatus], None] | None = None,
         cleanup_cancelled: Callable[[EventCallback], None],
-        explicit_validation_commands: list[str] | None = None,
+        explicit_validation_commands: list[ValidationCommandSpec] | None = None,
         declared_run_command: str | None = None,
     ) -> ToolRoundOutcome:
         if state.worker_needs_final_report:
@@ -334,7 +335,7 @@ class ToolRoundRunner:
         cancel_event: threading.Event,
         dispatch_cb: DispatchCallback | None,
         workflow_state_cb: Callable[[str, str, str, WorkflowStatus], None] | None = None,
-        explicit_validation_commands: list[str] | None,
+        explicit_validation_commands: list[ValidationCommandSpec] | None,
         declared_run_command: str | None,
     ) -> dict[str, Any]:
         tool_call_id = task["id"]

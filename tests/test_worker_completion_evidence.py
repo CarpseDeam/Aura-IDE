@@ -61,6 +61,9 @@ def _validation_event() -> ToolResult:
                 "command": "python -m py_compile src/example.py",
                 "exit_code": 0,
                 "output": "",
+                "validation_classification": "passed",
+                "counts_as_validation": True,
+                "auto_validation": True,
             }
         ),
     )
@@ -219,6 +222,8 @@ def test_unrecovered_ruff_check_recovered_by_later_focused_ruff() -> None:
             "command": "python -m ruff check aura/gui/left_pane.py",
             "exit_code": 0,
             "counts_as_product_failure": False,
+            "validation_classification": "passed",
+            "counts_as_validation": True,
         },
     ]
     failures = _unrecovered_validation_failures(results)
@@ -239,6 +244,8 @@ def test_unrecovered_pytest_recovered_by_later_focused_pytest() -> None:
             "command": "python -m pytest tests/test_left_pane.py -q",
             "exit_code": 0,
             "counts_as_product_failure": False,
+            "validation_classification": "passed",
+            "counts_as_validation": True,
         },
     ]
     failures = _unrecovered_validation_failures(results)
@@ -280,6 +287,8 @@ def test_unrecovered_aura_selfcheck_recovered_by_later_selfcheck() -> None:
             "command": "python -m aura --selfcheck",
             "exit_code": 0,
             "counts_as_product_failure": False,
+            "validation_classification": "passed",
+            "counts_as_validation": True,
         },
     ]
     failures = _unrecovered_validation_failures(results)

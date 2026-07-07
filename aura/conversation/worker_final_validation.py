@@ -9,8 +9,10 @@ from pathlib import Path
 from typing import Callable
 
 from aura.client import Event, ToolResult
+from aura.conversation.command_normalizer import normalize_command
 from aura.conversation.validation_orchestrator import (
     VALIDATION_COMMAND_UNRUNNABLE,
+    ValidationCommand,
     ValidationRunResult,
     classify_command_outcome,
     classify_validation_run,
@@ -18,6 +20,7 @@ from aura.conversation.validation_orchestrator import (
 )
 from aura.project_env import resolve_workspace_cwd
 from aura.sandbox import SandboxExecutor
+from aura.work_artifact.model import ValidationCommandSpec
 
 EventCallback = Callable[[Event], None]
 
@@ -50,10 +53,13 @@ class WorkerFinalValidationResult:
 def run_explicit_validation_commands(
     *,
     workspace_root: Path,
-    commands: list[str],
+    commands: list[str] | list[ValidationCommandSpec],
     window_seconds: int = 20,
 ) -> WorkerFinalValidationResult:
     """Run validation commands sequentially through SandboxExecutor.
+
+    Accepts either structured ``ValidationCommandSpec`` entries (preferred)
+    or legacy flat strings.  Structured entries skip free-text parsing.
 
     Returns ok=True with empty diagnostics if all commands pass or if the
     command list is empty.  Stops at the first *product* failure (a failure
@@ -70,11 +76,21 @@ def run_explicit_validation_commands(
     )
 
     runs: list[ValidationRunResult] = []
-    for raw_command in commands:
-        validation_command = parse_validation_command(
-            raw_command,
-            source="explicit_task_command",
-        )
+    for entry in commands:
+        # Build a ValidationCommand — structured entries skip free-text parsing.
+        if isinstance(entry, ValidationCommandSpec):
+            validation_command = ValidationCommand(
+                raw_text=entry.command,
+                command=entry.command,
+                cwd=entry.cwd,
+                expected_outcome=entry.expected_outcome,
+                source="explicit_task_command",
+            )
+        else:
+            validation_command = parse_validation_command(
+                str(entry),
+                source="explicit_task_command",
+            )
         if validation_command.malformed:
             runs.append(
                 classify_validation_run(
@@ -86,6 +102,22 @@ def run_explicit_validation_commands(
             )
             continue
         command = validation_command.command
+        # Normalize for consistent execution environment (venv Python, etc.).
+        normalized = normalize_command(command, workspace_root)
+        command = normalized.command
+
+        # Reject ambiguous shell constructs with a clear message before they
+        # reach the sandbox — avoids cryptic runtime failures.
+        if not normalized.valid:
+            run = classify_validation_run(
+                validation_command,
+                exit_code=None,
+                output=normalized.validation_error,
+                ok=False,
+            )
+            runs.append(run)
+            continue
+
         try:
             working_directory = resolve_workspace_cwd(workspace_root, validation_command.cwd)
         except ValueError as exc:

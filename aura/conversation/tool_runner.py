@@ -34,10 +34,11 @@ from aura.conversation.validation_orchestrator import (
     classify_command_outcome,
     classify_terminal_run,
     classify_validation_run,
-    looks_like_validation_command,
     parse_validation_command,
 )
+from aura.conversation.command_normalizer import normalize_command
 from aura.conversation.verification_progress import VerificationProgressTracker
+from aura.work_artifact.model import ValidationCommandSpec
 from aura.conversation.worker_outcome import WorkerOutcomeStatus
 from aura.project_env import (
     build_project_command,
@@ -210,7 +211,7 @@ class ToolRunner:
         on_event: Any,
         cancel_event: threading.Event,
         mode: str,
-        explicit_validation_commands: list[str] | None = None,
+        explicit_validation_commands: list[ValidationCommandSpec] | None = None,
     ) -> dict[str, Any] | None:
         command = args.get("command", "")
         requested_command = str(command or "")
@@ -437,13 +438,14 @@ class ToolRunner:
         payload_dict.update(terminal_classification.metadata())
         if validation_command.normalized:
             payload_dict.update(validation_command.metadata())
+        # In the structured validation-commands world, we know a command is
+        # validation when it matches an explicit spec (``explicit``) or was
+        # normalized (cd-wrapper, trailing-outcome token).  The standalone
+        # heuristic ``looks_like_validation_command`` is no longer needed
+        # because structured specs carry the authoritative list.
         should_classify_validation = (
             mode == "worker"
-            and (
-                explicit
-                or validation_command.normalized
-                or looks_like_validation_command(validation_command.command)
-            )
+            and (explicit or validation_command.normalized)
         )
         stall: dict[str, Any] | None = None
         if should_classify_validation:
@@ -540,6 +542,30 @@ class ToolRunner:
                 pass
 
         on_event(ToolCallStart(index=0, id=tool_call_id, name="run_and_watch"))
+
+        # Normalize for consistent execution environment.
+        normalized = normalize_command(declared_run_command, self._workspace_root)
+        declared_run_command = normalized.command
+
+        # Reject ambiguous shell constructs before they reach the sandbox.
+        if not normalized.valid:
+            payload_dict = {
+                "ok": False,
+                "failure_class": "validation_command_unrunnable",
+                "error": normalized.validation_error,
+                "command": declared_run_command,
+            }
+            payload = json.dumps(payload_dict, ensure_ascii=False)
+            self._history.append_tool_result(tool_call_id, payload)
+            on_event(
+                ToolResult(
+                    tool_call_id=tool_call_id,
+                    name="run_and_watch",
+                    ok=False,
+                    result=payload,
+                )
+            )
+            return {"_terminal_payload": payload_dict}
 
         sandbox = SandboxExecutor(
             mode="host",

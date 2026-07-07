@@ -763,6 +763,30 @@ DISPATCH_TOOL_DEF: dict[str, Any] = {
                                         "minLength": 1,
                                         "description": "Concrete pass/fail acceptance for this item.",
                                     },
+                                    "validation_commands": {
+                                        "type": "array",
+                                        "items": {
+                                            "type": "object",
+                                            "properties": {
+                                                "command": {
+                                                    "type": "string",
+                                                    "minLength": 1,
+                                                    "description": "Exact shell command to validate the item.",
+                                                },
+                                                "cwd": {
+                                                    "type": "string",
+                                                    "description": "Optional working directory relative to repo root.",
+                                                },
+                                                "expected_outcome": {
+                                                    "type": "string",
+                                                    "description": "Optional description of the expected pass/fail signal.",
+                                                },
+                                            },
+                                            "required": ["command"],
+                                            "additionalProperties": False,
+                                        },
+                                        "description": "Explicit validation commands declared for this item.",
+                                    },
                                 },
                                 "required": ["id", "title", "intent", "target_files", "acceptance"],
                                 "additionalProperties": False,
@@ -831,10 +855,29 @@ DISPATCH_TOOL_DEF: dict[str, Any] = {
                 },
                 "validation_commands": {
                     "type": "array",
-                    "items": {"type": "string"},
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "command": {
+                                "type": "string",
+                                "minLength": 1,
+                                "description": "Exact shell command to run for validation.",
+                            },
+                            "cwd": {
+                                "type": "string",
+                                "description": "Optional working directory relative to repo root.",
+                            },
+                            "expected_outcome": {
+                                "type": "string",
+                                "description": "Optional description of the expected pass/fail signal.",
+                            },
+                        },
+                        "required": ["command"],
+                        "additionalProperties": False,
+                    },
                     "description": (
                         "Exact focused validation commands when known "
-                        "(e.g. ['python -m compileall aura/']). "
+                        "(e.g. [{'command': 'python -m compileall aura/'}]). "
                         "When provided, these override extracted acceptance commands."
                     ),
                 },

@@ -1,12 +1,15 @@
 """Worker candidate finalization after a no-tool-call response."""
 from __future__ import annotations
 
+import json
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Literal
+from typing import Any, Callable, Literal
 
 from aura.client import Event
+from aura.conversation.completion_guard import assistant_message_text
 from aura.conversation.edit_recovery_state import edit_recovery_details
 from aura.conversation.history import History
 from aura.conversation.manager_send_state import _SendState
@@ -34,6 +37,8 @@ from aura.conversation.worker_final_validation import (
     emit_explicit_validation_runs,
     run_explicit_validation_commands,
 )
+from aura.conversation.worker_flow import WORKER_FLOW_ZERO_WORK_RECOVERY_TEXT
+from aura.work_artifact.model import ValidationCommandSpec
 from aura.conversation.worker_fingerprints import fingerprint_paths
 from aura.conversation.worker_recovery_messages import (
     PATCH_CANDIDATE_INVALID_SYNTAX_ACTION,
@@ -66,6 +71,206 @@ class _ValidationFinding:
 EventCallback = Callable[[Event], None]
 WorkerFinalizationAction = Literal["continue", "finished", "none"]
 
+# ── Zero-work / blocker helpers (moved from manager.py for gate access) ──────
+
+_ALLOWED_ZERO_WORK_FAILURE_CLASSES = frozenset(
+    {
+        "approval_rejected",
+        "cancelled",
+        "conflicting_spec",
+        "dispatch_blocked",
+        "dispatch_not_started",
+        "external_validation_runtime_missing",
+        "file_not_found",
+        "impossible_spec",
+        "missing_file",
+        "missing_path",
+        "missing_required_file",
+        "path_not_found",
+        "permission_denied",
+        "required_path_missing",
+        "runtime_environment_missing",
+        "source_inspection_command_blocked",
+        "tool_failure",
+        "tool_permission_denied",
+        "user_cancelled",
+        "validation_environment_missing",
+        "write_rejected",
+    }
+)
+
+_ALLOWED_ZERO_WORK_FAILURE_PREFIXES = (
+    "project_environment_missing_",
+    "permission_",
+)
+
+_ALLOWED_ZERO_WORK_BLOCKER_RE = re.compile(
+    r"\b(?:required\s+)?(?:file|path|directory)\b.{0,80}\b"
+    r"(?:missing|not\s+found|does\s+not\s+exist|unavailable)\b|"
+    r"\b(?:permission|access)\s+denied\b|"
+    r"\b(?:cannot|can't|could\s+not|couldn't|unable\s+to)\s+(?:read|write|access)\b|"
+    r"\b(?:missing|unavailable)\s+(?:runtime|environment|tool|dependency|executable)\b|"
+    r"\b(?:conflicting|impossible)\s+(?:spec|requirements?)\b",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _candidate_final_payload(full_message: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(full_message, dict):
+        return {}
+    try:
+        parsed = json.loads(assistant_message_text(full_message))
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _candidate_final_has_real_zero_work_blocker(
+    full_message: dict[str, Any] | None,
+) -> bool:
+    payload = _candidate_final_payload(full_message)
+    if payload.get("status") == "mismatch_detected":
+        return bool(
+            payload.get("mismatch")
+            or payload.get("question")
+            or payload.get("question_for_planner")
+            or payload.get("error")
+        )
+    failure_class = str(payload.get("failure_class") or "")
+    if failure_class in _ALLOWED_ZERO_WORK_FAILURE_CLASSES:
+        return True
+    if any(failure_class.startswith(prefix) for prefix in _ALLOWED_ZERO_WORK_FAILURE_PREFIXES):
+        return True
+    if payload.get("reject") or payload.get("dispatch_not_started"):
+        return True
+    return bool(_ALLOWED_ZERO_WORK_BLOCKER_RE.search(assistant_message_text(full_message or {})))
+
+
+def _worker_has_zero_applied_writes(state: _SendState) -> bool:
+    return not _worker_has_concrete_file_progress(state)
+
+
+def _worker_has_concrete_file_progress(state: _SendState) -> bool:
+    flow = state.worker_flow
+    write_actions = int(getattr(flow.state, "write_actions", 0) or 0) if flow else 0
+    return bool(
+        write_actions > 0
+        or state.worker_app_writes
+        or state.syntax_validation_required
+    )
+
+
+def _worker_has_attempted_write(state: _SendState) -> bool:
+    flow = state.worker_flow
+    write_intents = int(getattr(flow.state, "write_intents", 0) or 0) if flow else 0
+    return write_intents > 0 or bool(state.write_attempts_by_path)
+
+
+def _worker_artifact_item_validated_done(state: _SendState) -> bool:
+    if not (state.worker_artifact_id and state.worker_artifact_item_id):
+        return False
+    if not state.worker_explicit_validation_passed:
+        return False
+    return True
+
+
+# ── Recovery nudge helpers ───────────────────────────────────────────────────
+
+
+def _append_worker_zero_work_recovery(
+    state: _SendState,
+    history: History,
+    *,
+    reason: str,
+    steering: str,
+) -> None:
+    details = [
+        WORKER_FLOW_ZERO_WORK_RECOVERY_TEXT,
+        "",
+        "Internal recovery context:",
+        f"- worker_flow_reason: {reason}",
+    ]
+    if steering:
+        details.append(f"- last_steering: {steering}")
+    history.append_user_text("\n".join(details))
+    state.worker_flow_nudge_count += 1
+    state.worker_flow_last_reason = reason
+    state.worker_flow_last_steering = steering
+
+
+def _append_worker_thrash_recovery(
+    state: _SendState,
+    history: History,
+    *,
+    reason: str,
+    steering: str,
+) -> None:
+    details = [
+        "Worker Flow internal continuation:",
+        "Use the context already gathered. Do not restart orientation or restate the plan.",
+        "Choose the next smallest safe edit, make it now, and validate it.",
+        "If no safe edit is possible, return a real blocker with the exact missing file, permission, tool, or dispatch mismatch.",
+        "",
+        "Internal recovery context:",
+        f"- worker_flow_reason: {reason}",
+    ]
+    if steering:
+        details.append(f"- last_steering: {steering}")
+    history.append_user_text("\n".join(details))
+    state.worker_flow_nudge_count += 1
+    state.worker_flow_last_reason = reason
+    state.worker_flow_last_steering = steering
+
+
+def _handle_worker_zero_work_final(
+    state: _SendState,
+    history: History,
+    on_event: EventCallback,
+    finish_worker_recoverable_followup: Callable[..., None],
+) -> str:
+    """Recover or fail internally when Worker tries to finish with no work.
+
+    Caller is expected to have already checked
+    ``state.worker_explicit_validation_passed`` (terminal-success) before
+    calling this — the artifact-validated-done and validation-passed bailouts
+    that lived here in manager.py are handled at the gate level.
+    """
+    if not _worker_has_zero_applied_writes(state):
+        return "none"
+    if _worker_has_attempted_write(state):
+        return "none"
+    if state.reject_all_for_turn:
+        return "none"
+    if _candidate_final_has_real_zero_work_blocker(state.candidate_final_message):
+        return "none"
+
+    reason = state.worker_flow_last_reason or "zero_work_final"
+    fp = f"zero_work|{reason}|{state.worker_flow_last_steering}"
+    if state.progress_monitor is not None and state.progress_monitor.check(
+        fp, state.write_attempt_count()
+    ).progressing:
+        _append_worker_zero_work_recovery(
+            state, history,
+            reason=reason,
+            steering=state.worker_flow_last_steering,
+        )
+        return "nudged"
+
+    # Stalled — fail (terminal-success already checked by caller).
+    finish_worker_recoverable_followup(
+        on_event,
+        failure_class="worker_flow_zero_work_no_progress",
+        error=(
+            "Worker could not make progress after internal zero-work "
+            "recovery. Handing step back for planner resolution."
+        ),
+        details={
+            "reason": reason,
+            "steering": state.worker_flow_last_steering,
+        },
+    )
+    return "finished"
+
 
 def handle_worker_candidate_finalization(
     *,
@@ -76,9 +281,8 @@ def handle_worker_candidate_finalization(
     on_event: EventCallback,
     finish_worker_recoverable_followup: Callable[..., None],
     handle_worker_flow_steering: Callable[[_SendState, EventCallback], str],
-    handle_worker_zero_work_final: Callable[[_SendState, EventCallback], str],
     declared_run_command: str | None = None,
-    explicit_validation_commands: list[str] | None = None,
+    explicit_validation_commands: list[ValidationCommandSpec] | None = None,
 ) -> WorkerFinalizationAction:
     state.candidate_final_message = full_message
 
@@ -266,6 +470,16 @@ def handle_worker_candidate_finalization(
     if action != "none":
         return action
 
+    # Terminal-success check: validation passed always wins first,
+    # before any recovery nudge or failure path.
+    if state.worker_explicit_validation_passed:
+        return _release_candidate_final(
+            state=state,
+            history=history,
+            on_event=on_event,
+            finish_worker_recoverable_followup=finish_worker_recoverable_followup,
+        )
+
     if (
         state.worker_flow is not None
         and state.worker_flow.requires_validation_before_final()
@@ -309,7 +523,9 @@ def handle_worker_candidate_finalization(
             return "finished"
         return "continue"
 
-    zero_work_action = handle_worker_zero_work_final(state, on_event)
+    zero_work_action = _handle_worker_zero_work_final(
+        state, history, on_event, finish_worker_recoverable_followup,
+    )
     if zero_work_action != "none":
         state.discard_worker_candidate_final()
         if zero_work_action == "finished":
@@ -535,7 +751,7 @@ def _run_behavioral_tier(
     on_event: EventCallback,
     finish_worker_recoverable_followup: Callable[..., None],
     declared_run_command: str | None,
-    explicit_validation_commands: list[str] | None,
+    explicit_validation_commands: list[ValidationCommandSpec] | None,
 ) -> WorkerFinalizationAction:
     findings: list[_ValidationFinding] = []
     
@@ -595,8 +811,12 @@ def _run_behavioral_tier(
 
         # ── Ledger skip: avoid duplicate rerun when all explicit
         #    commands already have fresh passed proof. ──────────────
+        cmd_strings = [
+            vc.command if isinstance(vc, ValidationCommandSpec) else str(vc)
+            for vc in explicit_validation_commands
+        ]
         if state.validation_ledger.has_fresh_passed_commands(
-            explicit_validation_commands, current_snapshot
+            cmd_strings, current_snapshot,
         ):
             state.explicit_validation_fingerprints.clear()
             state.explicit_validation_edit_snapshot = current_snapshot

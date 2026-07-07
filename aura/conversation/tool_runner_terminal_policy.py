@@ -5,6 +5,7 @@ import re
 from typing import Any
 
 from aura.conversation.validation_orchestrator import parse_validation_command
+from aura.work_artifact.model import ValidationCommandSpec
 
 
 DEFAULT_TERMINAL_TIMEOUT_SECONDS = 300
@@ -25,24 +26,28 @@ def is_py_compile_command(command: str) -> bool:
 
 def matches_explicit_validation(
     command: str,
-    explicit_validation_commands: list[str] | None,
+    explicit_validation_commands: list[ValidationCommandSpec] | list[str] | None,
     *,
     cwd: str = "",
 ) -> bool:
-    """Return True when *command* is identical to an explicit validation command."""
+    """Return True when *command* is identical to an explicit validation command.
+
+    Accepts both structured ``ValidationCommandSpec`` entries (preferred) and
+    legacy flat strings for backward compatibility.
+    """
     normalized = " ".join(str(command or "").strip().lower().split())
     normalized_cwd = _normalize_cwd(cwd)
-    return any(
-        normalized
-        == " ".join(
-            (parsed := parse_validation_command(str(explicit or ""), source="explicit_task_command"))
-            .command.strip()
-            .lower()
-            .split()
-        )
-        and normalized_cwd == _normalize_cwd(parsed.cwd)
-        for explicit in explicit_validation_commands or []
-    )
+    for entry in explicit_validation_commands or []:
+        if isinstance(entry, ValidationCommandSpec):
+            spec_command = entry.command
+            spec_cwd = entry.cwd
+        else:
+            parsed = parse_validation_command(str(entry), source="explicit_task_command")
+            spec_command = parsed.command
+            spec_cwd = parsed.cwd
+        if normalized == " ".join(spec_command.strip().lower().split()) and normalized_cwd == _normalize_cwd(spec_cwd):
+            return True
+    return False
 
 
 def resolve_terminal_timeout(command: str, timeout_arg: Any, /) -> int:

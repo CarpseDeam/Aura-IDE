@@ -18,7 +18,12 @@ import logging
 from typing import Any, Callable
 
 from aura.conversation.dispatch import WorkerDispatchRequest, WorkerDispatchResult
-from aura.work_artifact.model import WorkArtifact, WorkArtifactItem, WorkArtifactReceipt
+from aura.work_artifact.model import (
+    ValidationCommandSpec,
+    WorkArtifact,
+    WorkArtifactItem,
+    WorkArtifactReceipt,
+)
 from aura.work_artifact.projection import WorkArtifactProjection
 from aura.work_artifact.receipt import worker_result_to_receipt
 
@@ -67,6 +72,7 @@ class WorkArtifactController:
                 intent=str(item.get("intent", "")),
                 target_files=[str(f) for f in (item.get("target_files") or item.get("files") or [])],
                 acceptance=str(item.get("acceptance", "")),
+                validation_commands=_parse_validation_specs(item.get("validation_commands")),
             )
             for idx, item in enumerate(items_raw)
         ]
@@ -220,3 +226,14 @@ class WorkArtifactController:
             return
         projection = WorkArtifactProjection.from_artifact(artifact)
         self._on_projection_updated(projection)
+
+
+def _parse_validation_specs(raw: Any) -> list[ValidationCommandSpec]:
+    """Coerce raw validation_commands from a Planner item payload into specs.
+
+    Supports both the new structured format (list of dicts) and the legacy
+    flat-string format (list of strings) for backward compatibility.
+    """
+    if not isinstance(raw, list):
+        return []
+    return [ValidationCommandSpec.from_dict(v) for v in raw]

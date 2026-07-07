@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 import threading
 
 _log = logging.getLogger(__name__)
@@ -65,127 +64,26 @@ from aura.conversation.tools._types import (
 )
 from aura.conversation.tools.registry import ToolRegistry
 from aura.conversation.verification_progress import VerificationProgressTracker
-from aura.conversation.worker_finalization_gate import handle_worker_candidate_finalization
+from aura.conversation.worker_finalization_gate import (
+    _append_worker_thrash_recovery,
+    _append_worker_zero_work_recovery,
+    _candidate_final_has_real_zero_work_blocker,
+    _worker_artifact_item_validated_done,
+    _worker_has_attempted_write,
+    _worker_has_concrete_file_progress,
+    _worker_has_zero_applied_writes,
+    handle_worker_candidate_finalization,
+)
 from aura.events import EventBus
 from aura.lifecycle import LifecycleHooks
+from aura.work_artifact.model import ValidationCommandSpec
 from aura.conversation.worker_finish import (
     build_worker_unrecoverable_message,
-)
-from aura.conversation.worker_flow import (
-    WORKER_FLOW_ZERO_WORK_RECOVERY_TEXT,
 )
 from aura.model_streams import model_streams
 from aura.research.policy import decide_research_policy
 
 EventCallback = Callable[[Event], None]
-
-_ALLOWED_ZERO_WORK_FAILURE_CLASSES = frozenset(
-    {
-        "approval_rejected",
-        "cancelled",
-        "conflicting_spec",
-        "dispatch_blocked",
-        "dispatch_not_started",
-        "external_validation_runtime_missing",
-        "file_not_found",
-        "impossible_spec",
-        "missing_file",
-        "missing_path",
-        "missing_required_file",
-        "path_not_found",
-        "permission_denied",
-        "required_path_missing",
-        "runtime_environment_missing",
-        "source_inspection_command_blocked",
-        "tool_failure",
-        "tool_permission_denied",
-        "user_cancelled",
-        "validation_environment_missing",
-        "write_rejected",
-    }
-)
-
-_ALLOWED_ZERO_WORK_FAILURE_PREFIXES = (
-    "project_environment_missing_",
-    "permission_",
-)
-
-WORKER_FLOW_ZERO_WORK_RECOVERY_BUDGET = 3
-WORKER_FLOW_THRASH_RECOVERY_BUDGET = 3
-
-_ALLOWED_ZERO_WORK_BLOCKER_RE = re.compile(
-    r"\b(?:required\s+)?(?:file|path|directory)\b.{0,80}\b"
-    r"(?:missing|not\s+found|does\s+not\s+exist|unavailable)\b|"
-    r"\b(?:permission|access)\s+denied\b|"
-    r"\b(?:cannot|can't|could\s+not|couldn't|unable\s+to)\s+(?:read|write|access)\b|"
-    r"\b(?:missing|unavailable)\s+(?:runtime|environment|tool|dependency|executable)\b|"
-    r"\b(?:conflicting|impossible)\s+(?:spec|requirements?)\b",
-    re.IGNORECASE | re.DOTALL,
-)
-
-def _worker_has_zero_applied_writes(state: _SendState) -> bool:
-    return not _worker_has_concrete_file_progress(state)
-
-
-def _worker_has_concrete_file_progress(state: _SendState) -> bool:
-    flow = state.worker_flow
-    write_actions = int(getattr(flow.state, "write_actions", 0) or 0) if flow else 0
-    return bool(
-        write_actions > 0
-        or state.worker_app_writes
-        or state.syntax_validation_required
-    )
-
-
-def _worker_has_attempted_write(state: _SendState) -> bool:
-    flow = state.worker_flow
-    write_intents = int(getattr(flow.state, "write_intents", 0) or 0) if flow else 0
-    return write_intents > 0 or bool(state.write_attempts_by_path)
-
-
-def _worker_artifact_item_validated_done(state: _SendState) -> bool:
-    """Return True when a WorkArtifact bounded item has passed validation.
-
-    Only fires for artifact items with explicit identity — does NOT mark
-    ordinary non-artifact implementation tasks complete.
-    """
-    if not (state.worker_artifact_id and state.worker_artifact_item_id):
-        return False
-    if not state.worker_explicit_validation_passed:
-        return False
-    return True
-
-
-def _candidate_final_payload(full_message: dict[str, Any] | None) -> dict[str, Any]:
-    if not isinstance(full_message, dict):
-        return {}
-    try:
-        parsed = json.loads(assistant_message_text(full_message))
-    except (TypeError, json.JSONDecodeError):
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
-
-
-def _candidate_final_has_real_zero_work_blocker(
-    full_message: dict[str, Any] | None,
-) -> bool:
-    payload = _candidate_final_payload(full_message)
-    if payload.get("status") == "mismatch_detected":
-        return bool(
-            payload.get("mismatch")
-            or payload.get("question")
-            or payload.get("question_for_planner")
-            or payload.get("error")
-        )
-    failure_class = str(payload.get("failure_class") or "")
-    if failure_class in _ALLOWED_ZERO_WORK_FAILURE_CLASSES:
-        return True
-    if any(failure_class.startswith(prefix) for prefix in _ALLOWED_ZERO_WORK_FAILURE_PREFIXES):
-        return True
-    if payload.get("reject") or payload.get("dispatch_not_started"):
-        return True
-    return bool(_ALLOWED_ZERO_WORK_BLOCKER_RE.search(assistant_message_text(full_message or {})))
-
 
 class ConversationManager:
     def __init__(
@@ -247,7 +145,7 @@ class ConversationManager:
         temperature: float = 0.7,
         max_tool_rounds: int | None = None,
         hook_name: str = 'generate_planner_code',
-        explicit_validation_commands: list[str] | None = None,
+        explicit_validation_commands: list[ValidationCommandSpec] | None = None,
         declared_run_command: str | None = None,
     ) -> None:
         """Run the model -> tool -> model loop until the model stops calling tools.
@@ -414,7 +312,6 @@ class ConversationManager:
                             self._finish_worker_unrecoverable
                         ),
                         handle_worker_flow_steering=self._handle_worker_flow_steering,
-                        handle_worker_zero_work_final=self._handle_worker_zero_work_final,
                         declared_run_command=declared_run_command,
                         explicit_validation_commands=explicit_validation_commands,
                     )
@@ -533,62 +430,67 @@ class ConversationManager:
             )
             return "finished"
         if state.worker_flow_nudge_sent:
-            if _worker_has_zero_applied_writes(state) and not _worker_has_attempted_write(state):
-                if _candidate_final_has_real_zero_work_blocker(state.candidate_final_message):
-                    return "none"
-                if state.worker_flow_zero_work_recovery_count < WORKER_FLOW_ZERO_WORK_RECOVERY_BUDGET:
-                    self._append_worker_zero_work_recovery(
-                        state,
-                        reason=reason,
-                        steering=steering,
+            is_zero_work = (
+                _worker_has_zero_applied_writes(state)
+                and not _worker_has_attempted_write(state)
+            )
+
+            # Real blocker check (only relevant for zero-work).
+            if is_zero_work and _candidate_final_has_real_zero_work_blocker(
+                state.candidate_final_message
+            ):
+                return "none"
+
+            # One progress check for both zero-work and thrash.
+            fp = f"steering|{reason}|{steering}"
+            verdict = state.progress_monitor.check(fp, state.write_attempt_count())
+            if verdict.progressing:
+                if is_zero_work:
+                    _append_worker_zero_work_recovery(
+                        state, self._history, reason=reason, steering=steering,
                     )
-                    return "nudged"
-                # Before failing on zero-work, check if validations are green.
-                if state.worker_explicit_validation_passed:
-                    self._finish_worker_as_validated_completed(
-                        on_event,
-                        summary=(
-                            "Item completed. Post-completion activity was "
-                            "truncated because validation already passed."
-                        ),
+                else:
+                    _append_worker_thrash_recovery(
+                        state, self._history, reason=reason, steering=steering,
                     )
-                    return "finished"
-                self._finish_worker_unrecoverable(
+                return "nudged"
+
+            # Stalled — before failing, check if validations are green.
+            if state.worker_explicit_validation_passed:
+                self._finish_worker_as_validated_completed(
                     on_event,
-                    failure_class="worker_flow_zero_work_no_progress",
-                    error=(
-                        "Worker could not make progress after internal zero-work "
-                        "recovery. Handing step back for planner resolution."
+                    summary=(
+                        "Item completed. Post-completion activity was "
+                        "truncated because validation already passed."
                     ),
-                    details={
-                        "reason": reason,
-                        "steering": steering,
-                        "recovery_count": state.worker_flow_zero_work_recovery_count,
-                        "recovery_budget": WORKER_FLOW_ZERO_WORK_RECOVERY_BUDGET,
-                    },
                 )
                 return "finished"
-            if state.worker_flow_thrash_recovery_count < WORKER_FLOW_THRASH_RECOVERY_BUDGET:
-                self._append_worker_thrash_recovery(
-                    state,
-                    reason=reason,
-                    steering=steering,
-                )
-                return "nudged"
-            self._finish_worker_unrecoverable(
-                on_event,
-                failure_class="worker_flow_thrash",
-                error=(
+
+            failure_class = (
+                "worker_flow_zero_work_no_progress"
+                if is_zero_work
+                else "worker_flow_thrash"
+            )
+            error = (
+                "Worker could not make progress after internal zero-work "
+                "recovery. Handing step back for planner resolution."
+                if is_zero_work
+                else (
                     "Worker kept re-orienting after a Worker Flow nudge instead "
                     "of making progress with an edit or validation action."
-                ),
-                details={
-                    "reason": reason,
-                    "steering": steering,
-                    "counts": state.limits.to_dict(),
-                    "recovery_count": state.worker_flow_thrash_recovery_count,
-                    "recovery_budget": WORKER_FLOW_THRASH_RECOVERY_BUDGET,
-                },
+                )
+            )
+            details: dict[str, Any] = {
+                "reason": reason,
+                "steering": steering,
+            }
+            if not is_zero_work:
+                details["counts"] = state.limits.to_dict()
+            self._finish_worker_unrecoverable(
+                on_event,
+                failure_class=failure_class,
+                error=error,
+                details=details,
             )
             return "finished"
         self._history.append_user_text(steering)
@@ -613,121 +515,6 @@ class ConversationManager:
                 return "nudged"
             return "none"
         return "none"
-
-    def _handle_worker_zero_work_final(
-        self,
-        state: _SendState,
-        on_event: EventCallback,
-    ) -> str:
-        """Recover or fail internally when Worker tries to finish with no work."""
-        if not _worker_has_zero_applied_writes(state):
-            return "none"
-        if _worker_has_attempted_write(state):
-            return "none"
-        if state.reject_all_for_turn:
-            return "none"
-        if _candidate_final_has_real_zero_work_blocker(state.candidate_final_message):
-            return "none"
-        # Artifact item validated done bailout — before recovery nudge.
-        if _worker_artifact_item_validated_done(state):
-            self._finish_worker_as_validated_completed(
-                on_event,
-                summary=(
-                    "WorkArtifact item completed. Validation passed and the bounded item "
-                    "was already satisfied, so no extra edit was required."
-                ),
-            )
-            return "finished"
-        if state.worker_flow_zero_work_recovery_count < WORKER_FLOW_ZERO_WORK_RECOVERY_BUDGET:
-            self._append_worker_zero_work_recovery(
-                state,
-                reason=state.worker_flow_last_reason or "zero_work_final",
-                steering=state.worker_flow_last_steering,
-            )
-            return "nudged"
-        # Before failing on zero-work, check if validations are green.
-        if state.worker_explicit_validation_passed:
-            self._finish_worker_as_validated_completed(
-                on_event,
-                summary=(
-                    "Item completed. Post-completion activity was "
-                    "truncated because validation already passed."
-                ),
-            )
-            return "finished"
-        self._finish_worker_unrecoverable(
-            on_event,
-            failure_class="worker_flow_zero_work_no_progress",
-            error=(
-                "Worker could not make progress after internal zero-work "
-                "recovery. Handing step back for planner resolution."
-            ),
-            details={
-                "reason": state.worker_flow_last_reason or "zero_work_final",
-                "steering": state.worker_flow_last_steering,
-                "recovery_count": state.worker_flow_zero_work_recovery_count,
-                "recovery_budget": WORKER_FLOW_ZERO_WORK_RECOVERY_BUDGET,
-            },
-        )
-        return "finished"
-
-    def _append_worker_zero_work_recovery(
-        self,
-        state: _SendState,
-        *,
-        reason: str,
-        steering: str,
-    ) -> None:
-        count = state.worker_flow_zero_work_recovery_count + 1
-        details = [
-            WORKER_FLOW_ZERO_WORK_RECOVERY_TEXT,
-            "",
-            "Internal recovery context:",
-            f"- worker_flow_reason: {reason}",
-            f"- recovery_attempt: {count}/{WORKER_FLOW_ZERO_WORK_RECOVERY_BUDGET}",
-        ]
-        if count > 1:
-            details[2:2] = [
-                (
-                    "This is a repeated internal continuation. Use existing evidence; "
-                    "do not read broadly, do not summarize, and do not stop unless "
-                    "you can name a concrete external blocker."
-                ),
-                "",
-            ]
-        if steering:
-            details.append(f"- last_steering: {steering}")
-        self._history.append_user_text("\n".join(details))
-        state.worker_flow_zero_work_recovery_count = count
-        state.worker_flow_nudge_count += 1
-        state.worker_flow_last_reason = reason
-        state.worker_flow_last_steering = steering
-
-    def _append_worker_thrash_recovery(
-        self,
-        state: _SendState,
-        *,
-        reason: str,
-        steering: str,
-    ) -> None:
-        count = state.worker_flow_thrash_recovery_count + 1
-        details = [
-            "Worker Flow internal continuation:",
-            "Use the context already gathered. Do not restart orientation or restate the plan.",
-            "Choose the next smallest safe edit, make it now, and validate it.",
-            "If no safe edit is possible, return a real blocker with the exact missing file, permission, tool, or dispatch mismatch.",
-            "",
-            "Internal recovery context:",
-            f"- worker_flow_reason: {reason}",
-            f"- recovery_attempt: {count}/{WORKER_FLOW_THRASH_RECOVERY_BUDGET}",
-        ]
-        if steering:
-            details.append(f"- last_steering: {steering}")
-        self._history.append_user_text("\n".join(details))
-        state.worker_flow_thrash_recovery_count = count
-        state.worker_flow_nudge_count += 1
-        state.worker_flow_last_reason = reason
-        state.worker_flow_last_steering = steering
 
     def _cleanup_cancelled(self, on_event: EventCallback) -> None:
         """Call this when a turn is cancelled while waiting for model or tool.

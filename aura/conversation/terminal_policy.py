@@ -35,15 +35,18 @@ def classify_worker_terminal_command(command: str) -> str:
 def worker_terminal_command_allowed(
     command: str,
     *,
-    explicit_validation_commands: list[str] | None = None,
+    explicit_validation_commands: list[str] | list | None = None,
     workspace_root: Path | str | None = None,
 ) -> TerminalPolicyDecision:
     _ = workspace_root
     normalized = " ".join(str(command or "").strip().lower().split())
-    explicit_commands = {
-        " ".join(str(explicit or "").strip().lower().split())
-        for explicit in explicit_validation_commands or []
-    }
+    explicit_commands = set()
+    for entry in explicit_validation_commands or []:
+        if hasattr(entry, "command"):
+            cmd = entry.command
+        else:
+            cmd = str(entry or "")
+        explicit_commands.add(" ".join(cmd.strip().lower().split()))
     if normalized and normalized in explicit_commands:
         return TerminalPolicyDecision(True, "worker terminal command allowed", "", "", "")
     if _looks_like_python_source_inspection(normalized):

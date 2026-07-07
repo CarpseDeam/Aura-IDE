@@ -41,6 +41,13 @@ def validate_dispatch_request(req: WorkerDispatchRequest) -> DispatchValidationR
     if not req.acceptance.strip():
         errors.append("Worker dispatch request is missing acceptance.")
 
+    # Structured validation_commands: each entry must have a non-empty command.
+    for idx, vc in enumerate(req.validation_commands):
+        if not getattr(vc, "command", str(vc or "")).strip():
+            errors.append(
+                f"validation_commands[{idx}] has an empty command."
+            )
+
     return DispatchValidationResult(
         ok=not errors,
         errors=errors,

@@ -165,11 +165,19 @@ def _format_spec_as_user_message(
     ])
 
     if task.validation_commands:
+        lines: list[str] = []
+        for vc in task.validation_commands:
+            cmd = vc.command
+            if vc.cwd:
+                cmd = f"cd {vc.cwd} && {cmd}"
+            if vc.expected_outcome:
+                cmd = f"{cmd}  # {vc.expected_outcome}"
+            lines.append(cmd)
         parts.extend([
             "",
             "Validation Commands",
             "```",
-            "\n".join(task.validation_commands),
+            "\n".join(lines),
             "```",
         ])
 

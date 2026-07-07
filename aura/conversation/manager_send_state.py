@@ -13,6 +13,7 @@ from aura.conversation.edit_orchestrator import EditRetryLedger
 from aura.conversation.tool_limits import ToolLimitState
 from aura.conversation.validation_ledger import WorkerValidationLedger
 from aura.conversation.worker_flow import WorkerFlowHarness
+from aura.conversation.worker_progress_monitor import WorkerProgressMonitor
 from aura.conversation.worker_stream_buffer import WorkerStreamBuffer
 
 
@@ -45,6 +46,7 @@ class _SendState:
     limits: ToolLimitState = field(init=False)
     stream_buffer: WorkerStreamBuffer | None = field(init=False)
     worker_flow: WorkerFlowHarness | None = field(init=False)
+    progress_monitor: WorkerProgressMonitor | None = field(init=False)
 
     # --- worker guard / quarantine ---
     candidate_final_message: dict[str, Any] | None = None
@@ -54,8 +56,6 @@ class _SendState:
     worker_validation_nudge_sent: bool = False
     worker_final_report_proof_nudge_sent: bool = False
     worker_flow_nudge_count: int = 0
-    worker_flow_zero_work_recovery_count: int = 0
-    worker_flow_thrash_recovery_count: int = 0
     worker_flow_last_steering: str = ""
     worker_flow_last_reason: str = ""
     worker_quality_nudge_sent: bool = False
@@ -108,9 +108,11 @@ class _SendState:
         self.limits = ToolLimitState(mode=self.mode)
         self.stream_buffer = None
         self.worker_flow = None
+        self.progress_monitor = None
         if self.mode == "worker":
             self.stream_buffer = WorkerStreamBuffer()
             self.worker_flow = WorkerFlowHarness()
+            self.progress_monitor = WorkerProgressMonitor()
 
     def discard_worker_candidate_final(self) -> None:
         """Clear the quarantined final message and the stream buffer."""
@@ -125,16 +127,6 @@ class _SendState:
     @worker_flow_nudge_sent.setter
     def worker_flow_nudge_sent(self, value: bool) -> None:
         self.worker_flow_nudge_count = max(1, self.worker_flow_nudge_count) if value else 0
-
-    @property
-    def worker_flow_zero_work_recovery_sent(self) -> bool:
-        return self.worker_flow_zero_work_recovery_count > 0
-
-    @worker_flow_zero_work_recovery_sent.setter
-    def worker_flow_zero_work_recovery_sent(self, value: bool) -> None:
-        self.worker_flow_zero_work_recovery_count = (
-            max(1, self.worker_flow_zero_work_recovery_count) if value else 0
-        )
 
     # ── Write-count helpers (honest signals from WorkerFlowHarness) ──
 

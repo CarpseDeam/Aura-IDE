@@ -13,6 +13,54 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
+@dataclass(frozen=True)
+class ValidationCommandSpec:
+    """Structured validation command entry for a work item.
+
+    Replaces free-text command parsing with structured fields declared
+    at planning time.  A malformed entry (empty ``command``) fails at
+    SpecCard review, not at runtime.
+
+    Attributes:
+        command: The exact shell command to execute.
+        cwd: Optional working directory relative to repo root.
+        expected_outcome: Optional description of the expected pass/fail signal.
+    """
+    command: str
+    cwd: str = ""
+    expected_outcome: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {"command": self.command}
+        if self.cwd:
+            d["cwd"] = self.cwd
+        if self.expected_outcome:
+            d["expected_outcome"] = self.expected_outcome
+        return d
+
+    @classmethod
+    def from_dict(cls, raw: Any) -> ValidationCommandSpec:
+        """Deserialize from a dict or legacy flat string."""
+        if isinstance(raw, str):
+            return cls(command=raw)
+        if not isinstance(raw, dict):
+            return cls(command="")
+        return cls(
+            command=str(raw.get("command", "")),
+            cwd=str(raw.get("cwd", "")),
+            expected_outcome=str(raw.get("expected_outcome", "")),
+        )
+
+    @property
+    def valid(self) -> bool:
+        """A spec is valid when it has a non-empty command."""
+        return bool(self.command.strip())
+
+    @property
+    def has_cwd(self) -> bool:
+        return bool(self.cwd.strip())
+
+
 class WorkItemStatus(enum.Enum):
     """Status of a single work item in the artifact."""
 
@@ -79,6 +127,7 @@ class WorkArtifactItem:
     acceptance: str = ""
     status: WorkItemStatus = WorkItemStatus.pending
     receipt: WorkArtifactReceipt | None = None
+    validation_commands: list[ValidationCommandSpec] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -91,6 +140,8 @@ class WorkArtifactItem:
         }
         if self.receipt is not None:
             payload["receipt"] = self.receipt.to_dict()
+        if self.validation_commands:
+            payload["validation_commands"] = [vc.to_dict() for vc in self.validation_commands]
         return payload
 
     @classmethod
@@ -104,6 +155,13 @@ class WorkArtifactItem:
             status = WorkItemStatus(raw_status)
         except ValueError:
             status = WorkItemStatus.pending
+        # Deserialize validation_commands — supports both structured (list[dict])
+        # and legacy flat (list[str]) formats.
+        vc_raw = raw.get("validation_commands") or []
+        if isinstance(vc_raw, list):
+            validation_commands = [ValidationCommandSpec.from_dict(v) for v in vc_raw]
+        else:
+            validation_commands = []
         return cls(
             id=str(raw.get("id", "")),
             title=str(raw.get("title", "")),
@@ -112,6 +170,7 @@ class WorkArtifactItem:
             acceptance=str(raw.get("acceptance", "")),
             status=status,
             receipt=receipt,
+            validation_commands=validation_commands,
         )
 
 

@@ -21,6 +21,7 @@ from aura.conversation._dispatch_helpers import (
     _string_dict_list,
     _string_list,
     _target_region_list,
+    _validation_spec_list,
 )
 from aura.conversation.project_profile import ProjectProfile
 from aura.conversation.task_shape import TaskShape, infer_task_shape, unknown_task_shape
@@ -57,7 +58,7 @@ class WorkerDispatchRequest:
     allowed_responsibilities: list[str] = field(default_factory=list)
     forbidden_responsibilities: list[str] = field(default_factory=list)
     required_outputs: list[str] = field(default_factory=list)
-    validation_commands: list[str] = field(default_factory=list)
+    validation_commands: list[ValidationCommandSpec] = field(default_factory=list)
     risk_notes: list[str] = field(default_factory=list)
     non_goals: list[str] = field(default_factory=list)
     expected_public_symbols: list[str] = field(default_factory=list)
@@ -81,7 +82,7 @@ class WorkerDispatchRequest:
             "run_command": self.run_command,
             "allowed_responsibilities": list(self.allowed_responsibilities),            "forbidden_responsibilities": list(self.forbidden_responsibilities),
             "required_outputs": list(self.required_outputs),
-            "validation_commands": list(self.validation_commands),
+            "validation_commands": [vc.to_dict() for vc in self.validation_commands],
             "risk_notes": list(self.risk_notes),
             "non_goals": list(self.non_goals),
             "expected_public_symbols": list(self.expected_public_symbols),
@@ -120,7 +121,7 @@ class WorkerDispatchRequest:
             run_command=str(data.get("run_command", "")),
             allowed_responsibilities=_string_list(data.get("allowed_responsibilities")),            forbidden_responsibilities=_string_list(data.get("forbidden_responsibilities")),
             required_outputs=_string_list(data.get("required_outputs")),
-            validation_commands=_string_list(data.get("validation_commands")),
+            validation_commands=_validation_spec_list(data, "validation_commands"),
             risk_notes=_string_list(data.get("risk_notes")),
             non_goals=_string_list(data.get("non_goals")),
             expected_public_symbols=_string_list(data.get("expected_public_symbols")),
@@ -345,7 +346,7 @@ class WorkerTaskSpec:
     allowed_responsibilities: list[str] = field(default_factory=list)
     forbidden_responsibilities: list[str] = field(default_factory=list)
     required_outputs: list[str] = field(default_factory=list)
-    validation_commands: list[str] = field(default_factory=list)
+    validation_commands: list[ValidationCommandSpec] = field(default_factory=list)
     risk_notes: list[str] = field(default_factory=list)
     non_goals: list[str] = field(default_factory=list)
     contract: ExplicitSpecContract | None = None
@@ -364,7 +365,7 @@ class WorkerTaskSpec:
             "allowed_responsibilities": list(self.allowed_responsibilities),
             "forbidden_responsibilities": list(self.forbidden_responsibilities),
             "required_outputs": list(self.required_outputs),
-            "validation_commands": list(self.validation_commands),
+            "validation_commands": [vc.to_dict() for vc in self.validation_commands],
             "risk_notes": list(self.risk_notes),
             "non_goals": list(self.non_goals),
         }
@@ -426,7 +427,7 @@ class WorkerTaskSpec:
             allowed_responsibilities=_str_list("allowed_responsibilities"),
             forbidden_responsibilities=_str_list("forbidden_responsibilities"),
             required_outputs=_str_list("required_outputs"),
-            validation_commands=_str_list("validation_commands"),
+            validation_commands=_validation_spec_list(data, "validation_commands"),
             risk_notes=_str_list("risk_notes"),
             non_goals=_str_list("non_goals"),
             contract=ExplicitSpecContract.from_dict(data["contract"]) if data.get("contract") else None,
@@ -448,7 +449,12 @@ def normalize_worker_task(req: WorkerDispatchRequest) -> WorkerTaskSpec:
     if req.validation_commands:
         validation_commands = list(req.validation_commands)
     else:
-        validation_commands = _extract_validation_commands(req.acceptance)
+        # Lazy import avoids circular: _dispatch_helpers → model → controller → dispatch.
+        from aura.work_artifact.model import ValidationCommandSpec  # noqa: PLC0415
+        validation_commands = [
+            ValidationCommandSpec(command=cmd)
+            for cmd in _extract_validation_commands(req.acceptance)
+        ]
 
     # non_goals: explicit overrides, else parse Non-Goals section from spec
     if req.non_goals:

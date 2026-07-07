@@ -232,10 +232,6 @@ def _is_missing_dependency(lowered_output: str) -> bool:
     )
 
 
-def _is_shell_syntax_error(lowered_output: str) -> bool:
-    return "syntax error" in lowered_output and ("shell" in lowered_output or "unexpected" in lowered_output)
-
-
 def _is_package_manifest_missing(tokens: list[str], lowered_output: str) -> bool:
     if not tokens:
         return False

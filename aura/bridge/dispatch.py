@@ -54,7 +54,7 @@ from aura.events import EventBus
 from aura.lifecycle import LifecycleHooks, attach_lifecycle_notify
 from aura.lifecycle.builtin_worker_gates import register_builtin_worker_gates
 from aura.work_artifact.controller import WorkArtifactController
-from aura.work_artifact.model import WorkItemStatus
+from aura.work_artifact.model import ValidationCommandSpec, WorkItemStatus
 from aura.work_artifact.projection import WorkArtifactProjection
 from aura.worker_todo import WorkerTodoProjector
 
@@ -1037,6 +1037,12 @@ class _DispatchProxy(QObject):
                 )
                 spec += "\n".join(manifest_parts)
 
+        # Merge per-item validation_commands (structured) with top-level ones.
+        # Per-item commands take precedence, then top-level.
+        item_vcs = list(getattr(item, "validation_commands", []) or [])
+        top_vcs = list(approved_req.validation_commands)
+        merged_vcs = item_vcs + [vc for vc in top_vcs if vc.command not in {c.command for c in item_vcs}]
+
         return WorkerDispatchRequest(
             goal=item.intent or approved_req.goal,
             files=list(item.target_files) if item.target_files else list(approved_req.files),
@@ -1045,7 +1051,7 @@ class _DispatchProxy(QObject):
             summary=item.title or approved_req.summary,
             artifact_id=tool_call_id,
             artifact_item_id=item.id,
-            validation_commands=list(approved_req.validation_commands),
+            validation_commands=merged_vcs,
         )
 
     def _aggregate_artifact_results(

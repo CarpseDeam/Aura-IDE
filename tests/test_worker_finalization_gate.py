@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 from aura.client import Event
 from aura.conversation.history import History
 from aura.conversation.manager_send_state import _SendState
@@ -37,7 +39,6 @@ def _finalize(
         on_event=events.append,
         finish_worker_recoverable_followup=finish,
         handle_worker_flow_steering=lambda _s, _e: "none",
-        handle_worker_zero_work_final=lambda _s, _e: "none",
         explicit_validation_commands=explicit_validation_commands,
         declared_run_command=declared_run_command,
     )
@@ -390,3 +391,51 @@ def _make_repair_verdict():
         action="repair",
         instruction="Fix the failing test.",
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 — mark_explicit_validation_passed is a method, not a property setter
+# ---------------------------------------------------------------------------
+
+
+def test_worker_explicit_validation_passed_is_read_only_property() -> None:
+    """worker_explicit_validation_passed must raise AttributeError on direct
+    assignment — it is a @property without a setter.  Only
+    mark_explicit_validation_passed() can set it."""
+    s = _SendState(mode="worker", research_policy=None)
+    with pytest.raises(AttributeError, match="no setter"):
+        s.worker_explicit_validation_passed = True  # type: ignore[attr-defined]
+
+
+def test_mark_explicit_validation_passed_sets_flag() -> None:
+    """After mark_explicit_validation_passed(), the property returns True."""
+    s = _SendState(mode="worker", research_policy=None)
+    assert s.worker_explicit_validation_passed is False
+    s.mark_explicit_validation_passed()
+    assert s.worker_explicit_validation_passed is True
+
+
+def test_mark_explicit_validation_passed_records_at_current_write_snapshot() -> None:
+    """mark_explicit_validation_passed records at the current applied-write
+    count, so a subsequent write invalidates it."""
+    s = _SendState(mode="worker", research_policy=None)
+    assert s.worker_flow is not None
+    s.worker_flow.observe_tool_result(
+        "write_file", {"path": "a.py"}, True,
+        {"ok": True, "path": "a.py", "applied": True},
+    )
+    assert s.applied_write_count() == 1
+    s.mark_explicit_validation_passed()
+    assert s.worker_explicit_validation_passed is True
+    # Another write advances the snapshot — validation is now stale.
+    s.worker_flow.observe_tool_result(
+        "write_file", {"path": "b.py"}, True,
+        {"ok": True, "path": "b.py", "applied": True},
+    )
+    assert s.worker_explicit_validation_passed is False
+
+
+def test_worker_explicit_validation_passed_defaults_to_false() -> None:
+    """A fresh _SendState has worker_explicit_validation_passed=False."""
+    s = _SendState(mode="worker", research_policy=None)
+    assert s.worker_explicit_validation_passed is False

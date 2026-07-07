@@ -43,6 +43,7 @@ from aura.conversation.detected_validation import (
 )
 from aura.conversation.project_profile import detect_project_profile
 from aura.events import EventBus
+from aura.work_artifact.model import ValidationCommandSpec
 from aura.lifecycle import LifecycleHooks
 from aura.validation.selector import ValidationPlan
 
@@ -133,7 +134,7 @@ class WorkerDispatchRunner:
             context_gearbox=context_gearbox,
             internal_error=internal_error,
             cleaned_scratch_files=cleaned_scratch_files,
-            final_validation_commands=final_validation_commands,
+            final_validation_commands=[vc.command for vc in final_validation_commands],
             workspace_root=self._workspace_root,
             preserve_scratch_records=_request_allows_root_check_files(req),
         )
@@ -146,7 +147,7 @@ class WorkerDispatchRunner:
                     task_kind=task_spec.task_shape.task_kind if task_spec.task_shape is not None else "unknown",
                     context_gearbox=context_gearbox,
                     workspace_root=self._workspace_root,
-                    final_validation_commands=final_validation_commands,
+                    final_validation_commands=[vc.command for vc in final_validation_commands],
                     validation_selector=validation_selector,
                     validation_selector_key=validation_selector_key,
                     validation_selector_failed=validation_selector_failed,
@@ -245,11 +246,21 @@ class WorkerDispatchRunner:
             if profile is not None and profile.validation_commands:
                 detected_runnable = runnable_detected_validation_commands(profile)
                 if detected_runnable:
-                    merged = merge_validation_commands(
-                        task_spec.validation_commands,
-                        detected_runnable,
+                    # Convert structured specs to command strings for merge.
+                    planner_strings = [
+                        vc.command for vc in task_spec.validation_commands
+                    ]
+                    merged_strings = merge_validation_commands(
+                        planner_strings, detected_runnable,
                     )
-                    task_spec = replace(task_spec, validation_commands=merged)
+                    # Convert back to specs (discard legacy cwd/expected_outcome
+                    # since detected commands don't carry them).
+                    task_spec = replace(
+                        task_spec,
+                        validation_commands=[
+                            ValidationCommandSpec(command=c) for c in merged_strings
+                        ],
+                    )
         _log.info(
             "worker_profile_detect_end tool_call_id=%s duration_ms=%.0f",
             tool_call_id, (time.monotonic() - t2) * 1000,
@@ -296,9 +307,9 @@ class WorkerDispatchRunner:
         worker_history: History,
         relay: WorkerEventRelay,
         cancel_event: threading.Event,
-    ) -> tuple[list[str], ValidationPlan | None, tuple[str, ...] | None, bool, str | None, list[str]]:
+    ) -> tuple[list[ValidationCommandSpec], ValidationPlan | None, tuple[str, ...] | None, bool, str | None, list[str]]:
         task_kind = task_spec.task_shape.task_kind if task_spec.task_shape is not None else "unknown"
-        final_validation_commands = list(task_spec.validation_commands)
+        final_validation_commands: list[ValidationCommandSpec] = list(task_spec.validation_commands)
 
         vs_bridge = _WorkerValidationSelectorBridge(
             task_spec=task_spec,

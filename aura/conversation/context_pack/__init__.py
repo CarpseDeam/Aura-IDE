@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from aura.conversation.context_pack.worker_pack import assemble_worker_context_pack
+from aura.work_artifact.model import ValidationCommandSpec
 
 __all__ = ["build_worker_context_pack"]
 
@@ -16,7 +17,7 @@ def build_worker_context_pack(
     goal: str,
     spec: str,
     acceptance: str,
-    validation_commands: list[str] | None = None,
+    validation_commands: list[ValidationCommandSpec] | None = None,
     max_chars: int = 12000,
 ) -> str:
     """Build a Worker Context Pack string.

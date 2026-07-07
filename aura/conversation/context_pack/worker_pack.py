@@ -8,6 +8,7 @@ from aura.conversation.context_pack.budget import BudgetTracker
 from aura.conversation.context_pack.dependency_hints import find_dependency_hints
 from aura.conversation.context_pack.file_summary import summarize_file
 from aura.conversation.context_pack.test_hints import find_test_hints
+from aura.work_artifact.model import ValidationCommandSpec
 
 
 def assemble_worker_context_pack(
@@ -17,7 +18,7 @@ def assemble_worker_context_pack(
     goal: str,
     spec: str,
     acceptance: str,
-    validation_commands: list[str] | None = None,
+    validation_commands: list[ValidationCommandSpec] | None = None,
     max_chars: int = 12000,
 ) -> str:
     """Build a compact Worker Context Pack string.
@@ -52,8 +53,13 @@ def assemble_worker_context_pack(
     # Validation commands
     if validation_commands:
         cmd_lines = ["Validation Commands:"]
-        for cmd in validation_commands:
-            cmd_lines.append(f"  {cmd}")
+        for spec in validation_commands:
+            formatted = spec.command
+            if spec.cwd:
+                formatted = f"cd {spec.cwd} && {formatted}"
+            if spec.expected_outcome:
+                formatted = f"{formatted}  # {spec.expected_outcome}"
+            cmd_lines.append(f"  {formatted}")
         tracker.add_section("\n".join(cmd_lines))
 
     # Final note

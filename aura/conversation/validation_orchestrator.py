@@ -14,7 +14,6 @@ from aura.conversation._parse_helpers import (
     _is_missing_executable,
     _is_package_manifest_missing,
     _is_pytest_tokens,
-    _is_shell_syntax_error,
     _looks_like_command,
     _pytest_missing_path,
     _pytest_no_tests_collected,
@@ -309,14 +308,6 @@ def classify_validation_run(
         return _result(validation_command, exit_code, output_text, MISSING_EXECUTABLE, user_action=ACTION_INSTALL_DEPENDENCY)
     if _is_missing_dependency(lowered):
         return _result(validation_command, exit_code, output_text, MISSING_DEPENDENCY, user_action=ACTION_INSTALL_DEPENDENCY)
-    if _is_shell_syntax_error(lowered):
-        return _result(
-            validation_command,
-            exit_code,
-            output_text,
-            MALFORMED_VALIDATION_COMMAND,
-            user_action=ACTION_FIX_VALIDATION_COMMAND,
-        )
 
     if _is_pytest_tokens(tokens):
         missing_path = _pytest_missing_path(output_text)

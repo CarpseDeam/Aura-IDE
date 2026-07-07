@@ -138,5 +138,23 @@ def _str_list_items(data: dict[str, Any], key: str) -> list[str]:
     return [str(item) for item in raw]
 
 
+def _validation_spec_list(data: dict[str, Any], key: str) -> list:
+    """Coerce raw validation_commands data into a list of ValidationCommandSpec.
+
+    Supports both the new structured format (list of dicts) and legacy
+    flat-string format (list of strings) for backward compatibility.
+
+    Note: return type is plain ``list`` to avoid a circular import of
+    ``ValidationCommandSpec`` at module level.
+    """
+    raw = data.get(key)
+    if not isinstance(raw, list):
+        return []
+    # Lazy import to break circular dependency:
+    # _dispatch_helpers → work_artifact.model → work_artifact.controller → dispatch
+    from aura.work_artifact.model import ValidationCommandSpec  # noqa: PLC0415
+    return [ValidationCommandSpec.from_dict(v) for v in raw]
+
+
 def _none_or_str(value: Any) -> str | None:
     return str(value) if value is not None else None
