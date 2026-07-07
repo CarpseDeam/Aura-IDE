@@ -7,7 +7,7 @@ from typing import Any
 from aura.conversation import History, WorkerDispatchRequest, WorkerTaskSpec, normalize_worker_task
 from aura.conversation.task_shape import task_shape_contract_lines
 from aura.conversation.validation_orchestrator import validation_issue_message
-from aura.conversation.validation_truth import validation_payload_passed
+from aura.conversation.validation_truth import validation_payload_failed, validation_payload_passed
 from aura.conversation.worker_completion._summary_formatters import (
     _final_report_claims_failure,
     _final_report_claims_validation,
@@ -346,7 +346,7 @@ def _build_worker_summary(
         passed_v = [v for v in validation_results if validation_payload_passed(v)]
         failed_v = [
             v for v in validation_results
-            if not v.get("ok") and v.get("counts_as_product_failure") is not False
+            if validation_payload_failed(v) and v.get("counts_as_product_failure") is not False
         ]
 
         if passed_v:
