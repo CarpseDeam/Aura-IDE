@@ -178,6 +178,7 @@ class _ThreadRow(QFrame):
         self.thread = thread
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFixedHeight(28)
+        self.setObjectName("threadRow")
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(24, 0, 8, 0)
@@ -191,11 +192,13 @@ class _ThreadRow(QFrame):
         layout.addWidget(self.title_label, 1)
 
         self.setStyleSheet(f"""
-            QFrame {{
+            QFrame#threadRow {{
                 background-color: transparent;
+                border-radius: 4px;
             }}
-            QFrame:hover {{
+            QFrame#threadRow:hover {{
                 background-color: {BG_RAISED};
+                border-radius: 4px;
             }}
         """)
 
@@ -239,21 +242,24 @@ class _ShowMoreRow(QFrame):
         super().__init__(parent)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFixedHeight(28)
+        self.setObjectName("showMoreRow")
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(24, 0, 8, 0)
         layout.setSpacing(4)
 
         label = QLabel("Show more...")
-        label.setStyleSheet(f"color: {FG_MUTED}; font-size: 12px; font-style: italic;")
+        label.setStyleSheet(f"color: {FG_MUTED}; font-size: 12px;")
         layout.addWidget(label, 1)
 
         self.setStyleSheet(f"""
-            QFrame {{
+            QFrame#showMoreRow {{
                 background-color: transparent;
+                border-radius: 4px;
             }}
-            QFrame:hover {{
+            QFrame#showMoreRow:hover {{
                 background-color: {BG_RAISED};
+                border-radius: 4px;
             }}
         """)
 
@@ -263,6 +269,23 @@ class _ShowMoreRow(QFrame):
             event.accept()
         else:
             super().mousePressEvent(event)
+
+
+class _ChatsHeader(QFrame):
+    """Subheader label above chat rows for the active expanded project."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setFixedHeight(24)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(24, 0, 8, 0)
+
+        label = QLabel("Chats")
+        label.setStyleSheet(
+            f"color: {FG_MUTED}; font-size: 11px; font-weight: 600; letter-spacing: 0.03em;"
+        )
+        layout.addWidget(label)
 
 
 class LeftPane(QFrame):
@@ -526,6 +549,9 @@ class LeftPane(QFrame):
                 visible_thread_ids[current_project_id].append(w.thread.id)
             elif isinstance(w, _ShowMoreRow) and current_project_id is not None:
                 has_more[current_project_id] = True
+            elif isinstance(w, _ChatsHeader):
+                # Visual-only element, no snapshot data needed.
+                continue
 
         return {
             "workspace_root": self._last_workspace_root,
@@ -718,6 +744,10 @@ class LeftPane(QFrame):
                 visible_threads, has_more = self._visible_thread_slice(
                     threads, self._show_all_active_threads, limit=INITIAL_VISIBLE_THREADS
                 )
+
+                if visible_threads or has_more:
+                    chats_header = _ChatsHeader(parent=self._projects_container)
+                    self._projects_layout.addWidget(chats_header)
 
                 for t in visible_threads:
                     t_row = _ThreadRow(t, parent=self._projects_container)
