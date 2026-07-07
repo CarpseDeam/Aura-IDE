@@ -6,8 +6,6 @@ from pathlib import Path
 from typing import Callable, Literal
 
 from aura.client import Event
-from aura.conversation.critic_dispatch import CriticCallback
-from aura.conversation.dispatch import WorkerDispatchRequest
 from aura.conversation.edit_recovery_state import edit_recovery_details
 from aura.conversation.history import History
 from aura.conversation.manager_send_state import _SendState
@@ -34,7 +32,6 @@ from aura.conversation.worker_final_validation import (
     run_explicit_validation_commands,
 )
 from aura.conversation.worker_fingerprints import fingerprint_paths
-from aura.conversation.worker_quality_gate import handle_worker_quality_gate
 from dataclasses import dataclass
 from aura.conversation.worker_recovery_messages import (
     PATCH_CANDIDATE_INVALID_SYNTAX_ACTION,
@@ -79,9 +76,6 @@ def handle_worker_candidate_finalization(
     finish_worker_recoverable_followup: Callable[..., None],
     handle_worker_flow_steering: Callable[[_SendState, EventCallback], str],
     handle_worker_zero_work_final: Callable[[_SendState, EventCallback], str],
-    critic_cb: CriticCallback | None = None,
-    worker_dispatch_request: WorkerDispatchRequest | None = None,
-    dispatch_tool_call_id: str = "",
     declared_run_command: str | None = None,
     explicit_validation_commands: list[str] | None = None,
 ) -> WorkerFinalizationAction:
@@ -318,21 +312,6 @@ def handle_worker_candidate_finalization(
     if zero_work_action != "none":
         state.discard_worker_candidate_final()
         if zero_work_action == "finished":
-            return "finished"
-        return "continue"
-
-    quality_action = handle_worker_quality_gate(
-        state=state,
-        workspace_root=workspace_root,
-        history=history,
-        on_event=on_event,
-        critic_cb=critic_cb,
-        worker_request=worker_dispatch_request,
-        dispatch_tool_call_id=dispatch_tool_call_id,
-    )
-    if quality_action != "none":
-        state.discard_worker_candidate_final()
-        if quality_action == "finished":
             return "finished"
         return "continue"
 

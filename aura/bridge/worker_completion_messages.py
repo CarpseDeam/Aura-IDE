@@ -198,36 +198,6 @@ def _build_worker_completion_messages(
         )
         result_caveats.append(phrase_caveat)
 
-    quality_findings: list[Any] = []
-    if workspace_root is not None and completion["has_writes"] and relay.touched_files:
-        try:
-            from aura.code_intel.audit import audit_changed_files
-
-            touched = sorted(relay.touched_files)
-            audit_findings = audit_changed_files(workspace_root, touched)
-            warning_findings = [f for f in audit_findings if f.severity == "warning"]
-            quality_findings.extend(warning_findings)
-            blocked = [f for f in audit_findings if f.severity in ("error",)]
-            if warning_findings:
-                warning_files = sorted({f.file for f in warning_findings})
-                result_caveats.append(
-                    "Post-edit structural audit reported warning-level findings in: "
-                    + ", ".join(warning_files[:5])
-                    + "."
-                )
-            if blocked:
-                failure_files = sorted({f.file for f in blocked})
-                msg = (
-                    "Post-edit structural audit found high-severity issues in: "
-                    + ", ".join(failure_files[:5])
-                    + ". Fix these before declaring success."
-                )
-                result_errors.append(msg)
-                for bf in blocked[:5]:
-                    result_errors.append(f"  {bf.file}:{bf.line}: {bf.message}")
-        except Exception:
-            _log.exception("Post-edit structural audit failed")
-
     no_failure_or_blocker = (
         not relay.failed_tool_results
         and not internal_error
@@ -255,7 +225,7 @@ def _build_worker_completion_messages(
         "failed_write_tools": failed_write_tools,
         "result_errors": result_errors,
         "result_caveats": result_caveats,
-        "quality_findings": _quality_findings_to_metadata(quality_findings),
+        "quality_findings": [],
     }
 
 

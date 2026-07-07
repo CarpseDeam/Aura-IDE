@@ -36,7 +36,6 @@ from aura.conversation import (
     WorkerTaskSpec,
     normalize_worker_task,
 )
-from aura.conversation.critic_dispatch import CriticCallback, CriticRequest, run_critic_dispatch
 from aura.conversation.persistence import WorkerDispatchRecord
 from aura.conversation.detected_validation import (
     merge_validation_commands,
@@ -316,7 +315,6 @@ class WorkerDispatchRunner:
 
         internal_error: str | None = None
         scratch_before = _validation_scratch_files(self._workspace_root) if self._workspace_root is not None else set()
-        critic_cb = self._build_critic_callback(cancel_event=cancel_event)
         try:
             worker_manager.send(
                 on_event=relay_worker_event,
@@ -325,7 +323,6 @@ class WorkerDispatchRunner:
                 model=self._worker_model,
                 thinking=self._worker_thinking,
                 dispatch_cb=None,
-                critic_cb=critic_cb,
                 worker_dispatch_request=req,
                 dispatch_tool_call_id=tool_call_id,
                 loaded_target_files=list(
@@ -352,24 +349,6 @@ class WorkerDispatchRunner:
             internal_error,
             cleaned_scratch_files,
         )
-
-    def _build_critic_callback(self, *, cancel_event: threading.Event) -> CriticCallback:
-        def critic(tool_call_id: str, request: CriticRequest):
-            # The hook registry currently wires provider streams as planner/worker.
-            # Reuse the worker backend for model plumbing only; the critic gets no
-            # tools and its events are never relayed to the user-facing worker stream.
-            return run_critic_dispatch(
-                tool_call_id,
-                request,
-                model=self._worker_model,
-                thinking=self._worker_thinking,
-                temperature=0.0,
-                hook_name="generate_worker_code",
-                cancel_event=cancel_event,
-                tools=[],
-            )
-
-        return critic
 
     def _cleanup_worker_scratch_outputs(
         self,

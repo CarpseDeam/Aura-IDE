@@ -43,7 +43,6 @@ from aura.conversation.completion_guard import (
     assistant_message_text,
     is_repetitive_completion_final,
 )
-from aura.conversation.critic_dispatch import CriticCallback
 from aura.conversation.workflow_state import WorkflowStatus
 from aura.conversation.dispatch import (
     DispatchCallback,
@@ -229,7 +228,6 @@ class ConversationManager:
         thinking: ThinkingMode,
         dispatch_cb: DispatchCallback | None = None,
         workflow_state_cb: Callable[[str, str, str, WorkflowStatus], None] | None = None,
-        critic_cb: CriticCallback | None = None,
         worker_dispatch_request: WorkerDispatchRequest | None = None,
         dispatch_tool_call_id: str = "",
         loaded_target_files: list[str] | None = None,
@@ -402,9 +400,6 @@ class ConversationManager:
                         ),
                         handle_worker_flow_steering=self._handle_worker_flow_steering,
                         handle_worker_zero_work_final=self._handle_worker_zero_work_final,
-                        critic_cb=critic_cb,
-                        worker_dispatch_request=worker_dispatch_request,
-                        dispatch_tool_call_id=dispatch_tool_call_id,
                         declared_run_command=declared_run_command,
                         explicit_validation_commands=explicit_validation_commands,
                     )

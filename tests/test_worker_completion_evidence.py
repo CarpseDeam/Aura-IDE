@@ -102,6 +102,70 @@ def test_successful_write_edit_patch_result_with_touched_file_is_completion_evid
     assert result.extras.get("failure_class") != "harness_no_progress"
 
 
+def _completion_result_with_workspace(
+    req: WorkerDispatchRequest,
+    relay: WorkerEventRelay,
+    workspace_root,
+) -> WorkerDispatchResult:
+    history = History()
+    history.append_assistant(
+        {
+            "role": "assistant",
+            "content": "<status>completed</status>\n<validation>passed</validation>",
+            "reasoning_content": None,
+        }
+    )
+    task_spec = normalize_worker_task(req)
+    completion = prepare_worker_completion_result(
+        req=req,
+        worker_history=history,
+        task_spec=task_spec,
+        relay=relay,
+        context_gearbox={},
+        internal_error=None,
+        cleaned_scratch_files=[],
+        final_validation_commands=[],
+        workspace_root=workspace_root,
+        preserve_scratch_records=False,
+    )
+    return completion.build_result(validation_selector=None).result
+
+
+def test_audit_changed_files_not_called_during_completion_assembly(monkeypatch, tmp_path) -> None:
+    """audit_changed_files must not be called during Worker completion assembly."""
+    import aura.code_intel.audit
+
+    def _should_not_be_called(*args, **kwargs):
+        raise AssertionError("audit_changed_files was invoked but is no longer wired")
+    monkeypatch.setattr(aura.code_intel.audit, "audit_changed_files", _should_not_be_called)
+
+    relay = _relay_with_events(
+        ToolResult(
+            tool_call_id="edit-1",
+            name="write_file",
+            ok=True,
+            result=json.dumps(
+                {"ok": True, "path": "src/example.py", "applied": True, "is_new_file": False}
+            ),
+        ),
+        _validation_event(),
+    )
+    # Touched files + workspace_root would have triggered the audit block.
+    relay.touched_files.add("src/example.py")
+
+    req = WorkerDispatchRequest(
+        goal="Implement the example change",
+        files=["src/example.py"],
+        spec="Update src/example.py.",
+        acceptance="",
+    )
+
+    result = _completion_result_with_workspace(req, relay, tmp_path)
+
+    assert result.ok is True
+    assert result.status == WorkerOutcomeStatus.completed.value
+
+
 def test_validation_only_without_touched_files_is_not_implementation_work() -> None:
     implementation_req = WorkerDispatchRequest(
         goal="Implement the example change",
