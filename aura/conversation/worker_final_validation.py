@@ -34,6 +34,18 @@ class WorkerFinalValidationResult:
     def counts_as_product_failure(self) -> bool:
         return any(run.counts_as_product_failure for run in self.runs or [])
 
+    @property
+    def infra_only(self) -> bool:
+        """True when not ok, at least one run failed, and none of the failing
+        runs count as a product failure (all are infrastructure/environment
+        issues)."""
+        if self.ok:
+            return False
+        failing = [r for r in (self.runs or []) if not r.ok]
+        if not failing:
+            return False
+        return not any(r.counts_as_product_failure for r in failing)
+
 
 def run_explicit_validation_commands(
     *,
@@ -99,7 +111,7 @@ def run_explicit_validation_commands(
             )
             runs.append(run)
             return WorkerFinalValidationResult(
-                ok=not run.counts_as_product_failure,
+                ok=False,
                 diagnostics=diagnostics,
                 command=command,
                 runs=runs,
@@ -149,7 +161,20 @@ def run_explicit_validation_commands(
                 runs=runs,
             )
 
-    return WorkerFinalValidationResult(ok=True, runs=runs)
+    ok = all(run.ok for run in runs) and bool(runs)
+    result = WorkerFinalValidationResult(ok=ok, runs=runs)
+    if not ok and not result.diagnostics:
+        # All failures were infra-classified (we continued past them).
+        # Populate diagnostics and command from the first failing run so the
+        # caller has something actionable.
+        failing = [r for r in runs if not r.ok]
+        if failing:
+            result = replace(
+                result,
+                diagnostics=failing[0].output,
+                command=failing[0].command,
+            )
+    return result
 
 
 def emit_explicit_validation_result(
@@ -159,6 +184,7 @@ def emit_explicit_validation_result(
     output: str,
     on_event: EventCallback,
     workspace_root: str | Path,
+    exit_code: int | None = None,
     raw_text: str = "",
     expected_outcome: str = "",
     classification: str = "",
@@ -172,7 +198,7 @@ def emit_explicit_validation_result(
     payload = {
         "ok": ok,
         "command": command,
-        "exit_code": 1 if not ok else 0,
+        "exit_code": exit_code if exit_code is not None else (1 if not ok else 0),
         "output": output,
         "auto_validation": True,
         "verification_rung": "explicit_validation",
@@ -221,6 +247,7 @@ def emit_explicit_validation_runs(
             output=run.output,
             on_event=on_event,
             workspace_root=workspace_root,
+            exit_code=run.exit_code,
             raw_text=run.raw_text,
             expected_outcome=run.expected_outcome,
             classification=run.classification,

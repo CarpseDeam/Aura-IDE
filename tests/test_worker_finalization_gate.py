@@ -119,11 +119,31 @@ def test_escalation_paths_unchanged(tmp_path: Path):
 
 
 def test_product_validation_failed_escalation(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr("aura.conversation.worker_finalization_gate.run_explicit_validation_commands",
-        MagicMock(return_value=MagicMock(ok=False, command="pytest", diagnostics="Failed!")))
+    from aura.conversation.validation_failure_routing import ValidationFailureVerdict
+
+    mock_val = MagicMock(
+        ok=False,
+        command="pytest",
+        diagnostics="Failed!",
+        runs=None,
+    )
+    monkeypatch.setattr(
+        "aura.conversation.worker_finalization_gate.run_explicit_validation_commands",
+        MagicMock(return_value=mock_val),
+    )
+    monkeypatch.setattr(
+        "aura.conversation.worker_finalization_gate.route_validation_failure",
+        MagicMock(return_value=ValidationFailureVerdict(
+            action="handback",
+            handback_details={
+                "failure_class": "product_validation_failed",
+                "error": "stall detected",
+                "details": {"command": "pytest", "diagnostics": "Failed!"},
+            },
+        )),
+    )
     s = _SendState(mode="worker", research_policy=None)
     s.worker_flow = WorkerFlowHarness()
-    s.explicit_validation_failure_counts = {"pytest": 1}
     action, history, finish = _finalize(s, tmp_path, explicit_validation_commands=["pytest"])
     assert action == "finished"
     finish.assert_called_once()

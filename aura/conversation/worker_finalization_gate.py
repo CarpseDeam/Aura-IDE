@@ -25,8 +25,10 @@ from aura.conversation.worker_final_report_guard import (
     WORKER_FINAL_REPORT_PROOF_REQUIRED_TEXT,
     worker_final_report_missing_proof,
 )
+from aura.conversation.validation_failure_routing import (
+    route_validation_failure,
+)
 from aura.conversation.worker_final_validation import (
-    WORKER_EXPLICIT_VALIDATION_FAILURE_INSTRUCTION,
     emit_explicit_validation_result,
     emit_explicit_validation_runs,
     run_explicit_validation_commands,
@@ -586,43 +588,35 @@ def _run_behavioral_tier(
                     on_event=on_event,
                     workspace_root=workspace_root,
                 )
-            validation_key = val_result.command or "\n".join(explicit_validation_commands)
-            failure_count = state.explicit_validation_failure_counts.get(validation_key, 0) + 1
-            state.explicit_validation_failure_counts[validation_key] = failure_count
-            if failure_count > 1:
+
+            edits_since_last_pass = (
+                sum(state.write_attempts_by_path.values())
+                > state.explicit_validation_edit_snapshot
+            )
+            state.explicit_validation_edit_snapshot = sum(
+                state.write_attempts_by_path.values()
+            )
+            verdict = route_validation_failure(
+                val_result=val_result,
+                fingerprint_memory=state.explicit_validation_fingerprints,
+                edits_since_last_pass=edits_since_last_pass,
+            )
+            if verdict.action == "handback":
                 finish_worker_recoverable_followup(
                     on_event,
-                    failure_class="product_validation_failed",
-                    error=(
-                        "Final acceptance validation still fails after one focused "
-                        "repair attempt."
-                    ),
-                    details={
-                        "command": val_result.command,
-                        "diagnostics": val_result.diagnostics,
-                        "suggested_next_tool": "dispatch_to_worker",
-                        "suggested_next_action": (
-                            "Redispatch a focused repair, or revise the "
-                            "acceptance command if it is misdeclared."
-                        ),
-                        "dispatch_mismatch": True,
-                        "worker_confusion_question": (
-                            "Worker could not make acceptance validation "
-                            "pass after one focused repair attempt"
-                            + (": " + str(val_result.command) if val_result.command else ".")
-                        ),
-                    },
+                    **verdict.handback_details,
                 )
                 return "finished"
-            
-            findings.append(_ValidationFinding(
-                rung="explicit_validation",
-                paths=(),
-                diagnostics=val_result.diagnostics,
-                command=val_result.command
-            ))
+
+            # fix_command or repair
+            history.append_user_text(verdict.instruction)
+            state.discard_worker_candidate_final()
+            return "continue"
         else:
-            state.explicit_validation_failure_counts.clear()
+            state.explicit_validation_fingerprints.clear()
+            state.explicit_validation_edit_snapshot = sum(
+                state.write_attempts_by_path.values()
+            )
             state.worker_explicit_validation_passed = True
             if state.worker_flow is not None:
                 state.worker_flow.mark_validation_satisfied()
@@ -637,11 +631,8 @@ def _run_behavioral_tier(
                 command=f.command,
                 output=f.diagnostics,
             )
-        elif f.rung == "explicit_validation":
-            instruction = WORKER_EXPLICIT_VALIDATION_FAILURE_INSTRUCTION.format(
-                command=f.command,
-                diagnostics=f.diagnostics,
-            )
+        # explicit_validation findings are no longer appended -- they are
+        # handled directly by the router above.
         history.append_user_text(instruction)
         state.discard_worker_candidate_final()
         return "continue"
@@ -650,7 +641,6 @@ def _run_behavioral_tier(
     for f in findings:
         title = {
             "launch": "Launch Failure",
-            "explicit_validation": "Explicit Validation Failure",
         }.get(f.rung, f.rung)
         
         diag = f.diagnostics.strip()

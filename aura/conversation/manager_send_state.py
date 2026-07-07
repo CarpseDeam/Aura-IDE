@@ -90,7 +90,8 @@ class _SendState:
     # --- syntax / import validation ---
     syntax_repair_required: dict[str, dict[str, Any]] = field(default_factory=dict)
     syntax_validation_required: set[str] = field(default_factory=set)
-    explicit_validation_failure_counts: dict[str, int] = field(default_factory=dict)
+    explicit_validation_fingerprints: dict[str, str] = field(default_factory=dict)
+    explicit_validation_edit_snapshot: int = 0
     import_verification_required: set[str] = field(default_factory=set)
 
     # --- launch / dependency fingerprints (skip-optimisation) ---
