@@ -7,17 +7,15 @@ wire point integration.
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock, PropertyMock, patch
 
 import pytest
 
 from aura.work_artifact.restore_points import (
     BaselineState,
-    CaptureResult,
     RestorePointManager,
     RestorePointSession,
+    _make_storage_key,
 )
-
 
 # ===========================================================================
 # RestorePointSession — unit tests
@@ -275,7 +273,13 @@ class TestRestorePointSessionManifest:
 
     def test_corrupt_manifest_does_not_prevent_new_capture(self, tmp_path: Path) -> None:
         """A corrupt manifest is logged and overwritten, not fatal."""
-        session_dir = tmp_path / ".aura" / "restore_points" / "a1" / "i1"
+        session_dir = (
+            tmp_path
+            / ".aura"
+            / "restore_points"
+            / _make_storage_key("a1")
+            / _make_storage_key("i1")
+        )
         session_dir.mkdir(parents=True)
         (session_dir / "manifest.json").write_text("not valid json{{", encoding="utf-8")
 
@@ -303,9 +307,15 @@ class TestRestorePointSessionDirectory:
         assert (session.session_dir / "blobs").exists()
 
     def test_session_dir_path(self, tmp_path: Path) -> None:
-        """Session dir is .aura/restore_points/<artifact_id>/<item_id>/."""
+        """Session dir is .aura/restore_points/<safe_key>/<safe_key>/."""
         session = RestorePointSession("artifact-x", "item-3", tmp_path)
-        expected = tmp_path / ".aura" / "restore_points" / "artifact-x" / "item-3"
+        expected = (
+            tmp_path
+            / ".aura"
+            / "restore_points"
+            / _make_storage_key("artifact-x")
+            / _make_storage_key("item-3")
+        )
         assert session.session_dir == expected
 
     def test_session_dir_nested_ids(self, tmp_path: Path) -> None:
@@ -392,8 +402,8 @@ class TestRestorePointManagerStorage:
 
     def test_delete_session_storage_removes_dir(self, tmp_path: Path) -> None:
         mgr = RestorePointManager(tmp_path)
-        mgr.open_session("a1", "i1")
-        session_dir = tmp_path / ".aura" / "restore_points" / "a1" / "i1"
+        session = mgr.open_session("a1", "i1")
+        session_dir = session.session_dir
         assert session_dir.exists()
 
         mgr.delete_session_storage("a1", "i1")
@@ -413,7 +423,7 @@ class TestRestorePointManagerStorage:
         mgr = RestorePointManager(tmp_path)
         mgr.open_session("a1", "i1")
         mgr.open_session("a1", "i2")
-        artifact_dir = tmp_path / ".aura" / "restore_points" / "a1"
+        artifact_dir = tmp_path / ".aura" / "restore_points" / _make_storage_key("a1")
 
         mgr.delete_artifact_storage("a1")
         assert not artifact_dir.exists()
@@ -482,7 +492,7 @@ class TestRestorePointManagerCapturePath:
 # ===========================================================================
 
 
-def _approve(req) -> "ApprovalDecision":
+def _approve(req) -> "ApprovalDecision":  # noqa: F821 — forward reference via lazy import
     """Approval callback that always approves."""
     from aura.conversation.tools._types import ApprovalDecision
     return ApprovalDecision(action="approve", metadata={})
@@ -735,6 +745,175 @@ class TestNonArtifactDispatchUnchanged:
             _approve,
         )
         assert result.ok is False
+
+
+class TestStorageKeyHardening:
+    """Storage keys derived from artifact_id / item_id must be
+    filesystem-safe even when the IDs contain attacker-controlled
+    path separators, traversal sequences, or special characters.
+
+    The original IDs are preserved in session attributes for
+    debugging while the on-disk paths use slug+hash keys.
+    """
+
+    # ── artifact_id hardening ──────────────────────────────────────────
+
+    def test_artifact_id_with_forward_slash(self, tmp_path: Path) -> None:
+        """Forward slash in artifact_id is safely encoded."""
+        session = RestorePointSession("foo/bar", "i1", tmp_path)
+        assert str(session.session_dir).startswith(
+            str(tmp_path / ".aura" / "restore_points")
+        )
+        assert session.session_dir.exists()
+        assert session.artifact_id == "foo/bar"  # original preserved
+
+    def test_artifact_id_with_backslash(self, tmp_path: Path) -> None:
+        """Backslash in artifact_id is safely encoded."""
+        session = RestorePointSession("foo\\bar", "i1", tmp_path)
+        assert str(session.session_dir).startswith(
+            str(tmp_path / ".aura" / "restore_points")
+        )
+        assert session.session_dir.exists()
+
+    def test_artifact_id_with_traversal(self, tmp_path: Path) -> None:
+        """``..`` in artifact_id cannot escape .aura/restore_points/."""
+        session = RestorePointSession("..", "i1", tmp_path)
+        assert str(session.session_dir).startswith(
+            str(tmp_path / ".aura" / "restore_points")
+        )
+        assert session.session_dir.exists()
+        assert session.artifact_id == ".."
+
+    def test_artifact_id_with_drive_prefix(self, tmp_path: Path) -> None:
+        """Drive-prefix artifact_id (C:\\) is safely encoded."""
+        session = RestorePointSession("C:\\Windows", "i1", tmp_path)
+        assert str(session.session_dir).startswith(
+            str(tmp_path / ".aura" / "restore_points")
+        )
+        assert session.session_dir.exists()
+
+    def test_artifact_id_whitespace_only_raises(self, tmp_path: Path) -> None:
+        """Whitespace-only artifact_id is rejected."""
+        with pytest.raises(ValueError, match="empty|whitespace"):
+            RestorePointSession("   ", "i1", tmp_path)
+
+    def test_empty_artifact_id_raises(self, tmp_path: Path) -> None:
+        """Empty artifact_id is rejected."""
+        with pytest.raises(ValueError, match="empty"):
+            RestorePointSession("", "i1", tmp_path)
+
+    def test_unicode_in_artifact_id(self, tmp_path: Path) -> None:
+        """Unicode characters in artifact_id are safely encoded."""
+        session = RestorePointSession("héllo_wørld", "i1", tmp_path)
+        assert str(session.session_dir).startswith(
+            str(tmp_path / ".aura" / "restore_points")
+        )
+        assert session.session_dir.exists()
+        assert session.artifact_id == "héllo_wørld"  # original preserved
+
+    # ── item_id hardening ──────────────────────────────────────────────
+
+    def test_item_id_with_forward_slash(self, tmp_path: Path) -> None:
+        """Forward slash in item_id is safely encoded."""
+        session = RestorePointSession("a1", "x/y", tmp_path)
+        assert str(session.session_dir).startswith(
+            str(tmp_path / ".aura" / "restore_points")
+        )
+        assert session.session_dir.exists()
+
+    def test_item_id_with_backslash(self, tmp_path: Path) -> None:
+        """Backslash in item_id is safely encoded."""
+        session = RestorePointSession("a1", "x\\y", tmp_path)
+        assert str(session.session_dir).startswith(
+            str(tmp_path / ".aura" / "restore_points")
+        )
+        assert session.session_dir.exists()
+
+    def test_item_id_with_traversal(self, tmp_path: Path) -> None:
+        """``..`` in item_id cannot escape .aura/restore_points/."""
+        session = RestorePointSession("a1", "../../etc", tmp_path)
+        assert str(session.session_dir).startswith(
+            str(tmp_path / ".aura" / "restore_points")
+        )
+        assert session.session_dir.exists()
+
+    def test_item_id_with_drive_prefix(self, tmp_path: Path) -> None:
+        """Drive-prefix item_id (C:\\) is safely encoded."""
+        session = RestorePointSession("a1", "D:\\esc", tmp_path)
+        assert str(session.session_dir).startswith(
+            str(tmp_path / ".aura" / "restore_points")
+        )
+        assert session.session_dir.exists()
+
+    def test_item_id_whitespace_only_raises(self, tmp_path: Path) -> None:
+        """Whitespace-only item_id is rejected."""
+        with pytest.raises(ValueError, match="empty|whitespace"):
+            RestorePointSession("a1", "   ", tmp_path)
+
+    def test_empty_item_id_raises(self, tmp_path: Path) -> None:
+        """Empty item_id is rejected."""
+        with pytest.raises(ValueError, match="empty"):
+            RestorePointSession("a1", "", tmp_path)
+
+    # ── stability and collision ────────────────────────────────────────
+
+    def test_same_id_pair_stable_across_sessions(self, tmp_path: Path) -> None:
+        """Same artifact_id + item_id produces the same storage path."""
+        s1 = RestorePointSession("artifact-1", "item-1", tmp_path)
+        s2 = RestorePointSession("artifact-1", "item-1", tmp_path)
+        assert s1.session_dir == s2.session_dir
+
+    def test_different_artifact_no_collision(self, tmp_path: Path) -> None:
+        """Different artifact IDs produce different directories."""
+        s1 = RestorePointSession("a1", "i1", tmp_path)
+        s2 = RestorePointSession("a2", "i1", tmp_path)
+        assert s1.session_dir != s2.session_dir
+
+    def test_different_item_no_collision(self, tmp_path: Path) -> None:
+        """Different item IDs under the same artifact produce different dirs."""
+        s1 = RestorePointSession("a1", "i1", tmp_path)
+        s2 = RestorePointSession("a1", "i2", tmp_path)
+        assert s1.session_dir != s2.session_dir
+
+    # ── functional correctness ─────────────────────────────────────────
+
+    def test_capture_still_works_with_adversarial_ids(self, tmp_path: Path) -> None:
+        """Capture still works when IDs contain path separator chars."""
+        (tmp_path / "data.txt").write_text("important data")
+        session = RestorePointSession("../../hack", "C:\\esc", tmp_path)
+        result = session.capture_pre_write("data.txt")
+        assert result.state == BaselineState.present
+        assert session.session_dir.exists()
+        blob = session.session_dir / result.blob_path
+        assert blob.read_bytes() == b"important data"
+
+    def test_manager_open_session_with_adversarial_ids(self, tmp_path: Path) -> None:
+        """Manager open_session works with IDs that need encoding."""
+        mgr = RestorePointManager(tmp_path)
+        session = mgr.open_session("hack/..\\C:", "i1")
+        assert session.artifact_id == "hack/..\\C:"
+        assert str(session.session_dir).startswith(
+            str(tmp_path / ".aura" / "restore_points")
+        )
+        assert session.session_dir.exists()
+
+    def test_manager_delete_session_storage_adversarial_ids(
+        self, tmp_path: Path
+    ) -> None:
+        """delete_session_storage works with adversarial IDs."""
+        mgr = RestorePointManager(tmp_path)
+        session = mgr.open_session("../../bad", "C:\\hack")
+        mgr.delete_session_storage("../../bad", "C:\\hack")
+        assert not session.session_dir.exists()
+
+    def test_manager_delete_artifact_storage_adversarial_ids(
+        self, tmp_path: Path
+    ) -> None:
+        """delete_artifact_storage works with adversarial artifact IDs."""
+        mgr = RestorePointManager(tmp_path)
+        mgr.open_session("../../bad", "i1")
+        mgr.delete_artifact_storage("../../bad")
+        assert mgr.open_count == 0
 
 
 class TestRestorePointManagerDefaultWorkspace:

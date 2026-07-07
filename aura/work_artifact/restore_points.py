@@ -154,6 +154,84 @@ def _path_is_out_of_bounds(
 
 # ── Storage helpers ───────────────────────────────────────────────────────
 
+import re as _re
+
+
+def _make_storage_key(raw: str) -> str:
+    """Convert an arbitrary identifier to a filesystem-safe storage key.
+
+    Format: ``<slug>-<sha256_prefix>``
+
+    The slug preserves readable characters for debugging.  The SHA-256
+    prefix guarantees uniqueness and makes the key stable across sessions.
+    The original ID is stored in the session manifest for reference.
+
+    Raises:
+        ValueError: If *raw* is empty or whitespace-only.
+    """
+    if not raw or not raw.strip():
+        raise ValueError(f"empty or whitespace-only ID: {raw!r}")
+
+    s = raw.strip().lower()
+
+    # Replace path separators and drive-letter colon.
+    s = _re.sub(r"[/\\:]+", "_", s)
+
+    # Remove control characters.
+    s = _re.sub(r"[\x00-\x1f\x7f]", "", s)
+
+    # Replace anything that is not a word character, dot, or dash.
+    s = _re.sub(r"[^\w.\-]", "_", s)
+
+    # Collapse consecutive dots (prevents ``..`` traversal in component).
+    s = _re.sub(r"\.{2,}", "_", s)
+
+    # Collapse consecutive underscores.
+    s = _re.sub(r"_+", "_", s)
+
+    # Strip leading/trailing special characters.
+    s = s.strip("_.-")
+
+    # Fallback if nothing survived slugification.
+    if not s:
+        s = "id"
+
+    # Keep the slug readable but bounded.
+    max_slug = 48
+    if len(s) > max_slug:
+        s = s[:max_slug].rstrip("_.-")
+
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
+    return f"{s}-{digest}"
+
+
+def _session_storage_dir(
+    workspace_root: Path,
+    artifact_id: str,
+    item_id: str,
+) -> Path:
+    """Return the filesystem-safe restore-point directory for an (artifact, item) pair."""
+    return (
+        workspace_root
+        / ".aura"
+        / "restore_points"
+        / _make_storage_key(artifact_id)
+        / _make_storage_key(item_id)
+    )
+
+
+def _artifact_storage_dir(
+    workspace_root: Path,
+    artifact_id: str,
+) -> Path:
+    """Return the filesystem-safe restore-point directory for an artifact."""
+    return (
+        workspace_root
+        / ".aura"
+        / "restore_points"
+        / _make_storage_key(artifact_id)
+    )
+
 
 def _blob_dir(session_dir: Path) -> Path:
     """Return the blobs subdirectory under a session directory."""
@@ -195,13 +273,9 @@ class RestorePointSession:
         self.manifest: dict[str, dict[str, Any]] = {}
         self._dirty: bool = False
 
-        # Set up session directory.
-        self.session_dir = (
-            self._workspace_root
-            / ".aura"
-            / "restore_points"
-            / artifact_id
-            / item_id
+        # Set up session directory using filesystem-safe storage keys.
+        self.session_dir = _session_storage_dir(
+            self._workspace_root, artifact_id, item_id
         )
         self.session_dir.mkdir(parents=True, exist_ok=True)
         _blob_dir(self.session_dir).mkdir(parents=True, exist_ok=True)
@@ -471,12 +545,8 @@ class RestorePointManager:
         needed.  The in-memory session (if open) is closed first.
         """
         self.close_session(artifact_id, item_id)
-        session_dir = (
-            self._workspace_root
-            / ".aura"
-            / "restore_points"
-            / artifact_id
-            / item_id
+        session_dir = _session_storage_dir(
+            self._workspace_root, artifact_id, item_id
         )
         if session_dir.exists():
             shutil.rmtree(session_dir, ignore_errors=True)
@@ -492,11 +562,8 @@ class RestorePointManager:
         for (aid, iid) in list(self._sessions):
             if aid == artifact_id:
                 self.close_session(aid, iid)
-        artifact_dir = (
-            self._workspace_root
-            / ".aura"
-            / "restore_points"
-            / artifact_id
+        artifact_dir = _artifact_storage_dir(
+            self._workspace_root, artifact_id
         )
         if artifact_dir.exists():
             shutil.rmtree(artifact_dir, ignore_errors=True)
