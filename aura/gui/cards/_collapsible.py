@@ -44,6 +44,13 @@ class _CollapsibleSection(QFrame):
         self._open = not self._open
         self._body.setVisible(self._open)
         self._refresh_text()
+        self._after_visibility_change()
+
+    def _after_visibility_change(self) -> None:
+        if self._open and hasattr(self._body, "refresh_height"):
+            self._body.refresh_height()
+        self._body.updateGeometry()
+        self.updateGeometry()
 
     def set_title(self, title: str) -> None:
         self._title = title
@@ -53,3 +60,4 @@ class _CollapsibleSection(QFrame):
         self._open = value
         self._body.setVisible(value)
         self._refresh_text()
+        self._after_visibility_change()

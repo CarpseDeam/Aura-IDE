@@ -4,7 +4,6 @@ from __future__ import annotations
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import QApplication
 
-
 # ---- color tokens ---------------------------------------------------------
 BG = "#141418"           # window background (was #1e1e1e)
 BG_ALT = "#1c1c22"       # panels / generic cards (was #25252d)
@@ -172,6 +171,11 @@ QPushButton#primary {{
 }}
 QPushButton#primary:hover {{
     background: {ACCENT_HOVER};
+}}
+QPushButton#primary:disabled {{
+    background: {BG_RAISED};
+    color: {FG_MUTED};
+    border-color: {BORDER_STRONG};
 }}
 QPushButton#danger {{
     background: transparent;

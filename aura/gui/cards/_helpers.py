@@ -2,14 +2,14 @@
 from __future__ import annotations
 
 import html as _html
-import re
+import math
 
-from PySide6.QtCore import QEasingCurve, Qt
+from PySide6.QtCore import QEasingCurve, Qt, QTimer
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QFrame, QGraphicsOpacityEffect, QSizePolicy, QTextBrowser, QWidget
 
 # Use the ones from markdown_renderer to avoid circularity if markdown_renderer needs them
-from aura.gui.markdown_renderer import _CODE_FENCE_RE, _HAVE_PYGMENTS
+from aura.gui.markdown_renderer import _CODE_FENCE_RE, _HAVE_PYGMENTS  # noqa: F401
 
 
 class _MarkdownTextBlock(QTextBrowser):
@@ -25,18 +25,37 @@ class _MarkdownTextBlock(QTextBrowser):
         self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self.setStyleSheet("background: transparent; border: none;")
         self.document().setDocumentMargin(0)
+        self._height_sync_pending: bool = False
         self.setHtml(html)
-        self._sync_height()
+        self.document().contentsChanged.connect(self._queue_height_sync)
+        self._queue_height_sync()
+
+    def _queue_height_sync(self) -> None:
+        if self._height_sync_pending:
+            return
+        self._height_sync_pending = True
+        QTimer.singleShot(0, self._sync_height)
+
+    def refresh_height(self) -> None:
+        self._queue_height_sync()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._queue_height_sync()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
-        self._sync_height()
+        self._queue_height_sync()
 
     def _sync_height(self) -> None:
+        self._height_sync_pending = False
         width = max(1, self.viewport().width())
         self.document().setTextWidth(width)
-        height = int(self.document().size().height() + 4)
+        height = math.ceil(self.document().size().height()) + 8
         self.setFixedHeight(max(1, height))
+        self.updateGeometry()
+        if self.parentWidget() is not None and self.parentWidget().layout() is not None:
+            self.parentWidget().layout().invalidate()
 
 
 def _wrap_body_text(text: str, color: str) -> str:
