@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 from typing import Any
 
+from aura.conversation.validation_truth import validation_payload_passed
 from aura.conversation.worker_flow_helpers import (
     BROAD_ORIENTATION_TOOLS,
     TARGETED_READ_TOOLS,
@@ -30,7 +31,6 @@ from aura.conversation.worker_flow_helpers import (
     _tool_call_name_args,
     _tool_def_name,
     _tool_paths,
-    _tool_result_succeeded,
     _write_was_applied,
 )
 
@@ -457,7 +457,7 @@ class WorkerFlowHarness:
             self.state.validation_actions += 1
             self._advance_to(WorkerFlowPhase.validating)
             self._clear_broad_orientation_restriction()
-            if _tool_result_succeeded(ok, payload):
+            if validation_payload_passed(payload):
                 self.mark_validation_satisfied()
 
     def pop_pending_steering(self) -> str:

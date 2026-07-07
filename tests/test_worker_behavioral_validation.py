@@ -2,8 +2,15 @@
 
 Covers the classification and result-assembly behaviour when required
 behavioral validation commands are passed, skipped, or could-not-run.
-"""
 
+Note: direct unit tests of ``_assess_required_behavioral_validation``
+construct raw dicts that bypass the relay pipeline.  These dicts must
+carry validation metadata fields (``validation_classification``,
+``counts_as_validation``, ``counts_as_product_failure``) so the
+validation-truth helpers (``validation_payload_passed``,
+``validation_payload_product_failure``) can classify them correctly —
+raw ``ok`` alone is never validation truth.
+"""
 from __future__ import annotations
 
 import json
@@ -127,7 +134,14 @@ class TestAssessRequiredBehavioralValidation:
         result = _assess_required_behavioral_validation(
             validation_commands=["pytest"],
             validation_results=[
-                {"command": "pytest", "ok": True, "counts_as_product_failure": False}
+                {
+                    "command": "pytest",
+                    "ok": True,
+                    "validation_classification": "passed",
+                    "classification": "passed",
+                    "counts_as_validation": True,
+                    "counts_as_product_failure": False,
+                }
             ],
             validation_command_issues=[],
         )
@@ -141,12 +155,41 @@ class TestAssessRequiredBehavioralValidation:
         result = _assess_required_behavioral_validation(
             validation_commands=["pytest"],
             validation_results=[
-                {"command": "pytest", "ok": False, "counts_as_product_failure": True}
+                {
+                    "command": "pytest",
+                    "ok": True,
+                    "exit_code": 1,
+                    "validation_classification": "product_validation_failed",
+                    "classification": "product_validation_failed",
+                    "counts_as_validation": True,
+                    "counts_as_product_failure": True,
+                }
             ],
             validation_command_issues=[],
         )
         assert len(result["failed"]) == 1
         assert result["failed"][0]["command"] == "pytest"
+
+    def test_ok_true_alone_not_passed(self) -> None:
+        """Raw terminal ok=True without validation metadata must NOT
+        count as passed — this is the core behavior of Phase 1.
+
+        The record exists in ``validation_results`` so it is *not* skipped —
+        but without ``validation_classification`` the truth helpers cannot
+        confirm a pass, so the command falls into ``could_not_run``.
+        """
+        result = _assess_required_behavioral_validation(
+            validation_commands=["pytest"],
+            validation_results=[
+                {"command": "pytest", "ok": True, "exit_code": 0}
+            ],
+            validation_command_issues=[],
+        )
+        assert len(result["passed"]) == 0
+        assert len(result["failed"]) == 0
+        assert "pytest" not in result["skipped"]
+        assert len(result["could_not_run"]) == 1
+        assert result["could_not_run"][0]["command"] == "pytest"
 
     def test_skipped_no_result_no_issue(self) -> None:
         result = _assess_required_behavioral_validation(
@@ -175,7 +218,15 @@ class TestAssessRequiredBehavioralValidation:
         result = _assess_required_behavioral_validation(
             validation_commands=["pytest", "npm run build", "cargo test"],
             validation_results=[
-                {"command": "npm run build", "ok": True, "counts_as_product_failure": False}
+                {
+                    "command": "npm run build",
+                    "ok": True,
+                    "exit_code": 0,
+                    "validation_classification": "passed",
+                    "classification": "passed",
+                    "counts_as_validation": True,
+                    "counts_as_product_failure": False,
+                }
             ],
             validation_command_issues=[
                 {"command": "cargo test", "validation_classification": "missing_executable"}
@@ -226,6 +277,8 @@ class TestIntegrationBehavioralValidation:
                     "command": "pytest",
                     "exit_code": 0,
                     "output": "passed",
+                    "validation_raw_text": "pytest",
+                    "validation_source": "worker_command",
                 }
             ],
             write_results=[{"path": "x.py", "applied": True, "is_new_file": True}],
@@ -309,6 +362,8 @@ class TestIntegrationBehavioralValidation:
                     "command": "npm run build",
                     "exit_code": 0,
                     "output": "built",
+                    "validation_raw_text": "npm run build",
+                    "validation_source": "worker_command",
                 }
             ],
             write_results=[{"path": "x.py", "applied": True, "is_new_file": True}],

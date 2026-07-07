@@ -16,6 +16,7 @@ from aura.bridge.event_relay_write_tracking import (
     TERMINAL_OUTPUT_CAPTURE_CHARS,
     TERMINAL_OUTPUT_PREVIEW_CHARS,
 )
+from aura.conversation.validation_truth import validation_payload_passed
 from aura.events import (
     WORKER_COMMAND_FINISHED,
     WORKER_VALIDATION_FINISHED,
@@ -77,10 +78,12 @@ class EventRelayTerminalTracker:
             "ok": record["ok"],
         })
         if _is_validation_terminal_record(record):
+            validation_ok = validation_payload_passed(record)
+            record["validation_ok"] = validation_ok
             self.validation_results.append(record)
             self._emit_bus_event(WORKER_VALIDATION_FINISHED, {
                 "command": record["command"],
-                "ok": record["ok"],
+                "ok": validation_ok,
                 "exit_code": record["exit_code"],
             })
 

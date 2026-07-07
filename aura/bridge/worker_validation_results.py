@@ -27,6 +27,10 @@ from aura.conversation.validation_orchestrator import (
     TIMEOUT,
     validation_issue_message,
 )
+from aura.conversation.validation_truth import (
+    validation_payload_passed,
+    validation_payload_product_failure,
+)
 from aura.conversation.worker_completion._shell_pipeline import (
     _is_benign_search_no_match,
 )
@@ -76,10 +80,10 @@ def _assess_required_behavioral_validation(
             if _normalize_command(str(r.get("command") or "")) == norm
         ]
         if matching_results:
-            if any(r.get("ok") for r in matching_results):
+            if any(validation_payload_passed(r) for r in matching_results):
                 passed.append({"command": cmd})
                 continue
-            if any(r.get("counts_as_product_failure") for r in matching_results):
+            if any(validation_payload_product_failure(r) for r in matching_results):
                 failed.append({"command": cmd})
                 continue
             # Ran but failed with *non*-product outcome (e.g. infra error).
