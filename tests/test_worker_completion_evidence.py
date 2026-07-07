@@ -8,7 +8,7 @@ from aura.bridge.event_relay import WorkerEventRelay
 from aura.bridge.worker_completion_result import prepare_worker_completion_result
 from aura.bridge.worker_validation_results import _unrecovered_validation_failures
 from aura.client import ToolResult
-from aura.conversation import History, WorkerDispatchRequest, normalize_worker_task
+from aura.conversation import History, WorkerDispatchRequest, WorkerDispatchResult, normalize_worker_task
 from aura.conversation.worker_outcome import WorkerOutcomeStatus
 from aura.events import EventBus
 
@@ -264,3 +264,44 @@ def test_unrecovered_ruff_not_recovered_by_unrelated_validation() -> None:
     failures = _unrecovered_validation_failures(results)
     assert len(failures) == 1
     assert failures[0]["command"] == "ruff check"
+
+
+def test_unrecovered_aura_selfcheck_recovered_by_later_selfcheck() -> None:
+    """Failed aura selfcheck is NOT an unrecovered failure when a later aura selfcheck passes."""
+    results = [
+        {
+            "ok": False,
+            "command": "python -m aura --selfcheck",
+            "exit_code": 1,
+            "counts_as_product_failure": True,
+        },
+        {
+            "ok": True,
+            "command": "python -m aura --selfcheck",
+            "exit_code": 0,
+            "counts_as_product_failure": False,
+        },
+    ]
+    failures = _unrecovered_validation_failures(results)
+    assert failures == []
+
+
+def test_unrecovered_aura_selfcheck_not_recovered_by_unrelated_validation() -> None:
+    """Failed aura selfcheck remains unrecovered when no later same-family pass exists."""
+    results = [
+        {
+            "ok": False,
+            "command": "python -m aura --selfcheck",
+            "exit_code": 1,
+            "counts_as_product_failure": True,
+        },
+        {
+            "ok": True,
+            "command": "python -m py_compile src/example.py",
+            "exit_code": 0,
+            "counts_as_product_failure": False,
+        },
+    ]
+    failures = _unrecovered_validation_failures(results)
+    assert len(failures) == 1
+    assert failures[0]["command"] == "python -m aura --selfcheck"
