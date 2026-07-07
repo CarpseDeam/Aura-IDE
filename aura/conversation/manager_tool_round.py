@@ -137,22 +137,6 @@ class ToolRoundRunner:
                 )
                 continue
 
-            flow_block = (
-                state.worker_flow.should_block_tool(name, args)
-                if state.worker_flow is not None
-                else None
-            )
-            if flow_block is not None:
-                tasks.append(
-                    {
-                        "id": tool_call_id,
-                        "name": name,
-                        "args": args,
-                        "flow_block": flow_block,
-                    }
-                )
-                continue
-
             allowed, limit_info = state.limits.check(name)
             if not allowed:
                 append_limit_tool_result(
@@ -323,10 +307,6 @@ class ToolRoundRunner:
         tool_call_id = task["id"]
         name = task["name"]
         args = task["args"]
-
-        flow_block = task.get("flow_block")
-        if isinstance(flow_block, dict):
-            return blocked_tool_result(tool_call_id, name, flow_block)
 
         if state.mode == "worker":
             blocked = worker_recovery_block(

@@ -178,8 +178,6 @@ class ConversationManager:
 
             full_message: dict[str, Any] | None = None
             tool_defs = [] if state.worker_needs_final_report else self._tools.tool_defs()
-            if state.worker_flow is not None:
-                tool_defs = state.worker_flow.filter_tool_defs(tool_defs)
             if state.stream_buffer is not None:
                 state.stream_buffer.begin_round()
 

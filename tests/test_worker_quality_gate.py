@@ -22,7 +22,6 @@ def test_worker_quality_gate_sends_cleanup_on_first_warning(tmp_path: Path, monk
     )
 
     assert action == "cleanup"
-    assert state.worker_quality_cleanup_attempted is True
     assert state.last_quality_ok_fingerprint is None
     assert history.messages[-1]["role"] == "user"
     assert "Findings:" in history.messages[-1]["content"]
@@ -33,8 +32,6 @@ def test_worker_quality_gate_releases_warning_findings_after_cleanup(
     monkeypatch,
 ):
     state = _state_with_write()
-    state.worker_quality_cleanup_attempted = True
-    state.worker_quality_nudge_sent = True
     history = History()
     events = []
     _prepare_gate(monkeypatch, tmp_path, _warning_decision())
@@ -46,7 +43,7 @@ def test_worker_quality_gate_releases_warning_findings_after_cleanup(
         on_event=events.append,
     )
 
-    assert action == "none"
+    assert action == "cleanup"
     assert state.last_quality_ok_fingerprint is None
     assert state.last_quality_findings[0]["kind"] == "large_diff_whole_file_rewrite"
     assert state.last_quality_findings[0]["severity"] == "warning"
@@ -62,7 +59,6 @@ def test_worker_quality_gate_does_not_set_clean_fingerprint_when_findings_remain
     monkeypatch,
 ):
     state = _state_with_write()
-    state.worker_quality_cleanup_attempted = True
     history = History()
     _prepare_gate(monkeypatch, tmp_path, _warning_decision())
 

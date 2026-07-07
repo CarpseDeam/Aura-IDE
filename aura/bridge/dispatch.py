@@ -68,6 +68,7 @@ __all__ = [
 ]
 
 DISPATCH_TIMEOUT = 300.0
+_ARTIFACT_ITEM_RETRY_CAP = 10
 _log = logging.getLogger(__name__)
 
 
@@ -431,8 +432,9 @@ class _DispatchProxy(QObject):
             )
 
         # --- Remove approved artifact request on terminal outcomes ---
-        # Infrastructure-paused jobs retain ownership so they can be
-        # resumed. Completion, cancellation, and exhaustion are terminal.
+        # Infrastructure-paused and retry-cap-reached jobs retain
+        # ownership so they can be resumed. Completion and cancellation
+        # are terminal.
         if is_artifact_job and not result.extras.get("work_artifact_unfinished"):
             self._approved_artifact_requests.pop(tool_call_id, None)
 
@@ -857,6 +859,32 @@ class _DispatchProxy(QObject):
                         infrastructure_pause=True,
                     )
 
+                # ── Physical retry cap — not signature/stall detection ─────
+                if attempt >= _ARTIFACT_ITEM_RETRY_CAP:
+                    _log.info(
+                        "WorkArtifact item %s retry cap (%d) reached after %d attempts",
+                        item.id, _ARTIFACT_ITEM_RETRY_CAP, attempt,
+                    )
+                    completed_ids = [r_id for r_id, _r in item_results if _r.ok]
+                    item_result = WorkerDispatchResult(
+                        ok=False,
+                        summary=(
+                            f"WorkArtifact item retry cap ({_ARTIFACT_ITEM_RETRY_CAP}) reached. "
+                            f"Item {item.id} did not complete after {attempt} attempts. "
+                            f"The approved job is paused and will continue when dispatched again."
+                        ),
+                        recoverable=True,
+                        extras={
+                            "artifact_retry_cap_reached": True,
+                            "work_artifact_unfinished": True,
+                            "recoverable": True,
+                            "current_item_id": item.id,
+                            "total_items": total,
+                            "completed_items": completed_ids,
+                        },
+                    )
+                    break
+
                 # ── Non-infrastructure failure → retry with recovery note ──
                 recovered_item_ids.append(item.id)
                 extras = item_result.extras if isinstance(item_result.extras, dict) else {}
@@ -1016,7 +1044,8 @@ class _DispatchProxy(QObject):
         3. **infrastructure-paused** — harness/provider/auth/network failure;
            ``work_artifact_unfinished: true`` with ``pending_item_ids`` so
            the caller can resume.
-        4. **exhausted** — stall limit reached; terminal with per-item summaries.
+        4. **retry-cap-reached** — physical retry limit bound; recoverable
+           with ``artifact_retry_cap_reached: true`` in extras.
 
         There is no "failed at item X, awaiting instructions" outcome.
         """
@@ -1104,6 +1133,15 @@ class _DispatchProxy(QObject):
         }
         if failed_item_id:
             extras["failed_item_id"] = failed_item_id
+
+        # Detect if any item hit the physical retry cap.
+        retry_cap_reached = any(
+            (r.extras or {}).get("artifact_retry_cap_reached")
+            for _item_id, r in item_results
+        )
+        if retry_cap_reached:
+            extras["artifact_retry_cap_reached"] = True
+            extras["work_artifact_unfinished"] = True
 
         if all_ok:
             return WorkerDispatchResult(

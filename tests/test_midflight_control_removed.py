@@ -13,7 +13,8 @@ Six scenarios from the dispatch:
 """
 from __future__ import annotations
 
-from unittest.mock import MagicMock, PropertyMock
+import inspect
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -354,9 +355,31 @@ class TestQualityNoTerminalAfterOneCleanup:
     No terminal finish unless concrete impossible/conflicting evidence exists.
     """
 
-    def test_quality_hard_block_is_feedback_not_terminal(self):
-        """hard_block now returns 'cleanup' not 'finished'."""
-        from aura.conversation.worker_quality_gate import handle_worker_quality_gate
+    def test_quality_hard_block_is_feedback_not_terminal(
+        self, monkeypatch, tmp_path,
+    ):
+        """hard_block returns 'cleanup', appends feedback, never 'finished'."""
+        from aura.conversation.worker_quality_gate import (
+            handle_worker_quality_gate,
+        )
+        from aura.conversation.quality.models import (
+            WorkerQualityDecision,
+        )
+
+        # Create .git so the gate proceeds past the early-exit check.
+        (tmp_path / ".git").mkdir()
+
+        decision = WorkerQualityDecision(
+            ok=False,
+            hard_block=True,
+            needs_cleanup=True,
+            instruction="Hard block: structural issues found.",
+            findings=[],
+        )
+        monkeypatch.setattr(
+            "aura.conversation.worker_quality_gate.evaluate_worker_quality",
+            lambda *args, **kwargs: decision,
+        )
 
         state = MagicMock()
         state.worker_quality_enabled = True
@@ -370,10 +393,70 @@ class TestQualityNoTerminalAfterOneCleanup:
 
         result = handle_worker_quality_gate(
             state=state,
-            workspace_root=str(__file__),  # Won't find .git here, so likely returns "none"
+            workspace_root=str(tmp_path),
             history=history,
             on_event=on_event,
         )
-        # Without .git, the gate returns "none" early — that's fine.
-        # This test at least confirms it doesn't crash.
-        assert result in {"none", "cleanup", "finished"}
+
+        assert result == "cleanup", (
+            f"hard_block should return 'cleanup', got {result!r}"
+        )
+        assert result != "finished", (
+            "hard_block must not return 'finished'"
+        )
+        assert history.append_user_text.call_count >= 1, (
+            "append_user_text should have been called with the instruction"
+        )
+
+
+class TestRuntimeShapeRegression:
+    """7. Runtime shape — WorkerFlowHarness and callers no longer have
+    filter_tool_defs or should_block_tool.
+    """
+
+    def test_worker_flow_has_no_filter_tool_defs(self):
+        """WorkerFlowHarness has no filter_tool_defs method."""
+        flow = WorkerFlowHarness()
+        assert not hasattr(flow, "filter_tool_defs"), (
+            "WorkerFlowHarness should not have filter_tool_defs"
+        )
+
+    def test_worker_flow_has_no_should_block_tool(self):
+        """WorkerFlowHarness has no should_block_tool method."""
+        flow = WorkerFlowHarness()
+        assert not hasattr(flow, "should_block_tool"), (
+            "WorkerFlowHarness should not have should_block_tool"
+        )
+
+    def test_manager_py_no_filter_tool_defs(self):
+        """manager.py should not reference filter_tool_defs."""
+        import aura.conversation.manager as mgr
+        import inspect
+        source = inspect.getsource(mgr)
+        assert "filter_tool_defs" not in source, (
+            "manager.py must not reference filter_tool_defs"
+        )
+
+    def test_manager_tool_round_no_should_block_tool(self):
+        """manager_tool_round.py should not reference should_block_tool."""
+        import aura.conversation.manager_tool_round as mtr
+        import inspect
+        source = inspect.getsource(mtr)
+        assert "should_block_tool" not in source, (
+            "manager_tool_round.py must not reference should_block_tool"
+        )
+
+    def test_dispatch_no_recovery_exhausted(self):
+        """dispatch.py should not reference recovery_exhausted."""
+        import aura.bridge.dispatch as dispatch_mod
+        source = inspect.getsource(dispatch_mod)
+        assert "recovery_exhausted" not in source, (
+            "dispatch.py must not reference recovery_exhausted"
+        )
+
+    def test_dispatch_has_retry_cap(self):
+        """dispatch.py should have _ARTIFACT_ITEM_RETRY_CAP."""
+        import aura.bridge.dispatch as dispatch_mod
+        assert hasattr(dispatch_mod, "_ARTIFACT_ITEM_RETRY_CAP"), (
+            "dispatch.py must define _ARTIFACT_ITEM_RETRY_CAP"
+        )
