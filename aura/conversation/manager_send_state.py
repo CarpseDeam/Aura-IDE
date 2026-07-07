@@ -79,6 +79,8 @@ class _SendState:
     worker_file_state: dict[str, dict[str, Any]] = field(default_factory=dict)
     loaded_target_files: list[str] = field(default_factory=list)
     dispatched_target_files: list[str] = field(default_factory=list)
+    worker_artifact_id: str = ""
+    worker_artifact_item_id: str = ""
     patch_failed_cycles: dict[str, int] = field(default_factory=dict)
     patch_invalid_syntax_required: dict[str, dict[str, Any]] = field(default_factory=dict)
     edit_retry_ledger: EditRetryLedger = field(default_factory=EditRetryLedger)

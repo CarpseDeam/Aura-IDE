@@ -143,6 +143,19 @@ def _worker_has_attempted_write(state: _SendState) -> bool:
     return write_intents > 0 or bool(state.write_attempts_by_path)
 
 
+def _worker_artifact_item_validated_done(state: _SendState) -> bool:
+    """Return True when a WorkArtifact bounded item has passed validation.
+
+    Only fires for artifact items with explicit identity — does NOT mark
+    ordinary non-artifact implementation tasks complete.
+    """
+    if not (state.worker_artifact_id and state.worker_artifact_item_id):
+        return False
+    if not state.worker_explicit_validation_passed:
+        return False
+    return True
+
+
 def _candidate_final_payload(full_message: dict[str, Any] | None) -> dict[str, Any]:
     if not isinstance(full_message, dict):
         return {}
@@ -258,6 +271,8 @@ class ConversationManager:
             state.loaded_target_files = list(loaded_target_files or [])
             if worker_dispatch_request is not None:
                 state.dispatched_target_files = list(worker_dispatch_request.files)
+                state.worker_artifact_id = str(worker_dispatch_request.artifact_id or "")
+                state.worker_artifact_item_id = str(worker_dispatch_request.artifact_item_id or "")
 
         while True:
             if (
@@ -543,6 +558,16 @@ class ConversationManager:
                     },
                 )
                 return "finished"
+            # Artifact validated done bailout before thrash recovery.
+            if _worker_artifact_item_validated_done(state):
+                self._finish_worker_as_validated_completed(
+                    on_event,
+                    summary=(
+                        "WorkArtifact item completed. Validation passed and the bounded item "
+                        "was already satisfied, so no extra edit was required."
+                    ),
+                )
+                return "finished"
             if state.worker_flow_thrash_recovery_count < WORKER_FLOW_THRASH_RECOVERY_BUDGET:
                 self._append_worker_thrash_recovery(
                     state,
@@ -603,6 +628,16 @@ class ConversationManager:
             return "none"
         if _candidate_final_has_real_zero_work_blocker(state.candidate_final_message):
             return "none"
+        # Artifact item validated done bailout — before recovery nudge.
+        if _worker_artifact_item_validated_done(state):
+            self._finish_worker_as_validated_completed(
+                on_event,
+                summary=(
+                    "WorkArtifact item completed. Validation passed and the bounded item "
+                    "was already satisfied, so no extra edit was required."
+                ),
+            )
+            return "finished"
         if state.worker_flow_zero_work_recovery_count < WORKER_FLOW_ZERO_WORK_RECOVERY_BUDGET:
             self._append_worker_zero_work_recovery(
                 state,

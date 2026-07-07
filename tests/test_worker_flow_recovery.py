@@ -67,3 +67,27 @@ def test_repeated_worker_flow_orientation_spends_thrash_budget(tmp_path) -> None
     state.worker_flow.state.pending_steering_reason = "orientation"
     assert manager._handle_worker_flow_steering(state, events.append) == "finished"
     assert any(isinstance(event, Done) for event in events)
+
+
+def test_artifact_item_zero_fresh_writes_validation_pass_finished_immediately(tmp_path) -> None:
+    """Artifact item with zero writes and validation passed finishes without recovery nudge."""
+    manager = _manager(tmp_path)
+    state = _worker_state()
+    state.worker_artifact_id = "artifact-1"
+    state.worker_artifact_item_id = "item-1"
+    state.worker_explicit_validation_passed = True
+    # No writes, no write attempts, no candidate final message (clean state).
+    events: list = []
+
+    result = manager._handle_worker_zero_work_final(state, events.append)
+
+    assert result == "finished"
+    # No recovery prompt should have been appended to history.
+    recovery_messages = [
+        message["content"]
+        for message in manager.history.messages
+        if message.get("role") == "user"
+    ]
+    assert len(recovery_messages) == 0
+    # A Done event signals validated completion.
+    assert any(isinstance(event, Done) for event in events)

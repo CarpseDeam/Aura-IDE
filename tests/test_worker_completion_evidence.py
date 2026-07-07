@@ -6,6 +6,7 @@ import pytest
 
 from aura.bridge.event_relay import WorkerEventRelay
 from aura.bridge.worker_completion_result import prepare_worker_completion_result
+from aura.bridge.worker_validation_results import _unrecovered_validation_failures
 from aura.client import ToolResult
 from aura.conversation import History, WorkerDispatchRequest, normalize_worker_task
 from aura.conversation.worker_outcome import WorkerOutcomeStatus
@@ -199,3 +200,67 @@ def test_validation_only_without_touched_files_is_not_implementation_work() -> N
     assert validation_only_result.ok is True
     assert validation_only_result.status == WorkerOutcomeStatus.completed.value
     assert validation_only_result.modified_files == []
+
+
+# ── Validation family recovery tests ────────────────────────────────────────
+
+
+def test_unrecovered_ruff_check_recovered_by_later_focused_ruff() -> None:
+    """Failed ruff check is NOT an unrecovered failure when a later focused ruff passes."""
+    results = [
+        {
+            "ok": False,
+            "command": "ruff check",
+            "exit_code": 1,
+            "counts_as_product_failure": True,
+        },
+        {
+            "ok": True,
+            "command": "python -m ruff check aura/gui/left_pane.py",
+            "exit_code": 0,
+            "counts_as_product_failure": False,
+        },
+    ]
+    failures = _unrecovered_validation_failures(results)
+    assert failures == []
+
+
+def test_unrecovered_pytest_recovered_by_later_focused_pytest() -> None:
+    """Failed pytest is NOT an unrecovered failure when a later focused pytest passes."""
+    results = [
+        {
+            "ok": False,
+            "command": "pytest",
+            "exit_code": 1,
+            "counts_as_product_failure": True,
+        },
+        {
+            "ok": True,
+            "command": "python -m pytest tests/test_left_pane.py -q",
+            "exit_code": 0,
+            "counts_as_product_failure": False,
+        },
+    ]
+    failures = _unrecovered_validation_failures(results)
+    assert failures == []
+
+
+def test_unrecovered_ruff_not_recovered_by_unrelated_validation() -> None:
+    """Failed ruff check remains unrecovered when no later same-family pass exists."""
+    results = [
+        {
+            "ok": False,
+            "command": "ruff check",
+            "exit_code": 1,
+            "counts_as_product_failure": True,
+        },
+        {
+            "ok": True,
+            "command": "python -m py_compile src/example.py",
+            "exit_code": 0,
+            "counts_as_product_failure": False,
+        },
+    ]
+    failures = _unrecovered_validation_failures(results)
+    assert len(failures) == 1
+    assert failures[0]["command"] == "ruff check"

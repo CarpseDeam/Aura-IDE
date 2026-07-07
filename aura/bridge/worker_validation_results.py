@@ -35,11 +35,13 @@ __all__ = [
     "_VALIDATION_COMMAND_ISSUE_CLASSES",
     "_assess_required_behavioral_validation",
     "_filter_scratch_validation_results",
+    "_later_family_passes",
     "_later_py_compile_passes",
     "_normalize_py_compile_path",
     "_py_compile_targets",
     "_unrecovered_validation_failures",
     "_validation_command_issues_for_task",
+    "_validation_family",
     "_validation_results_for_task",
 ]
 
@@ -115,6 +117,32 @@ def _assess_required_behavioral_validation(
     }
 
 
+def _validation_family(command: str) -> str:
+    """Classify a validation command into a family for cross-run recovery."""
+    normalized = command.lower()
+    if "py_compile" in normalized:
+        return "py_compile"
+    if "ruff" in normalized and "check" in normalized:
+        return "ruff_check"
+    if "pytest" in normalized:
+        return "pytest"
+    if "python -m aura --selfcheck" in normalized or "aura --selfcheck" in normalized:
+        return "aura_selfcheck"
+    return ""
+
+
+def _later_family_passes(results: list[dict[str, Any]], family: str) -> bool:
+    """Check if a later result in the same validation family passed."""
+    if not family:
+        return False
+    for result in results:
+        if not result.get("ok"):
+            continue
+        if _validation_family(str(result.get("command") or "")) == family:
+            return True
+    return False
+
+
 def _unrecovered_validation_failures(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     failures: list[dict[str, Any]] = []
     for index, result in enumerate(results):
@@ -127,6 +155,9 @@ def _unrecovered_validation_failures(results: list[dict[str, Any]]) -> list[dict
         command = str(result.get("command", ""))
         targets = set(_py_compile_targets(command))
         if targets and _later_py_compile_passes(results[index + 1:], targets):
+            continue
+        family = _validation_family(command)
+        if family and _later_family_passes(results[index + 1:], family):
             continue
         failures.append(result)
     return failures

@@ -38,19 +38,21 @@ WORKER_FLOW_STEERING_TEXT = (
     "Worker Flow: continue from the locked inventory. Stop restating the plan. "
     "Do not restart broad orientation. For large refactors, use the existing "
     "outline plus at most one or two targeted ranges for exact missing facts. "
-    "Make the next smallest safe edit now: create the first module, patch the "
-    "first seam, or wire back one helper family. Preserve protected control-flow "
-    "regions and avoid whole-file reconstruction."
+    "Make the next smallest safe edit now, unless this bounded item is already "
+    "satisfied and focused validation has passed; in that case finish with a "
+    "concrete receipt. Preserve protected control-flow regions and avoid "
+    "whole-file reconstruction."
 )
 
 WORKER_FLOW_ZERO_WORK_RECOVERY_TEXT = (
-    "Worker Flow zero-work recovery: use the context already gathered and make "
-    "one smallest safe edit now. Do not broaden orientation, do not restate the "
-    "plan, and do not produce a final report with zero changes. You may perform "
-    "one targeted read only if a specific missing fact is required for the first "
-    "edit. If no safe edit is possible, return a real blocker with the exact "
-    "missing fact, file/path, permission/tool failure, or planner-resolution "
-    "question."
+    "Worker Flow zero-work recovery: use the context already gathered. "
+    "If this bounded WorkArtifact item is already satisfied, do not invent a "
+    "cosmetic edit. Re-run or cite focused validation and finish with a concrete "
+    "receipt. Do not broaden orientation, do not restate the plan, and do not "
+    "produce a final report with zero changes. You may perform one targeted read "
+    "only if a specific missing fact is required for an edit. If no safe edit is "
+    "possible, return a real blocker with the exact missing fact, file/path, "
+    "permission/tool failure, or planner-resolution question."
 )
 
 WORKER_FLOW_LARGE_FILE_SEAM_TEXT = (
