@@ -15,8 +15,8 @@ def validation_payload_counts_as_validation(payload: dict[str, Any]) -> bool:
     """Return True when *payload* represents a validation attempt.
 
     Checks the structured validation fields that are attached by the event
-    relay's ``_attach_validation_metadata``, plus the legacy
-    ``auto_validation`` flag carried from the terminal tracker.
+    relay's ``_attach_validation_metadata``, plus the ``auto_validation``
+    flag carried from the terminal tracker.
     """
     if payload.get("counts_as_validation") is True:
         return True
@@ -33,15 +33,20 @@ def validation_payload_passed(payload: dict[str, Any]) -> bool:
 
     Truth rules (in order of precedence):
 
-    1. ``validation_classification == "passed"`` → passed unconditionally.
-    2. ``command_outcome_classification == "passed"`` → passed only when the
+    1. If ``validation_payload_failed(payload)`` is True → not passed (fail
+       closed: contradiction fields like ``exit_code != 0`` beat a pass label).
+    2. ``validation_classification == "passed"`` → passed.
+    3. ``command_outcome_classification == "passed"`` → passed only when the
        payload also counts as a validation attempt.  This field is set by
        the tool runner for *every* command outcome, not just validation,
        so the validation context guard is required.
-    3. ``classification == "passed"`` → passed only when the payload
+    4. ``classification == "passed"`` → passed only when the payload
        also counts as a validation attempt.
-    4. Every other case → not passed, even when ``ok=True``.
+    5. Every other case → not passed, even when ``ok=True``.
     """
+    # Fail-first guard: any failure indicator overrides a pass label.
+    if validation_payload_failed(payload):
+        return False
     vc = str(payload.get("validation_classification") or "")
     if vc == "passed":
         return True

@@ -49,11 +49,23 @@ class TestValidationPayloadCountsAsValidation:
 
 class TestValidationPayloadPassed:
     """Only ``validation_classification == "passed"`` or
-    ``classification == "passed"`` with validation context means passed."""
+    ``classification == "passed"`` with validation context means passed.
+
+    Fail-first guard means contradiction fields (exit_code != 0,
+    counts_as_product_failure, command_success=False) beat any pass label."""
 
     def test_validation_classification_passed(self):
         assert validation_payload_passed(
             {"validation_classification": "passed"}
+        )
+
+    def test_passed_with_exit_code_zero(self):
+        """validation_classification=passed + exit_code=0 → passed."""
+        assert validation_payload_passed(
+            {
+                "validation_classification": "passed",
+                "exit_code": 0,
+            }
         )
 
     def test_classification_passed_with_counts_as_validation(self):
@@ -94,14 +106,55 @@ class TestValidationPayloadPassed:
     def test_empty_payload_not_passed(self):
         assert not validation_payload_passed({})
 
-    def test_passed_overrides_count(self):
-        """validation_classification=passed wins even if
-        counts_as_product_failure is also set (shouldn't happen, but
-        the passthrough classification is authoritative)."""
-        assert validation_payload_passed(
+    def test_validation_classification_passed_with_exit_code_1_not_passed(self):
+        """validation_classification=passed + exit_code=1 → not passed
+        (fail-first guard catches the contradiction)."""
+        assert not validation_payload_passed(
+            {
+                "validation_classification": "passed",
+                "exit_code": 1,
+            }
+        )
+
+    def test_validation_classification_passed_with_product_failure_not_passed(self):
+        """validation_classification=passed + counts_as_product_failure=True
+        → not passed."""
+        assert not validation_payload_passed(
             {
                 "validation_classification": "passed",
                 "counts_as_product_failure": True,
+            }
+        )
+
+    def test_validation_classification_passed_with_command_success_false_not_passed(self):
+        """validation_classification=passed + command_success=False
+        → not passed."""
+        assert not validation_payload_passed(
+            {
+                "validation_classification": "passed",
+                "command_success": False,
+            }
+        )
+
+    def test_command_outcome_classification_passed_with_counts_as_validation_and_exit_code_1_not_passed(self):
+        """command_outcome_classification=passed + counts_as_validation=True
+        + exit_code=1 → not passed (fail-first guard)."""
+        assert not validation_payload_passed(
+            {
+                "command_outcome_classification": "passed",
+                "counts_as_validation": True,
+                "exit_code": 1,
+            }
+        )
+
+    def test_classification_passed_with_counts_as_validation_and_exit_code_1_not_passed(self):
+        """classification=passed + counts_as_validation=True + exit_code=1
+        → not passed (fail-first guard)."""
+        assert not validation_payload_passed(
+            {
+                "classification": "passed",
+                "counts_as_validation": True,
+                "exit_code": 1,
             }
         )
 
@@ -125,17 +178,6 @@ class TestValidationPayloadPassed:
             {
                 "command_outcome_classification": "passed",
                 "exit_code": 0,
-            }
-        )
-
-    def test_validation_classification_passed_wins_over_command_outcome(self):
-        """validation_classification takes precedence."""
-        assert validation_payload_passed(
-            {
-                "validation_classification": "passed",
-                "command_outcome_classification": "product_validation_failed",
-                "exit_code": 1,
-                "counts_as_product_failure": True,
             }
         )
 
