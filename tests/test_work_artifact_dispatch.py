@@ -12,9 +12,7 @@ from typing import Any
 
 from aura.conversation.dispatch import WorkerDispatchRequest, WorkerDispatchResult
 from aura.conversation.dispatch_failure import is_recoverable_worker_continuation
-from aura.conversation.loop_detection import LoopDetector
 from aura.conversation.tool_runner import ToolRunner
-from aura.conversation.verification_progress import VerificationProgressTracker
 from aura.conversation.history import History
 from aura.work_artifact.model import WorkArtifact, WorkArtifactItem, WorkItemStatus, WorkArtifactReceipt
 from aura.work_artifact.receipt import worker_result_to_receipt
@@ -91,7 +89,7 @@ def _non_recoverable_result(summary: str = "Fatal error") -> WorkerDispatchResul
 def test_toolrunner_preserves_full_envelope(tmp_path):
     """Given work_artifact with 3 items, ToolRunner passes the top-level envelope."""
     runner = ToolRunner(
-        History(), tmp_path, LoopDetector(), VerificationProgressTracker(),
+        History(), tmp_path,
     )
     dispatches: list[tuple[str, WorkerDispatchRequest]] = []
 
@@ -132,7 +130,7 @@ def test_toolrunner_preserves_full_envelope(tmp_path):
 def test_toolrunner_flat_dispatch_no_artifact_fields(tmp_path):
     """Flat dispatch does not get artifact_id/artifact_item_id set by ToolRunner."""
     runner = ToolRunner(
-        History(), tmp_path, LoopDetector(), VerificationProgressTracker(),
+        History(), tmp_path,
     )
     dispatches: list[tuple[str, WorkerDispatchRequest]] = []
 
@@ -389,11 +387,9 @@ def test_aggregate_artifact_results_non_ok():
     assert result.extras["completed_items"] == ["item-1"]
     assert result.extras["failed_item_id"] == "item-2"
     assert result.extras["current_item_id"] == "item-2"
-    assert "recovery_exhausted" in result.extras
+    assert result.extras.get("recovery_exhausted") is not True
     assert "item-2" in result.summary
     assert "Fatal" in result.summary
-    # Summary must not name item-1 as failed
-    assert "item-1" not in result.summary.split("failed")[0] if "failed" in result.summary else True
 
 
 # ── C/D. request_dispatch integration ─────────────────────────────────────────
@@ -702,8 +698,8 @@ def test_aggregate_artifact_results_exhausted():
     )
 
     assert result.ok is False
-    assert result.extras["recovery_exhausted"] is True
-    assert "recovery exhausted" in result.summary.lower()
+    assert result.extras.get("recovery_exhausted") is not True
+    assert "incomplete" in result.summary.lower()
     assert "✓ item-1" in result.summary
     assert "✗ item-2" in result.summary
     assert "Stalled" in result.summary
@@ -748,69 +744,6 @@ def test_is_infrastructure_failure_regular_failure():
         status="validation_failed",
     )
     assert _DispatchProxy._is_infrastructure_failure(result) is False
-
-
-# ── J. Failure signature (stall detection) ─────────────────────────────────────
-
-
-def test_failure_signature():
-    """_failure_signature returns (failure_class, summary_core)."""
-    from aura.bridge.dispatch import _failure_signature
-    result = WorkerDispatchResult(
-        ok=False, summary="Something went wrong",
-        extras={"failure_class": "validation_error"},
-    )
-    sig = _failure_signature(result)
-    assert sig[0] == "validation_error"
-    assert sig[1] == "Something went wrong"
-    assert len(sig) == 2
-
-
-def test_failure_signature_empty_failure_class():
-    """Empty failure_class is handled gracefully."""
-    from aura.bridge.dispatch import _failure_signature
-    result = WorkerDispatchResult(ok=False, summary="Something wrong")
-    sig = _failure_signature(result)
-    assert sig[0] == ""
-    assert sig[1] == "Something wrong"
-
-
-def test_failure_signature_truncates_long_summary():
-    """Summary is truncated to 200 characters."""
-    from aura.bridge.dispatch import _failure_signature
-    long_summary = "x" * 500
-    result = WorkerDispatchResult(ok=False, summary=long_summary)
-    sig = _failure_signature(result)
-    assert len(sig[1]) == 200
-    assert sig[1] == long_summary[:200]
-
-
-def test_failure_signature_persists_across_identical_failures():
-    """Identical (failure_class, summary) produces identical signatures."""
-    from aura.bridge.dispatch import _failure_signature
-    r1 = WorkerDispatchResult(
-        ok=False, summary="Error: X",
-        extras={"failure_class": "edit_failure"},
-    )
-    r2 = WorkerDispatchResult(
-        ok=False, summary="Error: X",
-        extras={"failure_class": "edit_failure"},
-    )
-    assert _failure_signature(r1) == _failure_signature(r2)
-
-
-def test_failure_signature_changes_when_summary_differs():
-    """Different summary produces different signature."""
-    from aura.bridge.dispatch import _failure_signature
-    r1 = WorkerDispatchResult(
-        ok=False, summary="Error: X",
-        extras={"failure_class": "edit_failure"},
-    )
-    r2 = WorkerDispatchResult(
-        ok=False, summary="Error: Y after retry",
-        extras={"failure_class": "edit_failure"},
-    )
-    assert _failure_signature(r1) != _failure_signature(r2)
 
 
 # ── K. _build_artifact_item_request prior-receipt appendix ─────────────────────

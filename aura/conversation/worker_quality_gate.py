@@ -6,14 +6,13 @@ import subprocess
 from pathlib import Path, PurePosixPath
 from typing import Callable
 
-from aura.client import ContentDelta, Done, Event
+from aura.client import Done, Event
 from aura.conversation.critic_dispatch import CriticCallback, CriticRequest
 from aura.conversation.critic_verdict import CriticFinding, CriticVerdict
 from aura.conversation.dispatch import WorkerDispatchRequest, WorkerMismatch
 from aura.conversation.history import History
 from aura.conversation.manager_send_state import _SendState
 from aura.conversation.worker_fingerprints import fingerprint_paths
-from aura.conversation.worker_finish import build_worker_recoverable_followup_message
 from aura.conversation.worker_quality import (
     PROTECTED_CONTROL_FLOW_FILES,
     evaluate_worker_quality,
@@ -58,39 +57,26 @@ def handle_worker_quality_gate(
     state.last_quality_findings = findings_to_receipt(decision.findings)
 
     if decision.hard_block:
-        _finish_worker_quality_hard_block(
-            history=history,
-            on_event=on_event,
-            changed_files=changed_files,
-            findings=state.last_quality_findings,
-        )
-        return "finished"
+        # Hard block becomes repeatable feedback, not terminal.
+        if decision.instruction:
+            history.append_user_text(decision.instruction)
+        else:
+            history.append_user_text(
+                "Quality gate: structural review identified issues. "
+                "Review the findings below and address them."
+            )
+        return "cleanup"
 
     if decision.needs_cleanup:
-        if not state.worker_quality_cleanup_attempted:
-            history.append_user_text(decision.instruction)
-            state.worker_quality_nudge_sent = True
-            state.worker_quality_cleanup_attempted = True
-            return "cleanup"
-        if _warning_only_findings(state.last_quality_findings):
-            return "none"
-        _finish_worker_quality_unresolved_findings(
-            history=history,
-            on_event=on_event,
-            changed_files=changed_files,
-            findings=state.last_quality_findings,
-        )
-        return "finished"
+        history.append_user_text(decision.instruction)
+        return "cleanup"
 
     if (
         critic_cb is not None
         and worker_request is not None
-        and not state.worker_quality_cleanup_attempted
-        and not state.critic_pass_attempted
         and _critic_risk_triggered(changed_files)
     ):
         verdict = _invoke_critic(
-            state=state,
             critic_cb=critic_cb,
             dispatch_tool_call_id=dispatch_tool_call_id,
             worker_request=worker_request,
@@ -100,30 +86,25 @@ def handle_worker_quality_gate(
         )
         state.last_quality_findings = _critic_findings_to_receipt(verdict.findings)
         if verdict.route == "worker":
-            if not state.worker_quality_cleanup_attempted:
-                history.append_user_text(
-                    verdict.instruction or _critic_cleanup_instruction(verdict.findings)
-                )
-                state.worker_quality_nudge_sent = True
-                state.worker_quality_cleanup_attempted = True
-                return "cleanup"
-            if _warning_only_findings(state.last_quality_findings):
-                return "none"
-            _finish_worker_quality_unresolved_findings(
-                history=history,
-                on_event=on_event,
-                changed_files=changed_files,
-                findings=state.last_quality_findings,
+            history.append_user_text(
+                verdict.instruction or _critic_cleanup_instruction(verdict.findings)
             )
-            return "finished"
+            return "cleanup"
         if verdict.route == "planner":
-            _finish_worker_critic_planner_resolution(
-                history=history,
-                on_event=on_event,
-                worker_request=worker_request,
-                verdict=verdict,
+            # Planner route is only terminal when it carries concrete conflict evidence.
+            if verdict.planner_question and _has_concrete_conflict_evidence(verdict):
+                _finish_worker_critic_planner_resolution(
+                    history=history,
+                    on_event=on_event,
+                    worker_request=worker_request,
+                    verdict=verdict,
+                )
+                return "finished"
+            # Otherwise give feedback and continue.
+            history.append_user_text(
+                verdict.instruction or _critic_cleanup_instruction(verdict.findings)
             )
-            return "finished"
+            return "cleanup"
 
     if fingerprint:
         state.last_quality_ok_fingerprint = fingerprint
@@ -182,9 +163,18 @@ def _is_gui_file(path: str) -> bool:
     return "gui" in parts
 
 
+def _has_concrete_conflict_evidence(verdict: CriticVerdict) -> bool:
+    """Check if the critic verdict has concrete conflicting/impossible spec evidence."""
+    if any(
+        finding.clause in {"conflicting_spec", "impossible_spec", "contradictory_requirements"}
+        for finding in verdict.findings
+    ):
+        return True
+    return False
+
+
 def _invoke_critic(
     *,
-    state: _SendState,
     critic_cb: CriticCallback,
     dispatch_tool_call_id: str,
     worker_request: WorkerDispatchRequest,
@@ -192,7 +182,6 @@ def _invoke_critic(
     changed_files: list[str],
     diff_text: str,
 ) -> CriticVerdict:
-    state.critic_pass_attempted = True
     try:
         return critic_cb(
             dispatch_tool_call_id,
@@ -271,67 +260,3 @@ def _finish_worker_critic_planner_resolution(
     on_event(Done(finish_reason="stop", full_message=full_message))
 
 
-def _finish_worker_quality_hard_block(
-    *,
-    history: History,
-    on_event: EventCallback,
-    changed_files: list[str],
-    findings: list[dict],
-) -> None:
-    content, full_message = build_worker_recoverable_followup_message(
-        failure_class="worker_quality_hard_block",
-        error=(
-            "Worker final candidate failed deterministic structural review "
-            "after validation."
-        ),
-        details={
-            "recoverable": True,
-            "phase_boundary": True,
-            "changed_files": changed_files,
-            "findings": findings,
-            "suggested_next_tool": "dispatch_to_worker",
-            "suggested_next_action": (
-                "Redispatch a focused repair for the listed hard-block findings."
-            ),
-        },
-    )
-    payload = json.loads(content)
-    payload["phase_boundary"] = True
-    content = json.dumps(payload, ensure_ascii=False)
-    full_message["content"] = content
-    history.append_assistant(full_message)
-    on_event(ContentDelta(text=content))
-    on_event(Done(finish_reason="stop", full_message=full_message))
-
-
-def _finish_worker_quality_unresolved_findings(
-    *,
-    history: History,
-    on_event: EventCallback,
-    changed_files: list[str],
-    findings: list[dict],
-) -> None:
-    content, full_message = build_worker_recoverable_followup_message(
-        failure_class="worker_quality_unresolved_findings",
-        error=(
-            "Worker final candidate still has production-quality findings "
-            "after one cleanup attempt."
-        ),
-        details={
-            "recoverable": True,
-            "phase_boundary": True,
-            "changed_files": changed_files,
-            "findings": findings,
-            "suggested_next_tool": "dispatch_to_worker",
-            "suggested_next_action": (
-                "Redispatch a focused repair for the unresolved quality findings."
-            ),
-        },
-    )
-    payload = json.loads(content)
-    payload["phase_boundary"] = True
-    content = json.dumps(payload, ensure_ascii=False)
-    full_message["content"] = content
-    history.append_assistant(full_message)
-    on_event(ContentDelta(text=content))
-    on_event(Done(finish_reason="stop", full_message=full_message))

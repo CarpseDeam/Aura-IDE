@@ -29,20 +29,12 @@ PLANNER_CONTEXT_TOOLS = {
     "search_codebase",
 }
 
-# High emergency brakes, not workflow budgets. These should be far above normal
-# use; repeated non-progress is handled by aura.conversation.loop_detection.
+# High emergency brakes, not workflow budgets.
 MAX_TOOL_CALLS_BY_MODE: dict[RegistryMode, int] = {
     "planner": 300,
     "worker": 300,
     "single": 300,
 }
-
-# Backward-compatible aliases for older imports. Category-specific hard caps are
-# intentionally disabled; ToolLimitState does not enforce these values.
-MAX_CONTEXT_CALLS_PER_PLANNER_TURN: int = 16
-MAX_TERMINAL_CALLS_PER_WORKER_PASS: int | None = None
-MAX_WRITE_CALLS_PER_WORKER_PASS: int | None = None
-MAX_DISPATCH_CALLS_PER_PLANNER_TURN: int | None = None
 
 
 @dataclass
@@ -64,31 +56,8 @@ class ToolLimitState:
     def check(self, tool_name: str) -> tuple[bool, dict[str, Any]]:
         """Return whether *tool_name* may run plus a JSON-ready reason payload.
 
-        Two layers of enforcement:
-          1. Planner context-read ceiling — prevents over-orienting before dispatch.
-          2. High emergency total guard (runaway backstop) for all modes.
+        Only the high emergency total guard (runaway backstop) is enforced.
         """
-        # 1. Planner context-read ceiling: enough gathered, time to dispatch.
-        if self.mode == "planner" and tool_name in PLANNER_CONTEXT_TOOLS:
-            if self.planner_context_calls >= MAX_CONTEXT_CALLS_PER_PLANNER_TURN:
-                return False, self._payload(
-                    tool_name=tool_name,
-                    reason="planner_context_ceiling",
-                    limit_name="planner_context_calls",
-                    limit=MAX_CONTEXT_CALLS_PER_PLANNER_TURN,
-                    current=self.planner_context_calls,
-                    recoverable=True,
-                    phase_boundary=False,
-                    message=(
-                        "Planner context-read ceiling reached. You have gathered "
-                        "sufficient context. Do not read more files. Dispatch a "
-                        "bounded ordered campaign now using the evidence already "
-                        "gathered. Identify target files, required changes, and "
-                        "order of operations."
-                    ),
-                )
-
-        # 2. High emergency total guard (runaway backstop).
         max_total = MAX_TOOL_CALLS_BY_MODE.get(self.mode, MAX_TOOL_CALLS_BY_MODE["single"])
         if self.total_calls + 1 > max_total:
             phase_boundary = self.mode == "worker"
@@ -173,11 +142,7 @@ def limit_reached_payload(info: dict[str, Any]) -> str:
 
 __all__ = [
     "DISPATCH_TOOLS",
-    "MAX_CONTEXT_CALLS_PER_PLANNER_TURN",
-    "MAX_DISPATCH_CALLS_PER_PLANNER_TURN",
-    "MAX_TERMINAL_CALLS_PER_WORKER_PASS",
     "MAX_TOOL_CALLS_BY_MODE",
-    "MAX_WRITE_CALLS_PER_WORKER_PASS",
     "PLANNER_CONTEXT_TOOLS",
     "RegistryMode",
     "TERMINAL_TOOLS",

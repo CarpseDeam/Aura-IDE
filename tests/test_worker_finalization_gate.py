@@ -38,7 +38,6 @@ def _finalize(
         workspace_root=tmp_path,
         on_event=events.append,
         finish_worker_recoverable_followup=finish,
-        handle_worker_flow_steering=lambda _s, _e: "none",
         explicit_validation_commands=explicit_validation_commands,
         declared_run_command=declared_run_command,
     )
@@ -102,15 +101,13 @@ def test_structural_fingerprint_skip(tmp_path: Path, monkeypatch):
     assert mock_py_compile.call_count == 1 # unchanged
 
 
-def test_escalation_paths_unchanged(tmp_path: Path):
+def test_syntax_failure_repeatable_feedback(tmp_path: Path):
+    """Syntax failure no longer escalates to finished — always gives feedback."""
     s = _SendState(mode="worker", research_policy=None)
     s.worker_flow = WorkerFlowHarness()
     s.syntax_repair_required = {"a.py": {"repair_failed": True, "error": "Syntax!"}}
-    s.worker_recovery_nudge_sent = True
     action, history, finish = _finalize(s, tmp_path)
-    assert action == "finished"
-    finish.assert_called_once()
-    assert finish.call_args[1]["failure_class"] == "syntax_invalid"
+    assert action == "continue"
 
 
 def test_product_validation_failed_escalation(tmp_path: Path, monkeypatch):

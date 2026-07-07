@@ -84,7 +84,6 @@ class ToolRegistry(
             dynamic_tools=self._dynamic_tools,
             mcp_tools=self._mcp_tools,
         )
-        self._drone_budget: dict[str, int] = {}
 
     @property
     def workspace_root(self) -> Path:

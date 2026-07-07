@@ -8,16 +8,11 @@ from aura.drones.store import DroneStore
 from aura.research.adapter import WEB_RESEARCH_DRONE_ID
 from aura.research.result import format_research_answer
 
-DEFAULT_READ_ONLY_DRONE_LIMIT = 3
-WEB_RESEARCH_DRONE_LIMIT = 6
 _log = logging.getLogger(__name__)
 
 
 class PlannerHandlersMixin:
     """Mixin for ToolRegistry implementing planner-specific tool handlers."""
-
-    def reset_drone_budget(self) -> None:
-        self._drone_budget.clear()
 
     def _handle_summon_drone(
         self,
@@ -217,23 +212,6 @@ class PlannerHandlersMixin:
                         f"Drone '{drone_id}' is not read-only; "
                         "only read-only Drones can be run directly."
                     ),
-                },
-            )
-
-        # Per-turn limit check (tracked per drone_id)
-        budget = self._drone_budget.get(drone_id, 0) + 1
-        self._drone_budget[drone_id] = budget
-        limit = WEB_RESEARCH_DRONE_LIMIT if drone_id == WEB_RESEARCH_DRONE_ID else DEFAULT_READ_ONLY_DRONE_LIMIT
-        if budget > limit:
-            return ToolExecResult(
-                ok=False,
-                payload={
-                    "ok": False,
-                    "error": f"Per-turn limit of {limit} runs reached for drone '{drone_id}'",
-                    "code": "drone_budget_exhausted",
-                    "limit": limit,
-                    "used": budget - 1,
-                    "drone_id": drone_id,
                 },
             )
 

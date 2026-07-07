@@ -193,7 +193,6 @@ def _append_worker_zero_work_recovery(
     if steering:
         details.append(f"- last_steering: {steering}")
     history.append_user_text("\n".join(details))
-    state.worker_flow_nudge_count += 1
     state.worker_flow_last_reason = reason
     state.worker_flow_last_steering = steering
 
@@ -217,7 +216,6 @@ def _append_worker_thrash_recovery(
     if steering:
         details.append(f"- last_steering: {steering}")
     history.append_user_text("\n".join(details))
-    state.worker_flow_nudge_count += 1
     state.worker_flow_last_reason = reason
     state.worker_flow_last_steering = steering
 
@@ -245,31 +243,12 @@ def _handle_worker_zero_work_final(
         return "none"
 
     reason = state.worker_flow_last_reason or "zero_work_final"
-    fp = f"zero_work|{reason}|{state.worker_flow_last_steering}"
-    if state.progress_monitor is not None and state.progress_monitor.check(
-        fp, state.write_attempt_count()
-    ).progressing:
-        _append_worker_zero_work_recovery(
-            state, history,
-            reason=reason,
-            steering=state.worker_flow_last_steering,
-        )
-        return "nudged"
-
-    # Stalled — fail (terminal-success already checked by caller).
-    finish_worker_recoverable_followup(
-        on_event,
-        failure_class="worker_flow_zero_work_no_progress",
-        error=(
-            "Worker could not make progress after internal zero-work "
-            "recovery. Handing step back for planner resolution."
-        ),
-        details={
-            "reason": reason,
-            "steering": state.worker_flow_last_steering,
-        },
+    _append_worker_zero_work_recovery(
+        state, history,
+        reason=reason,
+        steering=state.worker_flow_last_steering,
     )
-    return "finished"
+    return "nudged"
 
 
 def handle_worker_candidate_finalization(
@@ -280,7 +259,6 @@ def handle_worker_candidate_finalization(
     workspace_root,
     on_event: EventCallback,
     finish_worker_recoverable_followup: Callable[..., None],
-    handle_worker_flow_steering: Callable[[_SendState, EventCallback], str],
     declared_run_command: str | None = None,
     explicit_validation_commands: list[ValidationCommandSpec] | None = None,
 ) -> WorkerFinalizationAction:
@@ -294,49 +272,23 @@ def handle_worker_candidate_finalization(
             finish_worker_recoverable_followup=finish_worker_recoverable_followup,
         )
 
+    # Syntax failure — always give feedback and continue (never terminal).
     if has_terminal_syntax_failure(state.syntax_repair_required):
-        if not state.worker_recovery_nudge_sent:
-            diagnostic_parts = []
-            for path, s in state.syntax_repair_required.items():
-                if s.get("repair_failed") and s.get("error"):
-                    diagnostic_parts.append(f"{path}:\n{s['error']}")
-            diagnostic_text = "\n\n".join(diagnostic_parts)
-            instruction = (
-                "Terminal py_compile still failing after repair. "
-                "Re-read the failing Python file, fix the syntax error, "
-                "then re-run python -m py_compile. "
-                "Finish only after py_compile passes."
-            )
-            if diagnostic_text:
-                instruction += f"\n\nDiagnostic output:\n{diagnostic_text}"
-            history.append_user_text(instruction)
-            state.worker_recovery_nudge_sent = True
-            state.discard_worker_candidate_final()
-            return "continue"
-        failing_paths = sorted(
-            p for p, s in state.syntax_repair_required.items()
-            if s.get("repair_failed")
+        diagnostic_parts = []
+        for path, s in state.syntax_repair_required.items():
+            if s.get("repair_failed") and s.get("error"):
+                diagnostic_parts.append(f"{path}:\n{s['error']}")
+        diagnostic_text = "\n\n".join(diagnostic_parts)
+        instruction = (
+            "py_compile still failing after repair. "
+            "Re-read the failing Python file, fix the syntax error, "
+            "then re-run python -m py_compile."
         )
-        finish_worker_recoverable_followup(
-            on_event,
-            failure_class="syntax_invalid",
-            error="Python syntax still fails after two repair attempts.",
-            details={
-                "failing_files": failing_paths,
-                "suggested_next_tool": "dispatch_to_worker",
-                "suggested_next_action": (
-                    "Redispatch with a narrower edit target or "
-                    "different approach to the failing file."
-                ),
-                "dispatch_mismatch": True,
-                "worker_confusion_question": (
-                    "Worker could not repair Python syntax errors "
-                    "after two repair attempts"
-                    + (": " + ", ".join(failing_paths) if failing_paths else ".")
-                ),
-            },
-        )
-        return "finished"
+        if diagnostic_text:
+            instruction += f"\n\nDiagnostic output:\n{diagnostic_text}"
+        history.append_user_text(instruction)
+        state.discard_worker_candidate_final()
+        return "continue"
 
     # Carry import-verification paths forward for re-check.
     if state.import_verification_required:
@@ -350,88 +302,46 @@ def handle_worker_candidate_finalization(
     )
     syntax_repair_pending = bool(syntax_repair_paths(state.syntax_repair_required))
     if edit_recovery_pending or syntax_repair_pending:
-        if not state.worker_recovery_nudge_sent:
-            if edit_recovery_pending:
-                if (
-                    state.patch_invalid_syntax_required
-                    and not state.edit_fallback_required
-                    and not state.line_range_reread_required
-                ):
-                    instruction = PATCH_CANDIDATE_INVALID_SYNTAX_ACTION
-                else:
-                    instruction = WORKER_EDIT_RECOVERY_INSTRUCTION
-            else:
-                # Distinguish craft-gate failures from terminal py_compile failures.
-                any_repair_failed = any(
-                    s.get("repair_failed")
-                    for s in state.syntax_repair_required.values()
-                )
-                if any_repair_failed:
-                    instruction = (
-                        "Previous py_compile failed. Re-read the touched "
-                        "Python file, repair it with patch_file, then run python -m py_compile again. "
-                        "Finish only after py_compile passes."
-                    )
-                else:
-                    instruction = (
-                        "Validation caught invalid Python in the following file(s). "
-                        "Re-read the file, repair with patch_file, "
-                        "then run python -m py_compile. "
-                        "Finish only after py_compile passes."
-                    )
-            if not edit_recovery_pending:
-                diagnostic_parts = []
-                for path, s in state.syntax_repair_required.items():
-                    if (
-                        not s.get("awaiting_validation")
-                        and not s.get("repair_failed")
-                        and s.get("error")
-                    ):
-                        diagnostic_parts.append(f"{path}:\n{s['error']}")
-                diagnostic_text = "\n\n".join(diagnostic_parts)
-                if diagnostic_text:
-                    instruction += f"\n\nDiagnostic output:\n{diagnostic_text}"
-            history.append_user_text(instruction)
-            state.worker_recovery_nudge_sent = True
-            state.discard_worker_candidate_final()
-            return "continue"
-        error_parts = [
-            "Worker stopped before recovering from a recoverable failure."
-        ]
-        details: dict[str, object] = {}
-        if syntax_repair_pending:
-            sync_paths = sorted(syntax_repair_paths(state.syntax_repair_required))
-            error_parts.append(f" Syntax repair pending on: {', '.join(sync_paths)}.")
-            details["syntax_paths"] = sync_paths
         if edit_recovery_pending:
-            error_parts.append(" Edit mechanics recovery pending.")
-            details.update(edit_recovery_details(
-                state.edit_fallback_required,
-                state.line_range_reread_required,
-            ))
-            if state.patch_invalid_syntax_required:
-                details["patch_invalid_syntax_paths"] = sorted(
-                    state.patch_invalid_syntax_required
+            if (
+                state.patch_invalid_syntax_required
+                and not state.edit_fallback_required
+                and not state.line_range_reread_required
+            ):
+                instruction = PATCH_CANDIDATE_INVALID_SYNTAX_ACTION
+            else:
+                instruction = WORKER_EDIT_RECOVERY_INSTRUCTION
+        else:
+            any_repair_failed = any(
+                s.get("repair_failed")
+                for s in state.syntax_repair_required.values()
+            )
+            if any_repair_failed:
+                instruction = (
+                    "Previous py_compile failed. Re-read the touched "
+                    "Python file, repair it with patch_file, then run python -m py_compile again."
                 )
-        details.update({
-            "suggested_next_tool": "dispatch_to_worker",
-            "suggested_next_action": (
-                "Redispatch with exact edit regions for "
-                "the files that failed to apply."
-            ),
-            "dispatch_mismatch": True,
-            "worker_confusion_question": (
-                "Worker exhausted edit-mechanics recovery; "
-                "could not apply edits for the targeted files."
-            ),
-        })
-        finish_worker_recoverable_followup(
-            on_event,
-            failure_class="worker_recovery_exhausted",
-            error="".join(error_parts),
-            details=details or None,
-        )
-        return "finished"
+            else:
+                instruction = (
+                    "Validation caught invalid Python in the following file(s). "
+                    "Re-read the file, repair with patch_file, "
+                    "then run python -m py_compile."
+                )
+        if not edit_recovery_pending:
+            diagnostic_parts = []
+            for path, s in state.syntax_repair_required.items():
+                if (
+                    not s.get("awaiting_validation")
+                    and not s.get("repair_failed")
+                    and s.get("error")
+                ):
+                    diagnostic_parts.append(f"{path}:\n{s['error']}")
+            diagnostic_text = "\n\n".join(diagnostic_parts)
+            if diagnostic_text:
+                instruction += f"\n\nDiagnostic output:\n{diagnostic_text}"
+        history.append_user_text(instruction)
+        state.discard_worker_candidate_final()
+        return "continue"
 
     state.syntax_validation_required.difference_update(
         path for path in set(state.syntax_validation_required)
@@ -484,43 +394,8 @@ def handle_worker_candidate_finalization(
         state.worker_flow is not None
         and state.worker_flow.requires_validation_before_final()
     ):
-        if not state.worker_validation_nudge_sent:
-            history.append_user_text(state.worker_flow.validation_required_text())
-            state.worker_validation_nudge_sent = True
-            state.discard_worker_candidate_final()
-            return "continue"
+        history.append_user_text(state.worker_flow.validation_required_text())
         state.discard_worker_candidate_final()
-        classification = state.worker_flow.changed_file_classification()
-        suggested_next_action = (
-            "Run a docs-appropriate validation command if available, or state "
-            "that no Python/source files changed and no docs-specific command "
-            "is available, then provide the final report."
-            if classification.docs_only
-            else (
-                "Run the smallest relevant py_compile or pytest "
-                "command, then provide the final report."
-            )
-        )
-        finish_worker_recoverable_followup(
-            on_event,
-            failure_class="worker_validation_required",
-            error=(
-                "Worker stopped after changing files without running "
-                "focused validation after one validation nudge."
-            ),
-            details={
-                "suggested_next_tool": "run_terminal_command",
-                "suggested_next_action": suggested_next_action,
-                "dispatch_mismatch": True,
-            },
-        )
-        return "finished"
-
-    flow_steering_action = handle_worker_flow_steering(state, on_event)
-    if flow_steering_action != "none":
-        state.discard_worker_candidate_final()
-        if flow_steering_action == "finished":
-            return "finished"
         return "continue"
 
     zero_work_action = _handle_worker_zero_work_final(
@@ -922,27 +797,8 @@ def _release_candidate_final(
         if worker_final_report_missing_proof(
             state,
             state.candidate_final_message,
-            ignore_prior_nudge=True,
         ):
-            if state.worker_final_report_proof_nudge_sent:
-                state.discard_worker_candidate_final()
-                finish_worker_recoverable_followup(
-                    on_event,
-                    failure_class="worker_final_report_missing_proof",
-                    error=(
-                        "Worker changed files but did not provide validation or "
-                        "acceptance proof after the final-report proof nudge."
-                    ),
-                    details={
-                        "suggested_next_action": (
-                            "Provide a final report with changed files, validation "
-                            "command/result, and acceptance verification."
-                        ),
-                    },
-                )
-                return "finished"
             history.append_user_text(WORKER_FINAL_REPORT_PROOF_REQUIRED_TEXT)
-            state.worker_final_report_proof_nudge_sent = True
             state.discard_worker_candidate_final()
             return "continue"
         history.append_assistant(state.candidate_final_message)

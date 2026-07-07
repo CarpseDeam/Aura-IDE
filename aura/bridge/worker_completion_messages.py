@@ -210,13 +210,13 @@ def _build_worker_completion_messages(
         and no_failure_or_blocker
     ):
         if completion["validation_results"] and not failed_validation:
-            result_errors.append(
-                "Harness no-progress: Worker ran validation but made no implementation changes."
+            result_caveats.append(
+                "Worker ran validation but made no implementation changes — continuation, not failure."
             )
         elif not completion["validation_results"]:
-            result_errors.append(
-                "Harness no-progress: Worker made no changes, reported no blocker, "
-                "and ran no meaningful validation."
+            result_caveats.append(
+                "Worker made no changes, reported no blocker, "
+                "and ran no meaningful validation — continuation, not failure."
             )
 
     return {

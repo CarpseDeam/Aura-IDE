@@ -23,7 +23,6 @@ from aura.conversation.dispatch import (
 )
 from aura.conversation.dispatch_contract import enrich_worker_dispatch_contract
 from aura.conversation.history import History
-from aura.conversation.loop_detection import LoopDetector
 from aura.conversation.terminal_policy import worker_terminal_command_allowed
 from aura.conversation.tool_runner_terminal_policy import (
     matches_explicit_validation,
@@ -38,7 +37,6 @@ from aura.conversation.validation_orchestrator import (
     looks_like_validation_command,
     parse_validation_command,
 )
-from aura.conversation.verification_progress import VerificationProgressTracker
 from aura.conversation.worker_outcome import WorkerOutcomeStatus
 from aura.project_env import (
     build_project_command,
@@ -60,13 +58,9 @@ class ToolRunner:
         self,
         history: History,
         workspace_root: Path,
-        loop_detector: LoopDetector,
-        verification_tracker: VerificationProgressTracker,
     ) -> None:
         self._history = history
         self._workspace_root = workspace_root
-        self._loop_detector = loop_detector
-        self._verification_tracker = verification_tracker
 
     def set_workspace_root(self, root: Path) -> None:
         self._workspace_root = root
@@ -492,7 +486,6 @@ class ToolRunner:
             mode == "worker"
             and (explicit or validation_command.normalized or is_ad_hoc_validation)
         )
-        stall: dict[str, Any] | None = None
         if should_classify_validation:
             run_result = classify_validation_run(
                 validation_command,
@@ -501,11 +494,6 @@ class ToolRunner:
                 ok=ok,
             )
             payload_dict.update(run_result.metadata())
-            stall = self._verification_tracker.observe(
-                command=validation_command.command,
-                classification=run_result.classification,
-                output=full_output,
-            )
             # Compute contextual command outcome so that Workers see
             # a classification that accounts for command role (e.g.
             # "passed" for validation commands that exit 0 despite
@@ -524,18 +512,6 @@ class ToolRunner:
             payload_dict["terminal_traceback_detected"] = outcome.traceback_detected
         payload = json.dumps(payload_dict, ensure_ascii=False)
 
-        observed = self._loop_detector.observe(
-            mode=mode,
-            tool_name="run_terminal_command",
-            args=args,
-            ok=ok,
-            content=payload,
-        )
-        payload = observed.content
-        loop_info = observed.info
-        if loop_info is None and stall is not None:
-            loop_info = stall
-
         self._history.append_tool_result(tool_call_id, payload)
         on_event(
             ToolResult(
@@ -545,10 +521,7 @@ class ToolRunner:
                 result=payload,
             )
         )
-        if loop_info is None:
-            loop_info = {}
-        loop_info["_terminal_payload"] = payload_dict
-        return loop_info
+        return {"_terminal_payload": payload_dict}
 
     def handle_run_and_watch(
         self,

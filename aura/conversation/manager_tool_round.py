@@ -17,7 +17,6 @@ from aura.conversation.dispatch_tool_round import (
     handle_dispatch_to_worker_round,
 )
 from aura.conversation.history import History
-from aura.conversation.loop_detection import LoopDetector
 from aura.conversation.manager_recovery import (
     update_worker_recovery_state,
     worker_recovery_block,
@@ -66,7 +65,6 @@ _READ_ONLY_TOOLS = {
 @dataclass(frozen=True)
 class ToolRoundOutcome:
     action: str
-    flow_steering_suppressed: bool = False
     enter_silent_preflight: bool = False
 
 
@@ -79,7 +77,6 @@ class ToolRoundRunner:
         history: History,
         tools: ToolRegistry,
         tool_runner: ToolRunner,
-        loop_detector: LoopDetector,
         planner_refresh: PlannerRefreshState,
         lifecycle: LifecycleHooks | None = None,
         event_bus: EventBus | None = None,
@@ -87,7 +84,6 @@ class ToolRoundRunner:
         self._history = history
         self._tools = tools
         self._tool_runner = tool_runner
-        self._loop_detector = loop_detector
         self._planner_refresh = planner_refresh
         self._lifecycle = lifecycle
         self._event_bus = event_bus
@@ -222,12 +218,6 @@ class ToolRoundRunner:
 
         results_by_id = {r.get("id"): r for r in results_to_append if r is not None}
 
-        flow_steering_suppressed = False
-        if state.stale_validation_notes:
-            note_text = "\n".join(state.stale_validation_notes)
-            self._history.append_user_text(note_text)
-            flow_steering_suppressed = True
-
         completed_dispatch_for_final = False
         completed_tool_result_for_final = False
         planner_stale_read_files: list[str] = []
@@ -267,19 +257,12 @@ class ToolRoundRunner:
                 enter_silent_preflight = True
             if state.worker_flow is not None and res.get("flow_result"):
                 flow_result = res["flow_result"]
-                before_write_actions = int(state.worker_flow.state.write_actions)
-                before_validation_actions = int(state.worker_flow.state.validation_actions)
                 state.worker_flow.observe_tool_result(
                     flow_result.get("name", task["name"]),
                     flow_result.get("args", task["args"]),
                     flow_result.get("ok"),
                     flow_result.get("result_payload"),
                 )
-                if (
-                    state.worker_flow.state.write_actions > before_write_actions
-                    or state.worker_flow.state.validation_actions > before_validation_actions
-                ):
-                    state.worker_flow_nudge_sent = False
             planner_constraint = str(res.get("planner_internal_constraint", "") or "")
             attempt_brief = res.get("attempt_brief")
             if attempt_brief is not None:
@@ -319,7 +302,6 @@ class ToolRoundRunner:
 
         return ToolRoundOutcome(
             action="next_round",
-            flow_steering_suppressed=flow_steering_suppressed,
             enter_silent_preflight=enter_silent_preflight,
         )
 
@@ -491,16 +473,6 @@ class ToolRoundRunner:
                 worker_app_writes=state.worker_app_writes,
             )
 
-        observed = self._loop_detector.observe(
-            mode=state.mode,
-            tool_name=name,
-            args=args,
-            ok=exec_result.ok,
-            content=tool_msg_content,
-        )
-        tool_msg_content = observed.content
-        loop_info = observed.info
-
         result = {
             "id": tool_call_id,
             "result_payload": tool_msg_content,
@@ -527,8 +499,6 @@ class ToolRoundRunner:
                 exec_result.extras.get("failure_constraint", "") or ""
             )
             result["completed_tool_result_for_final"] = False
-        if is_recoverable_phase_boundary(loop_info):
-            result["_worker_phase_boundary_info"] = loop_info
         return result
 
 

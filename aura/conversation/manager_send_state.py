@@ -13,7 +13,6 @@ from aura.conversation.edit_orchestrator import EditRetryLedger
 from aura.conversation.tool_limits import ToolLimitState
 from aura.conversation.validation_ledger import WorkerValidationLedger
 from aura.conversation.worker_flow import WorkerFlowHarness
-from aura.conversation.worker_progress_monitor import WorkerProgressMonitor
 from aura.conversation.worker_stream_buffer import WorkerStreamBuffer
 
 
@@ -46,21 +45,13 @@ class _SendState:
     limits: ToolLimitState = field(init=False)
     stream_buffer: WorkerStreamBuffer | None = field(init=False)
     worker_flow: WorkerFlowHarness | None = field(init=False)
-    progress_monitor: WorkerProgressMonitor | None = field(init=False)
 
     # --- worker guard / quarantine ---
     candidate_final_message: dict[str, Any] | None = None
     worker_needs_final_report: bool = False
     worker_phase_boundary_info: dict[str, Any] | None = None
-    worker_recovery_nudge_sent: bool = False
-    worker_validation_nudge_sent: bool = False
-    worker_final_report_proof_nudge_sent: bool = False
-    worker_flow_nudge_count: int = 0
     worker_flow_last_steering: str = ""
     worker_flow_last_reason: str = ""
-    worker_quality_nudge_sent: bool = False
-    worker_quality_cleanup_attempted: bool = False
-    critic_pass_attempted: bool = False
     last_quality_ok_fingerprint: str | None = None
     last_quality_findings: list[dict[str, Any]] = field(default_factory=list)
     worker_quality_enabled: bool = True
@@ -108,25 +99,15 @@ class _SendState:
         self.limits = ToolLimitState(mode=self.mode)
         self.stream_buffer = None
         self.worker_flow = None
-        self.progress_monitor = None
         if self.mode == "worker":
             self.stream_buffer = WorkerStreamBuffer()
             self.worker_flow = WorkerFlowHarness()
-            self.progress_monitor = WorkerProgressMonitor()
 
     def discard_worker_candidate_final(self) -> None:
         """Clear the quarantined final message and the stream buffer."""
         self.candidate_final_message = None
         if self.stream_buffer is not None:
             self.stream_buffer.discard()
-
-    @property
-    def worker_flow_nudge_sent(self) -> bool:
-        return self.worker_flow_nudge_count > 0
-
-    @worker_flow_nudge_sent.setter
-    def worker_flow_nudge_sent(self, value: bool) -> None:
-        self.worker_flow_nudge_count = max(1, self.worker_flow_nudge_count) if value else 0
 
     # ── Write-count helpers (honest signals from WorkerFlowHarness) ──
 

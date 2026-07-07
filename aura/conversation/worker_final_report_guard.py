@@ -56,11 +56,7 @@ def _worker_final_report_needs_proof(state: Any) -> bool:
 def worker_final_report_missing_proof(
     state: Any,
     full_message: dict[str, Any],
-    *,
-    ignore_prior_nudge: bool = False,
 ) -> bool:
-    if state.worker_final_report_proof_nudge_sent and not ignore_prior_nudge:
-        return False
     if not _worker_final_report_needs_proof(state):
         return False
     return not _worker_final_report_claims_validation_or_acceptance(

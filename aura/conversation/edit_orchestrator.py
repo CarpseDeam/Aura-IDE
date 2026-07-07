@@ -162,27 +162,6 @@ class EditRetryLedger:
                 return record
         return None
 
-    def failure_count(
-        self,
-        *,
-        path: str,
-        mode: EditMode | str | None = None,
-        failure_class: str = "",
-    ) -> int:
-        edit_mode = _coerce_mode(mode)
-        normalized_path = normalize_worker_path(path)
-        normalized_failure = str(failure_class or "").strip()
-        count = 0
-        for record in self.records:
-            if record.path != normalized_path:
-                continue
-            if edit_mode is not None and record.mode != edit_mode:
-                continue
-            if normalized_failure and record.failure_class != normalized_failure:
-                continue
-            count += 1
-        return count
-
     def next_mode(
         self,
         path: str,

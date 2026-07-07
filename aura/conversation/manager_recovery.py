@@ -70,7 +70,6 @@ EDIT_TRANSACTION_FAILURE_CLASSES = {
 }
 
 PATCH_CANDIDATE_INVALID_SYNTAX_FAILURE_CLASS = "patch_candidate_invalid_syntax"
-PATCH_CANDIDATE_INVALID_SYNTAX_REPEATED_CLASS = "patch_candidate_invalid_syntax_repeated"
 
 
 def _is_worker_app_source_path(path: str) -> bool:
@@ -193,26 +192,6 @@ def worker_recovery_block(
             )
             return blocked_tool_result(tool_call_id, name, payload)
 
-    if (
-        path
-        and name in {"edit_file", "edit_line_range"}
-        and write_attempts_by_path.get(path, 0) > 3
-    ):
-        payload = recovery_payload(
-            path=path,
-            failure_class="edit_mechanics_multi_edit_spin",
-            error=(
-                "Multiple failed or unapplied write attempts targeted the same file. "
-                "Use patch_file for this existing-file edit."
-            ),
-            suggested_next_tool="patch_file",
-            suggested_next_action=(
-                "Re-read the file, then submit one patch_file containing all intended hunks."
-            ),
-        )
-        record_recovery_block(payload, f"multi-edit-spin:{path}:{name}", recovery_block_counts)
-        return blocked_tool_result(tool_call_id, name, payload)
-
     if name == "apply_edit_transaction" and path:
         shape = _edit_shapes.edit_shape_signature(name, args)
         if shape in edit_failed_shapes:
@@ -327,28 +306,6 @@ def worker_patch_invalid_syntax_block(
     )
     pending_path = target_path or sorted(patch_invalid_syntax_required)[0]
     state = patch_invalid_syntax_required.get(pending_path) or {}
-    if state.get("retry_failed") or state.get("blocked"):
-        payload = recovery_payload(
-            path=pending_path,
-            failure_class=PATCH_CANDIDATE_INVALID_SYNTAX_REPEATED_CLASS,
-            error=(
-                "patch_file candidate syntax recovery already used its one retry. "
-                "Stop and return a concise blocker."
-            ),
-            suggested_next_tool="none",
-            suggested_next_action="Stop and summarize the blocker; do not call more tools for this patch.",
-            recoverable=False,
-        )
-        payload["applied"] = False
-        payload["write_outcome"] = "not_applied_edit_mechanics_blocked"
-        payload["patch_shape"] = state.get("patch_shape")
-        record_recovery_block(
-            payload,
-            f"patch-invalid-syntax-blocked:{pending_path}",
-            recovery_block_counts,
-        )
-        return blocked_tool_result(tool_call_id, name, payload)
-
     if target_path and name in {"read_file", "read_file_range", "read_files"}:
         return None
 
@@ -512,46 +469,6 @@ def update_worker_recovery_state(
                 shape=shape,
                 error=str(parsed.get("error") or parsed.get("output") or ""),
             )
-    prior_invalid_syntax = (
-        normalized_state_value(patch_invalid_syntax_required, path)
-        if path and name == "patch_file"
-        else None
-    )
-    if (
-        path
-        and name == "patch_file"
-        and isinstance(prior_invalid_syntax, dict)
-        and prior_invalid_syntax.get("reread_done")
-        and failure_class
-    ):
-        prior_invalid_syntax["retry_failed"] = True
-        prior_invalid_syntax["blocked"] = True
-        blocked_state = {
-            **prior_invalid_syntax,
-            "retry_failed": True,
-            "blocked": True,
-        }
-        patch_invalid_syntax_required[_normalize_worker_path(path)] = blocked_state
-        parsed.setdefault("applied", False)
-        parsed.setdefault("write_outcome", "not_applied_edit_mechanics_blocked")
-        parsed["recoverable"] = False
-        parsed["failure_class"] = (
-            PATCH_CANDIDATE_INVALID_SYNTAX_REPEATED_CLASS
-            if failure_class == PATCH_CANDIDATE_INVALID_SYNTAX_FAILURE_CLASS
-            else PATCH_CANDIDATE_INVALID_SYNTAX_FAILURE_CLASS
-        )
-        parsed["error"] = (
-            "patch_file retry failed after candidate syntax recovery. "
-            "Stop and return a concise blocker. "
-            + str(parsed.get("error", ""))
-        ).strip()
-        parsed["suggested_next_tool"] = "none"
-        parsed["suggested_next_action"] = (
-            "Stop and summarize the blocker; do not call more tools for this patch."
-        )
-        parsed["patch_shape"] = prior_invalid_syntax.get("patch_shape")
-        return json.dumps(parsed, ensure_ascii=False)
-
     if path and failure_class in EDIT_TRANSACTION_FAILURE_CLASSES:
         parsed.setdefault("applied", False)
         parsed.setdefault("write_outcome", "not_applied_edit_mechanics_blocked")
@@ -602,24 +519,14 @@ def update_worker_recovery_state(
         parsed["patch_shape"] = _edit_shapes.shape_digest(patch_shape)
         parsed["suggested_next_tool"] = "read_file_range"
         parsed["suggested_next_action"] = PATCH_CANDIDATE_INVALID_SYNTAX_ACTION
-        if failed_cycles >= 2:
-            parsed["recoverable"] = False
-            parsed["failure_class"] = PATCH_CANDIDATE_INVALID_SYNTAX_REPEATED_CLASS
-            parsed["error"] = (
-                "Repeated patch_file candidate syntax failure for the same patch shape. "
-                "Stop and return a concise blocker."
-            )
-            pop_normalized_recovery_key(patch_invalid_syntax_required, path)
-        else:
-            patch_invalid_syntax_required[_normalize_worker_path(path)] = {
-                "failure_class": PATCH_CANDIDATE_INVALID_SYNTAX_FAILURE_CLASS,
-                "error": parsed.get("error", ""),
-                "shape": patch_shape,
-                "patch_shape": parsed["patch_shape"],
-                "reread_done": False,
-                "retry_failed": False,
-            }
-            parsed["recoverable"] = True
+        patch_invalid_syntax_required[_normalize_worker_path(path)] = {
+            "failure_class": PATCH_CANDIDATE_INVALID_SYNTAX_FAILURE_CLASS,
+            "error": parsed.get("error", ""),
+            "shape": patch_shape,
+            "patch_shape": parsed["patch_shape"],
+            "reread_done": False,
+        }
+        parsed["recoverable"] = True
         content = json.dumps(parsed, ensure_ascii=False)
     elif path and name == "patch_file" and failure_class in {"patch_hunk_not_found", "patch_hunk_ambiguous", "patch_file_hash_mismatch"}:
         parsed.setdefault("applied", False)

@@ -49,7 +49,6 @@ from aura.conversation.dispatch import (
     WorkerDispatchResult,
 )
 from aura.conversation.history import History
-from aura.conversation.loop_detection import LoopDetector
 from aura.conversation.manager_send_state import _SendState
 from aura.conversation.manager_tool_round import ToolRoundRunner
 from aura.conversation.planner_dispatch_gate import maybe_force_worker_dispatch
@@ -63,15 +62,7 @@ from aura.conversation.tools._types import (
     ApprovalRequest,
 )
 from aura.conversation.tools.registry import ToolRegistry
-from aura.conversation.verification_progress import VerificationProgressTracker
 from aura.conversation.worker_finalization_gate import (
-    _append_worker_thrash_recovery,
-    _append_worker_zero_work_recovery,
-    _candidate_final_has_real_zero_work_blocker,
-    _worker_artifact_item_validated_done,
-    _worker_has_attempted_write,
-    _worker_has_concrete_file_progress,
-    _worker_has_zero_applied_writes,
     handle_worker_candidate_finalization,
 )
 from aura.events import EventBus
@@ -97,20 +88,15 @@ class ConversationManager:
         self._tools = tool_registry
         self._lifecycle = lifecycle
         self._event_bus = event_bus
-        self._loop_detector = LoopDetector()
-        self._verification_tracker = VerificationProgressTracker()
         self._tool_runner = ToolRunner(
             history=self._history,
             workspace_root=self._tools.workspace_root,
-            loop_detector=self._loop_detector,
-            verification_tracker=self._verification_tracker,
         )
         self._planner_refresh = PlannerRefreshState()
         self._tool_round_runner = ToolRoundRunner(
             history=self._history,
             tools=self._tools,
             tool_runner=self._tool_runner,
-            loop_detector=self._loop_detector,
             planner_refresh=self._planner_refresh,
             lifecycle=self._lifecycle,
             event_bus=self._event_bus,
@@ -311,7 +297,6 @@ class ConversationManager:
                         finish_worker_recoverable_followup=(
                             self._finish_worker_unrecoverable
                         ),
-                        handle_worker_flow_steering=self._handle_worker_flow_steering,
                         declared_run_command=declared_run_command,
                         explicit_validation_commands=explicit_validation_commands,
                     )
@@ -342,14 +327,6 @@ class ConversationManager:
             if tool_round.action == "continue":
                 continue
 
-            if state.worker_flow is not None and not tool_round.flow_steering_suppressed:
-                flow_steering_action = self._handle_worker_flow_steering(
-                    state,
-                    on_event,
-                )
-                if flow_steering_action == "finished":
-                    return
-
     def _finish_worker_unrecoverable(
         self,
         on_event: EventCallback,
@@ -366,155 +343,6 @@ class ConversationManager:
         self._history.append_assistant(full_message)
         on_event(ContentDelta(text=content))
         on_event(Done(finish_reason="stop", full_message=full_message))
-
-    def _finish_worker_as_validated_completed(
-        self,
-        on_event: EventCallback,
-        *,
-        summary: str = "",
-    ) -> None:
-        """Terminate the worker's run as completed when validations are green.
-
-        Used by the zero-work detection: when the worker has passed all
-        item validation commands but produces no further edits, the run
-        is treated as completed rather than stalled. The worker receives
-        an ``ok`` receipt with a note that post-completion activity was
-        truncated.
-        """
-        payload = {
-            "status": "ok",
-            "summary": summary or (
-                "Item completed. Post-completion activity was truncated "
-                "because validation already passed."
-            ),
-        }
-        content = json.dumps(payload, ensure_ascii=False)
-        full_message = {
-            "role": "assistant",
-            "content": content,
-            "reasoning_content": None,
-        }
-        self._history.append_assistant(full_message)
-        on_event(ContentDelta(text=content))
-        on_event(Done(finish_reason="stop", full_message=full_message))
-
-    def _handle_worker_flow_steering(
-        self,
-        state: _SendState,
-        on_event: EventCallback,
-    ) -> str:
-        """Steer Worker Flow without turning zero-work orientation into follow-up."""
-        if state.worker_flow is None:
-            return "none"
-        if not state.worker_flow.pending_steering_message:
-            return "none"
-        if _worker_has_concrete_file_progress(state):
-            return self._handle_worker_flow_progress_continuation(state)
-        reason = str(
-            getattr(state.worker_flow.state, "pending_steering_reason", "")
-            or "worker_flow"
-        )
-        steering = state.worker_flow.pop_pending_steering()
-        if not steering:
-            return "none"
-        state.worker_flow_last_reason = reason
-        state.worker_flow_last_steering = steering
-        # Artifact validated done bailout — before any recovery nudge or thrash recovery.
-        if _worker_artifact_item_validated_done(state):
-            self._finish_worker_as_validated_completed(
-                on_event,
-                summary=(
-                    "WorkArtifact item completed. Validation passed and the bounded item "
-                    "was already satisfied, so no extra edit was required."
-                ),
-            )
-            return "finished"
-        if state.worker_flow_nudge_sent:
-            is_zero_work = (
-                _worker_has_zero_applied_writes(state)
-                and not _worker_has_attempted_write(state)
-            )
-
-            # Real blocker check (only relevant for zero-work).
-            if is_zero_work and _candidate_final_has_real_zero_work_blocker(
-                state.candidate_final_message
-            ):
-                return "none"
-
-            # One progress check for both zero-work and thrash.
-            fp = f"steering|{reason}|{steering}"
-            verdict = state.progress_monitor.check(fp, state.write_attempt_count())
-            if verdict.progressing:
-                if is_zero_work:
-                    _append_worker_zero_work_recovery(
-                        state, self._history, reason=reason, steering=steering,
-                    )
-                else:
-                    _append_worker_thrash_recovery(
-                        state, self._history, reason=reason, steering=steering,
-                    )
-                return "nudged"
-
-            # Stalled — before failing, check if validations are green.
-            if state.worker_explicit_validation_passed:
-                self._finish_worker_as_validated_completed(
-                    on_event,
-                    summary=(
-                        "Item completed. Post-completion activity was "
-                        "truncated because validation already passed."
-                    ),
-                )
-                return "finished"
-
-            failure_class = (
-                "worker_flow_zero_work_no_progress"
-                if is_zero_work
-                else "worker_flow_thrash"
-            )
-            error = (
-                "Worker could not make progress after internal zero-work "
-                "recovery. Handing step back for planner resolution."
-                if is_zero_work
-                else (
-                    "Worker kept re-orienting after a Worker Flow nudge instead "
-                    "of making progress with an edit or validation action."
-                )
-            )
-            details: dict[str, Any] = {
-                "reason": reason,
-                "steering": steering,
-            }
-            if not is_zero_work:
-                details["counts"] = state.limits.to_dict()
-            self._finish_worker_unrecoverable(
-                on_event,
-                failure_class=failure_class,
-                error=error,
-                details=details,
-            )
-            return "finished"
-        self._history.append_user_text(steering)
-        state.worker_flow_nudge_count += 1
-        return "nudged"
-
-    def _handle_worker_flow_progress_continuation(
-        self,
-        state: _SendState,
-    ) -> str:
-        """Drop stale orientation steering once concrete file progress exists."""
-        if state.worker_flow is None:
-            return "none"
-        state.worker_flow.pop_pending_steering()
-        state.worker_flow.mark_non_thrashing()
-        if state.worker_flow.requires_validation_before_final():
-            if not state.worker_validation_nudge_sent:
-                self._history.append_user_text(
-                    state.worker_flow.validation_required_text()
-                )
-                state.worker_validation_nudge_sent = True
-                return "nudged"
-            return "none"
-        return "none"
 
     def _cleanup_cancelled(self, on_event: EventCallback) -> None:
         """Call this when a turn is cancelled while waiting for model or tool.

@@ -60,12 +60,10 @@ def _classify_worker_completion(
     structured_failure_class = str(structured_failure.get("failure_class") or "")
     has_harness_no_progress_failure = structured_failure_class in {
         "harness_no_progress",
-        "worker_flow_zero_work_no_progress",
     }
     has_internal_failure = bool(
         internal_error
         or relay.api_errors
-        or has_harness_no_progress_failure
     )
     has_validation_failure = bool(failed_validation)
     structured_recovery_exhausted = structured_failure.get("failure_class") == "worker_recovery_exhausted"
@@ -117,8 +115,8 @@ def _classify_worker_completion(
         recoverable = True
     elif has_no_progress_failure:
         ok = False
-        needs_followup = False
-        recoverable = False
+        needs_followup = True
+        recoverable = True
     elif has_hard_failure:
         ok = False
         needs_followup = not has_internal_failure
@@ -166,9 +164,9 @@ def _classify_worker_completion(
     summary_continuation = dict(continuation)
 
     if has_no_progress_failure:
-        summary_continuation["status"] = "harness_no_progress"
+        summary_continuation["status"] = "no_progress"
         summary_continuation["reason"] = (
-            "Worker made no changes and no concrete external blocker was found."
+            "Worker made no changes and no concrete external blocker was found — continuation, not failure."
         )
     if has_recoverable_edit_blocker:
         if not summary_continuation.get("status"):
@@ -271,14 +269,11 @@ def _compute_outcome_status(
         return WorkerOutcomeStatus.validation_failed.value
     if (
         has_internal_failure
-        or has_no_progress_failure
         or any(
             fc
             in {
                 "harness_error",
-                "harness_no_progress",
                 "internal_error",
-                "worker_flow_zero_work_no_progress",
                 "worker_internal_error",
             }
             for fc in failure_classes
@@ -292,8 +287,6 @@ def _compute_outcome_status(
     if has_hard_failure:
         if structured_status == "phased":
             return WorkerOutcomeStatus.harness_error.value
-        return WorkerOutcomeStatus.harness_error.value
-    if has_no_work and is_implementation:
         return WorkerOutcomeStatus.harness_error.value
     if has_unverified_acceptance:
         validation_never_ran = any(
@@ -335,12 +328,6 @@ def _terminal_failure_status(
 
 def _is_true_phase_boundary(info: dict[str, Any] | None) -> bool:
     if not isinstance(info, dict):
-        return False
-    reason = str(info.get("reason") or "")
-    if reason in {
-        "verification_churn_budget_exceeded",
-        "verification_not_converging",
-    }:
         return False
     return bool(info)
 

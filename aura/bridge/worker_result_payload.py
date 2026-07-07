@@ -115,39 +115,13 @@ def _build_worker_result_payload(
             else {}
         ),
     }
-    if relay.phase_boundary_info and not phase_boundary:
-        extras["verification_progress_stop"] = dict(relay.phase_boundary_info)
     if isinstance(task_shape_ms, (int, float)):
         extras["task_shape_ms"] = task_shape_ms
 
-    if structured_failure.get("failure_class") in {
-        "harness_no_progress",
-        "worker_flow_zero_work_no_progress",
-    }:
+    no_progress_class = structured_failure.get("failure_class")
+    if no_progress_class in {"harness_no_progress", "worker_flow_zero_work_no_progress"}:
         details = structured_failure.get("details")
-        extras["failure_class"] = structured_failure.get("failure_class")
-        extras["harness_no_progress"] = details if isinstance(details, dict) else {}
-    elif (
-        status == "harness_error"
-        and completion["is_implementation"]
-        and not relay.write_results
-    ):
-        extras["failure_class"] = "harness_no_progress"
-        extras["harness_no_progress"] = {
-            "failure_class": "worker_zero_work_no_progress",
-            "worker_flow_reason": "",
-            "tool_counts": {
-                "tool_results": len(relay.tool_results),
-                "failed_tool_results": len(relay.failed_tool_results),
-                "terminal_results": len(relay.terminal_results),
-                "validation_results": len(validation_results),
-            },
-            "zero_work_recovery_attempted": False,
-            "last_steering_message": "",
-            "internal_recovery_steer_count": len(internal_recovery_steers),
-            "phase_boundary": relay.phase_boundary_info if phase_boundary else {},
-            "errors": list(result_errors),
-        }
+        extras["no_progress"] = details if isinstance(details, dict) else {}
 
     if mismatch is not None:
         extras["mismatch_detected"] = True

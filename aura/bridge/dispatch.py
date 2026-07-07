@@ -71,21 +71,6 @@ DISPATCH_TIMEOUT = 300.0
 _log = logging.getLogger(__name__)
 
 
-def _failure_signature(result: "WorkerDispatchResult") -> tuple[str, str]:
-    """Stable failure signature for stall detection.
-
-    Returns (failure_class, summary_core) where the summary is trimmed
-    to its first 200 characters to remove variable detail such as
-    timestamps or path formatting.  When the signature and the set of
-    modified files both match the previous attempt, the attempt counts
-    toward the stall limit.
-    """
-    extras = result.extras if isinstance(result.extras, dict) else {}
-    fc = str(extras.get("failure_class", "") or "")
-    stable = (result.summary or "")[:200]
-    return (fc, stable)
-
-
 class _DispatchProxy(QObject):
     showSpecCard = Signal(str, str, list, str, str, str)  # tool_id, goal, files, spec, acceptance, summary
     workerStarted = Signal(str)  # tool_id
@@ -654,12 +639,6 @@ class _DispatchProxy(QObject):
 
     # ---- worker run ------
 
-    # Stall limit per artifact item — consecutive identical-failure attempts
-    # that produce no new information (same failure signature, same modified
-    # files). Exceeded → recovery exhaustion (terminal). Any change in
-    # signature or modified files resets the counter to zero.
-    _ARTIFACT_ITEM_STALL_LIMIT = 3
-
     def _run_resumed_artifact_job(
         self,
         incoming_tool_call_id: str,
@@ -838,11 +817,8 @@ class _DispatchProxy(QObject):
                 tool_call_id, approved_req, item, item_index, total,
             )
 
-            # ── Item retry loop with stall detection ─────────────────────────
+            # ── Item retry loop — no stall limit, retry non-terminal failures ──
             attempt = 0
-            stall_count = 0
-            last_sig: tuple[str, str] | None = None
-            last_files: frozenset[str] = frozenset()
             item_result = None
 
             while True:
@@ -882,34 +858,6 @@ class _DispatchProxy(QObject):
                     )
 
                 # ── Non-infrastructure failure → retry with recovery note ──
-                sig = _failure_signature(item_result)
-                mod = frozenset(item_result.modified_files or [])
-
-                if sig == last_sig and mod == last_files:
-                    stall_count += 1
-                    _log.info(
-                        "WorkArtifact item %s stall %d/%d (same sig, same files)",
-                        item.id, stall_count, self._ARTIFACT_ITEM_STALL_LIMIT,
-                    )
-                else:
-                    stall_count = 0
-                    _log.info(
-                        "WorkArtifact item %s stall reset (sig or files changed)",
-                        item.id,
-                    )
-
-                last_sig = sig
-                last_files = mod
-
-                if stall_count >= self._ARTIFACT_ITEM_STALL_LIMIT:
-                    _log.info(
-                        "WorkArtifact item %s stall limit — recovery exhausted",
-                        item.id,
-                    )
-                    failed_attempts[item.id] = attempt
-                    break
-
-                # Build recovery context and retry.
                 recovered_item_ids.append(item.id)
                 extras = item_result.extras if isinstance(item_result.extras, dict) else {}
                 recovery_note = (
@@ -921,8 +869,8 @@ class _DispatchProxy(QObject):
                 )
                 item_req = replace(item_req, spec=item_req.spec + recovery_note)
                 _log.info(
-                    "WorkArtifact item %s retry attempt %d (stall_count=%d)",
-                    item.id, attempt, stall_count,
+                    "WorkArtifact item %s retry attempt %d",
+                    item.id, attempt,
                 )
 
             if item_result is None:
@@ -938,17 +886,11 @@ class _DispatchProxy(QObject):
             )
             item_results.append((item.id, item_result))
 
-            # Stop on cancellation or exhaustion — NOT on ordinary failure.
+            # Stop on cancellation only — repeated failure is retried.
             if item_result.cancelled:
                 _log.info(
                     "WorkArtifact job stopping after cancelled item tool_call_id=%s",
                     tool_call_id,
-                )
-                break
-            if stall_count >= self._ARTIFACT_ITEM_STALL_LIMIT:
-                _log.info(
-                    "WorkArtifact job recovery exhausted tool_call_id=%s item=%s",
-                    tool_call_id, item.id,
                 )
                 break
 
@@ -1182,24 +1124,22 @@ class _DispatchProxy(QObject):
                 extras=extras,
             )
         else:
-            # ── Exhausted: terminal, with precise per-item summaries ──
-            extras["recovery_exhausted"] = True
-            summary_parts = ["WorkArtifact job recovery exhausted."]
-            summary_parts.append(
-                f"Completed: {len(completed_items)}/{total_items} items."
-            )
+            # ── Incomplete: some items did not complete ──
+            summary_parts = [
+                f"WorkArtifact job incomplete: {len(completed_items)}/{total_items} items completed."
+            ]
             for item_id, r in item_results:
                 if r.ok:
                     summary_parts.append(f"✓ {item_id}: {r.summary}")
                 else:
                     summary_parts.append(f"✗ {item_id}: {r.summary}")
-            status = first_not_ok[1].status if first_not_ok else WorkerOutcomeStatus.harness_error.value
             return WorkerDispatchResult(
                 ok=False,
                 summary=" ".join(summary_parts),
                 modified_files=modified_files,
                 validation=validation,
-                status=status or WorkerOutcomeStatus.harness_error.value,
+                recoverable=True,
+                status=WorkerOutcomeStatus.harness_error.value,
                 extras=extras,
             )
 
