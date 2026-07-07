@@ -114,6 +114,7 @@ def run_explicit_validation_commands(
                 exit_code=None,
                 output=normalized.validation_error,
                 ok=False,
+                failure_class=VALIDATION_COMMAND_UNRUNNABLE,
             )
             runs.append(run)
             continue
@@ -143,6 +144,7 @@ def run_explicit_validation_commands(
                 exit_code=None,
                 output=diagnostics,
                 ok=False,
+                failure_class=VALIDATION_COMMAND_UNRUNNABLE,
             )
             runs.append(run)
             return WorkerFinalValidationResult(

@@ -422,3 +422,102 @@ class TestValidationDiagnosticsPreview:
 
 def VERDICT_INSTRUCTION_NONEMPTY(v: ValidationFailureVerdict) -> bool:
     return bool(v.instruction.strip())
+
+
+# ---------------------------------------------------------------------------
+# Normalizer rejection — routes as fix_command, not repair
+# ---------------------------------------------------------------------------
+
+class TestNormalizerRejectionRouting:
+    """Normalizer rejection (bare cd, export) produces infra_only results
+    that route_validation_failure sends to fix_command."""
+
+    def test_bare_cd_routes_to_fix_command(self):
+        """Bare cd rejection has infra_only=True → action is fix_command."""
+        run = ValidationRunResult(
+            command="",
+            raw_text="cd src",
+            exit_code=None,
+            output="Ambiguous shell construct: bare 'cd'",
+            classification="validation_command_unrunnable",
+            counts_as_product_failure=False,
+        )
+        result = WorkerFinalValidationResult(
+            ok=False, diagnostics="Ambiguous shell construct: bare 'cd'",
+            command="cd src", runs=[run],
+        )
+        assert result.infra_only is True
+        verdict = route_validation_failure(result, {}, False)
+        assert verdict.action == "fix_command"
+        assert "Do not edit product code" in verdict.instruction
+
+    def test_sandbox_exception_routes_to_fix_command(self):
+        """Sandbox exception has infra_only=True → action is fix_command."""
+        run = ValidationRunResult(
+            command="pytest",
+            raw_text="pytest",
+            exit_code=None,
+            output="RuntimeError: connection refused",
+            classification="validation_command_unrunnable",
+            counts_as_product_failure=False,
+        )
+        result = WorkerFinalValidationResult(
+            ok=False, diagnostics="RuntimeError: connection refused",
+            command="pytest", runs=[run],
+        )
+        assert result.infra_only is True
+        verdict = route_validation_failure(result, {}, False)
+        assert verdict.action == "fix_command"
+        assert "Do not edit product code" in verdict.instruction
+
+
+# ---------------------------------------------------------------------------
+# Product failure still routes as repair — regression guard
+# ---------------------------------------------------------------------------
+
+class TestProductFailureRouting:
+    """A real pytest/product failure still routes as repair."""
+
+    def test_product_validation_routes_to_repair(self):
+        run = ValidationRunResult(
+            command="pytest",
+            raw_text="pytest",
+            exit_code=1,
+            output="FAILED test_foo.py::test_bar - AssertionError",
+            classification=PRODUCT_VALIDATION_FAILED,
+            counts_as_product_failure=True,
+        )
+        result = WorkerFinalValidationResult(
+            ok=False, diagnostics="FAILED test_foo.py::test_bar - AssertionError",
+            command="pytest", runs=[run],
+        )
+        assert result.infra_only is False
+        assert result.counts_as_product_failure is True
+        verdict = route_validation_failure(result, {}, False)
+        assert verdict.action == "repair"
+
+    def test_product_failure_stops_iteration(self):
+        """A product failure stops iteration while infra failures continue.
+        This guards the route-level separation between product and infra."""
+        product_run = ValidationRunResult(
+            command="pytest", raw_text="pytest", exit_code=1,
+            classification=PRODUCT_VALIDATION_FAILED,
+            counts_as_product_failure=True,
+            output="AssertionError: expected 3 got 5",
+        )
+        infra_run = ValidationRunResult(
+            command="ruff", raw_text="ruff", exit_code=1,
+            classification="validation_command_unrunnable",
+            counts_as_product_failure=False,
+            output="validation_command_unrunnable",
+        )
+        # When product failure is present, infra_only is False
+        result = WorkerFinalValidationResult(
+            ok=False, diagnostics="product fail", command="pytest",
+            runs=[product_run, infra_run],
+        )
+        assert result.infra_only is False
+        assert result.counts_as_product_failure is True
+        verdict = route_validation_failure(result, {}, False)
+        # Presence of any product failure → repair (even if some runs are infra)
+        assert verdict.action == "repair"

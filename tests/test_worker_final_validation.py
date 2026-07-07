@@ -10,11 +10,12 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 from aura.conversation.worker_final_validation import (
     WorkerFinalValidationResult,
     run_explicit_validation_commands,
 )
-
 
 # ---------------------------------------------------------------------------
 # Sandbox exception
@@ -142,6 +143,20 @@ class TestMalformedCommand:
         )
         # Should produce a non-ok result without raising
         assert result.ok is False
+
+    def test_export_is_malformed_not_unrunnable(self, tmp_path: Path) -> None:
+        """'export' is not a known command token, so it is classified as
+        malformed (caught by the parser) rather than validation_command_unrunnable
+        (caught by the normalizer)."""
+        result = run_explicit_validation_commands(
+            workspace_root=tmp_path,
+            commands=["export PATH=/usr/bin"],
+        )
+        assert result.runs is not None
+        assert result.runs[0].classification == "malformed_validation_command"
+        assert result.ok is False
+        assert result.infra_only is True
+        assert result.counts_as_product_failure is False
 
 
 # ---------------------------------------------------------------------------
@@ -376,3 +391,120 @@ class TestWorkerFinalValidationResultProperties:
         )
         assert r.infra_only is False
         assert r.counts_as_product_failure is True
+
+
+# ---------------------------------------------------------------------------
+# Normalizer rejection — infra-only, not product
+# ---------------------------------------------------------------------------
+
+
+class TestNormalizerRejection:
+    """When the normalizer rejects a command (bare cd, export), the result
+    must be infra_only and must NOT count as a product failure."""
+
+    def test_bare_cd_rejected_infra_only(self, tmp_path: Path) -> None:
+        result = run_explicit_validation_commands(
+            workspace_root=tmp_path,
+            commands=["cd src"],
+        )
+        assert result.ok is False
+        assert result.infra_only is True
+        assert result.counts_as_product_failure is False
+
+    def test_bare_cd_classification_is_unrunnable(self, tmp_path: Path) -> None:
+        result = run_explicit_validation_commands(
+            workspace_root=tmp_path,
+            commands=["cd src"],
+        )
+        assert result.runs is not None
+        assert len(result.runs) == 1
+        assert result.runs[0].classification == "validation_command_unrunnable"
+        assert "bare 'cd'" in result.runs[0].output
+
+    def test_cd_chain_passes(self, tmp_path: Path) -> None:
+        """cd src && pytest passes the normalizer and reaches the sandbox.
+        On a bare workspace without pytest installed, it will fail as
+        missing_dependency (infra-only), not as normalizer rejection."""
+        result = run_explicit_validation_commands(
+            workspace_root=tmp_path,
+            commands=["cd src && pytest"],
+        )
+        # Should not be rejection — the cd is chained
+        assert result.runs is not None
+        classification = result.runs[0].classification
+        assert classification != "validation_command_unrunnable"
+        assert classification != "malformed_validation_command"
+
+
+# ---------------------------------------------------------------------------
+# Sandbox exception — infra-only, not product
+# ---------------------------------------------------------------------------
+
+
+class TestSandboxExceptionInfraOnly:
+    """When SandboxExecutor.run_and_watch raises, the result must be
+    infra_only and must NOT count as a product failure."""
+
+    def test_sandbox_exception_has_infra_only(self, tmp_path: Path, monkeypatch) -> None:
+        class _RaisingSandbox:
+            def __init__(self, **_kwargs) -> None:
+                pass
+            def run_and_watch(self, *_args, **_kwargs) -> None:
+                raise RuntimeError("connection refused")
+
+        monkeypatch.setattr(
+            "aura.conversation.worker_final_validation.SandboxExecutor",
+            _RaisingSandbox,
+        )
+        result = run_explicit_validation_commands(
+            workspace_root=tmp_path,
+            commands=["pytest"],
+        )
+        assert result.ok is False
+        assert result.infra_only is True
+        assert result.counts_as_product_failure is False
+
+    def test_sandbox_exception_unrunnable_classification(
+        self, tmp_path: Path, monkeypatch,
+    ) -> None:
+        class _RaisingSandbox:
+            def __init__(self, **_kwargs) -> None:
+                pass
+            def run_and_watch(self, *_args, **_kwargs) -> None:
+                raise RuntimeError("OOM")
+
+        monkeypatch.setattr(
+            "aura.conversation.worker_final_validation.SandboxExecutor",
+            _RaisingSandbox,
+        )
+        result = run_explicit_validation_commands(
+            workspace_root=tmp_path,
+            commands=["pytest"],
+        )
+        assert result.runs is not None
+        assert result.runs[0].classification == "validation_command_unrunnable"
+
+    def test_sandbox_exception_passing_validation_still_passes(
+        self, tmp_path: Path, monkeypatch,
+    ) -> None:
+        class _PassSandbox:
+            def __init__(self, **_kwargs) -> None:
+                pass
+            def run_and_watch(self, *_args, **_kwargs) -> MagicMock:
+                watch = MagicMock()
+                watch.exited_early = True
+                watch.exit_code = 0
+                watch.output = "All tests passed"
+                watch.survived_window = False
+                return watch
+
+        monkeypatch.setattr(
+            "aura.conversation.worker_final_validation.SandboxExecutor",
+            _PassSandbox,
+        )
+        result = run_explicit_validation_commands(
+            workspace_root=tmp_path,
+            commands=["pytest"],
+        )
+        assert result.ok is True
+        assert result.counts_as_product_failure is False

@@ -15,6 +15,7 @@ from aura.client import (
     WorkerDispatchRequested,
 )
 from aura.config import load_settings, redact_secrets
+from aura.conversation.command_normalizer import normalize_command
 from aura.conversation.dispatch import (
     DispatchCallback,
     WorkerDispatchRequest,
@@ -34,11 +35,10 @@ from aura.conversation.validation_orchestrator import (
     classify_command_outcome,
     classify_terminal_run,
     classify_validation_run,
+    looks_like_validation_command,
     parse_validation_command,
 )
-from aura.conversation.command_normalizer import normalize_command
 from aura.conversation.verification_progress import VerificationProgressTracker
-from aura.work_artifact.model import ValidationCommandSpec
 from aura.conversation.worker_outcome import WorkerOutcomeStatus
 from aura.project_env import (
     build_project_command,
@@ -48,6 +48,7 @@ from aura.project_env import (
     workspace_relative_cwd,
 )
 from aura.sandbox import SandboxExecutor, SandboxResult, WatchResult
+from aura.work_artifact.model import ValidationCommandSpec
 
 _log = logging.getLogger(__name__)
 
@@ -316,12 +317,57 @@ class ToolRunner:
 
         command = validation_command.command or requested_command
 
+        # Normalize for shell-dialect validation (reject bare cd, export)
+        # before the command reaches the sandbox.  The rewriting that
+        # normalize_command does is redundant with the per-mode rewriting
+        # below — the primary value here is the validity check.
+        normalized = normalize_command(command, self._workspace_root)
+        if not normalized.valid:
+            payload_dict = {
+                "ok": False,
+                "exit_code": None,
+                "output": normalized.validation_error,
+                "command": command,
+                "requested_command": requested_command,
+                "original_command": requested_command,
+                "cwd": relative_cwd,
+                "working_directory": relative_cwd,
+                "failure_class": VALIDATION_COMMAND_UNRUNNABLE,
+                "error": normalized.validation_error,
+                "recoverable": True,
+                "suggested_next_tool": "run_terminal_command",
+                "suggested_next_action": (
+                    "Use the structured 'cwd' / 'working_directory' parameter "
+                    "instead of bare 'cd', or chain the command with '&&'. "
+                    "For environment variables, configure them through the "
+                    "harness settings rather than 'export'."
+                ),
+            }
+            payload = json.dumps(payload_dict, ensure_ascii=False)
+            self._history.append_tool_result(tool_call_id, payload)
+            on_event(
+                ToolResult(
+                    tool_call_id=tool_call_id,
+                    name="run_terminal_command",
+                    ok=False,
+                    result=payload,
+                )
+            )
+            return {"_terminal_payload": payload_dict}
+
         if mode == "worker":
             explicit = matches_explicit_validation(
                 str(command),
                 explicit_validation_commands,
                 cwd=relative_cwd,
             )
+            # Ad-hoc validation fallback: when no explicit command list is
+            # present no explicit match exists, classify known Worker
+            # validation-command shapes so they still count as validation.
+            is_ad_hoc_validation = (
+                not explicit
+                and looks_like_validation_command(str(command))
+            ) if mode == "worker" else False
             decision = worker_terminal_command_allowed(
                 str(command),
                 explicit_validation_commands=explicit_validation_commands,
@@ -438,14 +484,13 @@ class ToolRunner:
         payload_dict.update(terminal_classification.metadata())
         if validation_command.normalized:
             payload_dict.update(validation_command.metadata())
-        # In the structured validation-commands world, we know a command is
-        # validation when it matches an explicit spec (``explicit``) or was
-        # normalized (cd-wrapper, trailing-outcome token).  The standalone
-        # heuristic ``looks_like_validation_command`` is no longer needed
-        # because structured specs carry the authoritative list.
+        # In the structured validation-commands world, we first check
+        # explicit spec matches; if none match, the ad-hoc
+        # ``looks_like_validation_command`` fallback ensures Worker
+        # validation commands like ``python -m py_compile`` still count.
         should_classify_validation = (
             mode == "worker"
-            and (explicit or validation_command.normalized)
+            and (explicit or validation_command.normalized or is_ad_hoc_validation)
         )
         stall: dict[str, Any] | None = None
         if should_classify_validation:
