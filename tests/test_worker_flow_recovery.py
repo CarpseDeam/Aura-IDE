@@ -91,3 +91,32 @@ def test_artifact_item_zero_fresh_writes_validation_pass_finished_immediately(tm
     assert len(recovery_messages) == 0
     # A Done event signals validated completion.
     assert any(isinstance(event, Done) for event in events)
+
+
+def test_artifact_item_steering_validation_pass_finished_immediately(tmp_path) -> None:
+    """Artifact item with nudge count>0 and validation passed finishes in steering without thrash."""
+    manager = _manager(tmp_path)
+    state = _worker_state()
+    state.worker_artifact_id = "artifact-1"
+    state.worker_artifact_item_id = "item-1"
+    state.worker_explicit_validation_passed = True
+    state.worker_flow_nudge_count = 1
+    # No writes, no write attempts (zero-work branch would fire — artifact bailout must beat it).
+    state.worker_flow.state.pending_steering_message = "Worker Flow: steer."
+    state.worker_flow.state.pending_steering_reason = "orientation"
+    events: list = []
+
+    result = manager._handle_worker_flow_steering(state, events.append)
+
+    assert result == "finished"
+    assert state.worker_flow_zero_work_recovery_count == 0
+    assert state.worker_flow_thrash_recovery_count == 0
+    # No recovery or thrash prompt should have been appended to history.
+    recovery_messages = [
+        message["content"]
+        for message in manager.history.messages
+        if message.get("role") == "user"
+    ]
+    assert len(recovery_messages) == 0
+    # A Done event signals validated completion.
+    assert any(isinstance(event, Done) for event in events)

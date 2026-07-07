@@ -522,6 +522,16 @@ class ConversationManager:
             return "none"
         state.worker_flow_last_reason = reason
         state.worker_flow_last_steering = steering
+        # Artifact validated done bailout — before any recovery nudge or thrash recovery.
+        if _worker_artifact_item_validated_done(state):
+            self._finish_worker_as_validated_completed(
+                on_event,
+                summary=(
+                    "WorkArtifact item completed. Validation passed and the bounded item "
+                    "was already satisfied, so no extra edit was required."
+                ),
+            )
+            return "finished"
         if state.worker_flow_nudge_sent:
             if _worker_has_zero_applied_writes(state) and not _worker_has_attempted_write(state):
                 if _candidate_final_has_real_zero_work_blocker(state.candidate_final_message):
@@ -556,16 +566,6 @@ class ConversationManager:
                         "recovery_count": state.worker_flow_zero_work_recovery_count,
                         "recovery_budget": WORKER_FLOW_ZERO_WORK_RECOVERY_BUDGET,
                     },
-                )
-                return "finished"
-            # Artifact validated done bailout before thrash recovery.
-            if _worker_artifact_item_validated_done(state):
-                self._finish_worker_as_validated_completed(
-                    on_event,
-                    summary=(
-                        "WorkArtifact item completed. Validation passed and the bounded item "
-                        "was already satisfied, so no extra edit was required."
-                    ),
                 )
                 return "finished"
             if state.worker_flow_thrash_recovery_count < WORKER_FLOW_THRASH_RECOVERY_BUDGET:
