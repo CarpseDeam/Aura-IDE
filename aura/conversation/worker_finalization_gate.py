@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Literal
 
@@ -21,12 +22,12 @@ from aura.conversation.syntax_repair_state import (
     syntax_repair_paths,
 )
 from aura.conversation.terminal_syntax import is_python_path
+from aura.conversation.validation_failure_routing import (
+    route_validation_failure,
+)
 from aura.conversation.worker_final_report_guard import (
     WORKER_FINAL_REPORT_PROOF_REQUIRED_TEXT,
     worker_final_report_missing_proof,
-)
-from aura.conversation.validation_failure_routing import (
-    route_validation_failure,
 )
 from aura.conversation.worker_final_validation import (
     emit_explicit_validation_result,
@@ -34,15 +35,14 @@ from aura.conversation.worker_final_validation import (
     run_explicit_validation_commands,
 )
 from aura.conversation.worker_fingerprints import fingerprint_paths
-from dataclasses import dataclass
 from aura.conversation.worker_recovery_messages import (
     PATCH_CANDIDATE_INVALID_SYNTAX_ACTION,
     WORKER_AUTO_PY_COMPILE_INSTRUCTION,
+    WORKER_BATCHED_VALIDATION_INSTRUCTION,
     WORKER_DEPENDENT_CONTRACT_INSTRUCTION,
     WORKER_EDIT_RECOVERY_INSTRUCTION,
     WORKER_IMPORT_FAILURE_INSTRUCTION,
     WORKER_LAUNCH_FAILURE_INSTRUCTION,
-    WORKER_BATCHED_VALIDATION_INSTRUCTION,
 )
 from aura.conversation.worker_validation import (
     emit_auto_dependent_import_info,
@@ -53,7 +53,6 @@ from aura.conversation.worker_validation import (
 )
 from aura.dependency_context import compute_dependents
 from aura.verify import run_dependent_import_check, run_focused_import_check
-
 
 
 @dataclass(frozen=True)
@@ -504,6 +503,30 @@ def _run_structural_tier(
     state.discard_worker_candidate_final()
     return "continue"
 
+def _record_explicit_validation_runs(
+    state: _SendState,
+    val_result: object,
+    write_snapshot: int,
+) -> None:
+    """Record each ``ValidationRunResult`` from explicit validation into the
+    state ledger, using source ``"final_explicit"``."""
+    for run in (getattr(val_result, "runs", None) or []):
+        raw_output = str(getattr(run, "output", None) or "")
+        payload = {
+            "command": getattr(run, "command", ""),
+            "exit_code": getattr(run, "exit_code", None),
+            "output": raw_output,
+            "output_preview": raw_output[:500],
+            "validation_classification": getattr(run, "classification", ""),
+            "classification": getattr(run, "classification", ""),
+            "counts_as_product_failure": getattr(run, "counts_as_product_failure", False),
+            "counts_as_validation": True,
+        }
+        state.validation_ledger.observe_tool_payload(
+            payload, write_snapshot, source="final_explicit"
+        )
+
+
 def _run_behavioral_tier(
     *,
     state: _SendState,
@@ -568,58 +591,73 @@ def _run_behavioral_tier(
             )
 
     if explicit_validation_commands:
-        val_result = run_explicit_validation_commands(
-            workspace_root=Path(workspace_root),
-            commands=explicit_validation_commands,
-        )
-        validation_runs = getattr(val_result, "runs", None)
-        if validation_runs:
-            emit_explicit_validation_runs(
-                runs=validation_runs,
-                on_event=on_event,
-                workspace_root=workspace_root,
-            )
-        if not val_result.ok:
-            if not validation_runs:
-                emit_explicit_validation_result(
-                    command=val_result.command,
-                    ok=False,
-                    output=val_result.diagnostics,
-                    on_event=on_event,
-                    workspace_root=workspace_root,
-                )
+        current_snapshot = sum(state.write_attempts_by_path.values())
 
-            edits_since_last_pass = (
-                sum(state.write_attempts_by_path.values())
-                > state.explicit_validation_edit_snapshot
-            )
-            state.explicit_validation_edit_snapshot = sum(
-                state.write_attempts_by_path.values()
-            )
-            verdict = route_validation_failure(
-                val_result=val_result,
-                fingerprint_memory=state.explicit_validation_fingerprints,
-                edits_since_last_pass=edits_since_last_pass,
-            )
-            if verdict.action == "handback":
-                finish_worker_recoverable_followup(
-                    on_event,
-                    **verdict.handback_details,
-                )
-                return "finished"
-
-            # fix_command or repair
-            history.append_user_text(verdict.instruction)
-            state.discard_worker_candidate_final()
-            return "continue"
-        else:
+        # ── Ledger skip: avoid duplicate rerun when all explicit
+        #    commands already have fresh passed proof. ──────────────
+        if state.validation_ledger.has_fresh_passed_commands(
+            explicit_validation_commands, current_snapshot
+        ):
             state.explicit_validation_fingerprints.clear()
-            state.explicit_validation_edit_snapshot = sum(
-                state.write_attempts_by_path.values()
-            )
+            state.explicit_validation_edit_snapshot = current_snapshot
             state.worker_explicit_validation_passed = True
             if state.worker_flow is not None:
                 state.worker_flow.mark_validation_satisfied()
+        else:
+            val_result = run_explicit_validation_commands(
+                workspace_root=Path(workspace_root),
+                commands=explicit_validation_commands,
+            )
+
+            # Record results into the ledger for future skip checks.
+            _record_explicit_validation_runs(state, val_result, current_snapshot)
+
+            validation_runs = getattr(val_result, "runs", None)
+            if validation_runs:
+                emit_explicit_validation_runs(
+                    runs=validation_runs,
+                    on_event=on_event,
+                    workspace_root=workspace_root,
+                )
+            if not val_result.ok:
+                if not validation_runs:
+                    emit_explicit_validation_result(
+                        command=val_result.command,
+                        ok=False,
+                        output=val_result.diagnostics,
+                        on_event=on_event,
+                        workspace_root=workspace_root,
+                    )
+
+                edits_since_last_pass = (
+                    sum(state.write_attempts_by_path.values())
+                    > state.explicit_validation_edit_snapshot
+                )
+                state.explicit_validation_edit_snapshot = sum(
+                    state.write_attempts_by_path.values()
+                )
+                verdict = route_validation_failure(
+                    val_result=val_result,
+                    fingerprint_memory=state.explicit_validation_fingerprints,
+                    edits_since_last_pass=edits_since_last_pass,
+                )
+                if verdict.action == "handback":
+                    finish_worker_recoverable_followup(
+                        on_event,
+                        **verdict.handback_details,
+                    )
+                    return "finished"
+
+                # fix_command or repair
+                history.append_user_text(verdict.instruction)
+                state.discard_worker_candidate_final()
+                return "continue"
+            else:
+                state.explicit_validation_fingerprints.clear()
+                state.explicit_validation_edit_snapshot = current_snapshot
+                state.worker_explicit_validation_passed = True
+                if state.worker_flow is not None:
+                    state.worker_flow.mark_validation_satisfied()
 
     if not findings:
         return "none"
