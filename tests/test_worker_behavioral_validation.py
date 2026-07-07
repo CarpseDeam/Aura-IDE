@@ -398,6 +398,8 @@ class TestIntegrationBehavioralValidation:
                     "command": "pytest",
                     "exit_code": 0,
                     "output": "passed",
+                    "validation_raw_text": "pytest",
+                    "validation_source": "worker_command",
                 }
             ],
             write_results=[{"path": "x.py", "applied": True, "is_new_file": True}],

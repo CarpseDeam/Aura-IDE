@@ -7,6 +7,7 @@ from typing import Any
 from aura.conversation import History, WorkerDispatchRequest, WorkerTaskSpec, normalize_worker_task
 from aura.conversation.task_shape import task_shape_contract_lines
 from aura.conversation.validation_orchestrator import validation_issue_message
+from aura.conversation.validation_truth import validation_payload_passed
 from aura.conversation.worker_completion._summary_formatters import (
     _final_report_claims_failure,
     _final_report_claims_validation,
@@ -306,13 +307,13 @@ def _build_worker_summary(
     if not validation_results:
         validation_str = "\u2014 (not yet verified)"
     elif py_compile_results:
-        pc_passed = sum(1 for v in py_compile_results if v.get("ok"))
+        pc_passed = sum(1 for v in py_compile_results if validation_payload_passed(v))
         pc_total = len(py_compile_results)
         pc_ok = pc_passed == pc_total
         pc_prefix = "\u2713" if pc_ok else "\u2717"
         validation_str = f"{pc_prefix} py_compile ({pc_passed}/{pc_total} passed)"
     else:
-        passed = sum(1 for v in validation_results if v.get("ok"))
+        passed = sum(1 for v in validation_results if validation_payload_passed(v))
         total = len(validation_results)
         ok = passed == total
         prefix = "\u2713" if ok else "\u2717"
@@ -342,7 +343,7 @@ def _build_worker_summary(
 
     # === Validation detail ===
     if validation_results:
-        passed_v = [v for v in validation_results if v.get("ok")]
+        passed_v = [v for v in validation_results if validation_payload_passed(v)]
         failed_v = [
             v for v in validation_results
             if not v.get("ok") and v.get("counts_as_product_failure") is not False

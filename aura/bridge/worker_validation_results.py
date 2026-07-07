@@ -140,7 +140,7 @@ def _later_family_passes(results: list[dict[str, Any]], family: str) -> bool:
     if not family:
         return False
     for result in results:
-        if not result.get("ok"):
+        if not validation_payload_passed(result):
             continue
         if _validation_family(str(result.get("command") or "")) == family:
             return True
@@ -150,7 +150,7 @@ def _later_family_passes(results: list[dict[str, Any]], family: str) -> bool:
 def _unrecovered_validation_failures(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     failures: list[dict[str, Any]] = []
     for index, result in enumerate(results):
-        if result.get("ok"):
+        if validation_payload_passed(result):
             continue
         if result.get("counts_as_product_failure") is False:
             continue
@@ -232,7 +232,7 @@ def _validation_results_for_task(
 
 def _later_py_compile_passes(results: list[dict[str, Any]], targets: set[str]) -> bool:
     for result in results:
-        if not result.get("ok"):
+        if not validation_payload_passed(result):
             continue
         later_targets = set(_py_compile_targets(str(result.get("command", ""))))
         if targets and targets.issubset(later_targets):

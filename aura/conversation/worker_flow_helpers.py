@@ -270,10 +270,6 @@ def _tool_def_name(tool_def: dict[str, Any]) -> str:
     return str(function.get("name") or "") if isinstance(function, dict) else ""
 
 
-def _tool_result_succeeded(ok: bool | None, payload: dict[str, Any]) -> bool:
-    return ok is True or payload.get("ok") is True
-
-
 def _write_was_applied(
     name: str, ok: bool | None, payload: dict[str, Any]
 ) -> bool:
@@ -323,7 +319,6 @@ __all__ = [
     "_first_path",
     "_payload_is_large",
     "_tool_def_name",
-    "_tool_result_succeeded",
     "_write_was_applied",
     "_int_or_none",
 ]
