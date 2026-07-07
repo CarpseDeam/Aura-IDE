@@ -441,6 +441,7 @@ class ToolRoundRunner:
                 cancel_event=cancel_event,
                 declared_run_command=declared_run_command or "",
             )
+            _maybe_record_validation_to_ledger(state, loop_info)
             return {
                 "id": tool_call_id,
                 "skip": True,
@@ -471,6 +472,7 @@ class ToolRoundRunner:
                     syntax_validation_required=state.syntax_validation_required,
                     stale_validation_notes=state.stale_validation_notes,
                 )
+            _maybe_record_validation_to_ledger(state, loop_info)
             result = {
                 "id": tool_call_id,
                 "skip": True,
@@ -1109,6 +1111,25 @@ def _get_latest_user_text(history: History) -> str:
                     parts.append(str(item.get("text") or ""))
             return "\n".join(part for part in parts if part)
     return ""
+
+
+def _maybe_record_validation_to_ledger(
+    state: _SendState,
+    loop_info: dict[str, Any] | None,
+) -> None:
+    """Record a validation payload into the state ledger when applicable.
+
+    Only records when in worker mode and the terminal payload exists.
+    The ledger's internal ``validation_payload_counts_as_validation``
+    guard silently skips non-validation terminal results.
+    """
+    if state.mode != "worker":
+        return
+    payload = _terminal_payload(loop_info)
+    if not payload:
+        return
+    write_snapshot = sum(state.write_attempts_by_path.values())
+    state.validation_ledger.observe_tool_payload(payload, write_snapshot)
 
 
 def _terminal_payload(loop_info: dict[str, Any] | None) -> dict[str, Any]:

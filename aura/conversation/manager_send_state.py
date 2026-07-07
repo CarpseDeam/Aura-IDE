@@ -11,6 +11,7 @@ from typing import Any
 
 from aura.conversation.edit_orchestrator import EditRetryLedger
 from aura.conversation.tool_limits import ToolLimitState
+from aura.conversation.validation_ledger import WorkerValidationLedger
 from aura.conversation.worker_flow import WorkerFlowHarness
 from aura.conversation.worker_stream_buffer import WorkerStreamBuffer
 
@@ -65,6 +66,9 @@ class _SendState:
     worker_quality_enabled: bool = True
     stale_validation_notes: list[str] = field(default_factory=list)
     worker_explicit_validation_passed: bool = False
+    validation_ledger: WorkerValidationLedger = field(
+        default_factory=WorkerValidationLedger
+    )
 
     # --- dispatch ---
     planner_dispatch_attempts: int = 0

@@ -3,17 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import pytest
-
 from aura.client import Event
 from aura.conversation.history import History
 from aura.conversation.manager_send_state import _SendState
-from aura.conversation.worker_flow import WorkerFlowHarness
 from aura.conversation.worker_finalization_gate import handle_worker_candidate_finalization
-from aura.conversation.worker_recovery_messages import (
-    WORKER_BATCHED_VALIDATION_INSTRUCTION,
-    WORKER_AUTO_PY_COMPILE_INSTRUCTION,
-)
+from aura.conversation.worker_flow import WorkerFlowHarness
 
 
 def _finalize(
