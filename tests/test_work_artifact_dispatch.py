@@ -213,6 +213,45 @@ def test_controller_attach_receipt_with_explicit_item_id():
     assert artifact.work_items[0].status == WorkItemStatus.pending  # item-1 still pending
 
 
+# ── continuation: empty validation commands do not block item done ────────
+
+
+def test_artifact_continues_after_item_with_empty_validation_commands():
+    """A WorkArtifact item with empty validation commands can still complete
+    and the artifact continues to the next pending item.
+
+    Regression: empty or misdeclared validation commands must never prevent
+    a completed item from being marked done, which would stall the whole
+    multi-item WorkArtifact job.
+    """
+    from aura.work_artifact.model import ValidationCommandSpec
+
+    ctrl = WorkArtifactController()
+    payload = _make_two_item_payload()
+    # Add an empty validation command to item-1 (simulating a declared but
+    # empty acceptance validation command).
+    payload["items"][0]["validation_commands"] = [
+        ValidationCommandSpec(command="").to_dict(),
+    ]
+    ctrl.create_artifact_from_payload("call_cont", payload)
+
+    # Run item-1: mark active, attach ok result.
+    ctrl.mark_item_active("call_cont", "item-1")
+    ctrl.attach_receipt("call_cont", _ok_result(modified=["src/model.py"]))
+
+    # Item-1 must be done even though it had an empty validation command.
+    artifact = ctrl.get_artifact("call_cont")
+    assert artifact is not None
+    assert artifact.work_items[0].status == WorkItemStatus.done
+    assert artifact.work_items[0].receipt is not None
+    assert artifact.work_items[0].receipt.status == "ok"
+
+    # The artifact must have item-2 as the next pending item.
+    pending = ctrl.pending_items("call_cont")
+    assert len(pending) == 1
+    assert pending[0].id == "item-2"
+
+
 # ── C. DispatchProxy tests (use fake _run_worker) ──────────────────────────────
 
 # B: DispatchProxy runs all items under one approval

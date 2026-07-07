@@ -50,6 +50,28 @@ class WorkerFinalValidationResult:
         return not any(r.counts_as_product_failure for r in failing)
 
 
+def _drop_empty_commands(
+    commands: list[str] | list[ValidationCommandSpec],
+) -> list[str] | list[ValidationCommandSpec]:
+    """Drop empty/whitespace-only entries from a validation command list.
+
+    Empty commands produce misleading failure classifications (they look
+    like product validation failures during stall detection when in fact
+    the issue is a missing or misdeclared command).  Silently dropping
+    them here lets the caller treat the remaining commands honestly.
+    """
+    if not commands:
+        return commands
+    filtered: list = []
+    for c in commands:
+        if isinstance(c, ValidationCommandSpec):
+            if c.command.strip():
+                filtered.append(c)
+        elif isinstance(c, str) and c.strip():
+            filtered.append(c)
+    return filtered
+
+
 def run_explicit_validation_commands(
     *,
     workspace_root: Path,
@@ -66,7 +88,14 @@ def run_explicit_validation_commands(
     where ``counts_as_product_failure`` is true).  Infra-classified failures
     (environment, unconfigured tools, etc.) do *not* stop iteration —
     remaining commands still run so the result carries a complete run list.
+
+    Empty/whitespace-only validation commands are silently dropped before
+    execution so they never produce misleading product-failure signals.
     """
+    if not commands:
+        return WorkerFinalValidationResult(ok=True)
+
+    commands = _drop_empty_commands(commands)
     if not commands:
         return WorkerFinalValidationResult(ok=True)
 

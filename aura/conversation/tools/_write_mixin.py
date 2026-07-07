@@ -433,6 +433,7 @@ class WriteHandlersMixin:
                 },
             )
 
+        self._capture_before_write(self, rel_path)
         backup_path = _reg.backup_existing(self._root, target)
         target.unlink()
 
@@ -460,6 +461,20 @@ class WriteHandlersMixin:
                 "approval_metadata": decision.metadata,
             },
         )
+
+    @staticmethod
+    def _capture_before_write(
+        instance: Any, rel_path: str,
+    ) -> None:
+        """Pre-write capture hook: call before a file mutation.
+
+        If the owning ``ToolRegistry`` has a ``RestorePointManager`` with
+        open sessions, this captures the current file state for each
+        session.  No-op when no manager is set or no sessions are open.
+        """
+        mgr = getattr(instance, "_restore_point_manager", None)
+        if mgr is not None:
+            mgr.capture_path(rel_path)
 
     def _handle_write(
         self,
@@ -665,7 +680,8 @@ class WriteHandlersMixin:
                 },
             )
 
-        # Approve — back up if file exists, write new content.
+        # Approve — capture pre-write state, back up, write new content.
+        self._capture_before_write(self, req.rel_path)
         target.parent.mkdir(parents=True, exist_ok=True)
         backup_path = _reg.backup_existing(self._root, target)
         _atomic_write_bytes(target, req.new_content.encode("utf-8"))

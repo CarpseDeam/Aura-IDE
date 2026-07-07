@@ -435,9 +435,30 @@ class RestorePointManager:
         return self._sessions.get((artifact_id, item_id))
 
     @property
+    def workspace_root(self) -> Path:
+        """The workspace root this manager was bound to."""
+        return self._workspace_root
+
+    @property
     def open_count(self) -> int:
         """Number of currently open sessions."""
         return len(self._sessions)
+
+    def capture_path(self, rel_path: str) -> list[CaptureResult]:
+        """Capture *rel_path* across all currently open sessions.
+
+        This is the intended integration point for the write-tool layer:
+        before a file mutation, call this once so every open session
+        captures its baseline.  Idempotent per-session — paths already
+        captured are returned with ``already_captured=True``.
+
+        Returns a list of ``CaptureResult``, one per open session, or an
+        empty list when no sessions are open.
+        """
+        return [
+            session.capture_pre_write(rel_path)
+            for session in self._sessions.values()
+        ]
 
     # ── cleanup ──────────────────────────────────────────────────────────
 

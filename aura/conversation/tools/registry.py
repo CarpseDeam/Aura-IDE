@@ -131,6 +131,21 @@ class ToolRegistry(
     def get_contract(self) -> ExplicitSpecContract | None:
         return self._contract
 
+    def set_restore_point_manager(
+        self, mgr: Any | None,
+    ) -> None:
+        """Set an optional RestorePointManager for pre-write capture.
+
+        When set, the write tool layer calls ``mgr.capture_path(rel_path)``
+        before every file mutation so that open restore-point sessions can
+        record a baseline.  Pass ``None`` to clear.
+        """
+        self._restore_point_manager = mgr
+
+    def get_restore_point_manager(self) -> Any | None:
+        """Return the current RestorePointManager, or None."""
+        return getattr(self, "_restore_point_manager", None)
+
     def set_task_shape(self, task_shape: TaskShape | None) -> None:
         self._task_shape = task_shape
 

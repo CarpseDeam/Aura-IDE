@@ -107,42 +107,49 @@ class TestSandboxException:
 
 
 class TestMalformedCommand:
-    """A validation command that cannot be parsed as runnable must produce a
-    failed run, not a crash or silent pass."""
+    """Empty/whitespace-only validation commands are silently dropped so they
+    never produce misleading product-failure signals.  Genuinely malformed but
+    non-empty commands still produce a classified failed run."""
 
-    def test_empty_command_returns_ok_false(self, tmp_path: Path) -> None:
+    def test_empty_command_silently_dropped(self, tmp_path: Path) -> None:
+        """An empty string command is dropped — result is ok (nothing to run)."""
         result = run_explicit_validation_commands(
             workspace_root=tmp_path,
             commands=[""],
         )
-        assert result.ok is False
+        assert result.ok is True
+        assert result.runs is None or len(result.runs) == 0
 
-    def test_empty_command_run_is_not_product_failure(self, tmp_path: Path) -> None:
-        result = run_explicit_validation_commands(
-            workspace_root=tmp_path,
-            commands=[""],
-        )
-        assert result.counts_as_product_failure is False
-        assert result.infra_only is True
-
-    def test_empty_command_run_has_diagnostics(self, tmp_path: Path) -> None:
-        result = run_explicit_validation_commands(
-            workspace_root=tmp_path,
-            commands=[""],
-        )
-        assert result.runs is not None
-        assert len(result.runs) == 1
-        assert result.runs[0].ok is False
-        assert result.runs[0].classification == "malformed_validation_command"
-
-    def test_malformed_command_does_not_crash(self, tmp_path: Path) -> None:
-        """A string that is not a valid command should not raise."""
+    def test_whitespace_command_silently_dropped(self, tmp_path: Path) -> None:
+        """A whitespace-only command is dropped — result is ok."""
         result = run_explicit_validation_commands(
             workspace_root=tmp_path,
             commands=["  "],
         )
-        # Should produce a non-ok result without raising
-        assert result.ok is False
+        assert result.ok is True
+        assert result.runs is None or len(result.runs) == 0
+
+    def test_mixed_empty_and_valid_ignores_empty(self, tmp_path: Path) -> None:
+        """When some commands are empty and some are runnable, empties are
+        dropped and only runnable commands execute."""
+        result = run_explicit_validation_commands(
+            workspace_root=tmp_path,
+            commands=["", "python -m py_compile nonexistent.py"],
+        )
+        # There should be exactly one run (the non-empty command).
+        assert result.runs is not None
+        assert len(result.runs) == 1
+        assert result.runs[0].command == "python -m py_compile nonexistent.py"
+
+    def test_empty_validation_command_spec_dropped(self, tmp_path: Path) -> None:
+        """A ValidationCommandSpec with an empty command is silently dropped."""
+        from aura.work_artifact.model import ValidationCommandSpec
+        result = run_explicit_validation_commands(
+            workspace_root=tmp_path,
+            commands=[ValidationCommandSpec(command="")],
+        )
+        assert result.ok is True
+        assert result.runs is None or len(result.runs) == 0
 
     def test_export_is_malformed_not_unrunnable(self, tmp_path: Path) -> None:
         """'export' is not a known command token, so it is classified as

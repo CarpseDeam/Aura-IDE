@@ -210,14 +210,35 @@ def route_validation_failure(
 
     # --- Stall -- identical fingerprint, no intervening edit -------------
     # The Worker has replayed itself and all options are exhausted.
+    if val_result.counts_as_product_failure:
+        failure_class = "product_validation_failed"
+        error = (
+            "Final acceptance validation still fails after one focused "
+            "repair attempt."
+        )
+        worker_confusion = (
+            "Worker could not make acceptance validation "
+            "pass after one focused repair attempt"
+            + (": " + str(val_result.command) if val_result.command else ".")
+        )
+    else:
+        failure_class = "validation_command_config_failed"
+        error = (
+            "Final acceptance validation command or configuration "
+            "issue persists. All failures are environment or "
+            "infrastructure related."
+        )
+        worker_confusion = (
+            "Worker could not resolve a validation command or "
+            "configuration issue after one repair attempt"
+            + (": " + str(val_result.command) if val_result.command else ".")
+        )
+
     return ValidationFailureVerdict(
         action="handback",
         handback_details={
-            "failure_class": "product_validation_failed",
-            "error": (
-                "Final acceptance validation still fails after one focused "
-                "repair attempt."
-            ),
+            "failure_class": failure_class,
+            "error": error,
             "details": {
                 "command": val_result.command,
                 **validation_diagnostics_preview(val_result.diagnostics),
@@ -227,11 +248,7 @@ def route_validation_failure(
                     "acceptance command if it is misdeclared."
                 ),
                 "dispatch_mismatch": True,
-                "worker_confusion_question": (
-                    "Worker could not make acceptance validation "
-                    "pass after one focused repair attempt"
-                    + (": " + str(val_result.command) if val_result.command else ".")
-                ),
+                "worker_confusion_question": worker_confusion,
             },
         },
     )

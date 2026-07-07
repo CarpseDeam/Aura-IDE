@@ -218,6 +218,42 @@ class TestInfraOnly:
         assert "noqa: F401" in verdict.instruction
         assert "compatibility re-export" in verdict.instruction
 
+    # ------------------------------------------------------------------
+    # Stall — infra vs product separation
+    # ------------------------------------------------------------------
+
+    def test_infra_only_stall_not_product_failure(self):
+        """When the same infra-only failure repeats with no edits, the
+        handback must use ``validation_command_config_failed``, not
+        ``product_validation_failed``."""
+        result = _make_result(infra=True, diagnostics="ModuleNotFoundError: nox")
+        fp = _fingerprint_for(result)
+        mem = {result.command: fp}
+        verdict = route_validation_failure(result, mem, False)
+        assert verdict.action == "handback"
+        assert verdict.handback_details["failure_class"] == "validation_command_config_failed"
+
+    def test_infra_only_stall_still_returns_handback(self):
+        """Infra-only stall still handbacks — the config is misconfigured
+        and the worker cannot fix it, but it must not be reported as a
+        product validation failure."""
+        result = _make_result(infra=True, diagnostics="ModuleNotFoundError: nox")
+        fp = _fingerprint_for(result)
+        mem = {result.command: fp}
+        verdict = route_validation_failure(result, mem, False)
+        assert verdict.action == "handback"
+        assert "command" in verdict.handback_details["details"]
+
+    def test_product_failure_still_product_failure_on_stall(self):
+        """A real product failure (infra=False) must still return
+        ``product_validation_failed`` on stall — no regression."""
+        result = _make_result(infra=False, diagnostics="AssertionError: expected 3 got 5")
+        fp = _fingerprint_for(result)
+        mem = {result.command: fp}
+        verdict = route_validation_failure(result, mem, False)
+        assert verdict.action == "handback"
+        assert verdict.handback_details["failure_class"] == "product_validation_failed"
+
 
 # ---------------------------------------------------------------------------
 # Multiple failing runs
