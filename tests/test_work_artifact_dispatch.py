@@ -955,3 +955,109 @@ def test_resume_guard_does_not_fire_on_first_dispatch(tmp_path):
     assert result.ok is True
     assert "resumed_artifact_id" not in (result.extras or {})
     assert len(captured) == 2
+
+
+# ── M. Retry cap pauses job immediately ─────────────────────────────────────────
+
+
+def test_artifact_retry_cap_pauses_job_immediately(tmp_path):
+    """Retry cap on item 2 pauses the job — item 3 never runs.
+
+    Multi-item WorkArtifact: item 1 succeeds, item 2 hits the physical
+    retry cap. The job returns a recoverable ``WorkerDispatchResult``
+    with ``artifact_retry_cap_reached``, ``work_artifact_unfinished``,
+    and NO ``recovery_exhausted``. Item 3 is never dispatched.
+    """
+    from aura.bridge.dispatch import _DispatchProxy, _ARTIFACT_ITEM_RETRY_CAP
+
+    proxy = _DispatchProxy(
+        parent_widget=None,
+        registry_factory=lambda mode: None,
+        approval_proxy=None,
+        workspace_root=tmp_path,
+    )
+
+    captured: list[WorkerDispatchRequest] = []
+
+    # Inject a controllable _run_worker:
+    #   item-1 → ok
+    #   item-2 → always fails (triggers retry loop → cap)
+    #   item-3 → should never be called
+    def failing_run_worker(
+        tool_call_id: str, worker_req: WorkerDispatchRequest, pending,
+    ) -> WorkerDispatchResult:
+        captured.append(worker_req)
+        if worker_req.artifact_item_id == "item-2":
+            return _non_recoverable_result(f"Item 2 failure")
+        return _ok_result(modified=list(worker_req.files))
+    proxy._run_worker = failing_run_worker
+
+    # Bypass Qt signal: auto-resolve the pending dispatch immediately.
+    original_register = proxy._pending_map.register
+
+    def auto_register(tool_call_id, req):
+        pending = original_register(tool_call_id, req)
+        pending.edited_request = req
+        pending.decision_event.set()
+        return pending
+    proxy._pending_map.register = auto_register
+
+    payload = _make_three_item_payload()
+    req = WorkerDispatchRequest(
+        goal="Full feature",
+        files=["src/a.py"],
+        spec="Implement the full feature.",
+        acceptance="Everything works.",
+        summary="Full feature",
+        work_artifact_payload=payload,
+    )
+
+    result = proxy.request_dispatch("call_retry_cap", req)
+
+    # ── Item-2 should have been attempted exactly _ARTIFACT_ITEM_RETRY_CAP times ──
+    item2_attempts = sum(
+        1 for r in captured if r.artifact_item_id == "item-2"
+    )
+    assert item2_attempts == _ARTIFACT_ITEM_RETRY_CAP, (
+        f"Expected {_ARTIFACT_ITEM_RETRY_CAP} item-2 attempts, got {item2_attempts}"
+    )
+
+    # ── Only item-1 and item-2 were dispatched — item-3 never runs ────────────
+    # item-1 runs once, item-2 runs _ARTIFACT_ITEM_RETRY_CAP times
+    assert len(captured) == 1 + _ARTIFACT_ITEM_RETRY_CAP, (
+        f"Expected {1 + _ARTIFACT_ITEM_RETRY_CAP} dispatches "
+        f"(item-1 × 1 + item-2 × {_ARTIFACT_ITEM_RETRY_CAP}), got {len(captured)}"
+    )
+
+    item3_dispatched = any(
+        r.artifact_item_id == "item-3" for r in captured
+    )
+    assert not item3_dispatched, (
+        "Item 3 was dispatched — job should have paused after item-2 retry cap"
+    )
+
+    # ── Result is recoverable with retry-cap extras ───────────────────────────
+    assert result.recoverable is True, (
+        f"Expected recoverable=True, got {result.recoverable}"
+    )
+    extras = result.extras if isinstance(result.extras, dict) else {}
+    assert extras.get("artifact_retry_cap_reached") is True, (
+        f"Expected artifact_retry_cap_reached=True, got {extras.get('artifact_retry_cap_reached')}"
+    )
+    assert extras.get("work_artifact_unfinished") is True, (
+        f"Expected work_artifact_unfinished=True, got {extras.get('work_artifact_unfinished')}"
+    )
+    assert extras.get("recovery_exhausted") is not True, (
+        "Must not contain recovery_exhausted"
+    )
+
+    # ── Summary says incomplete, not exhausted ────────────────────────────────
+    assert "incomplete" in result.summary.lower(), (
+        f"Summary should say 'incomplete', got: {result.summary}"
+    )
+    assert "item-2" in result.summary, (
+        f"Summary should mention the failed item, got: {result.summary}"
+    )
+    assert "recovery exhausted" not in result.summary.lower(), (
+        "Summary must not mention 'recovery exhausted'"
+    )

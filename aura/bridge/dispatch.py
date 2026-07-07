@@ -770,9 +770,8 @@ class _DispatchProxy(QObject):
 
         Recovery: Every non-cancelled, non-infrastructure failure retries
         the same item with accumulated failure context appended to the
-        spec. An attempt counts toward **stall** only when its failure
-        signature AND modified-files set both match the previous attempt
-        — any difference resets the stall counter.
+        spec. A physical retry cap pauses the entire job immediately
+        — no stall/signature detection.
 
         Outcomes
         --------
@@ -780,7 +779,8 @@ class _DispatchProxy(QObject):
         - **cancelled** — user cancelled the job.
         - **infrastructure-paused** — harness/provider/auth/network failure;
           resumable later (``work_artifact_unfinished: true``).
-        - **exhausted** — stall limit reached (terminal).
+        - **retry-cap-reached** — physical retry limit on one item;
+          recoverable with ``artifact_retry_cap_reached`` in extras.
         """
         item_results: list[tuple[str, WorkerDispatchResult]] = []
         recovered_item_ids: list[str] = []
@@ -883,7 +883,14 @@ class _DispatchProxy(QObject):
                             "completed_items": completed_ids,
                         },
                     )
-                    break
+                    self._artifact_controller.attach_receipt(
+                        tool_call_id, item_result, item_id=item.id,
+                    )
+                    item_results.append((item.id, item_result))
+                    return self._aggregate_artifact_results(
+                        tool_call_id, approved_req, item_results,
+                        recovered_item_ids, failed_attempts, total,
+                    )
 
                 # ── Non-infrastructure failure → retry with recovery note ──
                 recovered_item_ids.append(item.id)
