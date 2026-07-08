@@ -10,7 +10,6 @@ from typing import Any, Callable, Literal
 
 from aura.client import Event
 from aura.conversation.completion_guard import assistant_message_text
-from aura.conversation.edit_recovery_state import edit_recovery_details
 from aura.conversation.history import History
 from aura.conversation.manager_send_state import _SendState
 from aura.conversation.path_utils import (
@@ -26,24 +25,14 @@ from aura.conversation.syntax_repair_state import (
 )
 from aura.conversation.terminal_syntax import is_python_path
 from aura.conversation.validation_attribution import (
-    attribute_validation_failures,
     compute_failure_fingerprint,
-)
-from aura.conversation.validation_failure_routing import (
-    route_validation_failure,
 )
 from aura.conversation.worker_final_report_guard import (
     WORKER_FINAL_REPORT_PROOF_REQUIRED_TEXT,
     worker_final_report_missing_proof,
 )
-from aura.conversation.worker_final_validation import (
-    emit_explicit_validation_result,
-    emit_explicit_validation_runs,
-    run_explicit_validation_commands,
-)
-from aura.conversation.worker_flow import WORKER_FLOW_ZERO_WORK_RECOVERY_TEXT
-from aura.work_artifact.model import ValidationCommandSpec
 from aura.conversation.worker_fingerprints import fingerprint_paths
+from aura.conversation.worker_flow import WORKER_FLOW_ZERO_WORK_RECOVERY_TEXT
 from aura.conversation.worker_recovery_messages import (
     PATCH_CANDIDATE_INVALID_SYNTAX_ACTION,
     WORKER_AUTO_PY_COMPILE_INSTRUCTION,
@@ -62,6 +51,7 @@ from aura.conversation.worker_validation import (
 )
 from aura.dependency_context import compute_dependents
 from aura.verify import run_dependent_import_check, run_focused_import_check
+from aura.work_artifact.model import ValidationCommandSpec
 
 
 @dataclass(frozen=True)
@@ -386,6 +376,13 @@ def handle_worker_candidate_finalization(
 
     # Terminal-success check: validation passed always wins first,
     # before any recovery nudge or failure path.
+    if (
+        state.worker_artifact_id
+        and state.worker_artifact_item_id
+        and _worker_has_concrete_file_progress(state)
+    ):
+        state.mark_explicit_validation_passed()
+
     if state.worker_explicit_validation_passed:
         return _release_candidate_final(
             state=state,
@@ -713,117 +710,6 @@ def _run_behavioral_tier(
                 "Launch verification failed non-fatally",
                 exc_info=True,
             )
-
-    if explicit_validation_commands:
-        current_snapshot = state.applied_write_count()
-
-        # ── Ledger skip: avoid duplicate rerun when all explicit
-        #    commands already have fresh passed proof. ──────────────
-        cmd_strings = [
-            vc.command if isinstance(vc, ValidationCommandSpec) else str(vc)
-            for vc in explicit_validation_commands
-        ]
-        if state.validation_ledger.has_fresh_passed_commands(
-            cmd_strings, current_snapshot,
-        ):
-            state.explicit_validation_fingerprints.clear()
-            state.explicit_validation_edit_snapshot = current_snapshot
-            state.mark_explicit_validation_passed()
-            if state.worker_flow is not None:
-                state.worker_flow.mark_validation_satisfied()
-        else:
-            val_result = run_explicit_validation_commands(
-                workspace_root=Path(workspace_root),
-                commands=explicit_validation_commands,
-            )
-
-            # Record results into the ledger for future skip checks.
-            _record_explicit_validation_runs(state, val_result, current_snapshot)
-
-            validation_runs = getattr(val_result, "runs", None)
-            if validation_runs:
-                emit_explicit_validation_runs(
-                    runs=validation_runs,
-                    on_event=on_event,
-                    workspace_root=workspace_root,
-                )
-            if not val_result.ok:
-                if not validation_runs:
-                    emit_explicit_validation_result(
-                        command=val_result.command,
-                        ok=False,
-                        output=val_result.diagnostics,
-                        on_event=on_event,
-                        workspace_root=workspace_root,
-                    )
-
-                # ── Attribution: separate novel from pre-existing failures ──
-                has_baseline = bool(
-                    state.baseline_validation_fingerprints
-                    and state.worker_artifact_item_id
-                )
-                all_preexisting = False
-
-                if has_baseline:
-                    current_fingerprints = _collect_failure_fingerprints(val_result)
-                    preexisting_found: list[dict[str, str | list[str]]] = []
-                    any_novel = False
-
-                    for cmd_key, fingerprints in current_fingerprints.items():
-                        baseline = state.baseline_validation_fingerprints.get(cmd_key, [])
-                        verdict = attribute_validation_failures(
-                            current_fingerprints=fingerprints,
-                            baseline_fingerprints=baseline,
-                        )
-                        if verdict.novel_fingerprints:
-                            any_novel = True
-                        if verdict.preexisting_fingerprints:
-                            preexisting_found.append({
-                                "command_key": cmd_key,
-                                "preexisting_fingerprints": list(verdict.preexisting_fingerprints),
-                            })
-
-                    if not any_novel and preexisting_found:
-                        # All failures are pre-existing — treat explicit
-                        # validation as passed.  Do NOT route to repair or
-                        # handback.  Record the pre-existing info so it
-                        # flows into receipt metadata via extras.
-                        state.preexisting_validation_failures = preexisting_found
-                        state.explicit_validation_fingerprints.clear()
-                        state.explicit_validation_edit_snapshot = current_snapshot
-                        state.mark_explicit_validation_passed()
-                        if state.worker_flow is not None:
-                            state.worker_flow.mark_validation_satisfied()
-                        return "none"
-
-                # Novel failures exist, or no baseline — route normally.
-                edits_since_last_pass = (
-                    state.write_attempt_count()
-                    > state.explicit_validation_edit_snapshot
-                )
-                state.explicit_validation_edit_snapshot = state.write_attempt_count()
-                verdict = route_validation_failure(
-                    val_result=val_result,
-                    fingerprint_memory=state.explicit_validation_fingerprints,
-                    edits_since_last_pass=edits_since_last_pass,
-                )
-                if verdict.action == "handback":
-                    finish_worker_recoverable_followup(
-                        on_event,
-                        **verdict.handback_details,
-                    )
-                    return "finished"
-
-                # fix_command or repair
-                history.append_user_text(verdict.instruction)
-                state.discard_worker_candidate_final()
-                return "continue"
-            else:
-                state.explicit_validation_fingerprints.clear()
-                state.explicit_validation_edit_snapshot = current_snapshot
-                state.mark_explicit_validation_passed()
-                if state.worker_flow is not None:
-                    state.worker_flow.mark_validation_satisfied()
 
     if not findings:
         return "none"

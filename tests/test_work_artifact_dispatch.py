@@ -10,16 +10,14 @@ Verifies the new contract:
 
 from typing import Any
 
-from aura.conversation.dispatch import WorkerDispatchRequest, WorkerDispatchResult, WorkerMismatch
-from aura.conversation.dispatch_failure import is_recoverable_worker_continuation
-from aura.conversation.tool_runner import ToolRunner
-from aura.conversation.history import History
-from aura.work_artifact.model import WorkArtifact, WorkArtifactItem, WorkItemStatus, WorkArtifactReceipt
-from aura.work_artifact.receipt import worker_result_to_receipt
-from aura.work_artifact.controller import WorkArtifactController
-from aura.work_artifact.projection import WorkArtifactProjection
 from aura.bridge.worker_report import _format_spec_as_user_message
-
+from aura.conversation.dispatch import WorkerDispatchRequest, WorkerDispatchResult, WorkerMismatch
+from aura.conversation.history import History
+from aura.conversation.tool_runner import ToolRunner
+from aura.work_artifact.controller import WorkArtifactController
+from aura.work_artifact.model import WorkArtifact, WorkArtifactItem, WorkArtifactReceipt, WorkItemStatus
+from aura.work_artifact.projection import WorkArtifactProjection
+from aura.work_artifact.receipt import worker_result_to_receipt
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -1000,7 +998,7 @@ def test_artifact_retry_cap_pauses_job_immediately(tmp_path):
     with ``artifact_retry_cap_reached``, ``work_artifact_unfinished``,
     and NO ``recovery_exhausted``. Item 3 is never dispatched.
     """
-    from aura.bridge.dispatch import _DispatchProxy, _ARTIFACT_ITEM_RETRY_CAP
+    from aura.bridge.dispatch import _ARTIFACT_ITEM_RETRY_CAP, _DispatchProxy
 
     proxy = _DispatchProxy(
         parent_widget=None,
@@ -1020,7 +1018,7 @@ def test_artifact_retry_cap_pauses_job_immediately(tmp_path):
     ) -> WorkerDispatchResult:
         captured.append(worker_req)
         if worker_req.artifact_item_id == "item-2":
-            return _non_recoverable_result(f"Item 2 failure")
+            return _non_recoverable_result("Item 2 failure")
         return _ok_result(modified=list(worker_req.files))
     proxy._run_worker = failing_run_worker
 
@@ -1343,7 +1341,6 @@ def test_artifact_normalizer_receipt_corpse_prevention():
     ``receipt.status="ok"``.
     """
     from aura.bridge.dispatch import _DispatchProxy
-    from aura.work_artifact.receipt import worker_result_to_receipt
 
     proxy = _DispatchProxy(
         parent_widget=None,
@@ -2109,7 +2106,6 @@ def test_normalizer_mismatch_not_normalized(tmp_path):
        non-done (retried to cap), item 2 never starts.
     """
     from aura.bridge.dispatch import _DispatchProxy
-    from aura.work_artifact.receipt import worker_result_to_receipt
     from aura.work_artifact.model import WorkArtifactItem
 
     proxy = _DispatchProxy(
@@ -2386,7 +2382,7 @@ def test_normalizer_absolute_modified_path_normalizes(tmp_path):
                 needs_followup=True,
                 status="completed_with_caveats",
                 modified_files=[
-                    f"C:\\Projects\\Aura-Harness2\\{f.replace('/', '\\')}"
+                    "C:\\Projects\\Aura-Harness2\\" + f.replace("/", "\\")
                     for f in worker_req.files
                 ],
                 extras={
