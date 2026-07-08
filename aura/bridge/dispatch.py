@@ -46,6 +46,7 @@ from aura.conversation import (
     WorkerDispatchResult,
     WorkerOutcomeStatus,
 )
+from aura.conversation.path_utils import normalize_worker_path
 
 from aura.conversation.persistence import WorkerDispatchRecord
 from aura.conversation.tool_limits import TERMINAL_TOOLS, WRITE_TOOLS
@@ -80,21 +81,14 @@ _log = logging.getLogger(__name__)
 def _normalize_path_for_comparison(p: str) -> str:
     """Normalize a path string for evidence comparison only.
 
-    Normalises:
-    - backslashes to forward slashes
-    - leading ``./`` stripped
-    - duplicate slashes collapsed
-    - case-folded (lower)
+    Delegates to ``normalize_worker_path`` for consistent normalisation
+    across the codebase, then lowercases for case-insensitive matching.
 
     Does NOT resolve symlinks or make paths absolute.
     The result is used only for set-intersection checks and is
     never stored in receipts or results.
     """
-    p = p.replace("\\", "/")
-    p = p.lstrip("./")
-    while "//" in p:
-        p = p.replace("//", "/")
-    return p.lower()
+    return normalize_worker_path(p).lower()
 
 
 def _artifact_item_paths_overlap(
@@ -104,12 +98,27 @@ def _artifact_item_paths_overlap(
 
     Paths are normalised for comparison so that Windows backslashes,
     case differences, and ``./`` prefixes do not cause false negatives.
+    Also supports absolute-vs-relative matching: a relative target path
+    may match an absolute modified path via segment-suffix comparison.
     Preserves original paths in the result — normalisation is ephemeral.
     """
     if not target_files or not modified_files:
         return False
+
     targets = {_normalize_path_for_comparison(f) for f in target_files}
-    return any(_normalize_path_for_comparison(f) in targets for f in modified_files)
+    modified = {_normalize_path_for_comparison(f) for f in modified_files}
+
+    # 1. Exact normalised match
+    if targets.intersection(modified):
+        return True
+
+    # 2. Segment-suffix fallback (absolute-vs-relative)
+    return any(
+        m.endswith("/" + t) or t.endswith("/" + m)
+        for t in targets
+        for m in modified
+        if t and m
+    )
 
 
 def _artifact_item_declared_validation_commands(
@@ -145,7 +154,6 @@ def _artifact_item_validation_passed(
        classification.
     2. At least one ``terminal_results`` record with a passed
        classification.
-    3. ``result.validation`` summary text containing a pass marker.
 
     Explicit failure signals (``failed_validation``, ``validation_not_run``
     set to True, ``validation_failed`` status) block normalisation when
@@ -190,13 +198,6 @@ def _artifact_item_validation_passed(
                 return True
             if vc in ("product_validation_failed", "failed", "harness_error"):
                 return False
-
-    # 3. Validation summary text
-    if result.validation and any(
-        marker in result.validation.lower()
-        for marker in ("passed", "pass", "ok", "success")
-    ):
-        return True
 
     # ── No evidence found — fall through to failure-class guard ───────────
     if fc.startswith("validation_"):
@@ -1008,6 +1009,9 @@ class _DispatchProxy(QObject):
             return item_result
 
         if item_result.cancelled:
+            return item_result
+
+        if item_result.mismatch is not None:
             return item_result
 
         extras = item_result.extras if isinstance(item_result.extras, dict) else {}

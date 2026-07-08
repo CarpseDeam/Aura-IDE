@@ -10,7 +10,7 @@ Verifies the new contract:
 
 from typing import Any
 
-from aura.conversation.dispatch import WorkerDispatchRequest, WorkerDispatchResult
+from aura.conversation.dispatch import WorkerDispatchRequest, WorkerDispatchResult, WorkerMismatch
 from aura.conversation.dispatch_failure import is_recoverable_worker_continuation
 from aura.conversation.tool_runner import ToolRunner
 from aura.conversation.history import History
@@ -2092,4 +2092,387 @@ def test_normalizer_real_validation_failure_not_normalized(tmp_path):
     item1 = artifact.work_items[0]
     assert item1.status != WorkItemStatus.done, (
         "Item with real validation failure must not become done"
+    )
+
+
+def test_normalizer_mismatch_not_normalized(tmp_path):
+    """Test A: Mismatch not normalized.
+
+    A continuing-with-evidence result that also carries a WorkerMismatch.
+    The mismatch guard must fire before any evidence checks, preventing
+    normalisation.
+
+    Tests two paths:
+    a) Direct normalizer call — mismatch object survives unchanged and
+       ``worker_result_to_receipt`` produces ``status="mismatch"``.
+    b) Full dispatch loop — mismatch prevents normalization, item 1 stays
+       non-done (retried to cap), item 2 never starts.
+    """
+    from aura.bridge.dispatch import _DispatchProxy
+    from aura.work_artifact.receipt import worker_result_to_receipt
+    from aura.work_artifact.model import WorkArtifactItem
+
+    proxy = _DispatchProxy(
+        parent_widget=None,
+        registry_factory=lambda mode: None,
+        approval_proxy=None,
+        workspace_root=tmp_path,
+    )
+
+    # ── Path a: Direct normalizer call ──────────────────────────────────
+    item_req = WorkerDispatchRequest(
+        goal="Test",
+        files=["src/model.py"],
+        spec="Do the thing",
+        acceptance="Works",
+        summary="Test",
+        artifact_id="art-1",
+        artifact_item_id="item-1",
+    )
+    mismatch_result = WorkerDispatchResult(
+        ok=False,
+        summary="Item completed — mismatch detected.",
+        recoverable=True,
+        phase_boundary=True,
+        needs_followup=True,
+        status="completed_with_caveats",
+        modified_files=["src/model.py"],
+        validation="python -m compileall src/model.py passed.",
+        extras={
+            "failure_class": "behavioral_validation_skipped",
+        },
+        mismatch=WorkerMismatch(
+            kind="conflicting_spec",
+            file_paths=["src/model.py"],
+            requested="Add model class",
+            observed="Model class already exists",
+            worker_recommendation="Update existing model",
+            question_for_planner="Should I update the existing model?",
+        ),
+    )
+
+    dummy_item = WorkArtifactItem(
+        id="item-1", title="Test", intent="Test",
+        target_files=["src/model.py"], acceptance="Works",
+    )
+    normalized = proxy._normalize_artifact_item_completion(
+        item_req, mismatch_result, dummy_item,
+    )
+
+    # Normalizer must return the result unchanged (not normalized)
+    assert normalized is mismatch_result, "Mismatch result must pass through unchanged"
+    assert normalized.mismatch is not None, "Mismatch must survive normalizer"
+    assert normalized.mismatch.kind == "conflicting_spec"
+    assert normalized.ok is False, "Mismatch result must not become ok"
+
+    # When routed through receipt, status must be "mismatch"
+    receipt = worker_result_to_receipt(normalized)
+    assert receipt.status == "mismatch", (
+        f"Expected receipt status 'mismatch', got '{receipt.status}'"
+    )
+    assert receipt.mismatch is not None
+    assert receipt.mismatch.get("kind") == "conflicting_spec"
+
+    # ── Path b: Full dispatch loop ──────────────────────────────────────
+    captured: list[WorkerDispatchRequest] = []
+
+    def mismatch_then_fail(
+        tool_call_id: str, worker_req: WorkerDispatchRequest, pending,
+    ) -> WorkerDispatchResult:
+        captured.append(worker_req)
+        if worker_req.artifact_item_id == "item-1":
+            return WorkerDispatchResult(
+                ok=False,
+                summary="Item completed — mismatch detected.",
+                recoverable=True,
+                phase_boundary=True,
+                needs_followup=True,
+                status="completed_with_caveats",
+                modified_files=list(worker_req.files),
+                validation="python -m compileall src/model.py passed.",
+                extras={
+                    "failure_class": "behavioral_validation_skipped",
+                },
+                mismatch=WorkerMismatch(
+                    kind="conflicting_spec",
+                    file_paths=["src/model.py"],
+                    requested="Add model class",
+                    observed="Model class already exists",
+                    worker_recommendation="Update existing model",
+                    question_for_planner="Should I update the existing model?",
+                ),
+            )
+        return _ok_result(modified=list(worker_req.files))
+    proxy._run_worker = mismatch_then_fail
+
+    original_register = proxy._pending_map.register
+
+    def auto_register(tool_call_id, req):
+        pending = original_register(tool_call_id, req)
+        pending.edited_request = req
+        pending.decision_event.set()
+        return pending
+    proxy._pending_map.register = auto_register
+
+    payload = _make_two_item_payload()
+    req = WorkerDispatchRequest(
+        goal="Full feature", files=["src/a.py", "src/b.py"],
+        spec="Implement the full feature.",
+        acceptance="Everything works.", summary="Full feature",
+        work_artifact_payload=payload,
+    )
+
+    result = proxy.request_dispatch("call_mismatch", req)
+
+    # Job did NOT complete — normalization was prevented on every attempt
+    assert result.ok is not True, "Mismatch must not normalise to ok"
+    assert result.extras.get("work_artifact_item_completion_normalized") is not True
+
+    ctrl = proxy.artifact_controller()
+    artifact = ctrl.get_artifact("call_mismatch")
+    assert artifact is not None
+    item1 = artifact.work_items[0]
+    assert item1.status != WorkItemStatus.done, "Item with mismatch must not become done"
+
+    # The final receipt came from the retry-cap pause (no mismatch carried),
+    # NOT from any single attempt's mismatch result — that's correct.
+    # The important guard is that normalization never fired.
+
+    # ── Item 2 must NOT have started ──
+    assert not any(r.artifact_item_id == "item-2" for r in captured), (
+        "Item 2 dispatched despite mismatch on item 1"
+    )
+
+
+def test_normalizer_prose_only_validation_evidence_not_normalized(tmp_path):
+    """Test B: Prose-only validation evidence not normalized.
+
+    Item 1 declares a validation command.  The Worker result carries
+    ``validation="1 failed, 0 passed"`` (prose text containing substring
+    "passed") but empty ``validation_results`` and ``terminal_results``.
+    No ``failed_validation`` or ``validation_not_run`` signals.
+
+    Without the prose-marker deletion in ``_artifact_item_validation_passed``,
+    the substring "passed" would falsely match.  After deletion, the normaliser
+    must not mark this item done.
+
+    Expected: not normalised, item does not become done, item 2 does not start.
+    """
+    from aura.bridge.dispatch import _DispatchProxy
+
+    proxy = _DispatchProxy(
+        parent_widget=None,
+        registry_factory=lambda mode: None,
+        approval_proxy=None,
+        workspace_root=tmp_path,
+    )
+
+    captured: list[WorkerDispatchRequest] = []
+
+    def prose_only_fails(
+        tool_call_id: str, worker_req: WorkerDispatchRequest, pending,
+    ) -> WorkerDispatchResult:
+        captured.append(worker_req)
+        if worker_req.artifact_item_id == "item-1":
+            return WorkerDispatchResult(
+                ok=False,
+                summary="Item completed — acceptance unverified, continuing.",
+                recoverable=True,
+                phase_boundary=True,
+                needs_followup=True,
+                modified_files=list(worker_req.files),
+                validation="1 failed, 0 passed",
+                extras={
+                    "validation_results": [],
+                    "terminal_results": [],
+                },
+            )
+        return _ok_result(modified=list(worker_req.files))
+    proxy._run_worker = prose_only_fails
+
+    original_register = proxy._pending_map.register
+
+    def auto_register(tool_call_id, req):
+        pending = original_register(tool_call_id, req)
+        pending.edited_request = req
+        pending.decision_event.set()
+        return pending
+    proxy._pending_map.register = auto_register
+
+    payload = {
+        "goal": "Implement feature",
+        "constraints": [],
+        "allowed_files": ["src/"],
+        "items": [
+            {
+                "id": "item-1", "title": "Add model",
+                "intent": "Create the model",
+                "target_files": ["src/model.py"],
+                "acceptance": "Model works",
+                "validation_commands": ["python -m compileall src/model.py"],
+            },
+            {
+                "id": "item-2", "title": "Add view",
+                "intent": "Create the view",
+                "target_files": ["src/view.py"],
+                "acceptance": "View works",
+            },
+        ],
+    }
+    req = WorkerDispatchRequest(
+        goal="Full feature", files=["src/a.py", "src/b.py"],
+        spec="Implement the full feature.",
+        acceptance="Everything works.", summary="Full feature",
+        work_artifact_payload=payload,
+    )
+
+    result = proxy.request_dispatch("call_prose", req)
+
+    # ── Prose-only must NOT normalise ──
+    assert result.ok is not True, "Prose-only validation must not normalise to ok"
+    assert result.extras.get("work_artifact_item_completion_normalized") is not True
+
+    ctrl = proxy.artifact_controller()
+    artifact = ctrl.get_artifact("call_prose")
+    assert artifact is not None
+    item1 = artifact.work_items[0]
+    assert item1.status != WorkItemStatus.done, (
+        "Item with prose-only validation must not become done"
+    )
+
+    # ── Item 2 must NOT have started ──
+    assert not any(r.artifact_item_id == "item-2" for r in captured), (
+        "Item 2 dispatched despite item 1 not completing"
+    )
+
+
+def test_normalizer_absolute_modified_path_normalizes(tmp_path):
+    """Test C: Absolute modified path does normalise.
+
+    WorkArtifact item target files are relative
+    (``aura/gui/cards/_helpers.py``) but the Worker reports absolute
+    Windows paths (``C:\\Projects\\...\\aura\\gui\\cards\\_helpers.py``).
+    The segment-suffix fallback in ``_artifact_item_paths_overlap`` must
+    match them.
+
+    Includes structured passing validation evidence so the normaliser
+    reaches the path-overlap check.
+
+    Expected: normalised to ok, receipt status "ok", item done,
+    stored modified_files preserve the original absolute path,
+    item 2 starts automatically.
+    """
+    from aura.bridge.dispatch import _DispatchProxy
+
+    proxy = _DispatchProxy(
+        parent_widget=None,
+        registry_factory=lambda mode: None,
+        approval_proxy=None,
+        workspace_root=tmp_path,
+    )
+
+    captured: list[WorkerDispatchRequest] = []
+
+    def absolute_path_then_ok(
+        tool_call_id: str, worker_req: WorkerDispatchRequest, pending,
+    ) -> WorkerDispatchResult:
+        captured.append(worker_req)
+        if worker_req.artifact_item_id == "item-1":
+            return WorkerDispatchResult(
+                ok=False,
+                summary="Item completed — acceptance unverified, continuing.",
+                recoverable=True,
+                phase_boundary=True,
+                needs_followup=True,
+                status="completed_with_caveats",
+                modified_files=[
+                    f"C:\\Projects\\Aura-Harness2\\{f.replace('/', '\\')}"
+                    for f in worker_req.files
+                ],
+                extras={
+                    "validation_results": [
+                        {
+                            "command": "python -m compileall aura/gui/cards/_helpers.py",
+                            "ok": True,
+                            "exit_code": 0,
+                            "validation_classification": "passed",
+                            "counts_as_validation": True,
+                            "counts_as_product_failure": False,
+                        },
+                    ],
+                    "failure_class": "behavioral_validation_skipped",
+                },
+            )
+        return _ok_result(modified=list(worker_req.files))
+    proxy._run_worker = absolute_path_then_ok
+
+    original_register = proxy._pending_map.register
+
+    def auto_register(tool_call_id, req):
+        pending = original_register(tool_call_id, req)
+        pending.edited_request = req
+        pending.decision_event.set()
+        return pending
+    proxy._pending_map.register = auto_register
+
+    payload = {
+        "goal": "Implement feature",
+        "constraints": [],
+        "allowed_files": ["src/"],
+        "items": [
+            {
+                "id": "item-1", "title": "Add helpers",
+                "intent": "Create the helpers module",
+                "target_files": ["aura/gui/cards/_helpers.py"],
+                "acceptance": "Helpers work",
+            },
+            {
+                "id": "item-2", "title": "Add view",
+                "intent": "Create the view",
+                "target_files": ["src/view.py"],
+                "acceptance": "View works",
+            },
+        ],
+    }
+    req = WorkerDispatchRequest(
+        goal="Full feature", files=["aura/gui/cards/_helpers.py"],
+        spec="Implement.",
+        acceptance="Works.", summary="Feature",
+        work_artifact_payload=payload,
+    )
+
+    result = proxy.request_dispatch("call_abs_path", req)
+
+    # ── Both items completed ──
+    assert result.ok is True, f"Expected ok=True, got {result.ok}"
+    assert result.extras["completed_items"] == ["item-1", "item-2"]
+
+    ctrl = proxy.artifact_controller()
+    artifact = ctrl.get_artifact("call_abs_path")
+    assert artifact is not None
+    item1 = artifact.work_items[0]
+    assert item1.status == WorkItemStatus.done, (
+        f"Item 1 expected done, got {item1.status}"
+    )
+    assert item1.receipt is not None
+    assert item1.receipt.status == "ok", (
+        f"Item 1 receipt expected 'ok', got '{item1.receipt.status}'"
+    )
+
+    # ── Normaliser flag must be set on per-item receipt metadata ──
+    # (The flag lives on the per-item WorkerDispatchResult extras, not on
+    # the job-level aggregate extras.)
+    assert item1.receipt.metadata.get("work_artifact_item_completion_normalized") is True, (
+        "Normaliser flag must be set on per-item receipt metadata"
+    )
+
+    # ── Stored modified_files preserve the original absolute path ──
+    expected_abs = "C:\\Projects\\Aura-Harness2\\aura\\gui\\cards\\_helpers.py"
+    assert item1.receipt.modified_files == [expected_abs], (
+        f"Expected preserved absolute path, got {item1.receipt.modified_files}"
+    )
+
+    # ── Both items dispatched ──
+    assert len(captured) == 2, (
+        f"Expected 2 dispatches, got {len(captured)}"
     )
