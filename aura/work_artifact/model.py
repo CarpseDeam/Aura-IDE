@@ -6,7 +6,6 @@ path. Aura executes item-sized requests internally under one approved job.
 """
 from __future__ import annotations
 
-import copy
 import enum
 import time
 from dataclasses import dataclass, field
@@ -303,10 +302,16 @@ class WorkArtifact:
     # ── mutation helpers ──────────────────────────────────────────────────
 
     def mark_active(self, item_id: str) -> None:
-        """Mark an item as active (being worked on)."""
+        """Mark an item as active (being worked on).
+
+        Sets the item status to active, updates ``current_item_id`` to this
+        item, and records the timestamp.  Raises ``ValueError`` if the item
+        is not found.
+        """
         for item in self.work_items:
             if item.id == item_id:
                 item.status = WorkItemStatus.active
+                self.current_item_id = item_id
                 self.updated_at = time.time()
                 return
         raise ValueError(f"Item '{item_id}' not found in artifact.")

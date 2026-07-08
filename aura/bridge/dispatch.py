@@ -46,10 +46,14 @@ from aura.conversation import (
     WorkerDispatchResult,
     WorkerOutcomeStatus,
 )
+from aura.conversation.detected_validation import normalize_command as _normalize_command
 from aura.conversation.path_utils import normalize_worker_path
-
 from aura.conversation.persistence import WorkerDispatchRecord
 from aura.conversation.tool_limits import TERMINAL_TOOLS, WRITE_TOOLS
+from aura.conversation.validation_truth import (
+    validation_payload_passed,
+    validation_payload_product_failure,
+)
 from aura.conversation.workflow_state import WorkflowState, WorkflowStatus
 from aura.dependency_context import build_dependency_stanza
 from aura.events import EventBus
@@ -272,6 +276,71 @@ def _artifact_item_has_real_blocker(result: WorkerDispatchResult) -> bool:
     ):
         return True
     return False
+
+
+def _artifact_item_validation_satisfied(
+    req: WorkerDispatchRequest,
+    result: WorkerDispatchResult,
+) -> bool:
+    """Return True when declared validation commands have matching pass evidence.
+
+    Each declared non-empty command must have at least one matching
+    structured evidence record in ``validation_results`` or ``terminal_results``
+    that passes without being a product failure.
+
+    Matching uses ``_normalize_command`` (whitespace-collapsed, lowercased)
+    so that minor formatting differences between the declared command and
+    the evidence record do not cause false negatives.
+
+    A product-failure match for a declared command blocks the satisfied
+    outcome for that command.  Commands with no evidence at all are not
+    satisfied.
+
+    When no commands are declared, returns True (nothing to verify).
+    """
+    declared = _artifact_item_declared_validation_commands(req)
+    if not declared:
+        return True
+
+    extras = result.extras if isinstance(result.extras, dict) else {}
+
+    # Collect all evidence records from both sources.
+    evidence: list[dict] = []
+    for src in ("validation_results", "terminal_results"):
+        raw = extras.get(src, [])
+        if isinstance(raw, list):
+            evidence.extend(raw)
+
+    # Build a map from normalised declared command → raw command.
+    declared_normal: dict[str, str] = {
+        _normalize_command(cmd): cmd for cmd in declared
+    }
+
+    satisfied: set[str] = set()
+    blocked: set[str] = set()
+
+    for record in evidence:
+        if not isinstance(record, dict):
+            continue
+        record_cmd = str(record.get("command", "") or "")
+        if not record_cmd:
+            continue
+        normal = _normalize_command(record_cmd)
+        if normal not in declared_normal:
+            continue  # unrelated evidence
+
+        if validation_payload_product_failure(record):
+            blocked.add(normal)
+        elif validation_payload_passed(record):
+            satisfied.add(normal)
+
+    # Every declared command must be satisfied and not blocked.
+    for normal in declared_normal:
+        if normal in blocked:
+            return False
+        if normal not in satisfied:
+            return False
+    return True
 
 
 _SPURIOUS_FAILURE_CLASSES: set[str] = {
@@ -979,6 +1048,48 @@ class _DispatchProxy(QObject):
             return True
         return False
 
+    @staticmethod
+    def _decide_artifact_item_outcome(
+        item_req: WorkerDispatchRequest,
+        item_result: WorkerDispatchResult,
+        item: Any,
+    ) -> str:
+        """Decide the outcome of a single WorkArtifact item attempt.
+
+        Pure evidence classifier used only by ``_run_approved_artifact_job``.
+        Does NOT attach receipts, update model state, emit projection,
+        aggregate results, call Planner, or mutate WorkerDispatchResult.
+
+        Returns one of:
+        - ``"cancelled"`` — user cancelled the item.
+        - ``"external_pause"`` — infrastructure failure (provider/API/harness).
+        - ``"done"`` — item completed successfully (all conditions met).
+        - ``"continue_same_item"`` — retry needed (ordinary failure).
+        """
+        # ── Cancelled ──────────────────────────────────────────────────────
+        if item_result.cancelled:
+            return "cancelled"
+
+        # ── External / infrastructure pause ────────────────────────────────
+        if _DispatchProxy._is_infrastructure_failure(item_result):
+            return "external_pause"
+
+        # ── Done — all conditions must be satisfied ────────────────────────
+        if (
+            item_req.artifact_id
+            and item_req.artifact_item_id
+            and item_result.mismatch is None
+            and not _artifact_item_has_real_blocker(item_result)
+            and _artifact_item_paths_overlap(
+                list(item_req.files), list(item_result.modified_files or []),
+            )
+            and _artifact_item_validation_satisfied(item_req, item_result)
+        ):
+            return "done"
+
+        # ── Continue same item (everything else) ──────────────────────────
+        return "continue_same_item"
+
     def _normalize_artifact_item_completion(
         self,
         item_req: WorkerDispatchRequest,
@@ -1078,31 +1189,30 @@ class _DispatchProxy(QObject):
     ) -> WorkerDispatchResult:
         """Run all artifact items internally as bounded Worker requests.
 
-        Recovery: Every non-cancelled, non-infrastructure failure retries
-        the same item with accumulated failure context appended to the
-        spec. A physical retry cap pauses the entire job immediately
-        — no stall/signature detection.
+        The loop itself owns item advancement.  ``_decide_artifact_item_outcome``
+        classifies each Worker result; the loop acts on that classification by
+        attaching receipts (with ``status_override="ok"`` when done) and
+        advancing through the artifact's work items.
+
+        Ordinary per-item failures retry indefinitely on the same item with
+        accumulated context — there is no retry-cap pause.
 
         Outcomes
         --------
-        - **completed** — all items ok.
+        - **completed** — all items done (derived from artifact state).
         - **cancelled** — user cancelled the job.
         - **infrastructure-paused** — harness/provider/auth/network failure;
           resumable later (``work_artifact_unfinished: true``).
-        - **retry-cap-reached** — physical retry limit on one item;
-          recoverable with ``artifact_retry_cap_reached`` in extras.
         """
         item_results: list[tuple[str, WorkerDispatchResult]] = []
         recovered_item_ids: list[str] = []
         failed_attempts: dict[str, int] = {}
 
-        pending_items = self._artifact_controller.unfinished_items(tool_call_id)
-        total = len(pending_items)
+        artifact_obj = self._artifact_controller.get_artifact(tool_call_id)
+        total = len(artifact_obj.work_items) if artifact_obj else 0
 
-        for idx, item in enumerate(pending_items):
-            item_index = idx + 1  # 1-based index
-
-            # ── Check for external cancellation between items ────────────────
+        while True:
+            # ── Check for external cancellation between items ──────────────
             if self._artifact_job_cancel_event.is_set():
                 return self._aggregate_artifact_results(
                     tool_call_id, approved_req, item_results,
@@ -1114,6 +1224,26 @@ class _DispatchProxy(QObject):
                         extras={"work_artifact_job": True, "work_artifact_cancelled": True},
                     ),
                 )
+
+            unfinished = self._artifact_controller.unfinished_items(tool_call_id)
+            if not unfinished:
+                return self._aggregate_artifact_results(
+                    tool_call_id, approved_req, item_results,
+                    recovered_item_ids, failed_attempts, total,
+                )
+
+            item = unfinished[0]
+
+            # Compute the item's 1-based index across all work_items.
+            artifact_obj = self._artifact_controller.get_artifact(tool_call_id)
+            if artifact_obj is not None:
+                idx_in_all = next(
+                    (i for i, wi in enumerate(artifact_obj.work_items) if wi.id == item.id),
+                    0,
+                )
+                item_index = idx_in_all + 1
+            else:
+                item_index = 1
 
             _log.info(
                 "WorkArtifact internal item %d/%d tool_call_id=%s item=%s",
@@ -1129,41 +1259,37 @@ class _DispatchProxy(QObject):
                 tool_call_id, approved_req, item, item_index, total,
             )
 
-            # ── Item retry loop — no stall limit, retry non-terminal failures ──
+            # ── Inner loop for this item — retry indefinitely ──────────────
             attempt = 0
-            item_result = None
-
             while True:
                 item_result = self._run_worker(tool_call_id, item_req, pending)
+                attempt += 1
 
-                # ── WorkArtifact item completion normalizer ────────────────
-                # Override spurious "continuing/recoverable/phase_boundary"
-                # classifications when the item actually succeeded (files
-                # changed, validation passed, no real blockers).  This must
-                # run before any ok/cancelled/infrastructure check so a
-                # successful item is immediately recognised as done.
-                item_result = self._normalize_artifact_item_completion(
+                outcome = _DispatchProxy._decide_artifact_item_outcome(
                     item_req, item_result, item,
                 )
 
-                attempt += 1
-
-                if item_result.ok:
-                    _log.info(
-                        "WorkArtifact item %s ok (attempt %d)",
-                        item.id, attempt,
-                    )
-                    break
-
-                if item_result.cancelled:
+                if outcome == "cancelled":
                     _log.info(
                         "WorkArtifact item %s cancelled (attempt %d)",
                         item.id, attempt,
                     )
-                    break
+                    self._artifact_controller.attach_receipt(
+                        tool_call_id, item_result, item_id=item.id,
+                    )
+                    item_results.append((item.id, item_result))
+                    return self._aggregate_artifact_results(
+                        tool_call_id, approved_req, item_results,
+                        recovered_item_ids, failed_attempts, total,
+                        terminal_override=WorkerDispatchResult(
+                            ok=False,
+                            summary="WorkArtifact job cancelled during internal items.",
+                            cancelled=True,
+                            extras={"work_artifact_job": True, "work_artifact_cancelled": True},
+                        ),
+                    )
 
-                # ── Infrastructure failure → pause the entire job ──────────
-                if self._is_infrastructure_failure(item_result):
+                if outcome == "external_pause":
                     _log.info(
                         "WorkArtifact item %s infrastructure failure — "
                         "pausing job tool_call_id=%s",
@@ -1180,41 +1306,22 @@ class _DispatchProxy(QObject):
                         infrastructure_pause=True,
                     )
 
-                # ── Physical retry cap — not signature/stall detection ─────
-                if attempt >= _ARTIFACT_ITEM_RETRY_CAP:
+                if outcome == "done":
                     _log.info(
-                        "WorkArtifact item %s retry cap (%d) reached after %d attempts",
-                        item.id, _ARTIFACT_ITEM_RETRY_CAP, attempt,
-                    )
-                    completed_ids = [r_id for r_id, _r in item_results if _r.ok]
-                    item_result = WorkerDispatchResult(
-                        ok=False,
-                        summary=(
-                            f"WorkArtifact item retry cap ({_ARTIFACT_ITEM_RETRY_CAP}) reached. "
-                            f"Item {item.id} did not complete after {attempt} attempts. "
-                            f"The approved job is paused and will continue when dispatched again."
-                        ),
-                        recoverable=True,
-                        extras={
-                            "artifact_retry_cap_reached": True,
-                            "work_artifact_unfinished": True,
-                            "recoverable": True,
-                            "current_item_id": item.id,
-                            "total_items": total,
-                            "completed_items": completed_ids,
-                        },
+                        "WorkArtifact item %s done (attempt %d)",
+                        item.id, attempt,
                     )
                     self._artifact_controller.attach_receipt(
                         tool_call_id, item_result, item_id=item.id,
+                        status_override="ok",
                     )
                     item_results.append((item.id, item_result))
-                    return self._aggregate_artifact_results(
-                        tool_call_id, approved_req, item_results,
-                        recovered_item_ids, failed_attempts, total,
-                    )
+                    self._emit_projection(tool_call_id)
+                    break  # Inner loop — outer loop picks next item.
 
-                # ── Non-infrastructure failure → retry with recovery note ──
+                # outcome == "continue_same_item"
                 recovered_item_ids.append(item.id)
+                failed_attempts[item.id] = attempt
                 extras = item_result.extras if isinstance(item_result.extras, dict) else {}
                 recovery_note = (
                     f"\n\n--- Recovery attempt {attempt} for this item ---\n"
@@ -1225,36 +1332,9 @@ class _DispatchProxy(QObject):
                 )
                 item_req = replace(item_req, spec=item_req.spec + recovery_note)
                 _log.info(
-                    "WorkArtifact item %s retry attempt %d",
+                    "WorkArtifact item %s continue_same_item attempt %d",
                     item.id, attempt,
                 )
-
-            if item_result is None:
-                item_result = WorkerDispatchResult(
-                    ok=False,
-                    summary="WorkArtifact internal item was not started.",
-                    extras={"work_artifact_item_not_started": True},
-                )
-
-            # Attach receipt to this exact item.
-            self._artifact_controller.attach_receipt(
-                tool_call_id, item_result, item_id=item.id,
-            )
-            item_results.append((item.id, item_result))
-
-            # Stop on cancellation only — repeated failure is retried.
-            if item_result.cancelled:
-                _log.info(
-                    "WorkArtifact job stopping after cancelled item tool_call_id=%s",
-                    tool_call_id,
-                )
-                break
-
-        # Build and return aggregate result.
-        return self._aggregate_artifact_results(
-            tool_call_id, approved_req, item_results,
-            recovered_item_ids, failed_attempts, total,
-        )
 
     def _build_artifact_item_request(
         self,
@@ -1367,30 +1447,60 @@ class _DispatchProxy(QObject):
     ) -> WorkerDispatchResult:
         """Aggregate per-item results into one outcome.
 
-        Four outcomes
-        -------------
-        1. **completed** — every item succeeded.
+        Completion is derived from artifact state, not from raw per-attempt
+        ``WorkerDispatchResult.ok``.  Items whose artifact status is ``done``
+        or whose receipt status is ``ok`` count as completed.
+
+        Outcomes
+        --------
+        1. **completed** — all items done (``all_required_items_done``).
         2. **cancelled** — user cancelled the job.
         3. **infrastructure-paused** — harness/provider/auth/network failure;
-           ``work_artifact_unfinished: true`` with ``pending_item_ids`` so
-           the caller can resume.
-        4. **retry-cap-reached** — physical retry limit bound; recoverable
-           with ``artifact_retry_cap_reached: true`` in extras.
+           resumable later (``work_artifact_unfinished: true``).
 
-        There is no "failed at item X, awaiting instructions" outcome.
+        There is no "retry-cap-reached" outcome — ordinary repeated failures
+        do not pause the job.
         """
-        if terminal_override is not None and infrastructure_pause:
-            # ── Infrastructure pause: resumable ──
-            completed_ids = [item_id for item_id, r in item_results if r.ok]
+        # ── Derive completion from artifact state ────────────────────────────
+        artifact = self._artifact_controller.get_artifact(tool_call_id)
+
+        if artifact is not None:
+            completed_items = [
+                wi.id
+                for wi in artifact.work_items
+                if wi.status == WorkItemStatus.done
+                or (wi.receipt is not None and wi.receipt.status == "ok")
+            ]
+            all_ok = self._artifact_controller.all_required_items_done(tool_call_id)
             pending_ids = [
                 it.id
                 for it in self._artifact_controller.unfinished_items(tool_call_id)
             ]
+        else:
+            # Fallback when no artifact is registered (standalone helper tests).
+            completed_items = [item_id for item_id, r in item_results if r.ok]
+            all_ok = all(r.ok for _item_id, r in item_results)
+            pending_ids = []
+
+        all_cancelled = any(r.cancelled for _item_id, r in item_results)
+        first_not_ok = next(
+            ((item_id, r) for item_id, r in item_results if not r.ok and not r.cancelled),
+            None,
+        )
+        cancelled_item_id = next(
+            (item_id for item_id, r in item_results if r.cancelled),
+            None,
+        )
+
+        # ── Terminal overrides ──────────────────────────────────────────────
+
+        if terminal_override is not None and infrastructure_pause:
+            # ── Infrastructure pause: resumable ──
             paused_extras: dict[str, Any] = dict(terminal_override.extras or {})
             paused_extras.update({
                 "work_artifact_job": True,
                 "work_artifact_unfinished": True,
-                "completed_items": completed_ids,
+                "completed_items": completed_items,
                 "pending_item_ids": pending_ids,
                 "total_items": total_items,
                 "current_item_id": item_results[-1][0] if item_results else "",
@@ -1401,7 +1511,7 @@ class _DispatchProxy(QObject):
                     f"WorkArtifact job paused: "
                     f"{terminal_override.summary or 'Infrastructure issue'}. "
                     f"Job will resume when the provider is reachable. "
-                    f"{len(completed_ids)}/{total_items} items completed."
+                    f"{len(completed_items)}/{total_items} items completed."
                 ),
                 cancelled=False,
                 modified_files=list(terminal_override.modified_files)
@@ -1414,17 +1524,6 @@ class _DispatchProxy(QObject):
         if terminal_override is not None:
             # ── Cancellation: passed through directly ──
             return terminal_override
-
-        all_ok = all(r.ok for _item_id, r in item_results)
-        all_cancelled = any(r.cancelled for _item_id, r in item_results)
-        first_not_ok = next(
-            ((item_id, r) for item_id, r in item_results if not r.ok and not r.cancelled),
-            None,
-        )
-        cancelled_item_id = next(
-            (item_id for item_id, r in item_results if r.cancelled),
-            None,
-        )
 
         # Collect modified files (ordered union).
         modified_files: list[str] = []
@@ -1445,9 +1544,6 @@ class _DispatchProxy(QObject):
         item_summaries = {
             item_id: r.summary for item_id, r in item_results
         }
-        completed_items = [
-            item_id for item_id, r in item_results if r.ok
-        ]
         failed_item_id = first_not_ok[0] if first_not_ok else None
         cancel_item_id = cancelled_item_id if all_cancelled else None
         current_item_id = failed_item_id or cancel_item_id or (item_results[-1][0] if item_results else "")
@@ -1463,15 +1559,6 @@ class _DispatchProxy(QObject):
         }
         if failed_item_id:
             extras["failed_item_id"] = failed_item_id
-
-        # Detect if any item hit the physical retry cap.
-        retry_cap_reached = any(
-            (r.extras or {}).get("artifact_retry_cap_reached")
-            for _item_id, r in item_results
-        )
-        if retry_cap_reached:
-            extras["artifact_retry_cap_reached"] = True
-            extras["work_artifact_unfinished"] = True
 
         if all_ok:
             return WorkerDispatchResult(
