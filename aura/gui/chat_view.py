@@ -618,6 +618,16 @@ class ChatView(QScrollArea):
             # Remove any terminal-state plan cards left from prior retries
             self._remove_terminal_plan_cards()
 
+            # Idempotent plan card creation — if a card already exists for this
+            # tool_call_id do not create a second one or re-wire signals.
+            existing_card = self._plan_writer_cards.get(tool_call_id)
+            if existing_card is not None:
+                self._tool_owner[tool_call_id] = ac
+                if not ac._tool_cluster.isVisible():
+                    ac._tool_cluster.setVisible(True)
+                self._scroll_to_bottom()
+                return
+
             card = PlanWriterCard(parent=self)
             self._plan_writer_cards[tool_call_id] = card
             if not ac._tool_cluster.isVisible():
