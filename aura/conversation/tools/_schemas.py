@@ -759,8 +759,9 @@ DISPATCH_TOOL_DEF: dict[str, Any] = {
                                     "target_files": {
                                         "type": "array",
                                         "items": {"type": "string"},
-                                        "minItems": 1,
-                                        "description": "Workspace-relative files for this item.",
+                                        "description": "Known concrete target files for this item. "
+                                        "May be empty for discovery / repo-scope / phase-0 tasks "
+                                        "where no specific file is known yet.",
                                     },
                                     "acceptance": {
                                         "type": "string",

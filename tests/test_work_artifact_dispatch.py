@@ -1597,3 +1597,144 @@ def test_receipt_is_audit_not_advancement_authority(tmp_path):
     # rather than relying on raw ok.
     assert raw_result.ok is False, "Raw Worker result ok must remain False"
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Q. Empty target_files regression tests — unified-dispatch invariant fix
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def test_controller_creates_one_item_artifact_with_empty_files():
+    """Flat WorkerDispatchRequest with files=[] creates one-item WorkArtifact.
+
+    Regression: Phase 0 / discovery / repo-scope dispatch may have no known
+    concrete target files. The unified dispatch normalisation must accept
+    empty files without raising.
+    """
+    ctrl = WorkArtifactController()
+    req = WorkerDispatchRequest(
+        goal="Phase 0 — explore workspace",
+        files=[],
+        spec="Understand the project structure before planning changes.",
+        acceptance="Workspace structure is documented in a plan.",
+        summary="Workspace discovery",
+    )
+
+    artifact = ctrl.create_artifact_from_request("call_discovery", req)
+
+    assert artifact.artifact_id == "call_discovery"
+    assert len(artifact.work_items) == 1
+    item = artifact.work_items[0]
+    assert item.id == "item-1"
+    assert item.intent == "Phase 0 — explore workspace"
+    assert item.target_files == [], f"Expected [], got {item.target_files}"
+    assert item.acceptance == "Workspace structure is documented in a plan."
+    assert artifact.allowed_files == []
+
+
+def test_build_artifact_item_request_empty_files(tmp_path):
+    """_build_artifact_item_request returns files=[] when item and approved request
+    both have no files.
+
+    Regression: items with empty target_files and no top-level files must
+    produce a valid WorkerDispatchRequest with files=[], not raise.
+    """
+    from aura.bridge.dispatch import _DispatchProxy
+
+    proxy = _DispatchProxy(
+        parent_widget=None,
+        registry_factory=lambda mode: None,
+        approval_proxy=None,
+        workspace_root=tmp_path,
+    )
+
+    # Both item.target_files and approved_req.files are empty
+    item = WorkArtifactItem(
+        id="item-1",
+        title="Explore workspace",
+        intent="Phase 0 discovery",
+        target_files=[],
+        acceptance="Documented.",
+    )
+    approved_req = WorkerDispatchRequest(
+        goal="Phase 0",
+        files=[],
+        spec="Discovery pass",
+        acceptance="Done.",
+        summary="Discovery",
+    )
+
+    item_req = proxy._build_artifact_item_request(
+        "call_discovery", approved_req, item, 1, 1,
+    )
+
+    assert item_req.files == [], f"Expected files=[], got {item_req.files}"
+    assert item_req.goal == "Phase 0 discovery"
+    assert item_req.artifact_id == "call_discovery"
+    assert item_req.artifact_item_id == "item-1"
+
+
+def test_request_dispatch_with_empty_files_reaches_pending_approval(tmp_path):
+    """DispatchProxy.request_dispatch with files=[] reaches pending-approval /
+    SpecCard path instead of immediately failing before approval.
+
+    Regression: the unified dispatch normalisation must register a pending
+    dispatch (not raise on WorkArtifact creation with empty target_files).
+    We verify by running request_dispatch in a thread, waiting for the
+    pending entry to appear in the pending map, and confirming the
+    WorkArtifact was created successfully before approval.
+    """
+    from aura.bridge.dispatch import _DispatchProxy
+
+    proxy = _DispatchProxy(
+        parent_widget=None,
+        registry_factory=lambda mode: None,
+        approval_proxy=None,
+        workspace_root=tmp_path,
+    )
+
+    import threading
+    import time
+    pending_map = proxy._pending_map
+
+    dispatch_results: list = []
+    dispatch_thread = threading.Thread(
+        target=lambda: dispatch_results.append(
+            proxy.request_dispatch("call_empty_file", WorkerDispatchRequest(
+                goal="Phase 0",
+                files=[],
+                spec="Discovery pass.",
+                acceptance="Documented.",
+                summary="Discovery",
+            ))
+        ),
+        daemon=True,
+    )
+    dispatch_thread.start()
+
+    # Wait for the dispatch to register a pending entry (happens after
+    # artifact creation succeeds and showSpecCard is emitted).
+    deadline = time.time() + 5.0
+    while time.time() < deadline:
+        if pending_map.get("call_empty_file") is not None:
+            break
+        time.sleep(0.05)
+
+    pending = pending_map.get("call_empty_file")
+    assert pending is not None, (
+        "Pending dispatch must be registered — the dispatch should have "
+        "reached the pending-approval state without crashing"
+    )
+
+    # The artifact was successfully created (not crashed) before approval.
+    ctrl = proxy.artifact_controller()
+    artifact = ctrl.get_artifact("call_empty_file")
+    assert artifact is not None, (
+        "WorkArtifact must exist — creation must not have raised with files=[]"
+    )
+    assert len(artifact.work_items) == 1
+    assert artifact.work_items[0].target_files == []
+
+    # Clean up: cancel the pending dispatch so the thread can exit.
+    pending_map.resolve_cancelled("call_empty_file")
+    dispatch_thread.join(timeout=3.0)
+

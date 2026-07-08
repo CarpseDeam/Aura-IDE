@@ -117,7 +117,13 @@ class WorkArtifactReceipt:
 
 @dataclass
 class WorkArtifactItem:
-    """One bounded internal execution unit."""
+    """One bounded internal execution unit.
+
+    Every item carries ``target_files`` — known concrete files for the
+    work.  May be an empty list for discovery / repo-scope / phase-0 tasks
+    where no specific target file is known yet; the Worker inspects the
+    workspace through normal read/search tools instead.
+    """
 
     id: str
     title: str
@@ -183,6 +189,9 @@ class WorkArtifact:
     executes one item-sized request at a time. The artifact advances to
     the next pending item for internal execution only — no per-item user
     review path.
+
+    Items may carry an empty ``target_files`` list for discovery / repo-
+    scope / phase-0 tasks where no concrete target file is known yet.
     """
 
     artifact_id: str
@@ -212,8 +221,6 @@ class WorkArtifact:
                 raise ValueError("Every work item must have a title.")
             if not item.intent:
                 raise ValueError("Every work item must have an intent.")
-            if not item.target_files:
-                raise ValueError(f"Work item '{item.id}' must have target_files.")
             if not item.acceptance:
                 raise ValueError(f"Work item '{item.id}' must have acceptance.")
             if item.id in seen:

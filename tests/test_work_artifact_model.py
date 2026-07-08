@@ -267,3 +267,27 @@ class TestWorkArtifact:
         }
         item = WorkArtifactItem.from_dict(raw)
         assert item.status == WorkItemStatus.pending
+
+    def test_empty_target_files_does_not_raise(self) -> None:
+        """WorkArtifact with an item that has target_files=[] creates without raising.
+
+        Regression: discovery / repo-scope / phase-0 dispatches may have empty
+        target_files because no concrete target file is known yet.
+        """
+        artifact = WorkArtifact(
+            artifact_id="art-empty-files",
+            goal="Phase 0 discovery",
+            work_items=[
+                WorkArtifactItem(
+                    id="item-1",
+                    title="Explore workspace",
+                    intent="Understand project structure before planning changes",
+                    target_files=[],
+                    acceptance="Workspace structure is documented",
+                ),
+            ],
+            current_item_id="item-1",
+        )
+        assert artifact.artifact_id == "art-empty-files"
+        assert len(artifact.work_items) == 1
+        assert artifact.work_items[0].target_files == []
