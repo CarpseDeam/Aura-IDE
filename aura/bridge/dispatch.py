@@ -1544,32 +1544,41 @@ class _DispatchProxy(QObject):
         item_summaries = {
             item_id: r.summary for item_id, r in item_results
         }
-        failed_item_id = first_not_ok[0] if first_not_ok else None
-        cancel_item_id = cancelled_item_id if all_cancelled else None
-        current_item_id = failed_item_id or cancel_item_id or (item_results[-1][0] if item_results else "")
-
-        extras: dict[str, Any] = {
+        audit_base: dict[str, Any] = {
             "work_artifact_job": True,
             "completed_items": completed_items,
             "total_items": total_items,
-            "current_item_id": current_item_id,
             "recovered_item_ids": list(recovered_item_ids),
             "failed_attempts": dict(failed_attempts),
             "item_summaries": item_summaries,
         }
-        if failed_item_id:
-            extras["failed_item_id"] = failed_item_id
 
         if all_ok:
+            # All items done — no stale failure metadata from raw non-ok results.
             return WorkerDispatchResult(
                 ok=True,
                 summary=f"WorkArtifact job completed: {total_items} item(s) done.",
                 modified_files=modified_files,
                 validation=validation,
                 status=WorkerOutcomeStatus.completed.value,
-                extras=extras,
+                extras={
+                    **audit_base,
+                    "current_item_id": "",
+                },
             )
-        elif all_cancelled:
+
+        # ── Not fully complete: derive metadata from raw results ──────────────
+        failed_item_id = first_not_ok[0] if first_not_ok else None
+        cancel_item_id = cancelled_item_id if all_cancelled else None
+        current_item_id = failed_item_id or cancel_item_id or (item_results[-1][0] if item_results else "")
+        extras: dict[str, Any] = {
+            **audit_base,
+            "current_item_id": current_item_id,
+        }
+        if failed_item_id:
+            extras["failed_item_id"] = failed_item_id
+
+        if all_cancelled:
             return WorkerDispatchResult(
                 ok=False,
                 summary="WorkArtifact job cancelled during internal items.",
@@ -1578,25 +1587,25 @@ class _DispatchProxy(QObject):
                 status=WorkerOutcomeStatus.cancelled.value,
                 extras=extras,
             )
-        else:
-            # ── Incomplete: some items did not complete ──
-            summary_parts = [
-                f"WorkArtifact job incomplete: {len(completed_items)}/{total_items} items completed."
-            ]
-            for item_id, r in item_results:
-                if r.ok:
-                    summary_parts.append(f"✓ {item_id}: {r.summary}")
-                else:
-                    summary_parts.append(f"✗ {item_id}: {r.summary}")
-            return WorkerDispatchResult(
-                ok=False,
-                summary=" ".join(summary_parts),
-                modified_files=modified_files,
-                validation=validation,
-                recoverable=True,
-                status=WorkerOutcomeStatus.harness_error.value,
-                extras=extras,
-            )
+
+        # ── Incomplete: some items did not complete ──
+        summary_parts = [
+            f"WorkArtifact job incomplete: {len(completed_items)}/{total_items} items completed."
+        ]
+        for item_id, r in item_results:
+            if r.ok:
+                summary_parts.append(f"✓ {item_id}: {r.summary}")
+            else:
+                summary_parts.append(f"✗ {item_id}: {r.summary}")
+        return WorkerDispatchResult(
+            ok=False,
+            summary=" ".join(summary_parts),
+            modified_files=modified_files,
+            validation=validation,
+            recoverable=True,
+            status=WorkerOutcomeStatus.harness_error.value,
+            extras=extras,
+        )
 
     def _emit_projection(self, tool_call_id: str) -> None:
         """Helper to emit artifact projection from the current state."""

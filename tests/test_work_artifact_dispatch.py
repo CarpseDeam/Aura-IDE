@@ -1216,6 +1216,13 @@ def test_artifact_done_does_not_require_raw_worker_ok(tmp_path):
     assert proj.completed_count == 2
     assert proj.pending_count == 0
 
+    # ── No stale failure metadata from raw non-ok results ──────────────────
+    assert "failed_item_id" not in result.extras, \
+        f"Expected no failed_item_id in completed result, got {result.extras.get('failed_item_id')}"
+    current_id = result.extras.get("current_item_id", "")
+    assert current_id in ("", None) or current_id != "item-1", \
+        f"current_item_id should not be 'item-1' for completed job, got {current_id!r}"
+
 
 def test_missing_declared_validation_continues_same_item(tmp_path):
     """Item retries when declared validation has no matching evidence."""
