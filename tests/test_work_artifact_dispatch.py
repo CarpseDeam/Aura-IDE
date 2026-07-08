@@ -201,13 +201,16 @@ def test_controller_pending_items():
     assert pending[0].id == "item-1"
     assert pending[1].id == "item-2"
 
+    # Receipt does NOT change status — must mark done explicitly.
+    ctrl.mark_item_done("call_123", "item-1")
     ctrl.attach_receipt("call_123", _ok_result(modified=["src/model.py"]))
     pending2 = ctrl.pending_items("call_123")
     assert len(pending2) == 1  # item-1 done, item-2 still pending
     assert pending2[0].id == "item-2"
 
-    # Mark item-2 done
+    # Mark item-2 done explicitly.
     ctrl.mark_item_active("call_123", "item-2")
+    ctrl.mark_item_done("call_123", "item-2")
     ctrl.attach_receipt("call_123", _ok_result(modified=["src/view.py"]), item_id="item-2")
     assert ctrl.pending_items("call_123") == []
 
@@ -220,21 +223,26 @@ def test_controller_all_required_items_done():
     assert not ctrl.all_required_items_done("call_123")
 
     ctrl.mark_item_active("call_123", "item-1")
+    ctrl.mark_item_done("call_123", "item-1")
     ctrl.attach_receipt("call_123", _ok_result())
     assert not ctrl.all_required_items_done("call_123")
 
     ctrl.mark_item_active("call_123", "item-2")
+    ctrl.mark_item_done("call_123", "item-2")
     ctrl.attach_receipt("call_123", _ok_result(), item_id="item-2")
     assert ctrl.all_required_items_done("call_123")
 
 
 def test_controller_attach_receipt_with_explicit_item_id():
-    """attach_receipt with item_id attaches to the correct item, not current_item."""
+    """attach_receipt with item_id attaches to the correct item, not current_item.
+    Receipts are records only — status must be set via mark_item_done."""
     ctrl = WorkArtifactController()
     ctrl.create_artifact_from_payload("call_123", _make_two_item_payload())
 
     # Attach to item-2 explicitly while item-1 is current
     ctrl.attach_receipt("call_123", _ok_result(modified=["src/view.py"]), item_id="item-2")
+    # Receipt does NOT change status — must mark done explicitly.
+    ctrl.mark_item_done("call_123", "item-2")
     artifact = ctrl.get_artifact("call_123")
     assert artifact is not None
     assert artifact.work_items[1].status == WorkItemStatus.done  # item-2 done
@@ -263,8 +271,9 @@ def test_artifact_continues_after_item_with_empty_validation_commands():
     ]
     ctrl.create_artifact_from_payload("call_cont", payload)
 
-    # Run item-1: mark active, attach ok result.
+    # Run item-1: mark active, mark done, attach receipt as audit record.
     ctrl.mark_item_active("call_cont", "item-1")
+    ctrl.mark_item_done("call_cont", "item-1")
     ctrl.attach_receipt("call_cont", _ok_result(modified=["src/model.py"]))
 
     # Item-1 must be done even though it had an empty validation command.
@@ -530,6 +539,7 @@ def test_projection_item_counts():
     assert proj.artifact_status == "pending"
 
     # Mark item 1 done
+    artifact.mark_done("item-1")
     artifact.attach_receipt("item-1", WorkArtifactReceipt(status="ok"))
     proj2 = WorkArtifactProjection.from_artifact(artifact)
     assert proj2.completed_count == 1
@@ -539,6 +549,7 @@ def test_projection_item_counts():
 
     # Mark all done
     artifact.mark_active("item-2")
+    artifact.mark_done("item-2")
     artifact.attach_receipt("item-2", WorkArtifactReceipt(status="ok"))
     proj3 = WorkArtifactProjection.from_artifact(artifact)
     assert proj3.completed_count == 2
@@ -558,6 +569,7 @@ def test_projection_item_status_vs_aggregate():
         ],
         current_item_id="item-1",
     )
+    artifact.mark_done("item-1")
     artifact.attach_receipt("item-1", WorkArtifactReceipt(status="ok"))
 
     proj = WorkArtifactProjection.from_artifact(artifact)
@@ -996,23 +1008,15 @@ def test_resume_guard_does_not_fire_on_first_dispatch(tmp_path):
 #    _normalize_artifact_item_completion. ──────────────────────────────────────
 
 
-def test_artifact_normalizer_receipt_corpse_prevention():
-    """Receipt corpse prevention via the (orphaned) normalizer.
+def test_artifact_outcome_validation_is_sole_authority():
+    """_decide_artifact_item_outcome uses only validation evidence for 'done'.
 
-    A recoverable continuation result with successful item evidence
-    (modified files + validation) must NOT produce ``receipt.status="continuing"``
-    when routed through the artifact item normalizer.  It must produce
-    ``receipt.status="ok"``.
+    A recoverable continuation result WITHOUT structured validation evidence
+    MUST return ``continue_same_item``, not ``done``.
+    A result WITH passing validation evidence MUST return ``done``.
     """
     from aura.bridge.dispatch import _DispatchProxy
 
-    proxy = _DispatchProxy(
-        parent_widget=None,
-        registry_factory=lambda mode: None,
-        approval_proxy=None,
-    )
-
-    # Build the continuing-but-successful result
     item_req = WorkerDispatchRequest(
         goal="Test",
         files=["src/model.py"],
@@ -1022,28 +1026,66 @@ def test_artifact_normalizer_receipt_corpse_prevention():
         artifact_id="art-1",
         artifact_item_id="item-1",
     )
-    item_result = _continuing_with_evidence_result(
-        modified=["src/model.py"],
-    )
-
-    # Without normalizer: receipt is "continuing" — the corpse state.
-    raw_receipt = worker_result_to_receipt(item_result)
-    assert raw_receipt.status == "continuing", (
-        f"Expected continuing without normalizer, got {raw_receipt.status}"
-    )
-
-    # With normalizer: receipt is "ok"
     from aura.work_artifact.model import WorkArtifactItem
     dummy_item = WorkArtifactItem(
         id="item-1", title="Test", intent="Test",
         target_files=["src/model.py"], acceptance="Works",
     )
-    normalized = proxy._normalize_artifact_item_completion(
-        item_req, item_result, dummy_item,
+
+    # ── No structured validation evidence → continue_same_item ─────────────
+    no_evidence_result = _continuing_with_evidence_result(
+        modified=["src/model.py"],
     )
-    ok_receipt = worker_result_to_receipt(normalized)
-    assert ok_receipt.status == "ok", (
-        f"Expected ok after normalizer, got {ok_receipt.status}"
+    outcome1 = _DispatchProxy._decide_artifact_item_outcome(
+        item_req, no_evidence_result, dummy_item,
+    )
+    assert outcome1 == "continue_same_item", (
+        f"Expected continue_same_item without validation evidence, "
+        f"got {outcome1}"
+    )
+
+    # ── With passing validation evidence → done ────────────────────────────
+    passing_result = WorkerDispatchResult(
+        ok=False,
+        summary="Item done.",
+        recoverable=True,
+        phase_boundary=True,
+        needs_followup=True,
+        modified_files=["src/model.py"],
+        extras={
+            "validation_results": [
+                {
+                    "command": "python -m compileall src/model.py",
+                    "ok": True,
+                    "exit_code": 0,
+                    "validation_classification": "passed",
+                    "counts_as_validation": True,
+                    "counts_as_product_failure": False,
+                },
+            ],
+        },
+    )
+    outcome2 = _DispatchProxy._decide_artifact_item_outcome(
+        item_req, passing_result, dummy_item,
+    )
+    assert outcome2 == "done", (
+        f"Expected done with passing validation evidence, "
+        f"got {outcome2}"
+    )
+
+    # ── Infrastructure failure → external_pause ───────────────────────────
+    infra_result = WorkerDispatchResult(
+        ok=False,
+        summary="API error",
+        status="harness_error",
+        extras={"api_errors": ["timeout"], "failure_class": "provider_unavailable"},
+    )
+    outcome3 = _DispatchProxy._decide_artifact_item_outcome(
+        item_req, infra_result, dummy_item,
+    )
+    assert outcome3 == "external_pause", (
+        f"Expected external_pause for infrastructure failure, "
+        f"got {outcome3}"
     )
 
 

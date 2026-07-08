@@ -317,26 +317,31 @@ class WorkArtifact:
         raise ValueError(f"Item '{item_id}' not found in artifact.")
 
     def attach_receipt(self, item_id: str, receipt: WorkArtifactReceipt) -> None:
-        """Attach a receipt to an item and update its status.
+        """Attach a receipt to an item as an audit record only.
 
-        Work Artifact item states are only pending, active, done.
-        ``ok`` receipts mark the item done.
-        ``continuing`` receipts keep the item active.
-        All other receipts (cancelled, failed, mismatch, interrupted, etc.)
-        return the item to pending with the receipt attached so it remains
-        re-dispatchable. Interruptions are a run-level concern, not an item state.
+        Receipts do NOT change item status.  Status is owned by the
+        dispatcher's validation classifier, not receipt status.
+        The dispatcher calls ``mark_done`` explicitly when validation passes.
         """
         for item in self.work_items:
             if item.id == item_id:
                 item.receipt = receipt
-                if receipt.status == "ok":
-                    item.status = WorkItemStatus.done
-                elif receipt.status == "continuing":
-                    item.status = WorkItemStatus.active
-                else:
-                    item.status = WorkItemStatus.pending
                 self.updated_at = time.time()
                 self.current_item_id = item_id
+                return
+        raise ValueError(f"Item '{item_id}' not found in artifact.")
+
+    def mark_done(self, item_id: str) -> None:
+        """Mark an item as done (validation passed).
+
+        Called by the dispatcher when the item has passing validation
+        evidence.  Does NOT attach a receipt — the dispatcher does that
+        separately as an audit record.
+        """
+        for item in self.work_items:
+            if item.id == item_id:
+                item.status = WorkItemStatus.done
+                self.updated_at = time.time()
                 return
         raise ValueError(f"Item '{item_id}' not found in artifact.")
 

@@ -5,10 +5,10 @@ tool payload, the dispatch bridge, and the GUI projection.
 
 Responsibilities:
 - Create artifact from Planner tool payload.
-- Create a one-item compatibility artifact from a flat dispatch request.
 - Track item state for internal artifact execution.
 - Mark item active when execution starts.
-- Attach receipt on Worker finish.
+- Mark item done when validation passes.
+- Attach receipt as audit record on Worker finish.
 - Emit artifact projection updates for GUI.
 - Never run Worker itself.
 """
@@ -17,12 +17,11 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable
 
-from aura.conversation.dispatch import WorkerDispatchRequest, WorkerDispatchResult
+from aura.conversation.dispatch import WorkerDispatchResult
 from aura.work_artifact.model import (
     ValidationCommandSpec,
     WorkArtifact,
     WorkArtifactItem,
-    WorkArtifactReceipt,
 )
 from aura.work_artifact.projection import WorkArtifactProjection
 from aura.work_artifact.receipt import worker_result_to_receipt
@@ -98,40 +97,6 @@ class WorkArtifactController:
         self._emit_projection(tool_call_id)
         return artifact
 
-    def create_one_item_artifact(
-        self,
-        tool_call_id: str,
-        req: WorkerDispatchRequest,
-    ) -> WorkArtifact:
-        """Create a one-item compatibility artifact from a flat dispatch request.
-
-        Used when Planner sends a flat dispatch_to_worker without a
-        ``work_artifact`` field. The single item wraps the flat request.
-        """
-        item = WorkArtifactItem(
-            id="item-1",
-            title=req.summary or req.goal or "Worker dispatch",
-            intent=req.goal,
-            target_files=list(req.files),
-            acceptance=req.acceptance,
-        )
-        artifact = WorkArtifact(
-            artifact_id=tool_call_id,
-            goal=req.goal,
-            constraints=list(req.non_goals),
-            allowed_files=list(req.files),
-            work_items=[item],
-            current_item_id=item.id,
-        )
-
-        self._artifacts[tool_call_id] = artifact
-        _log.info(
-            "One-item WorkArtifact created tool_call_id=%s",
-            tool_call_id,
-        )
-        self._emit_projection(tool_call_id)
-        return artifact
-
     def get_artifact(self, tool_call_id: str) -> WorkArtifact | None:
         """Return the active artifact for *tool_call_id*, or None."""
         return self._artifacts.get(tool_call_id)
@@ -153,7 +118,14 @@ class WorkArtifactController:
         *,
         status_override: str | None = None,
     ) -> None:
-        """Attach a Worker result receipt to an artifact item.
+        """Attach a Worker result receipt to an artifact item (record only).
+
+        Receipts are audit/display records only — they do NOT change item
+        status.  Status is owned by the dispatcher's validation classifier.
+        The dispatcher calls ``mark_item_done`` explicitly when validation passes.
+
+        *status_override* controls the receipt's display status only; it has
+        no effect on item control state.
 
         When *item_id* is provided, attaches to that exact item.
         Otherwise attaches to ``artifact.current_item()``.
@@ -174,6 +146,20 @@ class WorkArtifactController:
 
         receipt = worker_result_to_receipt(result, status_override=status_override)
         artifact.attach_receipt(target_id, receipt)
+        self._emit_projection(tool_call_id)
+
+    def mark_item_done(self, tool_call_id: str, item_id: str) -> None:
+        """Mark an artifact item as done (validation passed).
+
+        Called by the dispatcher when the current item's validation evidence
+        passes.  Does NOT attach a receipt — call ``attach_receipt``
+        separately for audit recording.
+        """
+        artifact = self._artifacts.get(tool_call_id)
+        if artifact is None:
+            _log.warning("mark_item_done: no artifact for tool_call_id=%s", tool_call_id)
+            return
+        artifact.mark_done(item_id)
         self._emit_projection(tool_call_id)
 
     # ── item query helpers ───────────────────────────────────────────────

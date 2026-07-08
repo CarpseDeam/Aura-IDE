@@ -168,7 +168,7 @@ class TestWorkArtifact:
         values = {s.value for s in WorkItemStatus}
         assert values == {"pending", "active", "done"}
 
-    def test_attach_done_receipt_marks_item_done(self) -> None:
+    def test_attach_done_receipt_is_audit_record(self) -> None:
         artifact = WorkArtifact(
             artifact_id="art-1",
             goal="Test",
@@ -177,15 +177,16 @@ class TestWorkArtifact:
             ],
             current_item_id="item-1",
         )
+        artifact.mark_done("item-1")
         receipt = WorkArtifactReceipt(status="ok", summary="Done")
         artifact.attach_receipt("item-1", receipt)
         item = artifact.current_item()
         assert item is not None
-        assert item.status == WorkItemStatus.done
+        assert item.status == WorkItemStatus.done  # set by mark_done, not receipt
         assert item.receipt is not None
         assert item.receipt.status == "ok"
 
-    def test_attach_continuing_receipt_keeps_item_active(self) -> None:
+    def test_attach_continuing_receipt_does_not_mutate_status(self) -> None:
         artifact = WorkArtifact(
             artifact_id="art-1",
             goal="Test",
@@ -199,11 +200,11 @@ class TestWorkArtifact:
         artifact.attach_receipt("item-1", receipt)
         item = artifact.current_item()
         assert item is not None
-        assert item.status == WorkItemStatus.active
+        assert item.status == WorkItemStatus.active  # unchanged by receipt
         assert item.receipt is not None
         assert item.receipt.status == "continuing"
 
-    def test_attach_failed_receipt_returns_item_to_pending(self) -> None:
+    def test_attach_failed_receipt_does_not_mutate_status(self) -> None:
         artifact = WorkArtifact(
             artifact_id="art-1",
             goal="Test",
@@ -216,11 +217,11 @@ class TestWorkArtifact:
         artifact.attach_receipt("item-1", receipt)
         item = artifact.current_item()
         assert item is not None
-        assert item.status == WorkItemStatus.pending
+        assert item.status == WorkItemStatus.pending  # unchanged by receipt
         assert item.receipt is not None
         assert item.receipt.status == "failed"
 
-    def test_attach_cancelled_receipt_returns_item_to_pending(self) -> None:
+    def test_attach_cancelled_receipt_does_not_mutate_status(self) -> None:
         artifact = WorkArtifact(
             artifact_id="art-1",
             goal="Test",
@@ -233,11 +234,11 @@ class TestWorkArtifact:
         artifact.attach_receipt("item-1", receipt)
         item = artifact.current_item()
         assert item is not None
-        assert item.status == WorkItemStatus.pending
+        assert item.status == WorkItemStatus.pending  # unchanged by receipt
         assert item.receipt is not None
         assert item.receipt.status == "cancelled"
 
-    def test_attach_mismatch_receipt_returns_item_to_pending(self) -> None:
+    def test_attach_mismatch_receipt_does_not_mutate_status(self) -> None:
         artifact = WorkArtifact(
             artifact_id="art-1",
             goal="Test",
@@ -250,7 +251,7 @@ class TestWorkArtifact:
         artifact.attach_receipt("item-1", receipt)
         item = artifact.current_item()
         assert item is not None
-        assert item.status == WorkItemStatus.pending
+        assert item.status == WorkItemStatus.pending  # unchanged by receipt
         assert item.receipt is not None
         assert item.receipt.status == "mismatch"
 

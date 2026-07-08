@@ -28,7 +28,6 @@ from aura.bridge.worker_completion_result import (
     _last_assistant_content,
 )
 from aura.bridge.worker_dispatch_runner import WorkerDispatchRunner
-from aura.bridge.worker_outcome_classifier import EDIT_TRANSACTION_FAILURE_CLASSES
 from aura.bridge.worker_report import (
     _build_worker_summary,
     _format_spec_as_user_message,
@@ -47,7 +46,6 @@ from aura.conversation import (
     WorkerOutcomeStatus,
 )
 from aura.conversation.detected_validation import normalize_command as _normalize_command
-from aura.conversation.path_utils import normalize_worker_path
 from aura.conversation.persistence import WorkerDispatchRecord
 from aura.conversation.tool_limits import TERMINAL_TOOLS, WRITE_TOOLS
 from aura.conversation.validation_truth import (
@@ -75,233 +73,44 @@ __all__ = [
 ]
 
 DISPATCH_TIMEOUT = 300.0
-_ARTIFACT_ITEM_RETRY_CAP = 10
 _log = logging.getLogger(__name__)
 
 
 # ── WorkArtifact item completion normalizer helpers ──────────────────────────
 
 
-def _normalize_path_for_comparison(p: str) -> str:
-    """Normalize a path string for evidence comparison only.
-
-    Delegates to ``normalize_worker_path`` for consistent normalisation
-    across the codebase, then lowercases for case-insensitive matching.
-
-    Does NOT resolve symlinks or make paths absolute.
-    The result is used only for set-intersection checks and is
-    never stored in receipts or results.
-    """
-    return normalize_worker_path(p).lower()
-
-
-def _artifact_item_paths_overlap(
-    target_files: list[str], modified_files: list[str],
-) -> bool:
-    """Return True when *modified_files* overlaps *target_files*.
-
-    Paths are normalised for comparison so that Windows backslashes,
-    case differences, and ``./`` prefixes do not cause false negatives.
-    Also supports absolute-vs-relative matching: a relative target path
-    may match an absolute modified path via segment-suffix comparison.
-    Preserves original paths in the result — normalisation is ephemeral.
-    """
-    if not target_files or not modified_files:
-        return False
-
-    targets = {_normalize_path_for_comparison(f) for f in target_files}
-    modified = {_normalize_path_for_comparison(f) for f in modified_files}
-
-    # 1. Exact normalised match
-    if targets.intersection(modified):
-        return True
-
-    # 2. Segment-suffix fallback (absolute-vs-relative)
-    return any(
-        m.endswith("/" + t) or t.endswith("/" + m)
-        for t in targets
-        for m in modified
-        if t and m
-    )
-
 
 def _artifact_item_declared_validation_commands(
     req: WorkerDispatchRequest,
 ) -> list[str]:
-    """Return the list of non-empty declared validation command strings.
-
-    Returns an empty list when the item declared no commands (the
-    normaliser should not require validation evidence in that case).
-    """
+    """Return the list of non-empty declared validation command strings."""
     if not req.validation_commands:
         return []
     return [vc.command for vc in req.validation_commands if vc.command.strip()]
-
-
-def _artifact_item_validation_passed(
-    req: WorkerDispatchRequest,
-    result: WorkerDispatchResult,
-) -> bool:
-    """Return True when declared validation evidence shows a pass.
-
-    Returns True immediately when no validation was declared (nothing
-    to verify).
-
-    Evidence-first ordering: exits early when passing evidence is
-    found, THEN falls through to failure-class checks when no evidence
-    exists.  This ensures a spurious ``failure_class`` (e.g. the
-    classifier's ``validation_not_run`` label on a result that actually
-    has passing validation records) does not pre-empt a correct pass.
-
-    Acceptable passing evidence (checked in order):
-    1. At least one ``validation_results`` record with a passed
-       classification.
-    2. At least one ``terminal_results`` record with a passed
-       classification.
-
-    Explicit failure signals (``failed_validation``, ``validation_not_run``
-    set to True, ``validation_failed`` status) block normalisation when
-    validation was declared.
-    """
-    declared = _artifact_item_declared_validation_commands(req)
-    if not declared:
-        return True  # No validation declared — nothing to verify.
-
-    extras = result.extras if isinstance(result.extras, dict) else {}
-    fc = str(extras.get("failure_class", "") or "")
-
-    # ── Hard failure signals check first (cheap, correct) ─────────────────
-    if extras.get("failed_validation"):
-        return False
-    if extras.get("validation_not_run") is True:
-        return False
-    if result.status == WorkerOutcomeStatus.validation_failed.value:
-        return False
-
-    # ── Passing evidence ──────────────────────────────────────────────────
-    # Check evidence BEFORE failure_class — the failure_class may be a
-    # spurious label from the outcome classifier (e.g. "validation_not_run")
-    # that contradicts the actual result data.
-
-    # 1. validation_results records
-    validation_results = extras.get("validation_results", [])
-    if isinstance(validation_results, list):
-        for vr in validation_results:
-            vc = vr.get("validation_classification", "")
-            if vc in ("passed", "completed"):
-                return True
-            if vc in ("product_validation_failed", "failed", "harness_error"):
-                return False
-
-    # 2. Terminal validation records
-    terminal_results = extras.get("terminal_results", [])
-    if isinstance(terminal_results, list):
-        for tr in terminal_results:
-            vc = tr.get("validation_classification", "") or tr.get("classification", "")
-            if vc in ("passed", "completed"):
-                return True
-            if vc in ("product_validation_failed", "failed", "harness_error"):
-                return False
-
-    # ── No evidence found — fall through to failure-class guard ───────────
-    if fc.startswith("validation_"):
-        return False
-
-    return False
-
-
-def _artifact_item_behavioral_validation_required(
-    req: WorkerDispatchRequest,
-    result: WorkerDispatchResult,
-) -> bool:
-    """Return True when the item explicitly declared behavioral/UI validation.
-
-    When True the normaliser must NOT override the outcome classification
-    because the item itself required behavioral validation and it was not
-    satisfied.
-    """
-    extras = result.extras if isinstance(result.extras, dict) else {}
-    behavioral = extras.get("required_behavioral_validation", {})
-    if not isinstance(behavioral, dict):
-        return False
-    # If any commands are in skipped / failed / could_not_run, the item
-    # explicitly declared behavioral validation that wasn't satisfied.
-    return bool(behavioral.get("skipped") or behavioral.get("failed") or behavioral.get("could_not_run"))
-
-
-def _artifact_item_has_real_blocker(result: WorkerDispatchResult) -> bool:
-    """Return True when *result* carries a hard failure that blocks normalisation.
-
-    These are always-problematic states that no amount of evidence can
-    override: harness errors, syntax failures, policy blocks, etc.
-    """
-    extras = result.extras if isinstance(result.extras, dict) else {}
-    fc = str(extras.get("failure_class", "") or "")
-
-    hard_fcs = {
-        "harness_error",
-        "internal_error",
-        "worker_internal_error",
-        "harness_no_progress",
-        "worker_recovery_exhausted",
-        "fatal_error",
-        "developer_error",
-        "token_limit_exceeded",
-    }
-    hard_fcs.update(EDIT_TRANSACTION_FAILURE_CLASSES)
-
-    if fc in hard_fcs:
-        return True
-    if extras.get("api_errors"):
-        return True
-    if extras.get("unrecovered_not_applied_writes"):
-        return True
-    if extras.get("recoverable_write_failures"):
-        return True
-    if extras.get("syntax_failure") or extras.get("syntax_error"):
-        return True
-    if extras.get("traceback_product_failure"):
-        return True
-    if extras.get("source_inspection_blockers"):
-        return True
-    if extras.get("terminal_policy_blockers"):
-        return True
-    if extras.get("environment_setup_blockers"):
-        return True
-    if extras.get("diagnostic_environment_caveats"):
-        return True
-    if result.status in (
-        WorkerOutcomeStatus.edit_mechanics_blocked.value,
-        WorkerOutcomeStatus.harness_error.value,
-    ):
-        return True
-    return False
 
 
 def _artifact_item_validation_satisfied(
     req: WorkerDispatchRequest,
     result: WorkerDispatchResult,
 ) -> bool:
-    """Return True when declared validation commands have matching pass evidence.
+    """Return True when validation evidence shows the item passed.
 
-    Each declared non-empty command must have at least one matching
-    structured evidence record in ``validation_results`` or ``terminal_results``
-    that passes without being a product failure.
+    This is the SOLE authority for WorkArtifact item completion.
 
-    Matching uses ``_normalize_command`` (whitespace-collapsed, lowercased)
-    so that minor formatting differences between the declared command and
-    the evidence record do not cause false negatives.
+    When the item declares validation commands, each declared command
+    must have a matching passing evidence record in ``validation_results``
+    or ``terminal_results`` (using ``validation_payload_passed``).
 
-    A product-failure match for a declared command blocks the satisfied
-    outcome for that command.  Commands with no evidence at all are not
-    satisfied.
+    When no validation commands are declared, the result must still
+    carry at least one passing validation or terminal evidence record
+    from the Worker's finalization path.  No evidence is not satisfied.
 
-    When no commands are declared, returns True (nothing to verify).
+    Matching uses ``_normalize_command`` (whitespace-collapsed, lowercased).
+
+    A product-failure match for a declared command prevents the satisfied
+    outcome for that command.  Commands with no evidence are not satisfied.
     """
     declared = _artifact_item_declared_validation_commands(req)
-    if not declared:
-        return True
-
     extras = result.extras if isinstance(result.extras, dict) else {}
 
     # Collect all evidence records from both sources.
@@ -311,47 +120,44 @@ def _artifact_item_validation_satisfied(
         if isinstance(raw, list):
             evidence.extend(raw)
 
-    # Build a map from normalised declared command → raw command.
-    declared_normal: dict[str, str] = {
-        _normalize_command(cmd): cmd for cmd in declared
-    }
+    if declared:
+        # ── Declared commands: each must have a passing match ─────────────
+        declared_normal: dict[str, str] = {
+            _normalize_command(cmd): cmd for cmd in declared
+        }
 
-    satisfied: set[str] = set()
-    blocked: set[str] = set()
+        satisfied: set[str] = set()
+        blocked: set[str] = set()
 
+        for record in evidence:
+            if not isinstance(record, dict):
+                continue
+            record_cmd = str(record.get("command", "") or "")
+            if not record_cmd:
+                continue
+            normal = _normalize_command(record_cmd)
+            if normal not in declared_normal:
+                continue  # unrelated evidence
+
+            if validation_payload_product_failure(record):
+                blocked.add(normal)
+            elif validation_payload_passed(record):
+                satisfied.add(normal)
+
+        for normal in declared_normal:
+            if normal in blocked:
+                return False
+            if normal not in satisfied:
+                return False
+        return True
+
+    # ── No declared commands: require ANY passing evidence ──────────────
     for record in evidence:
         if not isinstance(record, dict):
             continue
-        record_cmd = str(record.get("command", "") or "")
-        if not record_cmd:
-            continue
-        normal = _normalize_command(record_cmd)
-        if normal not in declared_normal:
-            continue  # unrelated evidence
-
-        if validation_payload_product_failure(record):
-            blocked.add(normal)
-        elif validation_payload_passed(record):
-            satisfied.add(normal)
-
-    # Every declared command must be satisfied and not blocked.
-    for normal in declared_normal:
-        if normal in blocked:
-            return False
-        if normal not in satisfied:
-            return False
-    return True
-
-
-_SPURIOUS_FAILURE_CLASSES: set[str] = {
-    "acceptance_unverified",
-    "validation_not_run",
-    "behavioral_validation_skipped",
-    "required_behavioral_validation_skipped",
-    "validation_failed_caveat",
-    "continuation_caveat",
-    "continuation",
-}
+        if validation_payload_passed(record):
+            return True
+    return False
 
 
 class _DispatchProxy(QObject):
@@ -523,11 +329,9 @@ class _DispatchProxy(QObject):
     def _register_artifact_from_request(self, tool_call_id: str, req: WorkerDispatchRequest) -> None:
         """Register a WorkArtifact for this dispatch request.
 
-        Priority:
-        1. If the controller already has an artifact for this ID, skip.
-        2. If the request carries a ``work_artifact_payload`` (multi-item
-           artifact from the Planner), create the full artifact from it.
-        3. Otherwise, create a one-item compatibility artifact.
+        Only creates an artifact when the request carries a real
+        ``work_artifact_payload`` (multi-item artifact from the Planner).
+        Flat dispatch requests without a payload do NOT create an artifact.
         """
         if self._artifact_controller.get_artifact(tool_call_id) is not None:
             return  # Already registered.
@@ -539,8 +343,7 @@ class _DispatchProxy(QObject):
                 "Full WorkArtifact created from payload tool_call_id=%s",
                 tool_call_id,
             )
-        else:
-            self._artifact_controller.create_one_item_artifact(tool_call_id, req)
+        # Flat dispatch: no artifact created.  No projection, no receipt.
 
     def request_dispatch(
         self, tool_call_id: str, req: WorkerDispatchRequest
@@ -657,17 +460,7 @@ class _DispatchProxy(QObject):
                 edited = replace(edited, spec=edited.spec + stanza)
 
         # --- Determine if this is a WorkArtifact job ---
-        artifact = self._artifact_controller.get_artifact(tool_call_id)
-        is_artifact_job = (
-            artifact is not None
-            and req.work_artifact_payload is not None
-        )
-
-        # --- Mark artifact item active (flat only; artifact job marks internally) ---
-        if not is_artifact_job and artifact is not None and artifact.current_item_id:
-            self._artifact_controller.mark_item_active(
-                tool_call_id, artifact.current_item_id
-            )
+        is_artifact_job = req.work_artifact_payload is not None
 
         # --- Emit dispatched snapshot ---
         self._transition_workflow_state(
@@ -726,14 +519,12 @@ class _DispatchProxy(QObject):
         if is_artifact_job and not result.extras.get("work_artifact_unfinished"):
             self._approved_artifact_requests.pop(tool_call_id, None)
 
-        # --- Attach receipt for flat dispatch (artifact job handles its own receipts) ---
-        if not is_artifact_job:
-            self._artifact_controller.attach_receipt(tool_call_id, result)
-
         # --- Emit artifact projection update ---
-        projection = WorkArtifactProjection.from_artifact(artifact) if artifact else None
-        if projection is not None:
-            self._on_artifact_projection_updated(projection)
+        if is_artifact_job:
+            artifact = self._artifact_controller.get_artifact(tool_call_id)
+            if artifact is not None:
+                projection = WorkArtifactProjection.from_artifact(artifact)
+                self._on_artifact_projection_updated(projection)
 
         # --- Emit workerFinished (once for the whole job) ---
         _log.info(
@@ -1049,6 +840,7 @@ class _DispatchProxy(QObject):
         return False
 
     @staticmethod
+    @staticmethod
     def _decide_artifact_item_outcome(
         item_req: WorkerDispatchRequest,
         item_result: WorkerDispatchResult,
@@ -1056,15 +848,17 @@ class _DispatchProxy(QObject):
     ) -> str:
         """Decide the outcome of a single WorkArtifact item attempt.
 
-        Pure evidence classifier used only by ``_run_approved_artifact_job``.
-        Does NOT attach receipts, update model state, emit projection,
-        aggregate results, call Planner, or mutate WorkerDispatchResult.
+        Validation is the SOLE authority for "done".
+        No side channels (path overlap, receipt status, baseline
+        fingerprints, UI projection, Worker prose, or hard-blocker
+        checks) influence the outcome.
 
         Returns one of:
         - ``"cancelled"`` — user cancelled the item.
         - ``"external_pause"`` — infrastructure failure (provider/API/harness).
-        - ``"done"`` — item completed successfully (all conditions met).
-        - ``"continue_same_item"`` — retry needed (ordinary failure).
+        - ``"done"`` — validation evidence shows the item passed.
+        - ``"continue_same_item"`` — anything else (failed/missing validation,
+          scope mismatch, patch failure, Worker caveats, etc.).
         """
         # ── Cancelled ──────────────────────────────────────────────────────
         if item_result.cancelled:
@@ -1074,112 +868,12 @@ class _DispatchProxy(QObject):
         if _DispatchProxy._is_infrastructure_failure(item_result):
             return "external_pause"
 
-        # ── Done — all conditions must be satisfied ────────────────────────
-        if (
-            item_req.artifact_id
-            and item_req.artifact_item_id
-            and item_result.mismatch is None
-            and not _artifact_item_has_real_blocker(item_result)
-            and _artifact_item_paths_overlap(
-                list(item_req.files), list(item_result.modified_files or []),
-            )
-            and _artifact_item_validation_satisfied(item_req, item_result)
-        ):
+        # ── Done — validation passed ───────────────────────────────────────
+        if _artifact_item_validation_satisfied(item_req, item_result):
             return "done"
 
         # ── Continue same item (everything else) ──────────────────────────
         return "continue_same_item"
-
-    def _normalize_artifact_item_completion(
-        self,
-        item_req: WorkerDispatchRequest,
-        item_result: WorkerDispatchResult,
-        item: Any,
-    ) -> WorkerDispatchResult:
-        """Normalize a WorkArtifact item result to completed if the item truly succeeded.
-
-        When a WorkArtifact item made changes, ran validation (or had no
-        declared validation), and produced no real errors/blockers, the
-        outcome classifier may still emit ``recoverable/continuing/phase_boundary``
-        due to secondary signals (acceptance unverified, behavioral/UI
-        validation skipped, phase-boundary heuristics).  This normalizer
-        overrides those spurious classifications so the item is marked
-        ``done`` and the next item can start.
-
-        Replacement result preserves the original ``summary``, ``modified_files``,
-        ``validation``, and ``extras`` but neutralises continuation fields
-        and clears spurious failure-class values.
-
-        Only applies to bounded artifact items (``artifact_id`` and
-        ``artifact_item_id`` are set on the request).
-
-        Returns the original ``item_result`` unchanged when normalisation
-        does not apply (real failures, cancelled, flat dispatch).
-        """
-        if not item_req.artifact_id or not item_req.artifact_item_id:
-            return item_result
-
-        if item_result.cancelled:
-            return item_result
-
-        if item_result.mismatch is not None:
-            return item_result
-
-        extras = item_result.extras if isinstance(item_result.extras, dict) else {}
-
-        # ── Real blocker guards ──────────────────────────────────────────
-        if self._is_infrastructure_failure(item_result):
-            return item_result
-        if _artifact_item_has_real_blocker(item_result):
-            return item_result
-
-        # ── Item must have changed at least one target file ──────────────
-        if not _artifact_item_paths_overlap(
-            list(item_req.files), list(item_result.modified_files or []),
-        ):
-            return item_result
-
-        # ── Declared validation must have evidence of passing ────────────
-        if not _artifact_item_validation_passed(item_req, item_result):
-            return item_result
-
-        # ── Explicit behavioral/UI validation must have passed ───────────
-        if _artifact_item_behavioral_validation_required(item_req, item_result):
-            return item_result
-
-        # ── All checks passed → normalise to completed ───────────────────
-        cleaned = dict(extras)
-
-        # Clear every "continuing/recoverable" signal.
-        cleaned.pop("recoverable", None)
-        cleaned["recoverable"] = False
-        cleaned.pop("phase_boundary", None)
-        cleaned["phase_boundary"] = False
-        cleaned.pop("needs_followup", None)
-        cleaned["needs_followup"] = False
-        cleaned.pop("suggested_next_tool", None)
-        cleaned["suggested_next_tool"] = ""
-        cleaned.pop("suggested_next_action", None)
-        cleaned["suggested_next_action"] = ""
-
-        # Clear spurious failure-class values that are not real failures.
-        fc = str(extras.get("failure_class", "") or "")
-        if not fc or fc in _SPURIOUS_FAILURE_CLASSES:
-            cleaned.pop("failure_class", None)
-
-        cleaned["work_artifact_item_completion_normalized"] = True
-
-        return WorkerDispatchResult(
-            ok=True,
-            summary=item_result.summary or "",
-            recoverable=False,
-            needs_followup=False,
-            phase_boundary=False,
-            status=WorkerOutcomeStatus.completed.value,
-            modified_files=list(item_result.modified_files or []),
-            validation=item_result.validation,
-            extras=cleaned,
-        )
 
     def _run_approved_artifact_job(
         self,
@@ -1311,6 +1005,10 @@ class _DispatchProxy(QObject):
                         "WorkArtifact item %s done (attempt %d)",
                         item.id, attempt,
                     )
+                    # Mark item done explicitly — validation authority, not receipt status.
+                    self._artifact_controller.mark_item_done(tool_call_id, item.id)
+                    # Attach receipt as audit record only (display status "ok"
+                    # for consistency in the projection).
                     self._artifact_controller.attach_receipt(
                         tool_call_id, item_result, item_id=item.id,
                         status_override="ok",
@@ -1323,12 +1021,56 @@ class _DispatchProxy(QObject):
                 recovered_item_ids.append(item.id)
                 failed_attempts[item.id] = attempt
                 extras = item_result.extras if isinstance(item_result.extras, dict) else {}
+
+                # Build structured retry context per the fix contract.
+                declared_cmds = _artifact_item_declared_validation_commands(item_req)
+                validation_cmd_str = declared_cmds[0] if declared_cmds else "(no declared validation command)"
+
+                # Extract output excerpt from validation/terminal results.
+                output_excerpt = ""
+                for src in ("validation_results", "terminal_results"):
+                    records = extras.get(src, [])
+                    if isinstance(records, list) and records:
+                        last = records[-1]
+                        if isinstance(last, dict):
+                            output_excerpt = str(last.get("output", last.get("stdout", last.get("stderr", ""))))
+                            break
+
                 recovery_note = (
-                    f"\n\n--- Recovery attempt {attempt} for this item ---\n"
-                    f"Previous result: {item_result.summary}\n"
+                    f"\n\n--- Recovery attempt {attempt} for WorkArtifact item ---\n"
+                    f"\n"
+                    f"Previous attempt failed validation for the current WorkArtifact item.\n"
+                    f"\n"
+                    f"Artifact: {tool_call_id}\n"
+                    f"Item: {item.id} - {item.title}\n"
+                    f"Attempt: {attempt}\n"
+                    f"Worker status: {item_result.status or 'unknown'}\n"
                     f"Failure class: {extras.get('failure_class', 'unknown')}\n"
-                    f"Suggested next action: {extras.get('suggested_next_action', '')}\n"
-                    "Complete only this item. Aura will continue the approved job after this item succeeds."
+                    f"\n"
+                    f"Validation command:\n"
+                    f"{validation_cmd_str}\n"
+                    f"\n"
+                    f"Exit code: {extras.get('exit_code', 'N/A')}\n"
+                    f"\n"
+                    f"Failure summary:\n"
+                    f"{item_result.summary or '(no summary)'}\n"
+                    f"\n"
+                )
+                if output_excerpt:
+                    recovery_note += (
+                        f"Relevant output:\n"
+                        f"{output_excerpt[:2000]}\n"
+                        f"\n"
+                    )
+                recovery_note += (
+                    f"Files modified last attempt:\n"
+                    f"{', '.join(item_result.modified_files) if item_result.modified_files else '(none)'}\n"
+                    f"\n"
+                    f"Instruction:\n"
+                    f"Continue the same item only ({item.title}).\n"
+                    f"Fix the validation failure. Do not move to another item.\n"
+                    f"Rerun the required validation. The item is not complete until validation passes.\n"
+                    f"Aura will continue the approved job after this item succeeds."
                 )
                 item_req = replace(item_req, spec=item_req.spec + recovery_note)
                 _log.info(
@@ -1447,9 +1189,8 @@ class _DispatchProxy(QObject):
     ) -> WorkerDispatchResult:
         """Aggregate per-item results into one outcome.
 
-        Completion is derived from artifact state, not from raw per-attempt
-        ``WorkerDispatchResult.ok``.  Items whose artifact status is ``done``
-        or whose receipt status is ``ok`` count as completed.
+        Completion is derived from artifact state alone (``item.status == done``),
+        never from receipt status.  Receipts are audit records only.
 
         Outcomes
         --------
@@ -1469,7 +1210,6 @@ class _DispatchProxy(QObject):
                 wi.id
                 for wi in artifact.work_items
                 if wi.status == WorkItemStatus.done
-                or (wi.receipt is not None and wi.receipt.status == "ok")
             ]
             all_ok = self._artifact_controller.all_required_items_done(tool_call_id)
             pending_ids = [
