@@ -36,20 +36,36 @@ from aura.conversation import (
     WorkerTaskSpec,
     normalize_worker_task,
 )
-from aura.conversation.persistence import WorkerDispatchRecord
 from aura.conversation.detected_validation import (
     merge_validation_commands,
     runnable_detected_validation_commands,
 )
+from aura.conversation.persistence import WorkerDispatchRecord
 from aura.conversation.project_profile import detect_project_profile
 from aura.events import EventBus
-from aura.work_artifact.model import ValidationCommandSpec
 from aura.lifecycle import LifecycleHooks
 from aura.validation.selector import ValidationPlan
+from aura.work_artifact.model import ValidationCommandSpec
 
 _log = logging.getLogger(__name__)
 
 __all__ = ["WorkerDispatchRunner"]
+
+
+def _validation_command_text(command: object) -> str:
+    if isinstance(command, str):
+        return command.strip()
+    return str(getattr(command, "command", "") or "").strip()
+
+
+def _validation_command_texts(commands: object) -> list[str]:
+    if commands is None:
+        return []
+    return [
+        text
+        for command in commands
+        if (text := _validation_command_text(command))
+    ]
 
 
 class WorkerDispatchRunner:
@@ -125,6 +141,7 @@ class WorkerDispatchRunner:
             relay=relay,
             cancel_event=cancel_event,
         )
+        final_validation_command_texts = _validation_command_texts(final_validation_commands)
 
         worker_completion = prepare_worker_completion_result(
             req=req,
@@ -134,7 +151,7 @@ class WorkerDispatchRunner:
             context_gearbox=context_gearbox,
             internal_error=internal_error,
             cleaned_scratch_files=cleaned_scratch_files,
-            final_validation_commands=[vc.command for vc in final_validation_commands],
+            final_validation_commands=final_validation_command_texts,
             workspace_root=self._workspace_root,
             preserve_scratch_records=_request_allows_root_check_files(req),
         )
@@ -147,7 +164,7 @@ class WorkerDispatchRunner:
                     task_kind=task_spec.task_shape.task_kind if task_spec.task_shape is not None else "unknown",
                     context_gearbox=context_gearbox,
                     workspace_root=self._workspace_root,
-                    final_validation_commands=[vc.command for vc in final_validation_commands],
+                    final_validation_commands=final_validation_command_texts,
                     validation_selector=validation_selector,
                     validation_selector_key=validation_selector_key,
                     validation_selector_failed=validation_selector_failed,

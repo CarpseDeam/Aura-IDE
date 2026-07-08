@@ -8,10 +8,20 @@ Verifies the new contract:
 - Worker prompt uses artifact-aware wording.
 """
 
+from types import SimpleNamespace
 from typing import Any
 
+from aura.bridge import worker_dispatch_runner as worker_dispatch_runner_module
+from aura.bridge.worker_dispatch_runner import (
+    WorkerDispatchRunner,
+    _validation_command_texts,
+)
 from aura.bridge.worker_report import _format_spec_as_user_message
-from aura.conversation.dispatch import WorkerDispatchRequest, WorkerDispatchResult
+from aura.conversation.dispatch import (
+    WorkerDispatchRequest,
+    WorkerDispatchResult,
+    WorkerTaskSpec,
+)
 from aura.conversation.history import History
 from aura.conversation.tool_runner import ToolRunner
 from aura.work_artifact.controller import WorkArtifactController
@@ -85,6 +95,115 @@ def _non_recoverable_result(summary: str = "Fatal error") -> WorkerDispatchResul
         recoverable=False,
         extras={"failure_class": "fatal_error"},
     )
+
+
+def test_worker_dispatch_runner_normalizes_validation_command_texts():
+    command_like = SimpleNamespace(command=" python -m pytest tests/test_x.py ")
+
+    assert _validation_command_texts([" python -m py_compile aura/app.py "]) == [
+        "python -m py_compile aura/app.py"
+    ]
+    assert _validation_command_texts([command_like]) == [
+        "python -m pytest tests/test_x.py"
+    ]
+    assert _validation_command_texts([
+        " python -m ruff check aura ",
+        SimpleNamespace(command=" python -m pytest -q "),
+    ]) == [
+        "python -m ruff check aura",
+        "python -m pytest -q",
+    ]
+    assert _validation_command_texts(None) == []
+    assert _validation_command_texts([]) == []
+    assert _validation_command_texts(["  ", SimpleNamespace(command="")]) == []
+
+
+def test_worker_dispatch_runner_accepts_string_final_validation_commands(monkeypatch):
+    captured_completion_commands: list[list[str]] = []
+    captured_selector_commands: list[list[str]] = []
+
+    class FakeWorkerCompletion:
+        def build_result(self, *, validation_selector):
+            return SimpleNamespace(
+                summary="Done",
+                modified_files=[],
+                continuation={},
+                extras={},
+                status="completed",
+                structured_failure={},
+                task_shape_summary={},
+                result_errors=[],
+                result=WorkerDispatchResult(ok=True, summary="Done", status="completed"),
+            )
+
+    def fake_prepare_worker_completion_result(**kwargs):
+        captured_completion_commands.append(list(kwargs["final_validation_commands"]))
+        return FakeWorkerCompletion()
+
+    def fake_refresh_worker_validation_selector_plan(**kwargs):
+        captured_selector_commands.append(list(kwargs["final_validation_commands"]))
+        return (
+            kwargs["validation_selector"],
+            kwargs["validation_selector_key"],
+            kwargs["validation_selector_failed"],
+        )
+
+    monkeypatch.setattr(
+        worker_dispatch_runner_module,
+        "prepare_worker_completion_result",
+        fake_prepare_worker_completion_result,
+    )
+    monkeypatch.setattr(
+        worker_dispatch_runner_module,
+        "refresh_worker_validation_selector_plan",
+        fake_refresh_worker_validation_selector_plan,
+    )
+    monkeypatch.setattr(
+        worker_dispatch_runner_module,
+        "_record_worker_completion",
+        lambda **_kwargs: None,
+    )
+
+    runner = WorkerDispatchRunner(
+        approval_proxy=SimpleNamespace(request_approval=lambda *_args, **_kwargs: None),
+        registry_factory=lambda _mode: None,
+        workspace_root=None,
+        worker_model="test-model",
+        worker_thinking="off",
+        worker_temperature=0.0,
+        worker_system_prompt="",
+        max_tool_rounds=1,
+        dispatch_proxy=None,
+        records=[],
+        result_metadata={},
+        event_bus=SimpleNamespace(),
+    )
+    task_spec = WorkerTaskSpec(goal="G", files=[], builder_note="S", acceptance="A")
+    runner._create_worker_relay = lambda: SimpleNamespace()
+    runner._prepare_worker_conversation = lambda _tool_call_id, _req: (
+        History(),
+        task_spec,
+        {},
+        SimpleNamespace(),
+    )
+    runner._execute_worker_conversation = lambda **_kwargs: (
+        [" python -m pytest -q "],
+        None,
+        None,
+        False,
+        None,
+        [],
+    )
+
+    result = runner.run_worker(
+        "call_string_validation_commands",
+        WorkerDispatchRequest(goal="G", files=[], spec="S", acceptance="A"),
+        SimpleNamespace(),
+    )
+
+    assert result.ok is True
+    assert captured_completion_commands == [["python -m pytest -q"]]
+    assert captured_selector_commands == [["python -m pytest -q"]]
 
 
 # ── A. ToolRunner preserves full approved job envelope ─────────────────────────
@@ -1754,8 +1873,8 @@ def test_classify_harness_error_without_infra_extras_is_done():
     (e.g. tool-level hard failures, edit mechanics, policy blockers).
     is_infrastructure_failure must NOT treat status alone as pause.
     """
-    from aura.work_artifact.verification import classify_item_attempt
     from aura.conversation.dispatch import WorkerOutcomeStatus
+    from aura.work_artifact.verification import classify_item_attempt
 
     req = WorkerDispatchRequest(goal="G", files=[], spec="S", acceptance="A", summary="S")
     result = WorkerDispatchResult(
