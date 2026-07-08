@@ -64,12 +64,7 @@ def _build_worker_completion_messages(
     source_inspection_blockers = completion["source_inspection_blockers"]
     terminal_policy_blockers = completion["terminal_policy_blockers"]
     environment_setup_blockers = completion["environment_setup_blockers"]
-    failed_validation = completion["failed_validation"]
-    validation_not_run = completion["validation_not_run"]
-    validation_command_issues = completion["validation_command_issues"]
     diagnostic_environment_caveats = completion["diagnostic_environment_caveats"]
-    acceptance_unverified = completion["acceptance_unverified"]
-    is_implementation = completion["is_implementation"]
 
     structured_failure = _parse_structured_worker_failure(final_report)
     if structured_failure:
@@ -116,10 +111,6 @@ def _build_worker_completion_messages(
                 f"Project environment missing {label} '{dependency}'"
                 + suffix
             )
-        for v in failed_validation:
-            cmd = v["command"][:80]
-            result_errors.append(f"Validation command failed (exit code {v['exit_code']}): {cmd}")
-
     if workspace_root is None:
         edited_without_read = _check_read_before_edit(
             relay.read_files,
@@ -152,26 +143,6 @@ def _build_worker_completion_messages(
 
     if recoverable_write_failures and not relay.write_results and not structured_failure:
         result_caveats.append(_format_recoverable_write_failure(recoverable_write_failures[0]))
-    if validation_not_run:
-        result_caveats.append("Files changed but validation did not run.")
-    if validation_command_issues:
-        result_caveats.append("Validation command issue(s) were recorded; code validation failures are reported separately.")    # ── Required behavioral validation enforcement ────────────────
-    behavioral = completion.get("behavioral_validation", {})
-    behavioral_skipped = behavioral.get("skipped", [])
-    behavioral_could_not_run = behavioral.get("could_not_run", [])
-    if behavioral_skipped:
-        skipped_str = ", ".join(behavioral_skipped[:5])
-        result_errors.append(
-            f"Required behavioral validation skipped: {skipped_str}"
-        )
-    for entry in behavioral_could_not_run:
-        cmd = entry.get("command", "")
-        reason = entry.get("reason", "")
-        caveat = f"Required behavioral check could not run: {cmd}"
-        if reason:
-            caveat += f" ({reason})"
-        if caveat not in result_caveats:
-            result_caveats.append(caveat)
     for caveat in diagnostic_environment_caveats:
         if caveat not in result_caveats:
             result_caveats.append(caveat)
@@ -182,42 +153,12 @@ def _build_worker_completion_messages(
             + ", ".join(cleaned_scratch_files[:5])
         )
 
-    if acceptance_unverified:
-        has_deterministic_proof = (
-            completion.get("has_writes")
-            and bool(completion.get("validation_results"))
-            and not completion.get("failed_validation")
-        )
-        if not has_deterministic_proof:
-            result_caveats.append("Worker final report did not clearly mention validation or acceptance verification.")
-
     if not structured_failure and _final_report_claims_failure(final_report):
         phrase_caveat = (
             "Worker final report mentioned possible blocker, failed validation, "
             "or incomplete verification."
         )
         result_caveats.append(phrase_caveat)
-
-    no_failure_or_blocker = (
-        not relay.failed_tool_results
-        and not internal_error
-        and not relay.api_errors
-    )
-    if (
-        is_implementation
-        and not structured_failure
-        and not relay.touched_files
-        and no_failure_or_blocker
-    ):
-        if completion["validation_results"] and not failed_validation:
-            result_caveats.append(
-                "Worker ran validation but made no implementation changes — continuation, not failure."
-            )
-        elif not completion["validation_results"]:
-            result_caveats.append(
-                "Worker made no changes, reported no blocker, "
-                "and ran no meaningful validation — continuation, not failure."
-            )
 
     return {
         "structured_failure": structured_failure,

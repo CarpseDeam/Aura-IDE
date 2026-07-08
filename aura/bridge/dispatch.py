@@ -53,19 +53,8 @@ from aura.events import EventBus
 from aura.lifecycle import LifecycleHooks, attach_lifecycle_notify
 from aura.lifecycle.builtin_worker_gates import register_builtin_worker_gates
 from aura.work_artifact.controller import WorkArtifactController
-from aura.work_artifact.model import ValidationCommandSpec, WorkItemStatus
 from aura.work_artifact.projection import WorkArtifactProjection
 from aura.work_artifact.runner import WorkArtifactRunner
-from aura.work_artifact.validation_baseline import capture_baseline
-from aura.work_artifact.verification import (
-    WorkArtifactAttemptOutcome,
-    add_retry_context as _add_retry_context,
-    classify_item_attempt as _classify_item_attempt,
-    declared_validation_commands as _declared_validation_commands,
-    ensure_item_verification_source as _ensure_item_verification_source,
-    is_infrastructure_failure as _is_infrastructure_failure,
-    validation_satisfied as _validation_satisfied,
-)
 from aura.worker_todo import WorkerTodoProjector
 
 __all__ = [
@@ -405,12 +394,6 @@ class _DispatchProxy(QObject):
 
         # --- Store approved request (universal ownership) ---
         self._approved_artifact_requests[tool_call_id] = edited
-
-        # Capture validation baseline once before any item runs.
-        # This collects fingerprints of all declared item validation
-        # commands so we can later distinguish pre-existing failures
-        # from novel ones introduced by each item.
-        self._capture_artifact_baseline(tool_call_id)
 
         # --- Run Worker via WorkArtifactRunner ---
         # Every approved dispatch — one-item or multi-item — runs through
@@ -778,41 +761,6 @@ class _DispatchProxy(QObject):
 
         return result
 
-    @staticmethod
-    def _is_infrastructure_failure(result: WorkerDispatchResult) -> bool:
-        """True for harness/provider/auth/network failures.
-
-        Delegates to ``aura.work_artifact.verification.is_infrastructure_failure``.
-        """
-        return _is_infrastructure_failure(result)
-
-    @staticmethod
-    def _decide_artifact_item_outcome(
-        item_req: WorkerDispatchRequest,
-        item_result: WorkerDispatchResult,
-        item: Any,
-    ) -> str:
-        """Decide the outcome of a single WorkArtifact item attempt.
-
-        Delegates to ``aura.work_artifact.verification.classify_item_attempt``
-        and maps the ``WorkArtifactAttemptOutcome`` enum back to the legacy
-        string values for backward compatibility.
-
-        Returns one of:
-        - ``"cancelled"`` — user cancelled the item.
-        - ``"external_pause"`` — infrastructure failure (provider/API/harness).
-        - ``"done"`` — validation evidence shows the item passed.
-        - ``"continue_same_item"`` — anything else (failed/missing validation).
-        """
-        outcome = _classify_item_attempt(item_req, item_result)
-        if outcome == WorkArtifactAttemptOutcome.cancelled:
-            return "cancelled"
-        if outcome == WorkArtifactAttemptOutcome.pause:
-            return "external_pause"
-        if outcome == WorkArtifactAttemptOutcome.done:
-            return "done"
-        return "continue_same_item"
-
     def _create_work_artifact_runner(
         self,
         pending: "_DispatchPending",
@@ -823,7 +771,6 @@ class _DispatchProxy(QObject):
             run_worker=lambda tid, ireq: self._run_worker(tid, ireq, pending),
             emit_projection=lambda tid: self._emit_projection(tid),
             workspace_root=self._workspace_root,
-            capture_baseline=lambda tid: self._capture_artifact_baseline(tid),
         )
 
     def _run_approved_artifact_job(
@@ -872,8 +819,6 @@ class _DispatchProxy(QObject):
         tool_call_id: str,
         approved_req: WorkerDispatchRequest,
         item_results: list[tuple[str, WorkerDispatchResult]],
-        recovered_item_ids: list[str],
-        failed_attempts: dict[str, int],
         total_items: int,
         terminal_override: WorkerDispatchResult | None = None,
         infrastructure_pause: bool = False,
@@ -888,8 +833,7 @@ class _DispatchProxy(QObject):
             emit_projection=lambda tid: None,
         )
         return runner._aggregate_artifact_results(
-            tool_call_id, approved_req, item_results,
-            recovered_item_ids, failed_attempts, total_items,
+            tool_call_id, approved_req, item_results, total_items,
             terminal_override=terminal_override,
             infrastructure_pause=infrastructure_pause,
         )
@@ -902,79 +846,15 @@ class _DispatchProxy(QObject):
         projection = WorkArtifactProjection.from_artifact(artifact)
         self._on_artifact_projection_updated(projection)
 
-    def _capture_artifact_baseline(self, tool_call_id: str) -> None:
-        """Capture validation baseline fingerprints for the active artifact.
-
-        Runs once after approval and before any item Worker launches.
-        Stores fingerprints on the ``WorkArtifact.baseline_validation_fingerprints``
-        field.  Does not recapture if baseline already exists (idempotent
-        across resume).
-        """
-        artifact = self._artifact_controller.get_artifact(tool_call_id)
-        if artifact is None:
-            _log.warning("_capture_artifact_baseline: no artifact for %s", tool_call_id)
-            return
-
-        if artifact.baseline_validation_fingerprints:
-            _log.info("Baseline already exists for artifact %s — skipping", tool_call_id)
-            return
-
-        if self._workspace_root is None:
-            _log.warning("_capture_artifact_baseline: no workspace root — skipping")
-            return
-
-        # Collect the union of all per-item declared validation commands.
-        all_commands: list[ValidationCommandSpec] = []
-        seen_commands: set[str] = set()
-        for item in artifact.work_items:
-            for vc in (item.validation_commands or []):
-                if vc.command and vc.command not in seen_commands:
-                    seen_commands.add(vc.command)
-                    all_commands.append(vc)
-
-        if not all_commands:
-            _log.info("No item-level validation commands to baseline for %s", tool_call_id)
-            return
-
-        _log.info(
-            "Capturing baseline for artifact %s with %d command(s)",
-            tool_call_id, len(all_commands),
-        )
-        try:
-            baseline = capture_baseline(all_commands, self._workspace_root)
-            artifact.baseline_validation_fingerprints = baseline
-            _log.info(
-                "Baseline captured for artifact %s: %d command(s) fingerprinted",
-                tool_call_id, len(baseline),
-            )
-        except Exception as exc:
-            _log.exception(
-                "Baseline capture failed for artifact %s: %s",
-                tool_call_id, exc,
-            )
-            # Missing baseline degrades to strict gating — each item will
-            # treat all failures as novel.
-
     def _run_worker(
         self,
         tool_call_id: str,
         req: WorkerDispatchRequest,
         pending: "_DispatchPending",
     ) -> WorkerDispatchResult:
-        # For artifact items, thread the captured validation baseline through
-        # to the Worker finalization gate so pre-existing failures on declared
-        # item commands are attributed correctly.  Flat dispatches yield either
-        # a compatibility artifact with no baseline or None — both produce None.
-        artifact = self._artifact_controller.get_artifact(tool_call_id)
-        baseline_validation_fingerprints = (
-            dict(artifact.baseline_validation_fingerprints)
-            if artifact is not None
-            else None
-        )
         runner = self._create_worker_dispatch_runner()
         return runner.run_worker(
             tool_call_id, req, pending,
-            baseline_validation_fingerprints=baseline_validation_fingerprints,
         )
 
     def _pending_resolution_failure_result(

@@ -101,8 +101,6 @@ class ConversationManager:
             lifecycle=self._lifecycle,
             event_bus=self._event_bus,
         )
-        self._preexisting_failures: list[dict[str, str | list[str]]] = []
-
     @property
     def history(self) -> History:
         return self._history
@@ -134,7 +132,6 @@ class ConversationManager:
         hook_name: str = 'generate_planner_code',
         explicit_validation_commands: list[ValidationCommandSpec] | None = None,
         declared_run_command: str | None = None,
-        baseline_validation_fingerprints: dict[str, list[str]] | None = None,
     ) -> None:
         """Run the model -> tool -> model loop until the model stops calling tools.
 
@@ -159,8 +156,6 @@ class ConversationManager:
                 state.dispatched_target_files = list(worker_dispatch_request.files)
                 state.worker_artifact_id = str(worker_dispatch_request.artifact_id or "")
                 state.worker_artifact_item_id = str(worker_dispatch_request.artifact_item_id or "")
-            if baseline_validation_fingerprints is not None:
-                state.baseline_validation_fingerprints = dict(baseline_validation_fingerprints)
 
         while True:
             if (
@@ -181,7 +176,7 @@ class ConversationManager:
                 return
 
             full_message: dict[str, Any] | None = None
-            tool_defs = [] if state.worker_needs_final_report else self._tools.tool_defs()
+            tool_defs = self._tools.tool_defs()
             if state.stream_buffer is not None:
                 state.stream_buffer.begin_round()
 
@@ -290,21 +285,12 @@ class ConversationManager:
                         state.planner_dispatch_gate_steered = True
                         continue
                 if state.mode == "worker":
-                    finalization_action = handle_worker_candidate_finalization(
+                    handle_worker_candidate_finalization(
                         state=state,
                         full_message=full_message,
                         history=self._history,
-                        workspace_root=self._tools.workspace_root,
                         on_event=on_event,
-                        finish_worker_recoverable_followup=(
-                            self._finish_worker_unrecoverable
-                        ),
-                        declared_run_command=declared_run_command,
-                        explicit_validation_commands=explicit_validation_commands,
                     )
-                    if finalization_action == "continue":
-                        continue
-                    self._preexisting_failures = list(state.preexisting_validation_failures)
                     return
                 self._history.append_assistant(full_message)
                 return

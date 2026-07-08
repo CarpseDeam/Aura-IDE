@@ -8,7 +8,6 @@ from aura.bridge.event_relay import WorkerEventRelay
 from aura.bridge.worker_completion_messages import (
     RECOVERABLE_WORKER_WRITE_FAILURE_CLASSES,
 )
-from aura.bridge.worker_outcome_classifier import EDIT_TRANSACTION_FAILURE_CLASSES
 from aura.bridge.worker_report import _build_worker_summary
 from aura.conversation import History, WorkerDispatchRequest, WorkerTaskSpec
 from aura.conversation.path_utils import (
@@ -48,15 +47,12 @@ def _build_worker_result_payload(
     source_inspection_blockers = completion["source_inspection_blockers"]
     terminal_policy_blockers = completion["terminal_policy_blockers"]
     environment_setup_blockers = completion["environment_setup_blockers"]
-    validation_not_run = completion["validation_not_run"]
     summary_continuation = outcome["summary_continuation"]
     status = outcome["status"]
     recoverable = outcome["recoverable"]
     needs_followup = outcome["needs_followup"]
     phase_boundary = outcome["phase_boundary"]
     mismatch = outcome["mismatch"]
-
-    behavioral_validation = completion.get("behavioral_validation", {})
 
     summary = _build_worker_summary(
         req,
@@ -70,7 +66,6 @@ def _build_worker_result_payload(
         not_applied_writes=unrecovered_not_applied_writes,
         status=status,
         internal_error=internal_error,
-        behavioral_validation=behavioral_validation,
     )
     modified_files = _applied_modified_files(relay.write_results)
     task_shape_summary = (
@@ -97,13 +92,11 @@ def _build_worker_result_payload(
         "terminal_results": getattr(relay, "terminal_results", []),
         "validation_results": validation_results,
         "validation_command_issues": validation_command_issues,
-        "required_behavioral_validation": behavioral_validation,
         "errors": result_errors,
         "caveats": result_caveats,
         "quality_findings": quality_findings,
         "worker_internal_error": bool(internal_error),
         "internal_error": internal_error or "",
-        "validation_not_run": validation_not_run,
         "recoverable": recoverable,
         "needs_followup": needs_followup,
         "phase_boundary": relay.phase_boundary_info if phase_boundary else {},
@@ -130,11 +123,6 @@ def _build_worker_result_payload(
 
     extras["validation_selector"] = validation_selector
 
-    # Include pre-existing validation failures discovered via attribution.
-    preexisting = getattr(relay, "preexisting_validation_failures", None)
-    if preexisting:
-        extras["preexisting_failures"] = list(preexisting)
-
     return summary, modified_files, extras, task_shape_summary
 
 
@@ -155,6 +143,18 @@ def _final_write_outcome(
     return "no_write_needed"
 
 
+# Edit transaction failure classes for write failure detection.
+# Defined locally since the validation outcome classifier no longer exports them.
+_EDIT_TRANSACTION_FAILURE_CLASSES = {
+    "edit_transaction_hash_mismatch",
+    "edit_transaction_symbol_not_found",
+    "edit_transaction_ambiguous_symbol",
+    "edit_transaction_invalid_operation",
+    "edit_transaction_invalid_syntax",
+    "edit_transaction_not_applicable",
+}
+
+
 def _is_edit_mechanics_not_applied(record: dict[str, Any]) -> bool:
     failure_class = str(record.get("failure_class") or "")
     write_outcome = str(record.get("write_outcome") or "")
@@ -162,7 +162,7 @@ def _is_edit_mechanics_not_applied(record: dict[str, Any]) -> bool:
         return True
     return (
         failure_class in RECOVERABLE_WORKER_WRITE_FAILURE_CLASSES
-        or failure_class in EDIT_TRANSACTION_FAILURE_CLASSES
+        or failure_class in _EDIT_TRANSACTION_FAILURE_CLASSES
         or failure_class == "edit_mechanics_blocked"
     )
 

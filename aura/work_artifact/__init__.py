@@ -15,14 +15,8 @@ from aura.work_artifact.projection import WorkArtifactProjection
 from aura.work_artifact.runner import WorkArtifactRunner
 from aura.work_artifact.verification import (
     WorkArtifactAttemptOutcome,
-    add_retry_context,
     classify_item_attempt,
-    declared_validation_commands,
-    derive_scoped_validation_commands,
-    ensure_item_verification_source,
-    evidence_records,
     is_infrastructure_failure,
-    validation_satisfied,
 )
 
 __all__ = [
@@ -35,12 +29,6 @@ __all__ = [
     "WorkArtifactProjection",
     "WorkArtifactRunner",
     "WorkArtifactAttemptOutcome",
-    "add_retry_context",
     "classify_item_attempt",
-    "declared_validation_commands",
-    "derive_scoped_validation_commands",
-    "ensure_item_verification_source",
-    "evidence_records",
     "is_infrastructure_failure",
-    "validation_satisfied",
 ]

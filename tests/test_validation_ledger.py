@@ -1,4 +1,4 @@
-"""Focused tests for aura/conversation/validation_ledger.py — Phase 3."""
+"""Focused tests for aura/conversation/validation_ledger.py — simplified passive."""
 from __future__ import annotations
 
 from aura.conversation.validation_ledger import (
@@ -8,356 +8,128 @@ from aura.conversation.validation_ledger import (
 
 
 class TestWorkerValidationLedger:
-    """WorkerValidationLedger records validation payloads and answers
-    fresh-proof queries."""
+    """WorkerValidationLedger records validation payloads for passive display."""
 
-    # ------------------------------------------------------------------
-    # Recording
-    # ------------------------------------------------------------------
-
-    def test_records_passed_validation_with_write_snapshot(self):
-        """A passed validation payload is recorded with the current write
-        snapshot."""
+    def test_records_passed_validation(self):
+        """A passed validation payload is recorded."""
         ledger = WorkerValidationLedger()
-        ledger.observe_tool_payload(
-            {
-                "command": "pytest",
-                "validation_classification": "passed",
-                "exit_code": 0,
-            },
-            write_snapshot=3,
-        )
+        ledger.observe({
+            "command": "pytest",
+            "ok": True,
+            "validation_classification": "passed",
+            "counts_as_validation": True,
+        })
         assert len(ledger) == 1
-        r = ledger.latest_for_command("pytest")
-        assert r is not None
+        r = ledger.records[0]
         assert r.ok is True
-        assert r.write_snapshot == 3
         assert r.command_key == "pytest"
+        assert r.classification == "passed"
 
     def test_records_failed_validation_as_not_ok(self):
         """A failed validation payload is recorded with ok=False."""
         ledger = WorkerValidationLedger()
-        ledger.observe_tool_payload(
-            {
-                "command": "pytest",
-                "validation_classification": "product_validation_failed",
-                "exit_code": 1,
-                "counts_as_product_failure": True,
-            },
-            write_snapshot=1,
-        )
-        r = ledger.latest_for_command("pytest")
-        assert r is not None
+        ledger.observe({
+            "command": "pytest",
+            "ok": False,
+            "validation_classification": "failed",
+            "counts_as_validation": True,
+        })
+        assert len(ledger) == 1
+        r = ledger.records[0]
         assert r.ok is False
 
-    def test_records_with_cwd_does_not_normalize_key(self):
-        """The command key is cwd-independent; cwd is stored separately."""
+    def test_skips_non_validation_payloads(self):
+        """Payloads without validation indicators are silently ignored."""
         ledger = WorkerValidationLedger()
-        ledger.observe_tool_payload(
-            {
-                "command": "pytest",
-                "cwd": "/project",
-                "validation_classification": "passed",
-                "exit_code": 0,
-            },
-            write_snapshot=1,
-        )
-        r = ledger.latest_for_command("pytest")
-        # The normalized key does NOT include cwd.
-        assert r is not None
-        assert r.command_key == "pytest"
-        # cwd is stored on the record itself.
-        assert r.cwd == "/project"
-
-    def test_non_validation_payload_not_recorded(self):
-        """A terminal result that does not count as validation is silently
-        skipped."""
-        ledger = WorkerValidationLedger()
-        ledger.observe_tool_payload(
-            {"command": "pytest", "ok": True, "exit_code": 0},
-            write_snapshot=1,
-        )
+        ledger.observe({"command": "ls", "ok": True})
         assert len(ledger) == 0
 
-    def test_record_classification_fallback(self):
-        """When ``validation_classification`` is absent, ``classification``
-        is used as the record's classification string."""
+    def test_auto_validation_is_recorded(self):
+        """Payloads with auto_validation=True are recorded."""
         ledger = WorkerValidationLedger()
-        ledger.observe_tool_payload(
-            {
-                "command": "pytest",
-                "classification": "product_validation_failed",
-                "validation_classification": "product_validation_failed",
-                "exit_code": 1,
-                "counts_as_product_failure": True,
-            },
-            write_snapshot=1,
-        )
-        r = ledger.latest_for_command("pytest")
-        assert r is not None
-        assert r.classification == "product_validation_failed"
+        ledger.observe({
+            "command": "python -m compileall src/",
+            "ok": True,
+            "auto_validation": True,
+        })
+        assert len(ledger) == 1
+        # Without validation_classification, ok defaults to False in the ledger
+        # (validation_payload_passed requires explicit "passed" classification)
+        assert ledger.records[0].ok is False
 
-    # ------------------------------------------------------------------
-    # has_fresh_passed_commands
-    # ------------------------------------------------------------------
-
-    def test_has_fresh_passed_true_for_exact_command(self):
+    def test_records_are_independent(self):
+        """Multiple observations produce independent records."""
         ledger = WorkerValidationLedger()
-        ledger.observe_tool_payload(
-            {
-                "command": "pytest",
-                "validation_classification": "passed",
-                "exit_code": 0,
-            },
-            write_snapshot=5,
-        )
-        assert (
-            ledger.has_fresh_passed_commands(["pytest"], write_snapshot=5)
-            is True
-        )
+        ledger.observe({
+            "command": "pytest", "ok": True,
+            "validation_classification": "passed", "counts_as_validation": True,
+        })
+        ledger.observe({
+            "command": "ruff check", "ok": False,
+            "validation_classification": "failed", "counts_as_validation": True,
+        })
+        assert len(ledger) == 2
+        assert ledger.records[0].command == "pytest"
+        assert ledger.records[1].command == "ruff check"
 
-    def test_has_fresh_passed_false_for_stale_snapshot(self):
-        """A record at an older snapshot is stale and not considered passed."""
+    def test_records_property_returns_copy(self):
+        """The records property returns a copy, not the internal list."""
         ledger = WorkerValidationLedger()
-        ledger.observe_tool_payload(
-            {
-                "command": "pytest",
-                "validation_classification": "passed",
-                "exit_code": 0,
-            },
-            write_snapshot=3,
-        )
-        # Snapshot advanced to 4 (a write happened) → proof is stale
-        assert (
-            ledger.has_fresh_passed_commands(["pytest"], write_snapshot=4)
-            is False
-        )
+        ledger.observe({
+            "command": "pytest", "ok": True,
+            "counts_as_validation": True,
+        })
+        r = ledger.records
+        r.clear()
+        assert len(ledger) == 1
 
-    def test_has_fresh_passed_false_for_partial_proof(self):
-        """When only one of two required commands is proved, returns False."""
+    def test_output_truncation_not_stored(self):
+        """Simplified ledger does not store output preview or truncation."""
         ledger = WorkerValidationLedger()
-        ledger.observe_tool_payload(
-            {
-                "command": "pytest",
-                "validation_classification": "passed",
-                "exit_code": 0,
-            },
-            write_snapshot=5,
-        )
-        assert (
-            ledger.has_fresh_passed_commands(
-                ["pytest", "npm test"], write_snapshot=5
-            )
-            is False
-        )
+        ledger.observe({
+            "command": "pytest", "ok": True,
+            "counts_as_validation": True,
+        })
+        r = ledger.records[0]
+        assert not hasattr(r, "output_preview")
+        assert not hasattr(r, "output_truncated")
 
-    def test_has_fresh_passed_false_for_empty_commands(self):
+    def test_no_write_snapshot(self):
+        """Simplified ledger does not store write_snapshot."""
         ledger = WorkerValidationLedger()
-        assert (
-            ledger.has_fresh_passed_commands([], write_snapshot=5) is False
-        )
+        ledger.observe({
+            "command": "pytest", "ok": True,
+            "counts_as_validation": True,
+        })
+        r = ledger.records[0]
+        assert not hasattr(r, "write_snapshot")
 
-    def test_has_fresh_passed_false_for_failed_result(self):
-        """A fresh record with ok=False does not count as passed."""
+    def test_no_source_field(self):
+        """Simplified ledger does not store source."""
         ledger = WorkerValidationLedger()
-        ledger.observe_tool_payload(
-            {
-                "command": "pytest",
-                "validation_classification": "product_validation_failed",
-                "exit_code": 1,
-                "counts_as_product_failure": True,
-            },
-            write_snapshot=5,
-        )
-        assert (
-            ledger.has_fresh_passed_commands(["pytest"], write_snapshot=5)
-            is False
-        )
+        ledger.observe({
+            "command": "pytest", "ok": True,
+            "counts_as_validation": True,
+        })
+        r = ledger.records[0]
+        assert not hasattr(r, "source")
 
-    def test_has_fresh_passed_false_for_unknown_command(self):
+    def test_len_zero_for_empty_ledger(self):
+        """Empty ledger has length 0."""
         ledger = WorkerValidationLedger()
-        ledger.observe_tool_payload(
-            {
-                "command": "pytest",
-                "validation_classification": "passed",
-                "exit_code": 0,
-            },
-            write_snapshot=5,
-        )
-        assert (
-            ledger.has_fresh_passed_commands(["unknown"], write_snapshot=5)
-            is False
-        )
-
-    # ------------------------------------------------------------------
-    # latest_failures
-    # ------------------------------------------------------------------
-
-    def test_latest_failures_returns_only_failed_records(self):
-        ledger = WorkerValidationLedger()
-        ledger.observe_tool_payload(
-            {
-                "command": "pytest",
-                "validation_classification": "passed",
-                "exit_code": 0,
-            },
-            write_snapshot=1,
-        )
-        ledger.observe_tool_payload(
-            {
-                "command": "npm test",
-                "validation_classification": "product_validation_failed",
-                "exit_code": 1,
-                "counts_as_product_failure": True,
-            },
-            write_snapshot=1,
-        )
-        ledger.observe_tool_payload(
-            {
-                "command": "ruff",
-                "validation_classification": "passed",
-                "exit_code": 0,
-            },
-            write_snapshot=1,
-        )
-        failures = ledger.latest_failures()
-        assert len(failures) == 1
-        assert failures[0].command == "npm test"
-
-    def test_latest_failures_empty_when_all_pass(self):
-        ledger = WorkerValidationLedger()
-        ledger.observe_tool_payload(
-            {
-                "command": "pytest",
-                "validation_classification": "passed",
-                "exit_code": 0,
-            },
-            write_snapshot=1,
-        )
-        assert ledger.latest_failures() == []
-
-    # ------------------------------------------------------------------
-    # latest_for_command
-    # ------------------------------------------------------------------
-
-    def test_latest_for_command_returns_none_for_unknown(self):
-        ledger = WorkerValidationLedger()
-        assert ledger.latest_for_command("pytest") is None
-
-    def test_latest_for_command_returns_most_recent(self):
-        ledger = WorkerValidationLedger()
-        ledger.observe_tool_payload(
-            {
-                "command": "pytest",
-                "validation_classification": "passed",
-                "exit_code": 0,
-            },
-            write_snapshot=1,
-        )
-        ledger.observe_tool_payload(
-            {
-                "command": "pytest",
-                "validation_classification": "passed",
-                "exit_code": 0,
-            },
-            write_snapshot=2,
-        )
-        r = ledger.latest_for_command("pytest")
-        assert r is not None
-        assert r.write_snapshot == 2
-
-    # ------------------------------------------------------------------
-    # output_preview / output_truncated
-    # ------------------------------------------------------------------
-
-    def test_output_preview_truncates_long_output(self):
-        ledger = WorkerValidationLedger()
-        long_output = "A" * 2000
-        ledger.observe_tool_payload(
-            {
-                "command": "pytest",
-                "validation_classification": "passed",
-                "exit_code": 0,
-                "output": long_output,
-            },
-            write_snapshot=1,
-        )
-        r = ledger.latest_for_command("pytest")
-        assert r is not None
-        assert len(r.output_preview) == 500
-        assert r.output_truncated is True
-
-    def test_output_preview_short_output_not_truncated(self):
-        ledger = WorkerValidationLedger()
-        short = "All tests passed!"
-        ledger.observe_tool_payload(
-            {
-                "command": "pytest",
-                "validation_classification": "passed",
-                "exit_code": 0,
-                "output": short,
-            },
-            write_snapshot=1,
-        )
-        r = ledger.latest_for_command("pytest")
-        assert r is not None
-        assert r.output_preview == short
-        assert r.output_truncated is False
-
-    # ------------------------------------------------------------------
-    # edge cases
-    # ------------------------------------------------------------------
-
-    def test_empty_payload_not_recorded(self):
-        ledger = WorkerValidationLedger()
-        ledger.observe_tool_payload({}, write_snapshot=1)
         assert len(ledger) == 0
 
-    def test_record_with_no_exit_code(self):
+    def test_has_fresh_passed_not_available(self):
+        """has_fresh_passed_commands is removed from the simplified ledger."""
         ledger = WorkerValidationLedger()
-        ledger.observe_tool_payload(
-            {
-                "command": "pytest",
-                "validation_classification": "passed",
-            },
-            write_snapshot=1,
-        )
-        r = ledger.latest_for_command("pytest")
-        assert r is not None
-        assert r.exit_code is None
-        assert r.ok is True
+        assert not hasattr(ledger, "has_fresh_passed_commands")
 
-    def test_multiple_records_same_command_accumulate(self):
+    def test_latest_for_command_not_available(self):
+        """latest_for_command is removed from the simplified ledger."""
         ledger = WorkerValidationLedger()
-        for i in range(3):
-            ledger.observe_tool_payload(
-                {
-                    "command": "pytest",
-                    "validation_classification": "passed",
-                    "exit_code": 0,
-                },
-                write_snapshot=i,
-            )
-        assert len(ledger) == 3
+        assert not hasattr(ledger, "latest_for_command")
 
-
-class TestValidationLedgerRecord:
-    """ValidationLedgerRecord is a frozen dataclass with expected fields."""
-
-    def test_frozen(self):
-        r = ValidationLedgerRecord(
-            command_key="pytest",
-            command="pytest",
-            cwd="",
-            ok=True,
-            exit_code=0,
-            classification="passed",
-            counts_as_validation=True,
-            counts_as_product_failure=False,
-            output_preview="",
-            output_truncated=False,
-            write_snapshot=1,
-            source="worker_tool",
-        )
-        assert r.ok is True
-        assert r.command_key == "pytest"
+    def test_latest_failures_not_available(self):
+        """latest_failures is removed from the simplified ledger."""
+        ledger = WorkerValidationLedger()
+        assert not hasattr(ledger, "latest_failures")

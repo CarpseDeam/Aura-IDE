@@ -14,9 +14,8 @@ from typing import Any
 def validation_payload_counts_as_validation(payload: dict[str, Any]) -> bool:
     """Return True when *payload* represents a validation attempt.
 
-    Checks the structured validation fields that are attached by the event
-    relay's ``_attach_validation_metadata``, plus the ``auto_validation``
-    flag carried from the terminal tracker.
+    Checks the structured validation fields on the payload, plus the
+    ``auto_validation`` flag carried from the terminal tracker.
     """
     if payload.get("counts_as_validation") is True:
         return True

@@ -33,7 +33,6 @@ from aura.conversation.tool_round_events import (
     ToolRoundEventsContext,
     append_dispatch_blocker_message,
     append_limit_tool_result,
-    append_worker_final_report_tool_results,
 )
 from aura.conversation.tool_runner import ToolRunner
 from aura.conversation.tools._types import ApprovalCallback
@@ -102,15 +101,6 @@ class ToolRoundRunner:
         explicit_validation_commands: list[ValidationCommandSpec] | None = None,
         declared_run_command: str | None = None,
     ) -> ToolRoundOutcome:
-        if state.worker_needs_final_report:
-            append_worker_final_report_tool_results(
-                context=ToolRoundEventsContext(history=self._history),
-                tool_calls=tool_calls,
-                state=state,
-                on_event=on_event,
-            )
-            return ToolRoundOutcome(action="return")
-
         terminal_dispatch = False
         worker_phase_boundary_info: dict[str, Any] | None = None
         enter_silent_preflight = False
@@ -267,10 +257,8 @@ class ToolRoundRunner:
         )
 
         if worker_phase_boundary_info is not None:
-            state.worker_phase_boundary_info = worker_phase_boundary_info
-            if state.worker_phase_boundary_info.get("message"):
-                self._history.append_user_text(str(state.worker_phase_boundary_info["message"]))
-            state.worker_needs_final_report = True
+            if worker_phase_boundary_info.get("message"):
+                self._history.append_user_text(str(worker_phase_boundary_info["message"]))
             return ToolRoundOutcome(action="continue")
 
         if completed_dispatch_for_final:

@@ -1,7 +1,5 @@
 """Conversation history and the tool-loop manager."""
 
-from aura.conversation.critic_dispatch import CriticCallback, CriticRequest
-from aura.conversation.critic_verdict import CriticFinding, CriticVerdict
 from aura.conversation.dispatch import (
     DispatchCallback,
     ExplicitSpecContract,
@@ -51,10 +49,6 @@ __all__ = [
     "validate_dispatch_request",
     "TaskShape",
     "DispatchCallback",
-    "CriticCallback",
-    "CriticFinding",
-    "CriticRequest",
-    "CriticVerdict",
     "infer_task_shape",
     "infer_outcome_status",
     "normalize_outcome_status",

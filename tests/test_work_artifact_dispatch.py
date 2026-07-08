@@ -87,37 +87,6 @@ def _non_recoverable_result(summary: str = "Fatal error") -> WorkerDispatchResul
     )
 
 
-def _continuing_with_evidence_result(
-    summary: str = "Item completed — acceptance unverified, continuing.",
-    modified: list[str] | None = None,
-) -> WorkerDispatchResult:
-    """Simulate a result where the Worker did real work (files changed,
-    validation passed) but the outcome classifier emitted a recoverable/
-    continuing/phase_boundary classification.
-
-    This is the exact pattern that caused the "corpse state" bug: the
-    Worker succeeded but receipt.status was "continuing" because
-    ``is_recoverable_worker_continuation`` matched.
-    """
-    return WorkerDispatchResult(
-        ok=False,
-        summary=summary,
-        recoverable=True,
-        phase_boundary=True,
-        needs_followup=True,
-        status="completed_with_caveats",
-        modified_files=modified or [],
-        validation="python -m compileall src/model.py passed.",
-        extras={
-            "recoverable": True,
-            "phase_boundary": True,
-            "needs_followup": True,
-            "suggested_next_tool": "dispatch_to_worker",
-            "failure_class": "behavioral_validation_skipped",
-        },
-    )
-
-
 # ── A. ToolRunner preserves full approved job envelope ─────────────────────────
 
 
@@ -387,7 +356,7 @@ def test_aggregate_artifact_results_all_ok():
         ("item-2", _ok_result("Done 2", modified=["b.py"])),
     ]
 
-    result = proxy._aggregate_artifact_results("call_1", approved_req, item_results, [], {}, 2)
+    result = proxy._aggregate_artifact_results("call_1", approved_req, item_results, 2)
 
     assert result.ok is True
     assert result.extras["completed_items"] == ["item-1", "item-2"]
@@ -418,7 +387,7 @@ def test_aggregate_artifact_results_cancelled():
         ("item-2", cancelled),
     ]
 
-    result = proxy._aggregate_artifact_results("call_1", approved_req, item_results, [], {}, 2)
+    result = proxy._aggregate_artifact_results("call_1", approved_req, item_results, 2)
 
     assert result.ok is False
     assert result.cancelled is True
@@ -446,8 +415,7 @@ def test_aggregate_artifact_results_non_ok():
     ]
 
     result = proxy._aggregate_artifact_results(
-        "call_1", approved_req, item_results, [],
-        {"item-2": 1}, 3,
+        "call_1", approved_req, item_results, 3,
     )
 
     assert result.ok is False
@@ -849,7 +817,7 @@ def test_aggregate_artifact_results_infrastructure_pause():
     ]
 
     result = proxy._aggregate_artifact_results(
-        "call_1", approved_req, item_results, [], {}, 2,
+        "call_1", approved_req, item_results, 2,
         terminal_override=harness_result, infrastructure_pause=True,
     )
 
@@ -882,8 +850,7 @@ def test_aggregate_artifact_results_exhausted():
     ]
 
     result = proxy._aggregate_artifact_results(
-        "call_1", approved_req, item_results, [],
-        {"item-2": 3}, 2,
+        "call_1", approved_req, item_results, 2,
     )
 
     assert result.ok is False
@@ -895,44 +862,6 @@ def test_aggregate_artifact_results_exhausted():
 
 
 # ── I. Infrastructure failure detection ────────────────────────────────────────
-
-
-def test_is_infrastructure_failure_harness_error():
-    """harness_error status is classified as infrastructure failure."""
-    from aura.bridge.dispatch import _DispatchProxy
-    result = WorkerDispatchResult(ok=False, summary="Err", status="harness_error")
-    assert _DispatchProxy._is_infrastructure_failure(result) is True
-
-
-def test_is_infrastructure_failure_api_errors():
-    """api_errors in extras is infrastructure failure."""
-    from aura.bridge.dispatch import _DispatchProxy
-    result = WorkerDispatchResult(
-        ok=False, summary="Err",
-        extras={"api_errors": ["timeout"]},
-    )
-    assert _DispatchProxy._is_infrastructure_failure(result) is True
-
-
-def test_is_infrastructure_failure_failure_class():
-    """provider/network/auth failure classes are infrastructure."""
-    from aura.bridge.dispatch import _DispatchProxy
-    for fc in ("provider_unavailable", "network_error", "auth_error"):
-        result = WorkerDispatchResult(
-            ok=False, summary="Err",
-            extras={"failure_class": fc},
-        )
-        assert _DispatchProxy._is_infrastructure_failure(result) is True
-
-
-def test_is_infrastructure_failure_regular_failure():
-    """A regular non-ok worker result is NOT infrastructure."""
-    from aura.bridge.dispatch import _DispatchProxy
-    result = WorkerDispatchResult(
-        ok=False, summary="Validation failed",
-        status="validation_failed",
-    )
-    assert _DispatchProxy._is_infrastructure_failure(result) is False
 
 
 # ── K. _build_artifact_item_request prior-receipt appendix ─────────────────────
@@ -1189,86 +1118,6 @@ def test_resume_guard_does_not_fire_on_first_dispatch(tmp_path):
 #    _normalize_artifact_item_completion. ──────────────────────────────────────
 
 
-def test_artifact_outcome_validation_is_sole_authority():
-    """_decide_artifact_item_outcome uses only validation evidence for 'done'.
-
-    A recoverable continuation result WITHOUT structured validation evidence
-    MUST return ``continue_same_item``, not ``done``.
-    A result WITH passing validation evidence MUST return ``done``.
-    """
-    from aura.bridge.dispatch import _DispatchProxy
-
-    item_req = WorkerDispatchRequest(
-        goal="Test",
-        files=["src/model.py"],
-        spec="Do the thing",
-        acceptance="Works",
-        summary="Test",
-        artifact_id="art-1",
-        artifact_item_id="item-1",
-    )
-    from aura.work_artifact.model import WorkArtifactItem
-    dummy_item = WorkArtifactItem(
-        id="item-1", title="Test", intent="Test",
-        target_files=["src/model.py"], acceptance="Works",
-    )
-
-    # ── No structured validation evidence → continue_same_item ─────────────
-    no_evidence_result = _continuing_with_evidence_result(
-        modified=["src/model.py"],
-    )
-    outcome1 = _DispatchProxy._decide_artifact_item_outcome(
-        item_req, no_evidence_result, dummy_item,
-    )
-    assert outcome1 == "continue_same_item", (
-        f"Expected continue_same_item without validation evidence, "
-        f"got {outcome1}"
-    )
-
-    # ── With passing validation evidence → done ────────────────────────────
-    passing_result = WorkerDispatchResult(
-        ok=False,
-        summary="Item done.",
-        recoverable=True,
-        phase_boundary=True,
-        needs_followup=True,
-        modified_files=["src/model.py"],
-        extras={
-            "validation_results": [
-                {
-                    "command": "python -m compileall src/model.py",
-                    "ok": True,
-                    "exit_code": 0,
-                    "validation_classification": "passed",
-                    "counts_as_validation": True,
-                    "counts_as_product_failure": False,
-                },
-            ],
-        },
-    )
-    outcome2 = _DispatchProxy._decide_artifact_item_outcome(
-        item_req, passing_result, dummy_item,
-    )
-    assert outcome2 == "done", (
-        f"Expected done with passing validation evidence, "
-        f"got {outcome2}"
-    )
-
-    # ── Infrastructure failure → external_pause ───────────────────────────
-    infra_result = WorkerDispatchResult(
-        ok=False,
-        summary="API error",
-        status="harness_error",
-        extras={"api_errors": ["timeout"], "failure_class": "provider_unavailable"},
-    )
-    outcome3 = _DispatchProxy._decide_artifact_item_outcome(
-        item_req, infra_result, dummy_item,
-    )
-    assert outcome3 == "external_pause", (
-        f"Expected external_pause for infrastructure failure, "
-        f"got {outcome3}"
-    )
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # O. (removed) Old normalizer regression tests deleted.
@@ -1463,143 +1312,6 @@ def test_artifact_done_does_not_require_raw_worker_ok(tmp_path):
     assert current_id in ("", None) or current_id != "item-1", \
         f"current_item_id should not be 'item-1' for completed job, got {current_id!r}"
 
-
-def test_missing_declared_validation_continues_same_item(tmp_path):
-    """Item retries when declared validation has no matching evidence."""
-    from aura.bridge.dispatch import _DispatchProxy
-
-    proxy = _DispatchProxy(
-        parent_widget=None,
-        registry_factory=lambda mode: None,
-        approval_proxy=None,
-        workspace_root=tmp_path,
-    )
-
-    step: list[int] = [0]
-    MAX_CALLS = 20  # Safety guard — fail fast instead of hanging.
-
-    def fake_run_worker(
-        tool_call_id: str, worker_req: WorkerDispatchRequest, pending,
-    ) -> WorkerDispatchResult:
-        step[0] += 1
-        if step[0] > MAX_CALLS:
-            raise RuntimeError(
-                f"Fake worker called {step[0]} times — possible infinite retry loop. "
-                f"Current item: {worker_req.artifact_item_id}"
-            )
-        if step[0] == 1:
-            # First attempt: no validation evidence.
-            return WorkerDispatchResult(
-                ok=False,
-                summary="Validation did not run.",
-                recoverable=True,
-                modified_files=list(worker_req.files),
-                extras={
-                    "validation_results": [],
-                    "terminal_results": [],
-                    "validation_not_run": True,
-                    "failure_class": "validation_not_run",
-                },
-            )
-        if step[0] == 2:
-            # Second attempt: passing validation evidence.
-            return WorkerDispatchResult(
-                ok=False,
-                summary="Item 1 done.",
-                recoverable=True,
-                phase_boundary=True,
-                needs_followup=True,
-                modified_files=list(worker_req.files),
-                extras={
-                    "validation_results": [
-                        {
-                            "command": "python -m compileall src/model.py",
-                            "ok": True,
-                            "exit_code": 0,
-                            "validation_classification": "passed",
-                            "counts_as_validation": True,
-                            "counts_as_product_failure": False,
-                        },
-                    ],
-                    "failure_class": "validation_not_run",
-                },
-            )
-        # Item 2: may have scoped py_compile command injected.
-        # Return matching evidence for the injected command.
-        vc = worker_req.validation_commands
-        if vc:
-            cmd = vc[0].command if hasattr(vc[0], 'command') else str(vc[0])
-        else:
-            cmd = ""
-        return WorkerDispatchResult(
-            ok=bool(cmd),
-            summary=f"Item 2 done: {cmd}" if cmd else "Item 2 done.",
-            modified_files=list(worker_req.files),
-            extras={
-                "validation_results": [
-                    {
-                        "command": cmd,
-                        "ok": True,
-                        "exit_code": 0,
-                        "validation_classification": "passed",
-                        "counts_as_validation": True,
-                        "counts_as_product_failure": False,
-                    },
-                ],
-            } if cmd else {},
-        )
-    proxy._run_worker = fake_run_worker
-
-    original_register = proxy._pending_map.register
-
-    def auto_register(tool_call_id, req):
-        pending = original_register(tool_call_id, req)
-        pending.edited_request = req
-        pending.decision_event.set()
-        return pending
-    proxy._pending_map.register = auto_register
-
-    payload = {
-        "goal": "Implement feature",
-        "constraints": [],
-        "allowed_files": ["src/"],
-        "items": [
-            {
-                "id": "item-1", "title": "Add model",
-                "intent": "Create the model",
-                "target_files": ["src/model.py"],
-                "acceptance": "Model works",
-                "validation_commands": ["python -m compileall src/model.py"],
-            },
-            {
-                "id": "item-2", "title": "Add view",
-                "intent": "Create the view",
-                "target_files": ["src/view.py"],
-                "acceptance": "View works",
-            },
-        ],
-    }
-    req = WorkerDispatchRequest(
-        goal="Full feature", files=["src/a.py"],
-        spec="Implement.", acceptance="Works.", summary="Feature",
-        work_artifact_payload=payload,
-    )
-
-    result = proxy.request_dispatch("call_missing_val", req)
-
-    # ── Both items completed ────────────────────────────────────────────────
-    assert result.ok is True, f"Expected ok=True, got {result.ok}"
-    ctrl = proxy.artifact_controller()
-    artifact = ctrl.get_artifact("call_missing_val")
-    assert artifact is not None
-    assert artifact.work_items[0].status == WorkItemStatus.done
-    assert artifact.work_items[1].status == WorkItemStatus.done
-    assert result.extras["completed_items"] == ["item-1", "item-2"]
-
-    # ── Item 1 was attempted twice ──────────────────────────────────────────
-    # (step 1 = first validation missing, step 2 = second validation passes,
-    #  step 3 = item 2 runs)
-    assert step[0] == 3, f"Expected 3 worker runs, got {step[0]}"
 
 
 def test_retry_threshold_cannot_pause_approved_artifact(tmp_path):

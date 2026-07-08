@@ -1,4 +1,4 @@
-"""Worker tool validation observation — Phase 1 extraction from manager_tool_round.py."""
+"""Worker tool validation observation — simplified (no write_snapshot)."""
 from __future__ import annotations
 
 from typing import Any
@@ -19,8 +19,7 @@ def observe_worker_tool_validation(
     payload = _terminal_payload(loop_info)
     if not payload:
         return
-    write_snapshot = _current_write_snapshot(state)
-    state.validation_ledger.observe_tool_payload(payload, write_snapshot)
+    state.validation_ledger.observe(payload)
 
 
 # ---------------------------------------------------------------------------
@@ -37,7 +36,3 @@ def _terminal_payload(loop_info: dict[str, Any] | None) -> dict[str, Any]:
         return {}
     payload = loop_info.get("_terminal_payload")
     return payload if isinstance(payload, dict) else {}
-
-
-def _current_write_snapshot(state: Any) -> int:
-    return state.applied_write_count()

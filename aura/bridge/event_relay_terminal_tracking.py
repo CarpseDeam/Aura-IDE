@@ -9,7 +9,6 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from aura.bridge.event_relay_errors import (
-    _attach_validation_metadata,
     _is_validation_terminal_record,
 )
 from aura.bridge.event_relay_write_tracking import (
@@ -70,7 +69,6 @@ class EventRelayTerminalTracker:
         if tool_name == "run_terminal_command" and parsed.get("auto_validation"):
             record["auto_validation"] = True
 
-        _attach_validation_metadata(record, parsed)
         self.terminal_results.append(record)
         self._emit_bus_event(WORKER_COMMAND_FINISHED, {
             "command": record["command"],

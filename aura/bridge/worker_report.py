@@ -10,7 +10,6 @@ from aura.conversation.validation_orchestrator import validation_issue_message
 from aura.conversation.validation_truth import validation_payload_failed, validation_payload_passed
 from aura.conversation.worker_completion._summary_formatters import (
     _final_report_claims_failure,
-    _final_report_claims_validation,
     _format_recoverable_write_failure,
     _format_structured_worker_failure,
     _format_worker_write_failure,
@@ -22,7 +21,6 @@ __all__ = [
     "_build_worker_summary",
     "_dedupe_summary_writes",
     "_final_report_claims_failure",
-    "_final_report_claims_validation",
     "_parse_structured_worker_failure",
     "_format_structured_worker_failure",
     "_format_worker_write_failure",
@@ -213,32 +211,6 @@ def _target_line_text(start_line: int | None, end_line: int | None) -> str:
     return ""
 
 
-def _render_required_behavioral_summary(
-    lines: list[str],
-    behavioral: dict[str, Any],
-) -> None:
-    """Append required behavioral validation status lines to *lines*."""
-    passed = behavioral.get("passed", [])
-    skipped = behavioral.get("skipped", [])
-    could_not_run = behavioral.get("could_not_run", [])
-
-    if not passed and not skipped and not could_not_run:
-        return
-
-    lines.append("")
-    lines.append(" Required behavioral checks:")
-    for entry in passed:
-        cmd = entry.get("command", "")
-        lines.append(f"  • {cmd}  →  passed")
-    for entry in could_not_run:
-        cmd = entry.get("command", "")
-        reason = entry.get("reason", "")
-        suffix = f" ({reason})" if reason else ""
-        lines.append(f"  • {cmd}  →  could not run{suffix}")
-    for cmd in skipped:
-        lines.append(f"  • {cmd}  →  required but skipped")
-
-
 def _build_worker_summary(
     req: WorkerDispatchRequest,
     history: History,
@@ -251,22 +223,18 @@ def _build_worker_summary(
     not_applied_writes: list[dict[str, Any]] | None = None,
     status: str | None = None,
     internal_error: str | None = None,
-    behavioral_validation: dict[str, Any] | None = None,
 ) -> str:
     continuation = continuation or {}
     caveats = caveats or []
     validation_results = validation_results or []
     validation_command_issues = validation_command_issues or []
     not_applied_writes = not_applied_writes or []
-    behavioral_validation = behavioral_validation or {}
 
     # Derive status if not provided (backward compat for callers without status)
     if not status:
         if errors:
             if _is_internal_error_summary(errors[0]):
                 status = "harness_error"
-            elif errors[0].startswith("Validation command failed"):
-                status = "validation_failed"
             else:
                 status = "harness_error"
         elif caveats:
@@ -277,7 +245,6 @@ def _build_worker_summary(
     HEADER_LABELS = {
         "completed": "Worker Report",
         "completed_with_caveats": "Worker Report",
-        "validation_failed": "Worker Report",
         "edit_mechanics_blocked": "Worker Report",
         "scope_mismatch": "Worker Report",
         "approval_rejected": "Changes rejected",
@@ -385,8 +352,6 @@ def _build_worker_summary(
             lines.append(f"  \u2022 {validation_issue_message(issue)}")
 
     # \u2500\u2500 Required behavioral validation \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-    _render_required_behavioral_summary(lines, behavioral_validation)
-
     # === Harness errors ===
     if internal_error:
         lines.append("")

@@ -192,7 +192,6 @@ class WorkArtifact:
     work_items: list[WorkArtifactItem] = field(default_factory=list)
     current_item_id: str = ""
     final_receipt: WorkArtifactReceipt | None = None
-    baseline_validation_fingerprints: dict[str, list[str]] = field(default_factory=dict)
     created_at: float = 0.0
     updated_at: float = 0.0
 
@@ -236,7 +235,6 @@ class WorkArtifact:
             "allowed_files": list(self.allowed_files),
             "work_items": [item.to_dict() for item in self.work_items],
             "current_item_id": self.current_item_id,
-            "baseline_validation_fingerprints": dict(self.baseline_validation_fingerprints),
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -250,12 +248,6 @@ class WorkArtifact:
             raw = {}
         items_raw = raw.get("work_items") if isinstance(raw.get("work_items"), list) else []
         receipt_raw = raw.get("final_receipt")
-        baseline_raw = raw.get("baseline_validation_fingerprints")
-        baseline = {}
-        if isinstance(baseline_raw, dict):
-            for k, v in baseline_raw.items():
-                if isinstance(v, list):
-                    baseline[str(k)] = [str(item) for item in v]
         return cls(
             artifact_id=str(raw.get("artifact_id", "")),
             goal=str(raw.get("goal", "")),
@@ -264,7 +256,6 @@ class WorkArtifact:
             work_items=[WorkArtifactItem.from_dict(item) for item in items_raw],
             current_item_id=str(raw.get("current_item_id", "")),
             final_receipt=WorkArtifactReceipt.from_dict(receipt_raw) if receipt_raw else None,
-            baseline_validation_fingerprints=baseline,
             created_at=float(raw.get("created_at", 0.0)),
             updated_at=float(raw.get("updated_at", 0.0)),
         )

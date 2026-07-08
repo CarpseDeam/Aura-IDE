@@ -97,10 +97,6 @@ class WorkerEventRelay(QObject):
         self.final_report_text: str = ""          # last assistant content after Done event
         self._active_tool_names: dict[str, str] = {}
         self._tool_arg_fragments: dict[str, str] = {}
-        # Pre-existing validation failures discovered via attribution.
-        # Populated by the finalization gate when artifact item validation
-        # failures match the baseline; flows into result extras.
-        self.preexisting_validation_failures: list[dict[str, str | list[str]]] = []
 
     @property
     def terminal_results(self) -> list[dict]:

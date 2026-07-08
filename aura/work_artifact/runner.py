@@ -26,9 +26,7 @@ from aura.work_artifact.model import ValidationCommandSpec, WorkItemStatus
 from aura.work_artifact.projection import WorkArtifactProjection
 from aura.work_artifact.verification import (
     WorkArtifactAttemptOutcome,
-    add_retry_context,
     classify_item_attempt,
-    ensure_item_verification_source,
 )
 
 _log = logging.getLogger(__name__)
@@ -51,7 +49,6 @@ class WorkArtifactRunner:
         run_worker: Callable[[str, WorkerDispatchRequest], WorkerDispatchResult],
         emit_projection: Callable[[str], None],
         workspace_root: Path | None = None,
-        capture_baseline: Callable[[str], None] | None = None,
     ) -> None:
         """Constructor.
 
@@ -68,18 +65,12 @@ class WorkArtifactRunner:
             Callable that emits an artifact projection update for the
             GUI.  Receives the tool_call_id.
         workspace_root
-            Optional workspace root path, used for scoped verification
-            command derivation.
-        capture_baseline
-            Optional callable that captures validation baseline
-            fingerprints.  Receives the tool_call_id.  Called once
-            before any item runs.
+            Optional workspace root path (reserved for future use).
         """
         self._controller = controller
         self._run_worker = run_worker
         self._emit_projection = emit_projection
         self._workspace_root = workspace_root
-        self._capture_baseline = capture_baseline
 
     def run(
         self,
@@ -93,6 +84,11 @@ class WorkArtifactRunner:
         in order, executing each via ``run_worker``, classifying outcomes
         via ``verification.classify_item_attempt``, and acting on the
         classification.
+
+        Each item runs at most once — there is no validation-based retry
+        loop.  The Worker's own tool-loop validation is sufficient for
+        completion.  Only true infrastructure failures (provider/API/
+        harness errors) pause the job.
 
         Parameters
         ----------
@@ -108,13 +104,7 @@ class WorkArtifactRunner:
         WorkerDispatchResult
             The aggregated result for the whole job.
         """
-        # ── Capture baseline once before any item runs ─────────────────────
-        if self._capture_baseline is not None:
-            self._capture_baseline(artifact_id)
-
         item_results: list[tuple[str, WorkerDispatchResult]] = []
-        recovered_item_ids: list[str] = []
-        failed_attempts: dict[str, int] = {}
 
         artifact_obj = self._controller.get_artifact(artifact_id)
         total = len(artifact_obj.work_items) if artifact_obj else 0
@@ -123,8 +113,7 @@ class WorkArtifactRunner:
             # ── Check for external cancellation between items ──────────────
             if cancel_event.is_set():
                 return self._aggregate_artifact_results(
-                    artifact_id, approved_req, item_results,
-                    recovered_item_ids, failed_attempts, total,
+                    artifact_id, approved_req, item_results, total,
                     terminal_override=WorkerDispatchResult(
                         ok=False,
                         summary="WorkArtifact job cancelled during internal items.",
@@ -136,8 +125,7 @@ class WorkArtifactRunner:
             unfinished = self._controller.unfinished_items(artifact_id)
             if not unfinished:
                 return self._aggregate_artifact_results(
-                    artifact_id, approved_req, item_results,
-                    recovered_item_ids, failed_attempts, total,
+                    artifact_id, approved_req, item_results, total,
                 )
 
             item = unfinished[0]
@@ -167,86 +155,59 @@ class WorkArtifactRunner:
                 artifact_id, approved_req, item, item_index, total,
             )
 
-            # ── Guarantee a verification evidence path before running ─────────
-            # If the item has no declared validation commands and a safe scoped
-            # command can be derived (e.g. py_compile for Python files), inject
-            # it now so the Worker produces structured evidence.
-            item_req = ensure_item_verification_source(
-                item_req, item, self._workspace_root,
-            )
+            # ── Run the Worker once for this item ──────────────────────────
+            item_result = self._run_worker(artifact_id, item_req)
 
-            # ── Inner loop for this item — retry indefinitely ──────────────
-            attempt = 0
-            while True:
-                item_result = self._run_worker(artifact_id, item_req)
-                attempt += 1
+            outcome = classify_item_attempt(item_req, item_result)
 
-                outcome = classify_item_attempt(item_req, item_result)
-
-                if outcome == WorkArtifactAttemptOutcome.cancelled:
-                    _log.info(
-                        "WorkArtifact item %s cancelled (attempt %d)",
-                        item.id, attempt,
-                    )
-                    self._controller.attach_receipt(
-                        artifact_id, item_result, item_id=item.id,
-                    )
-                    item_results.append((item.id, item_result))
-                    return self._aggregate_artifact_results(
-                        artifact_id, approved_req, item_results,
-                        recovered_item_ids, failed_attempts, total,
-                        terminal_override=WorkerDispatchResult(
-                            ok=False,
-                            summary="WorkArtifact job cancelled during internal items.",
-                            cancelled=True,
-                            extras={"work_artifact_job": True, "work_artifact_cancelled": True},
-                        ),
-                    )
-
-                if outcome == WorkArtifactAttemptOutcome.pause:
-                    _log.info(
-                        "WorkArtifact item %s infrastructure failure — "
-                        "pausing job artifact_id=%s",
-                        item.id, artifact_id,
-                    )
-                    self._controller.attach_receipt(
-                        artifact_id, item_result, item_id=item.id,
-                    )
-                    item_results.append((item.id, item_result))
-                    return self._aggregate_artifact_results(
-                        artifact_id, approved_req, item_results,
-                        recovered_item_ids, failed_attempts, total,
-                        terminal_override=item_result,
-                        infrastructure_pause=True,
-                    )
-
-                if outcome == WorkArtifactAttemptOutcome.done:
-                    _log.info(
-                        "WorkArtifact item %s done (attempt %d)",
-                        item.id, attempt,
-                    )
-                    # Mark item done explicitly — validation authority, not receipt status.
-                    self._controller.mark_item_done(artifact_id, item.id)
-                    # Attach receipt as audit record only (display status "ok"
-                    # for consistency in the projection).
-                    self._controller.attach_receipt(
-                        artifact_id, item_result, item_id=item.id,
-                        status_override="ok",
-                    )
-                    item_results.append((item.id, item_result))
-                    self._emit_projection(artifact_id)
-                    break  # Inner loop — outer loop picks next item.
-
-                # outcome == retry
-                recovered_item_ids.append(item.id)
-                failed_attempts[item.id] = attempt
-
-                # Build structured retry context via verification module.
-                item_req = add_retry_context(item_req, item_result, item, attempt)
+            if outcome == WorkArtifactAttemptOutcome.cancelled:
                 _log.info(
-                    "WorkArtifact item %s retry attempt %d",
-                    item.id, attempt,
+                    "WorkArtifact item %s cancelled",
+                    item.id,
                 )
+                self._controller.attach_receipt(
+                    artifact_id, item_result, item_id=item.id,
+                )
+                item_results.append((item.id, item_result))
+                return self._aggregate_artifact_results(
+                    artifact_id, approved_req, item_results, total,
+                    terminal_override=WorkerDispatchResult(
+                        ok=False,
+                        summary="WorkArtifact job cancelled during internal items.",
+                        cancelled=True,
+                        extras={"work_artifact_job": True, "work_artifact_cancelled": True},
+                    ),
+                )
+
+            if outcome == WorkArtifactAttemptOutcome.pause:
+                _log.info(
+                    "WorkArtifact item %s infrastructure failure — "
+                    "pausing job artifact_id=%s",
+                    item.id, artifact_id,
+                )
+                self._controller.attach_receipt(
+                    artifact_id, item_result, item_id=item.id,
+                )
+                item_results.append((item.id, item_result))
+                return self._aggregate_artifact_results(
+                    artifact_id, approved_req, item_results, total,
+                    terminal_override=item_result,
+                    infrastructure_pause=True,
+                )
+
+            # outcome == done (always, for any Worker completion)
+            _log.info(
+                "WorkArtifact item %s done",
+                item.id,
+            )
+            self._controller.mark_item_done(artifact_id, item.id)
+            self._controller.attach_receipt(
+                artifact_id, item_result, item_id=item.id,
+                status_override="ok",
+            )
+            item_results.append((item.id, item_result))
+            self._emit_projection(artifact_id)
+            # Outer loop picks the next unfinished item.
 
     # ── Item request construction ─────────────────────────────────────────────
 
@@ -351,8 +312,6 @@ class WorkArtifactRunner:
         tool_call_id: str,
         approved_req: WorkerDispatchRequest,
         item_results: list[tuple[str, WorkerDispatchResult]],
-        recovered_item_ids: list[str],
-        failed_attempts: dict[str, int],
         total_items: int,
         terminal_override: WorkerDispatchResult | None = None,
         infrastructure_pause: bool = False,
@@ -368,9 +327,6 @@ class WorkArtifactRunner:
         2. **cancelled** — user cancelled the job.
         3. **infrastructure-paused** — harness/provider/auth/network failure;
            resumable later (``work_artifact_unfinished: true``).
-
-        There is no "retry-cap-reached" outcome — ordinary repeated failures
-        do not pause the job.
         """
         # ── Derive completion from artifact state ────────────────────────────
         artifact = self._controller.get_artifact(tool_call_id)
@@ -458,13 +414,10 @@ class WorkArtifactRunner:
             "work_artifact_job": True,
             "completed_items": completed_items,
             "total_items": total_items,
-            "recovered_item_ids": list(recovered_item_ids),
-            "failed_attempts": dict(failed_attempts),
             "item_summaries": item_summaries,
         }
 
         if all_ok:
-            # All items done — no stale failure metadata from raw non-ok results.
             return WorkerDispatchResult(
                 ok=True,
                 summary=f"WorkArtifact job completed: {total_items} item(s) done.",

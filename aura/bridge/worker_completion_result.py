@@ -1,5 +1,8 @@
-"""Worker completion/result assembly for bridge dispatch."""
+"""Worker completion/result assembly for bridge dispatch.
 
+No validation-based outcome authority. Validation results are carried as
+passive display data only.
+"""
 from __future__ import annotations
 
 import json
@@ -17,20 +20,11 @@ from aura.bridge.worker_completion_messages import (
 )
 from aura.bridge.worker_outcome_classifier import (
     _classify_worker_completion,
-    _is_explicit_validation_only_request,
-    _is_true_phase_boundary,
 )
 from aura.bridge.worker_report import _dedupe_summary_writes
 from aura.bridge.worker_result_payload import (
     _build_worker_result_payload,
     _unrecovered_not_applied_writes,
-)
-from aura.bridge.worker_validation_results import (
-    _assess_required_behavioral_validation,
-    _filter_scratch_validation_results,
-    _unrecovered_validation_failures,
-    _validation_command_issues_for_task,
-    _validation_results_for_task,
 )
 from aura.conversation import (
     History,
@@ -42,9 +36,6 @@ from aura.conversation.path_utils import (
     is_validation_scratch_path as _is_validation_scratch_path,
 )
 from aura.conversation.tool_limits import WRITE_TOOLS
-from aura.conversation.worker_completion._summary_formatters import (
-    _final_report_claims_validation,
-)
 from aura.validation.selector import ValidationPlan
 
 _log = logging.getLogger(__name__)
@@ -56,6 +47,7 @@ __all__ = [
     "_last_assistant_content",
     "prepare_worker_completion_result",
 ]
+
 
 @dataclass
 class WorkerCompletionResult:
@@ -103,12 +95,8 @@ class WorkerCompletionAssembly:
             status=self.outcome["status"],
             cancelled=False,
             needs_followup=self.outcome["needs_followup"],
-            phase_boundary=self.outcome["phase_boundary"],
-            followup_reason=(
-                str(self.relay.phase_boundary_info.get("reason"))
-                if _is_true_phase_boundary(self.relay.phase_boundary_info)
-                else None
-            ),
+            phase_boundary=False,
+            followup_reason=None,
             recoverable=self.outcome["recoverable"],
             completed=continuation.get("completed", []),
             remaining=continuation.get("remaining", []),
@@ -179,9 +167,6 @@ def prepare_worker_completion_result(
     )
 
 
-
-
-
 def _collect_worker_completion_data(
     *,
     req: WorkerDispatchRequest,
@@ -190,10 +175,14 @@ def _collect_worker_completion_data(
     final_validation_commands: list[str],
     preserve_scratch_records: bool,
 ) -> dict[str, Any]:
+    """Collect worker completion data for passive display.
+
+    No validation-based authority is derived from this data.  Validation
+    results and terminal results are carried as passive metadata for the
+    GUI display only.
+    """
     final_report = _last_assistant_content(worker_history)
     continuation = _parse_continuation_report(final_report)
-    is_partial = bool(continuation.get("remaining"))
-    claimed_validation = _final_report_claims_validation(final_report) or bool(continuation.get("validation_text"))
 
     diagnostic_environment_caveats = (
         []
@@ -201,17 +190,10 @@ def _collect_worker_completion_data(
         else _diagnostic_environment_caveats(relay)
     )
     _filter_scratch_write_records(relay, preserve_scratch=preserve_scratch_records)
-    validation_results = _validation_results_for_task(
-        relay.validation_results,
-        getattr(relay, "terminal_results", []),
-        final_validation_commands,
-    )
-    validation_command_issues = _validation_command_issues_for_task(
-        getattr(relay, "terminal_results", [])
-    )
-    if not preserve_scratch_records:
-        validation_results = _filter_scratch_validation_results(validation_results)
+
+    validation_results = list(relay.validation_results)
     has_writes = bool(relay.write_results)
+
     internal_recovery_steers = [
         r for r in relay.failed_tool_results if r.get("internal_recovery_steer")
     ]
@@ -237,36 +219,18 @@ def _collect_worker_completion_data(
         if r.get("failure_class") == "project_environment_missing_dependency"
         or r.get("environment_setup_needed")
     ]
-    failed_validation = _unrecovered_validation_failures(validation_results)
-    validation_ran = bool(validation_results)
+
+    failed_validation: list[dict[str, Any]] = []
     not_applied_writes = list(getattr(relay, "not_applied_writes", []))
     unrecovered_not_applied_writes = _unrecovered_not_applied_writes(relay.tool_results)
-
-    acceptance_unverified = False
-    if req.acceptance.strip():
-        if not is_partial and not claimed_validation and not validation_ran:
-            acceptance_unverified = True
-    validation_not_run = bool(relay.write_results) and not validation_ran
-    validation_only = _is_explicit_validation_only_request(req)
-    is_implementation = not validation_only and not (
-        "blueprint" in req.spec.lower()[:200]
-        or "inspect" in req.goal.lower()[:100]
-        or "diagnostic" in req.goal.lower()[:100]
-    )
-
-    behavioral_validation = _assess_required_behavioral_validation(
-        validation_commands=final_validation_commands,
-        validation_results=validation_results,
-        validation_command_issues=validation_command_issues,
-    )
 
     return {
         "final_report": final_report,
         "continuation": continuation,
         "diagnostic_environment_caveats": diagnostic_environment_caveats,
         "validation_results": validation_results,
-        "validation_command_issues": validation_command_issues,
-        "behavioral_validation": behavioral_validation,
+        "validation_command_issues": [],
+        "behavioral_validation": {},
         "has_writes": has_writes,
         "internal_recovery_steers": internal_recovery_steers,
         "write_failures": write_failures,
@@ -276,13 +240,11 @@ def _collect_worker_completion_data(
         "failed_validation": failed_validation,
         "not_applied_writes": not_applied_writes,
         "unrecovered_not_applied_writes": unrecovered_not_applied_writes,
-        "acceptance_unverified": acceptance_unverified,
-        "validation_not_run": validation_not_run,
-        "validation_only": validation_only,
-        "is_implementation": is_implementation,
+        "acceptance_unverified": False,
+        "validation_not_run": False,
+        "validation_only": False,
+        "is_implementation": True,
     }
-
-
 
 
 def _last_assistant_content(history: History) -> str:
@@ -292,7 +254,6 @@ def _last_assistant_content(history: History) -> str:
             if isinstance(content, str) and content.strip():
                 return content
     return ""
-
 
 
 def _filter_scratch_write_records(relay: Any, *, preserve_scratch: bool = False) -> None:

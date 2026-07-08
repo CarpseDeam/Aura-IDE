@@ -46,26 +46,14 @@ class _SendState:
     stream_buffer: WorkerStreamBuffer | None = field(init=False)
     worker_flow: WorkerFlowHarness | None = field(init=False)
 
-    # --- worker guard / quarantine ---
-    candidate_final_message: dict[str, Any] | None = None
-    worker_needs_final_report: bool = False
-    worker_phase_boundary_info: dict[str, Any] | None = None
+    # --- worker recovery state ---
     worker_flow_last_steering: str = ""
     worker_flow_last_reason: str = ""
-    last_quality_ok_fingerprint: str | None = None
-    last_quality_findings: list[dict[str, Any]] = field(default_factory=list)
-    worker_quality_enabled: bool = True
     stale_validation_notes: list[str] = field(default_factory=list)
-    explicit_validation_passed_at_writes: int | None = None
-    """Write-snapshot value when explicit validation last passed, or ``None``."""
     validation_ledger: WorkerValidationLedger = field(
         default_factory=WorkerValidationLedger
     )
 
-    # --- baseline fingerprints for artifact item validation attribution ---
-    baseline_validation_fingerprints: dict[str, list[str]] = field(default_factory=dict)
-    # --- pre-existing validation failures found during attribution ---
-    preexisting_validation_failures: list[dict[str, str | list[str]]] = field(default_factory=list)
 
     # --- dispatch ---
     planner_dispatch_attempts: int = 0
@@ -93,12 +81,6 @@ class _SendState:
     syntax_validation_required: set[str] = field(default_factory=set)
     explicit_validation_fingerprints: dict[str, str] = field(default_factory=dict)
     explicit_validation_edit_snapshot: int = 0
-    import_verification_required: set[str] = field(default_factory=set)
-
-    # --- launch / dependency fingerprints (skip-optimisation) ---
-    last_launch_ok_fingerprint: str | None = None
-    last_dependent_ok_fingerprint: str | None = None
-    last_structural_ok_fingerprint: str | None = None
 
     def __post_init__(self) -> None:
         self.limits = ToolLimitState(mode=self.mode)
@@ -107,12 +89,6 @@ class _SendState:
         if self.mode == "worker":
             self.stream_buffer = WorkerStreamBuffer()
             self.worker_flow = WorkerFlowHarness()
-
-    def discard_worker_candidate_final(self) -> None:
-        """Clear the quarantined final message and the stream buffer."""
-        self.candidate_final_message = None
-        if self.stream_buffer is not None:
-            self.stream_buffer.discard()
 
     # ── Write-count helpers (honest signals from WorkerFlowHarness) ──
 
@@ -128,19 +104,3 @@ class _SendState:
             return self.worker_flow.state.write_intents
         return 0
 
-    def mark_explicit_validation_passed(self) -> None:
-        """Record that explicit validation passed at the current applied-write count."""
-        self.explicit_validation_passed_at_writes = self.applied_write_count()
-
-    @property
-    def worker_explicit_validation_passed(self) -> bool:
-        """``True`` when explicit validation passed and no applied writes since.
-
-        Read-only: the backing field ``explicit_validation_passed_at_writes``
-        is set by ``mark_explicit_validation_passed()``.  Any direct assignment
-        ``state.worker_explicit_validation_passed = ...`` will raise
-        ``AttributeError`` — use the method instead.
-        """
-        if self.explicit_validation_passed_at_writes is None:
-            return False
-        return self.explicit_validation_passed_at_writes == self.applied_write_count()
