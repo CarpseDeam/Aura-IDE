@@ -462,3 +462,213 @@ class TestSendStateBaseline:
         state = _SendState(mode="worker", research_policy=None)
         assert hasattr(state, "preexisting_validation_failures")
         assert state.preexisting_validation_failures == []
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Regression: validation classification for known commands without metadata
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestKnownValidationCommandClassification:
+    """Known validation commands (compileall, pytest, etc.) must be classified
+    even when the tool runner omitted explicit validation metadata fields."""
+
+    def test_compileall_classified_without_explicit_metadata(self):
+        """_attach_validation_metadata must classify 'python -m compileall'
+        as validation even without validation_source/validation_raw_text."""
+        from aura.bridge.event_relay_errors import _attach_validation_metadata
+        from aura.conversation.validation_truth import validation_payload_passed
+
+        record: dict[str, Any] = {}
+        parsed = {
+            "command": "python -m compileall aura/gui/playground.py",
+            "ok": True,
+            "exit_code": 0,
+            "output": "Listing ...\nCompiling ...\n",
+        }
+        _attach_validation_metadata(record, parsed)
+
+        assert record.get("counts_as_validation") is True
+        assert record.get("validation_classification") == "passed"
+        assert record.get("counts_as_product_failure") is False
+        assert validation_payload_passed(record) is True
+
+    def test_pytest_classified_without_explicit_metadata(self):
+        """pytest is also classified via the fallback."""
+        from aura.bridge.event_relay_errors import _attach_validation_metadata
+        from aura.conversation.validation_truth import validation_payload_passed
+
+        record: dict[str, Any] = {}
+        parsed = {
+            "command": "pytest tests/test_foo.py -v",
+            "ok": True,
+            "exit_code": 0,
+            "output": "1 passed",
+        }
+        _attach_validation_metadata(record, parsed)
+
+        assert record.get("counts_as_validation") is True
+        assert record.get("validation_classification") == "passed"
+        assert validation_payload_passed(record) is True
+
+    def test_ruff_classified_without_explicit_metadata(self):
+        """ruff is also classified via the fallback."""
+        from aura.bridge.event_relay_errors import _attach_validation_metadata
+
+        record: dict[str, Any] = {}
+        parsed = {
+            "command": "ruff check src/",
+            "ok": True,
+            "exit_code": 0,
+            "output": "",
+        }
+        _attach_validation_metadata(record, parsed)
+
+        assert record.get("counts_as_validation") is True
+        assert record.get("validation_classification") == "passed"
+
+    def test_unknown_command_not_classified_without_metadata(self):
+        """An arbitrary command like 'ls' is not classified as validation."""
+        from aura.bridge.event_relay_errors import _attach_validation_metadata
+
+        record: dict[str, Any] = {}
+        parsed = {
+            "command": "ls -la",
+            "ok": True,
+            "exit_code": 0,
+            "output": "file1.py file2.py",
+        }
+        _attach_validation_metadata(record, parsed)
+
+        assert record.get("counts_as_validation") is not True
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Regression: two-item artifact auto-advance
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestTwoItemArtifactAutoAdvance:
+    """A two-item WorkArtifact must advance from item 1 to item 2
+    without user intervention when item 1 completes successfully."""
+
+    def test_successful_item_receipt_is_ok_and_item_is_done(self):
+        """Item 1 with an ok result gets receipt.status='ok' and status='done'."""
+        from aura.work_artifact.controller import WorkArtifactController
+        from aura.work_artifact.model import WorkItemStatus
+
+        ctrl = WorkArtifactController()
+        payload = {
+            "goal": "Add two components",
+            "items": [
+                {
+                    "id": "item-1", "title": "Model",
+                    "intent": "Create the model",
+                    "target_files": ["src/model.py"],
+                    "acceptance": "Model compiles",
+                },
+                {
+                    "id": "item-2", "title": "View",
+                    "intent": "Create the view",
+                    "target_files": ["src/view.py"],
+                    "acceptance": "View compiles",
+                },
+            ],
+        }
+        ctrl.create_artifact_from_payload("call_abc", payload)
+        ctrl.mark_item_active("call_abc", "item-1")
+
+        result = WorkerDispatchResult(
+            ok=True,
+            summary="Item 1 done",
+            modified_files=["src/model.py"],
+        )
+        artifact = ctrl.get_artifact("call_abc")
+        assert artifact is not None
+        item1 = artifact.work_items[0]
+        assert item1.status == WorkItemStatus.active
+
+        ctrl.attach_receipt("call_abc", result, item_id="item-1")
+        assert item1.receipt is not None
+        assert item1.receipt.status == "ok"
+        assert item1.status == WorkItemStatus.done
+
+    def test_pending_items_returns_next_item_after_first_is_done(self):
+        """After item 1 is done, pending_items returns item 2."""
+        from aura.work_artifact.controller import WorkArtifactController
+        from aura.work_artifact.model import WorkItemStatus
+
+        ctrl = WorkArtifactController()
+        payload = {
+            "goal": "Two items",
+            "items": [
+                {"id": "item-1", "title": "One", "intent": "A",
+                 "target_files": ["a.py"], "acceptance": "A works"},
+                {"id": "item-2", "title": "Two", "intent": "B",
+                 "target_files": ["b.py"], "acceptance": "B works"},
+            ],
+        }
+        ctrl.create_artifact_from_payload("call_def", payload)
+
+        # Item 1 succeeds.
+        ctrl.mark_item_active("call_def", "item-1")
+        ctrl.attach_receipt("call_def", WorkerDispatchResult(
+            ok=True, summary="Item 1 done", modified_files=["a.py"],
+        ), item_id="item-1")
+
+        pending = ctrl.pending_items("call_def")
+        assert len(pending) == 1
+        assert pending[0].id == "item-2"
+        assert pending[0].status == WorkItemStatus.pending
+
+    def test_pending_items_includes_active_item_for_resume(self):
+        """An active (not done) item appears in pending_items for resume."""
+        from aura.work_artifact.controller import WorkArtifactController
+        from aura.work_artifact.model import WorkItemStatus
+
+        ctrl = WorkArtifactController()
+        payload = {
+            "goal": "Two items",
+            "items": [
+                {"id": "item-1", "title": "One", "intent": "A",
+                 "target_files": ["a.py"], "acceptance": "A works"},
+                {"id": "item-2", "title": "Two", "intent": "B",
+                 "target_files": ["b.py"], "acceptance": "B works"},
+            ],
+        }
+        ctrl.create_artifact_from_payload("call_ghi", payload)
+
+        ctrl.mark_item_active("call_ghi", "item-1")
+
+        pending = ctrl.pending_items("call_ghi")
+        assert len(pending) == 2
+        assert pending[0].id == "item-1"
+        assert pending[0].status == WorkItemStatus.active
+        assert pending[1].id == "item-2"
+        assert pending[1].status == WorkItemStatus.pending
+
+    def test_all_required_items_done_strict(self):
+        """all_required_items_done is strict — returns True only when every
+        item is done, even when pending_items returns empty."""
+        from aura.work_artifact.controller import WorkArtifactController
+
+        ctrl = WorkArtifactController()
+        payload = {
+            "goal": "Two items",
+            "items": [
+                {"id": "item-1", "title": "One", "intent": "A",
+                 "target_files": ["a.py"], "acceptance": "A works"},
+                {"id": "item-2", "title": "Two", "intent": "B",
+                 "target_files": ["b.py"], "acceptance": "B works"},
+            ],
+        }
+        ctrl.create_artifact_from_payload("call_jkl", payload)
+
+        # Both items done.
+        ctrl.attach_receipt("call_jkl", WorkerDispatchResult(
+            ok=True, summary="Item 1 done"), item_id="item-1")
+        ctrl.attach_receipt("call_jkl", WorkerDispatchResult(
+            ok=True, summary="Item 2 done"), item_id="item-2")
+
+        assert ctrl.pending_items("call_jkl") == []
+        assert ctrl.all_required_items_done("call_jkl") is True

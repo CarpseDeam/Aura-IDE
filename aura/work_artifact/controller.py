@@ -179,11 +179,18 @@ class WorkArtifactController:
     # ── item query helpers ───────────────────────────────────────────────
 
     def pending_items(self, tool_call_id: str) -> list[Any]:
-        """Return all pending work items for the given artifact."""
+        """Return all unfinished work items for the given artifact.
+
+        Returns every item whose status is not ``done``, including items
+        that are currently ``active`` (execution in progress) or ``pending``
+        (not yet started).  This ensures that an infrastructure-paused job
+        can resume the active item it was executing, and that the internal
+        loop correctly discovers the next item after marking one ``done``.
+        """
         artifact = self._artifacts.get(tool_call_id)
         if artifact is None:
             return []
-        return [item for item in artifact.work_items if item.status.value == "pending"]
+        return [item for item in artifact.work_items if item.status.value != "done"]
 
     def next_pending_item(self, tool_call_id: str) -> Any | None:
         """Return the first pending item, or None if no pending items remain."""

@@ -161,15 +161,16 @@ def test_toolrunner_flat_dispatch_no_artifact_fields(tmp_path):
 
 
 def test_controller_pending_items():
-    """pending_items returns only items with pending status."""
+    """pending_items returns unfinished items (not done)."""
     ctrl = WorkArtifactController()
     payload = _make_two_item_payload()
     ctrl.create_artifact_from_payload("call_123", payload)
     ctrl.mark_item_active("call_123", "item-1")
 
     pending = ctrl.pending_items("call_123")
-    assert len(pending) == 1
-    assert pending[0].id == "item-2"
+    assert len(pending) == 2  # item-1 active, item-2 pending — both unfinished
+    assert pending[0].id == "item-1"
+    assert pending[1].id == "item-2"
 
     ctrl.attach_receipt("call_123", _ok_result(modified=["src/model.py"]))
     pending2 = ctrl.pending_items("call_123")
