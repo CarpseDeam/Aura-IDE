@@ -7,10 +7,11 @@ Responsibilities:
 - Create artifact from Planner tool payload.
 - Track item state for internal artifact execution.
 - Mark item active when execution starts.
-- Mark item done when validation passes.
+- Mark item done when validation passes (called by ``verification.py``).
 - Attach receipt as audit record on Worker finish.
 - Emit artifact projection updates for GUI.
 - Never run Worker itself.
+- Never decide validation truth (that is ``verification.py``'s job).
 """
 from __future__ import annotations
 
@@ -121,8 +122,9 @@ class WorkArtifactController:
         """Attach a Worker result receipt to an artifact item (record only).
 
         Receipts are audit/display records only — they do NOT change item
-        status.  Status is owned by the dispatcher's validation classifier.
-        The dispatcher calls ``mark_item_done`` explicitly when validation passes.
+        status.  Status is owned by ``aura.work_artifact.verification``,
+        not receipt status.
+        The runner calls ``mark_item_done`` explicitly when verification passes.
 
         *status_override* controls the receipt's display status only; it has
         no effect on item control state.
@@ -149,11 +151,11 @@ class WorkArtifactController:
         self._emit_projection(tool_call_id)
 
     def mark_item_done(self, tool_call_id: str, item_id: str) -> None:
-        """Mark an artifact item as done (validation passed).
+        """Mark an artifact item as done (validation evidence passes).
 
-        Called by the dispatcher when the current item's validation evidence
-        passes.  Does NOT attach a receipt — call ``attach_receipt``
-        separately for audit recording.
+        Called by the runner when ``verification.classify_item_attempt``
+        returns ``WorkArtifactAttemptOutcome.done``.  Does NOT attach a
+        receipt — call ``attach_receipt`` separately for audit recording.
         """
         artifact = self._artifacts.get(tool_call_id)
         if artifact is None:

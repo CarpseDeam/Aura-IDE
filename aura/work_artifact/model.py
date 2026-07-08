@@ -319,9 +319,9 @@ class WorkArtifact:
     def attach_receipt(self, item_id: str, receipt: WorkArtifactReceipt) -> None:
         """Attach a receipt to an item as an audit record only.
 
-        Receipts do NOT change item status.  Status is owned by the
-        dispatcher's validation classifier, not receipt status.
-        The dispatcher calls ``mark_done`` explicitly when validation passes.
+        Receipts do NOT change item status.  Status is owned by
+        ``aura.work_artifact.verification``, not receipt status.
+        The runner calls ``mark_done`` explicitly when verification passes.
         """
         for item in self.work_items:
             if item.id == item_id:
@@ -332,11 +332,11 @@ class WorkArtifact:
         raise ValueError(f"Item '{item_id}' not found in artifact.")
 
     def mark_done(self, item_id: str) -> None:
-        """Mark an item as done (validation passed).
+        """Mark an item as done (validation evidence passes).
 
-        Called by the dispatcher when the item has passing validation
-        evidence.  Does NOT attach a receipt — the dispatcher does that
-        separately as an audit record.
+        Called by the runner when ``verification.classify_item_attempt``
+        returns ``WorkArtifactAttemptOutcome.done``.  Does NOT attach a
+        receipt — the runner does that separately as an audit record.
         """
         for item in self.work_items:
             if item.id == item_id:

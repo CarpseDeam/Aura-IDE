@@ -45,13 +45,8 @@ from aura.conversation import (
     WorkerDispatchResult,
     WorkerOutcomeStatus,
 )
-from aura.conversation.detected_validation import normalize_command as _normalize_command
 from aura.conversation.persistence import WorkerDispatchRecord
 from aura.conversation.tool_limits import TERMINAL_TOOLS, WRITE_TOOLS
-from aura.conversation.validation_truth import (
-    validation_payload_passed,
-    validation_payload_product_failure,
-)
 from aura.conversation.workflow_state import WorkflowState, WorkflowStatus
 from aura.dependency_context import build_dependency_stanza
 from aura.events import EventBus
@@ -60,7 +55,17 @@ from aura.lifecycle.builtin_worker_gates import register_builtin_worker_gates
 from aura.work_artifact.controller import WorkArtifactController
 from aura.work_artifact.model import ValidationCommandSpec, WorkItemStatus
 from aura.work_artifact.projection import WorkArtifactProjection
+from aura.work_artifact.runner import WorkArtifactRunner
 from aura.work_artifact.validation_baseline import capture_baseline
+from aura.work_artifact.verification import (
+    WorkArtifactAttemptOutcome,
+    add_retry_context as _add_retry_context,
+    classify_item_attempt as _classify_item_attempt,
+    declared_validation_commands as _declared_validation_commands,
+    ensure_item_verification_source as _ensure_item_verification_source,
+    is_infrastructure_failure as _is_infrastructure_failure,
+    validation_satisfied as _validation_satisfied,
+)
 from aura.worker_todo import WorkerTodoProjector
 
 __all__ = [
@@ -74,90 +79,6 @@ __all__ = [
 
 DISPATCH_TIMEOUT = 300.0
 _log = logging.getLogger(__name__)
-
-
-# ── WorkArtifact item completion normalizer helpers ──────────────────────────
-
-
-
-def _artifact_item_declared_validation_commands(
-    req: WorkerDispatchRequest,
-) -> list[str]:
-    """Return the list of non-empty declared validation command strings."""
-    if not req.validation_commands:
-        return []
-    return [vc.command for vc in req.validation_commands if vc.command.strip()]
-
-
-def _artifact_item_validation_satisfied(
-    req: WorkerDispatchRequest,
-    result: WorkerDispatchResult,
-) -> bool:
-    """Return True when validation evidence shows the item passed.
-
-    This is the SOLE authority for WorkArtifact item completion.
-
-    When the item declares validation commands, each declared command
-    must have a matching passing evidence record in ``validation_results``
-    or ``terminal_results`` (using ``validation_payload_passed``).
-
-    When no validation commands are declared, the result must still
-    carry at least one passing validation or terminal evidence record
-    from the Worker's finalization path.  No evidence is not satisfied.
-
-    Matching uses ``_normalize_command`` (whitespace-collapsed, lowercased).
-
-    A product-failure match for a declared command prevents the satisfied
-    outcome for that command.  Commands with no evidence are not satisfied.
-    """
-    declared = _artifact_item_declared_validation_commands(req)
-    extras = result.extras if isinstance(result.extras, dict) else {}
-
-    # Collect all evidence records from both sources.
-    evidence: list[dict] = []
-    for src in ("validation_results", "terminal_results"):
-        raw = extras.get(src, [])
-        if isinstance(raw, list):
-            evidence.extend(raw)
-
-    if declared:
-        # ── Declared commands: each must have a passing match ─────────────
-        declared_normal: dict[str, str] = {
-            _normalize_command(cmd): cmd for cmd in declared
-        }
-
-        satisfied: set[str] = set()
-        blocked: set[str] = set()
-
-        for record in evidence:
-            if not isinstance(record, dict):
-                continue
-            record_cmd = str(record.get("command", "") or "")
-            if not record_cmd:
-                continue
-            normal = _normalize_command(record_cmd)
-            if normal not in declared_normal:
-                continue  # unrelated evidence
-
-            if validation_payload_product_failure(record):
-                blocked.add(normal)
-            elif validation_payload_passed(record):
-                satisfied.add(normal)
-
-        for normal in declared_normal:
-            if normal in blocked:
-                return False
-            if normal not in satisfied:
-                return False
-        return True
-
-    # ── No declared commands: require ANY passing evidence ──────────────
-    for record in evidence:
-        if not isinstance(record, dict):
-            continue
-        if validation_payload_passed(record):
-            return True
-    return False
 
 
 class _DispatchProxy(QObject):
@@ -826,20 +747,10 @@ class _DispatchProxy(QObject):
     def _is_infrastructure_failure(result: WorkerDispatchResult) -> bool:
         """True for harness/provider/auth/network failures.
 
-        These pause the job rather than retrying the item, and the job
-        can be resumed later when the infrastructure is healthy.
+        Delegates to ``aura.work_artifact.verification.is_infrastructure_failure``.
         """
-        if result.status == WorkerOutcomeStatus.harness_error.value:
-            return True
-        extras = result.extras if isinstance(result.extras, dict) else {}
-        if extras.get("api_errors"):
-            return True
-        fc = str(extras.get("failure_class", "") or "")
-        if any(marker in fc for marker in ("provider", "network", "auth", "api_error", "unavailable")):
-            return True
-        return False
+        return _is_infrastructure_failure(result)
 
-    @staticmethod
     @staticmethod
     def _decide_artifact_item_outcome(
         item_req: WorkerDispatchRequest,
@@ -848,32 +759,37 @@ class _DispatchProxy(QObject):
     ) -> str:
         """Decide the outcome of a single WorkArtifact item attempt.
 
-        Validation is the SOLE authority for "done".
-        No side channels (path overlap, receipt status, baseline
-        fingerprints, UI projection, Worker prose, or hard-blocker
-        checks) influence the outcome.
+        Delegates to ``aura.work_artifact.verification.classify_item_attempt``
+        and maps the ``WorkArtifactAttemptOutcome`` enum back to the legacy
+        string values for backward compatibility.
 
         Returns one of:
         - ``"cancelled"`` — user cancelled the item.
         - ``"external_pause"`` — infrastructure failure (provider/API/harness).
         - ``"done"`` — validation evidence shows the item passed.
-        - ``"continue_same_item"`` — anything else (failed/missing validation,
-          scope mismatch, patch failure, Worker caveats, etc.).
+        - ``"continue_same_item"`` — anything else (failed/missing validation).
         """
-        # ── Cancelled ──────────────────────────────────────────────────────
-        if item_result.cancelled:
+        outcome = _classify_item_attempt(item_req, item_result)
+        if outcome == WorkArtifactAttemptOutcome.cancelled:
             return "cancelled"
-
-        # ── External / infrastructure pause ────────────────────────────────
-        if _DispatchProxy._is_infrastructure_failure(item_result):
+        if outcome == WorkArtifactAttemptOutcome.pause:
             return "external_pause"
-
-        # ── Done — validation passed ───────────────────────────────────────
-        if _artifact_item_validation_satisfied(item_req, item_result):
+        if outcome == WorkArtifactAttemptOutcome.done:
             return "done"
-
-        # ── Continue same item (everything else) ──────────────────────────
         return "continue_same_item"
+
+    def _create_work_artifact_runner(
+        self,
+        pending: "_DispatchPending",
+    ) -> WorkArtifactRunner:
+        """Create a ``WorkArtifactRunner`` configured with this dispatch's callbacks."""
+        return WorkArtifactRunner(
+            controller=self._artifact_controller,
+            run_worker=lambda tid, ireq: self._run_worker(tid, ireq, pending),
+            emit_projection=lambda tid: self._emit_projection(tid),
+            workspace_root=self._workspace_root,
+            capture_baseline=lambda tid: self._capture_artifact_baseline(tid),
+        )
 
     def _run_approved_artifact_job(
         self,
@@ -881,202 +797,19 @@ class _DispatchProxy(QObject):
         approved_req: WorkerDispatchRequest,
         pending: "_DispatchPending",
     ) -> WorkerDispatchResult:
-        """Run all artifact items internally as bounded Worker requests.
+        """Run all artifact items via ``WorkArtifactRunner``.
 
-        The loop itself owns item advancement.  ``_decide_artifact_item_outcome``
-        classifies each Worker result; the loop acts on that classification by
-        attaching receipts (with ``status_override="ok"`` when done) and
-        advancing through the artifact's work items.
-
-        Ordinary per-item failures retry indefinitely on the same item with
-        accumulated context — there is no retry-cap pause.
-
-        Outcomes
-        --------
-        - **completed** — all items done (derived from artifact state).
-        - **cancelled** — user cancelled the job.
-        - **infrastructure-paused** — harness/provider/auth/network failure;
-          resumable later (``work_artifact_unfinished: true``).
+        This is a thin delegation wrapper.  The item loop, request
+        construction, classification, and aggregation all live in
+        ``aura.work_artifact.runner.WorkArtifactRunner`` and
+        ``aura.work_artifact.verification``.
         """
-        item_results: list[tuple[str, WorkerDispatchResult]] = []
-        recovered_item_ids: list[str] = []
-        failed_attempts: dict[str, int] = {}
-
-        artifact_obj = self._artifact_controller.get_artifact(tool_call_id)
-        total = len(artifact_obj.work_items) if artifact_obj else 0
-
-        while True:
-            # ── Check for external cancellation between items ──────────────
-            if self._artifact_job_cancel_event.is_set():
-                return self._aggregate_artifact_results(
-                    tool_call_id, approved_req, item_results,
-                    recovered_item_ids, failed_attempts, total,
-                    terminal_override=WorkerDispatchResult(
-                        ok=False,
-                        summary="WorkArtifact job cancelled during internal items.",
-                        cancelled=True,
-                        extras={"work_artifact_job": True, "work_artifact_cancelled": True},
-                    ),
-                )
-
-            unfinished = self._artifact_controller.unfinished_items(tool_call_id)
-            if not unfinished:
-                return self._aggregate_artifact_results(
-                    tool_call_id, approved_req, item_results,
-                    recovered_item_ids, failed_attempts, total,
-                )
-
-            item = unfinished[0]
-
-            # Compute the item's 1-based index across all work_items.
-            artifact_obj = self._artifact_controller.get_artifact(tool_call_id)
-            if artifact_obj is not None:
-                idx_in_all = next(
-                    (i for i, wi in enumerate(artifact_obj.work_items) if wi.id == item.id),
-                    0,
-                )
-                item_index = idx_in_all + 1
-            else:
-                item_index = 1
-
-            _log.info(
-                "WorkArtifact internal item %d/%d tool_call_id=%s item=%s",
-                item_index, total, tool_call_id, item.id,
-            )
-
-            # Mark this exact item active.
-            self._artifact_controller.mark_item_active(tool_call_id, item.id)
-            self._emit_projection(tool_call_id)
-
-            # Build a bounded WorkerDispatchRequest for this item.
-            item_req = self._build_artifact_item_request(
-                tool_call_id, approved_req, item, item_index, total,
-            )
-
-            # ── Inner loop for this item — retry indefinitely ──────────────
-            attempt = 0
-            while True:
-                item_result = self._run_worker(tool_call_id, item_req, pending)
-                attempt += 1
-
-                outcome = _DispatchProxy._decide_artifact_item_outcome(
-                    item_req, item_result, item,
-                )
-
-                if outcome == "cancelled":
-                    _log.info(
-                        "WorkArtifact item %s cancelled (attempt %d)",
-                        item.id, attempt,
-                    )
-                    self._artifact_controller.attach_receipt(
-                        tool_call_id, item_result, item_id=item.id,
-                    )
-                    item_results.append((item.id, item_result))
-                    return self._aggregate_artifact_results(
-                        tool_call_id, approved_req, item_results,
-                        recovered_item_ids, failed_attempts, total,
-                        terminal_override=WorkerDispatchResult(
-                            ok=False,
-                            summary="WorkArtifact job cancelled during internal items.",
-                            cancelled=True,
-                            extras={"work_artifact_job": True, "work_artifact_cancelled": True},
-                        ),
-                    )
-
-                if outcome == "external_pause":
-                    _log.info(
-                        "WorkArtifact item %s infrastructure failure — "
-                        "pausing job tool_call_id=%s",
-                        item.id, tool_call_id,
-                    )
-                    self._artifact_controller.attach_receipt(
-                        tool_call_id, item_result, item_id=item.id,
-                    )
-                    item_results.append((item.id, item_result))
-                    return self._aggregate_artifact_results(
-                        tool_call_id, approved_req, item_results,
-                        recovered_item_ids, failed_attempts, total,
-                        terminal_override=item_result,
-                        infrastructure_pause=True,
-                    )
-
-                if outcome == "done":
-                    _log.info(
-                        "WorkArtifact item %s done (attempt %d)",
-                        item.id, attempt,
-                    )
-                    # Mark item done explicitly — validation authority, not receipt status.
-                    self._artifact_controller.mark_item_done(tool_call_id, item.id)
-                    # Attach receipt as audit record only (display status "ok"
-                    # for consistency in the projection).
-                    self._artifact_controller.attach_receipt(
-                        tool_call_id, item_result, item_id=item.id,
-                        status_override="ok",
-                    )
-                    item_results.append((item.id, item_result))
-                    self._emit_projection(tool_call_id)
-                    break  # Inner loop — outer loop picks next item.
-
-                # outcome == "continue_same_item"
-                recovered_item_ids.append(item.id)
-                failed_attempts[item.id] = attempt
-                extras = item_result.extras if isinstance(item_result.extras, dict) else {}
-
-                # Build structured retry context per the fix contract.
-                declared_cmds = _artifact_item_declared_validation_commands(item_req)
-                validation_cmd_str = declared_cmds[0] if declared_cmds else "(no declared validation command)"
-
-                # Extract output excerpt from validation/terminal results.
-                output_excerpt = ""
-                for src in ("validation_results", "terminal_results"):
-                    records = extras.get(src, [])
-                    if isinstance(records, list) and records:
-                        last = records[-1]
-                        if isinstance(last, dict):
-                            output_excerpt = str(last.get("output", last.get("stdout", last.get("stderr", ""))))
-                            break
-
-                recovery_note = (
-                    f"\n\n--- Recovery attempt {attempt} for WorkArtifact item ---\n"
-                    f"\n"
-                    f"Previous attempt failed validation for the current WorkArtifact item.\n"
-                    f"\n"
-                    f"Artifact: {tool_call_id}\n"
-                    f"Item: {item.id} - {item.title}\n"
-                    f"Attempt: {attempt}\n"
-                    f"Worker status: {item_result.status or 'unknown'}\n"
-                    f"Failure class: {extras.get('failure_class', 'unknown')}\n"
-                    f"\n"
-                    f"Validation command:\n"
-                    f"{validation_cmd_str}\n"
-                    f"\n"
-                    f"Exit code: {extras.get('exit_code', 'N/A')}\n"
-                    f"\n"
-                    f"Failure summary:\n"
-                    f"{item_result.summary or '(no summary)'}\n"
-                    f"\n"
-                )
-                if output_excerpt:
-                    recovery_note += (
-                        f"Relevant output:\n"
-                        f"{output_excerpt[:2000]}\n"
-                        f"\n"
-                    )
-                recovery_note += (
-                    f"Files modified last attempt:\n"
-                    f"{', '.join(item_result.modified_files) if item_result.modified_files else '(none)'}\n"
-                    f"\n"
-                    f"Instruction:\n"
-                    f"Continue the same item only ({item.title}).\n"
-                    f"Fix the validation failure. Do not move to another item.\n"
-                    f"Rerun the required validation. The item is not complete until validation passes.\n"
-                    f"Aura will continue the approved job after this item succeeds."
-                )
-                item_req = replace(item_req, spec=item_req.spec + recovery_note)
-                _log.info(
-                    "WorkArtifact item %s continue_same_item attempt %d",
-                    item.id, attempt,
-                )
+        runner = self._create_work_artifact_runner(pending)
+        return runner.run(
+            artifact_id=tool_call_id,
+            approved_req=approved_req,
+            cancel_event=self._artifact_job_cancel_event,
+        )
 
     def _build_artifact_item_request(
         self,
@@ -1088,92 +821,15 @@ class _DispatchProxy(QObject):
     ) -> WorkerDispatchRequest:
         """Build a bounded WorkerDispatchRequest for one artifact item.
 
-        Preserves the approved top-level context while scoping to the item.
-        If the item carries a non-ok, non-continuing receipt (from a prior
-        failed attempt), appends that receipt's status and summary to the
-        spec so resumed items have context.
+        Delegates to ``WorkArtifactRunner._build_artifact_item_request``.
         """
-        spec_parts = [
-            f"WorkArtifact Item {index}/{total}: {item.title}",
-            "",
-            f"Approved job goal: {approved_req.goal}",
-            f"Top-level constraints: {approved_req.spec}",
-            "",
-            f"Item intent: {item.intent}",
-            "",
-            "This is one bounded item inside an already approved WorkArtifact job.",
-            "Complete only this item. Do not execute other artifact items.",
-            "Other items of this approved job may have already modified files "
-            "in the workspace. Those changes are NOT yours. Do not inspect, "
-            "verify, revert, re-implement, or report on them. They are approved "
-            "background, identical to any other pre-existing code. When this "
-            "item's acceptance criteria are met and its validation commands "
-            "pass, report done immediately. Do not continue checking other "
-            "items or the overall job goal — the harness owns job-level "
-            "completion, not you.",
-            "Aura will continue the approved job after this item succeeds.",
-        ]
-        spec = "\n".join(spec_parts)
-
-        # Append prior-attempt receipt context if the item carries one.
-        if item.receipt is not None and item.receipt.status not in ("ok", "continuing"):
-            receipt = item.receipt
-            spec += (
-                f"\n\n--- Previous attempt on this item ---\n"
-                f"Status: {receipt.status}\n"
-                f"Summary: {receipt.summary}\n"
-                f"Modified files: {', '.join(receipt.modified_files) if receipt.modified_files else '(none)'}"
-            )
-
-        # Append manifest of prior done items so each worker knows what already
-        # changed in the workspace and why — derived from verified receipts, not
-        # from planner narration.
-        artifact = self._artifact_controller.get_artifact(tool_call_id)
-        if artifact is not None:
-            done_items = [
-                it for it in artifact.work_items
-                if it.status == WorkItemStatus.done and it.receipt is not None
-            ]
-            if done_items:
-                manifest_parts = [
-                    "",
-                    "--- Changes already made by prior items of this job ---",
-                ]
-                for done_item in done_items:
-                    files_str = (
-                        ", ".join(done_item.receipt.modified_files)
-                        if done_item.receipt.modified_files
-                        else "(none recorded)"
-                    )
-                    manifest_parts.append(
-                        f"Item: {done_item.title}\n"
-                        f"  Modified files: {files_str}\n"
-                        f"  Summary: {done_item.receipt.summary}"
-                    )
-                manifest_parts.append(
-                    "These changes are complete, verified, and expected in the working tree "
-                    "and in git status/diff output. Treat them as existing code. Do not revert, "
-                    "re-verify, or re-implement them."
-                )
-                spec += "\n".join(manifest_parts)
-
-        # Use only the item's own validation_commands — never inherit
-        # top-level/job-wide validation commands into an item request.
-        # This is the core authority-boundary fix: a docs-only item with
-        # no declared commands must reach the Worker with no validation
-        # commands, even if the job-level spec carries broad checks like
-        # pytest or ruff.
-        item_vcs = list(getattr(item, "validation_commands", []) or [])
-
-        return WorkerDispatchRequest(
-            goal=item.intent or approved_req.goal,
-            files=list(item.target_files) if item.target_files else list(approved_req.files),
-            spec=spec,
-            acceptance=item.acceptance or approved_req.acceptance,
-            summary=item.title or approved_req.summary,
-            artifact_id=tool_call_id,
-            artifact_item_id=item.id,
-            validation_commands=item_vcs,
+        runner = WorkArtifactRunner(
+            controller=self._artifact_controller,
+            run_worker=lambda tid, ireq: None,  # not used for request construction
+            emit_projection=lambda tid: None,
+        )
+        return runner._build_artifact_item_request(
+            tool_call_id, approved_req, item, index, total,
         )
 
     def _aggregate_artifact_results(
@@ -1189,162 +845,18 @@ class _DispatchProxy(QObject):
     ) -> WorkerDispatchResult:
         """Aggregate per-item results into one outcome.
 
-        Completion is derived from artifact state alone (``item.status == done``),
-        never from receipt status.  Receipts are audit records only.
-
-        Outcomes
-        --------
-        1. **completed** — all items done (``all_required_items_done``).
-        2. **cancelled** — user cancelled the job.
-        3. **infrastructure-paused** — harness/provider/auth/network failure;
-           resumable later (``work_artifact_unfinished: true``).
-
-        There is no "retry-cap-reached" outcome — ordinary repeated failures
-        do not pause the job.
+        Delegates to ``WorkArtifactRunner._aggregate_artifact_results``.
         """
-        # ── Derive completion from artifact state ────────────────────────────
-        artifact = self._artifact_controller.get_artifact(tool_call_id)
-
-        if artifact is not None:
-            completed_items = [
-                wi.id
-                for wi in artifact.work_items
-                if wi.status == WorkItemStatus.done
-            ]
-            all_ok = self._artifact_controller.all_required_items_done(tool_call_id)
-            pending_ids = [
-                it.id
-                for it in self._artifact_controller.unfinished_items(tool_call_id)
-            ]
-        else:
-            # Fallback when no artifact is registered (standalone helper tests).
-            completed_items = [item_id for item_id, r in item_results if r.ok]
-            all_ok = all(r.ok for _item_id, r in item_results)
-            pending_ids = []
-
-        all_cancelled = any(r.cancelled for _item_id, r in item_results)
-        first_not_ok = next(
-            ((item_id, r) for item_id, r in item_results if not r.ok and not r.cancelled),
-            None,
+        runner = WorkArtifactRunner(
+            controller=self._artifact_controller,
+            run_worker=lambda tid, ireq: None,  # not used for aggregation
+            emit_projection=lambda tid: None,
         )
-        cancelled_item_id = next(
-            (item_id for item_id, r in item_results if r.cancelled),
-            None,
-        )
-
-        # ── Terminal overrides ──────────────────────────────────────────────
-
-        if terminal_override is not None and infrastructure_pause:
-            # ── Infrastructure pause: resumable ──
-            paused_extras: dict[str, Any] = dict(terminal_override.extras or {})
-            paused_extras.update({
-                "work_artifact_job": True,
-                "work_artifact_unfinished": True,
-                "completed_items": completed_items,
-                "pending_item_ids": pending_ids,
-                "total_items": total_items,
-                "current_item_id": item_results[-1][0] if item_results else "",
-            })
-            return WorkerDispatchResult(
-                ok=False,
-                summary=(
-                    f"WorkArtifact job paused: "
-                    f"{terminal_override.summary or 'Infrastructure issue'}. "
-                    f"Job will resume when the provider is reachable. "
-                    f"{len(completed_items)}/{total_items} items completed."
-                ),
-                cancelled=False,
-                modified_files=list(terminal_override.modified_files)
-                if terminal_override.modified_files else [],
-                recoverable=True,
-                status=terminal_override.status or WorkerOutcomeStatus.harness_error.value,
-                extras=paused_extras,
-            )
-
-        if terminal_override is not None:
-            # ── Cancellation: passed through directly ──
-            return terminal_override
-
-        # Collect modified files (ordered union).
-        modified_files: list[str] = []
-        seen_files: set[str] = set()
-        for _item_id, r in item_results:
-            for f in (r.modified_files or []):
-                if f not in seen_files:
-                    seen_files.add(f)
-                    modified_files.append(f)
-
-        # Collect validation summaries.
-        validation_parts: list[str] = []
-        for _item_id, r in item_results:
-            if r.validation:
-                validation_parts.append(r.validation)
-        validation = "\n".join(validation_parts) if validation_parts else None
-
-        item_summaries = {
-            item_id: r.summary for item_id, r in item_results
-        }
-        audit_base: dict[str, Any] = {
-            "work_artifact_job": True,
-            "completed_items": completed_items,
-            "total_items": total_items,
-            "recovered_item_ids": list(recovered_item_ids),
-            "failed_attempts": dict(failed_attempts),
-            "item_summaries": item_summaries,
-        }
-
-        if all_ok:
-            # All items done — no stale failure metadata from raw non-ok results.
-            return WorkerDispatchResult(
-                ok=True,
-                summary=f"WorkArtifact job completed: {total_items} item(s) done.",
-                modified_files=modified_files,
-                validation=validation,
-                status=WorkerOutcomeStatus.completed.value,
-                extras={
-                    **audit_base,
-                    "current_item_id": "",
-                },
-            )
-
-        # ── Not fully complete: derive metadata from raw results ──────────────
-        failed_item_id = first_not_ok[0] if first_not_ok else None
-        cancel_item_id = cancelled_item_id if all_cancelled else None
-        current_item_id = failed_item_id or cancel_item_id or (item_results[-1][0] if item_results else "")
-        extras: dict[str, Any] = {
-            **audit_base,
-            "current_item_id": current_item_id,
-        }
-        if failed_item_id:
-            extras["failed_item_id"] = failed_item_id
-
-        if all_cancelled:
-            return WorkerDispatchResult(
-                ok=False,
-                summary="WorkArtifact job cancelled during internal items.",
-                cancelled=True,
-                modified_files=modified_files,
-                status=WorkerOutcomeStatus.cancelled.value,
-                extras=extras,
-            )
-
-        # ── Incomplete: some items did not complete ──
-        summary_parts = [
-            f"WorkArtifact job incomplete: {len(completed_items)}/{total_items} items completed."
-        ]
-        for item_id, r in item_results:
-            if r.ok:
-                summary_parts.append(f"✓ {item_id}: {r.summary}")
-            else:
-                summary_parts.append(f"✗ {item_id}: {r.summary}")
-        return WorkerDispatchResult(
-            ok=False,
-            summary=" ".join(summary_parts),
-            modified_files=modified_files,
-            validation=validation,
-            recoverable=True,
-            status=WorkerOutcomeStatus.harness_error.value,
-            extras=extras,
+        return runner._aggregate_artifact_results(
+            tool_call_id, approved_req, item_results,
+            recovered_item_ids, failed_attempts, total_items,
+            terminal_override=terminal_override,
+            infrastructure_pause=infrastructure_pause,
         )
 
     def _emit_projection(self, tool_call_id: str) -> None:

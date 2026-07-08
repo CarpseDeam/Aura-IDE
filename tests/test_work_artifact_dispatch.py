@@ -462,11 +462,36 @@ def test_request_dispatch_work_artifact_runs_item_one_as_bounded_request(tmp_pat
     )
 
     # Capture every _run_worker request
+    _fake_call_count: list[int] = [0]
+    _FAKE_MAX = 20
+
     def capturing_run_worker(
         tool_call_id: str, worker_req: WorkerDispatchRequest, pending,
     ) -> WorkerDispatchResult:
+        _fake_call_count[0] += 1
+        if _fake_call_count[0] > _FAKE_MAX:
+            raise RuntimeError(f"Fake worker called {_fake_call_count[0]} times — possible infinite loop")
         captured.append(worker_req)
-        return _ok_result(modified=list(worker_req.files))
+        # Return evidence matching any injected validation commands.
+        vc = worker_req.validation_commands or []
+        evidence = []
+        for v in vc:
+            cmd = v.command if hasattr(v, 'command') else str(v)
+            if cmd.strip():
+                evidence.append({
+                    "command": cmd,
+                    "ok": True,
+                    "exit_code": 0,
+                    "validation_classification": "passed",
+                    "counts_as_validation": True,
+                    "counts_as_product_failure": False,
+                })
+        return WorkerDispatchResult(
+            ok=True,
+            summary="Done",
+            modified_files=list(worker_req.files),
+            extras={"validation_results": evidence} if evidence else {},
+        )
     proxy._run_worker = capturing_run_worker
 
     # Bypass Qt signal: auto-resolve the pending dispatch immediately
@@ -925,9 +950,26 @@ def test_request_dispatch_resumes_paused_artifact_job(tmp_path):
     # ── Incoming dispatch triggers the binding guard ──
     captured: list[WorkerDispatchRequest] = []
 
+    _fc: list[int] = [0]
+
     def capturing_run_worker(tid: str, req: WorkerDispatchRequest, pending) -> WorkerDispatchResult:
+        _fc[0] += 1
+        if _fc[0] > 20:
+            raise RuntimeError(f"Fake worker called {_fc[0]} times")
         captured.append(req)
-        return _ok_result(modified=list(req.files))
+        vc = req.validation_commands or []
+        evidence = []
+        for v in vc:
+            cmd = v.command if hasattr(v, 'command') else str(v)
+            if cmd.strip():
+                evidence.append({"command": cmd, "ok": True, "exit_code": 0,
+                                 "validation_classification": "passed",
+                                 "counts_as_validation": True,
+                                 "counts_as_product_failure": False})
+        return WorkerDispatchResult(
+            ok=True, summary="Done", modified_files=list(req.files),
+            extras={"validation_results": evidence} if evidence else {},
+        )
     proxy._run_worker = capturing_run_worker
 
     incoming_id = "call_new"
@@ -967,9 +1009,26 @@ def test_resume_guard_does_not_fire_on_first_dispatch(tmp_path):
         workspace_root=tmp_path,
     )
 
+    _fc3: list[int] = [0]
+
     def capturing_run_worker(tid, req, pending):
+        _fc3[0] += 1
+        if _fc3[0] > 20:
+            raise RuntimeError(f"Fake worker called {_fc3[0]} times")
         captured.append(req)
-        return _ok_result(modified=list(req.files))
+        vc = req.validation_commands or []
+        evidence = []
+        for v in vc:
+            cmd = v.command if hasattr(v, 'command') else str(v)
+            if cmd.strip():
+                evidence.append({"command": cmd, "ok": True, "exit_code": 0,
+                                 "validation_classification": "passed",
+                                 "counts_as_validation": True,
+                                 "counts_as_product_failure": False})
+        return WorkerDispatchResult(
+            ok=True, summary="Done", modified_files=list(req.files),
+            extras={"validation_results": evidence} if evidence else {},
+        )
     proxy._run_worker = capturing_run_worker
 
     # Bypass Qt signal: auto-resolve the pending dispatch immediately.
@@ -1166,11 +1225,15 @@ def test_artifact_done_does_not_require_raw_worker_ok(tmp_path):
         workspace_root=tmp_path,
     )
 
+    _fc4_count: list[int] = [0]
     step: list[int] = [0]
 
     def fake_run_worker(
         tool_call_id: str, worker_req: WorkerDispatchRequest, pending,
     ) -> WorkerDispatchResult:
+        _fc4_count[0] += 1
+        if _fc4_count[0] > 20:
+            raise RuntimeError(f"Fake worker called {_fc4_count[0]} times")
         step[0] += 1
         if step[0] == 1:
             # Item 1: raw ok=False but structured compileall pass evidence.
@@ -1198,8 +1261,21 @@ def test_artifact_done_does_not_require_raw_worker_ok(tmp_path):
                     "suggested_next_tool": "dispatch_to_worker",
                 },
             )
-        # Item 2: normal ok.
-        return _ok_result(modified=list(worker_req.files))
+        # Item 2: may have scoped py_compile command injected.
+        vc = worker_req.validation_commands or []
+        evidence = []
+        for v in vc:
+            cmd = v.command if hasattr(v, 'command') else str(v)
+            if cmd.strip():
+                evidence.append({"command": cmd, "ok": True, "exit_code": 0,
+                                 "validation_classification": "passed",
+                                 "counts_as_validation": True,
+                                 "counts_as_product_failure": False})
+        return WorkerDispatchResult(
+            ok=True, summary="Item 2 done.",
+            modified_files=list(worker_req.files),
+            extras={"validation_results": evidence} if evidence else {},
+        )
     proxy._run_worker = fake_run_worker
 
     original_register = proxy._pending_map.register
@@ -1278,11 +1354,17 @@ def test_missing_declared_validation_continues_same_item(tmp_path):
     )
 
     step: list[int] = [0]
+    MAX_CALLS = 20  # Safety guard — fail fast instead of hanging.
 
     def fake_run_worker(
         tool_call_id: str, worker_req: WorkerDispatchRequest, pending,
     ) -> WorkerDispatchResult:
         step[0] += 1
+        if step[0] > MAX_CALLS:
+            raise RuntimeError(
+                f"Fake worker called {step[0]} times — possible infinite retry loop. "
+                f"Current item: {worker_req.artifact_item_id}"
+            )
         if step[0] == 1:
             # First attempt: no validation evidence.
             return WorkerDispatchResult(
@@ -1320,8 +1402,30 @@ def test_missing_declared_validation_continues_same_item(tmp_path):
                     "failure_class": "validation_not_run",
                 },
             )
-        # Item 2: normal ok.
-        return _ok_result(modified=list(worker_req.files))
+        # Item 2: may have scoped py_compile command injected.
+        # Return matching evidence for the injected command.
+        vc = worker_req.validation_commands
+        if vc:
+            cmd = vc[0].command if hasattr(vc[0], 'command') else str(vc[0])
+        else:
+            cmd = ""
+        return WorkerDispatchResult(
+            ok=bool(cmd),
+            summary=f"Item 2 done: {cmd}" if cmd else "Item 2 done.",
+            modified_files=list(worker_req.files),
+            extras={
+                "validation_results": [
+                    {
+                        "command": cmd,
+                        "ok": True,
+                        "exit_code": 0,
+                        "validation_classification": "passed",
+                        "counts_as_validation": True,
+                        "counts_as_product_failure": False,
+                    },
+                ],
+            } if cmd else {},
+        )
     proxy._run_worker = fake_run_worker
 
     original_register = proxy._pending_map.register
@@ -1387,21 +1491,42 @@ def test_retry_threshold_cannot_pause_approved_artifact(tmp_path):
         workspace_root=tmp_path,
     )
 
+    _fc_retry: list[int] = [0]
     item2_count: list[int] = [0]
+
+    def _evidence_fallback(req: WorkerDispatchRequest) -> WorkerDispatchResult:
+        """Return passing evidence for the request's validation commands."""
+        vc = req.validation_commands or []
+        ev = []
+        for v in vc:
+            cmd = v.command if hasattr(v, 'command') else str(v)
+            if cmd.strip():
+                ev.append({"command": cmd, "ok": True, "exit_code": 0,
+                           "validation_classification": "passed",
+                           "counts_as_validation": True,
+                           "counts_as_product_failure": False})
+        return WorkerDispatchResult(
+            ok=True, summary="Done",
+            modified_files=list(req.files),
+            extras={"validation_results": ev} if ev else {},
+        )
 
     def fake_run_worker(
         tool_call_id: str, worker_req: WorkerDispatchRequest, pending,
     ) -> WorkerDispatchResult:
+        _fc_retry[0] += 1
+        if _fc_retry[0] > 30:
+            raise RuntimeError(f"Fake worker called {_fc_retry[0]} times")
         if worker_req.artifact_item_id == "item-1":
-            return _ok_result(modified=list(worker_req.files))
+            return _evidence_fallback(worker_req)
         if worker_req.artifact_item_id == "item-2":
             item2_count[0] += 1
             if item2_count[0] <= 12:  # More than the old retry cap of 10
                 return _recoverable_result()
-            # Finally succeed.
-            return _ok_result(modified=list(worker_req.files))
+            # Finally succeed with evidence.
+            return _evidence_fallback(worker_req)
         # Item 3
-        return _ok_result(modified=list(worker_req.files))
+        return _evidence_fallback(worker_req)
     proxy._run_worker = fake_run_worker
 
     original_register = proxy._pending_map.register
@@ -1453,11 +1578,32 @@ def test_infrastructure_pause_still_allowed(tmp_path):
         workspace_root=tmp_path,
     )
 
+    _fc_infra: list[int] = [0]
+
+    def _evidence_infra(req: WorkerDispatchRequest) -> WorkerDispatchResult:
+        vc = req.validation_commands or []
+        ev = []
+        for v in vc:
+            cmd = v.command if hasattr(v, 'command') else str(v)
+            if cmd.strip():
+                ev.append({"command": cmd, "ok": True, "exit_code": 0,
+                           "validation_classification": "passed",
+                           "counts_as_validation": True,
+                           "counts_as_product_failure": False})
+        return WorkerDispatchResult(
+            ok=True, summary="Done",
+            modified_files=list(req.files),
+            extras={"validation_results": ev} if ev else {},
+        )
+
     def fake_run_worker(
         tool_call_id: str, worker_req: WorkerDispatchRequest, pending,
     ) -> WorkerDispatchResult:
+        _fc_infra[0] += 1
+        if _fc_infra[0] > 10:
+            raise RuntimeError(f"Fake worker called {_fc_infra[0]} times")
         if worker_req.artifact_item_id == "item-1":
-            return _ok_result(modified=list(worker_req.files))
+            return _evidence_infra(worker_req)
         if worker_req.artifact_item_id == "item-2":
             # Infrastructure failure
             return WorkerDispatchResult(
@@ -1467,7 +1613,7 @@ def test_infrastructure_pause_still_allowed(tmp_path):
                 extras={"api_errors": ["timeout"], "failure_class": "provider_unavailable"},
             )
         # Item 3 — should never be reached.
-        return _ok_result(modified=list(worker_req.files))
+        return _evidence_infra(worker_req)
     proxy._run_worker = fake_run_worker
 
     original_register = proxy._pending_map.register
