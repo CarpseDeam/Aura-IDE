@@ -52,7 +52,7 @@ class AuraPlayground(QWidget):
         # Header
         header_container = QWidget(self)
         header_layout = QHBoxLayout(header_container)
-        header_layout.setContentsMargins(12, 8, 12, 4)
+        header_layout.setContentsMargins(12, 0, 12, 4)
         header_layout.setSpacing(8)
 
         self._header_label = QLabel("WORKSPACE", self)

@@ -126,17 +126,14 @@ def _classify_worker_completion(
         needs_followup = True
         recoverable = True
     elif has_required_behavioral_skipped and not has_internal_failure:
-        if _is_artifact_item:
-            # Artifact item: behavioral skip is a caveat, not a failure.
-            # The item completes normally; the skip is recorded in the
-            # continuation reason for diagnostics only.
-            ok = True
-            needs_followup = False
-            recoverable = False
-        else:
-            ok = False
-            needs_followup = True
-            recoverable = True
+        # Behavioral/UI validation was explicitly declared and skipped.
+        # For ALL item types (flat dispatch and WorkArtifact), this is a
+        # recoverable failure — never ok.  The artifact-item normalizer
+        # in dispatch.py may later normalize when the item did not
+        # actually declare behavioral commands.
+        ok = False
+        needs_followup = True
+        recoverable = True
     elif has_no_progress_failure:
         ok = False
         needs_followup = True
@@ -206,16 +203,9 @@ def _classify_worker_completion(
         summary_continuation["reason"] = diagnostic_environment_caveats[0]
     if has_required_behavioral_skipped and not summary_continuation.get("status"):
         skipped_cmds = behavioral.get("skipped", [])
-        if _is_artifact_item:
-            summary_continuation["status"] = "completed_with_caveats"
-            summary_continuation["reason"] = (
-                "Behavioral/UI validation skipped (caveat only): "
-                + (skipped_cmds[0] if skipped_cmds else "(unknown)")
-            )
-        else:
-            summary_continuation["status"] = "validation_failed"
-            reason = "Required behavioral validation skipped: " + (skipped_cmds[0] if skipped_cmds else "(unknown)")
-            summary_continuation["reason"] = reason
+        summary_continuation["status"] = "validation_failed"
+        reason = "Required behavioral validation skipped: " + (skipped_cmds[0] if skipped_cmds else "(unknown)")
+        summary_continuation["reason"] = reason
 
     status = _compute_outcome_status(
         ok=ok,

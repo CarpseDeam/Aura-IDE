@@ -74,6 +74,216 @@ _ARTIFACT_ITEM_RETRY_CAP = 10
 _log = logging.getLogger(__name__)
 
 
+# ── WorkArtifact item completion normalizer helpers ──────────────────────────
+
+
+def _normalize_path_for_comparison(p: str) -> str:
+    """Normalize a path string for evidence comparison only.
+
+    Normalises:
+    - backslashes to forward slashes
+    - leading ``./`` stripped
+    - duplicate slashes collapsed
+    - case-folded (lower)
+
+    Does NOT resolve symlinks or make paths absolute.
+    The result is used only for set-intersection checks and is
+    never stored in receipts or results.
+    """
+    p = p.replace("\\", "/")
+    p = p.lstrip("./")
+    while "//" in p:
+        p = p.replace("//", "/")
+    return p.lower()
+
+
+def _artifact_item_paths_overlap(
+    target_files: list[str], modified_files: list[str],
+) -> bool:
+    """Return True when *modified_files* overlaps *target_files*.
+
+    Paths are normalised for comparison so that Windows backslashes,
+    case differences, and ``./`` prefixes do not cause false negatives.
+    Preserves original paths in the result — normalisation is ephemeral.
+    """
+    if not target_files or not modified_files:
+        return False
+    targets = {_normalize_path_for_comparison(f) for f in target_files}
+    return any(_normalize_path_for_comparison(f) in targets for f in modified_files)
+
+
+def _artifact_item_declared_validation_commands(
+    req: WorkerDispatchRequest,
+) -> list[str]:
+    """Return the list of non-empty declared validation command strings.
+
+    Returns an empty list when the item declared no commands (the
+    normaliser should not require validation evidence in that case).
+    """
+    if not req.validation_commands:
+        return []
+    return [vc.command for vc in req.validation_commands if vc.command.strip()]
+
+
+def _artifact_item_validation_passed(
+    req: WorkerDispatchRequest,
+    result: WorkerDispatchResult,
+) -> bool:
+    """Return True when declared validation evidence shows a pass.
+
+    Returns True immediately when no validation was declared (nothing
+    to verify).
+
+    Evidence-first ordering: exits early when passing evidence is
+    found, THEN falls through to failure-class checks when no evidence
+    exists.  This ensures a spurious ``failure_class`` (e.g. the
+    classifier's ``validation_not_run`` label on a result that actually
+    has passing validation records) does not pre-empt a correct pass.
+
+    Acceptable passing evidence (checked in order):
+    1. At least one ``validation_results`` record with a passed
+       classification.
+    2. At least one ``terminal_results`` record with a passed
+       classification.
+    3. ``result.validation`` summary text containing a pass marker.
+
+    Explicit failure signals (``failed_validation``, ``validation_not_run``
+    set to True, ``validation_failed`` status) block normalisation when
+    validation was declared.
+    """
+    declared = _artifact_item_declared_validation_commands(req)
+    if not declared:
+        return True  # No validation declared — nothing to verify.
+
+    extras = result.extras if isinstance(result.extras, dict) else {}
+    fc = str(extras.get("failure_class", "") or "")
+
+    # ── Hard failure signals check first (cheap, correct) ─────────────────
+    if extras.get("failed_validation"):
+        return False
+    if extras.get("validation_not_run") is True:
+        return False
+    if result.status == WorkerOutcomeStatus.validation_failed.value:
+        return False
+
+    # ── Passing evidence ──────────────────────────────────────────────────
+    # Check evidence BEFORE failure_class — the failure_class may be a
+    # spurious label from the outcome classifier (e.g. "validation_not_run")
+    # that contradicts the actual result data.
+
+    # 1. validation_results records
+    validation_results = extras.get("validation_results", [])
+    if isinstance(validation_results, list):
+        for vr in validation_results:
+            vc = vr.get("validation_classification", "")
+            if vc in ("passed", "completed"):
+                return True
+            if vc in ("product_validation_failed", "failed", "harness_error"):
+                return False
+
+    # 2. Terminal validation records
+    terminal_results = extras.get("terminal_results", [])
+    if isinstance(terminal_results, list):
+        for tr in terminal_results:
+            vc = tr.get("validation_classification", "") or tr.get("classification", "")
+            if vc in ("passed", "completed"):
+                return True
+            if vc in ("product_validation_failed", "failed", "harness_error"):
+                return False
+
+    # 3. Validation summary text
+    if result.validation and any(
+        marker in result.validation.lower()
+        for marker in ("passed", "pass", "ok", "success")
+    ):
+        return True
+
+    # ── No evidence found — fall through to failure-class guard ───────────
+    if fc.startswith("validation_"):
+        return False
+
+    return False
+
+
+def _artifact_item_behavioral_validation_required(
+    req: WorkerDispatchRequest,
+    result: WorkerDispatchResult,
+) -> bool:
+    """Return True when the item explicitly declared behavioral/UI validation.
+
+    When True the normaliser must NOT override the outcome classification
+    because the item itself required behavioral validation and it was not
+    satisfied.
+    """
+    extras = result.extras if isinstance(result.extras, dict) else {}
+    behavioral = extras.get("required_behavioral_validation", {})
+    if not isinstance(behavioral, dict):
+        return False
+    # If any commands are in skipped / failed / could_not_run, the item
+    # explicitly declared behavioral validation that wasn't satisfied.
+    return bool(behavioral.get("skipped") or behavioral.get("failed") or behavioral.get("could_not_run"))
+
+
+def _artifact_item_has_real_blocker(result: WorkerDispatchResult) -> bool:
+    """Return True when *result* carries a hard failure that blocks normalisation.
+
+    These are always-problematic states that no amount of evidence can
+    override: harness errors, syntax failures, policy blocks, etc.
+    """
+    extras = result.extras if isinstance(result.extras, dict) else {}
+    fc = str(extras.get("failure_class", "") or "")
+
+    hard_fcs = {
+        "harness_error",
+        "internal_error",
+        "worker_internal_error",
+        "harness_no_progress",
+        "worker_recovery_exhausted",
+        "fatal_error",
+        "developer_error",
+        "token_limit_exceeded",
+    }
+    hard_fcs.update(EDIT_TRANSACTION_FAILURE_CLASSES)
+
+    if fc in hard_fcs:
+        return True
+    if extras.get("api_errors"):
+        return True
+    if extras.get("unrecovered_not_applied_writes"):
+        return True
+    if extras.get("recoverable_write_failures"):
+        return True
+    if extras.get("syntax_failure") or extras.get("syntax_error"):
+        return True
+    if extras.get("traceback_product_failure"):
+        return True
+    if extras.get("source_inspection_blockers"):
+        return True
+    if extras.get("terminal_policy_blockers"):
+        return True
+    if extras.get("environment_setup_blockers"):
+        return True
+    if extras.get("diagnostic_environment_caveats"):
+        return True
+    if result.status in (
+        WorkerOutcomeStatus.edit_mechanics_blocked.value,
+        WorkerOutcomeStatus.harness_error.value,
+    ):
+        return True
+    return False
+
+
+_SPURIOUS_FAILURE_CLASSES: set[str] = {
+    "acceptance_unverified",
+    "validation_not_run",
+    "behavioral_validation_skipped",
+    "required_behavioral_validation_skipped",
+    "validation_failed_caveat",
+    "continuation_caveat",
+    "continuation",
+}
+
+
 class _DispatchProxy(QObject):
     showSpecCard = Signal(str, str, list, str, str, str)  # tool_id, goal, files, spec, acceptance, summary
     workerStarted = Signal(str)  # tool_id
@@ -784,6 +994,10 @@ class _DispatchProxy(QObject):
         overrides those spurious classifications so the item is marked
         ``done`` and the next item can start.
 
+        Replacement result preserves the original ``summary``, ``modified_files``,
+        ``validation``, and ``extras`` but neutralises continuation fields
+        and clears spurious failure-class values.
+
         Only applies to bounded artifact items (``artifact_id`` and
         ``artifact_item_id`` are set on the request).
 
@@ -798,65 +1012,25 @@ class _DispatchProxy(QObject):
 
         extras = item_result.extras if isinstance(item_result.extras, dict) else {}
 
-        # ── Hard-failure guards ──────────────────────────────────────────
-
-        # Infrastructure / provider / auth / network
+        # ── Real blocker guards ──────────────────────────────────────────
         if self._is_infrastructure_failure(item_result):
             return item_result
-
-        # Harness / internal error
-        fc = str(extras.get("failure_class", "") or "")
-        if fc in ("harness_error", "internal_error", "worker_internal_error"):
-            return item_result
-        if extras.get("api_errors"):
-            return item_result
-
-        # Edit-transaction failure
-        if fc in EDIT_TRANSACTION_FAILURE_CLASSES:
-            return item_result
-        if extras.get("unrecovered_not_applied_writes"):
-            return item_result
-        if extras.get("recoverable_write_failures"):
-            return item_result
-        if item_result.status == WorkerOutcomeStatus.edit_mechanics_blocked.value:
-            return item_result
-
-        # Validation failure
-        if item_result.status == WorkerOutcomeStatus.validation_failed.value:
-            return item_result
-        if extras.get("failed_validation"):
-            return item_result
-        if fc.startswith("validation_"):
-            return item_result
-
-        # Syntax failure / traceback product failure
-        if extras.get("syntax_failure") or extras.get("syntax_error"):
-            return item_result
-        if extras.get("traceback_product_failure"):
-            return item_result
-
-        # Explicit blockers
-        if extras.get("source_inspection_blockers"):
-            return item_result
-        if extras.get("terminal_policy_blockers"):
-            return item_result
-        if extras.get("environment_setup_blockers"):
-            return item_result
-        if extras.get("diagnostic_environment_caveats"):
+        if _artifact_item_has_real_blocker(item_result):
             return item_result
 
         # ── Item must have changed at least one target file ──────────────
-        target_files = set(item_req.files)
-        modified = set(item_result.modified_files or [])
-        if not modified or not modified.intersection(target_files):
-            # No overlap with declared target files — treat as unverified.
+        if not _artifact_item_paths_overlap(
+            list(item_req.files), list(item_result.modified_files or []),
+        ):
             return item_result
 
-        # ── Validation passed (or no item validation was declared) ───────
-        # At this point we've already ruled out any validation_failure
-        # status and failed_validation extras.  If the item declared no
-        # validation commands, validation-not-run is acceptable for an
-        # artifact item.
+        # ── Declared validation must have evidence of passing ────────────
+        if not _artifact_item_validation_passed(item_req, item_result):
+            return item_result
+
+        # ── Explicit behavioral/UI validation must have passed ───────────
+        if _artifact_item_behavioral_validation_required(item_req, item_result):
+            return item_result
 
         # ── All checks passed → normalise to completed ───────────────────
         cleaned = dict(extras)
@@ -874,14 +1048,8 @@ class _DispatchProxy(QObject):
         cleaned["suggested_next_action"] = ""
 
         # Clear spurious failure-class values that are not real failures.
-        spurious_fcs = {
-            "acceptance_unverified",
-            "validation_not_run",
-            "behavioral_validation_skipped",
-            "validation_failed_caveat",
-            "continuation_caveat",
-        }
-        if not fc or fc in spurious_fcs:
+        fc = str(extras.get("failure_class", "") or "")
+        if not fc or fc in _SPURIOUS_FAILURE_CLASSES:
             cleaned.pop("failure_class", None)
 
         cleaned["work_artifact_item_completion_normalized"] = True
