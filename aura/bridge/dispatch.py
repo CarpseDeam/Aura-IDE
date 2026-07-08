@@ -248,23 +248,21 @@ class _DispatchProxy(QObject):
     # ---- planner-thread side ---------------------------------------------
 
     def _register_artifact_from_request(self, tool_call_id: str, req: WorkerDispatchRequest) -> None:
-        """Register a WorkArtifact for this dispatch request.
+        """Ensure a WorkArtifact exists for this dispatch request.
 
-        Only creates an artifact when the request carries a real
-        ``work_artifact_payload`` (multi-item artifact from the Planner).
-        Flat dispatch requests without a payload do NOT create an artifact.
+        Every approved dispatch — flat or multi-item — normalises into a
+        WorkArtifact via ``WorkArtifactController.create_artifact_from_request``.
+        Flat requests without ``work_artifact_payload`` become a one-item
+        artifact.  Idempotent — skips if already registered.
         """
         if self._artifact_controller.get_artifact(tool_call_id) is not None:
             return  # Already registered.
-        if req.work_artifact_payload is not None:
-            self._artifact_controller.create_artifact_from_payload(
-                tool_call_id, req.work_artifact_payload,
-            )
-            _log.info(
-                "Full WorkArtifact created from payload tool_call_id=%s",
-                tool_call_id,
-            )
-        # Flat dispatch: no artifact created.  No projection, no receipt.
+        self._artifact_controller.create_artifact_from_request(tool_call_id, req)
+        _log.info(
+            "WorkArtifact registered for dispatch tool_call_id=%s has_payload=%s",
+            tool_call_id,
+            req.work_artifact_payload is not None,
+        )
 
     def request_dispatch(
         self, tool_call_id: str, req: WorkerDispatchRequest
@@ -380,8 +378,19 @@ class _DispatchProxy(QObject):
             if stanza:
                 edited = replace(edited, spec=edited.spec + stanza)
 
-        # --- Determine if this is a WorkArtifact job ---
-        is_artifact_job = req.work_artifact_payload is not None
+        # --- Refresh artifact from the approved (possibly edited) request ---
+        # The artifact created before approval may be stale if the user
+        # edited files, spec, summary, acceptance, or validation commands.
+        # Rebuild it so the WorkArtifact projection matches the approved
+        # request exactly.
+        existing = self._artifact_controller.get_artifact(tool_call_id)
+        if existing is not None:
+            self._artifact_controller.remove_artifact(tool_call_id)
+        self._artifact_controller.create_artifact_from_request(tool_call_id, edited)
+        _log.info(
+            "Artifact refreshed from approved request tool_call_id=%s",
+            tool_call_id,
+        )
 
         # --- Emit dispatched snapshot ---
         self._transition_workflow_state(
@@ -394,58 +403,84 @@ class _DispatchProxy(QObject):
         _log.info("workerStarted emitted tool_call_id=%s", tool_call_id)
         self.workerStarted.emit(tool_call_id)
 
-        # --- Store approved request (artifact job retains ownership) ---
-        if is_artifact_job:
-            self._approved_artifact_requests[tool_call_id] = edited
+        # --- Store approved request (universal ownership) ---
+        self._approved_artifact_requests[tool_call_id] = edited
 
-            # Capture validation baseline once before any item runs.
-            # This collects fingerprints of all declared item validation
-            # commands so we can later distinguish pre-existing failures
-            # from novel ones introduced by each item.
-            self._capture_artifact_baseline(tool_call_id)
+        # Capture validation baseline once before any item runs.
+        # This collects fingerprints of all declared item validation
+        # commands so we can later distinguish pre-existing failures
+        # from novel ones introduced by each item.
+        self._capture_artifact_baseline(tool_call_id)
 
-        # --- Run Worker ---
+        # --- Run Worker via WorkArtifactRunner ---
+        # Every approved dispatch — one-item or multi-item — runs through
+        # the WorkArtifactRunner.  Direct ``_run_worker`` is reserved for
+        # emergency harness fallback only when artifact creation failed.
         try:
-            if is_artifact_job:
-                # WorkArtifact: run all items internally as bounded requests
-                self._artifact_job_cancel_event.clear()
-                result = self._run_approved_artifact_job(
-                    tool_call_id, edited, pending,
-                )
-            else:
-                # Flat dispatch: single Worker run on the edited request
-                result = self._run_worker(tool_call_id, edited, pending)
+            self._artifact_job_cancel_event.clear()
+            result = self._run_approved_artifact_job(
+                tool_call_id, edited, pending,
+            )
         except Exception as exc:
             _log.exception(
-                "request_dispatch _run_worker failed tool_call_id=%s",
+                "request_dispatch _run_approved_artifact_job failed tool_call_id=%s",
                 tool_call_id,
             )
-            result = WorkerDispatchResult(
-                ok=False,
-                summary=f"Harness error: {type(exc).__name__}",
-                cancelled=False,
-                recoverable=False,
-                status=WorkerOutcomeStatus.harness_error.value,
-                extras={
-                    "worker_internal_error": True,
-                    "error_type": type(exc).__name__,
-                    "internal_error": redact_secrets(f"{type(exc).__name__}: {exc}"),
-                },
+            # Emergency fallback: try direct worker run if the artifact
+            # disappeared (true harness error).
+            artifact_still_exists = (
+                self._artifact_controller.get_artifact(tool_call_id) is not None
             )
+            if not artifact_still_exists:
+                _log.warning(
+                    "Artifact missing for tool_call_id=%s — falling back to direct _run_worker",
+                    tool_call_id,
+                )
+                try:
+                    result = self._run_worker(tool_call_id, edited, pending)
+                except Exception as exc2:
+                    _log.exception(
+                        "Fallback _run_worker also failed tool_call_id=%s",
+                        tool_call_id,
+                    )
+                    result = WorkerDispatchResult(
+                        ok=False,
+                        summary=f"Harness error: {type(exc2).__name__}",
+                        cancelled=False,
+                        recoverable=False,
+                        status=WorkerOutcomeStatus.harness_error.value,
+                        extras={
+                            "worker_internal_error": True,
+                            "error_type": type(exc2).__name__,
+                            "internal_error": redact_secrets(f"{type(exc2).__name__}: {exc2}"),
+                        },
+                    )
+            else:
+                result = WorkerDispatchResult(
+                    ok=False,
+                    summary=f"Harness error: {type(exc).__name__}",
+                    cancelled=False,
+                    recoverable=False,
+                    status=WorkerOutcomeStatus.harness_error.value,
+                    extras={
+                        "worker_internal_error": True,
+                        "error_type": type(exc).__name__,
+                        "internal_error": redact_secrets(f"{type(exc).__name__}: {exc}"),
+                    },
+                )
 
         # --- Remove approved artifact request on terminal outcomes ---
         # Infrastructure-paused and retry-cap-reached jobs retain
         # ownership so they can be resumed. Completion and cancellation
         # are terminal.
-        if is_artifact_job and not result.extras.get("work_artifact_unfinished"):
+        if not result.extras.get("work_artifact_unfinished"):
             self._approved_artifact_requests.pop(tool_call_id, None)
 
         # --- Emit artifact projection update ---
-        if is_artifact_job:
-            artifact = self._artifact_controller.get_artifact(tool_call_id)
-            if artifact is not None:
-                projection = WorkArtifactProjection.from_artifact(artifact)
-                self._on_artifact_projection_updated(projection)
+        artifact = self._artifact_controller.get_artifact(tool_call_id)
+        if artifact is not None:
+            projection = WorkArtifactProjection.from_artifact(artifact)
+            self._on_artifact_projection_updated(projection)
 
         # --- Emit workerFinished (once for the whole job) ---
         _log.info(

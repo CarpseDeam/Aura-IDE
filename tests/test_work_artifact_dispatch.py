@@ -15,7 +15,13 @@ from aura.conversation.dispatch import WorkerDispatchRequest, WorkerDispatchResu
 from aura.conversation.history import History
 from aura.conversation.tool_runner import ToolRunner
 from aura.work_artifact.controller import WorkArtifactController
-from aura.work_artifact.model import WorkArtifact, WorkArtifactItem, WorkArtifactReceipt, WorkItemStatus
+from aura.work_artifact.model import (
+    ValidationCommandSpec,
+    WorkArtifact,
+    WorkArtifactItem,
+    WorkArtifactReceipt,
+    WorkItemStatus,
+)
 from aura.work_artifact.projection import WorkArtifactProjection
 from aura.work_artifact.receipt import worker_result_to_receipt
 
@@ -156,34 +162,59 @@ def test_toolrunner_preserves_full_envelope(tmp_path):
     assert req.artifact_item_id == ""
 
 
-def test_toolrunner_flat_dispatch_no_artifact_fields(tmp_path):
-    """Flat dispatch does not get artifact_id/artifact_item_id set by ToolRunner."""
-    runner = ToolRunner(
-        History(), tmp_path,
-    )
-    dispatches: list[tuple[str, WorkerDispatchRequest]] = []
+def test_controller_creates_one_item_artifact_from_flat_request():
+    """Controller normalises a flat request into a one-item WorkArtifact.
 
-    runner.handle_dispatch(
-        "call_flat",
-        {
-            "goal": "Fix bug",
-            "files": ["bug.py"],
-            "spec": "Fix the bug",
-            "acceptance": "Bug fixed",
-            "summary": "Bug fix",
-        },
-        on_event=lambda e: None,
-        dispatch_cb=lambda tid, req: (
-            dispatches.append((tid, req)),
-            _ok_result(),
-        )[1],
+    Every approved dispatch that carries no explicit ``work_artifact_payload``
+    becomes a one-item artifact with fields mapped from the top-level request.
+    """
+    ctrl = WorkArtifactController()
+    req = WorkerDispatchRequest(
+        goal="Fix the parsing bug",
+        files=["bug.py"],
+        spec="Fix the parsing bug in bug.py",
+        acceptance="Bug is fixed",
+        summary="Bug fix in parsing module",
+        validation_commands=[
+            ValidationCommandSpec(command="python -m compileall bug.py"),
+        ],
+        non_goals=["No new dependencies"],
     )
 
-    assert len(dispatches) == 1
-    _, req = dispatches[0]
-    assert req.artifact_id == ""
-    assert req.artifact_item_id == ""
-    assert req.work_artifact_payload is None
+    artifact = ctrl.create_artifact_from_request("call_flat", req)
+
+    # One item with the correct identity
+    assert artifact.artifact_id == "call_flat"
+    assert len(artifact.work_items) == 1
+    item = artifact.work_items[0]
+    assert item.id == "item-1"
+    assert item.title == "Bug fix in parsing module"  # from summary
+    assert item.intent == "Fix the parsing bug"  # from goal
+    assert item.target_files == ["bug.py"]  # from files
+    assert item.acceptance == "Bug is fixed"  # from acceptance
+
+    # Validation commands copied from top-level
+    assert len(item.validation_commands) == 1
+    assert item.validation_commands[0].command == "python -m compileall bug.py"
+
+    # Artifact-level fields from the flat request
+    assert artifact.goal == "Fix the parsing bug"
+    assert artifact.constraints == ["No new dependencies"]  # from non_goals
+    assert artifact.allowed_files == ["bug.py"]  # from files
+
+
+def test_controller_one_item_artifact_goal_fallback():
+    """One-item artifact uses goal when summary is empty."""
+    ctrl = WorkArtifactController()
+    req = WorkerDispatchRequest(
+        goal="Fix the parsing bug",
+        files=["bug.py"],
+        spec="Fix it",
+        acceptance="Fixed",
+        summary="",
+    )
+    artifact = ctrl.create_artifact_from_request("call_fb", req)
+    assert artifact.work_items[0].title == "Fix the parsing bug"
 
 
 # ── B. Controller tests (building blocks for DispatchProxy) ────────────────────
@@ -260,8 +291,6 @@ def test_artifact_continues_after_item_with_empty_validation_commands():
     a completed item from being marked done, which would stall the whole
     multi-item WorkArtifact job.
     """
-    from aura.work_artifact.model import ValidationCommandSpec
-
     ctrl = WorkArtifactController()
     payload = _make_two_item_payload()
     # Add an empty validation command to item-1 (simulating a declared but
@@ -432,6 +461,99 @@ def test_aggregate_artifact_results_non_ok():
 
 
 # ── C/D. request_dispatch integration ─────────────────────────────────────────
+
+
+def test_request_dispatch_flat_dispatch_creates_one_item_artifact(tmp_path):
+    """Flat dispatch (no work_artifact_payload) creates a one-item WorkArtifact
+    and routes through WorkArtifactRunner.
+
+    Regression: flat dispatch must no longer bypass the artifact system.
+    The controller artifact exists, projection emits, and the item runs
+    as a bounded artifact item request.
+    """
+    from aura.bridge.dispatch import _DispatchProxy
+
+    captured: list[WorkerDispatchRequest] = []
+
+    proxy = _DispatchProxy(
+        parent_widget=None,
+        registry_factory=lambda mode: None,
+        approval_proxy=None,
+        workspace_root=tmp_path,
+    )
+
+    _fake_call_count: list[int] = [0]
+    _FAKE_MAX = 20
+
+    def capturing_run_worker(
+        tool_call_id: str, worker_req: WorkerDispatchRequest, pending,
+    ) -> WorkerDispatchResult:
+        _fake_call_count[0] += 1
+        if _fake_call_count[0] > _FAKE_MAX:
+            raise RuntimeError(f"Fake worker called {_fake_call_count[0]} times — possible infinite loop")
+        captured.append(worker_req)
+        vc = worker_req.validation_commands or []
+        evidence = []
+        for v in vc:
+            cmd = v.command if hasattr(v, 'command') else str(v)
+            if cmd.strip():
+                evidence.append({
+                    "command": cmd, "ok": True, "exit_code": 0,
+                    "validation_classification": "passed",
+                    "counts_as_validation": True,
+                    "counts_as_product_failure": False,
+                })
+        return WorkerDispatchResult(
+            ok=True, summary="Done", modified_files=list(worker_req.files),
+            extras={"validation_results": evidence} if evidence else {},
+        )
+    proxy._run_worker = capturing_run_worker
+
+    # Bypass Qt signal: auto-resolve the pending dispatch immediately
+    original_register = proxy._pending_map.register
+
+    def auto_register(tool_call_id, req):
+        pending = original_register(tool_call_id, req)
+        pending.edited_request = req
+        pending.decision_event.set()
+        return pending
+    proxy._pending_map.register = auto_register
+
+    # Flat request — no work_artifact_payload
+    req = WorkerDispatchRequest(
+        goal="Fix the bug",
+        files=["bug.py"],
+        spec="Fix the parsing bug in bug.py",
+        acceptance="Bug is fixed",
+        summary="Bug fix in parsing module",
+    )
+
+    result = proxy.request_dispatch("call_flat_integration", req)
+
+    # Job completed
+    assert result.ok is True
+
+    # Controller has a one-item artifact
+    ctrl = proxy.artifact_controller()
+    artifact = ctrl.get_artifact("call_flat_integration")
+    assert artifact is not None
+    assert len(artifact.work_items) == 1
+    assert artifact.work_items[0].id == "item-1"
+    assert artifact.work_items[0].title == "Bug fix in parsing module"
+    assert artifact.work_items[0].intent == "Fix the bug"
+    assert artifact.work_items[0].target_files == ["bug.py"]
+
+    # Exactly one bounded item request was dispatched
+    assert len(captured) == 1
+    r1 = captured[0]
+    assert r1.artifact_id == "call_flat_integration"
+    assert r1.artifact_item_id == "item-1"
+    assert "WorkArtifact Item 1/1" in r1.spec
+    assert "Complete only this item" in r1.spec
+
+    # Artifact projection emits (artifact is present)
+    assert ctrl.all_required_items_done("call_flat_integration")
+
 
 def test_request_dispatch_work_artifact_runs_item_one_as_bounded_request(tmp_path):
     """Item 1 receives a bounded item request, not the full approved job.

@@ -623,10 +623,13 @@ DISPATCH_TOOL_DEF: dict[str, Any] = {
             "implementation details here; the worker owns those decisions. Include a "
             "self-terminating run_command smoke check for any change that affects whether "
             "the app boots or a runnable entry point behaves. The worker will return a "
-            "summary of what it did. For multi-part work, create a visible work_artifact. "
+            "summary of what it did. "
+            "Every dispatch becomes a WorkArtifact. "
+            "The Planner may either provide explicit work_artifact.items or provide the normal top-level fields. "
+            "If work_artifact is omitted, Aura normalises the top-level fields into a one-item WorkArtifact. "
+            "One-item and multi-item jobs share the same visible card, lifecycle, receipts, and progress model. "
             "The work_artifact is a visible scope/progress/receipt structure for one approved job. "
             "The user approves the WorkArtifact job once. Aura executes item runs internally under the same approval. "
-            "Flat fields remain valid for any task the Planner can express as one bounded Worker job. "
             "Fill structured contract fields when knowable from "
             "the request or repo context; they power Aura's pre-release quality gate."
         ),
@@ -705,9 +708,10 @@ DISPATCH_TOOL_DEF: dict[str, Any] = {
                 "work_artifact": {
                     "type": "object",
                     "description": (
-                        "Optional visible Work Artifact for multi-part work. "
-                        "For bounded single-item work, omit this and use flat fields. "
-                        "For multi-part work, supply a work_artifact so the user sees "
+                        "WorkArtifact payload for multi-item jobs. "
+                        "If omitted, Aura normalises the top-level fields (goal, files, spec, "
+                        "acceptance, summary, validation_commands) into a one-item WorkArtifact. "
+                        "For multi-part work, supply items so the user sees "
                         "every bounded item before any Worker runs. "
                         "Items are bounded internal execution units. "
                         "Aura executes item runs internally under the same approval. "

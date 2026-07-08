@@ -49,6 +49,68 @@ class WorkArtifactController:
 
     # ── artifact lifecycle ───────────────────────────────────────────────
 
+    def create_artifact_from_request(
+        self,
+        tool_call_id: str,
+        req: Any,
+    ) -> WorkArtifact:
+        """Create a WorkArtifact from a WorkerDispatchRequest.
+
+        If the request carries a ``work_artifact_payload``, delegates to
+        ``create_artifact_from_payload``.  Otherwise normalises the flat
+        request fields into a one-item WorkArtifact so every approved
+        dispatch — flat or multi-item — has a visible artifact with the
+        same card, lifecycle, receipts, and progress model.
+
+        The one-item artifact uses:
+
+        - id ``item-1``
+        - title from ``req.summary`` or ``req.goal``
+        - intent from ``req.goal``
+        - target files from ``req.files``
+        - acceptance from ``req.acceptance``
+        - validation commands from ``req.validation_commands``
+        - goal from ``req.goal``
+        - constraints from ``req.non_goals``
+        - allowed files from ``req.files``
+        """
+        from aura.conversation.dispatch import WorkerDispatchRequest  # avoid circular at module level
+
+        if not isinstance(req, WorkerDispatchRequest):
+            raise TypeError(f"Expected WorkerDispatchRequest, got {type(req).__name__}")
+
+        if req.work_artifact_payload is not None:
+            return self.create_artifact_from_payload(
+                tool_call_id, req.work_artifact_payload,
+            )
+
+        # ── Normalise flat request into a one-item WorkArtifact ───────────
+        item = WorkArtifactItem(
+            id="item-1",
+            title=req.summary or req.goal,
+            intent=req.goal,
+            target_files=list(req.files) if req.files else [],
+            acceptance=req.acceptance,
+            validation_commands=list(req.validation_commands) if req.validation_commands else [],
+        )
+
+        artifact = WorkArtifact(
+            artifact_id=tool_call_id,
+            goal=req.goal,
+            constraints=list(req.non_goals) if req.non_goals else [],
+            allowed_files=list(req.files) if req.files else [],
+            work_items=[item],
+            current_item_id="item-1",
+        )
+
+        self._artifacts[tool_call_id] = artifact
+        _log.info(
+            "WorkArtifact created from flat request tool_call_id=%s item_count=1",
+            tool_call_id,
+        )
+        self._emit_projection(tool_call_id)
+        return artifact
+
     def create_artifact_from_payload(
         self,
         tool_call_id: str,
