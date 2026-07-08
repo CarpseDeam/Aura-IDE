@@ -1264,8 +1264,21 @@ class _DispatchProxy(QObject):
         req: WorkerDispatchRequest,
         pending: "_DispatchPending",
     ) -> WorkerDispatchResult:
+        # For artifact items, thread the captured validation baseline through
+        # to the Worker finalization gate so pre-existing failures on declared
+        # item commands are attributed correctly.  Flat dispatches yield either
+        # a compatibility artifact with no baseline or None — both produce None.
+        artifact = self._artifact_controller.get_artifact(tool_call_id)
+        baseline_validation_fingerprints = (
+            dict(artifact.baseline_validation_fingerprints)
+            if artifact is not None
+            else None
+        )
         runner = self._create_worker_dispatch_runner()
-        return runner.run_worker(tool_call_id, req, pending)
+        return runner.run_worker(
+            tool_call_id, req, pending,
+            baseline_validation_fingerprints=baseline_validation_fingerprints,
+        )
 
     def _pending_resolution_failure_result(
         self,

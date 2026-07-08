@@ -98,6 +98,7 @@ class WorkerDispatchRunner:
         req: WorkerDispatchRequest,
         pending: Any,
         record_replayable: bool = True,
+        baseline_validation_fingerprints: dict[str, list[str]] | None = None,
     ) -> WorkerDispatchResult:
         _log.info("WorkerDispatchRunner.run_worker entered tool_call_id=%s", tool_call_id)
         worker_history, task_spec, context_gearbox, worker_manager = self._prepare_worker_conversation(
@@ -124,6 +125,7 @@ class WorkerDispatchRunner:
             worker_history=worker_history,
             relay=relay,
             cancel_event=cancel_event,
+            baseline_validation_fingerprints=baseline_validation_fingerprints,
         )
 
         worker_completion = prepare_worker_completion_result(
@@ -312,6 +314,7 @@ class WorkerDispatchRunner:
         worker_history: History,
         relay: WorkerEventRelay,
         cancel_event: threading.Event,
+        baseline_validation_fingerprints: dict[str, list[str]] | None = None,
     ) -> tuple[list[ValidationCommandSpec], ValidationPlan | None, tuple[str, ...] | None, bool, str | None, list[str]]:
         task_kind = task_spec.task_shape.task_kind if task_spec.task_shape is not None else "unknown"
         final_validation_commands: list[ValidationCommandSpec] = list(task_spec.validation_commands)
@@ -349,6 +352,7 @@ class WorkerDispatchRunner:
                 max_tool_rounds=self._max_tool_rounds,
                 explicit_validation_commands=final_validation_commands,
                 declared_run_command=task_spec.run_command,
+                baseline_validation_fingerprints=baseline_validation_fingerprints,
             )
         except Exception as exc:
             internal_error = redact_secrets(f"{type(exc).__name__}: {exc}")
