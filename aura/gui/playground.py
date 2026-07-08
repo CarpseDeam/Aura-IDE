@@ -39,7 +39,7 @@ class AuraPlayground(QWidget):
     focused_action_requested = Signal(str)
     stop_worker_requested = Signal()
 
-    def __init__(self, parent=None, terminal_window_geometry: str = ""):
+    def __init__(self, parent=None, terminal_window_geometry: str = "", outer_splitter_sizes: list[int] | None = None, vertical_splitter_sizes: list[int] | None = None):
         super().__init__(parent)
         self.setMinimumWidth(280)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -98,6 +98,9 @@ class AuraPlayground(QWidget):
         self._splitter.setStretchFactor(0, 2)
         self._splitter.setStretchFactor(1, 1)
         self._splitter.setSizes([560, 300])
+        # Restore saved vertical splitter sizes if valid (len 2, sum > 0, each >= 40)
+        if vertical_splitter_sizes is not None and len(vertical_splitter_sizes) == 2 and sum(vertical_splitter_sizes) > 0 and all(v >= 40 for v in vertical_splitter_sizes):
+            self._splitter.setSizes(vertical_splitter_sizes)
 
         # Outer horizontal splitter: file tree (left) | code/log (right)
         self._outer_splitter = QSplitter(Qt.Orientation.Horizontal, self)
@@ -126,6 +129,9 @@ class AuraPlayground(QWidget):
         self._outer_splitter.setStretchFactor(0, 0)
         self._outer_splitter.setStretchFactor(1, 1)
         self._outer_splitter.setSizes([240, 800])
+        # Restore saved outer splitter sizes if valid (len 2, sum > 0, each >= 40)
+        if outer_splitter_sizes is not None and len(outer_splitter_sizes) == 2 and sum(outer_splitter_sizes) > 0 and all(v >= 40 for v in outer_splitter_sizes):
+            self._outer_splitter.setSizes(outer_splitter_sizes)
 
         # Stacked widget: index 0 = workspace view; Chain Editor uses a dynamic index
         self._stack = QStackedWidget(self)
@@ -464,3 +470,8 @@ class AuraPlayground(QWidget):
 
     def add_mermaid_artifact(self, code: str):
         pass
+
+    def splitter_sizes(self) -> tuple[list[int], list[int]]:
+        """Return current (outer_splitter_sizes, vertical_splitter_sizes)."""
+        return (list(self._outer_splitter.sizes()), list(self._splitter.sizes()))
+

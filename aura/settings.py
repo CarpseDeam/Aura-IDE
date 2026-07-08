@@ -105,6 +105,8 @@ class AppSettings:
     main_window_geometry: str = ""
     main_window_state: str = ""
     main_splitter_sizes: list[int] = field(default_factory=list)
+    playground_outer_splitter_sizes: list[int] = field(default_factory=list)
+    playground_vertical_splitter_sizes: list[int] = field(default_factory=list)
     first_launch_done: bool = False
     onboarding_checklist: dict = field(default_factory=dict)
     onboarding_version: int = 1
@@ -143,6 +145,13 @@ class AppSettings:
             s.main_window_state = data["main_window_state"]
         if isinstance(data.get("main_splitter_sizes"), list):
             s.main_splitter_sizes = data["main_splitter_sizes"]
+        # Playground splitter sizes — validate expected length 2, sum > 0, each >= 40
+        raw_outer = data.get("playground_outer_splitter_sizes")
+        if isinstance(raw_outer, list) and len(raw_outer) == 2 and sum(raw_outer) > 0 and all(isinstance(v, int) and v >= 40 for v in raw_outer):
+            s.playground_outer_splitter_sizes = raw_outer
+        raw_vertical = data.get("playground_vertical_splitter_sizes")
+        if isinstance(raw_vertical, list) and len(raw_vertical) == 2 and sum(raw_vertical) > 0 and all(isinstance(v, int) and v >= 40 for v in raw_vertical):
+            s.playground_vertical_splitter_sizes = raw_vertical
         # Provider
         s.provider = _provider_from_data(data, "provider", s.provider)
         s.planner_provider = _provider_from_data(

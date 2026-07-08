@@ -196,6 +196,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._playground = AuraPlayground(
             parent=self,
             terminal_window_geometry=self._settings.terminal_window_geometry,
+            outer_splitter_sizes=self._settings.playground_outer_splitter_sizes or None,
+            vertical_splitter_sizes=self._settings.playground_vertical_splitter_sizes or None,
         )
         self._playground_aura = AuraWidget(
             self._playground,
@@ -381,6 +383,9 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._settings.main_window_state = bytes(state.toBase64()).decode("ascii")
         # Save splitter sizes.
         self._settings.main_splitter_sizes = list(self._main_splitter.sizes())
+        playground_outer, playground_vert = self._playground.splitter_sizes()
+        self._settings.playground_outer_splitter_sizes = playground_outer
+        self._settings.playground_vertical_splitter_sizes = playground_vert
         save_settings(self._settings)
         self._companion_controller.stop()
         self._balance_controller.shutdown()
