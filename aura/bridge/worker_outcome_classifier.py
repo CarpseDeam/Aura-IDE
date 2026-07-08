@@ -9,6 +9,12 @@ from aura.bridge.event_relay import WorkerEventRelay
 from aura.conversation import WorkerDispatchRequest, WorkerMismatch
 from aura.conversation.worker_outcome import WorkerOutcomeStatus
 
+# Internal: maximum number of validation commands on an artifact item that
+# still qualifies as "did not explicitly declare behavioral/UI validation".
+# When zero commands are declared (or only non-behavioral commands), skipped
+# behavioral validation is a caveat, not a blocker.
+_ARTIFACT_MAX_DECLARED_BEHAVIORAL_CMDS = 3
+
 __all__ = [
     "EDIT_TRANSACTION_FAILURE_CLASSES",
     "_classify_worker_completion",
@@ -34,6 +40,7 @@ def _classify_worker_completion(
     completion: dict[str, Any],
     messages: dict[str, Any],
     internal_error: str | None,
+    req: WorkerDispatchRequest | None = None,
 ) -> dict[str, Any]:
     continuation = completion["continuation"]
     result_errors = messages["result_errors"]
@@ -105,14 +112,31 @@ def _classify_worker_completion(
     behavioral = completion.get("behavioral_validation", {})
     has_required_behavioral_skipped = bool(behavioral.get("skipped", []))
 
+    # Bounded WorkArtifact items: skipped behavioral/UI validation is a
+    # caveat, not a blocker.  The primary gate for an artifact item is its
+    # declared validation commands (e.g. compileall) and file writes.
+    _is_artifact_item = (
+        req is not None
+        and bool(req.artifact_id)
+        and bool(req.artifact_item_id)
+    )
+
     if has_planner_resolution_mismatch:
         ok = False
         needs_followup = True
         recoverable = True
     elif has_required_behavioral_skipped and not has_internal_failure:
-        ok = False
-        needs_followup = True
-        recoverable = True
+        if _is_artifact_item:
+            # Artifact item: behavioral skip is a caveat, not a failure.
+            # The item completes normally; the skip is recorded in the
+            # continuation reason for diagnostics only.
+            ok = True
+            needs_followup = False
+            recoverable = False
+        else:
+            ok = False
+            needs_followup = True
+            recoverable = True
     elif has_no_progress_failure:
         ok = False
         needs_followup = True
@@ -181,10 +205,17 @@ def _classify_worker_completion(
         summary_continuation["status"] = "harness_error"
         summary_continuation["reason"] = diagnostic_environment_caveats[0]
     if has_required_behavioral_skipped and not summary_continuation.get("status"):
-        summary_continuation["status"] = "validation_failed"
         skipped_cmds = behavioral.get("skipped", [])
-        reason = "Required behavioral validation skipped: " + (skipped_cmds[0] if skipped_cmds else "(unknown)")
-        summary_continuation["reason"] = reason
+        if _is_artifact_item:
+            summary_continuation["status"] = "completed_with_caveats"
+            summary_continuation["reason"] = (
+                "Behavioral/UI validation skipped (caveat only): "
+                + (skipped_cmds[0] if skipped_cmds else "(unknown)")
+            )
+        else:
+            summary_continuation["status"] = "validation_failed"
+            reason = "Required behavioral validation skipped: " + (skipped_cmds[0] if skipped_cmds else "(unknown)")
+            summary_continuation["reason"] = reason
 
     status = _compute_outcome_status(
         ok=ok,

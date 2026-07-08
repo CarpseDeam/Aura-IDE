@@ -187,6 +187,16 @@ class WorkArtifactController:
         can resume the active item it was executing, and that the internal
         loop correctly discovers the next item after marking one ``done``.
         """
+        return self.unfinished_items(tool_call_id)
+
+    def unfinished_items(self, tool_call_id: str) -> list[Any]:
+        """Return all unfinished work items for the given artifact.
+
+        Same semantics as ``pending_items`` — every item whose status is
+        not ``done`` — but with an unambiguous name.  Use this for internal
+        dispatch loops and resume logic; ``pending_items`` is kept for
+        backward compatibility.
+        """
         artifact = self._artifacts.get(tool_call_id)
         if artifact is None:
             return []

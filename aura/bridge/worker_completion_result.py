@@ -164,6 +164,7 @@ def prepare_worker_completion_result(
         completion=completion,
         messages=messages,
         internal_error=internal_error,
+        req=req,
     )
     return WorkerCompletionAssembly(
         req=req,

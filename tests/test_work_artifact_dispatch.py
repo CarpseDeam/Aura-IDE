@@ -83,6 +83,37 @@ def _non_recoverable_result(summary: str = "Fatal error") -> WorkerDispatchResul
     )
 
 
+def _continuing_with_evidence_result(
+    summary: str = "Item completed — acceptance unverified, continuing.",
+    modified: list[str] | None = None,
+) -> WorkerDispatchResult:
+    """Simulate a result where the Worker did real work (files changed,
+    validation passed) but the outcome classifier emitted a recoverable/
+    continuing/phase_boundary classification.
+
+    This is the exact pattern that caused the "corpse state" bug: the
+    Worker succeeded but receipt.status was "continuing" because
+    ``is_recoverable_worker_continuation`` matched.
+    """
+    return WorkerDispatchResult(
+        ok=False,
+        summary=summary,
+        recoverable=True,
+        phase_boundary=True,
+        needs_followup=True,
+        status="completed_with_caveats",
+        modified_files=modified or [],
+        validation="python -m compileall src/model.py passed.",
+        extras={
+            "recoverable": True,
+            "phase_boundary": True,
+            "needs_followup": True,
+            "suggested_next_tool": "dispatch_to_worker",
+            "failure_class": "behavioral_validation_skipped",
+        },
+    )
+
+
 # ── A. ToolRunner preserves full approved job envelope ─────────────────────────
 
 
@@ -1062,3 +1093,377 @@ def test_artifact_retry_cap_pauses_job_immediately(tmp_path):
     assert "recovery exhausted" not in result.summary.lower(), (
         "Summary must not mention 'recovery exhausted'"
     )
+
+
+# ── N. WorkArtifact item completion normalizer ───────────────────────────────
+
+
+def test_artifact_normalizer_live_failure_reproduction(tmp_path):
+    """Test A: Exact live failure reproduction.
+
+    A two-item WorkArtifact where item 1 returns a recoverable/continuing/
+    phase_boundary result BUT with modified files and passing compileall.
+    After the normalizer and attach_receipt:
+
+      receipt.status == "ok"
+      item 1 status == done
+      projection counts: 1 done, 0 active, 1 pending
+      item 2 starts automatically
+    """
+    from aura.bridge.dispatch import _DispatchProxy
+
+    proxy = _DispatchProxy(
+        parent_widget=None,
+        registry_factory=lambda mode: None,
+        approval_proxy=None,
+        workspace_root=tmp_path,
+    )
+
+    captured: list[WorkerDispatchRequest] = []
+
+    # Item 1 returns a continuing-but-successful result; item 2 is normal ok.
+    def continuing_then_ok(
+        tool_call_id: str, worker_req: WorkerDispatchRequest, pending,
+    ) -> WorkerDispatchResult:
+        captured.append(worker_req)
+        if worker_req.artifact_item_id == "item-1":
+            return _continuing_with_evidence_result(
+                summary="Item 1 done — no blockers.",
+                modified=list(worker_req.files),
+            )
+        return _ok_result(modified=list(worker_req.files))
+    proxy._run_worker = continuing_then_ok
+
+    # Bypass Qt signal: auto-resolve the pending dispatch immediately.
+    original_register = proxy._pending_map.register
+
+    def auto_register(tool_call_id, req):
+        pending = original_register(tool_call_id, req)
+        pending.edited_request = req
+        pending.decision_event.set()
+        return pending
+    proxy._pending_map.register = auto_register
+
+    payload = _make_two_item_payload()
+    req = WorkerDispatchRequest(
+        goal="Full feature",
+        files=["src/a.py", "src/b.py"],
+        spec="Implement the full feature.",
+        acceptance="Everything works.",
+        summary="Full feature",
+        work_artifact_payload=payload,
+    )
+
+    result = proxy.request_dispatch("call_live_failure", req)
+
+    # ── Both items completed ───────────────────────────────────────────────
+    assert result.ok is True, f"Expected ok=True, got {result.ok}"
+    assert result.extras["completed_items"] == ["item-1", "item-2"]
+    assert result.extras["total_items"] == 2
+    assert len(captured) == 2, f"Expected 2 dispatches, got {len(captured)}"
+
+    # ── Item 1 receipt is "ok" (not "continuing") ──────────────────────────
+    ctrl = proxy.artifact_controller()
+    artifact = ctrl.get_artifact("call_live_failure")
+    assert artifact is not None
+    item1 = artifact.work_items[0]
+    assert item1.id == "item-1"
+    assert item1.status == WorkItemStatus.done, (
+        f"Item 1 expected done, got {item1.status}"
+    )
+    assert item1.receipt is not None
+    assert item1.receipt.status == "ok", (
+        f"Item 1 receipt expected 'ok', got '{item1.receipt.status}'"
+    )
+
+    # ── Projection: 2 done, 0 active, 0 pending ────────────────────────────
+    proj = WorkArtifactProjection.from_artifact(artifact)
+    assert proj.completed_count == 2, (
+        f"Expected 2 completed, got {proj.completed_count}"
+    )
+    assert proj.pending_count == 0, (
+        f"Expected 0 pending, got {proj.pending_count}"
+    )
+
+
+def test_artifact_normalizer_real_failure_not_normalized(tmp_path):
+    """Test B: Real validation failure must NOT be normalized.
+
+    When compileall fails (traceback present), the result must stay non-ok.
+    The item must NOT become done. Retry/pause behavior is preserved.
+    """
+    from aura.bridge.dispatch import _DispatchProxy
+
+    proxy = _DispatchProxy(
+        parent_widget=None,
+        registry_factory=lambda mode: None,
+        approval_proxy=None,
+        workspace_root=tmp_path,
+    )
+
+    captured: list[WorkerDispatchRequest] = []
+
+    def failing_run_worker(
+        tool_call_id: str, worker_req: WorkerDispatchRequest, pending,
+    ) -> WorkerDispatchResult:
+        captured.append(worker_req)
+        # Simulate a compileall failure with traceback
+        return WorkerDispatchResult(
+            ok=False,
+            summary="Item failed: validation error — syntax error in src/model.py",
+            status="validation_failed",
+            modified_files=list(worker_req.files),
+            validation="python -m compileall src/model.py failed with traceback.",
+            extras={
+                "failed_validation": True,
+                "failure_class": "validation_syntax_error",
+                "traceback_product_failure": True,
+            },
+        )
+    proxy._run_worker = failing_run_worker
+
+    original_register = proxy._pending_map.register
+
+    def auto_register(tool_call_id, req):
+        pending = original_register(tool_call_id, req)
+        pending.edited_request = req
+        pending.decision_event.set()
+        return pending
+    proxy._pending_map.register = auto_register
+
+    payload = _make_two_item_payload()
+    req = WorkerDispatchRequest(
+        goal="Full feature",
+        files=["src/a.py", "src/b.py"],
+        spec="Implement the full feature.",
+        acceptance="Everything works.",
+        summary="Full feature",
+        work_artifact_payload=payload,
+    )
+
+    result = proxy.request_dispatch("call_real_fail", req)
+
+    # ── Item 1 stays non-ok; item 2 never starts ───────────────────────────
+    assert result.ok is not True, (
+        "Validation failure must not be normalized to ok"
+    )
+    assert result.extras.get("work_artifact_item_completion_normalized") is not True, (
+        "Normalized flag must not be set for real failures"
+    )
+
+    ctrl = proxy.artifact_controller()
+    artifact = ctrl.get_artifact("call_real_fail")
+    assert artifact is not None
+    item1 = artifact.work_items[0]
+    assert item1.status != WorkItemStatus.done, (
+        "Item with real validation failure must not become done"
+    )
+
+
+def test_artifact_normalizer_behavioral_validation_skipped(tmp_path):
+    """Test C: Behavioral validation skipped for artifact items.
+
+    A WorkArtifact GUI/visual item with file writes and passing compileall
+    (no declared UI probe) becomes done with caveat.
+    """
+    from aura.bridge.dispatch import _DispatchProxy
+
+    proxy = _DispatchProxy(
+        parent_widget=None,
+        registry_factory=lambda mode: None,
+        approval_proxy=None,
+        workspace_root=tmp_path,
+    )
+
+    captured: list[WorkerDispatchRequest] = []
+
+    # Item returns a result shaped like behavioral-skip + passing compileall
+    def behavioral_skip_then_ok(
+        tool_call_id: str, worker_req: WorkerDispatchRequest, pending,
+    ) -> WorkerDispatchResult:
+        captured.append(worker_req)
+        return WorkerDispatchResult(
+            ok=False,
+            summary="Item completed. Behavioral validation skipped (caveat only).",
+            recoverable=True,
+            phase_boundary=True,
+            needs_followup=True,
+            status="completed_with_caveats",
+            modified_files=list(worker_req.files),
+            validation="python -m compileall src/model.py passed.",
+            extras={
+                "recoverable": True,
+                "phase_boundary": True,
+                "needs_followup": True,
+                "suggested_next_tool": "dispatch_to_worker",
+                "failure_class": "behavioral_validation_skipped",
+            },
+        )
+    proxy._run_worker = behavioral_skip_then_ok
+
+    original_register = proxy._pending_map.register
+
+    def auto_register(tool_call_id, req):
+        pending = original_register(tool_call_id, req)
+        pending.edited_request = req
+        pending.decision_event.set()
+        return pending
+    proxy._pending_map.register = auto_register
+
+    payload = _make_two_item_payload()
+    req = WorkerDispatchRequest(
+        goal="Full feature",
+        files=["src/a.py", "src/b.py"],
+        spec="Implement the full feature.",
+        acceptance="Everything works.",
+        summary="Full feature",
+        work_artifact_payload=payload,
+    )
+
+    result = proxy.request_dispatch("call_behavioral", req)
+
+    # ── Artifact item completes through normalizer ─────────────────────────
+    assert result.ok is True, (
+        f"Artifact item with behavioral skip must complete, got ok={result.ok}"
+    )
+    ctrl = proxy.artifact_controller()
+    artifact = ctrl.get_artifact("call_behavioral")
+    assert artifact is not None
+    assert artifact.work_items[0].status == WorkItemStatus.done, (
+        "Item 1 must be done even with behavioral validation skipped"
+    )
+
+
+def test_artifact_normalizer_receipt_corpse_prevention():
+    """Test D: Receipt corpse prevention.
+
+    A recoverable continuation result with successful item evidence
+    (modified files + validation) must NOT produce ``receipt.status="continuing"``
+    when routed through the artifact item normalizer.  It must produce
+    ``receipt.status="ok"``.
+    """
+    from aura.bridge.dispatch import _DispatchProxy
+    from aura.work_artifact.receipt import worker_result_to_receipt
+
+    proxy = _DispatchProxy(
+        parent_widget=None,
+        registry_factory=lambda mode: None,
+        approval_proxy=None,
+    )
+
+    # Build the continuing-but-successful result
+    item_req = WorkerDispatchRequest(
+        goal="Test",
+        files=["src/model.py"],
+        spec="Do the thing",
+        acceptance="Works",
+        summary="Test",
+        artifact_id="art-1",
+        artifact_item_id="item-1",
+    )
+    item_result = _continuing_with_evidence_result(
+        modified=["src/model.py"],
+    )
+
+    # Without normalizer: receipt is "continuing" — the corpse state.
+    raw_receipt = worker_result_to_receipt(item_result)
+    assert raw_receipt.status == "continuing", (
+        f"Expected continuing without normalizer, got {raw_receipt.status}"
+    )
+
+    # With normalizer: receipt is "ok"
+    from aura.work_artifact.model import WorkArtifactItem
+    dummy_item = WorkArtifactItem(
+        id="item-1", title="Test", intent="Test",
+        target_files=["src/model.py"], acceptance="Works",
+    )
+    normalized = proxy._normalize_artifact_item_completion(
+        item_req, item_result, dummy_item,
+    )
+    ok_receipt = worker_result_to_receipt(normalized)
+    assert ok_receipt.status == "ok", (
+        f"Expected ok after normalizer, got {ok_receipt.status}"
+    )
+
+
+def test_artifact_normalizer_full_loop_both_items(tmp_path):
+    """Test E: Full internal artifact loop.
+
+    Item 1 succeeds through the normalized path (continuing-with-evidence).
+    Item 2 starts automatically in the same approved artifact loop.
+    Aggregate finishes ok when both items complete.
+    """
+    from aura.bridge.dispatch import _DispatchProxy
+
+    proxy = _DispatchProxy(
+        parent_widget=None,
+        registry_factory=lambda mode: None,
+        approval_proxy=None,
+        workspace_root=tmp_path,
+    )
+
+    captured: list[WorkerDispatchRequest] = []
+
+    def continuing_then_ok(
+        tool_call_id: str, worker_req: WorkerDispatchRequest, pending,
+    ) -> WorkerDispatchResult:
+        captured.append(worker_req)
+        if worker_req.artifact_item_id == "item-1":
+            return _continuing_with_evidence_result(
+                summary="Item 1 done — continuing signal suppressed by normalizer.",
+                modified=list(worker_req.files),
+            )
+        return _ok_result(
+            summary="Item 2 complete.",
+            modified=list(worker_req.files),
+        )
+    proxy._run_worker = continuing_then_ok
+
+    original_register = proxy._pending_map.register
+
+    def auto_register(tool_call_id, req):
+        pending = original_register(tool_call_id, req)
+        pending.edited_request = req
+        pending.decision_event.set()
+        return pending
+    proxy._pending_map.register = auto_register
+
+    payload = _make_two_item_payload()
+    req = WorkerDispatchRequest(
+        goal="Full feature",
+        files=["src/a.py", "src/b.py"],
+        spec="Implement the full feature.",
+        acceptance="Everything works.",
+        summary="Full feature",
+        work_artifact_payload=payload,
+    )
+
+    result = proxy.request_dispatch("call_full_loop", req)
+
+    # ── Aggregate result: ok, both items complete ──────────────────────────
+    assert result.ok is True, f"Expected ok=True, got {result.ok}"
+    assert result.extras["completed_items"] == ["item-1", "item-2"]
+    assert len(captured) == 2, (
+        f"Expected 2 dispatches (item-1 and item-2), got {len(captured)}"
+    )
+
+    # ── No SpecCard or user approval occurred between items ─────────────────
+    # Artifact is fully complete: both items done.
+    ctrl = proxy.artifact_controller()
+    assert ctrl.all_required_items_done("call_full_loop"), (
+        "All items must be done after full loop"
+    )
+
+    # ── Item 1 has "completed" status (not "continuing") ───────────────────
+    artifact = ctrl.get_artifact("call_full_loop")
+    assert artifact is not None
+    assert artifact.work_items[0].receipt is not None
+    assert artifact.work_items[0].receipt.status == "ok"
+    assert artifact.work_items[1].receipt is not None
+    assert artifact.work_items[1].receipt.status == "ok"
+
+    # ── Projection shows both done ─────────────────────────────────────────
+    proj = WorkArtifactProjection.from_artifact(artifact)
+    assert proj.completed_count == 2
+    assert proj.pending_count == 0
+    assert proj.is_complete is True

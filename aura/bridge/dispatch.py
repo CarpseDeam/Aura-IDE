@@ -28,6 +28,7 @@ from aura.bridge.worker_completion_result import (
     _last_assistant_content,
 )
 from aura.bridge.worker_dispatch_runner import WorkerDispatchRunner
+from aura.bridge.worker_outcome_classifier import EDIT_TRANSACTION_FAILURE_CLASSES
 from aura.bridge.worker_report import (
     _build_worker_summary,
     _format_spec_as_user_message,
@@ -271,7 +272,7 @@ class _DispatchProxy(QObject):
         # review — the original approval is still in effect.
         resume_original_id: str | None = None
         for existing_id in list(self._approved_artifact_requests.keys()):
-            if self._artifact_controller.pending_items(existing_id):
+            if self._artifact_controller.unfinished_items(existing_id):
                 resume_original_id = existing_id
                 break
 
@@ -767,6 +768,136 @@ class _DispatchProxy(QObject):
             return True
         return False
 
+    def _normalize_artifact_item_completion(
+        self,
+        item_req: WorkerDispatchRequest,
+        item_result: WorkerDispatchResult,
+        item: Any,
+    ) -> WorkerDispatchResult:
+        """Normalize a WorkArtifact item result to completed if the item truly succeeded.
+
+        When a WorkArtifact item made changes, ran validation (or had no
+        declared validation), and produced no real errors/blockers, the
+        outcome classifier may still emit ``recoverable/continuing/phase_boundary``
+        due to secondary signals (acceptance unverified, behavioral/UI
+        validation skipped, phase-boundary heuristics).  This normalizer
+        overrides those spurious classifications so the item is marked
+        ``done`` and the next item can start.
+
+        Only applies to bounded artifact items (``artifact_id`` and
+        ``artifact_item_id`` are set on the request).
+
+        Returns the original ``item_result`` unchanged when normalisation
+        does not apply (real failures, cancelled, flat dispatch).
+        """
+        if not item_req.artifact_id or not item_req.artifact_item_id:
+            return item_result
+
+        if item_result.cancelled:
+            return item_result
+
+        extras = item_result.extras if isinstance(item_result.extras, dict) else {}
+
+        # ── Hard-failure guards ──────────────────────────────────────────
+
+        # Infrastructure / provider / auth / network
+        if self._is_infrastructure_failure(item_result):
+            return item_result
+
+        # Harness / internal error
+        fc = str(extras.get("failure_class", "") or "")
+        if fc in ("harness_error", "internal_error", "worker_internal_error"):
+            return item_result
+        if extras.get("api_errors"):
+            return item_result
+
+        # Edit-transaction failure
+        if fc in EDIT_TRANSACTION_FAILURE_CLASSES:
+            return item_result
+        if extras.get("unrecovered_not_applied_writes"):
+            return item_result
+        if extras.get("recoverable_write_failures"):
+            return item_result
+        if item_result.status == WorkerOutcomeStatus.edit_mechanics_blocked.value:
+            return item_result
+
+        # Validation failure
+        if item_result.status == WorkerOutcomeStatus.validation_failed.value:
+            return item_result
+        if extras.get("failed_validation"):
+            return item_result
+        if fc.startswith("validation_"):
+            return item_result
+
+        # Syntax failure / traceback product failure
+        if extras.get("syntax_failure") or extras.get("syntax_error"):
+            return item_result
+        if extras.get("traceback_product_failure"):
+            return item_result
+
+        # Explicit blockers
+        if extras.get("source_inspection_blockers"):
+            return item_result
+        if extras.get("terminal_policy_blockers"):
+            return item_result
+        if extras.get("environment_setup_blockers"):
+            return item_result
+        if extras.get("diagnostic_environment_caveats"):
+            return item_result
+
+        # ── Item must have changed at least one target file ──────────────
+        target_files = set(item_req.files)
+        modified = set(item_result.modified_files or [])
+        if not modified or not modified.intersection(target_files):
+            # No overlap with declared target files — treat as unverified.
+            return item_result
+
+        # ── Validation passed (or no item validation was declared) ───────
+        # At this point we've already ruled out any validation_failure
+        # status and failed_validation extras.  If the item declared no
+        # validation commands, validation-not-run is acceptable for an
+        # artifact item.
+
+        # ── All checks passed → normalise to completed ───────────────────
+        cleaned = dict(extras)
+
+        # Clear every "continuing/recoverable" signal.
+        cleaned.pop("recoverable", None)
+        cleaned["recoverable"] = False
+        cleaned.pop("phase_boundary", None)
+        cleaned["phase_boundary"] = False
+        cleaned.pop("needs_followup", None)
+        cleaned["needs_followup"] = False
+        cleaned.pop("suggested_next_tool", None)
+        cleaned["suggested_next_tool"] = ""
+        cleaned.pop("suggested_next_action", None)
+        cleaned["suggested_next_action"] = ""
+
+        # Clear spurious failure-class values that are not real failures.
+        spurious_fcs = {
+            "acceptance_unverified",
+            "validation_not_run",
+            "behavioral_validation_skipped",
+            "validation_failed_caveat",
+            "continuation_caveat",
+        }
+        if not fc or fc in spurious_fcs:
+            cleaned.pop("failure_class", None)
+
+        cleaned["work_artifact_item_completion_normalized"] = True
+
+        return WorkerDispatchResult(
+            ok=True,
+            summary=item_result.summary or "",
+            recoverable=False,
+            needs_followup=False,
+            phase_boundary=False,
+            status=WorkerOutcomeStatus.completed.value,
+            modified_files=list(item_result.modified_files or []),
+            validation=item_result.validation,
+            extras=cleaned,
+        )
+
     def _run_approved_artifact_job(
         self,
         tool_call_id: str,
@@ -793,7 +924,7 @@ class _DispatchProxy(QObject):
         recovered_item_ids: list[str] = []
         failed_attempts: dict[str, int] = {}
 
-        pending_items = self._artifact_controller.pending_items(tool_call_id)
+        pending_items = self._artifact_controller.unfinished_items(tool_call_id)
         total = len(pending_items)
 
         for idx, item in enumerate(pending_items):
@@ -832,6 +963,17 @@ class _DispatchProxy(QObject):
 
             while True:
                 item_result = self._run_worker(tool_call_id, item_req, pending)
+
+                # ── WorkArtifact item completion normalizer ────────────────
+                # Override spurious "continuing/recoverable/phase_boundary"
+                # classifications when the item actually succeeded (files
+                # changed, validation passed, no real blockers).  This must
+                # run before any ok/cancelled/infrastructure check so a
+                # successful item is immediately recognised as done.
+                item_result = self._normalize_artifact_item_completion(
+                    item_req, item_result, item,
+                )
+
                 attempt += 1
 
                 if item_result.ok:
@@ -1070,7 +1212,7 @@ class _DispatchProxy(QObject):
             completed_ids = [item_id for item_id, r in item_results if r.ok]
             pending_ids = [
                 it.id
-                for it in self._artifact_controller.pending_items(tool_call_id)
+                for it in self._artifact_controller.unfinished_items(tool_call_id)
             ]
             paused_extras: dict[str, Any] = dict(terminal_override.extras or {})
             paused_extras.update({
