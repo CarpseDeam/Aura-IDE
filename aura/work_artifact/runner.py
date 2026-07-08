@@ -157,8 +157,23 @@ class WorkArtifactRunner:
 
             # ── Run the Worker once for this item ──────────────────────────
             item_result = self._run_worker(artifact_id, item_req)
+            _log.info(
+                "WorkArtifact item result item=%s ok=%s status=%s cancelled=%s "
+                "worker_internal_error=%s api_errors=%s failure_class=%s",
+                item.id,
+                item_result.ok,
+                item_result.status,
+                item_result.cancelled,
+                bool((item_result.extras or {}).get("worker_internal_error")),
+                bool((item_result.extras or {}).get("api_errors")),
+                (item_result.extras or {}).get("failure_class", ""),
+            )
 
             outcome = classify_item_attempt(item_req, item_result)
+            _log.info(
+                "WorkArtifact item %s outcome=%s",
+                item.id, outcome.value,
+            )
 
             if outcome == WorkArtifactAttemptOutcome.cancelled:
                 _log.info(

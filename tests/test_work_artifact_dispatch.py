@@ -1738,3 +1738,176 @@ def test_request_dispatch_with_empty_files_reaches_pending_approval(tmp_path):
     pending_map.resolve_cancelled("call_empty_file")
     dispatch_thread.join(timeout=3.0)
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# R. Narrow infrastructure failure detection — status=harness_error alone
+#    must NOT pause the WorkArtifact item loop.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def test_classify_harness_error_without_infra_extras_is_done():
+    """A result with status=harness_error but NO infrastructure extras must
+    classify as done, not pause.
+
+    Regression: _compute_outcome_status in worker_outcome_classifier.py
+    returns harness_error for non-ok results without internal failure
+    (e.g. tool-level hard failures, edit mechanics, policy blockers).
+    is_infrastructure_failure must NOT treat status alone as pause.
+    """
+    from aura.work_artifact.verification import classify_item_attempt
+    from aura.conversation.dispatch import WorkerOutcomeStatus
+
+    req = WorkerDispatchRequest(goal="G", files=[], spec="S", acceptance="A", summary="S")
+    result = WorkerDispatchResult(
+        ok=False,
+        status=WorkerOutcomeStatus.harness_error.value,
+        summary="Write tool failed",
+        extras={"failure_class": "worker_write_failure"},
+    )
+
+    outcome = classify_item_attempt(req, result)
+    assert outcome.value == "done", (
+        f"Expected done, got {outcome.value} — harness_error alone must not pause"
+    )
+
+
+def test_classify_worker_internal_error_is_pause():
+    """A result with extras.worker_internal_error=True classifies as pause."""
+    from aura.work_artifact.verification import classify_item_attempt
+
+    req = WorkerDispatchRequest(goal="G", files=[], spec="S", acceptance="A", summary="S")
+    result = WorkerDispatchResult(
+        ok=False,
+        status="harness_error",
+        summary="Exception in worker",
+        extras={"worker_internal_error": True, "error_type": "RuntimeError"},
+    )
+
+    outcome = classify_item_attempt(req, result)
+    assert outcome.value == "pause", (
+        f"Expected pause, got {outcome.value}"
+    )
+
+
+def test_classify_api_errors_is_pause():
+    """A result with extras.api_errors classifies as pause."""
+    from aura.work_artifact.verification import classify_item_attempt
+
+    req = WorkerDispatchRequest(goal="G", files=[], spec="S", acceptance="A", summary="S")
+    result = WorkerDispatchResult(
+        ok=False,
+        status="harness_error",
+        summary="API unavailable",
+        extras={"api_errors": ["503 Service Unavailable"]},
+    )
+
+    outcome = classify_item_attempt(req, result)
+    assert outcome.value == "pause", (
+        f"Expected pause, got {outcome.value}"
+    )
+
+
+def test_classify_cancelled_is_cancelled():
+    """Cancellation still classifies as cancelled regardless of status."""
+    from aura.work_artifact.verification import classify_item_attempt
+
+    req = WorkerDispatchRequest(goal="G", files=[], spec="S", acceptance="A", summary="S")
+    result = WorkerDispatchResult(
+        ok=False,
+        cancelled=True,
+        summary="User cancelled",
+    )
+
+    outcome = classify_item_attempt(req, result)
+    assert outcome.value == "cancelled", (
+        f"Expected cancelled, got {outcome.value}"
+    )
+
+
+def test_artifact_runner_advances_past_non_infra_item_result(tmp_path):
+    """WorkArtifactRunner marks item 1 done and advances to item 2 when
+    item 1 returns a non-infrastructure WorkerDispatchResult with
+    ok=False/status=harness_error.
+
+    Regression: a Worker that completes with tool-level hard failures
+    (write-before-read findings, edit mechanics) must NOT pause the job.
+    The item classifies as done and the loop picks item 2.
+    """
+    import threading
+
+    from aura.conversation.dispatch import WorkerOutcomeStatus
+    from aura.work_artifact.runner import WorkArtifactRunner
+
+    ctrl = WorkArtifactController()
+
+    # Create a 2-item artifact manually.
+    payload = {
+        "goal": "Implement feature",
+        "constraints": [],
+        "allowed_files": ["src/"],
+        "items": [
+            {"id": "item-1", "title": "Add model", "intent": "Create the model",
+             "target_files": ["src/model.py"], "acceptance": "Model works"},
+            {"id": "item-2", "title": "Add view", "intent": "Create the view",
+             "target_files": ["src/view.py"], "acceptance": "View works"},
+        ],
+    }
+    ctrl.create_artifact_from_payload("call_advance", payload)
+    ctrl.mark_item_active("call_advance", "item-1")
+
+    approved_req = WorkerDispatchRequest(
+        goal="Full feature", files=["src/a.py"],
+        spec="Implement.", acceptance="Works.", summary="Feature",
+        work_artifact_payload=payload,
+    )
+
+    step: list[int] = [0]
+    captured: list[WorkerDispatchRequest] = []
+
+    def fake_run_worker(tid, ireq):
+        step[0] += 1
+        captured.append(ireq)
+        # Item 1: non-infrastructure result with ok=False/status=harness_error
+        if step[0] == 1:
+            return WorkerDispatchResult(
+                ok=False,
+                status=WorkerOutcomeStatus.harness_error.value,
+                summary="Write tool had a warning",
+                modified_files=["src/model.py"],
+                extras={"failure_class": "worker_write_failure",
+                        "errors": ["Write tool warning: file already exists"]},
+            )
+        # Item 2: success
+        return WorkerDispatchResult(
+            ok=True,
+            summary="Done",
+            modified_files=["src/view.py"],
+        )
+
+    runner = WorkArtifactRunner(
+        controller=ctrl,
+        run_worker=fake_run_worker,
+        emit_projection=lambda tid: None,
+    )
+
+    cancel_event = threading.Event()
+    result = runner.run("call_advance", approved_req, cancel_event)
+
+    # Both items ran.
+    assert len(captured) == 2, f"Expected 2 items, got {len(captured)}"
+    assert captured[0].artifact_item_id == "item-1"
+    assert captured[1].artifact_item_id == "item-2"
+
+    # Item 1 is done despite non-ok / harness_error.
+    artifact = ctrl.get_artifact("call_advance")
+    assert artifact is not None
+    assert artifact.work_items[0].status.value == "done", (
+        f"Item 1 expected done, got {artifact.work_items[0].status.value}"
+    )
+    assert artifact.work_items[1].status.value == "done", (
+        f"Item 2 expected done, got {artifact.work_items[1].status.value}"
+    )
+
+    # Job completed.
+    assert result.ok is True, f"Expected ok=True, got {result.ok}"
+    assert result.extras["completed_items"] == ["item-1", "item-2"]
