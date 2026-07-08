@@ -56,6 +56,7 @@ from aura.lifecycle.builtin_worker_gates import register_builtin_worker_gates
 from aura.work_artifact.controller import WorkArtifactController
 from aura.work_artifact.model import ValidationCommandSpec, WorkItemStatus
 from aura.work_artifact.projection import WorkArtifactProjection
+from aura.work_artifact.validation_baseline import capture_baseline
 from aura.worker_todo import WorkerTodoProjector
 
 __all__ = [
@@ -401,6 +402,12 @@ class _DispatchProxy(QObject):
         # --- Store approved request (artifact job retains ownership) ---
         if is_artifact_job:
             self._approved_artifact_requests[tool_call_id] = edited
+
+            # Capture validation baseline once before any item runs.
+            # This collects fingerprints of all declared item validation
+            # commands so we can later distinguish pre-existing failures
+            # from novel ones introduced by each item.
+            self._capture_artifact_baseline(tool_call_id)
 
         # --- Run Worker ---
         try:
@@ -1014,11 +1021,13 @@ class _DispatchProxy(QObject):
                 )
                 spec += "\n".join(manifest_parts)
 
-        # Merge per-item validation_commands (structured) with top-level ones.
-        # Per-item commands take precedence, then top-level.
+        # Use only the item's own validation_commands — never inherit
+        # top-level/job-wide validation commands into an item request.
+        # This is the core authority-boundary fix: a docs-only item with
+        # no declared commands must reach the Worker with no validation
+        # commands, even if the job-level spec carries broad checks like
+        # pytest or ruff.
         item_vcs = list(getattr(item, "validation_commands", []) or [])
-        top_vcs = list(approved_req.validation_commands)
-        merged_vcs = item_vcs + [vc for vc in top_vcs if vc.command not in {c.command for c in item_vcs}]
 
         return WorkerDispatchRequest(
             goal=item.intent or approved_req.goal,
@@ -1028,7 +1037,7 @@ class _DispatchProxy(QObject):
             summary=item.title or approved_req.summary,
             artifact_id=tool_call_id,
             artifact_item_id=item.id,
-            validation_commands=merged_vcs,
+            validation_commands=item_vcs,
         )
 
     def _aggregate_artifact_results(
@@ -1195,6 +1204,59 @@ class _DispatchProxy(QObject):
             return
         projection = WorkArtifactProjection.from_artifact(artifact)
         self._on_artifact_projection_updated(projection)
+
+    def _capture_artifact_baseline(self, tool_call_id: str) -> None:
+        """Capture validation baseline fingerprints for the active artifact.
+
+        Runs once after approval and before any item Worker launches.
+        Stores fingerprints on the ``WorkArtifact.baseline_validation_fingerprints``
+        field.  Does not recapture if baseline already exists (idempotent
+        across resume).
+        """
+        artifact = self._artifact_controller.get_artifact(tool_call_id)
+        if artifact is None:
+            _log.warning("_capture_artifact_baseline: no artifact for %s", tool_call_id)
+            return
+
+        if artifact.baseline_validation_fingerprints:
+            _log.info("Baseline already exists for artifact %s — skipping", tool_call_id)
+            return
+
+        if self._workspace_root is None:
+            _log.warning("_capture_artifact_baseline: no workspace root — skipping")
+            return
+
+        # Collect the union of all per-item declared validation commands.
+        all_commands: list[ValidationCommandSpec] = []
+        seen_commands: set[str] = set()
+        for item in artifact.work_items:
+            for vc in (item.validation_commands or []):
+                if vc.command and vc.command not in seen_commands:
+                    seen_commands.add(vc.command)
+                    all_commands.append(vc)
+
+        if not all_commands:
+            _log.info("No item-level validation commands to baseline for %s", tool_call_id)
+            return
+
+        _log.info(
+            "Capturing baseline for artifact %s with %d command(s)",
+            tool_call_id, len(all_commands),
+        )
+        try:
+            baseline = capture_baseline(all_commands, self._workspace_root)
+            artifact.baseline_validation_fingerprints = baseline
+            _log.info(
+                "Baseline captured for artifact %s: %d command(s) fingerprinted",
+                tool_call_id, len(baseline),
+            )
+        except Exception as exc:
+            _log.exception(
+                "Baseline capture failed for artifact %s: %s",
+                tool_call_id, exc,
+            )
+            # Missing baseline degrades to strict gating — each item will
+            # treat all failures as novel.
 
     def _run_worker(
         self,

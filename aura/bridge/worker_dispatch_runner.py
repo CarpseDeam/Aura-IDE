@@ -243,7 +243,12 @@ class WorkerDispatchRunner:
             # Merge detected runnable validation commands into the task spec.
             # This ensures detected project checks appear even when the Planner
             # did not echo them, without modifying Planner behavior.
-            if profile is not None and profile.validation_commands:
+            #
+            # IMPORTANT: For WorkArtifact item requests, do NOT merge detected
+            # project validation commands.  Only the item's own declared commands
+            # may gate an artifact item.  Broad project defaults like pytest
+            # would otherwise block docs-only items with pre-existing failures.
+            if profile is not None and profile.validation_commands and not is_artifact_item:
                 detected_runnable = runnable_detected_validation_commands(profile)
                 if detected_runnable:
                     # Convert structured specs to command strings for merge.
@@ -347,6 +352,11 @@ class WorkerDispatchRunner:
             )
         except Exception as exc:
             internal_error = redact_secrets(f"{type(exc).__name__}: {exc}")
+
+        # Collect pre-existing validation failures from attribution.
+        preexisting = getattr(worker_manager, "_preexisting_failures", None)
+        if preexisting:
+            relay.preexisting_validation_failures = list(preexisting)
 
         if cancel_event.is_set():
             worker_history.pop_if_empty_assistant_message()

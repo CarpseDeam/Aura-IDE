@@ -25,6 +25,10 @@ from aura.conversation.syntax_repair_state import (
     syntax_repair_paths,
 )
 from aura.conversation.terminal_syntax import is_python_path
+from aura.conversation.validation_attribution import (
+    attribute_validation_failures,
+    compute_failure_fingerprint,
+)
 from aura.conversation.validation_failure_routing import (
     route_validation_failure,
 )
@@ -618,6 +622,35 @@ def _record_explicit_validation_runs(
         )
 
 
+def _collect_failure_fingerprints(
+    val_result: Any,
+) -> dict[str, list[str]]:
+    """Extract failure fingerprints from a ``WorkerFinalValidationResult``.
+
+    Returns a dict mapping each command key to a list of failure fingerprints,
+    one per failing run.  When no structured runs are available, fingerprints
+    the entire result as a single failure.
+    """
+    fingerprints_by_key: dict[str, list[str]] = {}
+    failing_runs = [r for r in (getattr(val_result, "runs", None) or []) if not r.ok]
+
+    if not failing_runs:
+        command_key = getattr(val_result, "command", None) or "<unknown>"
+        classification = command_key
+        diagnostics = getattr(val_result, "diagnostics", "") or ""
+        fp = compute_failure_fingerprint(command_key, classification, diagnostics)
+        fingerprints_by_key[command_key] = [fp]
+    else:
+        for run in failing_runs:
+            command_key = getattr(run, "command", None) or getattr(val_result, "command", "<unknown>")
+            classification = getattr(run, "classification", "") or "failure"
+            output = getattr(run, "output", "") or ""
+            fp = compute_failure_fingerprint(command_key, classification, output)
+            fingerprints_by_key.setdefault(command_key, []).append(fp)
+
+    return fingerprints_by_key
+
+
 def _run_behavioral_tier(
     *,
     state: _SendState,
@@ -724,6 +757,46 @@ def _run_behavioral_tier(
                         workspace_root=workspace_root,
                     )
 
+                # ── Attribution: separate novel from pre-existing failures ──
+                has_baseline = bool(
+                    state.baseline_validation_fingerprints
+                    and state.worker_artifact_item_id
+                )
+                all_preexisting = False
+
+                if has_baseline:
+                    current_fingerprints = _collect_failure_fingerprints(val_result)
+                    preexisting_found: list[dict[str, str | list[str]]] = []
+                    any_novel = False
+
+                    for cmd_key, fingerprints in current_fingerprints.items():
+                        baseline = state.baseline_validation_fingerprints.get(cmd_key, [])
+                        verdict = attribute_validation_failures(
+                            current_fingerprints=fingerprints,
+                            baseline_fingerprints=baseline,
+                        )
+                        if verdict.novel_fingerprints:
+                            any_novel = True
+                        if verdict.preexisting_fingerprints:
+                            preexisting_found.append({
+                                "command_key": cmd_key,
+                                "preexisting_fingerprints": list(verdict.preexisting_fingerprints),
+                            })
+
+                    if not any_novel and preexisting_found:
+                        # All failures are pre-existing — treat explicit
+                        # validation as passed.  Do NOT route to repair or
+                        # handback.  Record the pre-existing info so it
+                        # flows into receipt metadata via extras.
+                        state.preexisting_validation_failures = preexisting_found
+                        state.explicit_validation_fingerprints.clear()
+                        state.explicit_validation_edit_snapshot = current_snapshot
+                        state.mark_explicit_validation_passed()
+                        if state.worker_flow is not None:
+                            state.worker_flow.mark_validation_satisfied()
+                        return "none"
+
+                # Novel failures exist, or no baseline — route normally.
                 edits_since_last_pass = (
                     state.write_attempt_count()
                     > state.explicit_validation_edit_snapshot

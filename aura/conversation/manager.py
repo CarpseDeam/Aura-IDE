@@ -101,6 +101,7 @@ class ConversationManager:
             lifecycle=self._lifecycle,
             event_bus=self._event_bus,
         )
+        self._preexisting_failures: list[dict[str, str | list[str]]] = []
 
     @property
     def history(self) -> History:
@@ -133,6 +134,7 @@ class ConversationManager:
         hook_name: str = 'generate_planner_code',
         explicit_validation_commands: list[ValidationCommandSpec] | None = None,
         declared_run_command: str | None = None,
+        baseline_validation_fingerprints: dict[str, list[str]] | None = None,
     ) -> None:
         """Run the model -> tool -> model loop until the model stops calling tools.
 
@@ -157,6 +159,8 @@ class ConversationManager:
                 state.dispatched_target_files = list(worker_dispatch_request.files)
                 state.worker_artifact_id = str(worker_dispatch_request.artifact_id or "")
                 state.worker_artifact_item_id = str(worker_dispatch_request.artifact_item_id or "")
+            if baseline_validation_fingerprints is not None:
+                state.baseline_validation_fingerprints = dict(baseline_validation_fingerprints)
 
         while True:
             if (
@@ -300,6 +304,7 @@ class ConversationManager:
                     )
                     if finalization_action == "continue":
                         continue
+                    self._preexisting_failures = list(state.preexisting_validation_failures)
                     return
                 self._history.append_assistant(full_message)
                 return

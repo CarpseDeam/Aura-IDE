@@ -62,6 +62,11 @@ class _SendState:
         default_factory=WorkerValidationLedger
     )
 
+    # --- baseline fingerprints for artifact item validation attribution ---
+    baseline_validation_fingerprints: dict[str, list[str]] = field(default_factory=dict)
+    # --- pre-existing validation failures found during attribution ---
+    preexisting_validation_failures: list[dict[str, str | list[str]]] = field(default_factory=list)
+
     # --- dispatch ---
     planner_dispatch_attempts: int = 0
     planner_visible_dispatch_tool_call_id: str = ""

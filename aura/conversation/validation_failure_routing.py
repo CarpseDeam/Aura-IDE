@@ -92,6 +92,16 @@ def _compute_digest(text: str) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
 
 
+def compute_diagnostics_digest(text: str) -> str:
+    """Public wrapper around ``_compute_digest``.
+
+    Canonicalises diagnostic text by stripping absolute paths and timestamps,
+    then produces a stable SHA-256 hex digest (truncated to 16 chars).
+    The fingerprint is stable across runs and process boundaries.
+    """
+    return _compute_digest(text)
+
+
 # ---------------------------------------------------------------------------
 # Diagnostics preview helper
 # ---------------------------------------------------------------------------
@@ -256,6 +266,7 @@ def route_validation_failure(
 
 __all__ = [
     "ValidationFailureVerdict",
+    "compute_diagnostics_digest",
     "route_validation_failure",
     "validation_diagnostics_preview",
     "VALIDATION_INFRA_FAILURE_INSTRUCTION",

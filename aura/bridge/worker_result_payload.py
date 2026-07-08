@@ -129,6 +129,12 @@ def _build_worker_result_payload(
         extras["mismatch_question"] = mismatch.question_for_planner
 
     extras["validation_selector"] = validation_selector
+
+    # Include pre-existing validation failures discovered via attribution.
+    preexisting = getattr(relay, "preexisting_validation_failures", None)
+    if preexisting:
+        extras["preexisting_failures"] = list(preexisting)
+
     return summary, modified_files, extras, task_shape_summary
 
 
