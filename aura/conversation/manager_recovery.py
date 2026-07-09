@@ -132,11 +132,12 @@ def worker_recovery_block(
         state = syntax_repair_state_for_path(syntax_repair_required, target)
         repair_failed = bool(state.get("repair_failed"))
         error_msg = (
-            f"Python syntax is invalid in {target}. "
+            f"Syntax probe failed for {target}. "
             + (
                 "Syntax still fails after one repair attempt."
                 if repair_failed
-                else "Repair that file and pass py_compile before any unrelated tool call."
+                else "Repair that file before unrelated writes. "
+                "Aura will re-run the syntax probe after the next applied write."
             )
         )
         diagnostic = state.get("error", "")
@@ -148,9 +149,9 @@ def worker_recovery_block(
             error=error_msg,
             suggested_next_tool="patch_file",
             suggested_next_action=(
-                "Re-read the file, inspect proposed_context if present, then submit one corrected "
-                "patch_file transaction with the current expected_file_hash. Run py_compile after "
-                "the patch is applied."
+                "Re-read the file, inspect the diagnostic/context, and submit one corrected "
+                "patch_file transaction with the current expected_file_hash. "
+                "Aura will re-run the syntax probe after the next applied write."
             ),
             recoverable=not repair_failed,
         )
@@ -578,9 +579,9 @@ def update_worker_recovery_state(
             state["failed_repairs"] = int(state.get("failed_repairs", 0)) + 1
         parsed["suggested_next_tool"] = "patch_file"
         parsed["suggested_next_action"] = (
-            "Re-read the file, inspect proposed_context if present, then submit one corrected "
-            "patch_file transaction with the current expected_file_hash. Run py_compile after "
-            "the patch is applied."
+            "Re-read the file, inspect the diagnostic/context, and submit one corrected "
+            "patch_file transaction with the current expected_file_hash. "
+            "Aura will re-run the syntax probe after the next applied write."
         )
         if int(state.get("failed_repairs", 0)) > 1:
             parsed["recoverable"] = False
