@@ -94,6 +94,7 @@ class InfoHubPane(QWidget):
         self._log_view.setStyleSheet(
             f"background: transparent; color: {FG}; border: none; padding: 8px;"
         )
+        self._log_view.setPlaceholderText("Worker output will appear here.")
         log_layout.addWidget(self._log_view, 1)
         self._log_stream = WorkerLogStreamBuffer(self._append_worker_log_batch, parent=self)
         self._activity_entry_count = 0

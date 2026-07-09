@@ -20,10 +20,12 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QInputDialog,
+    QLabel,
     QMenu,
     QMessageBox,
     QPlainTextEdit,
     QSizePolicy,
+    QStackedWidget,
     QTabBar,
     QTabWidget,
     QToolButton,
@@ -37,7 +39,7 @@ from aura.gui.editor.diff_overlay import DiffOverlay
 from aura.gui.editor.edit_animation import EditAnimation
 from aura.gui.smooth_code_streamer import SmoothCodeStreamer
 from aura.gui.syntax import PygmentsHighlighter, language_from_path
-from aura.gui.theme import ACCENT, BG, BORDER, FG
+from aura.gui.theme import ACCENT, BG, BORDER, FG, FG_MUTED
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +66,32 @@ class CodeEditorPane(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        self._tabs = QTabWidget(self)
+        self._stack = QStackedWidget(self)
+        layout.addWidget(self._stack)
+
+        # Empty state page (index 0)
+        self._empty_state = QWidget(self._stack)
+        empty_layout = QVBoxLayout(self._empty_state)
+        empty_layout.setAlignment(Qt.AlignCenter)
+        empty_title = QLabel("No file open")
+        empty_title.setAlignment(Qt.AlignCenter)
+        empty_title.setStyleSheet(
+            f"color: {FG_MUTED}; font-size: 14px; font-weight: 600; background: transparent;"
+        )
+        empty_subtitle = QLabel(
+            "Open a file from the workspace tree, or let Aura write one."
+        )
+        empty_subtitle.setAlignment(Qt.AlignCenter)
+        empty_subtitle.setWordWrap(True)
+        empty_subtitle.setStyleSheet(
+            f"color: {FG_MUTED}; font-size: 11px; background: transparent;"
+        )
+        empty_layout.addWidget(empty_title)
+        empty_layout.addWidget(empty_subtitle)
+        self._stack.addWidget(self._empty_state)  # index 0
+
+        # Tab widget (index 1)
+        self._tabs = QTabWidget(self._stack)
         self._tabs.setMinimumSize(0, 0)
         self._tabs.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
@@ -72,7 +99,7 @@ class CodeEditorPane(QWidget):
         self._tabs.setTabsClosable(False)
         self._tabs.tabCloseRequested.connect(self._on_tab_close_requested)
         self._tabs.setStyleSheet(self._tab_widget_style())
-        layout.addWidget(self._tabs)
+        self._stack.addWidget(self._tabs)  # index 1
 
         # Internal tracking
         self._editors: dict[str, QPlainTextEdit] = {}
@@ -89,6 +116,9 @@ class CodeEditorPane(QWidget):
 
         self._ask_shortcut = QShortcut(QKeySequence("Ctrl+Shift+A"), self)
         self._ask_shortcut.activated.connect(self.ask_about_current_selection)
+
+        # Show empty state initially since there are no tabs
+        self._update_empty_state()
 
     # ------------------------------------------------------------------
     # Public API
@@ -133,6 +163,7 @@ class CodeEditorPane(QWidget):
         self._file_tabs[resolved] = editor
         self._editor_file_paths[editor] = resolved
         logger.info("Opened file for focused actions: %s", resolved)
+        self._update_empty_state()
 
     def open_or_focus_tab(self, tool_id: str, file_path: str) -> None:
         """Create a new tab for *file_path* or focus an existing one.
@@ -223,6 +254,8 @@ class CodeEditorPane(QWidget):
         streamer.finished.connect(
             lambda tid=tool_id: self._on_streamer_finished(tid)
         )
+
+        self._update_empty_state()
 
     def set_content(self, tool_id: str, content: str) -> None:
         """Immediately show full content for an existing worker tab."""
@@ -382,6 +415,7 @@ class CodeEditorPane(QWidget):
         while self._tabs.count() > 0:
             self._tabs.removeTab(0)
         self._tabs.blockSignals(False)
+        self._update_empty_state()
 
     def close_worker_tabs(self) -> None:
         """Remove streaming worker tabs while preserving user-opened file tabs."""
@@ -406,6 +440,7 @@ class CodeEditorPane(QWidget):
             self._editor_file_paths.pop(editor, None)
             self._detach_highlighter(editor)
         self._tabs.blockSignals(False)
+        self._update_empty_state()
 
     def ask_about_current_selection(self) -> None:
         editor = self._current_editor()
@@ -653,6 +688,8 @@ class CodeEditorPane(QWidget):
             self._editor_file_paths.pop(editor, None)
             self._detach_highlighter(editor)
 
+        self._update_empty_state()
+
     def _detach_highlighter(self, editor: QPlainTextEdit) -> None:
         highlighter = self._editor_highlighters.pop(editor, None)
         if highlighter is not None:
@@ -672,6 +709,11 @@ class CodeEditorPane(QWidget):
             return path.resolve().relative_to(self._workspace_root.resolve()).as_posix()
         except ValueError:
             return str(path)
+
+    def _update_empty_state(self) -> None:
+        """Show empty-state page when no tabs exist, tabs page otherwise."""
+        has_tabs = self._tabs.count() > 0
+        self._stack.setCurrentIndex(1 if has_tabs else 0)
 
     @staticmethod
     def _compute_animation_region(old: str, new: str) -> tuple[int, int, int, int]:
