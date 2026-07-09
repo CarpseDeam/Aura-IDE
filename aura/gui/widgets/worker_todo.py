@@ -40,13 +40,13 @@ class WorkerTodoWidget(QFrame):
 
     _COLOR_BY_STATUS = {
         "pending": FG_MUTED,
-        "active": ACCENT,
-        "done": FG_MUTED,
+        "active": WARN,
+        "done": SUCCESS,
     }
 
     _TEXT_COLOR_BY_STATUS = {
         "pending": FG_MUTED,
-        "active": FG,
+        "active": WARN,
         "done": FG_DIM,
     }
 
@@ -150,6 +150,7 @@ class WorkerTodoWidget(QFrame):
     def _create_row(self) -> _TodoRow:
         row_widget = QFrame(self._rows_host)
         row_widget.setFrameShape(QFrame.Shape.NoFrame)
+        row_widget.setStyleSheet("QFrame { background: transparent; }")
         row_layout = QHBoxLayout(row_widget)
         row_layout.setContentsMargins(0, 0, 0, 0)
         row_layout.setSpacing(6)
@@ -177,19 +178,7 @@ class WorkerTodoWidget(QFrame):
             row.icon.setText(self._ICON_BY_STATUS.get(status, "□"))
             row.icon.setStyleSheet(f"color: {color};")
             row.text.setStyleSheet(f"color: {text_color};")
-            font = row.text.font()
-            font.setStrikeOut(status == "done")
-            row.text.setFont(font)
             row.status = status
-            # Active gets an accent left edge; done/pending get no border
-            if status == "active":
-                row.widget.setStyleSheet(
-                    f"QFrame {{ background: transparent; border-left: 3px solid {ACCENT}; padding-left: 6px; }}"
-                )
-            else:
-                row.widget.setStyleSheet(
-                    "QFrame { background: transparent; border-left: none; }"
-                )
         if row.text_value != text:
             row.text.setText(text)
             row.text_value = text

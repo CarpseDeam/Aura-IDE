@@ -8,6 +8,7 @@ from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QGuiApplication, QIcon
 from PySide6.QtWidgets import (
     QHBoxLayout,
+    QLabel,
     QPlainTextEdit,
     QPushButton,
     QSizePolicy,
@@ -21,7 +22,7 @@ from aura.config import media_path
 from aura.gui.cards._helpers import _mono_font
 from aura.gui.cards.diff_card import DiffCard
 from aura.gui.cards.error_card import ErrorCard
-from aura.gui.theme import ACCENT, BG, BG_RAISED, BORDER, FG
+from aura.gui.theme import ACCENT, BG, BG_RAISED, BORDER, FG, FG_MUTED, SUCCESS
 from aura.gui.widgets.worker_todo import WorkerTodoWidget
 from aura.gui.worker_log_stream import WorkerLogStreamBuffer
 
@@ -60,13 +61,7 @@ class InfoHubPane(QWidget):
         )
         self._tabs.setStyleSheet(self._tab_widget_style())
 
-        # Stop Worker button in worker log footer
-        self._stop_worker_btn = QPushButton("Stop Worker")
-        self._stop_worker_btn.setObjectName("danger")
-        self._stop_worker_btn.setMinimumSize(44, 36)
-        self._stop_worker_btn.setVisible(False)
-        self._stop_worker_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._stop_worker_btn.clicked.connect(self._on_stop_worker_clicked)
+
 
         layout.addWidget(self._tabs)
 
@@ -81,6 +76,45 @@ class InfoHubPane(QWidget):
         log_layout.setContentsMargins(0, 0, 0, 0)
         log_layout.setSpacing(0)
 
+        # Worker Log header row
+        self._log_header = QWidget(self._log_tab)
+        header_layout = QHBoxLayout(self._log_header)
+        header_layout.setContentsMargins(10, 4, 10, 4)
+        header_layout.setSpacing(8)
+
+        # Title
+        header_title = QLabel("WORKER LOG")
+        header_title.setObjectName("paneTitleWorkspace")
+        header_layout.addWidget(header_title)
+
+        # Status chip
+        self._status_chip = QLabel("")
+        self._status_chip.setObjectName("workerLogStatusChip")
+        header_layout.addWidget(self._status_chip)
+
+        header_layout.addStretch(1)
+
+        # Copy Receipt button — shown after a final summary exists
+        self._copy_receipt_btn = QPushButton("Copy Receipt")
+        self._copy_receipt_btn.setObjectName("primary")
+        self._copy_receipt_btn.setMinimumSize(44, 36)
+        self._copy_receipt_btn.setVisible(False)
+        self._copy_receipt_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._copy_receipt_btn.clicked.connect(self._on_header_copy_receipt)
+        header_layout.addWidget(self._copy_receipt_btn)
+
+        # Stop Worker button
+        self._stop_worker_btn = QPushButton("Stop Worker")
+        self._stop_worker_btn.setObjectName("danger")
+        self._stop_worker_btn.setMinimumSize(44, 36)
+        self._stop_worker_btn.setVisible(False)
+        self._stop_worker_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._stop_worker_btn.clicked.connect(self._on_stop_worker_clicked)
+        header_layout.addWidget(self._stop_worker_btn)
+
+        # Insert header at the top of the log tab layout
+        log_layout.insertWidget(0, self._log_header, 0)
+
         self._todo_widget = WorkerTodoWidget(self._log_tab)
         log_layout.addWidget(self._todo_widget, 0)
 
@@ -91,6 +125,7 @@ class InfoHubPane(QWidget):
         self._log_view.setFont(_mono_font(10))
         self._log_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
         self._log_view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._log_view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self._log_view.setStyleSheet(
             f"background: transparent; color: {FG}; border: none; padding: 8px;"
         )
@@ -98,6 +133,7 @@ class InfoHubPane(QWidget):
         log_layout.addWidget(self._log_view, 1)
         self._log_stream = WorkerLogStreamBuffer(self._append_worker_log_batch, parent=self)
         self._activity_entry_count = 0
+        self._receipt_text: str = ""
 
         # Dynamic cards area (diff cards, error cards)
         self._cards_layout = QVBoxLayout()
@@ -105,21 +141,13 @@ class InfoHubPane(QWidget):
         self._cards_layout.setSpacing(6)
         log_layout.addLayout(self._cards_layout, 0)
 
-        # Worker footer bar with Stop Worker button
-        self._worker_footer = QWidget(self._log_tab)
-        footer_layout = QHBoxLayout(self._worker_footer)
-        footer_layout.setContentsMargins(8, 4, 8, 4)
-        footer_layout.setSpacing(0)
-        footer_layout.addWidget(self._stop_worker_btn)
-        footer_layout.addStretch(1)
-        self._worker_footer.setVisible(False)
-        log_layout.addWidget(self._worker_footer, 0)
-        log_layout.setStretch(0, 0)
-        log_layout.setStretch(1, 1)
-        log_layout.setStretch(2, 0)
-        log_layout.setStretch(3, 0)
+        log_layout.setStretch(0, 0)  # header
+        log_layout.setStretch(1, 0)  # todo
+        log_layout.setStretch(2, 1)  # log view
+        log_layout.setStretch(3, 0)  # cards
 
         self._tabs.addTab(self._log_tab, "Worker Log")
+        self._tabs.tabBar().setVisible(False)
 
     # Public API — Worker Log
 
@@ -211,40 +239,24 @@ class InfoHubPane(QWidget):
         sb.setValue(sb.maximum())
 
         receipt_text = f"{'═' * 46}\n{prefix}\n{summary}\n{'═' * 46}"
+        self._receipt_text = receipt_text
+        self._copy_receipt_btn.setVisible(True)
+        self._status_chip.setText("● Receipt")
+        self._status_chip.setStyleSheet(f"color: {ACCENT}; font-size: 10px; font-weight: 600;")
 
-        # Compact copy-icon button in a right-aligned row
-        row = QWidget(self._log_tab)
-        row.setStyleSheet("background: transparent;")
-        row_layout = QHBoxLayout(row)
-        row_layout.setContentsMargins(0, 2, 8, 0)
-        row_layout.setSpacing(0)
+    def _on_header_copy_receipt(self) -> None:
+        """Copy the stored receipt text to clipboard and show brief Copied! feedback."""
+        if not self._receipt_text:
+            return
+        QGuiApplication.clipboard().setText(self._receipt_text)
+        original_text = self._copy_receipt_btn.text()
+        self._copy_receipt_btn.setText("Copied!")
+        self._copy_receipt_btn.setEnabled(False)
+        QTimer.singleShot(2000, lambda: self._reset_header_copy_btn(original_text))
 
-        row_layout.addStretch(1)
-
-        copy_btn = QToolButton(row)
-        copy_btn.setIcon(QIcon(str(media_path("copy-classic.svg"))))
-        copy_btn.setIconSize(QSize(16, 16))
-        copy_btn.setToolTip("Copy summary")
-        copy_btn.setStyleSheet(
-            f"QToolButton {{ border: none; border-radius: 3px; padding: 2px; }} "
-            f"QToolButton:hover {{ background: {BG_RAISED}; }}"
-        )
-        copy_btn.clicked.connect(lambda checked, b=copy_btn, r=receipt_text: self._on_copy_summary(b, r))
-        row_layout.addWidget(copy_btn)
-
-        self._cards_layout.addWidget(row)
-
-    def _on_copy_summary(self, btn: QToolButton, receipt_text: str) -> None:
-        QGuiApplication.clipboard().setText(receipt_text)
-        btn.setIcon(QIcon(str(media_path("check.svg"))))
-        btn.setText("")
-        btn.setToolTip("Copied!")
-        QTimer.singleShot(2000, lambda: self._reset_copy_summary_btn(btn))
-
-    def _reset_copy_summary_btn(self, btn: QToolButton) -> None:
-        btn.setIcon(QIcon(str(media_path("copy-classic.svg"))))
-        btn.setText("")
-        btn.setToolTip("Copy summary")
+    def _reset_header_copy_btn(self, original_text: str) -> None:
+        self._copy_receipt_btn.setText(original_text)
+        self._copy_receipt_btn.setEnabled(True)
 
     def clear(self) -> None:
         """Reset the Worker Log: clear text, activity, and dynamic cards."""
@@ -259,6 +271,10 @@ class InfoHubPane(QWidget):
         self._log_view.setPlainText("")
         self._activity_entry_count = 0
         self._todo_widget.clear()
+        self._copy_receipt_btn.setVisible(False)
+        self._receipt_text = ""
+        self._status_chip.setText("Idle")
+        self._status_chip.setStyleSheet(f"color: {FG_MUTED}; font-size: 10px;")
 
         # Remove all dynamic cards
         while self._cards_layout.count() > 0:
@@ -274,12 +290,15 @@ class InfoHubPane(QWidget):
 
     def set_worker_running(self, running: bool) -> None:
         """Show/hide the Stop Worker button based on worker running state."""
-        self._worker_footer.setVisible(running)
         self._stop_worker_btn.setVisible(running)
         if running:
             self._stop_worker_btn.setEnabled(True)
             self._stop_worker_btn.setText("Stop Worker")
+            self._status_chip.setText("● Live")
+            self._status_chip.setStyleSheet(f"color: {SUCCESS}; font-size: 10px; font-weight: 600;")
+            self._copy_receipt_btn.setVisible(False)
         else:
+            self._stop_worker_btn.setVisible(False)
             self._stop_worker_btn.setEnabled(True)
             self._stop_worker_btn.setText("Stop Worker")
 

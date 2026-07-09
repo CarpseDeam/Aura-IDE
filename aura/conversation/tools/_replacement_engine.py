@@ -1,4 +1,4 @@
-"""3-tier replacement matching engine: exact, line-exact, fuzzy."""
+"""Replacement matching engine: exact and line-exact apply tiers plus fuzzy diagnostics."""
 from __future__ import annotations
 
 import difflib
@@ -50,8 +50,8 @@ def _sanitize_edit_strings(old_str: str, new_str: str) -> tuple[str, str, bool]:
     return old, new, sanitized
 
 
-def _preview_block(text: str, limit: int = 160) -> str:
-    compact = text.replace("\r\n", "\n")
+def _preview_block(text: str, limit: int = 500) -> str:
+    compact = text.replace("\r\n", "\n").replace("\r", "\n")
     if len(compact) <= limit:
         return compact
     return compact[:limit] + "..."
@@ -158,13 +158,17 @@ def _span_line_number(text: str, offset: int) -> int:
     return text.count("\n", 0, offset) + 1
 
 
+def _repr_lines(lines: list[str]) -> str:
+    return "\n".join(repr(line) for line in lines)
+
+
 def _line_context(text: str, start: int, end: int, limit: int = 2) -> str:
     lines = text.replace("\r\n", "\n").replace("\r", "\n").splitlines()
     start_line = _span_line_number(text, start)
     end_line = _span_line_number(text, end)
     before = max(1, start_line - limit)
     after = min(len(lines), end_line + limit)
-    return "\n".join(lines[before - 1:after])
+    return _repr_lines(lines[before - 1:after])
 
 
 def _build_span_candidates(
@@ -208,7 +212,7 @@ def _build_line_candidates(
             {
                 "start_line": idx + 1,
                 "end_line": idx + window_len,
-                "text": "\n".join(file_lines[idx:idx + window_len]),
+                "text": _repr_lines(file_lines[idx:idx + window_len]),
             }
         )
         if len(candidates) >= limit:
@@ -225,15 +229,31 @@ def _not_found_replacement(
     old: str = "",
     sanitized: bool = False,
 ) -> dict[str, Any]:
+    old = old.replace("\r\n", "\n").replace("\r", "\n")
+    duplicate_hint = (
+        best_ratio >= 0.999
+        and len(nearest_candidates) > 1
+        and len({str(candidate.get("text", "")) for candidate in nearest_candidates}) == 1
+    )
+    if duplicate_hint:
+        error = (
+            "old_str appears more than once in the file. Add more surrounding "
+            "context so the old block uniquely identifies the target. Nearest "
+            "matching lines follow with exact whitespace rendered."
+        )
+    else:
+        error = (
+            "old_str was not found by exact or line-exact matching. Nearest "
+            "lines in the file follow with exact whitespace rendered. The old "
+            "block must reproduce those lines character for character, including "
+            "trailing spaces on lines that appear blank."
+        )
     result: dict[str, Any] = {
         "ok": False,
         "reason": "not_found",
         "match_tier": match_tier,
         "old": old,
-        "error": (
-            f"old_str not found in file. Best fuzzy match ratio: {best_ratio:.3f} "
-            f"(threshold: 0.75). Tried exact, line-exact, and fuzzy matching."
-        ),
+        "error": error,
         "best_fuzzy_ratio": round(best_ratio, 3),
         "best_ratio": round(best_ratio, 4),
         "nearest_candidates": nearest_candidates,
@@ -255,6 +275,7 @@ def _ambiguous_replacement(
     sanitized: bool,
     best_ratio: float | None = None,
 ) -> dict[str, Any]:
+    old = old.replace("\r\n", "\n").replace("\r", "\n")
     result: dict[str, Any] = {
         "ok": False,
         "reason": "ambiguous",
@@ -286,8 +307,8 @@ def apply_replacement_to_content(
 ) -> dict[str, Any]:
     """Apply one old/new replacement to an in-memory content string.
 
-    The matching tiers mirror edit_file: exact string, exact line window,
-    then whitespace-tolerant fuzzy line matching with ambiguity rejection.
+    Exact string and exact line-window matches may apply replacements. The
+    whitespace-tolerant fuzzy pass is diagnostic-only and feeds failure context.
     """
     if raw_first:
         raw_result = apply_replacement_to_content(
@@ -452,10 +473,17 @@ def apply_replacement_to_content(
 
     if line_matches:
         offsets = _line_offsets(lines_with_nl)
-        line_spans = [
-            (offsets[start], offsets[start + window_len])
-            for start in line_matches
-        ]
+        line_spans = []
+        for start in line_matches:
+            span_start = offsets[start]
+            span_end = offsets[start + window_len]
+            if (
+                not _match_old.endswith("\n")
+                and span_end > 0
+                and _match_content[span_end - 1] == "\n"
+            ):
+                span_end -= 1
+            line_spans.append((span_start, span_end))
         if occurrence is not None:
             if occurrence <= len(line_spans):
                 start, end = line_spans[occurrence - 1]
@@ -538,8 +566,7 @@ def apply_replacement_to_content(
                 sanitized=sanitized,
             )
 
-    # ---- Tier 3: Whitespace-agnostic fuzzy line matching ----
-    candidates: list[tuple[int, float]] = []
+    # ---- Diagnostic pass: whitespace-agnostic fuzzy line scoring ----
     best_ratio = 0.0
     all_near_matches: list[tuple[int, float]] = []
 
@@ -556,8 +583,6 @@ def apply_replacement_to_content(
             ).ratio()
             if ratio > best_ratio:
                 best_ratio = ratio
-            if ratio >= 0.75:
-                candidates.append((i, ratio))
             if ratio > 0.5:
                 all_near_matches.append((i, ratio))
 
@@ -569,118 +594,10 @@ def apply_replacement_to_content(
             window_len,
         )
 
-    if occurrence is not None and candidates:
-        if occurrence <= len(candidates):
-            start_idx, ratio = candidates[occurrence - 1]
-            start = _line_offsets(lines_with_nl)[start_idx]
-            end = _line_offsets(lines_with_nl)[start_idx + len(old_lines)]
-            if _crlf_present:
-                start = _map_offset_norm_to_orig(content, start)
-                end = _map_offset_norm_to_orig(content, end)
-            replacement = _replacement_for_span(
-                content,
-                start,
-                end,
-                new,
-                normalize_replacement_newlines=_use_normalize,
-            )
-            result = {
-                "ok": True,
-                "content": _replace_span(content, start, end, replacement),
-                "match_tier": "fuzzy",
-                "fuzzy_ratio": round(ratio, 3),
-                "occurrence_count": len(candidates),
-            }
-            if sanitized:
-                result["sanitized"] = True
-            return result
-        return _not_found_replacement(
-            best_ratio=best_ratio,
-            nearest_candidates=_build_nearest_candidates(),
-            match_tier="fuzzy",
-            occurrence_count=len(candidates),
-            old=old,
-            sanitized=sanitized,
-        )
-
-    if len(candidates) == 1:
-        start_idx, ratio = candidates[0]
-        offsets = _line_offsets(lines_with_nl)
-        start = offsets[start_idx]
-        end = offsets[start_idx + len(old_lines)]
-        if _crlf_present:
-            start = _map_offset_norm_to_orig(content, start)
-            end = _map_offset_norm_to_orig(content, end)
-        replacement = _replacement_for_span(
-            content,
-            start,
-            end,
-            new,
-            normalize_replacement_newlines=_use_normalize,
-        )
-        result = {
-            "ok": True,
-            "content": _replace_span(content, start, end, replacement),
-            "match_tier": "fuzzy",
-            "fuzzy_ratio": round(ratio, 3),
-        }
-        if sanitized:
-            result["sanitized"] = True
-        return result
-
-    if len(candidates) > 1:
-        max_ratio = max(r for _, r in candidates)
-        top_candidates = [(i, r) for i, r in candidates if max_ratio - r < 0.001]
-        if len(top_candidates) == 1:
-            start_idx = top_candidates[0][0]
-            offsets = _line_offsets(lines_with_nl)
-            start = offsets[start_idx]
-            end = offsets[start_idx + len(old_lines)]
-            if _crlf_present:
-                start = _map_offset_norm_to_orig(content, start)
-                end = _map_offset_norm_to_orig(content, end)
-            replacement = _replacement_for_span(
-                content,
-                start,
-                end,
-                new,
-                normalize_replacement_newlines=_use_normalize,
-            )
-            result = {
-                "ok": True,
-                "content": _replace_span(content, start, end, replacement),
-                "match_tier": "fuzzy",
-                "fuzzy_ratio": round(max_ratio, 3),
-            }
-            if sanitized:
-                result["sanitized"] = True
-            return result
-
-        line_count = len(old_lines)
-        lines_detail = "\n".join(
-            f"  Candidate {j+1}: lines {start+1}-{start+line_count}"
-            for j, (start, _) in enumerate(top_candidates)
-        )
-        error_msg = (
-            f"ambiguous: old_str matches {len(top_candidates)} blocks "
-            f"in the file (best ratio: {max_ratio:.3f}).\n"
-            f"{lines_detail}\n"
-            f"old_str does not uniquely identify the target. "
-            f"Add more surrounding context lines to disambiguate."
-        )
-        return _ambiguous_replacement(
-            error=error_msg,
-            match_tier="fuzzy",
-            occurrence_count=len(top_candidates),
-            nearest_candidates=_build_nearest_candidates(),
-            old=old,
-            sanitized=sanitized,
-            best_ratio=max_ratio,
-        )
-
     return _not_found_replacement(
         best_ratio=best_ratio,
         nearest_candidates=_build_nearest_candidates(),
+        match_tier="fuzzy",
         old=old,
         sanitized=sanitized,
     )

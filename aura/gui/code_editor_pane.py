@@ -460,6 +460,7 @@ class CodeEditorPane(QWidget):
         editor.setCursorWidth(2)
         editor.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
         editor.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        editor.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         editor.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         editor.customContextMenuRequested.connect(
             lambda pos, e=editor: self._on_editor_context_menu(e, pos)

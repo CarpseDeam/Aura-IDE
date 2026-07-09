@@ -1,12 +1,11 @@
 """Approval-gated write helpers for write_file and patch_file."""
 from __future__ import annotations
 
-from pathlib import Path
 import hashlib
+from pathlib import Path
 from typing import Any
 
-from aura.conversation.tools._replacement_engine import apply_replacement_to_content, _preview_block, _sanitize_edit_strings
-
+from aura.conversation.tools._replacement_engine import _preview_block, apply_replacement_to_content
 from aura.conversation.tools.fs_read import read_file_snapshot
 from aura.paths import safe_is_relative_to, safe_relative_to
 
@@ -441,7 +440,13 @@ def propose_edit(
     except UnicodeDecodeError:
         return _failure_payload(workspace_root, target, "file is not valid UTF-8 text", "internal_error")
 
-    match = apply_replacement_to_content(original, old_str, new_str)
+    match = apply_replacement_to_content(
+        original,
+        old_str,
+        new_str,
+        raw_first=True,
+        exact_duplicates_are_ambiguous=True,
+    )
     if match.get("ok"):
         result: dict[str, Any] = {
             "ok": True,

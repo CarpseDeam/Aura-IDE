@@ -146,6 +146,7 @@ class WorkspaceTree(QWidget):
         self._view.doubleClicked.connect(self._on_double_clicked)
 
         self._view.setStyleSheet("QTreeView#workspaceTree { border: none; }")
+        self._view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
         # Show only the file name column (size/type/date are noise here).
         for col in range(1, 4):
