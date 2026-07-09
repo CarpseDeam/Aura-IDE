@@ -25,6 +25,7 @@ from aura.conversation.path_utils import (
 from aura.conversation.path_utils import (
     normalize_worker_path as _normalize_worker_path,
 )
+from aura.conversation.syntax_probe_state import run_post_write_probe
 from aura.conversation.syntax_repair_state import (
     discard_syntax_validation_path,
     pop_syntax_repair_state,
@@ -439,6 +440,10 @@ def update_worker_recovery_state(
                 set_syntax_repair_state(syntax_repair_required, path, state)
                 if not _is_validation_scratch_path(path):
                     syntax_validation_required.add(path)
+            # Run post-write syntax probe for the written file.
+            run_post_write_probe(
+                workspace_root, path, syntax_repair_required, syntax_validation_required
+            )
         return content
 
     if name in ("edit_file", "edit_symbol", "edit_line_range", "apply_edit_transaction"):
