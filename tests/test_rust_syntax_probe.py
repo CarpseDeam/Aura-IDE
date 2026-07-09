@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import json
 import subprocess
+from pathlib import Path
 from unittest.mock import patch
 
 from aura.syntax_probe.rust_probe import RustSyntaxProbe
-
 
 _PRIMARY_ERROR_JSON = json.dumps({
     "reason": "compiler-message",
@@ -17,7 +17,7 @@ _PRIMARY_ERROR_JSON = json.dumps({
         "rendered": "error[E0308]: expected `;`\n --> src/main.rs:2:13\n",
         "spans": [
             {
-                "file_name": "/fake/src/main.rs",
+                "file_name": "src/main.rs",
                 "is_primary": True,
                 "line_start": 2,
                 "line_end": 2,
@@ -38,7 +38,7 @@ _OTHER_FILE_ERROR_JSON = json.dumps({
         "rendered": "error[E0425]: cannot find `foo`\n",
         "spans": [
             {
-                "file_name": "/fake/src/lib.rs",
+                "file_name": "src/lib.rs",
                 "is_primary": True,
                 "line_start": 3,
                 "line_end": 3,
@@ -86,30 +86,108 @@ class TestRustSyntaxProbe:
         fake_proc = subprocess.CompletedProcess(
             args=[], returncode=0, stdout="", stderr=""
         )
-        result = probe._parse_cargo_output(fake_proc, "/fake/main.rs")
+        result = probe._parse_cargo_output(fake_proc, "/fake/main.rs", Path("/fake"))
         assert result.evidence == "pass"
 
-    def test_parser_extracts_fail_for_target_file(self) -> None:
+    def test_parser_extracts_fail_for_target_file(self, tmp_path) -> None:
         probe = RustSyntaxProbe()
+        crate_root = tmp_path
+        target = str(crate_root / "src" / "main.rs")
         fake_proc = subprocess.CompletedProcess(
             args=[],
             returncode=0,
             stdout=_PRIMARY_ERROR_JSON + "\n",
             stderr="",
         )
-        result = probe._parse_cargo_output(fake_proc, "/fake/src/main.rs")
+        result = probe._parse_cargo_output(fake_proc, target, crate_root)
         assert result.evidence == "fail"
         assert result.failure_class == "syntax_invalid"
         assert result.line == 2
         assert result.column == 13
 
-    def test_parser_ignores_errors_for_other_files(self) -> None:
+    def test_parser_ignores_errors_for_other_files(self, tmp_path) -> None:
         probe = RustSyntaxProbe()
+        crate_root = tmp_path
+        target = str(crate_root / "src" / "main.rs")
         fake_proc = subprocess.CompletedProcess(
             args=[],
             returncode=0,
             stdout=_OTHER_FILE_ERROR_JSON + "\n",
             stderr="",
         )
-        result = probe._parse_cargo_output(fake_proc, "/fake/src/main.rs")
+        result = probe._parse_cargo_output(fake_proc, target, crate_root)
+        assert result.evidence == "no_evidence"
+
+
+    def test_parser_matches_relative_span_path(self, tmp_path) -> None:
+        """A relative span file_name is resolved against crate_root."""
+        probe = RustSyntaxProbe()
+        crate_root = tmp_path
+        target = str(crate_root / "src" / "main.rs")
+        relative_error = json.dumps({
+            "reason": "compiler-message",
+            "package_id": "test@0.1.0",
+            "target": {"kind": ["lib"], "name": "test"},
+            "message": {
+                "level": "error",
+                "message": "expected `;`",
+                "rendered": "error[E0308]: expected `;`\n --> src/main.rs:2:13\n",
+                "spans": [
+                    {
+                        "file_name": "src/main.rs",
+                        "is_primary": True,
+                        "line_start": 2,
+                        "line_end": 2,
+                        "column_start": 13,
+                        "column_end": 13,
+                    }
+                ],
+            },
+        })
+        fake_proc = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=relative_error + "\n",
+            stderr="",
+        )
+        result = probe._parse_cargo_output(fake_proc, target, crate_root)
+        assert result.evidence == "fail"
+        assert result.failure_class == "syntax_invalid"
+        assert result.line == 2
+        assert result.column == 13
+
+    def test_parser_nonzero_with_no_parseable_error_returns_no_evidence(self) -> None:
+        """Nonzero returncode with empty stdout yields no_evidence."""
+        probe = RustSyntaxProbe()
+        fake_proc = subprocess.CompletedProcess(
+            args=[], returncode=101, stdout="", stderr=""
+        )
+        result = probe._parse_cargo_output(fake_proc, "/fake/src/main.rs", Path("/fake"))
+        assert result.evidence == "no_evidence"
+
+    def test_parser_nonzero_with_malformed_json_returns_no_evidence(self) -> None:
+        """Nonzero returncode with unparseable stdout yields no_evidence."""
+        probe = RustSyntaxProbe()
+        fake_proc = subprocess.CompletedProcess(
+            args=[], returncode=101, stdout="not json\n{invalid\n", stderr=""
+        )
+        result = probe._parse_cargo_output(fake_proc, "/fake/src/main.rs", Path("/fake"))
+        assert result.evidence == "no_evidence"
+
+    def test_parser_nonzero_with_non_error_json_returns_no_evidence(self) -> None:
+        """Nonzero returncode with non-error JSON yields no_evidence."""
+        probe = RustSyntaxProbe()
+        fake_proc = subprocess.CompletedProcess(
+            args=[], returncode=101,
+            stdout='{"reason":"build-finished","success":false}\n',
+            stderr="",
+        )
+        result = probe._parse_cargo_output(fake_proc, "/fake/src/main.rs", Path("/fake"))
+        assert result.evidence == "no_evidence"
+
+    def test_outside_workspace_path_returns_no_evidence(self, tmp_path) -> None:
+        """A file outside the workspace root gets no_evidence."""
+        probe = RustSyntaxProbe()
+        outside = str(tmp_path / ".." / "sibling" / "file.rs")
+        result = probe.check(tmp_path, outside)
         assert result.evidence == "no_evidence"

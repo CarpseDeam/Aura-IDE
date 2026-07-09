@@ -4,6 +4,10 @@ from pathlib import Path
 
 from aura.syntax_probe.protocol import SyntaxProbe
 from aura.syntax_probe.python_probe import PythonSyntaxProbe
+from aura.syntax_probe.rust_probe import RustSyntaxProbe
+from aura.syntax_probe.json_probe import JSONSyntaxProbe
+from aura.syntax_probe.toml_probe import TOMLSyntaxProbe
+from aura.syntax_probe.yaml_probe import YAMLSyntaxProbe
 from aura.syntax_probe.registry import REGISTRY, get_probe, register_probe
 
 
@@ -14,9 +18,25 @@ class TestRegistry:
         probe = get_probe("foo.py")
         assert probe is PythonSyntaxProbe
 
-    def test_get_probe_rs_returns_none(self) -> None:
+    def test_get_probe_rs_returns_rust_probe(self) -> None:
         probe = get_probe("foo.rs")
-        assert probe is None
+        assert probe is RustSyntaxProbe
+
+    def test_get_probe_json_returns_json_probe(self) -> None:
+        probe = get_probe("foo.json")
+        assert probe is JSONSyntaxProbe
+
+    def test_get_probe_toml_returns_toml_probe(self) -> None:
+        probe = get_probe("foo.toml")
+        assert probe is TOMLSyntaxProbe
+
+    def test_get_probe_yaml_returns_yaml_probe(self) -> None:
+        probe = get_probe("foo.yaml")
+        assert probe is YAMLSyntaxProbe
+
+    def test_get_probe_yml_returns_yaml_probe(self) -> None:
+        probe = get_probe("foo.yml")
+        assert probe is YAMLSyntaxProbe
 
     def test_last_registered_wins(self) -> None:
         class FakePyProbe(SyntaxProbe):

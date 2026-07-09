@@ -12,6 +12,22 @@ from aura.syntax_probe.models import SyntaxProbeResult
 from aura.syntax_probe.protocol import SyntaxProbe
 
 
+def _resolve_span_path(span_path: str, crate_root: Path) -> Path | None:
+    """Resolve a Cargo compiler span file_name to an absolute path.
+
+    Returns the resolved absolute path for absolute *span_path*, or
+    ``crate_root / span_path`` resolved for relative paths.
+    Returns ``None`` on any resolution error (OSError, ValueError).
+    """
+    try:
+        p = Path(span_path)
+        if p.is_absolute():
+            return p.resolve()
+        return (crate_root / span_path).resolve()
+    except (OSError, ValueError):
+        return None
+
+
 class RustSyntaxProbe(SyntaxProbe):
     """Syntax probe for Rust files via cargo check JSON output."""
 
@@ -101,10 +117,10 @@ class RustSyntaxProbe(SyntaxProbe):
                 error=str(e),
             )
 
-        return self._parse_cargo_output(proc, path_str)
+        return self._parse_cargo_output(proc, path_str, crate_root)
 
     def _parse_cargo_output(
-        self, proc: subprocess.CompletedProcess, path_str: str
+        self, proc: subprocess.CompletedProcess, path_str: str, crate_root: Path
     ) -> SyntaxProbeResult:
         """Parse ``cargo check --message-format=json`` output.
 
@@ -146,7 +162,8 @@ class RustSyntaxProbe(SyntaxProbe):
                 if span.get("is_primary") is not True:
                     continue
                 span_path = span.get("file_name", "")
-                if os.path.normpath(span_path) == target_path:
+                resolved = _resolve_span_path(span_path, crate_root)
+                if resolved is not None and os.path.normpath(str(resolved)) == target_path:
                     return SyntaxProbeResult(
                         path=path_str,
                         language_id=self.language_id,
@@ -161,6 +178,15 @@ class RustSyntaxProbe(SyntaxProbe):
 
         # No primary error span for this file found.
         if had_any_error:
+            return SyntaxProbeResult(
+                path=path_str,
+                language_id=self.language_id,
+                evidence="no_evidence",
+            )
+
+        # Nonzero exit with no parseable compiler-message errors — cargo
+        # failed but not on this file's syntax.
+        if proc.returncode != 0:
             return SyntaxProbeResult(
                 path=path_str,
                 language_id=self.language_id,
