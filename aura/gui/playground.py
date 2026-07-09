@@ -118,10 +118,6 @@ class AuraPlayground(QWidget):
         file_tree_layout.setContentsMargins(0, 0, 0, 0)
         file_tree_layout.setSpacing(0)
 
-        files_label = QLabel("FILES")
-        files_label.setObjectName("paneTitleFiles")
-        file_tree_layout.addWidget(files_label)
-
         self._tree = WorkspaceTree(None)
         file_tree_layout.addWidget(self._tree, 1)
 

@@ -33,7 +33,6 @@ from PySide6.QtWidgets import (
 )
 
 from aura.config import get_subprocess_kwargs, media_path
-from aura.gui.scrollbar_style import aura_scrollbar_qss
 
 # Mirrors the SKIP rules in conversation/tools/fs_read.py so the user sees
 # what the tools see — minus `.aura`, which we keep visible so backups are
@@ -134,7 +133,7 @@ class WorkspaceTree(QWidget):
         self._view = QTreeView(self)
         self._view.setModel(self._proxy)
         self._view.setObjectName("workspaceTree")
-        self._view.setHeaderHidden(False)
+        self._view.setHeaderHidden(True)
         self._view.setUniformRowHeights(True)
         self._view.setAnimated(False)
         self._view.setSortingEnabled(False)
@@ -144,13 +143,11 @@ class WorkspaceTree(QWidget):
         self._view.customContextMenuRequested.connect(self._on_context_menu)
         self._view.doubleClicked.connect(self._on_double_clicked)
 
-        self._view.setStyleSheet(
-            "QTreeView#workspaceTree { border: none; }\n"
-            + aura_scrollbar_qss("QTreeView#workspaceTree")
-        )
-        self._view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        self._view.setStyleSheet("QTreeView#workspaceTree { border: none; }")
+        self._view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
-        # Show only the file name column (size/type/date are noise here).
+        # The tree is a navigation list, so keep only the name column and hide
+        # the model header that would otherwise repeat "Name".
         for col in range(1, 4):
             self._view.setColumnHidden(col, True)
         header = self._view.header()
