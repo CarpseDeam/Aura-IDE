@@ -66,6 +66,21 @@ class EventRelayTerminalTracker:
         ):
             if key in parsed:
                 record[key] = parsed[key]
+        VALIDATION_TRUTH_FIELDS = (
+            "counts_as_validation",
+            "validation_classification",
+            "classification",
+            "counts_as_product_failure",
+            "command_outcome_classification",
+            "validation_traceback_detected",
+            "validation_was_timeout",
+            "validation_source",
+            "cwd",
+            "working_directory",
+        )
+        for key in VALIDATION_TRUTH_FIELDS:
+            if key in parsed:
+                record[key] = parsed[key]
         if tool_name == "run_terminal_command" and parsed.get("auto_validation"):
             record["auto_validation"] = True
 
