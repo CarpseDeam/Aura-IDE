@@ -286,6 +286,11 @@ QLabel#paneTitleDrones {{ color: {LABEL_DRONES}; font-size: 11px; font-weight: 6
 QLabel#threadTitle {{ color: {LABEL_THREAD}; font-size: 12px; }}
 QLabel#threadTitle:hover {{ color: {LABEL_THREAD_HOVER}; }}
 
+QWidget#workspaceHeader {{
+    background: transparent;
+    border-bottom: 1px solid {BORDER};
+}}
+
 QLabel#workspaceLabel {{
     color: {FG};
     padding: 4px 8px;
@@ -408,9 +413,9 @@ QToolButton#reasoningToggle:hover {{
 }}
 
 QToolButton#closeAllBtn, QToolButton#closeTerminalsBtn {{
-    background: transparent;
+    background: {BG_RAISED};
     color: {FG_DIM};
-    border: 1px solid transparent;
+    border: 1px solid {BORDER};
     border-radius: 4px;
     padding: 2px 8px;
     font-weight: 600;
@@ -418,8 +423,12 @@ QToolButton#closeAllBtn, QToolButton#closeTerminalsBtn {{
 }}
 QToolButton#closeAllBtn:hover, QToolButton#closeTerminalsBtn:hover {{
     background: {BG_HOVER};
-    border-color: {BORDER};
+    border-color: {BORDER_STRONG};
     color: {FG};
+}}
+QToolButton#closeAllBtn:pressed, QToolButton#closeTerminalsBtn:pressed {{
+    background: #1a1a20;
+    border-color: {ACCENT};
 }}
 
 

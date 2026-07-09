@@ -51,6 +51,7 @@ class AuraPlayground(QWidget):
 
         # Header
         header_container = QWidget(self)
+        header_container.setObjectName("workspaceHeader")
         header_layout = QHBoxLayout(header_container)
         header_layout.setContentsMargins(12, 0, 12, 4)
         header_layout.setSpacing(8)
@@ -65,6 +66,8 @@ class AuraPlayground(QWidget):
         self._close_all_btn.setText("Close All")
         self._close_all_btn.setObjectName("closeAllBtn")
         self._close_all_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._close_all_btn.setToolTip("Close all workspace tabs and clear worker output.")
+        self._close_all_btn.setAccessibleName("Close all workspace output")
         self._close_all_btn.clicked.connect(self.clear)
         header_layout.addWidget(self._close_all_btn)
 
