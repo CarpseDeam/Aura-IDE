@@ -131,5 +131,6 @@ class SettingsDialog(QDialog):
     def accept(self) -> None:  # type: ignore[override]
         new_settings = self.result_settings()
         save_settings(new_settings)
+        self._sandbox_page.apply_project_settings()
         self._settings = new_settings
         super().accept()

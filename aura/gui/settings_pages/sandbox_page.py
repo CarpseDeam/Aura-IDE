@@ -6,15 +6,22 @@ from typing import Callable
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QComboBox,
+    QFileDialog,
     QFormLayout,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPushButton,
     QVBoxLayout,
     QWidget,
 )
 
 from aura.config import AppSettings
+from aura.godot_toolchain import (
+    find_godot_project_root,
+    load_godot_executable_setting,
+    save_godot_executable_setting,
+)
 from aura.gui.theme import FG_DIM
 
 
@@ -29,6 +36,10 @@ class SandboxPage(QWidget):
         super().__init__(parent)
         self._settings = settings
         self._on_change_root = on_change_root
+        self._godot_project_root = (
+            find_godot_project_root(workspace_root) if workspace_root is not None else None
+        )
+        self._godot_executable_edit: QLineEdit | None = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -87,6 +98,21 @@ class SandboxPage(QWidget):
         ws_widget.setLayout(ws_row)
         form.addRow("Workspace root:", ws_widget)
 
+        if self._godot_project_root is not None:
+            godot_row = QHBoxLayout()
+            godot_row.setSpacing(8)
+            self._godot_executable_edit = QLineEdit()
+            self._godot_executable_edit.setText(
+                load_godot_executable_setting(self._godot_project_root) or ""
+            )
+            godot_row.addWidget(self._godot_executable_edit, 1)
+            browse_btn = QPushButton("Browse...")
+            browse_btn.clicked.connect(self._browse_godot_executable)
+            godot_row.addWidget(browse_btn)
+            godot_widget = QWidget()
+            godot_widget.setLayout(godot_row)
+            form.addRow("Godot executable:", godot_widget)
+
         # Backups info
         if workspace_root is not None:
             backup_path = workspace_root / ".aura" / "backups"
@@ -111,6 +137,38 @@ class SandboxPage(QWidget):
         if main_window is not None and hasattr(main_window, "_workspace_root"):
             new_root = getattr(main_window, "_workspace_root")
             self._ws_label.setText(str(new_root) if new_root else "(none)")
+            self._godot_project_root = (
+                find_godot_project_root(new_root) if new_root is not None else None
+            )
+            if self._godot_executable_edit is not None:
+                self._godot_executable_edit.setEnabled(self._godot_project_root is not None)
+                self._godot_executable_edit.setText(
+                    (load_godot_executable_setting(self._godot_project_root) or "")
+                    if self._godot_project_root is not None
+                    else ""
+                )
 
     def collect_settings(self, settings: AppSettings) -> None:
         settings.sandbox_mode = self._sandbox_combo.currentData()
+
+    def apply_project_settings(self) -> None:
+        if self._godot_project_root is None or self._godot_executable_edit is None:
+            return
+        save_godot_executable_setting(
+            self._godot_project_root,
+            self._godot_executable_edit.text(),
+        )
+
+    def _browse_godot_executable(self) -> None:
+        if self._godot_executable_edit is None:
+            return
+        current = self._godot_executable_edit.text().strip()
+        start = str(Path(current).parent) if current else str(Path.home() / "Desktop")
+        chosen, _ = QFileDialog.getOpenFileName(
+            self,
+            "Choose Godot executable",
+            start,
+            "Godot executable (*.exe);;All files (*)",
+        )
+        if chosen:
+            self._godot_executable_edit.setText(chosen)
