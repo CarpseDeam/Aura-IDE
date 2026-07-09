@@ -20,8 +20,24 @@ class PythonSyntaxProbe(SyntaxProbe):
     def check(
         self, workspace_root: str | Path, file_path: str | Path
     ) -> SyntaxProbeResult:
-        resolved = Path(workspace_root).resolve() / Path(file_path)
+        workspace_root_path = Path(workspace_root).resolve(strict=False)
+
+        if Path(file_path).is_absolute():
+            resolved = Path(file_path).resolve(strict=False)
+        else:
+            resolved = (workspace_root_path / file_path).resolve(strict=False)
+
         path_str = str(resolved)
+
+        # Verify resolved path is within the workspace boundary.
+        try:
+            resolved.relative_to(workspace_root_path)
+        except ValueError:
+            return SyntaxProbeResult(
+                path=path_str,
+                language_id=self.language_id,
+                evidence="no_evidence",
+            )
 
         if not resolved.is_file():
             return SyntaxProbeResult(
@@ -49,11 +65,8 @@ class PythonSyntaxProbe(SyntaxProbe):
             return SyntaxProbeResult(
                 path=path_str,
                 language_id=self.language_id,
-                evidence="fail",
+                evidence="no_evidence",
                 error=str(e),
-                line=getattr(e, "lineno", None),
-                column=getattr(e, "offset", None),
-                failure_class="syntax_invalid",
             )
 
         return SyntaxProbeResult(
