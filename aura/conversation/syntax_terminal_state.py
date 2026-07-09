@@ -4,10 +4,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from aura.conversation.terminal_syntax import (
-    is_py_compile_error,
-    py_compile_targets,
-)
 from aura.conversation.path_utils import (
     is_validation_scratch_path,
     normalize_worker_path,
@@ -15,8 +11,10 @@ from aura.conversation.path_utils import (
 from aura.conversation.syntax_repair_state import (
     discard_syntax_validation_path,
     pop_syntax_repair_state,
-    set_syntax_repair_state,
     syntax_repair_state_for_path,
+)
+from aura.conversation.terminal_syntax import (
+    py_compile_targets,
 )
 
 
@@ -56,18 +54,4 @@ def update_syntax_state_from_terminal(
             pop_syntax_repair_state(syntax_repair_required, path)
             discard_syntax_validation_path(syntax_validation_required, path)
         return
-    # Only Python compiler syntax output should trigger syntax repair state.
-    output = str(payload.get("output") or "")
-    if not is_py_compile_error(output):
-        return
-    for path in targets:
-        prior = syntax_repair_state_for_path(syntax_repair_required, path)
-        failed_after_repair = bool(
-            prior.get("repair_attempted") or prior.get("awaiting_validation")
-        )
-        set_syntax_repair_state(syntax_repair_required, path, {
-            "error": payload.get("output", ""),
-            "failed_repairs": int(prior.get("failed_repairs", 0)) + (1 if failed_after_repair else 0),
-            "repair_failed": failed_after_repair,
-        })
-        discard_syntax_validation_path(syntax_validation_required, path)
+
