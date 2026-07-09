@@ -15,14 +15,14 @@ from PySide6.QtWidgets import (  # pyright: ignore
     QWidget,
 )
 
-from aura.gui.theme import BG_ALT, BORDER, FG, FG_DIM, SUCCESS, WARN
+from aura.gui.theme import ACCENT, BG_ALT, BORDER, FG, FG_DIM, FG_MUTED, SUCCESS, WARN
 
 _log = logging.getLogger(__name__)
 
 
 @dataclass
 class _TodoRow:
-    widget: QWidget
+    widget: QFrame
     icon: QLabel
     text: QLabel
     status: str = ""
@@ -39,14 +39,14 @@ class WorkerTodoWidget(QFrame):
     }
 
     _COLOR_BY_STATUS = {
-        "pending": FG_DIM,
-        "active": WARN,
-        "done": SUCCESS,
+        "pending": FG_MUTED,
+        "active": ACCENT,
+        "done": FG_MUTED,
     }
 
     _TEXT_COLOR_BY_STATUS = {
-        "pending": FG_DIM,
-        "active": WARN,
+        "pending": FG_MUTED,
+        "active": FG,
         "done": FG_DIM,
     }
 
@@ -83,9 +83,9 @@ class WorkerTodoWidget(QFrame):
         layout.setContentsMargins(10, 6, 10, 6)
         layout.setSpacing(4)
 
-        title = QLabel("Worker TODO", self)
-        title.setObjectName("workerTodoTitle")
-        layout.addWidget(title)
+        self._title = QLabel("WORKER TODO", self)
+        self._title.setObjectName("workerTodoTitle")
+        layout.addWidget(self._title)
 
         self._rows_host = QWidget(self)
         self._rows_layout = QVBoxLayout(self._rows_host)
@@ -106,6 +106,11 @@ class WorkerTodoWidget(QFrame):
         if not items:
             self.clear()
             return
+
+        # Update progress title
+        done_count = sum(1 for item in items if item.get("status") == "done")
+        total = len(items)
+        self._title.setText(f"WORKER TODO \u00b7 {done_count}/{total}")
 
         item_ids = [str(item.get("id") or "") for item in items]
         live_ids = {item_id for item_id in item_ids if item_id}
@@ -143,7 +148,8 @@ class WorkerTodoWidget(QFrame):
         self.hide()
 
     def _create_row(self) -> _TodoRow:
-        row_widget = QWidget(self._rows_host)
+        row_widget = QFrame(self._rows_host)
+        row_widget.setFrameShape(QFrame.Shape.NoFrame)
         row_layout = QHBoxLayout(row_widget)
         row_layout.setContentsMargins(0, 0, 0, 0)
         row_layout.setSpacing(6)
@@ -175,6 +181,15 @@ class WorkerTodoWidget(QFrame):
             font.setStrikeOut(status == "done")
             row.text.setFont(font)
             row.status = status
+            # Active gets an accent left edge; done/pending get no border
+            if status == "active":
+                row.widget.setStyleSheet(
+                    f"QFrame {{ background: transparent; border-left: 3px solid {ACCENT}; padding-left: 6px; }}"
+                )
+            else:
+                row.widget.setStyleSheet(
+                    "QFrame { background: transparent; border-left: none; }"
+                )
         if row.text_value != text:
             row.text.setText(text)
             row.text_value = text
