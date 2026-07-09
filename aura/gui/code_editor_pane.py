@@ -8,7 +8,6 @@ as line-aware delete/retype transitions.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, Signal
@@ -37,6 +36,7 @@ from aura.focused_actions import ACTION_LABELS, build_prompt_for_action, is_edit
 from aura.gui.cards._helpers import _mono_font
 from aura.gui.editor.diff_overlay import DiffOverlay
 from aura.gui.editor.edit_animation import EditAnimation
+from aura.gui.scrollbar_style import aura_scrollbar_qss
 from aura.gui.smooth_code_streamer import SmoothCodeStreamer
 from aura.gui.syntax import PygmentsHighlighter, language_from_path
 from aura.gui.theme import ACCENT, BG, BORDER, FG, FG_MUTED
@@ -460,13 +460,21 @@ class CodeEditorPane(QWidget):
         editor.setCursorWidth(2)
         editor.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
         editor.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        editor.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        editor.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
         editor.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         editor.customContextMenuRequested.connect(
             lambda pos, e=editor: self._on_editor_context_menu(e, pos)
         )
         editor.setStyleSheet(
-            f"background: {BG}; color: {FG}; border: none; padding: 8px;"
+            f"""
+            QPlainTextEdit {{
+                background: {BG};
+                color: {FG};
+                border: none;
+                padding: 8px;
+            }}
+            {aura_scrollbar_qss("QPlainTextEdit")}
+            """
         )
         self._editor_file_paths[editor] = Path(file_path)
         return editor

@@ -225,29 +225,50 @@ QScrollArea {{
     border: none;
 }}
 QScrollBar:vertical {{
-    background: transparent;
+    background: rgba(0, 0, 0, 0.0);
     width: 10px;
     margin: 0;
+}}
+/* Subtle groove hint so the scrollbar track is visible even when the handle is at an extreme */
+QScrollBar:vertical::groove {{
+    background: rgba(255, 255, 255, 0.04);
+    border-radius: 4px;
 }}
 QScrollBar::handle:vertical {{
     background: {BORDER_STRONG};
     border-radius: 4px;
     min-height: 30px;
+    margin: 2px;
 }}
 QScrollBar::handle:vertical:hover {{
-    background: #3a4250;
+    background: #5a6480;
+}}
+QScrollBar::handle:vertical:pressed {{
+    background: #6e7a9a;
 }}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
     height: 0;
 }}
 QScrollBar:horizontal {{
-    background: transparent;
+    background: rgba(0, 0, 0, 0.0);
     height: 10px;
+    margin: 0;
+}}
+QScrollBar:horizontal::groove {{
+    background: rgba(255, 255, 255, 0.04);
+    border-radius: 4px;
 }}
 QScrollBar::handle:horizontal {{
     background: {BORDER_STRONG};
     border-radius: 4px;
     min-width: 30px;
+    margin: 2px;
+}}
+QScrollBar::handle:horizontal:hover {{
+    background: #5a6480;
+}}
+QScrollBar::handle:horizontal:pressed {{
+    background: #6e7a9a;
 }}
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
     width: 0;
@@ -326,17 +347,25 @@ QTreeView#workspaceTree QHeaderView::section:hover {{
     color: {FG};
 }}
 QTreeView#workspaceTree QScrollBar:vertical {{
-    background: transparent;
+    background: rgba(0, 0, 0, 0.0);
     width: 10px;
     margin: 0;
+}}
+QTreeView#workspaceTree QScrollBar:vertical::groove {{
+    background: rgba(255, 255, 255, 0.04);
+    border-radius: 4px;
 }}
 QTreeView#workspaceTree QScrollBar::handle:vertical {{
     background: {BORDER_STRONG};
     border-radius: 4px;
     min-height: 30px;
+    margin: 2px;
 }}
 QTreeView#workspaceTree QScrollBar::handle:vertical:hover {{
-    background: #3a4250;
+    background: #5a6480;
+}}
+QTreeView#workspaceTree QScrollBar::handle:vertical:pressed {{
+    background: #6e7a9a;
 }}
 QTreeView#workspaceTree QScrollBar::add-line:vertical,
 QTreeView#workspaceTree QScrollBar::sub-line:vertical {{

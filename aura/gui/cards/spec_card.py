@@ -6,9 +6,7 @@ SpecCard reviews exactly one bounded Worker request — no campaign mode.
 
 from __future__ import annotations
 
-from typing import Any
-
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from aura.conversation.workflow_state import WorkflowState, WorkflowStatus
@@ -16,13 +14,52 @@ from aura.gui.cards._collapsible import _CollapsibleSection
 from aura.gui.cards._helpers import _MarkdownTextBlock
 from aura.gui.cards.dispatch_status_labels import spec_finished_label, spec_replay_finished_label
 from aura.gui.markdown_renderer import _render_markdown_with_code
-from aura.gui.theme import ACCENT, BG_ALT, BG_RAISED, BORDER, DANGER, FG, FG_DIM, FG_MUTED, SUCCESS, WARN
+from aura.gui.theme import (
+    ACCENT,
+    ACCENT_HOVER,
+    BG_ALT,
+    BG_RAISED,
+    BORDER,
+    BORDER_STRONG,
+    DANGER,
+    FG,
+    FG_DIM,
+    FG_MUTED,
+    SUCCESS,
+    WARN,
+)
 
 _CHIP_STYLE = (
     f"background: {BG_RAISED}; color: {FG_DIM}; "
     f"border: 1px solid {BORDER}; border-radius: 4px; "
     f"padding: 2px 8px; font-size: 10px; font-weight: 600;"
 )
+
+_DISPATCH_BUTTON_STYLE = f"""
+QPushButton#dispatchPrimary {{
+    background: {ACCENT};
+    color: #ffffff;
+    border: 1px solid {ACCENT_HOVER};
+    border-radius: 5px;
+    padding: 6px 14px;
+    font-weight: 700;
+}}
+QPushButton#dispatchPrimary:hover {{
+    background: {ACCENT_HOVER};
+    color: #ffffff;
+    border-color: #c2d4ff;
+}}
+QPushButton#dispatchPrimary:pressed {{
+    background: #5f89dc;
+    color: #ffffff;
+    border-color: {ACCENT};
+}}
+QPushButton#dispatchPrimary:disabled {{
+    background: {BG_RAISED};
+    color: {FG_MUTED};
+    border-color: {BORDER_STRONG};
+}}
+"""
 
 _RISKY_KEYWORDS = [
     "auth", "subprocess", "thread", "qthread", "git",
@@ -222,7 +259,8 @@ class SpecCard(QFrame):
         btn_layout.setSpacing(10)
 
         dispatch_btn = QPushButton("Dispatch", parent=buttons_row)
-        dispatch_btn.setObjectName("primary")
+        dispatch_btn.setObjectName("dispatchPrimary")
+        dispatch_btn.setStyleSheet(_DISPATCH_BUTTON_STYLE)
         dispatch_btn.setMinimumHeight(34)
         dispatch_btn.setMinimumWidth(128)
         dispatch_btn.clicked.connect(self._on_dispatch)

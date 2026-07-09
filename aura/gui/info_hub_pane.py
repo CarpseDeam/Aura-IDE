@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import logging
 
-from PySide6.QtCore import QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QGuiApplication, QIcon
+from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -13,16 +13,15 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QTabWidget,
-    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
-from aura.config import media_path
 from aura.gui.cards._helpers import _mono_font
 from aura.gui.cards.diff_card import DiffCard
 from aura.gui.cards.error_card import ErrorCard
-from aura.gui.theme import ACCENT, BG, BG_RAISED, BORDER, FG, FG_MUTED, SUCCESS
+from aura.gui.scrollbar_style import aura_scrollbar_qss
+from aura.gui.theme import ACCENT, BG, BORDER, FG, FG_MUTED, SUCCESS
 from aura.gui.widgets.worker_todo import WorkerTodoWidget
 from aura.gui.worker_log_stream import WorkerLogStreamBuffer
 
@@ -125,9 +124,17 @@ class InfoHubPane(QWidget):
         self._log_view.setFont(_mono_font(10))
         self._log_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
         self._log_view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self._log_view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._log_view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
         self._log_view.setStyleSheet(
-            f"background: transparent; color: {FG}; border: none; padding: 8px;"
+            f"""
+            QPlainTextEdit {{
+                background: transparent;
+                color: {FG};
+                border: none;
+                padding: 8px;
+            }}
+            {aura_scrollbar_qss("QPlainTextEdit")}
+            """
         )
         self._log_view.setPlaceholderText("Worker output will appear here.")
         log_layout.addWidget(self._log_view, 1)
