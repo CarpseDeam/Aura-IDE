@@ -291,6 +291,58 @@ QWidget#workspaceHeader {{
     border-bottom: 1px solid {BORDER};
 }}
 
+QTreeView#workspaceTree {{
+    border: none;
+    background: transparent;
+    outline: none;
+}}
+QTreeView#workspaceTree::item {{
+    padding: 4px 6px;
+    color: {FG};
+    min-height: 22px;
+}}
+QTreeView#workspaceTree::item:selected {{
+    background: rgba(122, 162, 247, 0.15);
+    color: {FG};
+}}
+QTreeView#workspaceTree::item:selected:focus {{
+    background: rgba(122, 162, 247, 0.18);
+    color: {FG};
+}}
+QTreeView#workspaceTree::item:hover {{
+    background: {BG_HOVER};
+}}
+QTreeView#workspaceTree QHeaderView::section {{
+    background: transparent;
+    color: {FG_DIM};
+    border: none;
+    border-bottom: 1px solid {BORDER};
+    padding: 2px 6px;
+    font-weight: 600;
+    font-size: 11px;
+    text-transform: uppercase;
+}}
+QTreeView#workspaceTree QHeaderView::section:hover {{
+    color: {FG};
+}}
+QTreeView#workspaceTree QScrollBar:vertical {{
+    background: transparent;
+    width: 10px;
+    margin: 0;
+}}
+QTreeView#workspaceTree QScrollBar::handle:vertical {{
+    background: {BORDER_STRONG};
+    border-radius: 4px;
+    min-height: 30px;
+}}
+QTreeView#workspaceTree QScrollBar::handle:vertical:hover {{
+    background: #3a4250;
+}}
+QTreeView#workspaceTree QScrollBar::add-line:vertical,
+QTreeView#workspaceTree QScrollBar::sub-line:vertical {{
+    height: 0;
+}}
+
 QLabel#workspaceLabel {{
     color: {FG};
     padding: 4px 8px;

@@ -134,6 +134,7 @@ class WorkspaceTree(QWidget):
 
         self._view = QTreeView(self)
         self._view.setModel(self._proxy)
+        self._view.setObjectName("workspaceTree")
         self._view.setHeaderHidden(False)
         self._view.setUniformRowHeights(True)
         self._view.setAnimated(False)
@@ -144,10 +145,7 @@ class WorkspaceTree(QWidget):
         self._view.customContextMenuRequested.connect(self._on_context_menu)
         self._view.doubleClicked.connect(self._on_double_clicked)
 
-        self._view.setStyleSheet(
-            "QTreeView { border: none; background: transparent; } "
-            "QTreeView::item { padding: 4px 6px; }"
-        )
+        self._view.setStyleSheet("QTreeView#workspaceTree { border: none; }")
 
         # Show only the file name column (size/type/date are noise here).
         for col in range(1, 4):
