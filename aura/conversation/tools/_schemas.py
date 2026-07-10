@@ -62,6 +62,18 @@ READ_TOOL_DEFS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "inspect_godot_asset_preview",
+            "description": (
+                "Inspect AuraPreview in the scene currently open in Godot. Returns catalog identities, "
+                "transforms, semantic roles, and conservative footprint-overlap diagnostics. This is read-only. "
+                "Use it after edit_godot_asset_preview and before deciding on the next spatial revision."
+            ),
+            "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "inspect_godot_editor",
             "description": (
                 "Inspect the scene currently open in the live Godot editor. Returns the exact scene tree, "
@@ -1140,6 +1152,50 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
                                 },
                             },
                             "required": ["action"],
+                            "additionalProperties": False,
+                        },
+                    },
+                },
+                "required": ["action"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "edit_godot_asset_preview",
+            "description": (
+                "Safely assemble catalog-approved PackedScenes beneath a dedicated AuraPreview Node3D in the "
+                "scene currently open in Godot, or clear its children. Every call is approval-gated and one "
+                "Godot UndoRedo action. Asset IDs must come from inspect_godot_assets; arbitrary resource paths "
+                "are not accepted. This never saves the scene automatically. Inspect the preview afterward."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["instantiate", "clear"]},
+                    "label": {"type": "string", "description": "Undo-history label."},
+                    "placements": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 64,
+                        "description": "Required for instantiate and ignored for clear.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "asset_id": {"type": "string"},
+                                "domain": {"type": "string", "description": "Required only if the ID is ambiguous."},
+                                "name": {"type": "string", "description": "Optional unique node name."},
+                                "position": {
+                                    "type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3
+                                },
+                                "rotation_degrees_y": {"type": "number", "default": 0},
+                                "scale": {
+                                    "type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3
+                                },
+                            },
+                            "required": ["asset_id"],
                             "additionalProperties": False,
                         },
                     },

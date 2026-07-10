@@ -27,7 +27,7 @@ func capture(params: Dictionary) -> Dictionary:
 	var nodes: Array[Dictionary] = []
 	var queue: Array[Node] = [root]
 	while not queue.is_empty() and nodes.size() < max_nodes:
-		var node := queue.pop_front()
+		var node: Node = queue.pop_front()
 		nodes.append(_describe_node(root, node, selected_ids, include_properties))
 		for child in node.get_children():
 			queue.append(child)
@@ -46,7 +46,7 @@ func capture(params: Dictionary) -> Dictionary:
 
 func _describe_node(root: Node, node: Node, selected_ids: Dictionary, include_properties: bool) -> Dictionary:
 	var path := str(root.get_path_to(node))
-	var owner_path = null
+	var owner_path: Variant = null
 	if node.owner != null and (root.is_ancestor_of(node.owner) or node.owner == root):
 		owner_path = str(root.get_path_to(node.owner))
 	var result := {

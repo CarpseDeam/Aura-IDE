@@ -9,6 +9,7 @@ from aura.codebase_index.tool import search_codebase as _search_codebase  # noqa
 from aura.conversation.tools._code_intel_mixin import CodeIntelHandlersMixin
 from aura.conversation.tools._diagnostic_mixin import DiagnosticHandlersMixin
 from aura.conversation.tools._git_mixin import GitHandlersMixin
+from aura.conversation.tools._godot_asset_preview_mixin import GodotAssetPreviewHandlersMixin
 from aura.conversation.tools._godot_assets_mixin import GodotAssetHandlersMixin
 from aura.conversation.tools._godot_editor_mixin import GodotEditorHandlersMixin
 from aura.conversation.tools._godot_scene_mixin import GodotSceneHandlersMixin
@@ -58,6 +59,7 @@ class ToolRegistry(
     SearchHandlersMixin,
     GitHandlersMixin,
     GodotAssetHandlersMixin,
+    GodotAssetPreviewHandlersMixin,
     GodotEditorHandlersMixin,
     GodotSceneHandlersMixin,
     WriteHandlersMixin,
@@ -205,8 +207,10 @@ TOOL_HANDLERS["delete_file"] = ToolRegistry._handle_delete_file
 TOOL_HANDLERS["patch_file"] = ToolRegistry._handle_patch_file
 TOOL_HANDLERS["edit_godot_scene"] = ToolRegistry._handle_edit_godot_scene
 TOOL_HANDLERS["inspect_godot_assets"] = ToolRegistry._handle_inspect_godot_assets
+TOOL_HANDLERS["inspect_godot_asset_preview"] = ToolRegistry._handle_inspect_godot_asset_preview
 TOOL_HANDLERS["inspect_godot_editor"] = ToolRegistry._handle_inspect_godot_editor
 TOOL_HANDLERS["edit_godot_editor"] = ToolRegistry._handle_edit_godot_editor
+TOOL_HANDLERS["edit_godot_asset_preview"] = ToolRegistry._handle_edit_godot_asset_preview
 TOOL_HANDLERS["install_godot_editor_bridge"] = ToolRegistry._handle_install_godot_editor_bridge
 TOOL_HANDLERS["update_worker_todo"] = ToolRegistry._handle_update_worker_todo
 

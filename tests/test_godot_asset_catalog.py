@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 from aura.conversation.tools._types import ApprovalDecision
 from aura.conversation.tools.registry import ToolRegistry
 from aura.godot_assets import inspect_godot_assets
+from aura.godot_assets.preview import analyze_preview_snapshot
 
 
 def _project(tmp_path: Path, entries: list[dict]) -> tuple[Path, Path]:
@@ -109,3 +111,73 @@ def test_tool_is_read_only_and_available_to_planner(tmp_path: Path) -> None:
     assert "inspect_godot_assets" in names
     assert result.ok is True
     assert result.payload["assets"][0]["id"] == "wall"
+
+
+def test_preview_instancing_resolves_catalog_id_and_is_approval_gated(tmp_path: Path) -> None:
+    root, _catalog = _project(tmp_path, [_wall()])
+    registry = ToolRegistry(root, mode="worker")
+    with patch(
+        "aura.conversation.tools._godot_asset_preview_mixin.GodotEditorBridgeClient"
+    ) as client_type:
+        client_type.return_value.request.return_value = {
+            "applied": True,
+            "preview_root": "AuraPreview",
+            "instance_paths": ["AuraPreview/WestWall"],
+            "instance_count": 1,
+        }
+        result = registry.execute(
+            "edit_godot_asset_preview",
+            {
+                "action": "instantiate",
+                "placements": [{
+                    "asset_id": "wall", "domain": "ruins", "name": "WestWall",
+                    "position": [2, 0, 3], "rotation_degrees_y": 90,
+                }],
+            },
+            lambda _request: ApprovalDecision("approve"),
+        )
+
+    assert result.ok is True
+    request = client_type.return_value.request.call_args.args
+    assert request[0] == "preview.instantiate"
+    placement = request[1]["placements"][0]
+    assert placement["resource_path"] == "res://assets/modules/wall.tscn"
+    assert placement["catalog_identity"] == "ruins:wall"
+    assert placement["position"] == [2.0, 0.0, 3.0]
+
+
+def test_preview_instancing_rejects_non_catalog_asset_before_bridge(tmp_path: Path) -> None:
+    root, _catalog = _project(tmp_path, [_wall()])
+    registry = ToolRegistry(root, mode="worker")
+    with patch(
+        "aura.conversation.tools._godot_asset_preview_mixin.GodotEditorBridgeClient"
+    ) as client_type:
+        result = registry.execute(
+            "edit_godot_asset_preview",
+            {"action": "instantiate", "placements": [{"asset_id": "not_catalogued"}]},
+            lambda _request: ApprovalDecision("approve"),
+        )
+
+    assert result.ok is False
+    assert "not present in a recognized catalog" in result.payload["error"]
+    client_type.assert_not_called()
+
+
+def test_preview_analysis_enriches_assets_and_flags_overlap(tmp_path: Path) -> None:
+    root, _catalog = _project(tmp_path, [_wall()])
+    snapshot = {
+        "scene_open": True, "preview_exists": True, "diagnostics": [],
+        "instances": [
+            {"path": "AuraPreview/A", "resource_path": "res://assets/modules/wall.tscn",
+             "position": [0, 0, 0], "rotation_degrees": [0, 0, 0], "scale": [1, 1, 1]},
+            {"path": "AuraPreview/B", "resource_path": "res://assets/modules/wall.tscn",
+             "position": [1, 0, 0], "rotation_degrees": [0, 0, 0], "scale": [1, 1, 1]},
+        ],
+    }
+
+    result = analyze_preview_snapshot(root, snapshot)
+
+    assert result["instances"][0]["asset_id"] == "wall"
+    assert result["instances"][0]["semantic_roles"] == ["barrier", "cover"]
+    overlaps = [item for item in result["diagnostics"] if item["code"] == "footprint_overlap"]
+    assert overlaps[0]["paths"] == ["AuraPreview/A", "AuraPreview/B"]

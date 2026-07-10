@@ -29,6 +29,8 @@ def test_installer_copies_modular_addon_for_normal_godot_activation(tmp_path: Pa
     assert (root / "addons/aura_bridge/transport/bridge_server.gd").is_file()
     assert (root / "addons/aura_bridge/perception/scene_snapshot.gd").is_file()
     assert (root / "addons/aura_bridge/actions/scene_actions.gd").is_file()
+    assert (root / "addons/aura_bridge/actions/asset_preview_actions.gd").is_file()
+    assert (root / "addons/aura_bridge/perception/asset_preview_snapshot.gd").is_file()
     assert ADDON_SETTING not in (root / "project.godot").read_text(encoding="utf-8")
     config = load_bridge_config(root)
     assert config.host == "127.0.0.1"
@@ -108,9 +110,17 @@ def test_registry_exposes_live_editor_tools_by_role(tmp_path: Path) -> None:
         tool["function"]["name"] for tool in ToolRegistry(tmp_path, mode="planner").tool_defs()
     }
 
-    assert {"inspect_godot_editor", "edit_godot_editor", "install_godot_editor_bridge"} <= worker_names
+    assert {
+        "inspect_godot_editor",
+        "inspect_godot_asset_preview",
+        "edit_godot_editor",
+        "edit_godot_asset_preview",
+        "install_godot_editor_bridge",
+    } <= worker_names
     assert "inspect_godot_editor" in planner_names
+    assert "inspect_godot_asset_preview" in planner_names
     assert "edit_godot_editor" not in planner_names
+    assert "edit_godot_asset_preview" not in planner_names
     assert "install_godot_editor_bridge" not in planner_names
 
 

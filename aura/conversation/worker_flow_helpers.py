@@ -28,6 +28,7 @@ WRITE_TOOLS: frozenset[str] = frozenset(
         "delete_file",
         "edit_godot_scene",
         "edit_godot_editor",
+        "edit_godot_asset_preview",
         "install_godot_editor_bridge",
     }
 )

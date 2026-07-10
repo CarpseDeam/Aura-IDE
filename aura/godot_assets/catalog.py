@@ -60,6 +60,36 @@ def inspect_godot_assets(
     }
 
 
+def resolve_godot_asset(
+    project_root: Path,
+    asset_id: str,
+    *,
+    domain: str = "",
+    sources: Iterable[GodotAssetCatalogSource] = BUILTIN_ASSET_SOURCES,
+) -> GodotAsset:
+    """Resolve one catalog-approved asset or raise a useful, deterministic error."""
+    root = project_root.resolve()
+    snapshots = [source.load(root) for source in sources if source.is_available(root)]
+    if not snapshots:
+        raise ValueError("no supported Godot asset catalog was discovered")
+    merged = _merge_snapshots(snapshots)
+    wanted_id = str(asset_id).strip().casefold()
+    wanted_domain = str(domain).strip().casefold()
+    matches = [
+        asset
+        for asset in merged.assets
+        if asset.id.casefold() == wanted_id
+        and (not wanted_domain or asset.domain.casefold() == wanted_domain)
+    ]
+    if not matches:
+        identity = f"{domain}:{asset_id}" if domain else asset_id
+        raise ValueError(f"asset is not present in a recognized catalog: {identity}")
+    if len(matches) > 1:
+        choices = ", ".join(f"{asset.domain}:{asset.id}" for asset in matches)
+        raise ValueError(f"asset id is ambiguous; provide domain ({choices})")
+    return matches[0]
+
+
 def _merge_snapshots(snapshots: list[AssetCatalogSnapshot]) -> AssetCatalogSnapshot:
     sources: list[str] = []
     assets: list[GodotAsset] = []
@@ -120,4 +150,4 @@ def _normalized(values: Iterable[str]) -> set[str]:
     return {str(value).strip().casefold() for value in values if str(value).strip()}
 
 
-__all__ = ["inspect_godot_assets"]
+__all__ = ["inspect_godot_assets", "resolve_godot_asset"]

@@ -18,6 +18,7 @@ WRITE_TOOLS = {
     "patch_file",
     "edit_godot_scene",
     "edit_godot_editor",
+    "edit_godot_asset_preview",
     "install_godot_editor_bridge",
 }
 TERMINAL_TOOLS = {"run_terminal_command", "run_and_watch"}

@@ -15,6 +15,7 @@ _PLANNER_FORBIDDEN_WRITE_TOOLS = frozenset({
     "edit_symbol",
     "edit_godot_scene",
     "edit_godot_editor",
+    "edit_godot_asset_preview",
     "install_godot_editor_bridge",
     "patch_file",
     "write_file",
