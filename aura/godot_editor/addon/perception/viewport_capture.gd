@@ -21,20 +21,35 @@ func capture(params: Dictionary) -> Dictionary:
 	if preview == null or not preview is Node3D:
 		return {"ok": false, "error": "AuraPreview not found or not a Node3D"}
 
-	# Validate capture_set_id
-	var capture_set_id := str(params.get("capture_set_id", "")).strip_edges()
+	# Validate capture_set_id (type-checked)
+	var raw_id := params.get("capture_set_id")
+	if raw_id != null and not (raw_id is String):
+		return {"ok": false, "error": "capture_set_id must be a string"}
+	var capture_set_id := str(raw_id if raw_id != null else "").strip_edges()
 	if capture_set_id.is_empty():
 		capture_set_id = str(Time.get_unix_time_from_system()).replace(".", "_")
 	if capture_set_id.contains("..") or capture_set_id.contains("/") or capture_set_id.contains("\\"):
 		return {"ok": false, "error": "invalid capture_set_id"}
 
-	# Validate dimensions (clamped)
-	var width := clampi(int(params.get("width", 1280)), 64, 1920)
-	var height := clampi(int(params.get("height", 720)), 64, 1080)
+	# Validate dimensions (type-checked, clamped)
+	var raw_width := params.get("width", 1280)
+	if raw_width != null and not (raw_width is int or raw_width is float):
+		return {"ok": false, "error": "width must be a number"}
+	var width := clampi(int(raw_width), 64, 1920)
+	var raw_height := params.get("height", 720)
+	if raw_height != null and not (raw_height is int or raw_height is float):
+		return {"ok": false, "error": "height must be a number"}
+	var height := clampi(int(raw_height), 64, 1080)
 
-	# Validate modes
-	var modes: Array = params.get("modes", ["current_editor"])
-	if not modes is Array or modes.is_empty():
+	# Validate modes (type-checked)
+	var raw_modes := params.get("modes")
+	if raw_modes == null:
+		var modes: Array = ["current_editor"]
+	elif raw_modes is Array:
+		var modes: Array = raw_modes
+	else:
+		return {"ok": false, "error": "modes must be an array"}
+	if modes.is_empty():
 		modes = ["current_editor"]
 	if modes.size() > 4:
 		return {"ok": false, "error": "too many capture modes (max 4)"}
@@ -64,13 +79,24 @@ func capture(params: Dictionary) -> Dictionary:
 	var preview_size := preview_bounds.size
 	var max_dim := maxf(preview_size.x, maxf(preview_size.y, preview_size.z))
 
-	# Scene fingerprint
+	# Scene fingerprint (computed from live preview children, not saved file content)
 	var scene_path := scene_root.scene_file_path
 	var scene_fingerprint: int = 0
-	if not scene_path.is_empty():
-		var scene_file := FileAccess.open(scene_path, FileAccess.READ)
-		if scene_file != null:
-			scene_fingerprint = scene_file.get_as_text().hash()
+	if not scene_path.is_empty() and preview.get_child_count() > 0:
+		var parts: Array[String] = []
+		for child in preview.get_children():
+			if not child is Node3D:
+				continue
+			var n: Node3D = child
+			var name := n.name
+			var rp := n.scene_file_path if n.scene_file_path else ""
+			var pos_str := str(n.position)
+			var rot_str := str(n.rotation_degrees)
+			var scale_str := str(n.scale)
+			parts.append("%s|%s|%s|%s|%s" % [name, rp, pos_str, rot_str, scale_str])
+		parts.sort()
+		var combined := scene_path + "::" + ";".join(parts)
+		scene_fingerprint = hash(combined)
 
 	var captures: Array[Dictionary] = []
 	for raw_mode in modes:
@@ -97,31 +123,41 @@ func capture(params: Dictionary) -> Dictionary:
 func _compute_preview_bounds(preview: Node3D) -> AABB:
 	var bounds: AABB
 	var first := true
-	for child in preview.get_children():
-		if not child is Node3D:
-			continue
-		var child_aabb := (child as Node3D).get_transformed_aabb()
-		if first:
-			bounds = child_aabb
-			first = false
-		else:
-			bounds = bounds.merge(child_aabb)
+	var stack: Array[Node] = preview.get_children()
+	while stack.size() > 0:
+		var node := stack.pop_back()
+		if node is VisualInstance3D:
+			var child_aabb := node.get_transformed_aabb()
+			if first:
+				bounds = child_aabb
+				first = false
+			else:
+				bounds = bounds.merge(child_aabb)
+		elif node is Node3D and not node is VisualInstance3D:
+			var small_box := AABB(node.global_position - Vector3(0.1, 0.1, 0.1), Vector3(0.2, 0.2, 0.2))
+			if first:
+				bounds = small_box
+				first = false
+			else:
+				bounds = bounds.merge(small_box)
+		# Recurse into children
+		for c in node.get_children():
+			stack.append(c)
 	if first:
-		# No Node3D children — small box at preview position
-		bounds = AABB(preview.position - Vector3(1, 1, 1), Vector3(2, 2, 2))
+		# No visualizable children — box at preview global position
+		bounds = AABB(preview.global_position - Vector3(1, 1, 1), Vector3(2, 2, 2))
 	return bounds
 
 
 func _capture_single(viewport, mode: String, capture_set_id: String, out_prefix: String, \
 		width: int, height: int, preview_center: Vector3, max_dim: float) -> Dictionary:
 	var is_controlled := mode != "current_editor"
+	var camera: Camera3D
 	var stored_transform: Transform3D
 	var new_transform: Transform3D
 
 	if is_controlled:
-		if not viewport.has_method("set_camera_transform"):
-			return {"ok": false, "error": "controlled capture modes require Godot 4.3+"}
-		var camera := viewport.get_camera_3d()
+		camera = viewport.get_camera_3d()
 		if camera == null:
 			return {"ok": false, "error": "no camera available for %s capture" % mode}
 		stored_transform = camera.global_transform
@@ -135,20 +171,20 @@ func _capture_single(viewport, mode: String, capture_set_id: String, out_prefix:
 		else:
 			return {"ok": false, "error": "unsupported capture mode: %s" % mode}
 
-		viewport.set_camera_transform(new_transform)
+		camera.global_transform = new_transform
 		RenderingServer.force_draw()
 
 	# Capture viewport texture
 	var texture := viewport.get_texture()
 	if texture == null:
 		if is_controlled:
-			viewport.set_camera_transform(stored_transform)
+			camera.global_transform = stored_transform
 		return {"ok": false, "error": "%s capture returned null texture" % mode}
 
 	var image := texture.get_image()
 	if image == null or image.is_empty():
 		if is_controlled:
-			viewport.set_camera_transform(stored_transform)
+			camera.global_transform = stored_transform
 		return {"ok": false, "error": "%s capture returned null image" % mode}
 
 	# Resize if different from requested dimensions
@@ -161,12 +197,12 @@ func _capture_single(viewport, mode: String, capture_set_id: String, out_prefix:
 	var save_err := image.save_png(file_path)
 	if save_err != OK:
 		if is_controlled:
-			viewport.set_camera_transform(stored_transform)
+			camera.global_transform = stored_transform
 		return {"ok": false, "error": "failed to save capture"}
 
 	# Restore camera
 	if is_controlled:
-		viewport.set_camera_transform(stored_transform)
+		camera.global_transform = stored_transform
 
 	# SHA-256 checksum
 	var sha256 := FileAccess.get_sha256(file_path)

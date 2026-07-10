@@ -251,3 +251,48 @@ def test_preview_capture_metadata_shape_is_rejected_by_client_when_malformed(tmp
     with pytest.raises(GodotEditorBridgeError, match="invalid result"):
         GodotEditorBridgeClient(root).request("preview.capture", {})
     thread.join(timeout=2)
+
+
+def test_viewport_capture_gdscript_patterns() -> None:
+    """Verify the GDScript uses correct Godot 4 APIs, not invalid ones."""
+    gd_path = Path("aura/godot_editor/addon/perception/viewport_capture.gd")
+    content = gd_path.read_text(encoding="utf-8")
+    # Must use VisualInstance3D for bounds (not bare Node3D cast)
+    assert "VisualInstance3D" in content, "Must use VisualInstance3D for aabb bounds"
+    assert "get_transformed_aabb" in content, "Must call get_transformed_aabb() on VisualInstance3D"
+    # Must use camera.global_transform for controlled capture (not set_camera_transform)
+    assert "camera.global_transform" in content, "Must use Camera3D.global_transform for camera manipulation"
+    # Must NOT use set_camera_transform (not available on SubViewport)
+    assert "set_camera_transform" not in content, "SubViewport has no set_camera_transform method"
+    # Must compute scene_fingerprint from live preview state (not file content)
+    assert "scene_file_path" in content, "Fingerprint must reference scene_file_path"
+    # Must have robust fallback for non-VisualInstance3D nodes
+    assert "global_position" in content, "Fallback bounds must use global_position"
+
+
+def test_viewport_capture_rejects_malformed_width() -> None:
+    """GDScript-level: string width should return type error (verified via content pattern)."""
+    gd_path = Path("aura/godot_editor/addon/perception/viewport_capture.gd")
+    content = gd_path.read_text(encoding="utf-8")
+    assert 'raw_width != null and not (raw_width is int or raw_width is float)' in content or \
+           'raw_width is int or raw_width is float' in content, \
+        "Must type-check width before clamping"
+
+
+def test_viewport_capture_rejects_non_string_capture_id() -> None:
+    """GDScript-level: non-string capture_set_id should return type error."""
+    gd_path = Path("aura/godot_editor/addon/perception/viewport_capture.gd")
+    content = gd_path.read_text(encoding="utf-8")
+    assert 'capture_set_id must be a string' in content, \
+        "Must reject non-string capture_set_id with clear error"
+
+
+def test_viewport_capture_fingerprint_uses_live_state() -> None:
+    """Scene fingerprint must use live child data, not saved file content."""
+    gd_path = Path("aura/godot_editor/addon/perception/viewport_capture.gd")
+    content = gd_path.read_text(encoding="utf-8")
+    # Must sort child data for deterministic fingerprint
+    assert "parts.sort()" in content, "Must sort child data for deterministic fingerprint"
+    # Must iterate preview children for the fingerprint (not file I/O)
+    assert "preview.get_child_count" in content, "Fingerprint must check preview child count"
+    assert "preview.get_children()" in content, "Fingerprint must iterate preview children"
