@@ -33,5 +33,5 @@ The current first slice provides semantic perception and undoable creation/prope
 reparenting, runtime-game inspection, and 3D viewport image capture belong in separate action and
 perception modules so the bridge remains small and auditable.
 
-The staged safety and implementation plan for modular ruin assembly is documented in
-[`ruin-visual-iteration-roadmap.md`](ruin-visual-iteration-roadmap.md).
+The staged safety and implementation plan for reusable asset assembly is documented in
+[`godot-asset-visual-iteration-roadmap.md`](../tmp/godot-asset-visual-iteration-roadmap.md).

@@ -41,6 +41,7 @@ PLANNER_TOOL_NAMES = {
     "code_intel_references",
     "code_intel_dependents",
     "code_intel_audit",
+    "inspect_godot_assets",
     "inspect_godot_editor",
     "git_status",
     "git_diff",

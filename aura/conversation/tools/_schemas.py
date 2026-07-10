@@ -12,6 +12,56 @@ READ_TOOL_DEFS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "inspect_godot_assets",
+            "description": (
+                "Inspect recognized, project-specific Godot asset catalogs without changing files or the open "
+                "scene. Returns generic asset descriptors with resource paths, domains, kinds, tags, semantic "
+                "roles, dimensions, sockets, placement modes, calibrations, and catalog diagnostics. Use this "
+                "to understand what ruins, camps, barriers, buildings, props, or other kits are available before "
+                "planning spatial work. Catalog adapters remain separate from Aura's conversation loop."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "domains": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional exact domain filters, such as ['ruins'] or ['camps'].",
+                    },
+                    "kinds": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional exact asset-kind filters, such as ['wall_corner'].",
+                    },
+                    "tags": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Require every listed project tag.",
+                    },
+                    "semantic_roles": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Require every listed generic role, such as entrance, barrier, or cover.",
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Optional case-insensitive text search across identity and semantics.",
+                    },
+                    "max_items": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 200,
+                        "default": 50,
+                        "description": "Maximum matching asset records to return. Summaries still cover all assets.",
+                    },
+                },
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "inspect_godot_editor",
             "description": (
                 "Inspect the scene currently open in the live Godot editor. Returns the exact scene tree, "
