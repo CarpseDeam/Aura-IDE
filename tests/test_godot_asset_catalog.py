@@ -181,3 +181,12 @@ def test_preview_analysis_enriches_assets_and_flags_overlap(tmp_path: Path) -> N
     assert result["instances"][0]["semantic_roles"] == ["barrier", "cover"]
     overlaps = [item for item in result["diagnostics"] if item["code"] == "footprint_overlap"]
     assert overlaps[0]["paths"] == ["AuraPreview/A", "AuraPreview/B"]
+
+    # Structural-validation payload is now a dict (not the old string).
+    sv = result["structural_validation"]
+    assert isinstance(sv, dict)
+    assert sv["status"] in ("passed", "failed", "partial")
+    footprint_facts = [f for f in sv["facts"] if f["code"] == "footprint_overlap"]
+    assert len(footprint_facts) >= 1
+    assert "overlap_x_m" in footprint_facts[0]["measured"]
+    assert "overlap_z_m" in footprint_facts[0]["measured"]
