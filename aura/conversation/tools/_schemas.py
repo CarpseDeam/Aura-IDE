@@ -991,6 +991,86 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "edit_godot_scene",
+            "description": (
+                "Apply structured node edits to an existing Godot .tscn text scene. "
+                "Prefer this over raw text patches for adding/removing nodes or changing node properties. "
+                "Node paths are relative to the scene root: '.' is the root and 'Player/Sprite' is a descendant. "
+                "Property values are raw one-line Godot expressions such as 'Vector2(10, 20)', 'true', "
+                "'\"Ready\"', or 'ExtResource(\"1_script\")'. All operations are validated in memory and "
+                "presented together in one approval diff before the scene is written."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Workspace-relative path to an existing .tscn scene.",
+                    },
+                    "operations": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "action": {
+                                    "type": "string",
+                                    "enum": [
+                                        "add_node",
+                                        "remove_node",
+                                        "set_property",
+                                        "remove_property",
+                                    ],
+                                },
+                                "node_path": {
+                                    "type": "string",
+                                    "description": "Existing node path for remove/property operations.",
+                                },
+                                "name": {
+                                    "type": "string",
+                                    "description": "New node name for add_node.",
+                                },
+                                "type": {
+                                    "type": "string",
+                                    "description": "Godot class name for add_node, e.g. CharacterBody2D.",
+                                },
+                                "parent": {
+                                    "type": "string",
+                                    "description": "Parent node path for add_node; defaults to '.'.",
+                                    "default": ".",
+                                },
+                                "property": {
+                                    "type": "string",
+                                    "description": "Godot property name for property operations.",
+                                },
+                                "value": {
+                                    "type": "string",
+                                    "description": "Raw one-line Godot value expression for set_property.",
+                                },
+                                "properties": {
+                                    "type": "object",
+                                    "description": "Optional property-to-raw-expression map for add_node.",
+                                    "additionalProperties": {"type": "string"},
+                                },
+                                "recursive": {
+                                    "type": "boolean",
+                                    "description": "Required to remove a node that has descendants.",
+                                    "default": False,
+                                },
+                            },
+                            "required": ["action"],
+                            "additionalProperties": False,
+                        },
+                    },
+                },
+                "required": ["path", "operations"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "write_file",
             "description": (
                 "Write the given content to a workspace file. "

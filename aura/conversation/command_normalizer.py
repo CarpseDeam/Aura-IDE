@@ -148,7 +148,7 @@ def _starts_with_export(command: str) -> bool:
 
 
 def _validate_godot_check_command(command: str) -> str:
-    """Reject check-only invocations that would open Godot's native error dialog."""
+    """Reject Godot invocations that look like validation but do no work."""
     try:
         tokens = shlex.split(command, posix=(os.name != "nt"))
     except ValueError:
@@ -167,6 +167,25 @@ def _validate_godot_check_command(command: str) -> str:
         return ""
 
     lowered = [token.lower() for token in cleaned]
+    if "--headless" in lowered and "--path" in lowered:
+        purposeful_flags = {
+            "--check-only",
+            "--import",
+            "--script",
+            "--scene",
+            "--editor",
+            "--export-release",
+            "--export-debug",
+            "--export-pack",
+            "--build-solutions",
+            "--test",
+        }
+        if not any(flag in lowered for flag in purposeful_flags):
+            return (
+                "Invalid Godot validation command: --headless --path only starts the engine; "
+                "add --check-only --script for GDScript, --import for the project, or "
+                "--scene/--script for an explicit runtime check."
+            )
     if "--check-only" not in lowered:
         return ""
     if "--script" not in lowered:

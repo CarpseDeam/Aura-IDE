@@ -13,6 +13,7 @@ _PLANNER_FORBIDDEN_WRITE_TOOLS = frozenset({
     "delete_file",
     "edit_file",
     "edit_symbol",
+    "edit_godot_scene",
     "patch_file",
     "write_file",
 })

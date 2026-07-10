@@ -16,6 +16,7 @@ WRITE_TOOLS = {
     "write_file",
     "delete_file",
     "patch_file",
+    "edit_godot_scene",
 }
 TERMINAL_TOOLS = {"run_terminal_command", "run_and_watch"}
 DISPATCH_TOOLS = {"dispatch_to_worker"}

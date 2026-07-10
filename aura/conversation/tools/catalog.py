@@ -48,7 +48,12 @@ PLANNER_TOOL_NAMES = {
     "git_log_file",
 }
 
-NORMAL_WORKER_WRITE_TOOL_NAMES = {"write_file", "patch_file", "delete_file"}
+NORMAL_WORKER_WRITE_TOOL_NAMES = {
+    "write_file",
+    "patch_file",
+    "delete_file",
+    "edit_godot_scene",
+}
 
 
 def _tool_name(tool_def: dict[str, Any]) -> str:

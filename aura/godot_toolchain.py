@@ -180,6 +180,50 @@ def build_godot_import_command(
     return _shell_join([str(executable), "--headless", "--path", str(root), "--import"], platform)
 
 
+def build_godot_resource_check_command(
+    executable: str | Path,
+    project_root: str | Path,
+    resource_paths: Iterable[str | Path],
+    *,
+    platform: str | None = None,
+    validator_script: str | Path | None = None,
+) -> str | None:
+    """Build a focused command that loads touched text scenes/resources.
+
+    Godot's ``--check-only`` applies only to scripts.  Scene validation uses a
+    tiny bundled ``SceneTree`` script which asks Godot's own ``ResourceLoader``
+    to parse every touched ``.tscn``/``.tres`` and returns a non-zero status if
+    any resource cannot be loaded.
+    """
+    root = Path(project_root).expanduser().resolve(strict=False)
+    res_paths: list[str] = []
+    for resource_path in resource_paths:
+        if Path(resource_path).suffix.lower() not in {".tscn", ".tres"}:
+            continue
+        res_paths.append(filesystem_path_to_res_path(resource_path, root))
+    res_paths = list(dict.fromkeys(res_paths))
+    if not res_paths:
+        return None
+    validator = (
+        Path(validator_script).expanduser().resolve(strict=False)
+        if validator_script is not None
+        else Path(__file__).parent / "validation" / "godot_resource_validator.gd"
+    )
+    return _shell_join(
+        [
+            str(executable),
+            "--headless",
+            "--path",
+            str(root),
+            "--script",
+            str(validator),
+            "--",
+            *res_paths,
+        ],
+        platform,
+    )
+
+
 def _path_candidate(value: str | Path | None) -> Path | None:
     if value is None or not str(value).strip():
         return None
@@ -259,6 +303,7 @@ __all__ = [
     "GodotExecutableResolution",
     "build_godot_check_command",
     "build_godot_import_command",
+    "build_godot_resource_check_command",
     "filesystem_path_to_res_path",
     "find_godot_project_root",
     "load_godot_executable_setting",

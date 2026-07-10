@@ -24,18 +24,31 @@ _log = logging.getLogger(__name__)
 
 
 def combine_validation_commands(
-    planner_commands: list[str] | tuple[str, ...] | None,
-    selector_commands: list[str] | tuple[str, ...] | None,
-) -> list[str]:
-    """Combine Planner and selector validation commands, preserving order."""
-    combined: list[str] = []
-    seen: set[str] = set()
-    for raw in [*(planner_commands or []), *(selector_commands or [])]:
-        command = str(raw or "").strip()
-        if not command or command in seen:
+    planner_commands: list[Any] | tuple[Any, ...] | None,
+    selector_commands: list[Any] | tuple[Any, ...] | None,
+) -> list[Any]:
+    """Combine validation commands without stringifying structured specs.
+
+    Planner commands are commonly ``ValidationCommandSpec`` instances.  They
+    must stay structured so their command/cwd/expected outcome survive into
+    the final gate.  Selector commands are plain strings and remain so.
+    """
+    combined: list[Any] = []
+    seen: set[tuple[str, str]] = set()
+    for entry in [*(planner_commands or []), *(selector_commands or [])]:
+        if isinstance(entry, str):
+            command = entry.strip()
+            cwd = ""
+            kept = command
+        else:
+            command = str(getattr(entry, "command", "") or "").strip()
+            cwd = str(getattr(entry, "cwd", "") or "").strip()
+            kept = entry
+        key = (" ".join(command.split()), cwd.replace("\\", "/").rstrip("/"))
+        if not command or key in seen:
             continue
-        combined.append(command)
-        seen.add(command)
+        combined.append(kept)
+        seen.add(key)
     return combined
 
 
@@ -117,7 +130,7 @@ def refresh_validation_selector_plan(
     task_kind: str,
     context_gearbox: dict[str, Any],
     workspace_root: Path | None,
-    final_validation_commands: list[str],
+    final_validation_commands: list[Any],
     validation_selector: ValidationPlan | None,
     validation_selector_key: tuple[str, ...] | None,
     validation_selector_failed: bool,

@@ -12,8 +12,8 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from aura.validation.selector import ValidationPlan
 from aura.bridge.validation_selector_runtime import refresh_validation_selector_plan
+from aura.validation.selector import ValidationPlan
 
 _log = logging.getLogger(__name__)
 
@@ -25,7 +25,7 @@ def refresh_worker_validation_selector_plan(
     task_kind: str,
     context_gearbox: dict[str, Any],
     workspace_root: Path | None,
-    final_validation_commands: list[str],
+    final_validation_commands: list[Any],
     validation_selector: ValidationPlan | None,
     validation_selector_key: tuple[str, ...] | None,
     validation_selector_failed: bool,
@@ -64,7 +64,7 @@ class _WorkerValidationSelectorBridge:
         task_kind: str,
         context_gearbox: dict[str, Any],
         workspace_root: Path | None,
-        final_validation_commands: list[str],
+        final_validation_commands: list[Any],
     ) -> None:
         self._task_spec = task_spec
         self._task_kind = task_kind

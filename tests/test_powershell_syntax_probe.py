@@ -1,8 +1,11 @@
 """Tests for PowerShellSyntaxProbe with mocked subprocess calls."""
 from __future__ import annotations
 
+import shutil
 import subprocess
 from unittest.mock import patch
+
+import pytest
 
 from aura.syntax_probe.powershell_probe import PowerShellSyntaxProbe
 
@@ -24,6 +27,9 @@ class TestPowerShellSyntaxProbe:
 
     def test_detect_psd1_file(self) -> None:
         assert PowerShellSyntaxProbe.detect("manifest.psd1") is True
+
+    def test_detect_is_case_insensitive(self) -> None:
+        assert PowerShellSyntaxProbe.detect("Build.PS1") is True
 
     def test_detect_non_powershell_file(self) -> None:
         assert PowerShellSyntaxProbe.detect("script.py") is False
@@ -71,6 +77,22 @@ class TestPowerShellSyntaxProbe:
         assert result.failure_class == "syntax_invalid"
         assert result.toolchain_available is True
 
+    def test_single_error_object_returns_fail(self, tmp_path) -> None:
+        """Tolerate hosts that serialize a one-item array as an object."""
+        probe = self._probe()
+        ps1_file = tmp_path / "invalid.ps1"
+        ps1_file.write_text("if ($true {\n")
+        stdout_json = '{"Line":1,"Column":11,"Message":"Missing closing brace"}'
+        with patch("shutil.which", return_value="/usr/bin/pwsh"), \
+             patch("subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = stdout_json
+            mock_run.return_value.stderr = ""
+            result = probe.check(tmp_path, "invalid.ps1")
+        assert result.evidence == "fail"
+        assert result.line == 1
+        assert result.column == 11
+
     # --- missing pwsh -> no_evidence ---
 
     def test_missing_pwsh_returns_no_evidence(self, tmp_path) -> None:
@@ -83,6 +105,23 @@ class TestPowerShellSyntaxProbe:
         assert result.ok is False
         assert result.failed is False
         assert result.toolchain_available is False
+
+    def test_falls_back_to_windows_powershell(self, tmp_path) -> None:
+        probe = self._probe()
+        ps1_file = tmp_path / "valid.ps1"
+        ps1_file.write_text('Write-Host "hello"\n')
+
+        def find_executable(name: str) -> str | None:
+            return "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe" if name == "powershell" else None
+
+        with patch("shutil.which", side_effect=find_executable), \
+             patch("subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = "[]"
+            mock_run.return_value.stderr = ""
+            result = probe.check(tmp_path, "valid.ps1")
+        assert result.evidence == "pass"
+        assert mock_run.call_args.args[0][0].endswith("powershell.exe")
 
     # --- runtime error -> no_evidence ---
 
@@ -159,3 +198,22 @@ class TestPowerShellSyntaxProbe:
              )):
             result = probe.check(tmp_path, "slow.ps1")
         assert result.evidence == "no_evidence"
+
+    @pytest.mark.skipif(
+        shutil.which("pwsh") is None and shutil.which("powershell") is None,
+        reason="PowerShell is not installed",
+    )
+    def test_real_parser_distinguishes_valid_and_invalid_files(self, tmp_path) -> None:
+        """Exercise the .NET parser contract that subprocess mocks cannot verify."""
+        valid = tmp_path / "valid.ps1"
+        invalid = tmp_path / "invalid.ps1"
+        valid.write_text('Write-Host "hello"\n')
+        invalid.write_text("if ($true {\n")
+
+        valid_result = self._probe().check(tmp_path, valid.name)
+        invalid_result = self._probe().check(tmp_path, invalid.name)
+
+        assert valid_result.evidence == "pass"
+        assert invalid_result.evidence == "fail"
+        assert invalid_result.line == 1
+        assert invalid_result.column is not None

@@ -11,6 +11,7 @@ from aura.godot_toolchain import (
     GODOT_SETUP_MESSAGE,
     build_godot_check_command,
     build_godot_import_command,
+    build_godot_resource_check_command,
     filesystem_path_to_res_path,
     find_godot_project_root,
     load_godot_executable_setting,
@@ -237,6 +238,35 @@ def test_non_gd_file_does_not_produce_check_command(tmp_path: Path) -> None:
     assert build_godot_check_command(executable, root, root / "icon.svg") is None
 
 
+def test_resource_validation_command_loads_touched_scenes(tmp_path: Path) -> None:
+    root = _project(tmp_path / "Game With Spaces")
+    executable = _executable(tmp_path / "Godot Tools" / "godot.exe")
+    validator = tmp_path / "Aura Tools" / "validate.gd"
+    validator.parent.mkdir()
+    validator.write_text("extends SceneTree\n", encoding="utf-8")
+
+    command = build_godot_resource_check_command(
+        executable,
+        root,
+        [root / "scenes" / "player.tscn", root / "data" / "stats.tres"],
+        platform="posix",
+        validator_script=validator,
+    )
+
+    assert command is not None
+    assert shlex.split(command) == [
+        str(executable),
+        "--headless",
+        "--path",
+        str(root.resolve()),
+        "--script",
+        str(validator.resolve()),
+        "--",
+        "res://scenes/player.tscn",
+        "res://data/stats.tres",
+    ]
+
+
 def test_selector_uses_real_godot_for_touched_gd_files(tmp_path: Path) -> None:
     root = _project(tmp_path / "game")
     executable = _executable(tmp_path / "Godot Tools" / "godot.exe")
@@ -282,3 +312,24 @@ def test_selector_reports_missing_godot_without_a_command(
     assert plan["available"] is False
     assert plan["commands"] == []
     assert plan["setup_message"] == GODOT_SETUP_MESSAGE
+
+
+def test_selector_imports_and_loads_touched_scene(tmp_path: Path) -> None:
+    root = _project(tmp_path / "game")
+    executable = _executable(tmp_path / "Godot Tools" / "godot.exe")
+    metadata = root / ".aura" / "project.json"
+    metadata.parent.mkdir()
+    metadata.write_text(json.dumps({"godot_executable": str(executable)}), encoding="utf-8")
+
+    plan = select_validation_plan(
+        target_files=["scenes/player.tscn"],
+        changed_files=["scenes/player.tscn"],
+        workspace_root=root,
+    )
+
+    assert plan["kind"] == "godot"
+    assert plan["available"] is True
+    assert len(plan["commands"]) == 2
+    assert "--import" in plan["commands"][0]
+    assert "godot_resource_validator.gd" in plan["commands"][1]
+    assert "res://scenes/player.tscn" in plan["commands"][1]

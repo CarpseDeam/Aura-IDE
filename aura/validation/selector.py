@@ -12,6 +12,8 @@ from typing import Any
 
 from aura.godot_toolchain import (
     build_godot_check_command,
+    build_godot_import_command,
+    build_godot_resource_check_command,
     find_godot_project_root,
     resolve_godot_executable,
 )
@@ -82,6 +84,8 @@ def select_validation_plan(
     # Extract changed .py files for focused compile commands.
     changed_py_files: list[str] = []
     changed_gd_files: list[str] = []
+    changed_godot_resource_files: list[str] = []
+    changed_godot_project_files: list[str] = []
     if changed_files:
         changed_py_files = [
             p.replace("\\", "/") for p in changed_files
@@ -90,6 +94,14 @@ def select_validation_plan(
         changed_gd_files = [
             p.replace("\\", "/") for p in changed_files
             if p.replace("\\", "/").lower().endswith(".gd")
+        ]
+        changed_godot_resource_files = [
+            p.replace("\\", "/") for p in changed_files
+            if Path(p.replace("\\", "/")).suffix.lower() in {".tscn", ".tres"}
+        ]
+        changed_godot_project_files = [
+            p.replace("\\", "/") for p in changed_files
+            if Path(p.replace("\\", "/")).name.lower() == "project.godot"
         ]
 
     # Extract loaded context-gearbox source IDs.
@@ -100,8 +112,11 @@ def select_validation_plan(
 
     # ── Ordered selection rules ───────────────────────────────────────
 
-    # 1. Godot validation uses the real editor binary for touched GDScript.
-    if changed_gd_files and workspace_root is not None:
+    # 1. Godot validation uses the real editor binary for touched project files.
+    changed_godot_files = (
+        changed_gd_files + changed_godot_resource_files + changed_godot_project_files
+    )
+    if changed_godot_files and workspace_root is not None:
         workspace = Path(workspace_root).resolve(strict=False)
         godot_root = find_godot_project_root(workspace)
         if godot_root is not None:
@@ -110,7 +125,7 @@ def select_validation_plan(
                 plan = _plan(
                     kind="godot",
                     commands=[],
-                    reason="GDScript files changed but Godot is unavailable",
+                    reason="Godot project files changed but Godot is unavailable",
                     confidence="unavailable",
                     skipped=[resolution.message],
                 )
@@ -133,10 +148,33 @@ def select_validation_plan(
                     continue
                 if command:
                     commands.append(command)
+
+            resource_paths: list[Path] = []
+            for changed_path in sorted(changed_godot_resource_files):
+                file_path = Path(changed_path)
+                if not file_path.is_absolute():
+                    file_path = workspace / file_path
+                resource_paths.append(file_path)
+            if resource_paths:
+                # Import dependencies first, then prove Godot can load each
+                # touched scene/resource through ResourceLoader.
+                commands.append(build_godot_import_command(resolution.path, godot_root))
+                try:
+                    resource_command = build_godot_resource_check_command(
+                        resolution.path,
+                        godot_root,
+                        resource_paths,
+                    )
+                except ValueError:
+                    resource_command = None
+                if resource_command:
+                    commands.append(resource_command)
+            elif changed_godot_project_files:
+                commands.append(build_godot_import_command(resolution.path, godot_root))
             plan = _plan(
                 kind="godot",
                 commands=commands,
-                reason="GDScript files changed in a Godot project",
+                reason="Godot project files changed in a Godot project",
                 confidence="focused",
             )
             plan["available"] = True

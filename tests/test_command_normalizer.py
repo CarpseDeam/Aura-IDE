@@ -240,6 +240,16 @@ class TestExportRejected:
 
 
 class TestGodotCheckOnlyValidation:
+    def test_bare_headless_project_start_is_not_validation(self, tmp_path: Path) -> None:
+        result = normalize_command(
+            '"C:\\Tools\\Godot_v4.6.3-stable_win64.exe" '
+            '--headless --path "C:\\Projects\\Game"',
+            tmp_path,
+        )
+
+        assert result.valid is False
+        assert "--headless --path only starts the engine" in result.validation_error
+
     def test_check_only_requires_script(self, tmp_path: Path) -> None:
         result = normalize_command(
             '"C:\\Tools\\Godot_v4.6.3-stable_win64.exe" '
