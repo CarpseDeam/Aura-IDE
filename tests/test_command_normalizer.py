@@ -237,3 +237,25 @@ class TestExportRejected:
         # Bare "export" with no argument: the validator checks len < 2 and
         # returns empty string (not a meaningful export command).
         assert result.valid is True
+
+
+class TestGodotCheckOnlyValidation:
+    def test_check_only_requires_script(self, tmp_path: Path) -> None:
+        result = normalize_command(
+            '"C:\\Tools\\Godot_v4.6.3-stable_win64.exe" '
+            '--headless --check-only --path "C:\\Projects\\Game"',
+            tmp_path,
+        )
+
+        assert result.valid is False
+        assert "--script res://path/to/script.gd" in result.validation_error
+
+    def test_focused_godot_check_is_allowed(self, tmp_path: Path) -> None:
+        result = normalize_command(
+            '"C:\\Tools\\Godot_v4.6.3-stable_win64.exe" '
+            '--headless --path "C:\\Projects\\Game" --check-only '
+            '--script "res://scripts/player.gd"',
+            tmp_path,
+        )
+
+        assert result.valid is True

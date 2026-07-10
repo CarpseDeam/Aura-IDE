@@ -102,6 +102,10 @@ def _validate_command_shell(command: str) -> str:
             "Set environment variables through the harness configuration instead."
         )
 
+    godot_error = _validate_godot_check_command(stripped)
+    if godot_error:
+        return godot_error
+
     return ""
 
 
@@ -141,6 +145,42 @@ def _starts_with_export(command: str) -> bool:
     # The second token must look like an assignment or variable name.
     second = tokens[1].strip("'\"")
     return "=" in second or (second.isidentifier() and second.isupper())
+
+
+def _validate_godot_check_command(command: str) -> str:
+    """Reject check-only invocations that would open Godot's native error dialog."""
+    try:
+        tokens = shlex.split(command, posix=(os.name != "nt"))
+    except ValueError:
+        tokens = command.split()
+    cleaned = [str(token).strip("'\"") for token in tokens]
+    if not cleaned:
+        return ""
+    executable = cleaned[0].replace("\\", "/").rsplit("/", 1)[-1].lower()
+    if executable.endswith(".exe"):
+        executable = executable[:-4]
+    if not (
+        executable == "godot"
+        or executable == "godot4"
+        or executable.startswith(("godot_", "godot-", "godot."))
+    ):
+        return ""
+
+    lowered = [token.lower() for token in cleaned]
+    if "--check-only" not in lowered:
+        return ""
+    if "--script" not in lowered:
+        return (
+            "Invalid Godot validation command: --check-only requires "
+            "--script res://path/to/script.gd."
+        )
+    script_index = lowered.index("--script")
+    if script_index + 1 >= len(cleaned) or not cleaned[script_index + 1].lower().endswith(".gd"):
+        return (
+            "Invalid Godot validation command: --script must name a touched .gd file "
+            "under the project as a res:// path."
+        )
+    return ""
 
 
 __all__ = [

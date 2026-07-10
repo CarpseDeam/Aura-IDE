@@ -9,6 +9,7 @@ from pathlib import Path
 
 from aura.godot_toolchain import (
     GODOT_SETUP_MESSAGE,
+    build_godot_check_command,
     find_godot_project_root,
     resolve_godot_executable,
 )
@@ -108,6 +109,14 @@ class ProjectProfile:
             lines.append("Godot project root: " + (self.godot_project_root or self.workspace_root))
             if self.godot_executable:
                 lines.append("Godot executable: " + self.godot_executable)
+                root = Path(self.godot_project_root or self.workspace_root)
+                command = build_godot_check_command(
+                    self.godot_executable,
+                    root,
+                    root / "path" / "to" / "touched_file.gd",
+                )
+                if command:
+                    lines.append("Godot focused validation format: " + command)
             elif self.godot_setup_message:
                 lines.append(self.godot_setup_message)
         return "\n".join(lines)

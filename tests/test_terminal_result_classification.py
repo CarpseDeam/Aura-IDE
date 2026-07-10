@@ -28,6 +28,19 @@ from aura.conversation.validation_orchestrator import (
 )
 from aura.sandbox import WatchResult, classify_watch_outcome
 
+
+def test_versioned_godot_executable_is_a_runnable_validation_command() -> None:
+    command = (
+        '"C:\\Users\\Kori\\Desktop\\Godot_v4.6.3-stable_win64.exe" '
+        '--headless --path "C:\\Projects\\Game" --check-only '
+        '--script "res://scripts/player.gd"'
+    )
+
+    parsed = parse_validation_command(command)
+
+    assert parsed.malformed is False
+    assert parsed.command == command
+
 # =========================================================================
 # classify_terminal_run — enhanced with output/timeout
 # =========================================================================

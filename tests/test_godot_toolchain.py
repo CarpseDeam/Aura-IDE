@@ -47,6 +47,24 @@ def test_detects_project_godot_at_workspace_and_ancestor(tmp_path: Path) -> None
     assert profile.godot_project_root == str(project_root.resolve())
 
 
+def test_profile_shows_focused_validation_format(tmp_path: Path) -> None:
+    project_root = _project(tmp_path / "game")
+    executable = _executable(tmp_path / "Godot Tools" / "Godot_v4.6.exe")
+    metadata = project_root / ".aura" / "project.json"
+    metadata.parent.mkdir()
+    metadata.write_text(
+        json.dumps({"godot_executable": str(executable)}),
+        encoding="utf-8",
+    )
+
+    summary = detect_project_profile(project_root).summarize()
+
+    assert "Godot focused validation format:" in summary
+    assert "--check-only" in summary
+    assert "--script" in summary
+    assert "res://path/to/touched_file.gd" in summary
+
+
 def test_configured_executable_path_wins(tmp_path: Path) -> None:
     root = _project(tmp_path / "game")
     configured = _executable(tmp_path / "Desktop" / "Godot configured.exe")

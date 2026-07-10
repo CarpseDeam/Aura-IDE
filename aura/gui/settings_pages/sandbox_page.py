@@ -20,6 +20,7 @@ from aura.config import AppSettings
 from aura.godot_toolchain import (
     find_godot_project_root,
     load_godot_executable_setting,
+    resolve_godot_executable,
     save_godot_executable_setting,
 )
 from aura.gui.theme import FG_DIM
@@ -102,9 +103,7 @@ class SandboxPage(QWidget):
             godot_row = QHBoxLayout()
             godot_row.setSpacing(8)
             self._godot_executable_edit = QLineEdit()
-            self._godot_executable_edit.setText(
-                load_godot_executable_setting(self._godot_project_root) or ""
-            )
+            self._godot_executable_edit.setText(self._godot_executable_display_value())
             godot_row.addWidget(self._godot_executable_edit, 1)
             browse_btn = QPushButton("Browse...")
             browse_btn.clicked.connect(self._browse_godot_executable)
@@ -142,11 +141,7 @@ class SandboxPage(QWidget):
             )
             if self._godot_executable_edit is not None:
                 self._godot_executable_edit.setEnabled(self._godot_project_root is not None)
-                self._godot_executable_edit.setText(
-                    (load_godot_executable_setting(self._godot_project_root) or "")
-                    if self._godot_project_root is not None
-                    else ""
-                )
+                self._godot_executable_edit.setText(self._godot_executable_display_value())
 
     def collect_settings(self, settings: AppSettings) -> None:
         settings.sandbox_mode = self._sandbox_combo.currentData()
@@ -172,3 +167,12 @@ class SandboxPage(QWidget):
         )
         if chosen:
             self._godot_executable_edit.setText(chosen)
+
+    def _godot_executable_display_value(self) -> str:
+        if self._godot_project_root is None:
+            return ""
+        configured = load_godot_executable_setting(self._godot_project_root)
+        if configured:
+            return configured
+        resolution = resolve_godot_executable(self._godot_project_root)
+        return str(resolution.path) if resolution.path is not None else ""
