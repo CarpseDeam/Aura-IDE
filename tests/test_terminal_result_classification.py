@@ -41,6 +41,18 @@ def test_versioned_godot_executable_is_a_runnable_validation_command() -> None:
     assert parsed.malformed is False
     assert parsed.command == command
 
+
+def test_godot_validation_alias_and_bare_probe_are_validation_intent() -> None:
+    from aura.conversation.validation_orchestrator import looks_like_validation_command
+
+    prefix = (
+        '"C:\\Users\\Kori\\Desktop\\Godot_v4.6.3-stable_win64.exe" '
+        '--headless --path "C:\\Projects\\Game"'
+    )
+
+    assert looks_like_validation_command(prefix + " --validate-project") is True
+    assert looks_like_validation_command(prefix) is True
+
 # =========================================================================
 # classify_terminal_run — enhanced with output/timeout
 # =========================================================================

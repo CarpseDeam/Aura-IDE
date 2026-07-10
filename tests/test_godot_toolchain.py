@@ -64,6 +64,8 @@ def test_profile_shows_focused_validation_format(tmp_path: Path) -> None:
     assert "--check-only" in summary
     assert "--script" in summary
     assert "res://path/to/touched_file.gd" in summary
+    assert "Godot project import validation:" in summary
+    assert "--import" in summary
 
 
 def test_configured_executable_path_wins(tmp_path: Path) -> None:

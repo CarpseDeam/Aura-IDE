@@ -17,6 +17,7 @@ normalization logic across entry points.
 from __future__ import annotations
 
 import os
+import re
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
@@ -55,12 +56,13 @@ def normalize_command(command: str, workspace_root: Path) -> NormalizedCommand:
         shell-dialect validation error.
     """
     plan = build_project_command_rewrite(workspace_root, command)
-    rewritten = plan.command
+    rewritten, godot_reason = _rewrite_godot_validation_aliases(plan.command)
     error = _validate_command_shell(rewritten)
     return NormalizedCommand(
         command=rewritten,
         original_command=plan.original_command,
         normalized=rewritten != plan.original_command,
+        normalization_reason=godot_reason,
         validation_error=error,
     )
 
@@ -200,6 +202,62 @@ def _validate_godot_check_command(command: str) -> str:
             "under the project as a res:// path."
         )
     return ""
+
+
+def _rewrite_godot_validation_aliases(command: str) -> tuple[str, str]:
+    """Translate common model-generated Godot validation into real CLI flags.
+
+    Godot has no ``--validate-project`` flag.  ``--import`` is the supported
+    editor operation that imports project resources and exits.  A bare
+    headless project invocation is also ambiguous in a validation context, so
+    make it useful by adding ``--import`` instead of rejecting it.
+    """
+    try:
+        tokens = shlex.split(command, posix=(os.name != "nt"))
+    except ValueError:
+        tokens = command.split()
+    cleaned = [str(token).strip("'\"") for token in tokens]
+    if not cleaned:
+        return command, ""
+    executable = cleaned[0].replace("\\", "/").rsplit("/", 1)[-1].lower()
+    if executable.endswith(".exe"):
+        executable = executable[:-4]
+    if not (
+        executable == "godot"
+        or executable == "godot4"
+        or executable.startswith(("godot_", "godot-", "godot."))
+    ):
+        return command, ""
+
+    rewritten, alias_count = re.subn(
+        r"(?<!\S)--validate-project(?!\S)",
+        "--import",
+        command,
+        flags=re.IGNORECASE,
+    )
+    if alias_count:
+        return rewritten, "Godot --validate-project alias rewritten to --import"
+
+    lowered = [token.lower() for token in cleaned]
+    purposeful_flags = {
+        "--check-only",
+        "--import",
+        "--script",
+        "--scene",
+        "--editor",
+        "--export-release",
+        "--export-debug",
+        "--export-pack",
+        "--build-solutions",
+        "--test",
+    }
+    if (
+        "--headless" in lowered
+        and "--path" in lowered
+        and not any(flag in lowered for flag in purposeful_flags)
+    ):
+        return command.rstrip() + " --import", "bare Godot headless project probe upgraded to --import"
+    return command, ""
 
 
 __all__ = [

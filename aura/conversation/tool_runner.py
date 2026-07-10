@@ -349,6 +349,14 @@ class ToolRunner:
             )
             return {"_terminal_payload": payload_dict}
 
+        # Most project-environment rewriting is repeated by
+        # build_project_command below.  Godot validation aliases are different:
+        # they change the engine operation itself, so carry that corrected
+        # command forward to the sandbox instead of validating one string and
+        # accidentally executing the original one.
+        if normalized.normalization_reason:
+            command = normalized.command
+
         if mode == "worker":
             explicit = matches_explicit_validation(
                 str(command),
@@ -470,6 +478,14 @@ class ToolRunner:
             "cwd": relative_cwd,
             "working_directory": relative_cwd,
         }
+        if normalized.normalization_reason:
+            payload_dict.update(
+                {
+                    "normalized": True,
+                    "validation_command_normalized": True,
+                    "normalization_reason": normalized.normalization_reason,
+                }
+            )
         terminal_classification = classify_terminal_run(
             str(command),
             exit_code=exit_code,

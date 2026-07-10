@@ -240,15 +240,29 @@ class TestExportRejected:
 
 
 class TestGodotCheckOnlyValidation:
-    def test_bare_headless_project_start_is_not_validation(self, tmp_path: Path) -> None:
+    def test_bare_headless_project_start_is_upgraded_to_import(self, tmp_path: Path) -> None:
         result = normalize_command(
             '"C:\\Tools\\Godot_v4.6.3-stable_win64.exe" '
             '--headless --path "C:\\Projects\\Game"',
             tmp_path,
         )
 
-        assert result.valid is False
-        assert "--headless --path only starts the engine" in result.validation_error
+        assert result.valid is True
+        assert result.normalized is True
+        assert result.command.endswith("--import")
+        assert "upgraded to --import" in result.normalization_reason
+
+    def test_validate_project_alias_is_rewritten_to_import(self, tmp_path: Path) -> None:
+        result = normalize_command(
+            '"C:\\Tools\\Godot_v4.6.3-stable_win64.exe" '
+            '--headless --path "C:\\Projects\\Game" --validate-project',
+            tmp_path,
+        )
+
+        assert result.valid is True
+        assert "--validate-project" not in result.command
+        assert result.command.endswith("--import")
+        assert "alias rewritten" in result.normalization_reason
 
     def test_check_only_requires_script(self, tmp_path: Path) -> None:
         result = normalize_command(

@@ -10,6 +10,7 @@ from pathlib import Path
 from aura.godot_toolchain import (
     GODOT_SETUP_MESSAGE,
     build_godot_check_command,
+    build_godot_import_command,
     find_godot_project_root,
     resolve_godot_executable,
 )
@@ -117,6 +118,10 @@ class ProjectProfile:
                 )
                 if command:
                     lines.append("Godot focused validation format: " + command)
+                lines.append(
+                    "Godot project import validation: "
+                    + build_godot_import_command(self.godot_executable, root)
+                )
             elif self.godot_setup_message:
                 lines.append(self.godot_setup_message)
         return "\n".join(lines)
