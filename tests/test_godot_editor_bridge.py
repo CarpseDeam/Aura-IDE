@@ -259,7 +259,7 @@ def test_viewport_capture_gdscript_patterns() -> None:
     content = gd_path.read_text(encoding="utf-8")
     # Must use VisualInstance3D for bounds (not bare Node3D cast)
     assert "VisualInstance3D" in content, "Must use VisualInstance3D for aabb bounds"
-    assert "get_transformed_aabb" in content, "Must call get_transformed_aabb() on VisualInstance3D"
+    assert "vi.get_aabb()" in content, "Must use VisualInstance3D.get_aabb() for local bounds"
     # Must use camera.global_transform for controlled capture (not set_camera_transform)
     assert "camera.global_transform" in content, "Must use Camera3D.global_transform for camera manipulation"
     # Must NOT use set_camera_transform (not available on SubViewport)

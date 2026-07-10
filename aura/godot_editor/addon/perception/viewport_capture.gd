@@ -43,10 +43,11 @@ func capture(params: Dictionary) -> Dictionary:
 
 	# Validate modes (type-checked)
 	var raw_modes := params.get("modes")
+	var modes: Array
 	if raw_modes == null:
-		var modes: Array = ["current_editor"]
+		modes = ["current_editor"]
 	elif raw_modes is Array:
-		var modes: Array = raw_modes
+		modes = raw_modes
 	else:
 		return {"ok": false, "error": "modes must be an array"}
 	if modes.is_empty():
@@ -127,7 +128,8 @@ func _compute_preview_bounds(preview: Node3D) -> AABB:
 	while stack.size() > 0:
 		var node := stack.pop_back()
 		if node is VisualInstance3D:
-			var child_aabb := node.get_transformed_aabb()
+			var vi := node as VisualInstance3D
+			var child_aabb := vi.global_transform * vi.get_aabb()
 			if first:
 				bounds = child_aabb
 				first = false
