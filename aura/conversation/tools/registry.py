@@ -9,6 +9,7 @@ from aura.codebase_index.tool import search_codebase as _search_codebase  # noqa
 from aura.conversation.tools._code_intel_mixin import CodeIntelHandlersMixin
 from aura.conversation.tools._diagnostic_mixin import DiagnosticHandlersMixin
 from aura.conversation.tools._git_mixin import GitHandlersMixin
+from aura.conversation.tools._godot_editor_mixin import GodotEditorHandlersMixin
 from aura.conversation.tools._godot_scene_mixin import GodotSceneHandlersMixin
 from aura.conversation.tools._memory_mixin import MemoryHandlersMixin
 from aura.conversation.tools._planner_mixin import PlannerHandlersMixin
@@ -55,6 +56,7 @@ class ToolRegistry(
     ReadHandlersMixin,
     SearchHandlersMixin,
     GitHandlersMixin,
+    GodotEditorHandlersMixin,
     GodotSceneHandlersMixin,
     WriteHandlersMixin,
     WorkerTodoHandlersMixin,
@@ -200,6 +202,9 @@ TOOL_HANDLERS["write_file"] = ToolRegistry._handle_write_file
 TOOL_HANDLERS["delete_file"] = ToolRegistry._handle_delete_file
 TOOL_HANDLERS["patch_file"] = ToolRegistry._handle_patch_file
 TOOL_HANDLERS["edit_godot_scene"] = ToolRegistry._handle_edit_godot_scene
+TOOL_HANDLERS["inspect_godot_editor"] = ToolRegistry._handle_inspect_godot_editor
+TOOL_HANDLERS["edit_godot_editor"] = ToolRegistry._handle_edit_godot_editor
+TOOL_HANDLERS["install_godot_editor_bridge"] = ToolRegistry._handle_install_godot_editor_bridge
 TOOL_HANDLERS["update_worker_todo"] = ToolRegistry._handle_update_worker_todo
 
 TOOL_HANDLERS["search_project_memory"] = ToolRegistry._handle_search_project_memory

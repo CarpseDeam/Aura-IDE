@@ -12,6 +12,37 @@ READ_TOOL_DEFS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "inspect_godot_editor",
+            "description": (
+                "Inspect the scene currently open in the live Godot editor. Returns the exact scene tree, "
+                "selected nodes, node types, scripts, transforms, and editor-visible properties. Use this "
+                "before live scene edits and again afterward to observe the result. The Aura Editor Bridge "
+                "must be installed and Godot must have the project open. If it is absent, do not write a "
+                "new addon: dispatch a Worker to call install_godot_editor_bridge."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "include_properties": {
+                        "type": "boolean",
+                        "description": "Include serialized Inspector properties for every node.",
+                        "default": True,
+                    },
+                    "max_nodes": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 2000,
+                        "description": "Maximum number of scene nodes to return. Default: 500.",
+                        "default": 500,
+                    },
+                },
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "read_file",
             "description": (
                 "Read a UTF-8 text file from the workspace. Returns its full contents (capped at 200KB). "
@@ -988,6 +1019,86 @@ SUMMON_DRONE_TOOL_DEF: dict[str, Any] = {
 
 
 WRITE_TOOL_DEFS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "install_godot_editor_bridge",
+            "description": (
+                "Install and enable Aura's modular, localhost-only EditorPlugin in the current Godot project. "
+                "This creates addons/aura_bridge and writes a token-authenticated local config. By default, "
+                "activate it normally in Godot under Project Settings > Plugins. Set enable_plugin only for "
+                "headless setup. Use this bundled installer instead of authoring another bridge."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "port": {
+                        "type": "integer",
+                        "minimum": 1024,
+                        "maximum": 65535,
+                        "default": 17891,
+                    },
+                    "enable_plugin": {
+                        "type": "boolean",
+                        "description": (
+                            "Write the enabled plugin entry into project.godot. Defaults to false so the user "
+                            "can activate it normally through Godot's Plugins UI."
+                        ),
+                        "default": False,
+                    },
+                },
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "edit_godot_editor",
+            "description": (
+                "Manipulate the scene currently open in the live Godot editor. Changes use Godot's own "
+                "EditorUndoRedoManager. Use action=apply for node/property operations, action=select to focus "
+                "nodes in Godot, or action=save to save the active scene. Inspect before and after iterating. "
+                "Values use Godot Variant text such as 'Vector3(1, 2, 3)', 'true', or '\"hello\"'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["apply", "select", "save"]},
+                    "label": {"type": "string", "description": "Undo-history label for apply."},
+                    "paths": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Root-relative node paths for select; '.' is the scene root.",
+                    },
+                    "operations": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "action": {"type": "string", "enum": ["set_property", "create_node"]},
+                                "node_path": {"type": "string"},
+                                "property": {"type": "string"},
+                                "value_text": {"type": "string"},
+                                "parent": {"type": "string", "default": "."},
+                                "name": {"type": "string"},
+                                "type": {"type": "string"},
+                                "properties": {
+                                    "type": "object",
+                                    "additionalProperties": {"type": "string"},
+                                },
+                            },
+                            "required": ["action"],
+                            "additionalProperties": False,
+                        },
+                    },
+                },
+                "required": ["action"],
+                "additionalProperties": False,
+            },
+        },
+    },
     {
         "type": "function",
         "function": {

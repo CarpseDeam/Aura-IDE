@@ -57,6 +57,14 @@ exclude = ["scripts*", "tests*"]
 [tool.setuptools.package-data]
 "aura.roles" = ["bundled/*.md"]
 "aura.validation" = ["*.gd"]
+"aura.godot_editor" = [
+    "addon/*.gd",
+    "addon/*.cfg",
+    "addon/actions/*.gd",
+    "addon/perception/*.gd",
+    "addon/protocol/*.gd",
+    "addon/transport/*.gd",
+]
 
 [tool.pytest.ini_options]
 minversion = "8.0"

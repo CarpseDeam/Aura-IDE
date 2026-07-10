@@ -41,6 +41,7 @@ PLANNER_TOOL_NAMES = {
     "code_intel_references",
     "code_intel_dependents",
     "code_intel_audit",
+    "inspect_godot_editor",
     "git_status",
     "git_diff",
     "git_log",
@@ -53,6 +54,8 @@ NORMAL_WORKER_WRITE_TOOL_NAMES = {
     "patch_file",
     "delete_file",
     "edit_godot_scene",
+    "edit_godot_editor",
+    "install_godot_editor_bridge",
 }
 
 

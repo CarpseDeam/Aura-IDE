@@ -17,6 +17,8 @@ WRITE_TOOLS = {
     "delete_file",
     "patch_file",
     "edit_godot_scene",
+    "edit_godot_editor",
+    "install_godot_editor_bridge",
 }
 TERMINAL_TOOLS = {"run_terminal_command", "run_and_watch"}
 DISPATCH_TOOLS = {"dispatch_to_worker"}

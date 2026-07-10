@@ -66,6 +66,9 @@ def test_profile_shows_focused_validation_format(tmp_path: Path) -> None:
     assert "res://path/to/touched_file.gd" in summary
     assert "Godot project import validation:" in summary
     assert "--import" in summary
+    assert "Aura live Godot editor bridge: bundled" in summary
+    assert "do not author a replacement plugin" in summary
+    assert "install_godot_editor_bridge" in summary
 
 
 def test_configured_executable_path_wins(tmp_path: Path) -> None:

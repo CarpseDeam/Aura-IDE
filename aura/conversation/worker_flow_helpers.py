@@ -22,7 +22,14 @@ TARGETED_READ_TOOLS: frozenset[str] = frozenset(
 )
 
 WRITE_TOOLS: frozenset[str] = frozenset(
-    {"write_file", "patch_file", "delete_file", "edit_godot_scene"}
+    {
+        "write_file",
+        "patch_file",
+        "delete_file",
+        "edit_godot_scene",
+        "edit_godot_editor",
+        "install_godot_editor_bridge",
+    }
 )
 VALIDATION_TOOLS: frozenset[str] = frozenset({"run_terminal_command", "run_and_watch"})
 

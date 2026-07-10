@@ -108,6 +108,11 @@ class ProjectProfile:
             lines.append(f"Node scripts: {script_names}")
         if "godot" in self.project_types:
             lines.append("Godot project root: " + (self.godot_project_root or self.workspace_root))
+            lines.append(
+                "Aura live Godot editor bridge: bundled. If addons/aura_bridge is absent, do not "
+                "author a replacement plugin. Dispatch a Worker to call install_godot_editor_bridge, "
+                "then restart Godot and use inspect_godot_editor/edit_godot_editor."
+            )
             if self.godot_executable:
                 lines.append("Godot executable: " + self.godot_executable)
                 root = Path(self.godot_project_root or self.workspace_root)
