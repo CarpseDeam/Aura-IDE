@@ -26,7 +26,7 @@ class ValidationConfig:
     socket_distance_threshold_m: float = 0.1
     socket_facing_dot_threshold: float = 0.85
     max_piece_count_warning: int = 64
-    socket_candidate_radius_m: float = 12.0
+    socket_candidate_radius_m: float = 0.75
 
 
 # ── Public entry point ──────────────────────────────────────────────────────
@@ -64,17 +64,13 @@ def struct_validate_preview(
             footprint_map[path] = _compute_footprint_bounds(inst, asset)
 
     # Run each check.
-    _check_footprint_overlap(instances, footprint_map, config, facts, unavailable)
+    _check_footprint_overlap(instances, footprint_map, config, facts, unavailable, not_applicable)
     _check_grounding(instances, assets, config, facts, unavailable)
     _check_socket_alignment(instances, assets, config, facts, unavailable, not_applicable)
     _check_duplicate_identity(instances, facts)
     _check_piece_count(instances, config, facts)
     _check_total_footprint_bounds(instances, footprint_map, facts, unavailable)
     _check_malformed_nodes(snapshot, facts)
-
-    # Pair-requiring checks are not applicable with fewer than 2 instances.
-    if len(instances) < 2:
-        not_applicable.append("footprint_overlap")
 
     # ── Aggregate status ────────────────────────────────────────────────
     evaluated_checks = sorted({
@@ -132,7 +128,13 @@ def _check_footprint_overlap(
     config: ValidationConfig,
     facts: list[dict[str, Any]],
     unavailable: list[str],
+    not_applicable: list[str],
 ) -> None:
+    # Overlap is not applicable with fewer than 2 instances.
+    if len(instances) < 2:
+        not_applicable.append("footprint_overlap")
+        return
+
     has_footprint = any(v is not None for v in footprint_map.values())
     if not has_footprint:
         unavailable.append("footprint_overlap")
@@ -178,7 +180,7 @@ def _check_grounding(
             has_bounds = True
         if asset.placement_mode == "ground":
             has_ground_instances = True
-            if "ground_reference_y" in asset.calibration:
+            if _parse_ground_reference_y(asset.calibration.get("ground_reference_y")) is not None:
                 has_ground_reference_y = True
 
     if not has_bounds:
@@ -205,20 +207,25 @@ def _check_grounding(
             })
 
         # Buried (only when ground_reference_y calibration metadata is available)
-        if (
-            asset.placement_mode == "ground"
-            and "ground_reference_y" in asset.calibration
-        ):
-            ground_y = float(asset.calibration["ground_reference_y"])
-            bottom = y - ground_y
-            if bottom < -config.burial_threshold_m:
-                facts.append({
-                    "code": "ground_asset_buried",
-                    "severity": "warning",
-                    "message": f"Asset is buried {abs(bottom):.3f}m below grade.",
-                    "paths": [inst.get("path", "")],
-                    "measured": {"burial_depth_m": round(abs(bottom), 3)},
-                })
+        if asset.placement_mode == "ground":
+            gr = _parse_ground_reference_y(asset.calibration.get("ground_reference_y"))
+            if gr is not None:
+                scale = inst.get("scale") or [1.0, 1.0, 1.0]
+                scale_y = float(scale[1]) if len(scale) >= 2 else 1.0
+                world_ground_y = y + gr * scale_y
+                if world_ground_y < -config.burial_threshold_m:
+                    burial_depth = abs(world_ground_y)
+                    facts.append({
+                        "code": "ground_asset_buried",
+                        "severity": "warning",
+                        "message": f"Asset is buried {burial_depth:.3f}m below grade.",
+                        "paths": [inst.get("path", "")],
+                        "measured": {
+                            "burial_depth_m": round(burial_depth, 3),
+                            "world_ground_y": round(world_ground_y, 3),
+                            "ground_reference_y": round(gr, 3),
+                        },
+                    })
 
 
 def _check_socket_alignment(
@@ -252,31 +259,17 @@ def _check_socket_alignment(
 
     for i in range(len(world_sockets)):
         left_inst, left_asset, left_socks = world_sockets[i]
-        left_pos = left_inst.get("position") or [0.0, 0.0, 0.0]
         for j in range(i + 1, len(world_sockets)):
             right_inst, right_asset, right_socks = world_sockets[j]
-            right_pos = right_inst.get("position") or [0.0, 0.0, 0.0]
 
-            # Candidate-radius gate: skip pairs whose instance centers
-            # are farther apart than socket_candidate_radius_m.
-            dx = float(left_pos[0]) - float(right_pos[0])
-            dy = float(left_pos[1]) - float(right_pos[1])
-            dz = float(left_pos[2]) - float(right_pos[2])
-            inst_dist = math.sqrt(dx * dx + dy * dy + dz * dz)
-            if inst_dist > config.socket_candidate_radius_m:
-                continue
-
-            # Emit at most one fact per instance pair.
-            emitted = False
-
-            # Find the minimum-distance socket pair.
             compatible = False
             min_dist = float("inf")
             min_sock_pair = (None, None)
+            min_misaligned_dist = float("inf")
+            min_misaligned_sock_pair = (None, None)
+            min_misaligned_dot = 0.0
 
             for ls in left_socks:
-                if emitted:
-                    break
                 for rs in right_socks:
                     sdx = ls["position"][0] - rs["position"][0]
                     sdy = ls["position"][1] - rs["position"][1]
@@ -295,34 +288,42 @@ def _check_socket_alignment(
                         )
                         if dot < -config.socket_facing_dot_threshold:
                             compatible = True
-                            emitted = True
                             break
                         else:
-                            facts.append({
-                                "code": "socket_misaligned_facing",
-                                "severity": "warning",
-                                "message": (
-                                    f"Sockets close but facings are misaligned "
-                                    f"(dot={dot:.3f})."
-                                ),
-                                "paths": [
-                                    left_inst.get("path", ""),
-                                    right_inst.get("path", ""),
-                                ],
-                                "measured": {
-                                    "distance_m": round(dist, 3),
-                                    "facing_dot": round(dot, 3),
-                                },
-                            })
-                            emitted = True
-                            break
-                if emitted:
+                            if dist < min_misaligned_dist:
+                                min_misaligned_dist = dist
+                                min_misaligned_sock_pair = (ls["id"], rs["id"])
+                                min_misaligned_dot = dot
+                if compatible:
                     break
+
+            # Candidate-radius gate: if nearest socket-to-socket distance
+            # exceeds candidate radius, ignore the pair entirely (no fact).
+            if min_dist > config.socket_candidate_radius_m:
+                continue
 
             if compatible:
                 continue
 
-            if not emitted and min_sock_pair[0] is not None:
+            # No compatible pair found. Emit at most one fact.
+            if min_misaligned_sock_pair[0] is not None:
+                facts.append({
+                    "code": "socket_misaligned_facing",
+                    "severity": "warning",
+                    "message": (
+                        f"Sockets close but facings are misaligned "
+                        f"(dot={min_misaligned_dot:.3f})."
+                    ),
+                    "paths": [
+                        left_inst.get("path", ""),
+                        right_inst.get("path", ""),
+                    ],
+                    "measured": {
+                        "distance_m": round(min_misaligned_dist, 3),
+                        "facing_dot": round(min_misaligned_dot, 3),
+                    },
+                })
+            elif min_sock_pair[0] is not None:
                 facts.append({
                     "code": "socket_distance_exceeded",
                     "severity": "warning",
@@ -514,6 +515,27 @@ def _world_socket_facing(
     if length < 1e-9:
         return (0.0, 0.0, 0.0)
     return (fx / length, fy / length, fz / length)
+
+
+def _parse_ground_reference_y(value: Any) -> float | None:
+    """Parse ground_reference_y calibration value defensively.
+
+    Accepts finite int/float.  Rejects strings, bools, NaN, inf, and
+    None.  Never raises.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            f = float(value)
+        except (ValueError, OverflowError, TypeError):
+            return None
+        if not math.isfinite(f):
+            return None
+        return f
+    return None
 
 
 def _pos_key(pos: list[float]) -> str:
