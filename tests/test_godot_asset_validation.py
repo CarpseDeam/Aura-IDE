@@ -170,13 +170,18 @@ def test_misaligned_sockets_report_distance(tmp_path: Path) -> None:
     assert len(misaligned) >= 1, f"No misaligned facts: {sv['facts']}"
     assert "distance_m" in misaligned[0]["measured"]
     assert misaligned[0]["measured"]["facing_dot"] >= -0.84  # not pointing toward each other
+    # At most one socket fact per pair — no socket_distance_exceeded for the same pair.
+    dist_facts = [f for f in sv["facts"] if f["code"] == "socket_distance_exceeded"]
+    assert len(dist_facts) == 0, f"Unexpected distance facts: {dist_facts}"
+    socket_facts = [f for f in sv["facts"] if "socket_" in f["code"]]
+    assert len(socket_facts) == 1, f"Expected exactly 1 socket fact, got {len(socket_facts)}"
 
 
 # ── Socket distance exceeded ─────────────────────────────────────────────────
 
 
-def test_socket_distance_exceeded_for_shared_role_instances(tmp_path: Path) -> None:
-    """Distant instances sharing a semantic role report socket_distance_exceeded."""
+def test_socket_distance_exceeded_within_candidate_radius(tmp_path: Path) -> None:
+    """Instances within candidate radius with distant sockets report distance_exceeded."""
     root = _project(tmp_path, [_wall()])
     instances = [
         _enrich({
@@ -194,11 +199,29 @@ def test_socket_distance_exceeded_for_shared_role_instances(tmp_path: Path) -> N
     assert dist_facts[0]["measured"]["distance_m"] > 0.1
 
 
+def test_socket_outside_candidate_radius_no_fact(tmp_path: Path) -> None:
+    """Instances farther than candidate radius produce no socket fact."""
+    root = _project(tmp_path, [_wall()])
+    instances = [
+        _enrich({
+            "path": "AuraPreview/A", "resource_path": "res://assets/modules/wall.tscn",
+            "position": [0, 0, 0], "rotation_degrees": [0, 0, 0], "scale": [1, 1, 1],
+        }),
+        _enrich({
+            "path": "AuraPreview/B", "resource_path": "res://assets/modules/wall.tscn",
+            "position": [20, 0, 0], "rotation_degrees": [0, 0, 0], "scale": [1, 1, 1],
+        }),
+    ]
+    sv = struct_validate_preview(root, _enriched_snapshot(instances))
+    socket_facts = [f for f in sv["facts"] if "socket_" in f["code"]]
+    assert len(socket_facts) == 0, f"Unexpected socket facts: {socket_facts}"
+
+
 # ── Missing sockets leads to unavailable_checks ──────────────────────────────
 
 
-def test_no_socket_assets_produces_unavailable_socket_alignment(tmp_path: Path) -> None:
-    """When no asset has sockets, socket_alignment appears in unavailable_checks."""
+def test_no_socket_assets_produces_not_applicable_socket_alignment(tmp_path: Path) -> None:
+    """When no asset has sockets, socket_alignment appears in not_applicable_checks."""
     asset = _wall("no_sock")
     asset["sockets"] = []
     root = _project(tmp_path, [asset])
@@ -209,7 +232,7 @@ def test_no_socket_assets_produces_unavailable_socket_alignment(tmp_path: Path) 
         }, asset_id="no_sock"),
     ]
     sv = struct_validate_preview(root, _enriched_snapshot(instances))
-    assert "socket_alignment" in sv["unavailable_checks"]
+    assert "socket_alignment" in sv["not_applicable_checks"]
 
 
 # ── Duplicate instance ───────────────────────────────────────────────────────
@@ -233,11 +256,15 @@ def test_duplicate_identity_produces_warning_fact(tmp_path: Path) -> None:
 
 
 def test_ground_asset_elevated_produces_info_fact(tmp_path: Path) -> None:
-    """A ground-placed asset above threshold produces a ground_asset_elevated fact."""
+    """A ground-placed asset above threshold produces a ground_asset_elevated fact.
+    Negative Y must NOT trigger elevated.
+    """
     elevated_asset = _wall("elevated")
     elevated_asset["sockets"] = []  # no sockets → placement_mode = "ground"
     elevated_asset["tags"] = ["ruins", "rubble", "scatter"]
     root = _project(tmp_path, [elevated_asset])
+
+    # Positive Y → elevated fact expected.
     instances = [
         _enrich({
             "path": "AuraPreview/A", "resource_path": "res://assets/modules/wall.tscn",
@@ -246,30 +273,43 @@ def test_ground_asset_elevated_produces_info_fact(tmp_path: Path) -> None:
     ]
     sv = struct_validate_preview(root, _enriched_snapshot(instances))
     elevated = [f for f in sv["facts"] if f["code"] == "ground_asset_elevated"]
-    assert len(elevated) >= 1
+    assert len(elevated) >= 1, f"Expected elevated fact for Y=0.5: {sv['facts']}"
     assert elevated[0]["measured"]["elevation_m"] == 0.5
+
+    # Negative Y → must NOT produce elevated fact.
+    instances_neg = [
+        _enrich({
+            "path": "AuraPreview/B", "resource_path": "res://assets/modules/wall.tscn",
+            "position": [0, -0.5, 0], "rotation_degrees": [0, 0, 0], "scale": [1, 1, 1],
+        }, asset_id="elevated", roles=["scatter"]),
+    ]
+    sv2 = struct_validate_preview(root, _enriched_snapshot(instances_neg))
+    elevated_neg = [f for f in sv2["facts"] if f["code"] == "ground_asset_elevated"]
+    assert len(elevated_neg) == 0, f"Unexpected elevated fact for negative Y: {elevated_neg}"
 
 
 # ── Ground asset buried ──────────────────────────────────────────────────────
 
 
-def test_ground_asset_buried_produces_warning_fact(tmp_path: Path) -> None:
-    """An asset whose bottom is below grade produces a ground_asset_buried fact."""
+def test_ground_asset_buried_without_ground_reference_y(tmp_path: Path) -> None:
+    """When ground_reference_y is missing, burial appears in unavailable_checks
+    and no ground_asset_buried fact is emitted.
+    """
     buried_asset = _wall("buried")
     buried_asset["sockets"] = []
     buried_asset["tags"] = ["ruins", "rubble", "scatter"]
+    # No calibration.ground_reference_y set.
     root = _project(tmp_path, [buried_asset])
-    # height = 4.0, bottom = 0.1 - 4.0/2 = 0.1 - 2.0 = -1.9 → buried 1.9m
     instances = [
         _enrich({
             "path": "AuraPreview/A", "resource_path": "res://assets/modules/wall.tscn",
-            "position": [0, 0.1, 0], "rotation_degrees": [0, 0, 0], "scale": [1, 1, 1],
+            "position": [0, -10, 0], "rotation_degrees": [0, 0, 0], "scale": [1, 1, 1],
         }, asset_id="buried", roles=["scatter"]),
     ]
     sv = struct_validate_preview(root, _enriched_snapshot(instances))
-    buried = [f for f in sv["facts"] if f["code"] == "ground_asset_buried"]
-    assert len(buried) >= 1
-    assert buried[0]["measured"]["burial_depth_m"] > 0
+    buried_facts = [f for f in sv["facts"] if f["code"] == "ground_asset_buried"]
+    assert len(buried_facts) == 0, f"Unexpected buried facts without ground_reference_y: {buried_facts}"
+    assert "burial" in sv["unavailable_checks"], f"burial not in unavailable_checks: {sv['unavailable_checks']}"
 
 
 # ── Piece count exceeded ──────────────────────────────────────────────────────

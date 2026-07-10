@@ -26,7 +26,7 @@ class ValidationConfig:
     socket_distance_threshold_m: float = 0.1
     socket_facing_dot_threshold: float = 0.85
     max_piece_count_warning: int = 64
-    default_instance_count_warning: int = 40
+    socket_candidate_radius_m: float = 12.0
 
 
 # ── Public entry point ──────────────────────────────────────────────────────
@@ -51,6 +51,7 @@ def struct_validate_preview(
 
     facts: list[dict[str, Any]] = []
     unavailable: list[str] = []
+    not_applicable: list[str] = []
 
     # Pre-compute footprint bounds for every enriched instance.
     footprint_map: dict[str, tuple[float, float, float, float] | None] = {}
@@ -65,11 +66,15 @@ def struct_validate_preview(
     # Run each check.
     _check_footprint_overlap(instances, footprint_map, config, facts, unavailable)
     _check_grounding(instances, assets, config, facts, unavailable)
-    _check_socket_alignment(instances, assets, config, facts, unavailable)
+    _check_socket_alignment(instances, assets, config, facts, unavailable, not_applicable)
     _check_duplicate_identity(instances, facts)
     _check_piece_count(instances, config, facts)
     _check_total_footprint_bounds(instances, footprint_map, facts, unavailable)
     _check_malformed_nodes(snapshot, facts)
+
+    # Pair-requiring checks are not applicable with fewer than 2 instances.
+    if len(instances) < 2:
+        not_applicable.append("footprint_overlap")
 
     # ── Aggregate status ────────────────────────────────────────────────
     evaluated_checks = sorted({
@@ -84,7 +89,7 @@ def struct_validate_preview(
         "piece_count",
         "total_footprint_bounds",
         "malformed_nodes",
-    } - set(unavailable))
+    } - set(unavailable) - set(not_applicable))
 
     has_error = any(f.get("severity") == "error" for f in facts)
     has_warning = any(f.get("severity") == "warning" for f in facts)
@@ -107,6 +112,7 @@ def struct_validate_preview(
         "status": status,
         "evaluated_checks": evaluated_checks,
         "unavailable_checks": sorted(unavailable),
+        "not_applicable_checks": sorted(not_applicable),
         "facts": facts,
         "summary": {
             "error_count": error_count,
@@ -161,13 +167,25 @@ def _check_grounding(
     unavailable: list[str],
 ) -> None:
     has_bounds = False
+    has_ground_instances = False
+    has_ground_reference_y = False
+
     for inst in instances:
         asset = _lookup_asset(assets, inst)
-        if asset is not None and asset.local_bounds_m is not None:
+        if asset is None:
+            continue
+        if asset.local_bounds_m is not None:
             has_bounds = True
-            break
+        if asset.placement_mode == "ground":
+            has_ground_instances = True
+            if "ground_reference_y" in asset.calibration:
+                has_ground_reference_y = True
+
     if not has_bounds:
         unavailable.append("grounding")
+
+    if has_ground_instances and not has_ground_reference_y:
+        unavailable.append("burial")
 
     for inst in instances:
         asset = _lookup_asset(assets, inst)
@@ -176,8 +194,8 @@ def _check_grounding(
         pos = inst.get("position") or [0.0, 0.0, 0.0]
         y = float(pos[1]) if len(pos) == 3 else 0.0
 
-        # Elevated
-        if asset.placement_mode == "ground" and abs(y) > config.ground_elevation_threshold_m:
+        # Elevated (positive Y only)
+        if asset.placement_mode == "ground" and y > config.ground_elevation_threshold_m:
             facts.append({
                 "code": "ground_asset_elevated",
                 "severity": "info",
@@ -186,10 +204,13 @@ def _check_grounding(
                 "measured": {"elevation_m": round(y, 3)},
             })
 
-        # Buried (only meaningful for ground-placed assets)
-        if asset.placement_mode == "ground" and asset.local_bounds_m is not None:
-            height = float(asset.local_bounds_m[1])
-            bottom = y - height / 2.0
+        # Buried (only when ground_reference_y calibration metadata is available)
+        if (
+            asset.placement_mode == "ground"
+            and "ground_reference_y" in asset.calibration
+        ):
+            ground_y = float(asset.calibration["ground_reference_y"])
+            bottom = y - ground_y
             if bottom < -config.burial_threshold_m:
                 facts.append({
                     "code": "ground_asset_buried",
@@ -206,6 +227,7 @@ def _check_socket_alignment(
     config: ValidationConfig,
     facts: list[dict[str, Any]],
     unavailable: list[str],
+    not_applicable: list[str],
 ) -> None:
     # Collect instances that have sockets.
     socketed: list[tuple[dict[str, Any], GodotAsset]] = []
@@ -215,7 +237,7 @@ def _check_socket_alignment(
             socketed.append((inst, asset))
 
     if len(socketed) < 2:
-        unavailable.append("socket_alignment")
+        not_applicable.append("socket_alignment")
         return
 
     # Pre-compute world transforms for every socket.
@@ -230,19 +252,37 @@ def _check_socket_alignment(
 
     for i in range(len(world_sockets)):
         left_inst, left_asset, left_socks = world_sockets[i]
+        left_pos = left_inst.get("position") or [0.0, 0.0, 0.0]
         for j in range(i + 1, len(world_sockets)):
             right_inst, right_asset, right_socks = world_sockets[j]
+            right_pos = right_inst.get("position") or [0.0, 0.0, 0.0]
 
-            # Check every socket pair.
+            # Candidate-radius gate: skip pairs whose instance centers
+            # are farther apart than socket_candidate_radius_m.
+            dx = float(left_pos[0]) - float(right_pos[0])
+            dy = float(left_pos[1]) - float(right_pos[1])
+            dz = float(left_pos[2]) - float(right_pos[2])
+            inst_dist = math.sqrt(dx * dx + dy * dy + dz * dz)
+            if inst_dist > config.socket_candidate_radius_m:
+                continue
+
+            # Emit at most one fact per instance pair.
+            emitted = False
+
+            # Find the minimum-distance socket pair.
             compatible = False
             min_dist = float("inf")
             min_sock_pair = (None, None)
+
             for ls in left_socks:
+                if emitted:
+                    break
                 for rs in right_socks:
-                    dx = ls["position"][0] - rs["position"][0]
-                    dy = ls["position"][1] - rs["position"][1]
-                    dz = ls["position"][2] - rs["position"][2]
-                    dist = math.sqrt(dx * dx + dy * dy + dz * dz)
+                    sdx = ls["position"][0] - rs["position"][0]
+                    sdy = ls["position"][1] - rs["position"][1]
+                    sdz = ls["position"][2] - rs["position"][2]
+                    dist = math.sqrt(sdx * sdx + sdy * sdy + sdz * sdz)
+
                     if dist < min_dist:
                         min_dist = dist
                         min_sock_pair = (ls["id"], rs["id"])
@@ -255,12 +295,16 @@ def _check_socket_alignment(
                         )
                         if dot < -config.socket_facing_dot_threshold:
                             compatible = True
+                            emitted = True
                             break
                         else:
                             facts.append({
                                 "code": "socket_misaligned_facing",
                                 "severity": "warning",
-                                "message": f"Sockets close but facings are misaligned (dot={dot:.3f}).",
+                                "message": (
+                                    f"Sockets close but facings are misaligned "
+                                    f"(dot={dot:.3f})."
+                                ),
                                 "paths": [
                                     left_inst.get("path", ""),
                                     right_inst.get("path", ""),
@@ -270,27 +314,28 @@ def _check_socket_alignment(
                                     "facing_dot": round(dot, 3),
                                 },
                             })
-                if compatible:
+                            emitted = True
+                            break
+                if emitted:
                     break
 
-            if not compatible:
-                # Check if instances share semantic roles (expected to align).
-                left_roles = set(left_asset.semantic_roles)
-                right_roles = set(right_asset.semantic_roles)
-                if left_roles & right_roles and min_sock_pair[0] is not None:
-                    facts.append({
-                        "code": "socket_distance_exceeded",
-                        "severity": "warning",
-                        "message": (
-                            f"Socket pair ({min_sock_pair[0]}, {min_sock_pair[1]}) "
-                            f"distance {min_dist:.3f}m exceeds threshold."
-                        ),
-                        "paths": [
-                            left_inst.get("path", ""),
-                            right_inst.get("path", ""),
-                        ],
-                        "measured": {"distance_m": round(min_dist, 3)},
-                    })
+            if compatible:
+                continue
+
+            if not emitted and min_sock_pair[0] is not None:
+                facts.append({
+                    "code": "socket_distance_exceeded",
+                    "severity": "warning",
+                    "message": (
+                        f"Socket pair ({min_sock_pair[0]}, {min_sock_pair[1]}) "
+                        f"distance {min_dist:.3f}m exceeds threshold."
+                    ),
+                    "paths": [
+                        left_inst.get("path", ""),
+                        right_inst.get("path", ""),
+                    ],
+                    "measured": {"distance_m": round(min_dist, 3)},
+                })
 
 
 def _check_duplicate_identity(
