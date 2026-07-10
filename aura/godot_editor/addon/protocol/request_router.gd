@@ -5,12 +5,14 @@ const SceneActions = preload("../actions/scene_actions.gd")
 const SceneSnapshot = preload("../perception/scene_snapshot.gd")
 const AssetPreviewActions = preload("../actions/asset_preview_actions.gd")
 const AssetPreviewSnapshot = preload("../perception/asset_preview_snapshot.gd")
+const ViewportCapture = preload("../perception/viewport_capture.gd")
 
 var _editor_interface: EditorInterface
 var _snapshot
 var _actions
 var _asset_preview_actions
 var _asset_preview_snapshot
+var _viewport_capture
 
 
 func _init(editor_interface: EditorInterface, undo_redo: EditorUndoRedoManager) -> void:
@@ -19,6 +21,7 @@ func _init(editor_interface: EditorInterface, undo_redo: EditorUndoRedoManager) 
 	_actions = SceneActions.new(editor_interface, undo_redo)
 	_asset_preview_actions = AssetPreviewActions.new(editor_interface, undo_redo)
 	_asset_preview_snapshot = AssetPreviewSnapshot.new(editor_interface)
+	_viewport_capture = ViewportCapture.new(editor_interface)
 
 
 func dispatch(action: String, params: Dictionary) -> Dictionary:
@@ -27,8 +30,8 @@ func dispatch(action: String, params: Dictionary) -> Dictionary:
 			return {"ok": true, "result": {
 				"bridge": "aura-godot-editor",
 				"protocol": 1,
-				"bridge_version": 2,
-				"capabilities": ["scene.snapshot", "scene.select", "scene.apply", "scene.save", "preview.snapshot", "preview.instantiate", "preview.clear"],
+				"bridge_version": 3,
+				"capabilities": ["scene.snapshot", "scene.select", "scene.apply", "scene.save", "preview.snapshot", "preview.instantiate", "preview.clear", "preview.capture"],
 			}}
 		"scene.snapshot":
 			return _snapshot.capture(params)
@@ -45,5 +48,7 @@ func dispatch(action: String, params: Dictionary) -> Dictionary:
 			return _asset_preview_actions.instantiate_assets(params)
 		"preview.clear":
 			return _asset_preview_actions.clear_preview(params)
+		"preview.capture":
+			return _viewport_capture.capture(params)
 		_:
 			return {"ok": false, "error": "unsupported action: %s" % action}

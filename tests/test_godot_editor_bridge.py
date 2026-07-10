@@ -6,9 +6,11 @@ import threading
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from aura.conversation.tools._types import ApprovalDecision
 from aura.conversation.tools.registry import ToolRegistry
-from aura.godot_editor.client import GodotEditorBridgeClient, load_bridge_config
+from aura.godot_editor.client import GodotEditorBridgeClient, GodotEditorBridgeError, load_bridge_config
 from aura.godot_editor.installer import ADDON_SETTING, enable_plugin_setting, install_editor_bridge
 
 
@@ -36,6 +38,7 @@ def test_installer_copies_modular_addon_for_normal_godot_activation(tmp_path: Pa
     assert config.host == "127.0.0.1"
     assert config.port == 18991
     assert len(config.token) >= 24
+    assert (root / "addons/aura_bridge/perception/viewport_capture.gd").is_file()
 
 
 def test_installer_can_enable_plugin_for_headless_setup(tmp_path: Path) -> None:
@@ -163,3 +166,88 @@ def test_live_editor_edit_is_approval_gated(tmp_path: Path) -> None:
     assert result.ok is True
     assert result.payload["applied"] is True
     client_type.return_value.request.assert_called_once()
+
+
+def test_capability_reporting_includes_preview_capture(tmp_path: Path) -> None:
+    root = _project(tmp_path)
+    server = socket.socket()
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+    port = server.getsockname()[1]
+    token = "t" * 32
+    (root / ".aura").mkdir()
+    (root / ".aura/godot_editor_bridge.json").write_text(
+        json.dumps({"host": "127.0.0.1", "port": port, "token": token}), encoding="utf-8"
+    )
+
+    def serve() -> None:
+        with server:
+            peer, _address = server.accept()
+            with peer:
+                wire = b""
+                while not wire.endswith(b"\n"):
+                    wire += peer.recv(4096)
+                request = json.loads(wire)
+                response = {
+                    "ok": True,
+                    "request_id": request["request_id"],
+                    "result": {
+                        "bridge": "aura-godot-editor",
+                        "protocol": 1,
+                        "bridge_version": 3,
+                        "capabilities": [
+                            "scene.snapshot",
+                            "scene.select",
+                            "scene.apply",
+                            "scene.save",
+                            "preview.snapshot",
+                            "preview.instantiate",
+                            "preview.clear",
+                            "preview.capture",
+                        ],
+                    },
+                }
+                peer.sendall(json.dumps(response).encode() + b"\n")
+
+    thread = threading.Thread(target=serve)
+    thread.start()
+    result = GodotEditorBridgeClient(root).request("ping", {})
+    thread.join(timeout=2)
+
+    assert result["bridge"] == "aura-godot-editor"
+    assert result["bridge_version"] == 3
+    assert "preview.capture" in result["capabilities"]
+
+
+def test_preview_capture_metadata_shape_is_rejected_by_client_when_malformed(tmp_path: Path) -> None:
+    root = _project(tmp_path)
+    server = socket.socket()
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+    port = server.getsockname()[1]
+    token = "t" * 32
+    (root / ".aura").mkdir()
+    (root / ".aura/godot_editor_bridge.json").write_text(
+        json.dumps({"host": "127.0.0.1", "port": port, "token": token}), encoding="utf-8"
+    )
+
+    def serve() -> None:
+        with server:
+            peer, _address = server.accept()
+            with peer:
+                wire = b""
+                while not wire.endswith(b"\n"):
+                    wire += peer.recv(4096)
+                request = json.loads(wire)
+                response = {
+                    "ok": True,
+                    "request_id": request["request_id"],
+                    "result": "not-a-dict",
+                }
+                peer.sendall(json.dumps(response).encode() + b"\n")
+
+    thread = threading.Thread(target=serve)
+    thread.start()
+    with pytest.raises(GodotEditorBridgeError, match="invalid result"):
+        GodotEditorBridgeClient(root).request("preview.capture", {})
+    thread.join(timeout=2)
