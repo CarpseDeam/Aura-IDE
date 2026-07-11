@@ -33,6 +33,7 @@ def test_installer_copies_modular_addon_for_normal_godot_activation(tmp_path: Pa
     assert (root / "addons/aura_bridge/actions/scene_actions.gd").is_file()
     assert (root / "addons/aura_bridge/actions/asset_preview_actions.gd").is_file()
     assert (root / "addons/aura_bridge/perception/asset_preview_snapshot.gd").is_file()
+    assert (root / "addons/aura_bridge/perception/api_introspection.gd").is_file()
     assert ADDON_SETTING not in (root / "project.godot").read_text(encoding="utf-8")
     config = load_bridge_config(root)
     assert config.host == "127.0.0.1"
@@ -115,6 +116,7 @@ def test_registry_exposes_live_editor_tools_by_role(tmp_path: Path) -> None:
 
     assert {
         "inspect_godot_editor",
+        "inspect_godot_api",
         "inspect_godot_asset_preview",
         "capture_godot_asset_preview",
         "edit_godot_editor",
@@ -122,6 +124,7 @@ def test_registry_exposes_live_editor_tools_by_role(tmp_path: Path) -> None:
         "install_godot_editor_bridge",
     } <= worker_names
     assert "inspect_godot_editor" in planner_names
+    assert "inspect_godot_api" in planner_names
     assert "inspect_godot_asset_preview" in planner_names
     assert "capture_godot_asset_preview" in planner_names
     assert "edit_godot_editor" not in planner_names
@@ -196,7 +199,7 @@ def test_capability_reporting_includes_preview_capture(tmp_path: Path) -> None:
                     "result": {
                         "bridge": "aura-godot-editor",
                         "protocol": 1,
-                        "bridge_version": 3,
+                        "bridge_version": 5,
                         "capabilities": [
                             "scene.snapshot",
                             "scene.select",
@@ -205,7 +208,9 @@ def test_capability_reporting_includes_preview_capture(tmp_path: Path) -> None:
                             "preview.snapshot",
                             "preview.instantiate",
                             "preview.clear",
+                            "preview.apply",
                             "preview.capture",
+                            "api.describe",
                         ],
                     },
                 }
@@ -217,7 +222,9 @@ def test_capability_reporting_includes_preview_capture(tmp_path: Path) -> None:
     thread.join(timeout=2)
 
     assert result["bridge"] == "aura-godot-editor"
-    assert result["bridge_version"] == 3
+    assert result["bridge_version"] == 5
+    assert "preview.apply" in result["capabilities"]
+    assert "api.describe" in result["capabilities"]
     assert "preview.capture" in result["capabilities"]
 
 
@@ -312,3 +319,55 @@ def test_capture_tool_rejects_bridge_offline(tmp_path: Path) -> None:
     assert "error" in result.payload
     assert "not installed" in str(result.payload["error"]).lower() or \
            "bridge is not installed" in str(result.payload["error"]).lower()
+
+
+def test_inspect_godot_api_uses_live_classdb_route(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path, mode="planner")
+    with patch("aura.conversation.tools._godot_editor_mixin.GodotEditorBridgeClient") as client_type:
+        client_type.return_value.request.return_value = {
+            "mode": "class",
+            "class_name": "Node3D",
+            "methods": [{"name": "to_local", "arguments": []}],
+            "properties": [],
+            "signals": [],
+            "integer_constants": [],
+            "enums": [],
+        }
+        result = registry.execute(
+            "inspect_godot_api",
+            {"class_name": "Node3D", "member_query": "local"},
+            lambda _request: ApprovalDecision("approve"),
+        )
+
+    assert result.ok is True
+    assert result.payload["source"] == "live_godot_classdb"
+    client_type.return_value.request.assert_called_once_with(
+        "api.describe",
+        {
+            "class_name": "Node3D",
+            "member_query": "local",
+            "include_inherited": False,
+            "max_items": 50,
+        },
+    )
+
+
+def test_inspect_godot_api_falls_back_to_configured_executable(tmp_path: Path) -> None:
+    registry = ToolRegistry(tmp_path, mode="planner")
+    with (
+        patch("aura.conversation.tools._godot_editor_mixin.GodotEditorBridgeClient") as client_type,
+        patch(
+            "aura.conversation.tools._godot_editor_mixin.query_godot_api_offline",
+            return_value={"mode": "class_search", "engine_classes": ["Node3D"]},
+        ) as offline_query,
+    ):
+        client_type.return_value.request.side_effect = GodotEditorBridgeError("offline")
+        result = registry.execute(
+            "inspect_godot_api",
+            {"member_query": "node3d", "max_items": 10},
+            lambda _request: ApprovalDecision("approve"),
+        )
+
+    assert result.ok is True
+    assert result.payload["source"] == "configured_godot_classdb"
+    offline_query.assert_called_once()

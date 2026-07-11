@@ -119,6 +119,45 @@ READ_TOOL_DEFS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "inspect_godot_api",
+            "description": (
+                "Query the exact engine API exposed by the live Godot editor's ClassDB. Search engine class "
+                "names or inspect a class's methods, argument/default signatures, properties, signals, integer "
+                "constants, and enums before writing GDScript or editor-plugin code. This is read-only and "
+                "version-exact. ClassDB does not include project script-defined class_name types; inspect project "
+                "code for those."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "class_name": {
+                        "type": "string",
+                        "description": "Exact engine class to inspect. Omit to search class names.",
+                    },
+                    "member_query": {
+                        "type": "string",
+                        "description": "Case-insensitive class-name or member-name filter.",
+                    },
+                    "include_inherited": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "Include inherited members when inspecting one class.",
+                    },
+                    "max_items": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 200,
+                        "default": 50,
+                        "description": "Maximum returned matches in each bounded member section.",
+                    },
+                },
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "inspect_godot_editor",
             "description": (
                 "Inspect the scene currently open in the live Godot editor. Returns the exact scene tree, "
@@ -1219,7 +1258,7 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "action": {"type": "string", "enum": ["instantiate", "clear"]},
+                    "action": {"type": "string", "enum": ["instantiate", "clear", "apply"]},
                     "label": {"type": "string", "description": "Undo-history label."},
                     "placements": {
                         "type": "array",
@@ -1241,6 +1280,37 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
                                 },
                             },
                             "required": ["asset_id"],
+                            "additionalProperties": False,
+                        },
+                    },
+                    "operations": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 25,
+                        "description": "Atomic ordered revision operations required for action=apply.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "operation": {
+                                    "type": "string",
+                                    "enum": ["set_transform", "instantiate", "remove", "replace"],
+                                },
+                                "node_path": {
+                                    "type": "string",
+                                    "description": "Direct child path such as AuraPreview/WestWall.",
+                                },
+                                "asset_id": {"type": "string"},
+                                "domain": {"type": "string"},
+                                "name": {"type": "string"},
+                                "position": {
+                                    "type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3
+                                },
+                                "rotation_degrees_y": {"type": "number"},
+                                "scale": {
+                                    "type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3
+                                },
+                            },
+                            "required": ["operation"],
                             "additionalProperties": False,
                         },
                     },

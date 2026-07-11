@@ -181,8 +181,6 @@ def test_preview_analysis_enriches_assets_and_flags_overlap(tmp_path: Path) -> N
     assert result["instances"][0]["semantic_roles"] == ["barrier", "cover"]
     overlaps = [item for item in result["diagnostics"] if item["code"] == "footprint_overlap"]
     assert overlaps[0]["paths"] == ["AuraPreview/A", "AuraPreview/B"]
-
-    # Structural-validation payload is now a dict (not the old string).
     sv = result["structural_validation"]
     assert isinstance(sv, dict)
     assert sv["status"] in ("passed", "failed", "partial")
@@ -190,3 +188,82 @@ def test_preview_analysis_enriches_assets_and_flags_overlap(tmp_path: Path) -> N
     assert len(footprint_facts) >= 1
     assert "overlap_x_m" in footprint_facts[0]["measured"]
     assert "overlap_z_m" in footprint_facts[0]["measured"]
+
+
+def test_atomic_preview_apply_resolves_replacement_and_addition_assets(tmp_path: Path) -> None:
+    root, _catalog = _project(tmp_path, [_wall()])
+    registry = ToolRegistry(root, mode="worker")
+    with patch(
+        "aura.conversation.tools._godot_asset_preview_mixin.GodotEditorBridgeClient"
+    ) as client_type:
+        client_type.return_value.request.return_value = {
+            "applied": True,
+            "operation_count": 3,
+            "changed_paths": ["AuraPreview/WestWall"],
+            "added_paths": ["AuraPreview/wall_02"],
+            "removed_paths": [],
+            "replaced_paths": ["AuraPreview/Gate"],
+            "instance_count": 3,
+        }
+        result = registry.execute(
+            "edit_godot_asset_preview",
+            {
+                "action": "apply",
+                "operations": [
+                    {
+                        "operation": "set_transform",
+                        "node_path": "AuraPreview/WestWall",
+                        "position": [4, 0, 0],
+                    },
+                    {"operation": "instantiate", "asset_id": "wall", "position": [8, 0, 0]},
+                    {
+                        "operation": "replace",
+                        "node_path": "AuraPreview/Gate",
+                        "asset_id": "wall",
+                    },
+                ],
+            },
+            lambda _request: ApprovalDecision("approve"),
+        )
+
+    assert result.ok is True
+    action, params = client_type.return_value.request.call_args.args
+    assert action == "preview.apply"
+    assert params["operations"][1]["resource_path"] == "res://assets/modules/wall.tscn"
+    assert params["operations"][2]["catalog_identity"] == "ruins:wall"
+    assert "position" not in params["operations"][2]
+
+
+def test_atomic_preview_apply_rejects_nested_or_conflicting_targets(tmp_path: Path) -> None:
+    root, _catalog = _project(tmp_path, [_wall()])
+    registry = ToolRegistry(root, mode="worker")
+    nested = registry.execute(
+        "edit_godot_asset_preview",
+        {
+            "action": "apply",
+            "operations": [
+                {"operation": "remove", "node_path": "AuraPreview/Building/NestedWall"}
+            ],
+        },
+        lambda _request: ApprovalDecision("approve"),
+    )
+    conflicting = registry.execute(
+        "edit_godot_asset_preview",
+        {
+            "action": "apply",
+            "operations": [
+                {"operation": "remove", "node_path": "AuraPreview/Wall"},
+                {
+                    "operation": "set_transform",
+                    "node_path": "AuraPreview/Wall",
+                    "position": [1, 0, 0],
+                },
+            ],
+        },
+        lambda _request: ApprovalDecision("approve"),
+    )
+
+    assert nested.ok is False
+    assert "direct AuraPreview child" in nested.payload["error"]
+    assert conflicting.ok is False
+    assert "more than one operation" in conflicting.payload["error"]

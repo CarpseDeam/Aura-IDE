@@ -8,13 +8,10 @@ import re
 from aura.conversation.tools._types import ToolExecResult
 from aura.conversation.tools.write_payloads import _mark_not_applied
 from aura.godot_assets import resolve_godot_asset
+from aura.godot_assets.capture_evidence import validate_capture_set
 from aura.godot_assets.preview import analyze_preview_snapshot
 from aura.godot_editor.client import GodotEditorBridgeClient, GodotEditorBridgeError
-from aura.paths import safe_is_relative_to
 from aura.perception.decompiler import describe as _decompile_image
-
-import base64
-import hashlib
 
 
 class GodotAssetPreviewHandlersMixin:
@@ -66,127 +63,26 @@ class GodotAssetPreviewHandlersMixin:
             capture_result = client.request("preview.capture", params)
             snapshot = client.request("preview.snapshot", {})
             preview_facts = analyze_preview_snapshot(self._root, snapshot)
-
-            if not capture_result.get("ok"):
-                return ToolExecResult(
-                    ok=False,
-                    payload={"ok": False, "error": capture_result.get("error", "bridge returned ok=False")},
-                )
-
-            raw_captures = capture_result.get("captures")
-            if not isinstance(raw_captures, list):
-                return ToolExecResult(ok=False, payload={"ok": False, "error": "bridge response missing captures list"})
-
-            scene_fingerprint = capture_result.get("scene_fingerprint", "")
-            scene_path_res = capture_result.get("scene_path", "")
-
-            if len(raw_captures) > 4:
-                return ToolExecResult(ok=False, payload={"ok": False, "error": "too many captures (max 4)"})
-
-            captures_out = []
-            for cap in raw_captures:
-                if not isinstance(cap, dict):
-                    continue
-                res_path = str(cap.get("path", ""))
-                if res_path.startswith("res://"):
-                    local_rel = res_path[6:].lstrip("/")
-                else:
-                    local_rel = res_path
-                local_path = (self._root / local_rel).resolve()
-
-                allowed_root = (self._root / ".aura" / "tmp" / "godot_previews").resolve()
-                if not safe_is_relative_to(local_path, allowed_root):
-                    return ToolExecResult(
-                        ok=False,
-                        payload={"ok": False, "error": f"capture path '{res_path}' escapes allowed preview directory"},
-                    )
-
-                if not local_path.suffix.lower() == ".png":
-                    return ToolExecResult(
-                        ok=False,
-                        payload={"ok": False, "error": f"capture path '{res_path}' is not a PNG file"},
-                    )
-
-                if not local_path.is_file():
-                    return ToolExecResult(
-                        ok=False,
-                        payload={"ok": False, "error": f"capture file not found: {res_path}"},
-                    )
-
-                file_size = local_path.stat().st_size
-                if file_size > 20 * 1024 * 1024:
-                    return ToolExecResult(
-                        ok=False,
-                        payload={"ok": False, "error": f"capture file exceeds 20 MiB: {res_path}"},
-                    )
-
-                cap_width = cap.get("width", 0)
-                cap_height = cap.get("height", 0)
-                if (isinstance(cap_width, (int, float)) and cap_width > 3840) or \
-                   (isinstance(cap_height, (int, float)) and cap_height > 2160):
-                    return ToolExecResult(
-                        ok=False,
-                        payload={"ok": False, "error": f"capture dimensions exceed 3840x2160: {res_path}"},
-                    )
-
-                png_bytes = local_path.read_bytes()
-                actual_sha256 = hashlib.sha256(png_bytes).hexdigest()
-                expected_sha256 = cap.get("sha256", "")
-                if expected_sha256 and actual_sha256 != expected_sha256:
-                    return ToolExecResult(
-                        ok=False,
-                        payload={"ok": False, "error": f"SHA-256 mismatch for {res_path}"},
-                    )
-
-                image_b64 = base64.b64encode(png_bytes).decode("ascii")
-                visual_structure = _decompile_image(image_b64)
-
-                captures_out.append(
-                    {
-                        "view": cap.get("view", ""),
-                        "path": str(allowed_root.parent.parent.parent / local_rel) if local_rel else str(local_path),
-                        "width": cap_width,
-                        "height": cap_height,
-                        "sha256": actual_sha256,
-                        "evidence_kind": "local_structural_decompile",
-                        "visual_structure": visual_structure,
-                    }
-                )
-
-            # Resolve scene_path to workspace-relative
-            scene_path_relative = ""
-            if scene_path_res.startswith("res://"):
-                scene_path_relative = scene_path_res[6:].lstrip("/")
-            else:
-                scene_path_relative = scene_path_res
-
-            payload = {
-                "ok": True,
-                "read_only": True,
-                "capture_set_id": params.get("capture_set_id", ""),
-                "scene_path": scene_path_relative,
-                "scene_fingerprint": scene_fingerprint,
-                "preview": {
-                    "instance_count": len(preview_facts.get("instances", [])),
-                    "instances": preview_facts.get("instances", []),
-                    "structural_validation": preview_facts.get("structural_validation", {}),
-                },
-                "captures": captures_out,
-            }
+            evidence = validate_capture_set(
+                self._root, capture_result, preview_facts, _decompile_image
+            )
+            payload = {"ok": True, "read_only": True, **evidence}
             return ToolExecResult(ok=True, payload=payload)
         except (GodotEditorBridgeError, TypeError, ValueError, OSError) as exc:
-            return ToolExecResult(ok=False, payload={"ok": False, "error": str(exc)})
+            return ToolExecResult(
+                ok=False, payload={"ok": False, "error": _preview_bridge_error(exc)}
+            )
 
     def _handle_edit_godot_asset_preview(self, args, approval_cb, reject_all) -> ToolExecResult:
         blocked = self._live_editor_write_block("edit_godot_asset_preview")
         if blocked is not None:
             return blocked
         action = str(args.get("action") or "")
-        if action not in {"instantiate", "clear"}:
+        if action not in {"instantiate", "clear", "apply"}:
             return ToolExecResult(
                 ok=False,
                 payload=_mark_not_applied(
-                    {"ok": False, "error": "action must be instantiate or clear", "failure_class": "invalid_preview_action"}
+                    {"ok": False, "error": "action must be instantiate, clear, or apply", "failure_class": "invalid_preview_action"}
                 ),
             )
         try:
@@ -215,9 +111,16 @@ class GodotAssetPreviewHandlersMixin:
         return ToolExecResult(ok=True, payload={"ok": True, "applied": bool(result.get("applied")), "action": action, **result})
 
     def _prepare_preview_params(self, action: str, args: dict) -> dict:
-        label = str(args.get("label") or ("Aura place catalog assets" if action == "instantiate" else "Aura clear asset preview"))
+        default_labels = {
+            "instantiate": "Aura place catalog assets",
+            "clear": "Aura clear asset preview",
+            "apply": "Aura revise asset preview",
+        }
+        label = str(args.get("label") or default_labels[action])
         if action == "clear":
             return {"label": label}
+        if action == "apply":
+            return {"label": label, "operations": self._prepare_preview_operations(args)}
         raw_placements = args.get("placements")
         if not isinstance(raw_placements, list) or not 1 <= len(raw_placements) <= 64:
             raise ValueError("placements must contain between 1 and 64 items")
@@ -257,6 +160,87 @@ class GodotAssetPreviewHandlersMixin:
             )
         return {"label": label, "placements": placements}
 
+    def _prepare_preview_operations(self, args: dict) -> list[dict]:
+        raw_operations = args.get("operations")
+        if not isinstance(raw_operations, list) or not 1 <= len(raw_operations) <= 25:
+            raise ValueError("operations must contain between 1 and 25 items")
+        operations: list[dict] = []
+        targeted: set[str] = set()
+        added_names: set[str] = set()
+        for index, raw in enumerate(raw_operations):
+            if not isinstance(raw, dict):
+                raise ValueError(f"operation {index} must be an object")
+            operation = str(raw.get("operation") or "")
+            if operation not in {"set_transform", "instantiate", "remove", "replace"}:
+                raise ValueError(f"operation {index} has an unsupported operation")
+            if operation == "instantiate":
+                prepared = self._prepare_catalog_revision_asset(raw, index)
+                if prepared["name"] in added_names:
+                    raise ValueError(f"duplicate new preview name: {prepared['name']}")
+                added_names.add(prepared["name"])
+                operations.append({"operation": operation, **prepared})
+                continue
+
+            node_path = _direct_preview_path(raw.get("node_path"), index)
+            if node_path in targeted:
+                raise ValueError(f"preview target appears in more than one operation: {node_path}")
+            targeted.add(node_path)
+            if operation == "remove":
+                operations.append({"operation": operation, "node_path": node_path})
+                continue
+            if operation == "set_transform":
+                transform = _optional_transform(raw, index)
+                if not transform:
+                    raise ValueError(f"set_transform operation {index} must change a transform value")
+                operations.append({"operation": operation, "node_path": node_path, **transform})
+                continue
+            prepared = self._prepare_catalog_revision_asset(raw, index)
+            operations.append(
+                {
+                    "operation": operation,
+                    "node_path": node_path,
+                    **prepared,
+                    **_optional_transform(raw, index),
+                }
+            )
+        return operations
+
+    def _prepare_catalog_revision_asset(self, raw: dict, index: int) -> dict:
+        asset = resolve_godot_asset(
+            self._root, str(raw.get("asset_id") or ""), domain=str(raw.get("domain") or "")
+        )
+        raw_name = str(raw.get("name") or "").strip()
+        operation = str(raw.get("operation") or "")
+        name = raw_name or (_default_name(asset.id, index) if operation == "instantiate" else "")
+        if name and any(char in name for char in ".:@/\""):
+            raise ValueError(f"operation {index} has an invalid node name: {name}")
+        result = {
+            "catalog_identity": f"{asset.domain}:{asset.id}",
+            "resource_path": asset.resource_path,
+            "allowed_rotations_deg": list(asset.allowed_rotations_deg),
+        }
+        if name:
+            result["name"] = name
+        if operation == "instantiate":
+            result.update(
+                {
+                    "position": _vector(raw.get("position", [0, 0, 0]), f"operation {index} position"),
+                    "rotation_degrees_y": _number(
+                        raw.get("rotation_degrees_y", 0), f"operation {index} rotation"
+                    ),
+                    "scale": _vector(raw.get("scale", [1, 1, 1]), f"operation {index} scale"),
+                }
+            )
+            _validate_transform_bounds(result, index)
+            _validate_allowed_rotation(result["rotation_degrees_y"], asset.allowed_rotations_deg, asset.id)
+        elif "rotation_degrees_y" in raw:
+            _validate_allowed_rotation(
+                _number(raw["rotation_degrees_y"], f"operation {index} rotation"),
+                asset.allowed_rotations_deg,
+                asset.id,
+            )
+        return result
+
 
 def _number(value, label: str) -> float:
     if isinstance(value, bool):
@@ -279,6 +263,44 @@ def _vector(value, label: str) -> list[float]:
 def _default_name(asset_id: str, index: int) -> str:
     stem = re.sub(r"[^A-Za-z0-9_-]+", "_", asset_id).strip("_") or "Asset"
     return f"{stem}_{index + 1:02d}"
+
+
+def _direct_preview_path(value, index: int) -> str:
+    path = str(value or "").strip()
+    if not path.startswith("AuraPreview/") or path.count("/") != 1:
+        raise ValueError(f"operation {index} must target one direct AuraPreview child")
+    name = path.split("/", 1)[1]
+    if not name or any(char in name for char in ".:@/\""):
+        raise ValueError(f"operation {index} has an invalid preview path")
+    return path
+
+
+def _optional_transform(raw: dict, index: int) -> dict:
+    result: dict = {}
+    if "position" in raw:
+        result["position"] = _vector(raw["position"], f"operation {index} position")
+    if "rotation_degrees_y" in raw:
+        result["rotation_degrees_y"] = _number(
+            raw["rotation_degrees_y"], f"operation {index} rotation"
+        )
+    if "scale" in raw:
+        result["scale"] = _vector(raw["scale"], f"operation {index} scale")
+    _validate_transform_bounds(result, index)
+    return result
+
+
+def _validate_transform_bounds(transform: dict, index: int) -> None:
+    if "position" in transform and any(abs(value) > 10000 for value in transform["position"]):
+        raise ValueError(f"operation {index} exceeds the 10 km preview bound")
+    if "scale" in transform and any(value < 0.01 or value > 100 for value in transform["scale"]):
+        raise ValueError(f"operation {index} scale must be between 0.01 and 100")
+
+
+def _validate_allowed_rotation(rotation: float, allowed: tuple[float, ...], asset_id: str) -> None:
+    if allowed and not any(
+        math.isclose(rotation % 360, candidate % 360, abs_tol=1e-4) for candidate in allowed
+    ):
+        raise ValueError(f"rotation is not allowed for catalog asset {asset_id}")
 
 
 def _preview_bridge_error(exc: Exception) -> str:

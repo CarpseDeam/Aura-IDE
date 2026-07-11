@@ -210,6 +210,7 @@ TOOL_HANDLERS["inspect_godot_assets"] = ToolRegistry._handle_inspect_godot_asset
 TOOL_HANDLERS["inspect_godot_asset_preview"] = ToolRegistry._handle_inspect_godot_asset_preview
 TOOL_HANDLERS["capture_godot_asset_preview"] = ToolRegistry._handle_capture_godot_asset_preview
 TOOL_HANDLERS["inspect_godot_editor"] = ToolRegistry._handle_inspect_godot_editor
+TOOL_HANDLERS["inspect_godot_api"] = ToolRegistry._handle_inspect_godot_api
 TOOL_HANDLERS["edit_godot_editor"] = ToolRegistry._handle_edit_godot_editor
 TOOL_HANDLERS["edit_godot_asset_preview"] = ToolRegistry._handle_edit_godot_asset_preview
 TOOL_HANDLERS["install_godot_editor_bridge"] = ToolRegistry._handle_install_godot_editor_bridge

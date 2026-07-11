@@ -22,7 +22,7 @@ func capture(params: Dictionary) -> Dictionary:
 		return {"ok": false, "error": "AuraPreview not found or not a Node3D"}
 
 	# Validate capture_set_id (type-checked)
-	var raw_id := params.get("capture_set_id")
+	var raw_id: Variant = params.get("capture_set_id")
 	if raw_id != null and not (raw_id is String):
 		return {"ok": false, "error": "capture_set_id must be a string"}
 	var capture_set_id := str(raw_id if raw_id != null else "").strip_edges()
@@ -32,17 +32,17 @@ func capture(params: Dictionary) -> Dictionary:
 		return {"ok": false, "error": "invalid capture_set_id"}
 
 	# Validate dimensions (type-checked, clamped)
-	var raw_width := params.get("width", 1280)
+	var raw_width: Variant = params.get("width", 1280)
 	if raw_width != null and not (raw_width is int or raw_width is float):
 		return {"ok": false, "error": "width must be a number"}
 	var width := clampi(int(raw_width), 64, 1920)
-	var raw_height := params.get("height", 720)
+	var raw_height: Variant = params.get("height", 720)
 	if raw_height != null and not (raw_height is int or raw_height is float):
 		return {"ok": false, "error": "height must be a number"}
 	var height := clampi(int(raw_height), 64, 1080)
 
 	# Validate modes (type-checked)
-	var raw_modes := params.get("modes")
+	var raw_modes: Variant = params.get("modes")
 	var modes: Array
 	if raw_modes == null:
 		modes = ["current_editor"]
@@ -126,7 +126,7 @@ func _compute_preview_bounds(preview: Node3D) -> AABB:
 	var first := true
 	var stack: Array[Node] = preview.get_children()
 	while stack.size() > 0:
-		var node := stack.pop_back()
+		var node: Node = stack.pop_back()
 		if node is VisualInstance3D:
 			var vi := node as VisualInstance3D
 			var child_aabb := vi.global_transform * vi.get_aabb()
@@ -151,7 +151,7 @@ func _compute_preview_bounds(preview: Node3D) -> AABB:
 	return bounds
 
 
-func _capture_single(viewport, mode: String, capture_set_id: String, out_prefix: String, \
+func _capture_single(viewport: SubViewport, mode: String, capture_set_id: String, out_prefix: String, \
 		width: int, height: int, preview_center: Vector3, max_dim: float) -> Dictionary:
 	var is_controlled := mode != "current_editor"
 	var camera: Camera3D
@@ -177,13 +177,13 @@ func _capture_single(viewport, mode: String, capture_set_id: String, out_prefix:
 		RenderingServer.force_draw()
 
 	# Capture viewport texture
-	var texture := viewport.get_texture()
+	var texture: ViewportTexture = viewport.get_texture()
 	if texture == null:
 		if is_controlled:
 			camera.global_transform = stored_transform
 		return {"ok": false, "error": "%s capture returned null texture" % mode}
 
-	var image := texture.get_image()
+	var image: Image = texture.get_image()
 	if image == null or image.is_empty():
 		if is_controlled:
 			camera.global_transform = stored_transform
@@ -196,7 +196,7 @@ func _capture_single(viewport, mode: String, capture_set_id: String, out_prefix:
 	# Save as PNG
 	var file_name := mode + ".png"
 	var file_path := out_prefix + file_name
-	var save_err := image.save_png(file_path)
+	var save_err: Error = image.save_png(file_path)
 	if save_err != OK:
 		if is_controlled:
 			camera.global_transform = stored_transform

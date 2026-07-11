@@ -82,6 +82,246 @@ func clear_preview(params: Dictionary) -> Dictionary:
 	return {"ok": true, "result": {"applied": true, "preview_root": PREVIEW_ROOT_NAME, "removed_count": children.size()}}
 
 
+func apply_revision(params: Dictionary) -> Dictionary:
+	var scene_root := _editor_interface.get_edited_scene_root()
+	if scene_root == null:
+		return {"ok": false, "error": "no scene is open"}
+	if not scene_root is Node3D:
+		return {"ok": false, "error": "asset preview requires a Node3D scene root"}
+	var operations = params.get("operations", [])
+	if not operations is Array or operations.is_empty() or operations.size() > 25:
+		return {"ok": false, "error": "operations must contain between 1 and 25 items"}
+	var preview := scene_root.get_node_or_null(NodePath(PREVIEW_ROOT_NAME))
+	if preview != null and (not preview is Node3D or not bool(preview.get_meta("aura_preview_root", false))):
+		return {"ok": false, "error": "%s already exists but is not an Aura preview root" % PREVIEW_ROOT_NAME}
+
+	var names: Dictionary = {}
+	var nodes: Dictionary = {}
+	if preview != null:
+		for child in preview.get_children():
+			names[str(child.name)] = true
+			nodes[PREVIEW_ROOT_NAME + "/" + str(child.name)] = child
+	var prepared: Array[Dictionary] = []
+	var targeted: Dictionary = {}
+	var creates_preview := preview == null
+	for index in operations.size():
+		var checked := _prepare_revision_operation(operations[index], index, names, nodes, targeted)
+		if not checked.get("ok", false):
+			_free_prepared_instances(prepared)
+			return checked
+		prepared.append(checked["operation"])
+	if names.size() > MAX_INSTANCES:
+		_free_prepared_instances(prepared)
+		return {"ok": false, "error": "revision would exceed the %d-instance preview limit" % MAX_INSTANCES}
+	if creates_preview:
+		for operation in prepared:
+			if operation["operation"] != "instantiate":
+				_free_prepared_instances(prepared)
+				return {"ok": false, "error": "only instantiate can create a missing AuraPreview root"}
+		preview = Node3D.new()
+		preview.name = PREVIEW_ROOT_NAME
+		preview.set_meta("aura_preview_root", true)
+
+	_undo_redo.create_action(str(params.get("label", "Aura revise asset preview")), UndoRedo.MERGE_DISABLE, scene_root)
+	_undo_redo.add_do_method(self, "_execute_revision", scene_root, preview, prepared, creates_preview, true)
+	_undo_redo.add_undo_method(self, "_execute_revision", scene_root, preview, prepared, creates_preview, false)
+	for operation in prepared:
+		if operation.has("new_node"):
+			_undo_redo.add_do_reference(operation["new_node"])
+	if creates_preview:
+		_undo_redo.add_do_reference(preview)
+	_undo_redo.commit_action()
+
+	var changed: Array[String] = []
+	var added: Array[String] = []
+	var removed: Array[String] = []
+	var replaced: Array[String] = []
+	for operation in prepared:
+		match operation["operation"]:
+			"set_transform": changed.append(operation["path"])
+			"instantiate": added.append(operation["path"])
+			"remove": removed.append(operation["path"])
+			"replace": replaced.append(operation["path"])
+	return {"ok": true, "result": {
+		"applied": true,
+		"preview_root": PREVIEW_ROOT_NAME,
+		"operation_count": prepared.size(),
+		"changed_paths": changed,
+		"added_paths": added,
+		"removed_paths": removed,
+		"replaced_paths": replaced,
+		"instance_count": names.size(),
+	}}
+
+
+func _prepare_revision_operation(
+	raw: Variant,
+	index: int,
+	names: Dictionary,
+	nodes: Dictionary,
+	targeted: Dictionary,
+) -> Dictionary:
+	if not raw is Dictionary:
+		return {"ok": false, "error": "operation %d must be an object" % index}
+	var action := str(raw.get("operation", ""))
+	if action == "instantiate":
+		var placed := _prepare_placement(raw, index, names)
+		if not placed.get("ok", false):
+			return placed
+		var placement: Dictionary = placed["placement"]
+		return {"ok": true, "operation": {
+			"operation": action,
+			"path": PREVIEW_ROOT_NAME + "/" + str(placement["instance"].name),
+			"new_node": placement["instance"],
+			"new_position": placement["position"],
+			"new_rotation": Vector3(0.0, placement["rotation_y"], 0.0),
+			"new_scale": placement["scale"],
+		}}
+
+	var path := str(raw.get("node_path", ""))
+	if not path.begins_with(PREVIEW_ROOT_NAME + "/") or path.count("/") != 1:
+		return {"ok": false, "error": "operation %d must target one direct preview child" % index}
+	if targeted.has(path):
+		return {"ok": false, "error": "preview target appears more than once: %s" % path}
+	var target: Node = nodes.get(path)
+	if target == null or not target is Node3D:
+		return {"ok": false, "error": "preview target does not exist or is not Node3D: %s" % path}
+	targeted[path] = true
+	var target_3d := target as Node3D
+	var base := {
+		"operation": action,
+		"path": path,
+		"old_node": target_3d,
+		"old_owner": target_3d.owner,
+		"old_index": target_3d.get_index(),
+		"old_position": target_3d.position,
+		"old_rotation": target_3d.rotation_degrees,
+		"old_scale": target_3d.scale,
+	}
+	if action == "remove":
+		names.erase(str(target_3d.name))
+		return {"ok": true, "operation": base}
+	if action == "set_transform":
+		var transform := _revision_transform(raw, target_3d.position, target_3d.rotation_degrees.y, target_3d.scale)
+		if not transform.get("ok", false):
+			return transform
+		base.merge(transform["transform"])
+		return {"ok": true, "operation": base}
+	if action == "replace":
+		names.erase(str(target_3d.name))
+		var replacement_raw: Dictionary = raw.duplicate()
+		if str(replacement_raw.get("name", "")).is_empty():
+			replacement_raw["name"] = str(target_3d.name)
+		if not replacement_raw.has("position"):
+			replacement_raw["position"] = [target_3d.position.x, target_3d.position.y, target_3d.position.z]
+		if not replacement_raw.has("rotation_degrees_y"):
+			replacement_raw["rotation_degrees_y"] = target_3d.rotation_degrees.y
+		if not replacement_raw.has("scale"):
+			replacement_raw["scale"] = [target_3d.scale.x, target_3d.scale.y, target_3d.scale.z]
+		var replaced := _prepare_placement(replacement_raw, index, names)
+		if not replaced.get("ok", false):
+			names[str(target_3d.name)] = true
+			return replaced
+		var placement: Dictionary = replaced["placement"]
+		base["new_node"] = placement["instance"]
+		base["new_position"] = placement["position"]
+		base["new_rotation"] = Vector3(0.0, placement["rotation_y"], 0.0)
+		base["new_scale"] = placement["scale"]
+		base["new_path"] = PREVIEW_ROOT_NAME + "/" + str(placement["instance"].name)
+		return {"ok": true, "operation": base}
+	return {"ok": false, "error": "unsupported revision operation: %s" % action}
+
+
+func _revision_transform(raw: Dictionary, position: Vector3, rotation_y: float, scale: Vector3) -> Dictionary:
+	var decoded_position: Variant = _vector3(raw.get("position", []), position)
+	var decoded_scale: Variant = _vector3(raw.get("scale", []), scale)
+	var decoded_rotation: Variant = raw.get("rotation_degrees_y", rotation_y)
+	if decoded_position == null or decoded_scale == null or (not decoded_rotation is int and not decoded_rotation is float):
+		return {"ok": false, "error": "revision transform is invalid"}
+	if absf(decoded_position.x) > 10000.0 or absf(decoded_position.y) > 10000.0 or absf(decoded_position.z) > 10000.0:
+		return {"ok": false, "error": "revision position exceeds the 10 km preview bound"}
+	if decoded_scale.x < 0.01 or decoded_scale.y < 0.01 or decoded_scale.z < 0.01 or decoded_scale.x > 100.0 or decoded_scale.y > 100.0 or decoded_scale.z > 100.0:
+		return {"ok": false, "error": "revision scale must be between 0.01 and 100"}
+	return {"ok": true, "transform": {
+		"new_position": decoded_position,
+		"new_rotation": Vector3(0.0, float(decoded_rotation), 0.0),
+		"new_scale": decoded_scale,
+	}}
+
+
+func _execute_revision(
+	scene_root: Node,
+	preview: Node3D,
+	operations: Array[Dictionary],
+	creates_preview: bool,
+	forward: bool,
+) -> void:
+	if forward:
+		if creates_preview and preview.get_parent() == null:
+			scene_root.add_child(preview, true)
+			preview.owner = scene_root
+		for operation in operations:
+			_apply_prepared_operation(scene_root, preview, operation, true)
+	else:
+		for index in range(operations.size() - 1, -1, -1):
+			_apply_prepared_operation(scene_root, preview, operations[index], false)
+		if creates_preview and preview.get_parent() == scene_root:
+			scene_root.remove_child(preview)
+
+
+func _apply_prepared_operation(scene_root: Node, preview: Node3D, operation: Dictionary, forward: bool) -> void:
+	var action: String = operation["operation"]
+	if action == "set_transform":
+		var node: Node3D = operation["old_node"]
+		node.position = operation["new_position"] if forward else operation["old_position"]
+		node.rotation_degrees = operation["new_rotation"] if forward else operation["old_rotation"]
+		node.scale = operation["new_scale"] if forward else operation["old_scale"]
+	elif action == "instantiate":
+		var node: Node3D = operation["new_node"]
+		if forward:
+			preview.add_child(node, true)
+			node.owner = scene_root
+			node.position = operation["new_position"]
+			node.rotation_degrees = operation["new_rotation"]
+			node.scale = operation["new_scale"]
+		elif node.get_parent() == preview:
+			preview.remove_child(node)
+	elif action == "remove":
+		var node: Node3D = operation["old_node"]
+		if forward and node.get_parent() == preview:
+			preview.remove_child(node)
+		elif not forward:
+			preview.add_child(node, true)
+			preview.move_child(node, mini(operation["old_index"], preview.get_child_count() - 1))
+			node.owner = operation["old_owner"]
+	elif action == "replace":
+		var old_node: Node3D = operation["old_node"]
+		var new_node: Node3D = operation["new_node"]
+		if forward:
+			if old_node.get_parent() == preview:
+				preview.remove_child(old_node)
+			preview.add_child(new_node, true)
+			preview.move_child(new_node, mini(operation["old_index"], preview.get_child_count() - 1))
+			new_node.owner = scene_root
+			new_node.position = operation["new_position"]
+			new_node.rotation_degrees = operation["new_rotation"]
+			new_node.scale = operation["new_scale"]
+		else:
+			if new_node.get_parent() == preview:
+				preview.remove_child(new_node)
+			preview.add_child(old_node, true)
+			preview.move_child(old_node, mini(operation["old_index"], preview.get_child_count() - 1))
+			old_node.owner = operation["old_owner"]
+
+
+func _free_prepared_instances(prepared: Array[Dictionary]) -> void:
+	for operation in prepared:
+		if operation.has("new_node"):
+			var node: Node = operation["new_node"]
+			if is_instance_valid(node) and node.get_parent() == null:
+				node.free()
+
+
 func _prepare_placement(raw: Variant, index: int, names: Dictionary) -> Dictionary:
 	if not raw is Dictionary:
 		return {"ok": false, "error": "placement %d must be an object" % index}
@@ -117,6 +357,19 @@ func _prepare_placement(raw: Variant, index: int, names: Dictionary) -> Dictiona
 	if scale.x < 0.01 or scale.y < 0.01 or scale.z < 0.01 or scale.x > 100.0 or scale.y > 100.0 or scale.z > 100.0:
 		instance.free()
 		return {"ok": false, "error": "placement %d scale must be between 0.01 and 100" % index}
+	var allowed_rotations: Variant = raw.get("allowed_rotations_deg", [])
+	if not allowed_rotations is Array:
+		instance.free()
+		return {"ok": false, "error": "placement %d allowed rotations are invalid" % index}
+	if not allowed_rotations.is_empty():
+		var rotation_allowed := false
+		for allowed in allowed_rotations:
+			if (allowed is int or allowed is float) and is_equal_approx(fposmod(float(rotation_y), 360.0), fposmod(float(allowed), 360.0)):
+				rotation_allowed = true
+				break
+		if not rotation_allowed:
+			instance.free()
+			return {"ok": false, "error": "placement %d rotation is not catalog-approved" % index}
 	return {"ok": true, "placement": {"instance": instance, "position": position, "rotation_y": float(rotation_y), "scale": scale}}
 
 

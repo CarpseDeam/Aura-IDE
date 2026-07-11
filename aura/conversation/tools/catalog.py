@@ -45,6 +45,7 @@ PLANNER_TOOL_NAMES = {
     "inspect_godot_asset_preview",
     "capture_godot_asset_preview",
     "inspect_godot_editor",
+    "inspect_godot_api",
     "git_status",
     "git_diff",
     "git_log",

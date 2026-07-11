@@ -6,6 +6,7 @@ import json
 
 from aura.conversation.tools._types import ApprovalRequest, ToolExecResult
 from aura.conversation.tools.write_payloads import _mark_not_applied
+from aura.godot_editor.api_query import query_godot_api_offline
 from aura.godot_editor.client import GodotEditorBridgeClient, GodotEditorBridgeError
 from aura.godot_editor.installer import install_editor_bridge
 
@@ -37,6 +38,35 @@ class GodotEditorHandlersMixin:
                 )
             return ToolExecResult(ok=False, payload=payload)
         return ToolExecResult(ok=True, payload={"ok": True, **result})
+
+    def _handle_inspect_godot_api(self, args, approval_cb, reject_all) -> ToolExecResult:
+        params = {
+            "class_name": str(args.get("class_name") or ""),
+            "member_query": str(args.get("member_query") or ""),
+            "include_inherited": bool(args.get("include_inherited", False)),
+            "max_items": int(args.get("max_items", 50)),
+        }
+        source = "live_godot_classdb"
+        try:
+            result = GodotEditorBridgeClient(self._root).request("api.describe", params)
+        except GodotEditorBridgeError:
+            try:
+                result = query_godot_api_offline(self._root, params)
+                source = "configured_godot_classdb"
+            except (RuntimeError, TypeError, ValueError) as exc:
+                return ToolExecResult(ok=False, payload={"ok": False, "error": str(exc)})
+        except (TypeError, ValueError) as exc:
+            return ToolExecResult(ok=False, payload={"ok": False, "error": str(exc)})
+        return ToolExecResult(
+            ok=True,
+            payload={
+                "ok": True,
+                "read_only": True,
+                "source": source,
+                "note": "ClassDB covers engine classes; script-defined class_name types require project code inspection.",
+                **result,
+            },
+        )
 
     def _handle_edit_godot_editor(self, args, approval_cb, reject_all) -> ToolExecResult:
         blocked = self._live_editor_write_block("edit_godot_editor")
