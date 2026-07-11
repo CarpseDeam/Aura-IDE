@@ -9,7 +9,7 @@ triggers: ["aura preview", "godot bridge", "inspect_godot_api", "inspect_godot_a
 - May inspect project conventions, catalog (inspect_godot_assets), live scene (inspect_godot_editor), AuraPreview (inspect_godot_asset_preview), uncertain Godot APIs (inspect_godot_api), and captured visual evidence (capture_godot_asset_preview).
 - Produces one compact Worker item for the complete live-editor composition request.
 - Preserves the user's original visual intent, constraints, and no-save instruction.
-- Names the existing conversation tools the Worker should use.
+- Names the existing conversation tools the Worker should use. For rendered visual-composition work, the compact handoff must preserve the original visual brief and explicitly name `critique_godot_preview_local` for the Worker to call.
 - Must NOT write helper scripts, source files, builders, generators, resources, tests, or documentation for a live composition request.
 - Must NOT read bridge credentials, author TCP clients, call bridge protocol actions directly, or invent another execution path.
 - Must NOT prescribe raw resource paths or bypass catalog asset IDs.
@@ -27,13 +27,19 @@ Build coherent environments in observable visible layers:
 2. Connect corners and complete important spatial relationships.
 3. Add secondary structures and interior organization.
 4. Add breaches, damage, rubble, props, and visual storytelling.
-5. Inspect exact live facts and structural diagnostics.
-6. Capture overview visual evidence.
-7. Obtain bounded local visual critique (optional, when the personal tool is installed).
-8. Apply a focused atomic revision.
-9. Reinspect, recapture, and continue while meaningful improvements remain.
+5. After each meaningful visual-composition pass, inspect exact live facts and structural diagnostics.
+6. Capture a useful overview or other view that clearly shows the composition under judgment.
+7. When `critique_godot_preview_local` is installed and callable, call it with that capture, the original creative brief, and bounded exact scene facts.
+8. Use the returned semantic observations to make a focused atomic revision with a concrete design purpose.
+9. Reinspect exact facts, recapture, critique again, and continue while meaningful improvements remain.
 
-Use structural facts (preview snapshot, footprint diagnostics) for exact geometry. Use image evidence (capture, critique) for composition, hierarchy, silhouette, readability, and atmosphere. Make each revision concrete and visible in the editor.
+Use structural facts (preview snapshot, footprint diagnostics) for exact geometry. Use image evidence and semantic critique for composition, hierarchy, silhouette, readability, apparent connectedness, negative space, atmosphere, and environmental storytelling. Structural facts, nominal dimensions, transforms, instance counts, node names, overlap diagnostics, and Aura's built-in local image decompiler are not proof that a rendered composition is visually coherent. Make each revision concrete and visible in the editor.
+
+#### Semantic Visual Evidence
+- Semantic critique is required when success depends on rendered composition, visual hierarchy, silhouette, entrance readability, apparent connectedness, negative space, atmosphere, or environmental storytelling and `critique_godot_preview_local` is installed and callable.
+- If the local critique tool is unavailable or fails during a task requiring visual judgment, preserve the exact unavailable/failure result and do not claim that the composition is visually successful or coherent.
+- Semantic critique is unnecessary for purely structural work such as API inspection, bridge validation, catalog validation, deterministic geometry checks, or capture-plumbing tests.
+- Planner names the tool and preserves the brief in its handoff but does not execute semantic critique, inspect bridge credentials, mutate Godot, or author helper scripts. Worker alone owns the semantic critique and every resulting live-editor revision.
 
 #### Pass Limit and Supervision
 - When the user is actively supervising the run, there is no fixed revision-pass limit.

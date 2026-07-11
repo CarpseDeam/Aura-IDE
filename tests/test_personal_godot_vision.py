@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import shutil
 from pathlib import Path
 from unittest.mock import patch
 
 from PIL import Image
+
+from aura.conversation.tools.registry import ToolRegistry
 
 SCRIPT = Path("scripts/personal/godot_vision/critique_godot_preview.py")
 
@@ -55,3 +58,28 @@ def test_personal_vision_tool_validates_path_and_calls_loopback_ollama(tmp_path:
 
     escaped = module.critique_godot_preview_local("../outside.png", "request")
     assert escaped["ok"] is False
+
+
+def test_personal_vision_tool_is_worker_only_and_executes_through_registry(tmp_path: Path) -> None:
+    tools_dir = tmp_path / ".aura/tools"
+    tools_dir.mkdir(parents=True)
+    shutil.copy2(SCRIPT, tools_dir / SCRIPT.name)
+    worker = ToolRegistry(tmp_path, mode="worker")
+    planner = ToolRegistry(tmp_path, mode="planner")
+
+    worker_names = {tool["function"]["name"] for tool in worker.tool_defs()}
+    planner_names = {tool["function"]["name"] for tool in planner.tool_defs()}
+    result = worker.execute(
+        "critique_godot_preview_local",
+        {"capture_path": "../outside.png", "user_request": "Inspect the composition"},
+        None,
+    )
+
+    assert "critique_godot_preview_local" in worker_names
+    assert "critique_godot_preview_local" not in planner_names
+    assert result.ok is True
+    assert result.payload["result"] == {
+        "ok": False,
+        "local_only": True,
+        "error": "capture_path must be a workspace-relative PNG",
+    }
