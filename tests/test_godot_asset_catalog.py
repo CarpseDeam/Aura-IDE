@@ -866,11 +866,12 @@ func _initialize() -> void:
         0, source, {"Wall": true})
     source.scale = Vector3.ONE
     var scaled_target: Dictionary = actions._prepare_attach_operation(
-        _params("scaled_target", [2.0, 0.0, 0.0], [1.0, 0.0, 0.0], [-2.0, 0.0, 0.0], [-1.0, 0.0, 0.0], [2.0, 1.0, 3.0]),
+        _params("scaled_target", [2.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 0.0, -1.0], [2.0, 1.0, 3.0]),
         0, source, {"Wall": true})
     var disallowed: Dictionary = actions._prepare_attach_operation(
         _params("corner", [2.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 0.0, -1.0], [1.0, 1.0, 1.0], [0.0]),
         0, source, {"Wall": true})
+    var failed_preparation_child_count := preview.get_child_count()
     if not straight.get("ok", false) or not corner.get("ok", false) or not scaled_source.get("ok", false) or not scaled_target.get("ok", false):
         push_error("attachment preparation failed")
         quit(1)
@@ -888,6 +889,14 @@ func _initialize() -> void:
     actions._execute_revision(scene_root, preview, prepared_ops, false, true)
     var forward_count := preview.get_child_count()
     actions._execute_revision(scene_root, preview, prepared_ops, false, false)
+    var straight_undo_count := preview.get_child_count()
+    var scaled_target_ops: Array[Dictionary] = [scaled_target["operation"]]
+    actions._execute_revision(scene_root, preview, scaled_target_ops, false, true)
+    var live_scaled_target: Node3D = scaled_target["operation"]["new_node"]
+    var live_source_socket: Vector3 = source.transform * Vector3(2.0, 0.0, 0.0)
+    var live_target_socket: Vector3 = live_scaled_target.transform * Vector3(0.0, 0.0, -1.0)
+    var live_source_facing: Vector3 = source.transform.basis.orthonormalized() * Vector3.RIGHT
+    var live_target_facing: Vector3 = live_scaled_target.transform.basis.orthonormalized() * Vector3(0.0, 0.0, -1.0)
     var result := {
         "straight_position": _vector(straight_op["new_position"]),
         "straight_rotation_y": straight_op["new_rotation"].y,
@@ -899,14 +908,19 @@ func _initialize() -> void:
         "corner_path": corner_op["path"],
         "scaled_source_position": _vector(scaled_source["operation"]["new_position"]),
         "scaled_source_facing": _vector((Basis(Vector3.UP, deg_to_rad(scaled_source["operation"]["new_rotation"].y)) * Vector3.LEFT).normalized()),
-        "scaled_target_position": _vector(scaled_target["operation"]["new_position"]),
-        "scaled_target_scale": _vector(scaled_target["operation"]["new_scale"]),
+        "scaled_target_position": _vector(live_scaled_target.position),
+        "scaled_target_rotation_y": live_scaled_target.rotation_degrees.y,
+        "scaled_target_socket_distance": live_source_socket.distance_to(live_target_socket),
+        "scaled_target_facing_dot": live_source_facing.normalized().dot(live_target_facing.normalized()),
+        "scaled_target_scale": _vector(live_scaled_target.scale),
         "disallowed_ok": disallowed.get("ok", false),
         "disallowed_error": disallowed.get("error", ""),
-        "child_count_after_failed_preparation": preview.get_child_count(),
+        "child_count_after_failed_preparation": failed_preparation_child_count,
         "forward_child_count": forward_count,
-        "undo_child_count": preview.get_child_count(),
+        "undo_child_count": straight_undo_count,
     }
+    actions._execute_revision(scene_root, preview, scaled_target_ops, false, false)
+    result["scaled_target_undo_child_count"] = preview.get_child_count()
     print("AURA_ATTACH_RUNTIME:" + JSON.stringify(result))
     var all_prepared: Array[Dictionary] = [straight_op, corner_op, scaled_source["operation"], scaled_target["operation"]]
     actions._free_prepared_instances(all_prepared)
@@ -936,10 +950,14 @@ func _initialize() -> void:
     assert payload["corner_path"] == "AuraPreview/corner_02"
     assert payload["scaled_source_position"] == pytest.approx([6.0, 0.0, 0.0], abs=1e-5)
     assert payload["scaled_source_facing"] == pytest.approx([-1.0, 0.0, 0.0], abs=1e-5)
-    assert payload["scaled_target_position"] == pytest.approx([6.0, 0.0, 0.0], abs=1e-5)
+    assert payload["scaled_target_position"] == pytest.approx([5.0, 0.0, 0.0], abs=1e-5)
+    assert payload["scaled_target_rotation_y"] == pytest.approx(90.0, abs=1e-5)
+    assert payload["scaled_target_socket_distance"] == pytest.approx(0.0, abs=1e-5)
+    assert payload["scaled_target_facing_dot"] == pytest.approx(-1.0, abs=1e-5)
     assert payload["scaled_target_scale"] == [2.0, 1.0, 3.0]
     assert payload["disallowed_ok"] is False
     assert "rotation is not catalog-approved" in payload["disallowed_error"]
     assert payload["child_count_after_failed_preparation"] == 1
     assert payload["forward_child_count"] == 2
     assert payload["undo_child_count"] == 1
+    assert payload["scaled_target_undo_child_count"] == 1

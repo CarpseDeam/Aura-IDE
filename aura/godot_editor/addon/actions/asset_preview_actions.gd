@@ -349,7 +349,7 @@ func _prepare_attach_operation(
 	var target_heading := atan2(-normalized_target_facing.z, normalized_target_facing.x)
 	var target_yaw := wrapf(source_heading - target_heading, -PI, PI)
 	var target_basis := Basis(Vector3.UP, target_yaw)
-	var target_socket_transform := Transform3D(target_basis.scaled(target_scale), Vector3.ZERO)
+	var target_socket_transform := Transform3D(target_basis.scaled_local(target_scale), Vector3.ZERO)
 	var target_socket_offset: Vector3 = target_socket_transform * target_socket_position
 	var target_position: Vector3 = source_socket_point - target_socket_offset
 	var target_rotation_degrees := rad_to_deg(target_yaw)
