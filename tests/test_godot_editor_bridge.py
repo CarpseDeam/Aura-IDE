@@ -199,7 +199,7 @@ def test_capability_reporting_includes_preview_capture(tmp_path: Path) -> None:
                     "result": {
                         "bridge": "aura-godot-editor",
                         "protocol": 1,
-                        "bridge_version": 5,
+                        "bridge_version": 6,
                         "capabilities": [
                             "scene.snapshot",
                             "scene.select",
@@ -222,7 +222,7 @@ def test_capability_reporting_includes_preview_capture(tmp_path: Path) -> None:
     thread.join(timeout=2)
 
     assert result["bridge"] == "aura-godot-editor"
-    assert result["bridge_version"] == 5
+    assert result["bridge_version"] == 6
     assert "preview.apply" in result["capabilities"]
     assert "api.describe" in result["capabilities"]
     assert "preview.capture" in result["capabilities"]
@@ -277,6 +277,85 @@ def test_viewport_capture_gdscript_patterns() -> None:
     assert "scene_file_path" in content, "Fingerprint must reference scene_file_path"
     # Must have robust fallback for non-VisualInstance3D nodes
     assert "global_position" in content, "Fallback bounds must use global_position"
+
+
+def test_controlled_capture_waits_for_a_completed_render_before_readback() -> None:
+    content = Path("aura/godot_editor/addon/perception/viewport_capture.gd").read_text(
+        encoding="utf-8"
+    )
+
+    arm = content.index("func _arm_next_view")
+    connect_pre_draw = content.index("RenderingServer.frame_pre_draw.connect", arm)
+    pre_draw = content.index("func _on_frame_pre_draw", connect_pre_draw)
+    apply_camera = content.index("_apply_controlled_camera(camera, mode)", pre_draw)
+    connect_post_draw = content.index("RenderingServer.frame_post_draw.connect", apply_camera)
+    callback = content.index("func _on_frame_post_draw", connect_post_draw)
+    readback = content.index("texture.get_image()", callback)
+
+    assert connect_pre_draw < pre_draw < apply_camera < connect_post_draw < callback < readback
+    assert "RenderingServer.force_draw" not in content
+    assert 'call_deferred("_arm_next_view")' in content
+    assert "viewport.render_target_update_mode = SubViewport.UPDATE_ONCE" in content
+    assert '"post_draws_remaining"] = 2' in content
+    assert "_restore_viewport_update_mode()" in content
+
+
+def test_controlled_views_have_distinct_camera_intent_and_stale_frame_guard() -> None:
+    content = Path("aura/godot_editor/addon/perception/viewport_capture.gd").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Camera3D.PROJECTION_PERSPECTIVE" in content
+    assert "Vector3(1.0, 0.8, 1.0).normalized()" in content
+    assert "Camera3D.PROJECTION_ORTHOGONAL" in content
+    assert "Vector3.UP *" in content
+    assert 'capture_entry["camera_transform"]' in content
+    assert 'capture_entry["camera_projection"]' in content
+    assert 'hashes.has(digest)' in content
+    assert "repeated the rendered frame" in content
+
+
+def test_controlled_capture_restores_complete_camera_state_on_success_and_error() -> None:
+    content = Path("aura/godot_editor/addon/perception/viewport_capture.gd").read_text(
+        encoding="utf-8"
+    )
+    snapshot = content[content.index("func _snapshot_camera") : content.index("func _finish_success")]
+    for property_name in (
+        "global_transform",
+        "projection",
+        "fov",
+        "size",
+        "near",
+        "far",
+        "keep_aspect",
+        "frustum_offset",
+        "h_offset",
+        "v_offset",
+    ):
+        assert f'"{property_name}"' in snapshot
+        assert f'camera.{property_name} = state["{property_name}"]' in snapshot
+
+    post_draw = content[content.index("func _on_frame_post_draw") : content.index("func _acquire_rendered_view")]
+    error_finish = content[content.index("func _finish_with_error") : content.index("func _compute_preview_bounds")]
+    assert post_draw.index("_acquire_rendered_view") < post_draw.index("_restore_controlled_camera")
+    assert "_restore_controlled_camera()" in error_finish
+    assert 'capture_entry["camera_state_restored"] = camera_restored' in content
+    assert "failed to restore the editor camera" in content
+
+
+def test_bridge_holds_async_capture_request_until_render_job_finishes() -> None:
+    server = Path("aura/godot_editor/addon/transport/bridge_server.gd").read_text(
+        encoding="utf-8"
+    )
+    router = Path("aura/godot_editor/addon/protocol/request_router.gd").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'client["pending_id"]' in server
+    assert "_router.poll_pending" in server
+    assert "_router.cancel_pending" in server
+    assert "func poll_pending" in router
+    assert "func cancel_pending" in router
 
 
 def test_viewport_capture_rejects_malformed_width() -> None:

@@ -33,7 +33,7 @@ func dispatch(action: String, params: Dictionary) -> Dictionary:
 			return {"ok": true, "result": {
 				"bridge": "aura-godot-editor",
 				"protocol": 1,
-				"bridge_version": 5,
+				"bridge_version": 6,
 				"capabilities": ["scene.snapshot", "scene.select", "scene.apply", "scene.save", "preview.snapshot", "preview.instantiate", "preview.clear", "preview.apply", "preview.capture", "api.describe"],
 			}}
 		"scene.snapshot":
@@ -59,3 +59,11 @@ func dispatch(action: String, params: Dictionary) -> Dictionary:
 			return _api_introspection.describe(params)
 		_:
 			return {"ok": false, "error": "unsupported action: %s" % action}
+
+
+func poll_pending(pending_id: int) -> Dictionary:
+	return _viewport_capture.poll_capture(pending_id)
+
+
+func cancel_pending(pending_id: int) -> void:
+	_viewport_capture.cancel_capture(pending_id)
