@@ -633,15 +633,16 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         )
         dlg.exec()
 
-    def _apply_planner_worker_mode_to_bridge(self, enabled: bool) -> None:
+    def _apply_planner_worker_mode_to_bridge(self, enabled: bool) -> bool:
         if not self._bridge.set_planner_worker_mode(enabled):
-            return
+            return False
         if enabled:
             prompt = self._settings.planner_system_prompt or PLANNER_SYSTEM_PROMPT
         else:
             prompt = self._settings.system_prompt or SINGLE_SYSTEM_PROMPT
         self._bridge.set_system_prompt(prompt)
         self._sync_execution_mode_ui(enabled)
+        return True
 
     def _on_execution_mode_changed(self, mode: str) -> None:
         if self._bridge.is_running():
@@ -651,7 +652,24 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             )
             return
         enabled = mode != INTERACTIVE_MODE
-        self._apply_planner_worker_mode_to_bridge(enabled)
+        previous = self._bridge.planner_worker_mode
+        if enabled == previous:
+            return
+        if self._apply_planner_worker_mode_to_bridge(enabled):
+            self._auto_save_current_conversation(synchronous=True)
+
+    def _auto_save_current_conversation(self, *, synchronous: bool = False) -> None:
+        self._persistence.auto_save(
+            workspace_root=self._workspace_root,
+            model=self.current_model(),
+            thinking=self.current_thinking(),
+            worker_model=self.current_worker_model(),
+            worker_thinking=self.current_worker_thinking(),
+            provider=self._settings.provider,
+            planner_provider=self._settings.planner_provider,
+            worker_provider=self._settings.worker_provider,
+            synchronous=synchronous,
+        )
 
     def _sync_execution_mode_ui(self, planner_worker_mode: bool) -> None:
         mode = PLANNER_WORKER_MODE if planner_worker_mode else INTERACTIVE_MODE
@@ -704,16 +722,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             # No tool calls — this is the final turn.
             self._chat.assistant_done()
         # Auto-save after each assistant turn — including partial tool-call rounds.
-        self._persistence.auto_save(
-            workspace_root=self._workspace_root,
-            model=self.current_model(),
-            thinking=self.current_thinking(),
-            worker_model=self.current_worker_model(),
-            worker_thinking=self.current_worker_thinking(),
-            provider=self._settings.provider,
-            planner_provider=self._settings.planner_provider,
-            worker_provider=self._settings.worker_provider,
-        )
+        self._auto_save_current_conversation()
 
         # Check for pending handoff after the response completes (no tool calls)
         if not tool_calls:

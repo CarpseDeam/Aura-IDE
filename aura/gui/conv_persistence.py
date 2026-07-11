@@ -170,11 +170,15 @@ class ConversationPersistence(QObject):
         provider,
         planner_provider,
         worker_provider,
+        *,
+        synchronous: bool = False,
     ) -> None:
-        """Save the current conversation in a background thread (fire-and-forget).
+        """Save the current conversation through the normal autosave path.
 
         Guards against missing workspace or empty history.  Deep-copies all
-        mutable state before handing it to the save thread.
+        mutable state before saving. Normal turn saves run in the background;
+        callers that must survive immediate application shutdown may wait for
+        this same save operation to finish.
         """
         if workspace_root is None:
             return
@@ -223,7 +227,10 @@ class ConversationPersistence(QObject):
             except OSError as exc:
                 self.save_failed.emit(str(exc))
 
-        threading.Thread(target=_run_save, daemon=True).start()
+        if synchronous:
+            _run_save()
+        else:
+            threading.Thread(target=_run_save, daemon=True).start()
 
     # ---- new / open / restore ----------------------------------------------
 

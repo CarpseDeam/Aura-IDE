@@ -5,7 +5,7 @@ import os
 import shutil
 import threading
 from pathlib import Path
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -18,6 +18,7 @@ from aura.conversation.execution_mode import INTERACTIVE_MODE, PLANNER_WORKER_MO
 from aura.conversation.persistence import load_conversation, save_conversation
 from aura.conversation.tools import ToolRegistry
 from aura.gui.conv_persistence import ConversationPersistence
+from aura.gui.main_window import MainWindow
 from aura.gui.main_window_toolbar import MainWindowToolbar
 from aura.settings import AppSettings
 
@@ -209,6 +210,119 @@ def test_persistence_round_trips_interactive_and_missing_mode_defaults_planner(t
         encoding="utf-8",
     )
     assert load_conversation(missing).planner_worker_mode is True
+
+
+def test_idle_mode_change_persists_without_an_assistant_turn(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _app()
+    bridge = ConversationBridge(parent_widget=None)
+    bridge.set_workspace_root(tmp_path)
+    bridge.history.append_user_text("Keep the current gatehouse work")
+    bridge.set_worker_model("preserved-worker-model")
+    bridge.set_worker_thinking("max")
+
+    chat_items = [{"kind": "user", "text": "Keep the current gatehouse work"}]
+    saved_path = save_conversation(
+        bridge.history,
+        tmp_path,
+        model="primary-model",
+        thinking="high",
+        planner_worker_mode=True,
+        planner_model="primary-model",
+        worker_model="preserved-worker-model",
+        worker_thinking="max",
+        chat_items=chat_items,
+        planner_provider="deepseek",
+        worker_provider="openrouter",
+    )
+
+    class Chat:
+        def __init__(self, items):
+            self.chat_items = items
+
+        def add_error(self, _title, _message):
+            raise AssertionError("mode persistence unexpectedly failed")
+
+    persistence = ConversationPersistence(
+        bridge=bridge,
+        chat=Chat(chat_items),
+        playground=object(),
+        input_panel=object(),
+        left_pane=object(),
+        settings=SimpleNamespace(),
+    )
+    persistence._current_conversation_path = saved_path
+    monkeypatch.setattr(persistence, "_update_project_thread", lambda *_args: None)
+
+    window = SimpleNamespace(
+        _bridge=bridge,
+        _persistence=persistence,
+        _workspace_root=tmp_path,
+        _settings=SimpleNamespace(
+            planner_system_prompt="",
+            system_prompt="",
+            provider="deepseek",
+            planner_provider="deepseek",
+            worker_provider="openrouter",
+        ),
+        current_model=lambda: "primary-model",
+        current_thinking=lambda: "high",
+        current_worker_model=lambda: "preserved-worker-model",
+        current_worker_thinking=lambda: "max",
+        _sync_execution_mode_ui=lambda _enabled: None,
+    )
+    window._apply_planner_worker_mode_to_bridge = MethodType(
+        MainWindow._apply_planner_worker_mode_to_bridge, window
+    )
+    window._auto_save_current_conversation = MethodType(
+        MainWindow._auto_save_current_conversation, window
+    )
+
+    MainWindow._on_execution_mode_changed(window, INTERACTIVE_MODE)
+
+    reloaded = load_conversation(saved_path)
+    assert reloaded.planner_worker_mode is False
+    assert reloaded.history.messages == [
+        {"role": "user", "content": "Keep the current gatehouse work"}
+    ]
+    assert reloaded.chat_items == chat_items
+    assert reloaded.planner_model == "primary-model"
+    assert reloaded.worker_model == "preserved-worker-model"
+    assert reloaded.worker_thinking == "max"
+    assert reloaded.worker_provider == "openrouter"
+
+
+def test_rejected_or_unchanged_mode_change_does_not_autosave(monkeypatch) -> None:
+    saves: list[bool] = []
+    notices: list[str] = []
+
+    class Bridge:
+        planner_worker_mode = True
+
+        def __init__(self, running: bool):
+            self.running = running
+
+        def is_running(self) -> bool:
+            return self.running
+
+    window = SimpleNamespace(
+        _bridge=Bridge(running=True),
+        _sync_execution_mode_ui=lambda _enabled: None,
+        _apply_planner_worker_mode_to_bridge=lambda _enabled: True,
+        _auto_save_current_conversation=lambda **_kwargs: saves.append(True),
+    )
+    monkeypatch.setattr(
+        "aura.gui.main_window.QMessageBox.information",
+        lambda *_args: notices.append("running"),
+    )
+
+    MainWindow._on_execution_mode_changed(window, INTERACTIVE_MODE)
+    window._bridge.running = False
+    MainWindow._on_execution_mode_changed(window, PLANNER_WORKER_MODE)
+
+    assert notices == ["running"]
+    assert saves == []
 
 
 def test_new_chat_returns_existing_bridge_to_planner_worker(tmp_path: Path) -> None:
