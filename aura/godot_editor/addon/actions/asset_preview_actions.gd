@@ -259,7 +259,7 @@ func _prepare_duplicate_operation(
 
 	var position_step: Vector3 = offset
 	if offset_space == "local":
-		position_step = source.transform.basis * offset
+		position_step = source.transform.basis.orthonormalized() * offset
 	var duplicated: Array[Dictionary] = []
 	for copy_index in count:
 		var placement_raw := {

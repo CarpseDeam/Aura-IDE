@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import subprocess
 from pathlib import Path
 from unittest.mock import patch
+
+import pytest
 
 from aura.conversation.tools._types import ApprovalDecision
 from aura.conversation.tools.registry import ToolRegistry
@@ -440,15 +445,138 @@ def test_preview_duplicate_rejects_missing_or_non_catalog_source_before_apply(tm
     ]
 
 
-def test_godot_duplicate_preparation_is_relative_deterministic_atomic_and_unsaved() -> None:
+def test_godot_duplicate_preparation_is_deterministic_atomic_and_unsaved() -> None:
     content = Path("aura/godot_editor/addon/actions/asset_preview_actions.gd").read_text(
         encoding="utf-8"
     )
 
-    assert "position_step = source.transform.basis * offset" in content
     assert 'candidate := "%s_copy_%02d"' in content
     assert '"path": PREVIEW_ROOT_NAME + "/" + str(placement["instance"].name)' in content
     assert '_undo_redo.add_do_method(self, "_execute_revision"' in content
     assert '_undo_redo.add_undo_method(self, "_execute_revision"' in content
     assert "for index in range(operations.size() - 1, -1, -1)" in content
     assert "save_scene" not in content
+
+
+def test_godot_duplicate_offsets_ignore_scale_and_preserve_inherited_scale(
+    tmp_path: Path,
+) -> None:
+    executable = os.environ.get("GODOT_BIN") or shutil.which("godot")
+    if not executable:
+        pytest.skip("GODOT_BIN or godot on PATH is required for runtime transform validation")
+
+    project = tmp_path / "godot_duplicate_runtime"
+    actions_dir = project / "addons/aura_bridge/actions"
+    actions_dir.mkdir(parents=True)
+    shutil.copyfile(
+        "aura/godot_editor/addon/actions/asset_preview_actions.gd",
+        actions_dir / "asset_preview_actions.gd",
+    )
+    (project / "project.godot").write_text(
+        '[application]\nconfig/name="Aura Duplicate Runtime Test"\n', encoding="utf-8"
+    )
+    (project / "asset.tscn").write_text(
+        '[gd_scene format=3]\n\n[node name="Wall" type="Node3D"]\n', encoding="utf-8"
+    )
+    (project / "test_duplicate.gd").write_text(
+        """extends SceneTree
+
+const Actions = preload("res://addons/aura_bridge/actions/asset_preview_actions.gd")
+
+func _initialize() -> void:
+    var packed := load("res://asset.tscn") as PackedScene
+    var source := packed.instantiate() as Node3D
+    source.name = "Wall"
+    source.rotation_degrees = Vector3(0.0, 90.0, 0.0)
+    source.scale = Vector3(2.0, 3.0, 4.0)
+    var scene_root := Node3D.new()
+    var preview := Node3D.new()
+    scene_root.add_child(preview)
+    preview.add_child(source)
+    var actions = Actions.new(null, null)
+    var checked: Dictionary = actions._prepare_duplicate_operation({
+        "count": 2,
+        "offset": [2.0, 0.0, 0.0],
+        "offset_space": "local",
+        "resource_path": "res://asset.tscn",
+    }, 0, source, {"Wall": true})
+    if not checked.get("ok", false):
+        push_error(str(checked.get("error", "duplicate preparation failed")))
+        quit(1)
+        return
+    var operations: Array[Dictionary] = checked["operations"]
+    var unit_source := packed.instantiate() as Node3D
+    unit_source.name = "UnitWall"
+    unit_source.rotation_degrees = Vector3(0.0, 90.0, 0.0)
+    var unit_checked: Dictionary = actions._prepare_duplicate_operation({
+        "count": 1,
+        "offset": [2.0, 0.0, 0.0],
+        "offset_space": "local",
+        "resource_path": "res://asset.tscn",
+    }, 0, unit_source, {"UnitWall": true})
+    var world_checked: Dictionary = actions._prepare_duplicate_operation({
+        "count": 1,
+        "offset": [2.0, 0.0, 0.0],
+        "offset_space": "world",
+        "resource_path": "res://asset.tscn",
+    }, 0, source, {"Wall": true})
+    if not unit_checked.get("ok", false) or not world_checked.get("ok", false):
+        push_error("unit or world duplicate preparation failed")
+        quit(1)
+        return
+    var unit_operations: Array[Dictionary] = unit_checked["operations"]
+    var world_operations: Array[Dictionary] = world_checked["operations"]
+    actions._execute_revision(scene_root, preview, operations, false, true)
+    var result := {
+        "unit_step": [unit_operations[0]["new_position"].x, unit_operations[0]["new_position"].y, unit_operations[0]["new_position"].z],
+        "scaled_step": [operations[0]["new_position"].x, operations[0]["new_position"].y, operations[0]["new_position"].z],
+        "world_step": [world_operations[0]["new_position"].x, world_operations[0]["new_position"].y, world_operations[0]["new_position"].z],
+        "positions": [
+            [operations[0]["new_position"].x, operations[0]["new_position"].y, operations[0]["new_position"].z],
+            [operations[1]["new_position"].x, operations[1]["new_position"].y, operations[1]["new_position"].z],
+        ],
+        "scales": [
+            [operations[0]["new_scale"].x, operations[0]["new_scale"].y, operations[0]["new_scale"].z],
+            [operations[1]["new_scale"].x, operations[1]["new_scale"].y, operations[1]["new_scale"].z],
+        ],
+        "paths": [operations[0]["path"], operations[1]["path"]],
+        "forward_child_count": preview.get_child_count(),
+    }
+    actions._execute_revision(scene_root, preview, operations, false, false)
+    result["reversed_child_count"] = preview.get_child_count()
+    print("AURA_DUPLICATE_RUNTIME:" + JSON.stringify(result))
+    actions._free_prepared_instances(unit_operations)
+    actions._free_prepared_instances(world_operations)
+    unit_source.free()
+    scene_root.free()
+    quit()
+""",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [executable, "--headless", "--path", str(project), "--script", "res://test_duplicate.gd"],
+        cwd=project,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=30,
+        check=False,
+    )
+    output = completed.stdout + "\n" + completed.stderr
+    assert completed.returncode == 0, output
+    payload_line = next(
+        line for line in output.splitlines() if line.startswith("AURA_DUPLICATE_RUNTIME:")
+    )
+    payload = json.loads(payload_line.split(":", 1)[1])
+
+    assert payload["unit_step"] == pytest.approx([0.0, 0.0, -2.0], abs=1e-5)
+    assert payload["scaled_step"] == pytest.approx(payload["unit_step"], abs=1e-5)
+    assert payload["world_step"] == [2.0, 0.0, 0.0]
+    assert payload["positions"][0] == pytest.approx([0.0, 0.0, -2.0], abs=1e-5)
+    assert payload["positions"][1] == pytest.approx([0.0, 0.0, -4.0], abs=1e-5)
+    assert payload["scales"] == [[2.0, 3.0, 4.0], [2.0, 3.0, 4.0]]
+    assert payload["paths"] == ["AuraPreview/Wall_copy_01", "AuraPreview/Wall_copy_02"]
+    assert payload["forward_child_count"] == 3
+    assert payload["reversed_child_count"] == 1
