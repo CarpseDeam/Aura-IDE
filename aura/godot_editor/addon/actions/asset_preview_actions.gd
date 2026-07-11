@@ -104,6 +104,7 @@ func apply_revision(params: Dictionary) -> Dictionary:
 			nodes[PREVIEW_ROOT_NAME + "/" + str(child.name)] = child
 	var prepared: Array[Dictionary] = []
 	var targeted: Dictionary = {}
+	var removed: Dictionary = {}
 	var planned_paths: Dictionary = {}
 	var creates_preview := preview == null
 	for index in operations.size():
@@ -114,7 +115,7 @@ func apply_revision(params: Dictionary) -> Dictionary:
 			if planned_paths.has(raw_path) and raw_action not in ["duplicate", "attach"]:
 				_free_prepared_instances(prepared)
 				return {"ok": false, "error": "operation %d cannot %s an unattached planned node: %s" % [index, raw_action, raw_path]}
-		var checked := _prepare_revision_operation(raw, index, names, nodes, targeted)
+		var checked := _prepare_revision_operation(raw, index, names, nodes, targeted, removed)
 		if not checked.get("ok", false):
 			_free_prepared_instances(prepared)
 			return checked
@@ -122,7 +123,7 @@ func apply_revision(params: Dictionary) -> Dictionary:
 			prepared.append_array(checked["operations"])
 		else:
 			prepared.append(checked["operation"])
-		_register_prepared_outputs(checked, nodes, targeted, planned_paths)
+		_register_prepared_outputs(checked, nodes, targeted, planned_paths, removed)
 	if names.size() > MAX_INSTANCES:
 		_free_prepared_instances(prepared)
 		return {"ok": false, "error": "revision would exceed the %d-instance preview limit" % MAX_INSTANCES}
@@ -172,6 +173,7 @@ func _register_prepared_outputs(
 	nodes: Dictionary,
 	targeted: Dictionary,
 	planned_paths: Dictionary,
+	removed: Dictionary,
 ) -> void:
 	var outputs: Array[Dictionary] = []
 	if checked.has("operations"):
@@ -191,6 +193,10 @@ func _register_prepared_outputs(
 		targeted.erase(output_path)
 		if operation["operation"] == "replace" and output_path != operation["path"]:
 			nodes.erase(operation["path"])
+	if not checked.has("operations"):
+		var op: Dictionary = checked["operation"]
+		if op["operation"] == "remove":
+			removed[op["path"]] = true
 
 
 func _prepare_revision_operation(
@@ -199,6 +205,7 @@ func _prepare_revision_operation(
 	names: Dictionary,
 	nodes: Dictionary,
 	targeted: Dictionary,
+	removed: Dictionary,
 ) -> Dictionary:
 	if not raw is Dictionary:
 		return {"ok": false, "error": "operation %d must be an object" % index}
@@ -220,12 +227,16 @@ func _prepare_revision_operation(
 	var path := str(raw.get("node_path", ""))
 	if not path.begins_with(PREVIEW_ROOT_NAME + "/") or path.count("/") != 1:
 		return {"ok": false, "error": "operation %d must target one direct preview child" % index}
-	if targeted.has(path):
-		return {"ok": false, "error": "preview target appears more than once: %s" % path}
+	if action in ["duplicate", "attach"]:
+		if removed.has(path):
+			return {"ok": false, "error": "operation %d cannot %s from a removed or replaced source: %s" % [index, action, path]}
+	else:
+		if targeted.has(path):
+			return {"ok": false, "error": "preview target appears more than once: %s" % path}
+		targeted[path] = true
 	var target: Node = nodes.get(path)
 	if target == null or not target is Node3D:
 		return {"ok": false, "error": "preview target does not exist or is not Node3D: %s" % path}
-	targeted[path] = true
 	var target_3d := target as Node3D
 	if action == "duplicate":
 		return _prepare_duplicate_operation(raw, index, target_3d, names)
@@ -243,6 +254,7 @@ func _prepare_revision_operation(
 	}
 	if action == "remove":
 		names.erase(str(target_3d.name))
+		removed[path] = true
 		return {"ok": true, "operation": base}
 	if action == "set_transform":
 		var transform := _revision_transform(raw, target_3d.position, target_3d.rotation_degrees.y, target_3d.scale)
@@ -252,6 +264,7 @@ func _prepare_revision_operation(
 		return {"ok": true, "operation": base}
 	if action == "replace":
 		names.erase(str(target_3d.name))
+		removed[path] = true
 		var replacement_raw: Dictionary = raw.duplicate()
 		if str(replacement_raw.get("name", "")).is_empty():
 			replacement_raw["name"] = str(target_3d.name)

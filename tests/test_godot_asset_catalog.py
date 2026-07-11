@@ -1165,21 +1165,21 @@ func _attach(source_path: String, source_identity: String, source_resource: Stri
     }
 
 func _prepare_batch(actions, raw_operations: Array, names: Dictionary,
-        nodes: Dictionary, targeted: Dictionary, planned_paths: Dictionary,
-        prepared: Array[Dictionary]) -> Dictionary:
+        nodes: Dictionary, targeted: Dictionary, removed: Dictionary,
+        planned_paths: Dictionary, prepared: Array[Dictionary]) -> Dictionary:
     for index in raw_operations.size():
         var raw: Dictionary = raw_operations[index]
         if planned_paths.has(str(raw.get("node_path", ""))) and str(raw.get("operation", "")) not in ["duplicate", "attach"]:
             return {"ok": false, "error": "incompatible planned operation"}
         var checked: Dictionary = actions._prepare_revision_operation(
-            raw, index, names, nodes, targeted)
+            raw, index, names, nodes, targeted, removed)
         if not checked.get("ok", false):
             return checked
         if checked.has("operations"):
             prepared.append_array(checked["operations"])
         else:
             prepared.append(checked["operation"])
-        actions._register_prepared_outputs(checked, nodes, targeted, planned_paths)
+        actions._register_prepared_outputs(checked, nodes, targeted, planned_paths, removed)
     return {"ok": true}
 
 func _point(node: Node3D, socket_position: Vector3) -> Vector3:
@@ -1198,6 +1198,7 @@ func _initialize() -> void:
     var names := {}
     var nodes := {}
     var targeted := {}
+    var removed := {}
     var planned_paths := {}
     var prepared: Array[Dictionary] = []
     var raw_operations: Array = [
@@ -1236,7 +1237,7 @@ func _initialize() -> void:
             [-2.0, 0.0, 0.0], [-1.0, 0.0, 0.0], "Terminal", [0.5, 1.0, 2.0]),
     ]
     var prepared_check := _prepare_batch(
-        actions, raw_operations, names, nodes, targeted, planned_paths, prepared)
+        actions, raw_operations, names, nodes, targeted, removed, planned_paths, prepared)
     if not prepared_check.get("ok", false):
         push_error(str(prepared_check.get("error", "burst preparation failed")))
         quit(1)
@@ -1245,6 +1246,7 @@ func _initialize() -> void:
     var bad_names := {}
     var bad_nodes := {}
     var bad_targeted := {}
+    var bad_removed := {}
     var bad_paths := {}
     var bad_prepared: Array[Dictionary] = []
     var bad_operations: Array = [
@@ -1259,7 +1261,7 @@ func _initialize() -> void:
             [-2.0, 0.0, 0.0], [-1.0, 0.0, 0.0], "BadFinal", [1.0, 1.0, 1.0]),
     ]
     var bad_check := _prepare_batch(
-        actions, bad_operations, bad_names, bad_nodes, bad_targeted, bad_paths, bad_prepared)
+        actions, bad_operations, bad_names, bad_nodes, bad_targeted, bad_removed, bad_paths, bad_prepared)
     var failed_child_count := preview.get_child_count()
     actions._free_prepared_instances(bad_prepared)
 
@@ -1354,3 +1356,437 @@ func _initialize() -> void:
     assert payload["terminal_scale"] == [0.5, 1.0, 2.0]
     assert payload["before_names"] == payload["after_names"] == []
     assert payload["undo_child_count"] == 0
+
+
+def test_preview_branching_two_attaches_from_same_planned_corner(tmp_path: Path) -> None:
+    """Two attach operations can both read from the same planned corner source."""
+    root, _catalog = _project(tmp_path, [_wall(), _corner()])
+    (root / "assets/modules/corner.tscn").write_text(
+        '[gd_scene format=3]\n\n[node name="Corner" type="Node3D"]\n', encoding="utf-8"
+    )
+    operations = [
+        {
+            "operation": "instantiate", "asset_id": "corner", "name": "Corner",
+            "position": [0, 0, 0], "rotation_degrees_y": 0, "scale": [1, 1, 1],
+        },
+        {
+            "operation": "attach", "node_path": "AuraPreview/Corner",
+            "source_socket": "right", "asset_id": "wall", "target_socket": "left",
+            "name": "WallA",
+        },
+        {
+            "operation": "attach", "node_path": "AuraPreview/Corner",
+            "source_socket": "left", "asset_id": "wall", "target_socket": "right",
+            "name": "WallB",
+        },
+    ]
+    with patch(
+        "aura.conversation.tools._godot_asset_preview_mixin.GodotEditorBridgeClient"
+    ) as client_type:
+        client_type.return_value.request.return_value = {"applied": True}
+        result = ToolRegistry(root, mode="worker").execute(
+            "edit_godot_asset_preview",
+            {"action": "apply", "operations": operations},
+            lambda _request: ApprovalDecision("approve"),
+        )
+    assert result.ok is True
+    action, params = client_type.return_value.request.call_args.args
+    assert action == "preview.apply"
+    assert params["operations"][1]["node_path"] == "AuraPreview/Corner"
+    assert params["operations"][2]["node_path"] == "AuraPreview/Corner"
+    assert params["operations"][1]["name"] == "WallA"
+    assert params["operations"][2]["name"] == "WallB"
+
+
+def test_preview_branching_two_duplicates_from_same_source(tmp_path: Path) -> None:
+    """Two duplicate operations can both read from the same planned source."""
+    root, _catalog = _project(tmp_path, [_wall()])
+    operations = [
+        {
+            "operation": "instantiate", "asset_id": "wall", "name": "Wall",
+            "position": [0, 0, 0], "rotation_degrees_y": 0, "scale": [1, 1, 1],
+        },
+        {
+            "operation": "duplicate", "node_path": "AuraPreview/Wall",
+            "count": 1, "offset": [4, 0, 0], "name": "CopyA",
+        },
+        {
+            "operation": "duplicate", "node_path": "AuraPreview/Wall",
+            "count": 1, "offset": [-4, 0, 0], "name": "CopyB",
+        },
+    ]
+    with patch(
+        "aura.conversation.tools._godot_asset_preview_mixin.GodotEditorBridgeClient"
+    ) as client_type:
+        client_type.return_value.request.return_value = {"applied": True}
+        result = ToolRegistry(root, mode="worker").execute(
+            "edit_godot_asset_preview",
+            {"action": "apply", "operations": operations},
+            lambda _request: ApprovalDecision("approve"),
+        )
+    assert result.ok is True
+    action, params = client_type.return_value.request.call_args.args
+    assert action == "preview.apply"
+    assert params["operations"][1]["node_path"] == "AuraPreview/Wall"
+    assert params["operations"][2]["node_path"] == "AuraPreview/Wall"
+    assert params["operations"][1]["name"] == "CopyA"
+    assert params["operations"][2]["name"] == "CopyB"
+
+
+def test_preview_branching_duplicate_and_attach_from_same_source(tmp_path: Path) -> None:
+    """A duplicate and an attach can both read the same unchanged planned source."""
+    root, _catalog = _project(tmp_path, [_wall(), _corner()])
+    (root / "assets/modules/corner.tscn").write_text(
+        '[gd_scene format=3]\n\n[node name="Corner" type="Node3D"]\n', encoding="utf-8"
+    )
+    operations = [
+        {
+            "operation": "instantiate", "asset_id": "wall", "name": "Wall",
+            "position": [0, 0, 0], "rotation_degrees_y": 0, "scale": [1, 1, 1],
+        },
+        {
+            "operation": "duplicate", "node_path": "AuraPreview/Wall",
+            "count": 1, "offset": [4, 0, 0], "name": "Copy",
+        },
+        {
+            "operation": "attach", "node_path": "AuraPreview/Wall",
+            "source_socket": "right", "asset_id": "corner", "target_socket": "left",
+            "name": "AttachedCorner",
+        },
+    ]
+    with patch(
+        "aura.conversation.tools._godot_asset_preview_mixin.GodotEditorBridgeClient"
+    ) as client_type:
+        client_type.return_value.request.return_value = {"applied": True}
+        result = ToolRegistry(root, mode="worker").execute(
+            "edit_godot_asset_preview",
+            {"action": "apply", "operations": operations},
+            lambda _request: ApprovalDecision("approve"),
+        )
+    assert result.ok is True
+    action, params = client_type.return_value.request.call_args.args
+    assert action == "preview.apply"
+    assert params["operations"][1]["node_path"] == "AuraPreview/Wall"
+    assert params["operations"][2]["node_path"] == "AuraPreview/Wall"
+
+
+@pytest.mark.parametrize(
+    ("ops", "expected"),
+    [
+        (
+            [
+                {"operation": "set_transform", "node_path": "AuraPreview/Wall", "position": [1, 0, 0]},
+                {"operation": "set_transform", "node_path": "AuraPreview/Wall", "position": [2, 0, 0]},
+            ],
+            "more than one operation",
+        ),
+        (
+            [
+                {"operation": "remove", "node_path": "AuraPreview/Wall"},
+                {"operation": "set_transform", "node_path": "AuraPreview/Wall", "position": [1, 0, 0]},
+            ],
+            "more than one operation",
+        ),
+        (
+            [
+                {"operation": "remove", "node_path": "AuraPreview/Wall"},
+                {"operation": "remove", "node_path": "AuraPreview/Wall"},
+            ],
+            "more than one operation",
+        ),
+        (
+            [
+                {"operation": "replace", "node_path": "AuraPreview/Wall", "asset_id": "wall", "name": "NewWall"},
+                {"operation": "set_transform", "node_path": "AuraPreview/Wall", "position": [1, 0, 0]},
+            ],
+            "more than one operation",
+        ),
+    ],
+)
+def test_preview_branching_rejects_conflicting_mutations(
+    tmp_path: Path, ops: list[dict], expected: str
+) -> None:
+    """Mutation operations on the same path are still rejected."""
+    root, _catalog = _project(tmp_path, [_wall()])
+    result = ToolRegistry(root, mode="worker").execute(
+        "edit_godot_asset_preview",
+        {"action": "apply", "operations": ops},
+        lambda _request: ApprovalDecision("approve"),
+    )
+    assert result.ok is False
+    assert expected in result.payload["error"]
+
+
+def test_preview_branching_rejects_read_after_removal(tmp_path: Path) -> None:
+    """Reading from a path that was removed earlier in the batch is rejected."""
+    root, _catalog = _project(tmp_path, [_wall()])
+    ops = [
+        {"operation": "remove", "node_path": "AuraPreview/Wall"},
+        {
+            "operation": "duplicate", "node_path": "AuraPreview/Wall",
+            "count": 1, "offset": [4, 0, 0],
+        },
+    ]
+    result = ToolRegistry(root, mode="worker").execute(
+        "edit_godot_asset_preview",
+        {"action": "apply", "operations": ops},
+        lambda _request: ApprovalDecision("approve"),
+    )
+    assert result.ok is False
+    assert "removed or replaced" in result.payload["error"]
+
+
+def test_preview_branching_rejects_read_after_replace(tmp_path: Path) -> None:
+    """Reading from a path that was replaced earlier in the batch is rejected."""
+    root, _catalog = _project(tmp_path, [_wall()])
+    ops = [
+        {"operation": "replace", "node_path": "AuraPreview/Wall", "asset_id": "wall"},
+        {
+            "operation": "attach", "node_path": "AuraPreview/Wall",
+            "source_socket": "right", "asset_id": "wall", "target_socket": "left",
+        },
+    ]
+    result = ToolRegistry(root, mode="worker").execute(
+        "edit_godot_asset_preview",
+        {"action": "apply", "operations": ops},
+        lambda _request: ApprovalDecision("approve"),
+    )
+    assert result.ok is False
+    assert "removed or replaced" in result.payload["error"]
+
+
+def test_preview_branching_sequential_courtyard_chain_still_passes(tmp_path: Path) -> None:
+    """The original sequential courtyard-chain behavior remains passing."""
+    terminal = {**_wall("terminal"), "path": "res://assets/modules/terminal.tscn"}
+    root, _catalog = _project(tmp_path, [_wall(), _corner(), terminal])
+    for scene_name in ("corner", "terminal"):
+        (root / f"assets/modules/{scene_name}.tscn").write_text(
+            f'[gd_scene format=3]\n\n[node name="{scene_name.title()}" type="Node3D"]\n',
+            encoding="utf-8",
+        )
+    operations = [
+        {
+            "operation": "instantiate", "asset_id": "wall", "name": "RearWall01",
+            "position": [2, 0, 3], "rotation_degrees_y": 90, "scale": [2, 1, 3],
+        },
+        {
+            "operation": "duplicate", "node_path": "AuraPreview/RearWall01",
+            "count": 1, "offset": [8, 0, 0], "name": "RearWall02",
+        },
+        {
+            "operation": "duplicate", "node_path": "AuraPreview/RearWall02",
+            "count": 1, "offset": [8, 0, 0], "name": "RearWall03",
+        },
+        {
+            "operation": "attach", "node_path": "AuraPreview/RearWall03",
+            "source_socket": "right", "asset_id": "corner", "target_socket": "left",
+            "name": "RearCorner",
+        },
+        {
+            "operation": "attach", "node_path": "AuraPreview/RearCorner",
+            "source_socket": "right", "asset_id": "wall", "target_socket": "left",
+            "name": "SideWall01", "scale": [1.5, 2, 0.75],
+        },
+        {
+            "operation": "duplicate", "node_path": "AuraPreview/SideWall01",
+            "count": 1, "offset": [6, 0, 0], "name": "SideWall02",
+        },
+        {
+            "operation": "attach", "node_path": "AuraPreview/SideWall02",
+            "source_socket": "right", "asset_id": "terminal", "target_socket": "left",
+            "name": "Terminal",
+        },
+    ]
+    with patch(
+        "aura.conversation.tools._godot_asset_preview_mixin.GodotEditorBridgeClient"
+    ) as client_type:
+        client_type.return_value.request.return_value = {
+            "applied": True,
+            "added_paths": [f"AuraPreview/{name}" for name in (
+                "RearWall01", "RearWall02", "RearWall03", "RearCorner",
+                "SideWall01", "SideWall02", "Terminal",
+            )],
+        }
+        result = ToolRegistry(root, mode="worker").execute(
+            "edit_godot_asset_preview",
+            {"action": "apply", "operations": operations},
+            lambda _request: ApprovalDecision("approve"),
+        )
+    assert result.ok is True
+    action, params = client_type.return_value.request.call_args.args
+    assert action == "preview.apply"
+    prepared = params["operations"]
+    assert [item.get("name") for item in prepared] == [
+        "RearWall01", "RearWall02", "RearWall03", "RearCorner",
+        "SideWall01", "SideWall02", "Terminal",
+    ]
+    assert prepared[1]["catalog_identity"] == "ruins:wall"
+    assert prepared[2]["catalog_identity"] == "ruins:wall"
+    assert prepared[3]["source_catalog_identity"] == "ruins:wall"
+    assert prepared[4]["source_catalog_identity"] == "ruins:corner"
+    assert prepared[5]["catalog_identity"] == "ruins:wall"
+    assert prepared[6]["source_catalog_identity"] == "ruins:wall"
+
+
+def test_godot_branching_construction(tmp_path: Path) -> None:
+    """Branching construction: two attaches from the same corner source, plus
+    conflict rejection and undo — validated with the real Godot headless runtime."""
+    executable = os.environ.get("GODOT_BIN") or shutil.which("godot")
+    if not executable:
+        pytest.skip("GODOT_BIN or godot on PATH is required for runtime branching test")
+    project = tmp_path / "godot_branch_runtime"
+    actions_dir = project / "addons/aura_bridge/actions"
+    actions_dir.mkdir(parents=True)
+    shutil.copyfile(
+        "aura/godot_editor/addon/actions/asset_preview_actions.gd",
+        actions_dir / "asset_preview_actions.gd",
+    )
+    (project / "project.godot").write_text(
+        '[application]\nconfig/name="Aura Branch Runtime Test"\n', encoding="utf-8"
+    )
+    for scene_name in ("wall", "corner"):
+        (project / f"{scene_name}.tscn").write_text(
+            f'[gd_scene format=3]\n\n[node name="{scene_name.title()}" type="Node3D"]\n',
+            encoding="utf-8",
+        )
+    (project / "test_branch.gd").write_text(
+        r"""extends SceneTree
+const Actions = preload("res://addons/aura_bridge/actions/asset_preview_actions.gd")
+
+func _attach_op(source_path: String, sock_pos: Array, sock_facing: Array,
+        targ_pos: Array, targ_facing: Array, name: String) -> Dictionary:
+    return {
+        "operation": "attach",
+        "node_path": source_path,
+        "source_catalog_identity": "ruins:corner",
+        "source_resource_path": "res://corner.tscn",
+        "source_socket_position": sock_pos,
+        "source_socket_facing": sock_facing,
+        "catalog_identity": "ruins:wall",
+        "asset_id": "wall",
+        "resource_path": "res://wall.tscn",
+        "target_socket_position": targ_pos,
+        "target_socket_facing": targ_facing,
+        "allowed_rotations_deg": [],
+        "name": name,
+        "scale": [1.0, 1.0, 1.0],
+    }
+
+func _initialize() -> void:
+    var actions = Actions.new(null, null)
+    var scene_root := Node3D.new()
+    var preview := Node3D.new()
+    preview.name = "AuraPreview"
+    preview.set_meta("aura_preview_root", true)
+    scene_root.add_child(preview)
+
+    var corner := (load("res://corner.tscn") as PackedScene).instantiate() as Node3D
+    corner.name = "Corner"
+    preview.add_child(corner)
+
+    var names := {"Corner": true}
+    var nodes := {"AuraPreview/Corner": corner}
+    var targeted := {}
+    var removed := {}
+    var planned_paths := {}
+    var prepared: Array[Dictionary] = []
+
+    # Branch A: corner.right → wall.left
+    var raw_a := _attach_op("AuraPreview/Corner",
+        [2.0, 0.0, 0.0], [1.0, 0.0, 0.0],
+        [-2.0, 0.0, 0.0], [-1.0, 0.0, 0.0],
+        "WallA")
+    var checked_a := actions._prepare_revision_operation(
+        raw_a, 0, names, nodes, targeted, removed)
+    if not checked_a.get("ok", false):
+        push_error("Branch A failed: " + str(checked_a.get("error", "")))
+        quit(1)
+        return
+    prepared.append(checked_a["operation"])
+    actions._register_prepared_outputs(checked_a, nodes, targeted, planned_paths, removed)
+
+    # Branch B: same corner source, different name
+    var raw_b := _attach_op("AuraPreview/Corner",
+        [2.0, 0.0, 0.0], [1.0, 0.0, 0.0],
+        [-2.0, 0.0, 0.0], [-1.0, 0.0, 0.0],
+        "WallB")
+    var checked_b := actions._prepare_revision_operation(
+        raw_b, 1, names, nodes, targeted, removed)
+    if not checked_b.get("ok", false):
+        push_error("Branch B failed: " + str(checked_b.get("error", "")))
+        quit(1)
+        return
+    prepared.append(checked_b["operation"])
+    actions._register_prepared_outputs(checked_b, nodes, targeted, planned_paths, removed)
+
+    # Mutations on same path are still rejected
+    var mut_targeted := {}
+    var mut_removed := {}
+    var mut_nodes := {"AuraPreview/Corner": corner}
+    var first_mut := actions._prepare_revision_operation({
+        "operation": "set_transform", "node_path": "AuraPreview/Corner",
+        "position": [5.0, 0.0, 0.0],
+    }, 0, {"Corner": true}, mut_nodes, mut_targeted, mut_removed)
+    var second_mut := actions._prepare_revision_operation({
+        "operation": "remove", "node_path": "AuraPreview/Corner",
+    }, 1, {"Corner": true}, mut_nodes, mut_targeted, mut_removed)
+    var mutations_conflict := first_mut.get("ok", false) and not second_mut.get("ok", false)
+
+    # Reading from a removed path is rejected
+    var rem_targeted := {}
+    var rem_removed := {}
+    var rem_nodes := {"AuraPreview/Corner": corner}
+    var remove_op := actions._prepare_revision_operation({
+        "operation": "remove", "node_path": "AuraPreview/Corner",
+    }, 0, {}, rem_nodes, rem_targeted, rem_removed)
+    var dup_after_remove := actions._prepare_revision_operation({
+        "operation": "duplicate", "node_path": "AuraPreview/Corner",
+        "count": 1, "offset": [4, 0, 0],
+        "resource_path": "res://corner.tscn",
+    }, 1, {}, rem_nodes, rem_targeted, rem_removed)
+    var remove_rejects_dup := remove_op.get("ok", false) \
+        and not dup_after_remove.get("ok", false)
+
+    # Execute forward
+    var child_before := preview.get_child_count()
+    actions._execute_revision(scene_root, preview, prepared, false, true)
+    var forward_count := preview.get_child_count()
+
+    # Execute undo
+    actions._execute_revision(scene_root, preview, prepared, false, false)
+    var undo_count := preview.get_child_count()
+
+    var result := {
+        "branch_a_ok": checked_a.get("ok", false),
+        "branch_b_ok": checked_b.get("ok", false),
+        "mutations_conflict": mutations_conflict,
+        "remove_rejects_dup": remove_rejects_dup,
+        "child_before": child_before,
+        "forward_count": forward_count,
+        "undo_count": undo_count,
+    }
+    print("AURA_BRANCH_RUNTIME:" + JSON.stringify(result))
+    actions._free_prepared_instances(prepared)
+    scene_root.free()
+    quit()
+""",
+        encoding="utf-8",
+    )
+    completed = subprocess.run(
+        [executable, "--headless", "--path", str(project), "--script", "res://test_branch.gd"],
+        cwd=project, capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=30, check=False,
+    )
+    output = completed.stdout + "\n" + completed.stderr
+    assert completed.returncode == 0, output
+    payload_line = next(
+        line for line in output.splitlines() if line.startswith("AURA_BRANCH_RUNTIME:")
+    )
+    payload = json.loads(payload_line.split(":", 1)[1])
+    assert payload["branch_a_ok"] is True
+    assert payload["branch_b_ok"] is True
+    assert payload["mutations_conflict"] is True
+    assert payload["remove_rejects_dup"] is True
+    assert payload["child_before"] == 1
+    assert payload["forward_count"] == 3
+    assert payload["undo_count"] == 1

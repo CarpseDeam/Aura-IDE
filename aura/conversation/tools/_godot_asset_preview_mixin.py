@@ -167,6 +167,7 @@ class GodotAssetPreviewHandlersMixin:
             raise ValueError("operations must contain between 1 and 25 items")
         operations: list[dict] = []
         targeted: set[str] = set()
+        removed_or_replaced: set[str] = set()
         added_names: set[str] = set()
         planned_nodes: dict[str, GodotAsset] = {}
         preview_instances: list[dict] | None = None
@@ -196,9 +197,15 @@ class GodotAssetPreviewHandlersMixin:
                 raise ValueError(
                     f"operation {index} cannot {operation} an unattached planned node: {node_path}"
                 )
-            if node_path in targeted:
-                raise ValueError(f"preview target appears in more than one operation: {node_path}")
-            targeted.add(node_path)
+            if operation in {"duplicate", "attach"}:
+                if node_path in removed_or_replaced:
+                    raise ValueError(
+                        f"operation {index} cannot {operation} from a removed or replaced source: {node_path}"
+                    )
+            else:
+                if node_path in targeted:
+                    raise ValueError(f"preview target appears in more than one operation: {node_path}")
+                targeted.add(node_path)
             if operation == "attach":
                 if "position" in raw or "rotation_degrees_y" in raw:
                     raise ValueError(
@@ -293,6 +300,7 @@ class GodotAssetPreviewHandlersMixin:
                 operations.append(prepared_duplicate)
                 continue
             if operation == "remove":
+                removed_or_replaced.add(node_path)
                 operations.append({"operation": operation, "node_path": node_path})
                 continue
             if operation == "set_transform":
@@ -301,6 +309,7 @@ class GodotAssetPreviewHandlersMixin:
                     raise ValueError(f"set_transform operation {index} must change a transform value")
                 operations.append({"operation": operation, "node_path": node_path, **transform})
                 continue
+            removed_or_replaced.add(node_path)
             prepared = self._prepare_catalog_revision_asset(raw, index)
             operations.append(
                 {
