@@ -168,6 +168,7 @@ class GodotAssetPreviewHandlersMixin:
         operations: list[dict] = []
         targeted: set[str] = set()
         removed_or_replaced: set[str] = set()
+        read: set[str] = set()
         added_names: set[str] = set()
         planned_nodes: dict[str, GodotAsset] = {}
         preview_instances: list[dict] | None = None
@@ -202,9 +203,20 @@ class GodotAssetPreviewHandlersMixin:
                     raise ValueError(
                         f"operation {index} cannot {operation} from a removed or replaced source: {node_path}"
                     )
+                if node_path in targeted:
+                    raise ValueError(
+                        f"operation {index} cannot {operation} from a source already"
+                        f" targeted for mutation: {node_path}"
+                    )
+                read.add(node_path)
             else:
                 if node_path in targeted:
                     raise ValueError(f"preview target appears in more than one operation: {node_path}")
+                if node_path in read:
+                    raise ValueError(
+                        f"operation {index} cannot mutate a path already read"
+                        f" earlier in the batch: {node_path}"
+                    )
                 targeted.add(node_path)
             if operation == "attach":
                 if "position" in raw or "rotation_degrees_y" in raw:
