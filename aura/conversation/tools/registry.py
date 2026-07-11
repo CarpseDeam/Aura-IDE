@@ -208,6 +208,7 @@ TOOL_HANDLERS["patch_file"] = ToolRegistry._handle_patch_file
 TOOL_HANDLERS["edit_godot_scene"] = ToolRegistry._handle_edit_godot_scene
 TOOL_HANDLERS["inspect_godot_assets"] = ToolRegistry._handle_inspect_godot_assets
 TOOL_HANDLERS["inspect_godot_asset_preview"] = ToolRegistry._handle_inspect_godot_asset_preview
+TOOL_HANDLERS["capture_godot_asset_preview"] = ToolRegistry._handle_capture_godot_asset_preview
 TOOL_HANDLERS["inspect_godot_editor"] = ToolRegistry._handle_inspect_godot_editor
 TOOL_HANDLERS["edit_godot_editor"] = ToolRegistry._handle_edit_godot_editor
 TOOL_HANDLERS["edit_godot_asset_preview"] = ToolRegistry._handle_edit_godot_asset_preview

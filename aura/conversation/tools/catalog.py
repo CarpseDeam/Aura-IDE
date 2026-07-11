@@ -43,6 +43,7 @@ PLANNER_TOOL_NAMES = {
     "code_intel_audit",
     "inspect_godot_assets",
     "inspect_godot_asset_preview",
+    "capture_godot_asset_preview",
     "inspect_godot_editor",
     "git_status",
     "git_diff",

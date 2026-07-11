@@ -116,12 +116,14 @@ def test_registry_exposes_live_editor_tools_by_role(tmp_path: Path) -> None:
     assert {
         "inspect_godot_editor",
         "inspect_godot_asset_preview",
+        "capture_godot_asset_preview",
         "edit_godot_editor",
         "edit_godot_asset_preview",
         "install_godot_editor_bridge",
     } <= worker_names
     assert "inspect_godot_editor" in planner_names
     assert "inspect_godot_asset_preview" in planner_names
+    assert "capture_godot_asset_preview" in planner_names
     assert "edit_godot_editor" not in planner_names
     assert "edit_godot_asset_preview" not in planner_names
     assert "install_godot_editor_bridge" not in planner_names
@@ -296,3 +298,17 @@ def test_viewport_capture_fingerprint_uses_live_state() -> None:
     # Must iterate preview children for the fingerprint (not file I/O)
     assert "preview.get_child_count" in content, "Fingerprint must check preview child count"
     assert "preview.get_children()" in content, "Fingerprint must iterate preview children"
+
+
+def test_capture_tool_rejects_bridge_offline(tmp_path: Path) -> None:
+    """capture_godot_asset_preview returns ok=False when bridge is offline."""
+    registry = ToolRegistry(tmp_path, mode="planner")
+    result = registry.execute(
+        "capture_godot_asset_preview",
+        {},
+        lambda _request: ApprovalDecision("approve"),
+    )
+    assert result.ok is False
+    assert "error" in result.payload
+    assert "not installed" in str(result.payload["error"]).lower() or \
+           "bridge is not installed" in str(result.payload["error"]).lower()

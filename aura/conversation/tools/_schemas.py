@@ -74,6 +74,51 @@ READ_TOOL_DEFS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "capture_godot_asset_preview",
+            "description": (
+                "Capture a viewport rendering of the current Godot AuraPreview scene and return capture "
+                "metadata, live preview facts, and local structural decompile evidence. Parameters are "
+                "optional. Returns capture_set_id, scene_path, scene_fingerprint, preview facts from "
+                "preview.snapshot, structural validation, and per-capture entries with view name, "
+                "workspace-relative path, dimensions, sha256 digest, and textual visual structure from "
+                "local decompilation. No image bytes or base64 data appear in the result. "
+                "Read-only — no approval needed."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "capture_set_id": {
+                        "type": "string",
+                        "description": "Stable label for this capture set. Must not contain '..', '/', or '\\'. Default: auto-generated timestamp.",
+                    },
+                    "width": {
+                        "type": "integer",
+                        "minimum": 64,
+                        "maximum": 1920,
+                        "default": 1280,
+                        "description": "Viewport width in pixels.",
+                    },
+                    "height": {
+                        "type": "integer",
+                        "minimum": 64,
+                        "maximum": 1080,
+                        "default": 720,
+                        "description": "Viewport height in pixels.",
+                    },
+                    "modes": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "maxItems": 4,
+                        "description": "One or more of 'current_editor', 'overview', 'top_down'. Default: ['current_editor'].",
+                    },
+                },
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "inspect_godot_editor",
             "description": (
                 "Inspect the scene currently open in the live Godot editor. Returns the exact scene tree, "

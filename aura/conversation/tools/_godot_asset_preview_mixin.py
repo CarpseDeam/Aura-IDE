@@ -10,6 +10,11 @@ from aura.conversation.tools.write_payloads import _mark_not_applied
 from aura.godot_assets import resolve_godot_asset
 from aura.godot_assets.preview import analyze_preview_snapshot
 from aura.godot_editor.client import GodotEditorBridgeClient, GodotEditorBridgeError
+from aura.paths import safe_is_relative_to
+from aura.perception.decompiler import describe as _decompile_image
+
+import base64
+import hashlib
 
 
 class GodotAssetPreviewHandlersMixin:
@@ -20,6 +25,157 @@ class GodotAssetPreviewHandlersMixin:
         except (GodotEditorBridgeError, TypeError, ValueError) as exc:
             return ToolExecResult(ok=False, payload={"ok": False, "error": _preview_bridge_error(exc)})
         return ToolExecResult(ok=True, payload={"ok": True, "read_only": True, **payload})
+
+    def _handle_capture_godot_asset_preview(self, args, approval_cb, reject_all) -> ToolExecResult:
+        try:
+            params = {}
+            raw_capture_set_id = args.get("capture_set_id")
+            if raw_capture_set_id is not None:
+                capture_set_id = str(raw_capture_set_id)
+                for ch in ("..", "/", "\\"):
+                    if ch in capture_set_id:
+                        return ToolExecResult(
+                            ok=False,
+                            payload={"ok": False, "error": f"capture_set_id must not contain '{ch}'"},
+                        )
+                params["capture_set_id"] = capture_set_id
+            width = args.get("width", 1280)
+            if width is not None:
+                w = int(width)
+                if w < 64 or w > 1920:
+                    return ToolExecResult(ok=False, payload={"ok": False, "error": f"width must be between 64 and 1920, got {w}"})
+                params["width"] = w
+            height = args.get("height", 720)
+            if height is not None:
+                h = int(height)
+                if h < 64 or h > 1080:
+                    return ToolExecResult(ok=False, payload={"ok": False, "error": f"height must be between 64 and 1080, got {h}"})
+                params["height"] = h
+            raw_modes = args.get("modes", ["current_editor"])
+            if raw_modes is not None:
+                modes = list(raw_modes)
+                if len(modes) < 1 or len(modes) > 4:
+                    return ToolExecResult(ok=False, payload={"ok": False, "error": "modes must contain between 1 and 4 items"})
+                valid_modes = {"current_editor", "overview", "top_down"}
+                for m in modes:
+                    if m not in valid_modes:
+                        return ToolExecResult(ok=False, payload={"ok": False, "error": f"unknown mode '{m}'; valid: current_editor, overview, top_down"})
+                params["modes"] = modes
+
+            client = GodotEditorBridgeClient(self._root)
+            capture_result = client.request("preview.capture", params)
+            snapshot = client.request("preview.snapshot", {})
+            preview_facts = analyze_preview_snapshot(self._root, snapshot)
+
+            if not capture_result.get("ok"):
+                return ToolExecResult(
+                    ok=False,
+                    payload={"ok": False, "error": capture_result.get("error", "bridge returned ok=False")},
+                )
+
+            raw_captures = capture_result.get("captures")
+            if not isinstance(raw_captures, list):
+                return ToolExecResult(ok=False, payload={"ok": False, "error": "bridge response missing captures list"})
+
+            scene_fingerprint = capture_result.get("scene_fingerprint", "")
+            scene_path_res = capture_result.get("scene_path", "")
+
+            if len(raw_captures) > 4:
+                return ToolExecResult(ok=False, payload={"ok": False, "error": "too many captures (max 4)"})
+
+            captures_out = []
+            for cap in raw_captures:
+                if not isinstance(cap, dict):
+                    continue
+                res_path = str(cap.get("path", ""))
+                if res_path.startswith("res://"):
+                    local_rel = res_path[6:].lstrip("/")
+                else:
+                    local_rel = res_path
+                local_path = (self._root / local_rel).resolve()
+
+                allowed_root = (self._root / ".aura" / "tmp" / "godot_previews").resolve()
+                if not safe_is_relative_to(local_path, allowed_root):
+                    return ToolExecResult(
+                        ok=False,
+                        payload={"ok": False, "error": f"capture path '{res_path}' escapes allowed preview directory"},
+                    )
+
+                if not local_path.suffix.lower() == ".png":
+                    return ToolExecResult(
+                        ok=False,
+                        payload={"ok": False, "error": f"capture path '{res_path}' is not a PNG file"},
+                    )
+
+                if not local_path.is_file():
+                    return ToolExecResult(
+                        ok=False,
+                        payload={"ok": False, "error": f"capture file not found: {res_path}"},
+                    )
+
+                file_size = local_path.stat().st_size
+                if file_size > 20 * 1024 * 1024:
+                    return ToolExecResult(
+                        ok=False,
+                        payload={"ok": False, "error": f"capture file exceeds 20 MiB: {res_path}"},
+                    )
+
+                cap_width = cap.get("width", 0)
+                cap_height = cap.get("height", 0)
+                if (isinstance(cap_width, (int, float)) and cap_width > 3840) or \
+                   (isinstance(cap_height, (int, float)) and cap_height > 2160):
+                    return ToolExecResult(
+                        ok=False,
+                        payload={"ok": False, "error": f"capture dimensions exceed 3840x2160: {res_path}"},
+                    )
+
+                png_bytes = local_path.read_bytes()
+                actual_sha256 = hashlib.sha256(png_bytes).hexdigest()
+                expected_sha256 = cap.get("sha256", "")
+                if expected_sha256 and actual_sha256 != expected_sha256:
+                    return ToolExecResult(
+                        ok=False,
+                        payload={"ok": False, "error": f"SHA-256 mismatch for {res_path}"},
+                    )
+
+                image_b64 = base64.b64encode(png_bytes).decode("ascii")
+                visual_structure = _decompile_image(image_b64)
+
+                captures_out.append(
+                    {
+                        "view": cap.get("view", ""),
+                        "path": str(allowed_root.parent.parent.parent / local_rel) if local_rel else str(local_path),
+                        "width": cap_width,
+                        "height": cap_height,
+                        "sha256": actual_sha256,
+                        "evidence_kind": "local_structural_decompile",
+                        "visual_structure": visual_structure,
+                    }
+                )
+
+            # Resolve scene_path to workspace-relative
+            scene_path_relative = ""
+            if scene_path_res.startswith("res://"):
+                scene_path_relative = scene_path_res[6:].lstrip("/")
+            else:
+                scene_path_relative = scene_path_res
+
+            payload = {
+                "ok": True,
+                "read_only": True,
+                "capture_set_id": params.get("capture_set_id", ""),
+                "scene_path": scene_path_relative,
+                "scene_fingerprint": scene_fingerprint,
+                "preview": {
+                    "instance_count": len(preview_facts.get("instances", [])),
+                    "instances": preview_facts.get("instances", []),
+                    "structural_validation": preview_facts.get("structural_validation", {}),
+                },
+                "captures": captures_out,
+            }
+            return ToolExecResult(ok=True, payload=payload)
+        except (GodotEditorBridgeError, TypeError, ValueError, OSError) as exc:
+            return ToolExecResult(ok=False, payload={"ok": False, "error": str(exc)})
 
     def _handle_edit_godot_asset_preview(self, args, approval_cb, reject_all) -> ToolExecResult:
         blocked = self._live_editor_write_block("edit_godot_asset_preview")
