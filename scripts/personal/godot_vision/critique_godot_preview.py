@@ -11,6 +11,7 @@ import urllib.request
 from pathlib import Path
 
 
+AURA_DYNAMIC_TOOL_TIMEOUT_SECONDS = 45
 _VERDICTS = {"coherent", "needs_revision", "cannot_judge"}
 _CHECK_NAMES = (
     "single_place",

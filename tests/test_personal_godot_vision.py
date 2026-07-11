@@ -9,7 +9,12 @@ from unittest.mock import patch
 import pytest
 from PIL import Image
 
+from aura.conversation.tools.dynamic import (
+    dynamic_tool_timeout_seconds,
+    execute_dynamic_tool,
+)
 from aura.conversation.tools.registry import ToolRegistry
+from aura.sandbox import SandboxResult
 
 SCRIPT = Path("scripts/personal/godot_vision/critique_godot_preview.py")
 
@@ -33,6 +38,42 @@ def test_personal_vision_tool_is_outside_packaged_aura() -> None:
         "critique_godot_preview_local" in path.read_text(encoding="utf-8", errors="ignore")
         for path in Path("aura").rglob("*.py")
     )
+
+
+def test_personal_vision_timeout_hint_is_scoped_and_wired(tmp_path: Path) -> None:
+    ordinary_tool = tmp_path / "ordinary.py"
+    ordinary_tool.write_text("def ordinary():\n    return True\n", encoding="utf-8")
+
+    assert dynamic_tool_timeout_seconds(ordinary_tool) == 30
+    assert dynamic_tool_timeout_seconds(SCRIPT) == 45
+
+    with patch("aura.conversation.tools.dynamic.SandboxExecutor") as sandbox_type:
+        sandbox_type.return_value.run_dynamic_tool.return_value = SandboxResult(
+            ok=True,
+            stdout='{"ok": true, "result": {}}',
+            stderr="",
+            exit_code=0,
+        )
+        result = execute_dynamic_tool(
+            SCRIPT,
+            "critique_godot_preview_local",
+            {"capture_path": "capture.png", "user_request": "Review it"},
+            tmp_path,
+        )
+
+    assert result["ok"] is True
+    assert sandbox_type.return_value.run_dynamic_tool.call_args.kwargs["timeout"] == 45
+
+
+@pytest.mark.parametrize("hint", ["0", "121", "True", "'45'", "unknown_name"])
+def test_dynamic_tool_timeout_hint_rejects_invalid_values(tmp_path: Path, hint: str) -> None:
+    tool = tmp_path / "invalid_timeout.py"
+    tool.write_text(
+        f"AURA_DYNAMIC_TOOL_TIMEOUT_SECONDS = {hint}\ndef tool():\n    return True\n",
+        encoding="utf-8",
+    )
+
+    assert dynamic_tool_timeout_seconds(tool) == 30
 
 
 def test_personal_vision_tool_validates_path_and_calls_loopback_ollama(tmp_path: Path, monkeypatch) -> None:

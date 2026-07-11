@@ -15,6 +15,11 @@ from typing import Any
 from aura.sandbox import SandboxExecutor, SandboxResult
 
 
+DEFAULT_DYNAMIC_TOOL_TIMEOUT_SECONDS = 30
+MAX_DYNAMIC_TOOL_TIMEOUT_SECONDS = 120
+_TIMEOUT_HINT_NAME = "AURA_DYNAMIC_TOOL_TIMEOUT_SECONDS"
+
+
 def _get_base_name(node: ast.expr) -> str:
     """Extract a human-readable base name from an annotation expression.
 
@@ -285,7 +290,7 @@ def execute_dynamic_tool(
         file_path=file_path,
         function_name=function_name,
         arguments=arguments,
-        timeout=30,
+        timeout=dynamic_tool_timeout_seconds(file_path),
     )
 
     stdout = result.stdout.strip()
@@ -300,3 +305,46 @@ def execute_dynamic_tool(
         }
 
     return parsed
+
+
+def dynamic_tool_timeout_seconds(file_path: Path) -> int:
+    """Return a dynamic script's bounded timeout hint or the 30-second default.
+
+    Personal tools may declare a module-level integer named
+    ``AURA_DYNAMIC_TOOL_TIMEOUT_SECONDS``. Invalid, non-literal, or out-of-range
+    values are ignored. This keeps longer allowances scoped to the script that
+    needs one without changing the default for every dynamic tool.
+    """
+    try:
+        tree = ast.parse(file_path.read_text(encoding="utf-8"), filename=str(file_path))
+    except (OSError, SyntaxError, UnicodeError):
+        return DEFAULT_DYNAMIC_TOOL_TIMEOUT_SECONDS
+
+    for node in tree.body:
+        value_node: ast.expr | None = None
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == _TIMEOUT_HINT_NAME
+            for target in node.targets
+        ):
+            value_node = node.value
+        elif (
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.target.id == _TIMEOUT_HINT_NAME
+        ):
+            value_node = node.value
+        if value_node is None:
+            continue
+        try:
+            value = ast.literal_eval(value_node)
+        except (ValueError, TypeError):
+            return DEFAULT_DYNAMIC_TOOL_TIMEOUT_SECONDS
+        if (
+            isinstance(value, int)
+            and not isinstance(value, bool)
+            and 1 <= value <= MAX_DYNAMIC_TOOL_TIMEOUT_SECONDS
+        ):
+            return value
+        return DEFAULT_DYNAMIC_TOOL_TIMEOUT_SECONDS
+
+    return DEFAULT_DYNAMIC_TOOL_TIMEOUT_SECONDS

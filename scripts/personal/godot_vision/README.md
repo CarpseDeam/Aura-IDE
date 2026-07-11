@@ -44,5 +44,8 @@ route hierarchy, believable enclosure, deliberate negative space, causal collaps
 silhouette—rather than generic attractiveness or object-count completion. It does not mutate Godot or
 save scenes.
 
+This script requests a 45-second Aura dynamic-tool timeout for cold local-model startup. Other dynamic
+tools retain Aura's 30-second default; timeout hints are bounded to 120 seconds.
+
 If Aura uses Docker sandbox mode, this personal tool will not reach the host Ollama service. Use host
 sandbox mode for this local workflow.
