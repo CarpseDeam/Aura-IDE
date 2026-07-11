@@ -127,7 +127,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
         # ----- toolbar ----
         self._toolbar = MainWindowToolbar(self._settings, self)
-        self._toolbar.set_execution_mode(PLANNER_WORKER_MODE)
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self._toolbar)
         self._settings_controller = MainWindowSettingsController(self)
         self._debug_report_handler = DebugReportHandler(window=self, parent=self)
@@ -672,9 +671,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         )
 
     def _sync_execution_mode_ui(self, planner_worker_mode: bool) -> None:
-        mode = PLANNER_WORKER_MODE if planner_worker_mode else INTERACTIVE_MODE
         if hasattr(self, "_toolbar"):
-            self._toolbar.set_execution_mode(mode)
+            self._toolbar.set_dispatch_available(planner_worker_mode)
         if hasattr(self, "_left_pane"):
             self._left_pane.set_planner_worker_mode(planner_worker_mode)
         if hasattr(self, "_chat"):
@@ -682,7 +680,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
 
     def _on_started(self) -> None:
-        self._toolbar.set_response_running(True)
+        self._left_pane.set_response_running(True)
         self._input.set_streaming(True)
         # Switch from Drone Bay to workspace so the user sees the run —
         # but do NOT switch away from the Chain Editor (Workflow Studio).
@@ -691,7 +689,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._drone_controller.sync_drone_tab_checked()
 
     def _on_finished(self) -> None:
-        self._toolbar.set_response_running(False)
+        self._left_pane.set_response_running(False)
         if self._answer_only_ui_guard is not None:
             self._answer_only_ui_guard.stop()
             self._answer_only_ui_guard = None

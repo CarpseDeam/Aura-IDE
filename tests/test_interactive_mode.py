@@ -18,6 +18,7 @@ from aura.conversation.execution_mode import INTERACTIVE_MODE, PLANNER_WORKER_MO
 from aura.conversation.persistence import load_conversation, save_conversation
 from aura.conversation.tools import ToolRegistry
 from aura.gui.conv_persistence import ConversationPersistence
+from aura.gui.left_pane import LeftPane
 from aura.gui.main_window import MainWindow
 from aura.gui.main_window_toolbar import MainWindowToolbar
 from aura.settings import AppSettings
@@ -109,20 +110,61 @@ def test_interactive_turn_uses_primary_loop_without_dispatch_and_preserves_worke
     )
 
 
-def test_toolbar_selector_is_conversation_mode_and_quiets_dispatch() -> None:
+def test_model_configuration_owns_execution_selector_and_presentation() -> None:
     _app()
+    pane = LeftPane(None)
     toolbar = MainWindowToolbar(AppSettings())
-    toolbar.set_execution_mode(INTERACTIVE_MODE)
 
-    assert toolbar.execution_mode() == INTERACTIVE_MODE
-    assert toolbar._interactive_badge.text() == "INTERACTIVE"
+    assert pane._execution_mode_combo.parent() is pane._model_config_footer
+    assert not hasattr(toolbar, "_execution_mode_combo")
+    assert not hasattr(toolbar, "_interactive_badge")
+    assert pane.execution_mode() == PLANNER_WORKER_MODE
+    assert pane._planner_model_label.text() == "Planner:"
+    assert not pane._worker_model_combo.isHidden()
+    assert not pane._worker_thinking_combo.isHidden()
+    pane._worker_model_combo.addItem("Preserved worker", "preserved-worker")
+    pane.set_worker_model("preserved-worker")
+    pane.set_worker_thinking("max")
+
+    pane.set_planner_worker_mode(False)
+
+    assert pane.execution_mode() == INTERACTIVE_MODE
+    assert pane._planner_model_label.text() == "Model:"
+    assert pane._planner_thinking_label.text() == "Thinking:"
+    assert pane._worker_model_combo.isHidden()
+    assert pane._worker_thinking_combo.isHidden()
+    assert pane.current_worker_model() == "preserved-worker"
+    assert pane.current_worker_thinking() == "max"
+
+    pane.set_planner_worker_mode(True)
+
+    assert pane.execution_mode() == PLANNER_WORKER_MODE
+    assert pane._planner_model_label.text() == "Planner:"
+    assert pane._planner_thinking_label.text() == "Thinking:"
+    assert not pane._worker_model_combo.isHidden()
+    assert not pane._worker_thinking_combo.isHidden()
+    assert pane.current_worker_model() == "preserved-worker"
+    assert pane.current_worker_thinking() == "max"
+
+
+def test_mode_selector_running_state_and_dispatch_value_are_presentation_only() -> None:
+    _app()
+    pane = LeftPane(None)
+    toolbar = MainWindowToolbar(AppSettings())
+    toolbar.set_auto_dispatch(True)
+
+    pane.set_response_running(True)
+    assert not pane._execution_mode_combo.isEnabled()
+    pane.set_response_running(False)
+    assert pane._execution_mode_combo.isEnabled()
+
+    toolbar.set_dispatch_available(False)
     assert not toolbar._auto_dispatch_switch.isEnabled()
-    assert toolbar._auto_dispatch_switch.isChecked() == AppSettings().auto_dispatch
+    assert toolbar._auto_dispatch_switch.isChecked()
 
-    toolbar.set_response_running(True)
-    assert not toolbar._execution_mode_combo.isEnabled()
-    toolbar.set_response_running(False)
-    assert toolbar._execution_mode_combo.isEnabled()
+    toolbar.set_dispatch_available(True)
+    assert toolbar._auto_dispatch_switch.isEnabled()
+    assert toolbar._auto_dispatch_switch.isChecked()
 
 
 def test_interactive_inventory_has_direct_mutation_and_dynamic_tools(tmp_path: Path) -> None:

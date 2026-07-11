@@ -25,6 +25,7 @@ from aura.config import (
     ProviderId,
     ThinkingMode,
 )
+from aura.conversation.execution_mode import INTERACTIVE_MODE, PLANNER_WORKER_MODE
 from aura.gui.theme import ACCENT, BG_ALT, BG_RAISED, BORDER, FG_DIM, FG_MUTED, LABEL_PROJECTS, LABEL_THREAD
 from aura.gui.widgets.no_wheel_combo import NoWheelComboBox
 from aura.projects.store import ProjectStore
@@ -297,6 +298,7 @@ class LeftPane(QFrame):
     planner_thinking_changed = Signal(str)
     worker_model_changed = Signal(str)
     worker_thinking_changed = Signal(str)
+    execution_mode_changed = Signal(str)
     drone_selected = Signal(Path)
     new_drone_requested = Signal()
 
@@ -375,12 +377,31 @@ class LeftPane(QFrame):
         model_label.setObjectName("paneTitleModel")
         footer_layout.addWidget(model_label)
 
+        # Conversation-scoped execution mode
+        mode_row = QHBoxLayout()
+        mode_row.setSpacing(4)
+        mode_label = QLabel("Mode:")
+        mode_label.setStyleSheet(f"color: {FG_DIM};")
+        mode_row.addWidget(mode_label)
+        self._execution_mode_combo = NoWheelComboBox()
+        self._execution_mode_combo.setObjectName("executionModeSelector")
+        self._execution_mode_combo.addItem("Planner + Worker", PLANNER_WORKER_MODE)
+        self._execution_mode_combo.addItem("Interactive", INTERACTIVE_MODE)
+        self._execution_mode_combo.setToolTip(
+            "Execution strategy for this conversation"
+        )
+        self._execution_mode_combo.currentIndexChanged.connect(
+            lambda _index: self.execution_mode_changed.emit(self.execution_mode())
+        )
+        mode_row.addWidget(self._execution_mode_combo, 1)
+        footer_layout.addLayout(mode_row)
+
         # Planner model
         planner_model_row = QHBoxLayout()
         planner_model_row.setSpacing(4)
-        planner_model_label = QLabel("Planner:")
-        planner_model_label.setStyleSheet(f"color: {FG_DIM};")
-        planner_model_row.addWidget(planner_model_label)
+        self._planner_model_label = QLabel("Planner:")
+        self._planner_model_label.setStyleSheet(f"color: {FG_DIM};")
+        planner_model_row.addWidget(self._planner_model_label)
         self._planner_model_combo = NoWheelComboBox()
         self._planner_model_combo.currentIndexChanged.connect(
             lambda: self.planner_model_changed.emit(self.current_planner_model())
@@ -391,9 +412,9 @@ class LeftPane(QFrame):
         # Planner thinking
         planner_think_row = QHBoxLayout()
         planner_think_row.setSpacing(4)
-        planner_think_label = QLabel("Thinking:")
-        planner_think_label.setStyleSheet(f"color: {FG_DIM};")
-        planner_think_row.addWidget(planner_think_label)
+        self._planner_thinking_label = QLabel("Thinking:")
+        self._planner_thinking_label.setStyleSheet(f"color: {FG_DIM};")
+        planner_think_row.addWidget(self._planner_thinking_label)
         self._planner_thinking_combo = NoWheelComboBox()
         self._planner_thinking_combo.addItem("Off", "off")
         self._planner_thinking_combo.addItem("High", "high")
@@ -493,10 +514,29 @@ class LeftPane(QFrame):
             self._worker_thinking_combo.setCurrentIndex(keys.index(thinking))
 
     def set_planner_worker_mode(self, enabled: bool) -> None:
+        self.set_execution_mode(
+            PLANNER_WORKER_MODE if enabled else INTERACTIVE_MODE
+        )
+        self._planner_model_label.setText("Planner:" if enabled else "Model:")
+        self._planner_thinking_label.setText("Thinking:")
         self._worker_model_label.setVisible(enabled)
         self._worker_model_combo.setVisible(enabled)
         self._worker_thinking_label.setVisible(enabled)
         self._worker_thinking_combo.setVisible(enabled)
+
+    def execution_mode(self) -> str:
+        return str(self._execution_mode_combo.currentData())
+
+    def set_execution_mode(self, mode: str) -> None:
+        index = self._execution_mode_combo.findData(mode)
+        if index < 0:
+            index = self._execution_mode_combo.findData(PLANNER_WORKER_MODE)
+        self._execution_mode_combo.blockSignals(True)
+        self._execution_mode_combo.setCurrentIndex(index)
+        self._execution_mode_combo.blockSignals(False)
+
+    def set_response_running(self, running: bool) -> None:
+        self._execution_mode_combo.setEnabled(not running)
 
     def _clear_projects_layout(self) -> None:
         while self._projects_layout.count():
