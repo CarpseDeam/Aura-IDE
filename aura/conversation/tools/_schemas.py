@@ -1251,7 +1251,9 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
             "name": "edit_godot_asset_preview",
             "description": (
                 "Safely assemble catalog-approved PackedScenes beneath a dedicated AuraPreview Node3D in the "
-                "scene currently open in Godot, or clear its children. Every call is approval-gated and one "
+                "scene currently open in Godot, revise it, or clear its children. Use apply/duplicate to extend "
+                "a live catalog piece by a small relative offset, then inspect and revise the result in later "
+                "calls instead of laying out an entire scene at once. Every call is approval-gated and one "
                 "Godot UndoRedo action. Asset IDs must come from inspect_godot_assets; arbitrary resource paths "
                 "are not accepted. This never saves the scene automatically. Inspect the preview afterward."
             ),
@@ -1293,7 +1295,7 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
                             "properties": {
                                 "operation": {
                                     "type": "string",
-                                    "enum": ["set_transform", "instantiate", "remove", "replace"],
+                                    "enum": ["set_transform", "instantiate", "remove", "replace", "duplicate"],
                                 },
                                 "node_path": {
                                     "type": "string",
@@ -1308,6 +1310,25 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
                                 "rotation_degrees_y": {"type": "number"},
                                 "scale": {
                                     "type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3
+                                },
+                                "count": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 16,
+                                    "description": "For duplicate, the bounded number of copies to add.",
+                                },
+                                "offset": {
+                                    "type": "array",
+                                    "items": {"type": "number"},
+                                    "minItems": 3,
+                                    "maxItems": 3,
+                                    "description": "For duplicate, the translation step between copies.",
+                                },
+                                "offset_space": {
+                                    "type": "string",
+                                    "enum": ["local", "world"],
+                                    "default": "local",
+                                    "description": "Interpret duplicate offset in the source's local basis or preview world space.",
                                 },
                             },
                             "required": ["operation"],

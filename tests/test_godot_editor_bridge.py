@@ -199,7 +199,7 @@ def test_capability_reporting_includes_preview_capture(tmp_path: Path) -> None:
                     "result": {
                         "bridge": "aura-godot-editor",
                         "protocol": 1,
-                        "bridge_version": 6,
+                        "bridge_version": 7,
                         "capabilities": [
                             "scene.snapshot",
                             "scene.select",
@@ -222,7 +222,7 @@ def test_capability_reporting_includes_preview_capture(tmp_path: Path) -> None:
     thread.join(timeout=2)
 
     assert result["bridge"] == "aura-godot-editor"
-    assert result["bridge_version"] == 6
+    assert result["bridge_version"] == 7
     assert "preview.apply" in result["capabilities"]
     assert "api.describe" in result["capabilities"]
     assert "preview.capture" in result["capabilities"]

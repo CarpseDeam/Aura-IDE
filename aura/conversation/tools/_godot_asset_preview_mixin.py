@@ -87,7 +87,7 @@ class GodotAssetPreviewHandlersMixin:
             )
         try:
             params = self._prepare_preview_params(action, args)
-        except (TypeError, ValueError) as exc:
+        except (GodotEditorBridgeError, TypeError, ValueError) as exc:
             return ToolExecResult(
                 ok=False,
                 payload=_mark_not_applied(
@@ -167,11 +167,12 @@ class GodotAssetPreviewHandlersMixin:
         operations: list[dict] = []
         targeted: set[str] = set()
         added_names: set[str] = set()
+        preview_instances: list[dict] | None = None
         for index, raw in enumerate(raw_operations):
             if not isinstance(raw, dict):
                 raise ValueError(f"operation {index} must be an object")
             operation = str(raw.get("operation") or "")
-            if operation not in {"set_transform", "instantiate", "remove", "replace"}:
+            if operation not in {"set_transform", "instantiate", "remove", "replace", "duplicate"}:
                 raise ValueError(f"operation {index} has an unsupported operation")
             if operation == "instantiate":
                 prepared = self._prepare_catalog_revision_asset(raw, index)
@@ -185,6 +186,47 @@ class GodotAssetPreviewHandlersMixin:
             if node_path in targeted:
                 raise ValueError(f"preview target appears in more than one operation: {node_path}")
             targeted.add(node_path)
+            if operation == "duplicate":
+                count = _bounded_int(raw.get("count"), f"duplicate operation {index} count", 1, 16)
+                if "offset" not in raw:
+                    raise ValueError(f"duplicate operation {index} requires an offset")
+                offset = _vector(raw["offset"], f"duplicate operation {index} offset")
+                offset_space = str(raw.get("offset_space") or "local")
+                if offset_space not in {"local", "world"}:
+                    raise ValueError(
+                        f"duplicate operation {index} offset_space must be local or world"
+                    )
+                if preview_instances is None:
+                    snapshot = GodotEditorBridgeClient(self._root).request("preview.snapshot", {})
+                    preview_instances = list(
+                        analyze_preview_snapshot(self._root, snapshot).get("instances") or []
+                    )
+                source = next(
+                    (item for item in preview_instances if str(item.get("path") or "") == node_path),
+                    None,
+                )
+                if source is None:
+                    raise ValueError(f"duplicate source does not exist: {node_path}")
+                asset_id = str(source.get("asset_id") or "")
+                domain = str(source.get("domain") or "")
+                if not asset_id or not domain:
+                    raise ValueError(f"duplicate source is not a recognized catalog asset: {node_path}")
+                asset = resolve_godot_asset(self._root, asset_id, domain=domain)
+                resource_path = str(source.get("resource_path") or "")
+                if resource_path.casefold() != asset.resource_path.casefold():
+                    raise ValueError(f"duplicate source catalog identity is inconsistent: {node_path}")
+                operations.append(
+                    {
+                        "operation": operation,
+                        "node_path": node_path,
+                        "count": count,
+                        "offset": offset,
+                        "offset_space": offset_space,
+                        "catalog_identity": f"{asset.domain}:{asset.id}",
+                        "resource_path": asset.resource_path,
+                    }
+                )
+                continue
             if operation == "remove":
                 operations.append({"operation": operation, "node_path": node_path})
                 continue
@@ -260,6 +302,14 @@ def _vector(value, label: str) -> list[float]:
     return [_number(component, label) for component in value]
 
 
+def _bounded_int(value, label: str, minimum: int, maximum: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{label} must be an integer between {minimum} and {maximum}")
+    if value < minimum or value > maximum:
+        raise ValueError(f"{label} must be between {minimum} and {maximum}")
+    return value
+
+
 def _default_name(asset_id: str, index: int) -> str:
     stem = re.sub(r"[^A-Za-z0-9_-]+", "_", asset_id).strip("_") or "Asset"
     return f"{stem}_{index + 1:02d}"
@@ -305,7 +355,10 @@ def _validate_allowed_rotation(rotation: float, allowed: tuple[float, ...], asse
 
 def _preview_bridge_error(exc: Exception) -> str:
     message = str(exc)
-    if "unsupported action: preview." in message:
+    if (
+        "unsupported action: preview." in message
+        or "unsupported revision operation: duplicate" in message
+    ):
         return (
             "The active Godot plugin is an older Aura bridge. Run install_godot_editor_bridge, "
             "then disable and re-enable Aura Editor Bridge once in Godot's Plugins panel."

@@ -267,3 +267,188 @@ def test_atomic_preview_apply_rejects_nested_or_conflicting_targets(tmp_path: Pa
     assert "direct AuraPreview child" in nested.payload["error"]
     assert conflicting.ok is False
     assert "more than one operation" in conflicting.payload["error"]
+
+
+def test_preview_schema_exposes_one_bounded_relational_duplicate_operation(tmp_path: Path) -> None:
+    schema = next(
+        tool["function"]
+        for tool in ToolRegistry(tmp_path, mode="worker").tool_defs()
+        if tool["function"]["name"] == "edit_godot_asset_preview"
+    )
+    item = schema["parameters"]["properties"]["operations"]["items"]
+
+    assert item["properties"]["operation"]["enum"] == [
+        "set_transform", "instantiate", "remove", "replace", "duplicate"
+    ]
+    assert item["properties"]["count"]["minimum"] == 1
+    assert item["properties"]["count"]["maximum"] == 16
+    assert item["properties"]["offset_space"]["enum"] == ["local", "world"]
+
+
+def test_preview_duplicate_normalizes_live_catalog_source_and_relative_inputs(tmp_path: Path) -> None:
+    root, _catalog = _project(tmp_path, [_wall()])
+    registry = ToolRegistry(root, mode="worker")
+    snapshot = {
+        "scene_open": True,
+        "preview_exists": True,
+        "diagnostics": [],
+        "instances": [{
+            "path": "AuraPreview/WestWall",
+            "resource_path": "res://assets/modules/wall.tscn",
+            "position": [2, 0, 3],
+            "rotation_degrees": [0, 90, 0],
+            "scale": [1, 1, 1],
+        }],
+    }
+    with patch(
+        "aura.conversation.tools._godot_asset_preview_mixin.GodotEditorBridgeClient"
+    ) as client_type:
+        client_type.return_value.request.side_effect = [
+            snapshot,
+            {
+                "applied": True,
+                "operation_count": 3,
+                "added_paths": [
+                    "AuraPreview/WestWall_copy_01",
+                    "AuraPreview/WestWall_copy_02",
+                    "AuraPreview/WestWall_copy_03",
+                ],
+                "instance_count": 4,
+            },
+        ]
+        result = registry.execute(
+            "edit_godot_asset_preview",
+            {
+                "action": "apply",
+                "operations": [{
+                    "operation": "duplicate",
+                    "node_path": "AuraPreview/WestWall",
+                    "count": 3,
+                    "offset": [4, 0, 0],
+                }],
+            },
+            lambda _request: ApprovalDecision("approve"),
+        )
+
+    assert result.ok is True
+    calls = client_type.return_value.request.call_args_list
+    assert calls[0].args == ("preview.snapshot", {})
+    assert calls[1].args[0] == "preview.apply"
+    duplicate = calls[1].args[1]["operations"][0]
+    assert duplicate == {
+        "operation": "duplicate",
+        "node_path": "AuraPreview/WestWall",
+        "count": 3,
+        "offset": [4.0, 0.0, 0.0],
+        "offset_space": "local",
+        "catalog_identity": "ruins:wall",
+        "resource_path": "res://assets/modules/wall.tscn",
+    }
+
+
+def test_preview_duplicate_rejects_invalid_count_before_live_lookup(tmp_path: Path) -> None:
+    root, _catalog = _project(tmp_path, [_wall()])
+    registry = ToolRegistry(root, mode="worker")
+    with patch(
+        "aura.conversation.tools._godot_asset_preview_mixin.GodotEditorBridgeClient"
+    ) as client_type:
+        for count in (0, 17, 1.5, True):
+            result = registry.execute(
+                "edit_godot_asset_preview",
+                {
+                    "action": "apply",
+                    "operations": [{
+                        "operation": "duplicate",
+                        "node_path": "AuraPreview/Wall",
+                        "count": count,
+                        "offset": [1, 0, 0],
+                    }],
+                },
+                lambda _request: ApprovalDecision("approve"),
+            )
+            assert result.ok is False
+            assert "count" in result.payload["error"]
+    client_type.assert_not_called()
+
+
+def test_preview_duplicate_rejects_nested_source_before_live_lookup(tmp_path: Path) -> None:
+    root, _catalog = _project(tmp_path, [_wall()])
+    registry = ToolRegistry(root, mode="worker")
+    with patch(
+        "aura.conversation.tools._godot_asset_preview_mixin.GodotEditorBridgeClient"
+    ) as client_type:
+        result = registry.execute(
+            "edit_godot_asset_preview",
+            {
+                "action": "apply",
+                "operations": [{
+                    "operation": "duplicate",
+                    "node_path": "AuraPreview/Building/Wall",
+                    "count": 2,
+                    "offset": [1, 0, 0],
+                }],
+            },
+            lambda _request: ApprovalDecision("approve"),
+        )
+
+    assert result.ok is False
+    assert "direct AuraPreview child" in result.payload["error"]
+    client_type.assert_not_called()
+
+
+def test_preview_duplicate_rejects_missing_or_non_catalog_source_before_apply(tmp_path: Path) -> None:
+    root, _catalog = _project(tmp_path, [_wall()])
+    registry = ToolRegistry(root, mode="worker")
+    snapshots = [
+        {"scene_open": True, "preview_exists": True, "diagnostics": [], "instances": []},
+        {
+            "scene_open": True,
+            "preview_exists": True,
+            "diagnostics": [],
+            "instances": [{
+                "path": "AuraPreview/Wall",
+                "resource_path": "res://handmade/not_catalogued.tscn",
+                "position": [0, 0, 0],
+                "rotation_degrees": [0, 0, 0],
+                "scale": [1, 1, 1],
+            }],
+        },
+    ]
+    with patch(
+        "aura.conversation.tools._godot_asset_preview_mixin.GodotEditorBridgeClient"
+    ) as client_type:
+        client_type.return_value.request.side_effect = snapshots
+        for expected in ("does not exist", "not a recognized catalog asset"):
+            result = registry.execute(
+                "edit_godot_asset_preview",
+                {
+                    "action": "apply",
+                    "operations": [{
+                        "operation": "duplicate",
+                        "node_path": "AuraPreview/Wall",
+                        "count": 2,
+                        "offset": [1, 0, 0],
+                    }],
+                },
+                lambda _request: ApprovalDecision("approve"),
+            )
+            assert result.ok is False
+            assert expected in result.payload["error"]
+
+    assert [call.args[0] for call in client_type.return_value.request.call_args_list] == [
+        "preview.snapshot", "preview.snapshot"
+    ]
+
+
+def test_godot_duplicate_preparation_is_relative_deterministic_atomic_and_unsaved() -> None:
+    content = Path("aura/godot_editor/addon/actions/asset_preview_actions.gd").read_text(
+        encoding="utf-8"
+    )
+
+    assert "position_step = source.transform.basis * offset" in content
+    assert 'candidate := "%s_copy_%02d"' in content
+    assert '"path": PREVIEW_ROOT_NAME + "/" + str(placement["instance"].name)' in content
+    assert '_undo_redo.add_do_method(self, "_execute_revision"' in content
+    assert '_undo_redo.add_undo_method(self, "_execute_revision"' in content
+    assert "for index in range(operations.size() - 1, -1, -1)" in content
+    assert "save_scene" not in content

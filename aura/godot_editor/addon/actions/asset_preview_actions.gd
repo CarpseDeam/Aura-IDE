@@ -3,6 +3,7 @@ extends RefCounted
 
 const PREVIEW_ROOT_NAME := "AuraPreview"
 const MAX_INSTANCES := 64
+const MAX_DUPLICATE_COUNT := 16
 
 var _editor_interface: EditorInterface
 var _undo_redo: EditorUndoRedoManager
@@ -109,7 +110,10 @@ func apply_revision(params: Dictionary) -> Dictionary:
 		if not checked.get("ok", false):
 			_free_prepared_instances(prepared)
 			return checked
-		prepared.append(checked["operation"])
+		if checked.has("operations"):
+			prepared.append_array(checked["operations"])
+		else:
+			prepared.append(checked["operation"])
 	if names.size() > MAX_INSTANCES:
 		_free_prepared_instances(prepared)
 		return {"ok": false, "error": "revision would exceed the %d-instance preview limit" % MAX_INSTANCES}
@@ -188,6 +192,8 @@ func _prepare_revision_operation(
 		return {"ok": false, "error": "preview target does not exist or is not Node3D: %s" % path}
 	targeted[path] = true
 	var target_3d := target as Node3D
+	if action == "duplicate":
+		return _prepare_duplicate_operation(raw, index, target_3d, names)
 	var base := {
 		"operation": action,
 		"path": path,
@@ -230,6 +236,66 @@ func _prepare_revision_operation(
 		base["new_path"] = PREVIEW_ROOT_NAME + "/" + str(placement["instance"].name)
 		return {"ok": true, "operation": base}
 	return {"ok": false, "error": "unsupported revision operation: %s" % action}
+
+
+func _prepare_duplicate_operation(
+	raw: Dictionary,
+	index: int,
+	source: Node3D,
+	names: Dictionary,
+) -> Dictionary:
+	var count: Variant = raw.get("count")
+	if not count is int or count < 1 or count > MAX_DUPLICATE_COUNT:
+		return {"ok": false, "error": "duplicate count must be between 1 and %d" % MAX_DUPLICATE_COUNT}
+	var offset: Variant = _vector3(raw.get("offset", null), Vector3.ZERO)
+	if offset == null:
+		return {"ok": false, "error": "duplicate offset must contain three numbers"}
+	var offset_space := str(raw.get("offset_space", "local"))
+	if offset_space != "local" and offset_space != "world":
+		return {"ok": false, "error": "duplicate offset_space must be local or world"}
+	var resource_path := str(raw.get("resource_path", ""))
+	if resource_path.is_empty() or source.scene_file_path != resource_path:
+		return {"ok": false, "error": "duplicate source is not the prepared catalog asset: %s" % source.name}
+
+	var position_step: Vector3 = offset
+	if offset_space == "local":
+		position_step = source.transform.basis * offset
+	var duplicated: Array[Dictionary] = []
+	for copy_index in count:
+		var placement_raw := {
+			"resource_path": resource_path,
+			"name": _next_duplicate_name(str(source.name), names),
+			"position": [
+				source.position.x + position_step.x * float(copy_index + 1),
+				source.position.y + position_step.y * float(copy_index + 1),
+				source.position.z + position_step.z * float(copy_index + 1),
+			],
+			"rotation_degrees_y": source.rotation_degrees.y,
+			"scale": [source.scale.x, source.scale.y, source.scale.z],
+		}
+		var placed := _prepare_placement(placement_raw, index, names)
+		if not placed.get("ok", false):
+			_free_prepared_instances(duplicated)
+			return placed
+		var placement: Dictionary = placed["placement"]
+		duplicated.append({
+			"operation": "instantiate",
+			"path": PREVIEW_ROOT_NAME + "/" + str(placement["instance"].name),
+			"new_node": placement["instance"],
+			"new_position": placement["position"],
+			"new_rotation": Vector3(0.0, placement["rotation_y"], 0.0),
+			"new_scale": placement["scale"],
+		})
+	return {"ok": true, "operations": duplicated}
+
+
+func _next_duplicate_name(source_name: String, names: Dictionary) -> String:
+	var suffix := 1
+	var candidate := "%s_copy_%02d" % [source_name, suffix]
+	while names.has(candidate):
+		suffix += 1
+		candidate = "%s_copy_%02d" % [source_name, suffix]
+	return candidate
 
 
 func _revision_transform(raw: Dictionary, position: Vector3, rotation_y: float, scale: Vector3) -> Dictionary:
