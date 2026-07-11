@@ -22,7 +22,6 @@ from aura.config import (
     save_dynamic_catalog,
 )
 from aura.gui.theme import FG_DIM
-from aura.gui.widgets.glass_switch import GlassSwitch
 from aura.gui.widgets.no_wheel_combo import NoWheelComboBox
 from aura.providers.base import ProviderId
 from aura.providers.registry import provider_registry
@@ -71,12 +70,6 @@ class ModelsPage(QWidget):
         form.setVerticalSpacing(10)
 
         # --- 1. Create Widgets ---
-
-        # P/W mode toggle
-        self._pw_mode_chk = GlassSwitch(
-            "Planner/Worker mode (planner chats; worker executes code changes)",
-            self._settings.planner_worker_mode,
-        )
 
         # Planner Provider
         self._planner_provider_combo = NoWheelComboBox()
@@ -142,7 +135,6 @@ class ModelsPage(QWidget):
 
         # --- 2. Setup Layout ---
 
-        form.addRow("", self._pw_mode_chk)
         form.addRow("Planner provider:", self._planner_provider_combo)
 
         planner_model_row = QHBoxLayout()
@@ -213,12 +205,9 @@ class ModelsPage(QWidget):
         self._temperature_spin.setValue(self._settings.temperature)
         self._worker_temperature_spin.setValue(self._settings.worker_temperature)
 
-        self._refresh_pw_enabled()
-
         # --- 4. Connect Signals ---
         # Connect AFTER initial population to avoid spurious signal firing
         # while some widgets might still be partially initialized.
-        self._pw_mode_chk.toggled.connect(self._on_pw_toggled)
         self._planner_provider_combo.currentIndexChanged.connect(self._on_planner_provider_changed)
         self._worker_provider_combo.currentIndexChanged.connect(self._on_worker_provider_changed)
 
@@ -431,25 +420,11 @@ class ModelsPage(QWidget):
         if idx >= 0:
             combo.setCurrentIndex(idx)
 
-    # --- P/W toggle ---
-
-    def _on_pw_toggled(self, _checked: bool) -> None:
-        self._refresh_pw_enabled()
-
-    def _refresh_pw_enabled(self) -> None:
-        enabled = self._pw_mode_chk.isChecked()
-        # Planner controls are always enabled — Planner is the primary brain
-        # Only Worker controls disable when planner/worker mode is off
-        self._worker_model_combo.setEnabled(enabled)
-        self._worker_thinking_combo.setEnabled(enabled)
-        self._worker_temperature_spin.setEnabled(enabled)
-
     # --- Collect ---
 
     def collect_settings(self, settings: AppSettings) -> None:
         settings.planner_provider = self._planner_provider_combo.currentData()
         settings.worker_provider = self._worker_provider_combo.currentData()
-        settings.planner_worker_mode = self._pw_mode_chk.isChecked()
         settings.default_planner_model = self._planner_model_combo.currentData()
         settings.default_worker_model = self._worker_model_combo.currentData()
         settings.default_planner_thinking = self._planner_thinking_combo.currentData()

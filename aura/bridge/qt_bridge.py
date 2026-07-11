@@ -70,6 +70,12 @@ from aura.conversation import (
     ConversationManager,
     History,
 )
+from aura.conversation.execution_mode import (
+    INTERACTIVE_MODE,
+    PLANNER_WORKER_MODE,
+    ExecutionMode,
+    normalize_execution_mode,
+)
 from aura.conversation.tools import (
     ToolRegistry,
 )
@@ -267,7 +273,7 @@ class ConversationBridge(QObject):
         model_streams.register('generate_worker_code', self._worker_backend.stream)
         
         self._history = History()
-        self._registry = ToolRegistry(workspace_root=_dummy_root(), mode="single")
+        self._registry = ToolRegistry(workspace_root=_dummy_root(), mode="planner")
         self._manager = ConversationManager(self._history, self._registry)
         self._parent_widget = parent_widget
         self._approval_proxy = _ApprovalProxy(parent_widget)
@@ -289,7 +295,7 @@ class ConversationBridge(QObject):
         self._last_proposed_tool_call_id: str | None = None
         self._active_model: str = ""
 
-        self._planner_worker_mode: bool = False  # configured by main_window
+        self._planner_worker_mode: bool = True
         self._temperature: float = 0.7
         self._single_system_prompt: str = ""
         self._planner_system_prompt: str = ""
@@ -299,6 +305,7 @@ class ConversationBridge(QObject):
         self._pre_worker_sha: str | None = None
         self._active_prompt_mode: str | None = None
         self._turn_task_kind: str | None = None
+        self._turn_context_content: str | None = None
 
         # Re-emit dispatch proxy signals on the bridge so the GUI binds once.
         self._dispatch_proxy.showSpecCard.connect(self.workerDispatchRequested)
@@ -336,6 +343,10 @@ class ConversationBridge(QObject):
     @property
     def planner_worker_mode(self) -> bool:
         return self._planner_worker_mode
+
+    @property
+    def execution_mode(self) -> ExecutionMode:
+        return PLANNER_WORKER_MODE if self._planner_worker_mode else INTERACTIVE_MODE
 
     @property
     def auto_dispatch(self) -> bool:
@@ -399,17 +410,29 @@ class ConversationBridge(QObject):
         )
         self._history.set_system(composed.system_prompt)
 
-    def set_planner_worker_mode(self, enabled: bool) -> None:
+    def set_execution_mode(self, mode: ExecutionMode | str) -> bool:
+        """Switch this conversation's existing manager/registry while idle."""
+        if self.is_running():
+            return False
+        normalized = normalize_execution_mode(mode)
+        enabled = normalized == PLANNER_WORKER_MODE
         self._planner_worker_mode = enabled
-        self._compute_and_cache_tier1()
         mode_key = "planner" if enabled else "single"
         self._registry.set_mode(mode_key)
-        if self._active_prompt_mode == mode_key:
-            return  # Already set, avoid churn
+        latest_user_text = _latest_user_text(self._history)
+        self._turn_task_kind = _research_task_kind_for_text(latest_user_text)
+        self._turn_context_content = latest_user_text if not enabled else None
         role = self._active_runtime_role()
         composed = self._compose_prompt(role, self._custom_prompt_for_role(role))
         self._history.set_system(composed.system_prompt)
         self._active_prompt_mode = mode_key
+        return True
+
+    def set_planner_worker_mode(self, enabled: bool) -> bool:
+        """Compatibility wrapper around the explicit execution-mode API."""
+        return self.set_execution_mode(
+            PLANNER_WORKER_MODE if enabled else INTERACTIVE_MODE
+        )
 
     def set_temperature(self, temperature: float) -> None:
         self._temperature = temperature
@@ -461,6 +484,7 @@ class ConversationBridge(QObject):
             self._registry.workspace_root,
             force=force_repo_map,
             task_kind=self._turn_task_kind,
+            content=self._turn_context_content if role == RuntimeRole.SINGLE else None,
         )
         self._context_gearbox_metadata = context_gearbox_metadata(
             composed.ledger, workspace_root=self._registry.workspace_root,
@@ -504,6 +528,8 @@ class ConversationBridge(QObject):
         self._history.messages.clear()
         self._index_to_id.clear()
         self._index_to_name.clear()
+        self._turn_task_kind = None
+        self._turn_context_content = None
         self._dispatch_proxy.clear_records()
         # We do NOT reset _approve_all_session here, as it is managed by the
         # persistent toolbar toggle.
@@ -694,10 +720,13 @@ class ConversationBridge(QObject):
         self.finished.emit()
 
     def _prepare_turn_context(self) -> None:
-        task_kind = _research_task_kind_for_text(_latest_user_text(self._history))
-        if task_kind == self._turn_task_kind:
+        latest_user_text = _latest_user_text(self._history)
+        task_kind = _research_task_kind_for_text(latest_user_text)
+        content = latest_user_text if not self._planner_worker_mode else None
+        if task_kind == self._turn_task_kind and content == self._turn_context_content:
             return
         self._turn_task_kind = task_kind
+        self._turn_context_content = content
         if self._registry.workspace_root is None:
             return
         role = self._active_runtime_role()

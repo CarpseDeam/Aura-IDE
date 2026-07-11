@@ -36,6 +36,7 @@ class MainWindowSignalWiring:
         w._toolbar.new_conversation_requested.connect(w._on_new_conversation)
         w._toolbar.open_conversation_requested.connect(w._on_open_conversation)
         w._toolbar.read_only_toggled.connect(w._on_read_only_toggled)
+        w._toolbar.execution_mode_changed.connect(w._on_execution_mode_changed)
         w._toolbar.auto_dispatch_toggled.connect(w._settings_controller.on_auto_dispatch_toggled)
         w._toolbar.auto_approve_toggled.connect(w._settings_controller.on_auto_approve_toggled)
         w._toolbar.auto_summon_drones_toggled.connect(w._settings_controller.on_auto_summon_drones_toggled)
@@ -92,6 +93,7 @@ class MainWindowSignalWiring:
 
         # ---- group 10: persistence ----
         w._persistence.needs_status_refresh.connect(w._refresh_status_bar)
+        w._persistence.execution_mode_restored.connect(w._sync_execution_mode_ui)
 
         # ---- group 11: edge rail ----
         w._edge_rail.terminalTabToggled.connect(w._terminal_controller._on_terminal_toggle)

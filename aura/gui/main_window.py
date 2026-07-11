@@ -33,6 +33,7 @@ from aura.config import (
     load_workspace_root,
     save_settings,
 )
+from aura.conversation.execution_mode import INTERACTIVE_MODE, PLANNER_WORKER_MODE
 from aura.git_ops import is_git_repo
 from aura.gui._screen import clamp_to_screen
 from aura.gui.chat_view import ChatView
@@ -111,7 +112,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._bridge.set_planner_provider(self._settings.planner_provider)
         self._bridge.set_worker_provider(self._settings.worker_provider)
         self._bridge.set_workspace_root(self._workspace_root)
-        self._apply_planner_worker_mode_to_bridge(self._settings.planner_worker_mode)
+        self._bridge.set_execution_mode(PLANNER_WORKER_MODE)
         self._bridge.set_worker_model(self._settings.default_worker_model)
         self._bridge.set_worker_thinking(self._settings.default_worker_thinking)
         self._bridge.set_temperature(self._settings.temperature)
@@ -126,6 +127,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
         # ----- toolbar ----
         self._toolbar = MainWindowToolbar(self._settings, self)
+        self._toolbar.set_execution_mode(PLANNER_WORKER_MODE)
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self._toolbar)
         self._settings_controller = MainWindowSettingsController(self)
         self._debug_report_handler = DebugReportHandler(window=self, parent=self)
@@ -171,7 +173,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
         self._chat = ChatView()
         self._chat.setParent(self)
-        if self._settings.planner_worker_mode:
+        if self._bridge.planner_worker_mode:
             self._chat.set_compact_tools(True)
         center_layout.addWidget(self._chat, 1)
 
@@ -254,15 +256,11 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         )
 
         # Apply default model / thinking from settings.
-        if self._settings.planner_worker_mode:
-            self.set_model(self._settings.default_planner_model)
-            self.set_thinking(self._settings.default_planner_thinking)
-        else:
-            self.set_model(self._settings.default_model)
-            self.set_thinking(self._settings.default_thinking)
+        self.set_model(self._settings.default_planner_model)
+        self.set_thinking(self._settings.default_planner_thinking)
         self.set_worker_model(self._settings.default_worker_model)
         self.set_worker_thinking(self._settings.default_worker_thinking)
-        self._set_sidebar_planner_worker_mode(self._settings.planner_worker_mode)
+        self._set_sidebar_planner_worker_mode(True)
         center_layout.addWidget(self._input)
 
         # Show appropriate initial page
@@ -636,24 +634,37 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         dlg.exec()
 
     def _apply_planner_worker_mode_to_bridge(self, enabled: bool) -> None:
-        # HACK: Force planner/worker mode to always be enabled. The user is
-        # complaining about not seeing the rich playground UI, which is only
-        # active in this mode. This ensures all agent activity is routed
-        # through the AuraPlayground for the expected rich feedback.
-        effective_enabled = True
-
-        self._bridge.set_planner_worker_mode(effective_enabled)
-        if effective_enabled:
+        if not self._bridge.set_planner_worker_mode(enabled):
+            return
+        if enabled:
             prompt = self._settings.planner_system_prompt or PLANNER_SYSTEM_PROMPT
         else:
-            # This branch is now effectively dead code.
             prompt = self._settings.system_prompt or SINGLE_SYSTEM_PROMPT
         self._bridge.set_system_prompt(prompt)
+        self._sync_execution_mode_ui(enabled)
+
+    def _on_execution_mode_changed(self, mode: str) -> None:
+        if self._bridge.is_running():
+            self._sync_execution_mode_ui(self._bridge.planner_worker_mode)
+            QMessageBox.information(
+                self, APP_NAME, "Execution mode can only be changed while Aura is idle."
+            )
+            return
+        enabled = mode != INTERACTIVE_MODE
+        self._apply_planner_worker_mode_to_bridge(enabled)
+
+    def _sync_execution_mode_ui(self, planner_worker_mode: bool) -> None:
+        mode = PLANNER_WORKER_MODE if planner_worker_mode else INTERACTIVE_MODE
+        if hasattr(self, "_toolbar"):
+            self._toolbar.set_execution_mode(mode)
+        if hasattr(self, "_left_pane"):
+            self._left_pane.set_planner_worker_mode(planner_worker_mode)
         if hasattr(self, "_chat"):
-            self._chat.set_compact_tools(effective_enabled)
+            self._chat.set_compact_tools(planner_worker_mode)
 
 
     def _on_started(self) -> None:
+        self._toolbar.set_response_running(True)
         self._input.set_streaming(True)
         # Switch from Drone Bay to workspace so the user sees the run —
         # but do NOT switch away from the Chain Editor (Workflow Studio).
@@ -662,6 +673,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._drone_controller.sync_drone_tab_checked()
 
     def _on_finished(self) -> None:
+        self._toolbar.set_response_running(False)
         if self._answer_only_ui_guard is not None:
             self._answer_only_ui_guard.stop()
             self._answer_only_ui_guard = None

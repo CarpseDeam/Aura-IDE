@@ -102,16 +102,11 @@ class MainWindowSettingsController(QObject):
         window._bridge.set_planner_provider(settings.planner_provider)
         window._bridge.set_worker_provider(settings.worker_provider)
 
-        if settings.planner_worker_mode:
-            window.set_model(settings.default_planner_model)
-            window.set_thinking(settings.default_planner_thinking)
-        else:
-            window.set_model(settings.default_model)
-            window.set_thinking(settings.default_thinking)
+        window.set_model(settings.default_planner_model)
+        window.set_thinking(settings.default_planner_thinking)
         window.set_worker_model(settings.default_worker_model)
         window.set_worker_thinking(settings.default_worker_thinking)
-        window._set_sidebar_planner_worker_mode(settings.planner_worker_mode)
-        window._apply_planner_worker_mode_to_bridge(settings.planner_worker_mode)
+        window._sync_execution_mode_ui(window._bridge.planner_worker_mode)
         window._bridge.set_worker_model(settings.default_worker_model)
         window._bridge.set_worker_thinking(settings.default_worker_thinking)
         window._bridge.set_temperature(settings.temperature)

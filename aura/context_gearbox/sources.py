@@ -338,7 +338,7 @@ CONTEXT_SOURCES: tuple[ContextSource, ...] = (
     ContextSource(
         source_id="skill_pack",
         kind="skill_pack",
-        roles=(RuntimeRole.PLANNER, RuntimeRole.WORKER),
+        roles=(RuntimeRole.PLANNER, RuntimeRole.WORKER, RuntimeRole.SINGLE),
         reason="terrain-selected skills for this context",
     ),
 )

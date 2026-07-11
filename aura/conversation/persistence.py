@@ -5,8 +5,8 @@ Schema:
   system_prompt, messages, ...}.
 - v2: planner-worker aware. Adds planner_worker_mode, planner_model,
   worker_model, planner_thinking, worker_thinking, and an optional
-  worker_dispatches list. Loading v1 is backward-compatible: it's treated as
-  planner_worker_mode=False with a single set of messages on the planner.
+  worker_dispatches list. Conversations without usable mode metadata default
+  safely to Planner/Worker.
 - v2 + provider: v2 schema extended with a `provider` field.
 - v2 + chat_items: durable render transcript. `messages` remain model
   continuity; `worker_dispatches` remain diagnostics/project memory.
@@ -20,8 +20,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-
-from aura.paths import safe_is_relative_to
 
 from aura.config import (
     DEFAULT_MODEL,
@@ -39,6 +37,7 @@ from aura.conversation.chat_transcript import (
 )
 from aura.conversation.history import History
 from aura.git_ops import ensure_aura_gitignored
+from aura.paths import safe_is_relative_to
 from aura.providers.registry import provider_registry
 
 SCHEMA_VERSION = 2
@@ -127,7 +126,7 @@ def save_conversation(
     *,
     title: str | None = None,
     existing_path: Path | None = None,
-    planner_worker_mode: bool = False,
+    planner_worker_mode: bool = True,
     planner_model: str | None = None,
     worker_model: str | None = None,
     planner_thinking: ThinkingMode | None = None,
@@ -203,7 +202,7 @@ class LoadedConversation:
     provider: ProviderId = "deepseek"
     planner_provider: ProviderId = "deepseek"
     worker_provider: ProviderId = "deepseek"
-    planner_worker_mode: bool = False
+    planner_worker_mode: bool = True
     planner_model: str = DEFAULT_PLANNER_MODEL
     worker_model: str = DEFAULT_WORKER_MODEL
     planner_thinking: ThinkingMode = DEFAULT_PLANNER_THINKING
@@ -254,7 +253,8 @@ def load_conversation(path: Path) -> LoadedConversation:
 
     version = data.get("version")
     if version == 2:
-        pwm = bool(data.get("planner_worker_mode", False))
+        raw_pwm = data.get("planner_worker_mode")
+        pwm = raw_pwm if isinstance(raw_pwm, bool) else True
         planner_model = data.get("planner_model") if isinstance(data.get("planner_model"), str) else model
         worker_model = data.get("worker_model") if isinstance(data.get("worker_model"), str) else DEFAULT_WORKER_MODEL
         planner_thinking = data.get("planner_thinking") if data.get("planner_thinking") in valid_thinking else thinking
@@ -266,8 +266,8 @@ def load_conversation(path: Path) -> LoadedConversation:
             if isinstance(d, dict)
         ]
     else:
-        # v1 (or unversioned): treat as single-model.
-        pwm = False
+        # v1 (or unversioned): default safely to the standard execution path.
+        pwm = True
         planner_model = model
         worker_model = DEFAULT_WORKER_MODEL
         planner_thinking = thinking

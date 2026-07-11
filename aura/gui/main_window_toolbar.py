@@ -12,8 +12,10 @@ from PySide6.QtWidgets import (
 )
 
 from aura.config import media_path
+from aura.conversation.execution_mode import INTERACTIVE_MODE, PLANNER_WORKER_MODE
 from aura.gui.theme import LABEL_APPROVE, LABEL_DISPATCH, LABEL_DRONES, LABEL_READ_ONLY
 from aura.gui.widgets.glass_switch import GlassSwitch
+from aura.gui.widgets.no_wheel_combo import NoWheelComboBox
 
 
 def _toolbar_separator() -> QFrame:
@@ -31,6 +33,7 @@ class MainWindowToolbar(QToolBar):
     auto_dispatch_toggled = Signal(bool)
     auto_approve_toggled = Signal(bool)
     auto_summon_drones_toggled = Signal(bool)
+    execution_mode_changed = Signal(str)
     update_requested = Signal()
     settings_requested = Signal()
     logs_requested = Signal()
@@ -54,6 +57,28 @@ class MainWindowToolbar(QToolBar):
         new_conv_action = self.addWidget(self._new_conv_btn)
         new_conv_action.setText("New Conversation")
         new_conv_action.triggered.connect(self.new_conversation_requested.emit)
+
+        self.addWidget(_toolbar_separator())
+
+        self._execution_mode_combo = NoWheelComboBox()
+        self._execution_mode_combo.setObjectName("executionModeSelector")
+        self._execution_mode_combo.addItem("Planner + Worker", PLANNER_WORKER_MODE)
+        self._execution_mode_combo.addItem("INTERACTIVE", INTERACTIVE_MODE)
+        self._execution_mode_combo.setToolTip("Execution strategy for this conversation")
+        self._execution_mode_combo.setMinimumContentsLength(16)
+        self._execution_mode_combo.currentIndexChanged.connect(
+            lambda _index: self.execution_mode_changed.emit(
+                str(self._execution_mode_combo.currentData())
+            )
+        )
+        self.addWidget(self._execution_mode_combo)
+
+        self._interactive_badge = QLabel("")
+        self._interactive_badge.setObjectName("interactiveModeBadge")
+        self._interactive_badge.setStyleSheet(
+            "QLabel { color: #00e5ff; font-weight: bold; padding: 2px 6px; }"
+        )
+        self.addWidget(self._interactive_badge)
 
         self.addWidget(_toolbar_separator())
 
@@ -185,6 +210,30 @@ class MainWindowToolbar(QToolBar):
         self._debug_report_btn.setText("Sending..." if busy else "Send Logs")
         self._debug_report_btn.setToolTip(
             "Sending recent Aura logs..." if busy else "Send recent Aura logs to help diagnose problems"
+        )
+
+    def execution_mode(self) -> str:
+        return str(self._execution_mode_combo.currentData())
+
+    def set_execution_mode(self, mode: str) -> None:
+        index = self._execution_mode_combo.findData(mode)
+        if index < 0:
+            index = self._execution_mode_combo.findData(PLANNER_WORKER_MODE)
+        self._execution_mode_combo.blockSignals(True)
+        self._execution_mode_combo.setCurrentIndex(index)
+        self._execution_mode_combo.blockSignals(False)
+        interactive = self.execution_mode() == INTERACTIVE_MODE
+        self._interactive_badge.setText("INTERACTIVE" if interactive else "")
+        self._auto_dispatch_switch.setEnabled(not interactive)
+        self._refresh_execution_mode_enabled()
+
+    def set_response_running(self, running: bool) -> None:
+        self._response_running = bool(running)
+        self._refresh_execution_mode_enabled()
+
+    def _refresh_execution_mode_enabled(self) -> None:
+        self._execution_mode_combo.setEnabled(
+            not getattr(self, "_response_running", False)
         )
 
     def update_settings(self, settings) -> None:

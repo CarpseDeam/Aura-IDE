@@ -14,6 +14,13 @@ from PySide6.QtCore import QObject, QTimer, Signal, Slot
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 
 from aura.config import APP_NAME
+from aura.conversation.chat_transcript import (
+    PLANNER,
+    USER,
+    WORKER_COMPLETE,
+    clone_chat_items,
+    legacy_chat_items_from_messages,
+)
 from aura.conversation.history import History
 from aura.conversation.persistence import (
     LoadedConversation,
@@ -21,13 +28,6 @@ from aura.conversation.persistence import (
     load_conversation,
     most_recent_conversation,
     save_conversation,
-)
-from aura.conversation.chat_transcript import (
-    PLANNER,
-    USER,
-    WORKER_COMPLETE,
-    clone_chat_items,
-    legacy_chat_items_from_messages,
 )
 from aura.projects.store import ProjectStore
 from aura.settings import AppSettings
@@ -72,6 +72,7 @@ class ConversationPersistence(QObject):
     project_thread_updated = Signal()
     # Emitted when the active project or conversation context changes.
     current_context_changed = Signal(str, str)  # (project_id, thread_id)
+    execution_mode_restored = Signal(bool)  # planner_worker_mode
 
     def __init__(
         self,
@@ -231,6 +232,8 @@ class ConversationPersistence(QObject):
         self._active_replay_id += 1
         self._conversation_generation += 1
         self._bridge.reset_history()
+        self._bridge.set_planner_worker_mode(True)
+        self.execution_mode_restored.emit(True)
         self._bridge.clear_pre_worker_snapshot()
         self._chat.reset()
         self._playground.clear()
@@ -377,6 +380,7 @@ class ConversationPersistence(QObject):
             self._left_pane.set_planner_thinking(loaded.thinking)
 
         self._left_pane.set_planner_worker_mode(pwm)
+        self.execution_mode_restored.emit(pwm)
         self._chat.reset()
         self._playground.clear()
         self._bridge.clear_pre_worker_snapshot()
