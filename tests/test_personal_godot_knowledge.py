@@ -28,6 +28,11 @@ def _ids(skills) -> list[str]:
     return [dict(skill.origin).get("skill_id", "") for skill in skills]
 
 
+# ---------------------------------------------------------------------------
+# Skill discovery and routing (preserved)
+# ---------------------------------------------------------------------------
+
+
 def test_personal_godot_skills_are_read_as_project_authored(tmp_path: Path) -> None:
     root = _workspace_with_skills(tmp_path)
     skills = read_skills(root)
@@ -79,91 +84,6 @@ def test_personal_godot_knowledge_is_not_imported_by_packaged_aura() -> None:
     )
 
 
-def test_godot_workflow_skill_defines_planner_and_worker_roles() -> None:
-    text = _skill_text()
-    assert "#### Planner (read-only)" in text
-    assert "#### Worker (owns every mutation" in text
-
-
-def test_godot_workflow_skill_forbids_planner_mutations() -> None:
-    text = _skill_text()
-    lower = text.lower()
-    assert "not attempt mutations" in lower
-    assert "not write helper scripts" in lower
-    assert "not read bridge credentials" in lower
-
-
-def test_godot_workflow_skill_forbids_raw_tcp_and_arbitrary_paths() -> None:
-    text = _skill_text()
-    lower = text.lower()
-    assert "no raw tcp" in lower
-    assert "not prescribe raw resource paths" in lower
-
-
-def test_godot_workflow_skill_lists_live_tool_names() -> None:
-    text = _skill_text()
-    for tool in [
-        "inspect_godot_assets",
-        "inspect_godot_editor",
-        "inspect_godot_asset_preview",
-        "edit_godot_asset_preview",
-        "capture_godot_asset_preview",
-        "critique_godot_preview_local",
-    ]:
-        assert tool in text
-
-
-def test_godot_workflow_skill_has_no_fixed_pass_limit() -> None:
-    text = _skill_text()
-    assert "no fixed revision-pass limit" in text
-
-
-def test_godot_workflow_skill_allows_supervised_iteration() -> None:
-    text = _skill_text()
-    assert "actively supervising" in text
-    assert "meaningful progress" in text
-
-
-def test_godot_workflow_requires_semantic_evidence_for_visual_composition() -> None:
-    text = _skill_text()
-    lower = text.lower()
-    assert "critique (optional" not in lower
-    assert "semantic critique is required" in lower
-    assert "installed and callable" in lower
-    assert "not proof that a rendered composition is visually coherent" in lower
-    assert "do not claim that the composition is visually successful or coherent" in lower
-    assert "original creative brief" in lower
-
-
-def test_godot_workflow_preserves_planner_worker_boundary_and_refinement() -> None:
-    text = _skill_text()
-    lower = text.lower()
-    assert "planner names the tool" in lower
-    assert "does not execute semantic critique" in lower
-    assert "worker alone owns" in lower
-    assert "reinspect exact facts, recapture, critique again" in lower
-    assert "no fixed revision-pass limit" in lower
-
-
-def test_godot_workflow_uses_verdicts_without_weakening_boundaries() -> None:
-    text = _skill_text().lower()
-    assert "`needs_revision` requires another focused composition pass" in text
-    assert "`cannot_judge` requires a more useful capture" in text
-    assert "latest useful critique returns `coherent`" in text
-    assert "exact structural facts do not contradict it" in text
-    assert "worst reported coherence failure first" in text
-    assert "preserves the reported strongest feature" in text
-    assert "planner names the tool" in text
-    assert "worker alone owns" in text
-
-
-def test_godot_workflow_exempts_purely_structural_tasks() -> None:
-    text = _skill_text().lower()
-    assert "semantic critique is unnecessary for purely structural work" in text
-    assert "bridge validation" in text
-    assert "deterministic geometry checks" in text
-
-
 def test_godot_workflow_skill_remains_outside_packaged_aura() -> None:
     assert SKILL_FILE.parts[0] == "scripts"
     assert not any(
@@ -200,5 +120,189 @@ def test_live_composition_build_skill_context_selects_workflow(tmp_path: Path) -
         content=brief,
     )
 
-    assert "Godot Visual Iteration — Planner and Worker Role Split" in context
-    assert "critique_godot_preview_local" in context
+    assert "Godot Live Building — Fast Interactive Loop" in context
+    assert "describe_godot_preview_local" in context
+
+
+# ---------------------------------------------------------------------------
+# Tool naming: describe_godot_preview_local present, critique_godot_preview_local absent
+# ---------------------------------------------------------------------------
+
+
+def test_godot_workflow_skill_names_describe_not_critique() -> None:
+    text = _skill_text()
+    assert "describe_godot_preview_local" in text
+    assert "critique_godot_preview_local" not in text
+
+
+def test_godot_workflow_skill_lists_live_tool_names() -> None:
+    text = _skill_text()
+    for tool in [
+        "inspect_godot_assets",
+        "inspect_godot_editor",
+        "inspect_godot_asset_preview",
+        "edit_godot_asset_preview",
+        "capture_godot_asset_preview",
+        "describe_godot_preview_local",
+    ]:
+        assert tool in text, f"{tool} not found in skill text"
+
+
+# ---------------------------------------------------------------------------
+# Same-turn continued building
+# ---------------------------------------------------------------------------
+
+
+def test_godot_workflow_directs_same_turn_continued_building() -> None:
+    text = _skill_text()
+    lower = text.lower()
+    assert "immediately continues" in lower
+    assert "same tool loop" in lower or "same request" in lower
+    assert "do not stop after each burst" in lower
+
+
+def test_godot_workflow_says_not_to_invoke_vision_per_individual_piece() -> None:
+    text = _skill_text()
+    lower = text.lower()
+    assert "not after every individual wall" in lower or "not after every individual piece" in lower
+
+
+def test_godot_workflow_favors_several_connected_pieces_per_apply() -> None:
+    text = _skill_text()
+    lower = text.lower()
+    assert "several meaningful connected pieces" in lower
+    assert "one atomic" in lower
+
+
+# ---------------------------------------------------------------------------
+# Interactive Mode and Planner/Worker boundaries
+# ---------------------------------------------------------------------------
+
+
+def test_godot_workflow_defines_interactive_mode_role() -> None:
+    text = _skill_text()
+    assert "#### Interactive Mode" in text
+    assert "DeepSeek is the builder and sole decision-maker" in text
+
+
+def test_godot_workflow_defines_planner_and_worker_roles() -> None:
+    text = _skill_text()
+    assert "##### Planner (read-only)" in text
+    assert "##### Worker (owns every mutation" in text
+
+
+def test_godot_workflow_forbids_planner_mutations() -> None:
+    text = _skill_text()
+    lower = text.lower()
+    assert "not attempt mutations" in lower
+    assert "not write helper scripts" in lower
+    assert "not read bridge credentials" in lower
+
+
+# ---------------------------------------------------------------------------
+# Safety constraints preserved
+# ---------------------------------------------------------------------------
+
+
+def test_godot_workflow_forbids_raw_tcp_and_arbitrary_paths() -> None:
+    text = _skill_text()
+    lower = text.lower()
+    assert "no raw tcp" in lower
+    assert "not prescribe raw resource paths" in lower
+
+
+def test_godot_workflow_forbids_helper_builders_and_implicit_save() -> None:
+    text = _skill_text()
+    lower = text.lower()
+    assert "no helper builders" in lower
+    assert "never save the scene unless explicitly requested" in lower
+
+
+def test_godot_workflow_preserves_catalog_only_assets() -> None:
+    text = _skill_text()
+    lower = text.lower()
+    assert "catalog-only asset ids" in lower or "catalog asset ids" in lower
+    assert "no arbitrary" in lower and ".tscn" in lower
+
+
+# ---------------------------------------------------------------------------
+# Critic language absent
+# ---------------------------------------------------------------------------
+
+
+def test_godot_workflow_has_no_critic_verdict_language() -> None:
+    """Verify critic concepts are not used as positive workflow instructions.
+
+    Words like "verdict", "score", "coherent" may appear in prohibitions
+    ("Do not require a verdict / score / critic approval").  That is correct.
+    This test verifies that critic-driven workflow language (mandatory critique,
+    revision passes, verdict-gated progression) is absent.
+    """
+    text = _skill_text().lower()
+
+    # Critic workflow mechanics — must never appear as positive instructions
+    forbidden_mechanics = [
+        "needs_revision",
+        "cannot_judge",
+        "coherence_check",
+        "critical_failure",
+        "strongest_feature",
+        "critique again",
+        "semantic critique is required",
+    ]
+    for word in forbidden_mechanics:
+        assert word not in text, f"Critic mechanic '{word}' found in skill"
+
+    # Verify the old "critique (optional" escape hatch is gone
+    assert "critique (optional" not in text
+
+    # "coherent" should not appear as a quality bar
+    assert "must be coherent" not in text
+    assert "until coherent" not in text
+    assert "declared coherent" not in text
+    assert "visually coherent" not in text
+
+    # The skill must describe the fast build loop, not a critique loop
+    assert "describe locally" in text
+    assert "continue" in text
+
+
+def test_godot_workflow_has_no_semantic_critique_requirement() -> None:
+    text = _skill_text().lower()
+    assert "semantic critique is required" not in text
+    assert "not proof that a rendered composition is visually coherent" not in text
+    assert "do not claim that the composition is visually successful" not in text
+
+
+def test_godot_workflow_has_no_planner_names_tool_language() -> None:
+    """The old critic workflow had 'Planner names the tool' — verify it's gone."""
+    text = _skill_text().lower()
+    assert "planner names the tool" not in text
+
+
+# ---------------------------------------------------------------------------
+# Positive signals
+# ---------------------------------------------------------------------------
+
+
+def test_godot_workflow_describes_fast_interactive_loop() -> None:
+    text = _skill_text()
+    assert "inspect once" in text
+    assert "build a connected burst" in text
+    assert "describe locally" in text
+    assert "build the next burst" in text
+
+
+def test_godot_workflow_allows_later_user_modifications() -> None:
+    text = _skill_text()
+    lower = text.lower()
+    assert "add a tower" in lower
+    assert "make it more run down" in lower
+    assert "modify the existing live" in lower
+
+
+def test_godot_workflow_preserves_aura_preview_root_and_undo_redo() -> None:
+    text = _skill_text()
+    assert "AuraPreview" in text
+    assert "UndoRedo" in text
+    assert "atomic" in text
