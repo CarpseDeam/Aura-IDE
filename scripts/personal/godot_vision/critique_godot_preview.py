@@ -11,6 +11,103 @@ import urllib.request
 from pathlib import Path
 
 
+_VERDICTS = {"coherent", "needs_revision", "cannot_judge"}
+_CHECK_NAMES = (
+    "single_place",
+    "major_masses_connected",
+    "primary_identity_clear",
+    "entrance_or_route_readable",
+    "spatial_logic_believable",
+    "damage_and_rubble_causal",
+)
+_CHECK_VALUES = {"pass", "fail", "unclear"}
+_CRITIQUE_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "verdict": {"type": "string", "enum": sorted(_VERDICTS)},
+        "reads_as": {"type": "string"},
+        "coherence_checks": {
+            "type": "object",
+            "properties": {
+                name: {"type": "string", "enum": sorted(_CHECK_VALUES)}
+                for name in _CHECK_NAMES
+            },
+            "required": list(_CHECK_NAMES),
+        },
+        "critical_failures": {
+            "type": "array",
+            "maxItems": 3,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "problem": {"type": "string"},
+                    "evidence": {"type": "string"},
+                    "impact": {"type": "string"},
+                },
+                "required": ["problem", "evidence", "impact"],
+            },
+        },
+        "strongest_feature": {"type": "string"},
+        "next_revision": {
+            "type": "object",
+            "properties": {
+                "design_goal": {"type": "string"},
+                "visible_relationships": {
+                    "type": "array",
+                    "maxItems": 4,
+                    "items": {"type": "string"},
+                },
+            },
+            "required": ["design_goal", "visible_relationships"],
+        },
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "limitations": {
+            "type": "array",
+            "maxItems": 5,
+            "items": {"type": "string"},
+        },
+    },
+    "required": [
+        "verdict",
+        "reads_as",
+        "coherence_checks",
+        "critical_failures",
+        "strongest_feature",
+        "next_revision",
+        "confidence",
+        "limitations",
+    ],
+}
+_SYSTEM_PROMPT = """You are a visual environment-construction reviewer for a Godot 3D preview.
+Your central question is: Do these modular assets visually read as one intentionally constructed
+place, or as unrelated pieces placed near one another? Give a plain verdict. This is not a beauty
+score and visible checklist items are not evidence that the composition works.
+
+Return JSON matching the supplied schema. Use verdict `needs_revision` whenever foundational visual
+assembly fails: scattered kit pieces, disconnected primary masses, an illegible environment type,
+an entrance or route that leads nowhere, unbelievable enclosure boundaries, rubble without a visible
+collapse source, no dominant landmark, or large accidental gaps that break structural continuity.
+Use `coherent` only when the broad environment reads as one intentional place and remaining problems
+are secondary refinement. Use `cannot_judge` only when framing, angle, occlusion, or image quality
+prevents a reliable decision.
+
+Evaluate whether major masses connect; walls form meaningful runs and terminate at believable
+corners, towers, buildings, gates, breaches, or collapse; detached fragments look intentionally
+ruined rather than accidentally isolated; the requested primary identity and entrance or route are
+immediately legible; interior, sheltered, and negative spaces have believable boundaries; towers and
+landmarks belong to the same structure; rubble visibly originates from collapse; and the silhouette
+has a dominant hierarchy. Explicitly reject a scene that merely contains requested modular pieces
+without composing them into a location.
+
+List at most three critical failures, ordered worst first. For each, state the visible problem, image
+evidence, and why it harms the intended environment. Preserve the strongest feature. Recommend exactly
+one focused next revision with concrete visible relationships such as closing a gap, connecting a wall
+run into a tower, removing an isolated competing fragment, moving collapse debris toward its source,
+or strengthening an entrance as the dominant center. Do not invent node paths, asset identities, exact
+transforms, collision, dimensions, or hidden connectivity from pixels. Supplied scene facts are
+authoritative for exact identity and geometry; the image is authoritative for visual coherence."""
+
+
 def critique_godot_preview_local(
     capture_path: str,
     user_request: str,
@@ -44,17 +141,12 @@ def critique_godot_preview_local(
         payload = {
             "model": selected_model,
             "stream": False,
-            "format": "json",
+            "format": _CRITIQUE_JSON_SCHEMA,
+            "options": {"temperature": 0.1},
             "messages": [
                 {
                     "role": "system",
-                    "content": (
-                        "You are a bounded visual critic for a Godot 3D asset preview. Return JSON only with "
-                        "keys observations, suggestions, confidence, and limitations. Use the image for visual "
-                        "composition and the supplied facts for identity and geometry. Do not claim collision, "
-                        "connectivity, or exact dimensions from pixels. Do not issue commands or decide whether "
-                        "the scene should be saved. Keep observations and suggestions concrete and concise."
-                    ),
+                    "content": _SYSTEM_PROMPT,
                 },
                 {
                     "role": "user",
@@ -69,10 +161,7 @@ def critique_godot_preview_local(
             raise RuntimeError("Ollama returned no critique content")
         if len(content) > 16_000:
             content = content[:16_000] + "…[truncated]"
-        try:
-            critique = json.loads(content)
-        except json.JSONDecodeError:
-            critique = {"observations": [content], "suggestions": [], "limitations": ["Model returned non-JSON text."]}
+        critique = _parse_and_normalize_critique(content)
         return {
             "ok": True,
             "local_only": True,
@@ -84,6 +173,149 @@ def critique_godot_preview_local(
         }
     except (OSError, ValueError, RuntimeError, urllib.error.URLError) as exc:
         return {"ok": False, "local_only": True, "error": str(exc)}
+
+
+def _parse_and_normalize_critique(content: str) -> dict:
+    try:
+        raw = json.loads(content)
+    except json.JSONDecodeError:
+        return _normalize_critique(
+            {}, extra_limitations=["Model returned non-JSON text; no reliable visual verdict was available."]
+        )
+    if not isinstance(raw, dict):
+        return _normalize_critique(
+            {}, extra_limitations=["Model returned a non-object JSON value; no reliable visual verdict was available."]
+        )
+    return _normalize_critique(raw)
+
+
+def _normalize_critique(raw: dict, *, extra_limitations: list[str] | None = None) -> dict:
+    limitations = _string_list(raw.get("limitations"), max_items=5, item_limit=500)
+    limitations.extend(extra_limitations or [])
+
+    verdict = _text(raw.get("verdict"), 40).lower()
+    if verdict not in _VERDICTS:
+        verdict = "cannot_judge"
+        limitations.append("Model returned a missing or invalid verdict; normalized to cannot_judge.")
+
+    raw_checks = raw.get("coherence_checks")
+    if not isinstance(raw_checks, dict):
+        raw_checks = {}
+    checks = {name: _normalize_check(raw_checks.get(name)) for name in _CHECK_NAMES}
+
+    raw_failures = raw.get("critical_failures")
+    if isinstance(raw_failures, str):
+        raw_failures = [raw_failures]
+    if not isinstance(raw_failures, list):
+        raw_failures = []
+    failures: list[dict[str, str]] = []
+    for item in raw_failures[:3]:
+        if isinstance(item, dict):
+            failure = {
+                "problem": _text(item.get("problem"), 600),
+                "evidence": _text(item.get("evidence"), 900),
+                "impact": _text(item.get("impact"), 700),
+            }
+        else:
+            failure = {"problem": _text(item, 600), "evidence": "", "impact": ""}
+        if any(failure.values()):
+            failures.append(failure)
+
+    next_revision = raw.get("next_revision")
+    if isinstance(next_revision, dict):
+        normalized_revision = {
+            "design_goal": _text(next_revision.get("design_goal"), 700),
+            "visible_relationships": _string_list(
+                next_revision.get("visible_relationships"), max_items=4, item_limit=700
+            ),
+        }
+    else:
+        normalized_revision = {
+            "design_goal": _text(next_revision, 700),
+            "visible_relationships": [],
+        }
+
+    if verdict == "coherent" and ("fail" in checks.values() or failures):
+        verdict = "needs_revision"
+        limitations.append(
+            "Model marked the scene coherent despite failed checks or critical failures; normalized to needs_revision."
+        )
+    elif verdict == "coherent" and all(value == "unclear" for value in checks.values()):
+        verdict = "cannot_judge"
+        limitations.append(
+            "Model marked the scene coherent without any judgeable coherence check; normalized to cannot_judge."
+        )
+
+    confidence = raw.get("confidence", 0.0)
+    try:
+        normalized_confidence = max(0.0, min(1.0, float(confidence)))
+    except (TypeError, ValueError):
+        normalized_confidence = 0.0
+        limitations.append("Model returned invalid confidence; normalized to 0.0.")
+
+    return {
+        "verdict": verdict,
+        "reads_as": _text(raw.get("reads_as"), 1_000),
+        "coherence_checks": checks,
+        "critical_failures": failures,
+        "strongest_feature": _text(raw.get("strongest_feature"), 800),
+        "next_revision": normalized_revision,
+        "confidence": normalized_confidence,
+        "limitations": _dedupe(limitations)[:5],
+    }
+
+
+def _normalize_check(value: object) -> str:
+    if isinstance(value, bool):
+        return "pass" if value else "fail"
+    normalized = _text(value, 40).lower().replace(" ", "_")
+    aliases = {
+        "passed": "pass",
+        "true": "pass",
+        "yes": "pass",
+        "failed": "fail",
+        "false": "fail",
+        "no": "fail",
+        "unknown": "unclear",
+        "cannot_judge": "unclear",
+        "not_visible": "unclear",
+    }
+    normalized = aliases.get(normalized, normalized)
+    return normalized if normalized in _CHECK_VALUES else "unclear"
+
+
+def _text(value: object, limit: int) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip()
+    text = (
+        text.replace("\u2018", "'")
+        .replace("\u2019", "'")
+        .replace("\u201c", '"')
+        .replace("\u201d", '"')
+        .replace("\u2013", "-")
+        .replace("\u2014", "-")
+        .replace("\u2026", "...")
+    )
+    text = text.encode("ascii", errors="replace").decode("ascii")
+    return text if len(text) <= limit else text[:limit] + "...[truncated]"
+
+
+def _string_list(value: object, *, max_items: int, item_limit: int) -> list[str]:
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list):
+        return []
+    return [text for item in value[:max_items] if (text := _text(item, item_limit))]
+
+
+def _dedupe(values: list[str]) -> list[str]:
+    result: list[str] = []
+    for value in values:
+        text = _text(value, 500)
+        if text and text not in result:
+            result.append(text)
+    return result
 
 
 def _safe_capture_path(root: Path, raw_path: str) -> Path:

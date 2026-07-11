@@ -30,13 +30,16 @@ Build coherent environments in observable visible layers:
 5. After each meaningful visual-composition pass, inspect exact live facts and structural diagnostics.
 6. Capture a useful overview or other view that clearly shows the composition under judgment.
 7. When `critique_godot_preview_local` is installed and callable, call it with that capture, the original creative brief, and bounded exact scene facts.
-8. Use the returned semantic observations to make a focused atomic revision with a concrete design purpose.
+8. Use the returned semantic verdict and observations to make a focused atomic revision with a concrete design purpose, targeting the single most important coherence failure first while preserving the strongest feature.
 9. Reinspect exact facts, recapture, critique again, and continue while meaningful improvements remain.
 
 Use structural facts (preview snapshot, footprint diagnostics) for exact geometry. Use image evidence and semantic critique for composition, hierarchy, silhouette, readability, apparent connectedness, negative space, atmosphere, and environmental storytelling. Structural facts, nominal dimensions, transforms, instance counts, node names, overlap diagnostics, and Aura's built-in local image decompiler are not proof that a rendered composition is visually coherent. Make each revision concrete and visible in the editor.
 
 #### Semantic Visual Evidence
 - Semantic critique is required when success depends on rendered composition, visual hierarchy, silhouette, entrance readability, apparent connectedness, negative space, atmosphere, or environmental storytelling and `critique_godot_preview_local` is installed and callable.
+- Treat the latest useful semantic verdict as visual evidence. `needs_revision` requires another focused composition pass. `cannot_judge` requires a more useful capture rather than a success claim.
+- Do not declare visual coherence unless the latest useful critique returns `coherent` and exact structural facts do not contradict it.
+- Each revision addresses the worst reported coherence failure first and preserves the reported strongest feature instead of rebuilding blindly.
 - If the local critique tool is unavailable or fails during a task requiring visual judgment, preserve the exact unavailable/failure result and do not claim that the composition is visually successful or coherent.
 - Semantic critique is unnecessary for purely structural work such as API inspection, bridge validation, catalog validation, deterministic geometry checks, or capture-plumbing tests.
 - Planner names the tool and preserves the brief in its handoff but does not execute semantic critique, inspect bridge credentials, mutate Godot, or author helper scripts. Worker alone owns the semantic critique and every resulting live-editor revision.

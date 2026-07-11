@@ -145,6 +145,18 @@ def test_godot_workflow_preserves_planner_worker_boundary_and_refinement() -> No
     assert "no fixed revision-pass limit" in lower
 
 
+def test_godot_workflow_uses_verdicts_without_weakening_boundaries() -> None:
+    text = _skill_text().lower()
+    assert "`needs_revision` requires another focused composition pass" in text
+    assert "`cannot_judge` requires a more useful capture" in text
+    assert "latest useful critique returns `coherent`" in text
+    assert "exact structural facts do not contradict it" in text
+    assert "worst reported coherence failure first" in text
+    assert "preserves the reported strongest feature" in text
+    assert "planner names the tool" in text
+    assert "worker alone owns" in text
+
+
 def test_godot_workflow_exempts_purely_structural_tasks() -> None:
     text = _skill_text().lower()
     assert "semantic critique is unnecessary for purely structural work" in text

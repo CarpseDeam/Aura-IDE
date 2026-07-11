@@ -1,6 +1,7 @@
 # Personal Godot vision tool
 
-This optional tool uses a locally installed Ollama vision model to critique an Aura Godot preview.
+This optional personal tool uses a locally installed Ollama vision model to review whether modular
+assets in an Aura Godot preview read as one intentionally constructed environment.
 It is intentionally outside the `aura` package, is excluded by setuptools, and is not included by
 Aura's Nuitka installer build.
 
@@ -28,7 +29,20 @@ python -m aura
 ```
 
 The tool accepts only workspace-relative PNGs beneath `.aura/tmp/godot_previews`, sends image bytes
-only to `127.0.0.1:11434`, and returns bounded text/JSON. It does not mutate Godot or save scenes.
+only to `127.0.0.1:11434`, and returns bounded normalized JSON. Its critique contains:
+
+- `verdict`: `coherent`, `needs_revision`, or `cannot_judge`
+- `reads_as`: the location's immediate visual identity
+- six `coherence_checks` with `pass`, `fail`, or `unclear`
+- up to three `critical_failures`, each with problem, visible evidence, and impact
+- `strongest_feature` to preserve
+- one `next_revision` design goal with concrete visible relationships
+- bounded `confidence` and `limitations`
+
+The reviewer prioritizes structural composition—connected masses, meaningful wall runs, entrance and
+route hierarchy, believable enclosure, deliberate negative space, causal collapse, and dominant
+silhouette—rather than generic attractiveness or object-count completion. It does not mutate Godot or
+save scenes.
 
 If Aura uses Docker sandbox mode, this personal tool will not reach the host Ollama service. Use host
 sandbox mode for this local workflow.
