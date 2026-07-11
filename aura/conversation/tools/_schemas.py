@@ -1251,9 +1251,10 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
             "name": "edit_godot_asset_preview",
             "description": (
                 "Safely assemble catalog-approved PackedScenes beneath a dedicated AuraPreview Node3D in the "
-                "scene currently open in Godot, revise it, or clear its children. Use apply/duplicate to extend "
-                "a live catalog piece by a small relative offset, then inspect and revise the result in later "
-                "calls instead of laying out an entire scene at once. Every call is approval-gated and one "
+                "scene currently open in Godot, revise it, or clear its children. With apply, duplicate extends "
+                "a repeated run from a live piece, while attach connects a different catalog piece through named "
+                "semantic sockets. Inspect between small calls; set_transform, remove, and replace revise the "
+                "live result afterward. Every call is approval-gated and one "
                 "Godot UndoRedo action. Asset IDs must come from inspect_godot_assets; arbitrary resource paths "
                 "are not accepted. This never saves the scene automatically. Inspect the preview afterward."
             ),
@@ -1295,7 +1296,7 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
                             "properties": {
                                 "operation": {
                                     "type": "string",
-                                    "enum": ["set_transform", "instantiate", "remove", "replace", "duplicate"],
+                                    "enum": ["set_transform", "instantiate", "remove", "replace", "duplicate", "attach"],
                                 },
                                 "node_path": {
                                     "type": "string",
@@ -1329,6 +1330,14 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
                                     "enum": ["local", "world"],
                                     "default": "local",
                                     "description": "Interpret duplicate offset in the source's local basis or preview world space.",
+                                },
+                                "source_socket": {
+                                    "type": "string",
+                                    "description": "For attach, the named socket on the existing source node.",
+                                },
+                                "target_socket": {
+                                    "type": "string",
+                                    "description": "For attach, the named socket on the new catalog asset.",
                                 },
                             },
                             "required": ["operation"],

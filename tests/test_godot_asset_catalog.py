@@ -4,14 +4,20 @@ import json
 import os
 import shutil
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
+from aura.conversation.tools._godot_asset_preview_mixin import (
+    _catalog_socket,
+    _preview_bridge_error,
+)
 from aura.conversation.tools._types import ApprovalDecision
 from aura.conversation.tools.registry import ToolRegistry
-from aura.godot_assets import inspect_godot_assets
+from aura.godot_assets import inspect_godot_assets, resolve_godot_asset
+from aura.godot_assets.models import GodotAssetSocket
 from aura.godot_assets.preview import analyze_preview_snapshot
 
 
@@ -43,6 +49,26 @@ def _wall(asset_id: str = "wall") -> dict:
         ],
         "weight": 1.0,
     }
+
+
+def _corner(asset_id: str = "corner") -> dict:
+    return {
+        **_wall(asset_id),
+        "path": "res://assets/modules/corner.tscn",
+        "kind": "wall_corner",
+        "sockets": [
+            {"id": "left", "position": [0.0, 0.0, -1.0], "facing": [0.0, 0.0, -1.0]},
+            {"id": "right", "position": [2.0, 0.0, 0.0], "facing": [1.0, 0.0, 0.0]},
+        ],
+    }
+
+
+def _attachment_project(tmp_path: Path, source: dict | None = None) -> tuple[Path, Path]:
+    root, catalog = _project(tmp_path, [source or _wall(), _corner()])
+    (root / "assets/modules/corner.tscn").write_text(
+        '[gd_scene format=3]\n\n[node name="Corner" type="Node3D"]\n', encoding="utf-8"
+    )
+    return root, catalog
 
 
 def test_inspection_returns_generic_asset_semantics_and_calibration(tmp_path: Path) -> None:
@@ -274,7 +300,7 @@ def test_atomic_preview_apply_rejects_nested_or_conflicting_targets(tmp_path: Pa
     assert "more than one operation" in conflicting.payload["error"]
 
 
-def test_preview_schema_exposes_one_bounded_relational_duplicate_operation(tmp_path: Path) -> None:
+def test_preview_schema_exposes_relational_duplicate_and_attach_operations(tmp_path: Path) -> None:
     schema = next(
         tool["function"]
         for tool in ToolRegistry(tmp_path, mode="worker").tool_defs()
@@ -283,11 +309,24 @@ def test_preview_schema_exposes_one_bounded_relational_duplicate_operation(tmp_p
     item = schema["parameters"]["properties"]["operations"]["items"]
 
     assert item["properties"]["operation"]["enum"] == [
-        "set_transform", "instantiate", "remove", "replace", "duplicate"
+        "set_transform", "instantiate", "remove", "replace", "duplicate", "attach"
     ]
     assert item["properties"]["count"]["minimum"] == 1
     assert item["properties"]["count"]["maximum"] == 16
     assert item["properties"]["offset_space"]["enum"] == ["local", "world"]
+    assert {"source_socket", "target_socket", "asset_id", "domain", "name", "scale"} <= set(
+        item["properties"]
+    )
+    assert "resource_path" not in item["properties"]
+    assert "source_socket_position" not in item["properties"]
+    assert "target_socket_facing" not in item["properties"]
+
+
+def test_old_preview_plugin_attach_error_requests_reinstall_and_reload() -> None:
+    message = _preview_bridge_error(ValueError("unsupported revision operation: attach"))
+
+    assert "install_godot_editor_bridge" in message
+    assert "disable and re-enable Aura Editor Bridge" in message
 
 
 def test_preview_duplicate_normalizes_live_catalog_source_and_relative_inputs(tmp_path: Path) -> None:
@@ -349,6 +388,187 @@ def test_preview_duplicate_normalizes_live_catalog_source_and_relative_inputs(tm
         "catalog_identity": "ruins:wall",
         "resource_path": "res://assets/modules/wall.tscn",
     }
+
+
+def _attach_args(**overrides) -> dict:
+    operation = {
+        "operation": "attach",
+        "node_path": "AuraPreview/WestWall",
+        "source_socket": "right",
+        "asset_id": "corner",
+        "target_socket": "left",
+    }
+    operation.update(overrides)
+    return {"action": "apply", "operations": [operation]}
+
+
+def _wall_snapshot(*, resource_path: str = "res://assets/modules/wall.tscn", **extra) -> dict:
+    instance = {"path": "AuraPreview/WestWall", "resource_path": resource_path, **extra}
+    return {
+        "scene_open": True,
+        "preview_exists": True,
+        "diagnostics": [],
+        "instances": [instance],
+    }
+
+
+def test_preview_attach_normalizes_live_source_and_catalog_sockets(tmp_path: Path) -> None:
+    root, _catalog = _attachment_project(tmp_path)
+    snapshot = _wall_snapshot(
+        position=[2, 0, 3], rotation_degrees=[0, 90, 0], scale=[2, 1, 1]
+    )
+    with patch(
+        "aura.conversation.tools._godot_asset_preview_mixin.GodotEditorBridgeClient"
+    ) as client_type:
+        client_type.return_value.request.side_effect = [
+            snapshot,
+            {"applied": True, "added_paths": ["AuraPreview/CornerPiece"]},
+        ]
+        result = ToolRegistry(root, mode="worker").execute(
+            "edit_godot_asset_preview",
+            _attach_args(name="CornerPiece", scale=[2, 1, 3], domain="ruins"),
+            lambda _request: ApprovalDecision("approve"),
+        )
+
+    assert result.ok is True
+    calls = client_type.return_value.request.call_args_list
+    assert calls[0].args == ("preview.snapshot", {})
+    operation = calls[1].args[1]["operations"][0]
+    assert operation == {
+        "operation": "attach",
+        "node_path": "AuraPreview/WestWall",
+        "source_catalog_identity": "ruins:wall",
+        "source_resource_path": "res://assets/modules/wall.tscn",
+        "source_socket_position": [2.0, 0.0, 0.0],
+        "source_socket_facing": [1.0, 0.0, 0.0],
+        "catalog_identity": "ruins:corner",
+        "asset_id": "corner",
+        "resource_path": "res://assets/modules/corner.tscn",
+        "target_socket_position": [0.0, 0.0, -1.0],
+        "target_socket_facing": [0.0, 0.0, -1.0],
+        "allowed_rotations_deg": [],
+        "scale": [2.0, 1.0, 3.0],
+        "name": "CornerPiece",
+    }
+    assert "position_offset" not in operation
+
+
+def test_preview_attach_rejects_nested_source_before_live_lookup(tmp_path: Path) -> None:
+    root, _catalog = _attachment_project(tmp_path)
+    with patch(
+        "aura.conversation.tools._godot_asset_preview_mixin.GodotEditorBridgeClient"
+    ) as client_type:
+        result = ToolRegistry(root, mode="worker").execute(
+            "edit_godot_asset_preview",
+            _attach_args(node_path="AuraPreview/Building/Wall"),
+            lambda _request: ApprovalDecision("approve"),
+        )
+
+    assert result.ok is False
+    assert "direct AuraPreview child" in result.payload["error"]
+    client_type.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("snapshot", "expected"),
+    [
+        ({"instances": [], "diagnostics": []}, "does not exist"),
+        (_wall_snapshot(resource_path="res://handmade/not_catalogued.tscn"), "not a recognized catalog asset"),
+        (
+            _wall_snapshot(
+                resource_path="res://handmade/not_catalogued.tscn",
+                asset_id="wall",
+                domain="ruins",
+            ),
+            "catalog identity is inconsistent",
+        ),
+    ],
+)
+def test_preview_attach_rejects_missing_non_catalog_and_mismatched_sources(
+    tmp_path: Path, snapshot: dict, expected: str
+) -> None:
+    root, _catalog = _attachment_project(tmp_path)
+    with patch(
+        "aura.conversation.tools._godot_asset_preview_mixin.GodotEditorBridgeClient"
+    ) as client_type:
+        client_type.return_value.request.return_value = snapshot
+        result = ToolRegistry(root, mode="worker").execute(
+            "edit_godot_asset_preview",
+            _attach_args(),
+            lambda _request: ApprovalDecision("approve"),
+        )
+
+    assert result.ok is False
+    assert expected in result.payload["error"]
+    client_type.return_value.request.assert_called_once_with("preview.snapshot", {})
+
+
+@pytest.mark.parametrize(
+    ("source_socket", "target_socket", "expected"),
+    [
+        ("missing", "left", "source asset wall has no socket"),
+        ("right", "missing", "target asset corner has no socket"),
+    ],
+)
+def test_preview_attach_rejects_missing_catalog_sockets(
+    tmp_path: Path, source_socket: str, target_socket: str, expected: str
+) -> None:
+    root, _catalog = _attachment_project(tmp_path)
+    with patch(
+        "aura.conversation.tools._godot_asset_preview_mixin.GodotEditorBridgeClient"
+    ) as client_type:
+        client_type.return_value.request.return_value = _wall_snapshot()
+        result = ToolRegistry(root, mode="worker").execute(
+            "edit_godot_asset_preview",
+            _attach_args(source_socket=source_socket, target_socket=target_socket),
+            lambda _request: ApprovalDecision("approve"),
+        )
+
+    assert result.ok is False
+    assert expected in result.payload["error"]
+
+
+def test_preview_attach_reports_duplicated_and_malformed_catalog_sockets(tmp_path: Path) -> None:
+    root, _catalog = _project(tmp_path, [_wall()])
+    asset = resolve_godot_asset(root, "wall", domain="ruins")
+    duplicated = replace(asset, sockets=(asset.sockets[0], asset.sockets[0]))
+    malformed = replace(
+        asset,
+        sockets=(GodotAssetSocket("broken", (0.0, 0.0), (1.0, 0.0, 0.0)),),
+    )
+
+    with pytest.raises(ValueError, match="duplicated socket ID left"):
+        _catalog_socket(duplicated, "left", "attach source asset wall")
+    with pytest.raises(ValueError, match="socket broken is malformed"):
+        _catalog_socket(malformed, "broken", "attach target asset wall")
+
+
+def test_preview_attach_rejects_vertical_facing_and_manual_transform(tmp_path: Path) -> None:
+    vertical = _wall()
+    vertical["sockets"] = [
+        {"id": "top", "position": [0, 1, 0], "facing": [0, 1, 0]},
+    ]
+    root, _catalog = _attachment_project(tmp_path, vertical)
+    registry = ToolRegistry(root, mode="worker")
+    with patch(
+        "aura.conversation.tools._godot_asset_preview_mixin.GodotEditorBridgeClient"
+    ) as client_type:
+        client_type.return_value.request.return_value = _wall_snapshot()
+        vertical_result = registry.execute(
+            "edit_godot_asset_preview",
+            _attach_args(source_socket="top"),
+            lambda _request: ApprovalDecision("approve"),
+        )
+        manual_result = registry.execute(
+            "edit_godot_asset_preview",
+            _attach_args(source_socket="top", position=[10, 0, 0]),
+            lambda _request: ApprovalDecision("approve"),
+        )
+
+    assert vertical_result.ok is False
+    assert "no usable horizontal facing" in vertical_result.payload["error"]
+    assert manual_result.ok is False
+    assert "derives position and rotation from sockets" in manual_result.payload["error"]
 
 
 def test_preview_duplicate_rejects_invalid_count_before_live_lookup(tmp_path: Path) -> None:
@@ -580,3 +800,146 @@ func _initialize() -> void:
     assert payload["paths"] == ["AuraPreview/Wall_copy_01", "AuraPreview/Wall_copy_02"]
     assert payload["forward_child_count"] == 3
     assert payload["reversed_child_count"] == 1
+
+
+def test_godot_socket_attachment_math_naming_validation_and_undo(tmp_path: Path) -> None:
+    executable = os.environ.get("GODOT_BIN") or shutil.which("godot")
+    if not executable:
+        pytest.skip("GODOT_BIN or godot on PATH is required for runtime attachment validation")
+    project = tmp_path / "godot_attach_runtime"
+    actions_dir = project / "addons/aura_bridge/actions"
+    actions_dir.mkdir(parents=True)
+    shutil.copyfile(
+        "aura/godot_editor/addon/actions/asset_preview_actions.gd",
+        actions_dir / "asset_preview_actions.gd",
+    )
+    (project / "project.godot").write_text(
+        '[application]\nconfig/name="Aura Attach Runtime Test"\n', encoding="utf-8"
+    )
+    for scene_name in ("source", "target"):
+        (project / f"{scene_name}.tscn").write_text(
+            f'[gd_scene format=3]\n\n[node name="{scene_name.title()}" type="Node3D"]\n',
+            encoding="utf-8",
+        )
+    (project / "test_attach.gd").write_text(
+        """extends SceneTree
+const Actions = preload("res://addons/aura_bridge/actions/asset_preview_actions.gd")
+
+func _params(asset_id: String, source_position: Array, source_facing: Array,
+        target_position: Array, target_facing: Array,
+        target_scale: Array = [1.0, 1.0, 1.0], allowed: Array = []) -> Dictionary:
+    return {
+        "source_catalog_identity": "ruins:wall",
+        "source_resource_path": "res://source.tscn",
+        "source_socket_position": source_position,
+        "source_socket_facing": source_facing,
+        "catalog_identity": "ruins:" + asset_id,
+        "asset_id": asset_id,
+        "resource_path": "res://target.tscn",
+        "target_socket_position": target_position,
+        "target_socket_facing": target_facing,
+        "scale": target_scale,
+        "allowed_rotations_deg": allowed,
+    }
+
+func _vector(value: Vector3) -> Array:
+    return [value.x, value.y, value.z]
+
+func _initialize() -> void:
+    var source := (load("res://source.tscn") as PackedScene).instantiate() as Node3D
+    source.name = "Wall"
+    var scene_root := Node3D.new()
+    var preview := Node3D.new()
+    preview.name = "AuraPreview"
+    scene_root.add_child(preview)
+    preview.add_child(source)
+    var actions = Actions.new(null, null)
+    var straight: Dictionary = actions._prepare_attach_operation(
+        _params("straight", [2.0, 0.0, 0.0], [1.0, 0.0, 0.0], [-2.0, 0.0, 0.0], [-1.0, 0.0, 0.0]),
+        0, source, {"Wall": true})
+    var corner: Dictionary = actions._prepare_attach_operation(
+        _params("corner", [2.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 0.0, -1.0]),
+        0, source, {"Wall": true, "corner_01": true})
+    source.scale = Vector3(2.0, 3.0, 4.0)
+    var scaled_source: Dictionary = actions._prepare_attach_operation(
+        _params("scaled_source", [2.0, 0.0, 0.0], [1.0, 0.0, 0.0], [-2.0, 0.0, 0.0], [-1.0, 0.0, 0.0]),
+        0, source, {"Wall": true})
+    source.scale = Vector3.ONE
+    var scaled_target: Dictionary = actions._prepare_attach_operation(
+        _params("scaled_target", [2.0, 0.0, 0.0], [1.0, 0.0, 0.0], [-2.0, 0.0, 0.0], [-1.0, 0.0, 0.0], [2.0, 1.0, 3.0]),
+        0, source, {"Wall": true})
+    var disallowed: Dictionary = actions._prepare_attach_operation(
+        _params("corner", [2.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 0.0, -1.0], [1.0, 1.0, 1.0], [0.0]),
+        0, source, {"Wall": true})
+    if not straight.get("ok", false) or not corner.get("ok", false) or not scaled_source.get("ok", false) or not scaled_target.get("ok", false):
+        push_error("attachment preparation failed")
+        quit(1)
+        return
+    var straight_op: Dictionary = straight["operation"]
+    var corner_op: Dictionary = corner["operation"]
+    var source_socket_point: Vector3 = source.transform * Vector3(2.0, 0.0, 0.0)
+    var straight_transform := Transform3D(
+        Basis(Vector3.UP, deg_to_rad(straight_op["new_rotation"].y)).scaled(straight_op["new_scale"]),
+        straight_op["new_position"])
+    var straight_socket_point: Vector3 = straight_transform * Vector3(-2.0, 0.0, 0.0)
+    var source_facing: Vector3 = source.transform.basis.orthonormalized() * Vector3.RIGHT
+    var target_facing: Vector3 = straight_transform.basis.orthonormalized() * Vector3.LEFT
+    var prepared_ops: Array[Dictionary] = [straight_op]
+    actions._execute_revision(scene_root, preview, prepared_ops, false, true)
+    var forward_count := preview.get_child_count()
+    actions._execute_revision(scene_root, preview, prepared_ops, false, false)
+    var result := {
+        "straight_position": _vector(straight_op["new_position"]),
+        "straight_rotation_y": straight_op["new_rotation"].y,
+        "socket_distance": source_socket_point.distance_to(straight_socket_point),
+        "facing_dot": source_facing.normalized().dot(target_facing.normalized()),
+        "corner_position": _vector(corner_op["new_position"]),
+        "corner_rotation_y": corner_op["new_rotation"].y,
+        "corner_name": corner_op["new_node"].name,
+        "corner_path": corner_op["path"],
+        "scaled_source_position": _vector(scaled_source["operation"]["new_position"]),
+        "scaled_source_facing": _vector((Basis(Vector3.UP, deg_to_rad(scaled_source["operation"]["new_rotation"].y)) * Vector3.LEFT).normalized()),
+        "scaled_target_position": _vector(scaled_target["operation"]["new_position"]),
+        "scaled_target_scale": _vector(scaled_target["operation"]["new_scale"]),
+        "disallowed_ok": disallowed.get("ok", false),
+        "disallowed_error": disallowed.get("error", ""),
+        "child_count_after_failed_preparation": preview.get_child_count(),
+        "forward_child_count": forward_count,
+        "undo_child_count": preview.get_child_count(),
+    }
+    print("AURA_ATTACH_RUNTIME:" + JSON.stringify(result))
+    var all_prepared: Array[Dictionary] = [straight_op, corner_op, scaled_source["operation"], scaled_target["operation"]]
+    actions._free_prepared_instances(all_prepared)
+    scene_root.free()
+    quit()
+""",
+        encoding="utf-8",
+    )
+    completed = subprocess.run(
+        [executable, "--headless", "--path", str(project), "--script", "res://test_attach.gd"],
+        cwd=project, capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=30, check=False,
+    )
+    output = completed.stdout + "\n" + completed.stderr
+    assert completed.returncode == 0, output
+    payload_line = next(
+        line for line in output.splitlines() if line.startswith("AURA_ATTACH_RUNTIME:")
+    )
+    payload = json.loads(payload_line.split(":", 1)[1])
+    assert payload["straight_position"] == pytest.approx([4.0, 0.0, 0.0], abs=1e-5)
+    assert payload["straight_rotation_y"] == pytest.approx(0.0, abs=1e-5)
+    assert payload["socket_distance"] == pytest.approx(0.0, abs=1e-5)
+    assert payload["facing_dot"] == pytest.approx(-1.0, abs=1e-5)
+    assert payload["corner_position"] == pytest.approx([3.0, 0.0, 0.0], abs=1e-5)
+    assert payload["corner_rotation_y"] == pytest.approx(90.0, abs=1e-5)
+    assert payload["corner_name"] == "corner_02"
+    assert payload["corner_path"] == "AuraPreview/corner_02"
+    assert payload["scaled_source_position"] == pytest.approx([6.0, 0.0, 0.0], abs=1e-5)
+    assert payload["scaled_source_facing"] == pytest.approx([-1.0, 0.0, 0.0], abs=1e-5)
+    assert payload["scaled_target_position"] == pytest.approx([6.0, 0.0, 0.0], abs=1e-5)
+    assert payload["scaled_target_scale"] == [2.0, 1.0, 3.0]
+    assert payload["disallowed_ok"] is False
+    assert "rotation is not catalog-approved" in payload["disallowed_error"]
+    assert payload["child_count_after_failed_preparation"] == 1
+    assert payload["forward_child_count"] == 2
+    assert payload["undo_child_count"] == 1

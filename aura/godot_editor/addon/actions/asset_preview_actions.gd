@@ -194,6 +194,8 @@ func _prepare_revision_operation(
 	var target_3d := target as Node3D
 	if action == "duplicate":
 		return _prepare_duplicate_operation(raw, index, target_3d, names)
+	if action == "attach":
+		return _prepare_attach_operation(raw, index, target_3d, names)
 	var base := {
 		"operation": action,
 		"path": path,
@@ -295,6 +297,98 @@ func _next_duplicate_name(source_name: String, names: Dictionary) -> String:
 	while names.has(candidate):
 		suffix += 1
 		candidate = "%s_copy_%02d" % [source_name, suffix]
+	return candidate
+
+
+func _prepare_attach_operation(
+	raw: Dictionary,
+	index: int,
+	source: Node3D,
+	names: Dictionary,
+) -> Dictionary:
+	var source_resource_path := str(raw.get("source_resource_path", ""))
+	var source_identity := str(raw.get("source_catalog_identity", ""))
+	if source_identity.is_empty() or source_resource_path.is_empty() or source.scene_file_path != source_resource_path:
+		return {"ok": false, "error": "attach source is not the prepared catalog asset: %s" % source.name}
+	var target_identity := str(raw.get("catalog_identity", ""))
+	var target_asset_id := str(raw.get("asset_id", ""))
+	if target_identity.is_empty() or target_asset_id.is_empty():
+		return {"ok": false, "error": "attach target catalog identity is missing"}
+	var source_socket_position: Variant = _vector3(raw.get("source_socket_position", null), Vector3.ZERO)
+	var source_socket_facing: Variant = _vector3(raw.get("source_socket_facing", null), Vector3.ZERO)
+	var target_socket_position: Variant = _vector3(raw.get("target_socket_position", null), Vector3.ZERO)
+	var target_socket_facing: Variant = _vector3(raw.get("target_socket_facing", null), Vector3.ZERO)
+	var target_scale: Variant = _vector3(raw.get("scale", []), Vector3.ONE)
+	if (
+		source_socket_position == null
+		or source_socket_facing == null
+		or target_socket_position == null
+		or target_socket_facing == null
+		or target_scale == null
+	):
+		return {"ok": false, "error": "attach socket vectors or scale are invalid"}
+	if (
+		not source_socket_position.is_finite()
+		or not source_socket_facing.is_finite()
+		or not target_socket_position.is_finite()
+		or not target_socket_facing.is_finite()
+		or not target_scale.is_finite()
+	):
+		return {"ok": false, "error": "attach socket vectors or scale must be finite"}
+	var source_horizontal := Vector3(source_socket_facing.x, 0.0, source_socket_facing.z)
+	var target_horizontal := Vector3(target_socket_facing.x, 0.0, target_socket_facing.z)
+	if source_horizontal.length_squared() < 0.000000000001 or target_horizontal.length_squared() < 0.000000000001:
+		return {"ok": false, "error": "attach socket facing must have a usable horizontal component"}
+
+	var source_socket_transform := source.transform
+	var source_socket_point: Vector3 = source_socket_transform * source_socket_position
+	var source_facing_parent := source_socket_transform.basis.orthonormalized() * source_horizontal.normalized()
+	var desired_target_facing := -Vector3(source_facing_parent.x, 0.0, source_facing_parent.z).normalized()
+	var normalized_target_facing := target_horizontal.normalized()
+	var source_heading := atan2(-desired_target_facing.z, desired_target_facing.x)
+	var target_heading := atan2(-normalized_target_facing.z, normalized_target_facing.x)
+	var target_yaw := wrapf(source_heading - target_heading, -PI, PI)
+	var target_basis := Basis(Vector3.UP, target_yaw)
+	var target_socket_transform := Transform3D(target_basis.scaled(target_scale), Vector3.ZERO)
+	var target_socket_offset: Vector3 = target_socket_transform * target_socket_position
+	var target_position: Vector3 = source_socket_point - target_socket_offset
+	var target_rotation_degrees := rad_to_deg(target_yaw)
+	if is_zero_approx(target_rotation_degrees):
+		target_rotation_degrees = 0.0
+	var requested_name := str(raw.get("name", "")).strip_edges()
+	if requested_name.is_empty():
+		requested_name = _next_asset_name(target_asset_id, names)
+	var placement_raw := {
+		"resource_path": str(raw.get("resource_path", "")),
+		"name": requested_name,
+		"position": [target_position.x, target_position.y, target_position.z],
+		"rotation_degrees_y": target_rotation_degrees,
+		"scale": [target_scale.x, target_scale.y, target_scale.z],
+		"allowed_rotations_deg": raw.get("allowed_rotations_deg", []),
+	}
+	var placed := _prepare_placement(placement_raw, index, names)
+	if not placed.get("ok", false):
+		return placed
+	var placement: Dictionary = placed["placement"]
+	return {"ok": true, "operation": {
+		"operation": "instantiate",
+		"path": PREVIEW_ROOT_NAME + "/" + str(placement["instance"].name),
+		"new_node": placement["instance"],
+		"new_position": placement["position"],
+		"new_rotation": Vector3(0.0, placement["rotation_y"], 0.0),
+		"new_scale": placement["scale"],
+	}}
+
+
+func _next_asset_name(asset_id: String, names: Dictionary) -> String:
+	var stem := asset_id.validate_node_name()
+	if stem.is_empty():
+		stem = "Asset"
+	var suffix := 1
+	var candidate := "%s_%02d" % [stem, suffix]
+	while names.has(candidate):
+		suffix += 1
+		candidate = "%s_%02d" % [stem, suffix]
 	return candidate
 
 

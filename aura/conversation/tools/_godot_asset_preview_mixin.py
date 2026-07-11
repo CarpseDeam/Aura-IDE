@@ -9,6 +9,7 @@ from aura.conversation.tools._types import ToolExecResult
 from aura.conversation.tools.write_payloads import _mark_not_applied
 from aura.godot_assets import resolve_godot_asset
 from aura.godot_assets.capture_evidence import validate_capture_set
+from aura.godot_assets.models import GodotAsset, GodotAssetSocket
 from aura.godot_assets.preview import analyze_preview_snapshot
 from aura.godot_editor.client import GodotEditorBridgeClient, GodotEditorBridgeError
 from aura.perception.decompiler import describe as _decompile_image
@@ -172,7 +173,7 @@ class GodotAssetPreviewHandlersMixin:
             if not isinstance(raw, dict):
                 raise ValueError(f"operation {index} must be an object")
             operation = str(raw.get("operation") or "")
-            if operation not in {"set_transform", "instantiate", "remove", "replace", "duplicate"}:
+            if operation not in {"set_transform", "instantiate", "remove", "replace", "duplicate", "attach"}:
                 raise ValueError(f"operation {index} has an unsupported operation")
             if operation == "instantiate":
                 prepared = self._prepare_catalog_revision_asset(raw, index)
@@ -186,6 +187,73 @@ class GodotAssetPreviewHandlersMixin:
             if node_path in targeted:
                 raise ValueError(f"preview target appears in more than one operation: {node_path}")
             targeted.add(node_path)
+            if operation == "attach":
+                if "position" in raw or "rotation_degrees_y" in raw:
+                    raise ValueError(
+                        f"attach operation {index} derives position and rotation from sockets"
+                    )
+                if preview_instances is None:
+                    snapshot = GodotEditorBridgeClient(self._root).request("preview.snapshot", {})
+                    preview_instances = list(
+                        analyze_preview_snapshot(self._root, snapshot).get("instances") or []
+                    )
+                source = next(
+                    (item for item in preview_instances if str(item.get("path") or "") == node_path),
+                    None,
+                )
+                if source is None:
+                    raise ValueError(f"attach source does not exist: {node_path}")
+                source_asset_id = str(source.get("asset_id") or "")
+                source_domain = str(source.get("domain") or "")
+                if not source_asset_id or not source_domain:
+                    raise ValueError(f"attach source is not a recognized catalog asset: {node_path}")
+                source_asset = resolve_godot_asset(
+                    self._root, source_asset_id, domain=source_domain
+                )
+                source_resource_path = str(source.get("resource_path") or "")
+                if source_resource_path.casefold() != source_asset.resource_path.casefold():
+                    raise ValueError(f"attach source catalog identity is inconsistent: {node_path}")
+                source_socket = _catalog_socket(
+                    source_asset,
+                    str(raw.get("source_socket") or ""),
+                    f"attach source asset {source_asset.id}",
+                )
+                target_asset = resolve_godot_asset(
+                    self._root,
+                    str(raw.get("asset_id") or ""),
+                    domain=str(raw.get("domain") or ""),
+                )
+                target_socket = _catalog_socket(
+                    target_asset,
+                    str(raw.get("target_socket") or ""),
+                    f"attach target asset {target_asset.id}",
+                )
+                _validate_horizontal_socket(source_socket.facing, source_asset.id, source_socket.id)
+                _validate_horizontal_socket(target_socket.facing, target_asset.id, target_socket.id)
+                scale = _vector(raw.get("scale", [1, 1, 1]), f"operation {index} scale")
+                _validate_transform_bounds({"scale": scale}, index)
+                name = str(raw.get("name") or "").strip()
+                if name and any(char in name for char in ".:@/\""):
+                    raise ValueError(f"operation {index} has an invalid node name: {name}")
+                prepared_attach = {
+                    "operation": operation,
+                    "node_path": node_path,
+                    "source_catalog_identity": f"{source_asset.domain}:{source_asset.id}",
+                    "source_resource_path": source_asset.resource_path,
+                    "source_socket_position": list(source_socket.position),
+                    "source_socket_facing": list(source_socket.facing),
+                    "catalog_identity": f"{target_asset.domain}:{target_asset.id}",
+                    "asset_id": target_asset.id,
+                    "resource_path": target_asset.resource_path,
+                    "target_socket_position": list(target_socket.position),
+                    "target_socket_facing": list(target_socket.facing),
+                    "allowed_rotations_deg": list(target_asset.allowed_rotations_deg),
+                    "scale": scale,
+                }
+                if name:
+                    prepared_attach["name"] = name
+                operations.append(prepared_attach)
+                continue
             if operation == "duplicate":
                 count = _bounded_int(raw.get("count"), f"duplicate operation {index} count", 1, 16)
                 if "offset" not in raw:
@@ -353,11 +421,52 @@ def _validate_allowed_rotation(rotation: float, allowed: tuple[float, ...], asse
         raise ValueError(f"rotation is not allowed for catalog asset {asset_id}")
 
 
+def _catalog_socket(asset: GodotAsset, socket_id: str, label: str) -> GodotAssetSocket:
+    wanted = socket_id.strip()
+    if not wanted:
+        raise ValueError(f"{label} requires a socket ID")
+    matches: list[GodotAssetSocket] = []
+    for socket in asset.sockets:
+        if not isinstance(socket, GodotAssetSocket) or not isinstance(socket.id, str):
+            raise ValueError(f"{label} contains a malformed socket")
+        if socket.id == wanted:
+            matches.append(socket)
+    if not matches:
+        raise ValueError(f"{label} has no socket named {wanted}")
+    if len(matches) != 1:
+        raise ValueError(f"{label} has duplicated socket ID {wanted}")
+    socket = matches[0]
+    if (
+        not isinstance(socket.position, (list, tuple))
+        or not isinstance(socket.facing, (list, tuple))
+        or len(socket.position) != 3
+        or len(socket.facing) != 3
+    ):
+        raise ValueError(f"{label} socket {wanted} is malformed")
+    if any(
+        isinstance(value, bool) or not isinstance(value, (int, float))
+        for value in (*socket.position, *socket.facing)
+    ):
+        raise ValueError(f"{label} socket {wanted} contains a malformed vector")
+    if not all(math.isfinite(value) for value in (*socket.position, *socket.facing)):
+        raise ValueError(f"{label} socket {wanted} contains a non-finite vector")
+    return socket
+
+
+def _validate_horizontal_socket(facing, asset_id: str, socket_id: str) -> None:
+    if math.hypot(facing[0], facing[2]) < 1e-6:
+        raise ValueError(
+            f"catalog asset {asset_id} socket {socket_id} has no usable horizontal facing "
+            "for yaw-only attachment"
+        )
+
+
 def _preview_bridge_error(exc: Exception) -> str:
     message = str(exc)
     if (
         "unsupported action: preview." in message
         or "unsupported revision operation: duplicate" in message
+        or "unsupported revision operation: attach" in message
     ):
         return (
             "The active Godot plugin is an older Aura bridge. Run install_godot_editor_bridge, "
