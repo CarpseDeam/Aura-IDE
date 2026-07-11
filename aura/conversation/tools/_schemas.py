@@ -1252,9 +1252,11 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
             "description": (
                 "Safely assemble catalog-approved PackedScenes beneath a dedicated AuraPreview Node3D in the "
                 "scene currently open in Godot, revise it, or clear its children. With apply, duplicate extends "
-                "a repeated run from a live piece, while attach connects a different catalog piece through named "
-                "semantic sockets. Inspect between small calls; set_transform, remove, and replace revise the "
-                "live result afterward. Every call is approval-gated and one "
+                "a repeated run, while attach connects a different catalog piece through named semantic sockets. "
+                "Build a short connected structural burst in one ordered apply call by explicitly naming each "
+                "instantiate, one-copy duplicate, and attach output, then target that ordinary AuraPreview path in "
+                "later operations. Inspect, capture, and visually critique after the burst instead of calling once "
+                "per wall. set_transform, remove, and replace revise the live result afterward. Every call is approval-gated and one "
                 "Godot UndoRedo action. Asset IDs must come from inspect_godot_assets; arbitrary resource paths "
                 "are not accepted. This never saves the scene automatically. Inspect the preview afterward."
             ),
@@ -1304,7 +1306,10 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
                                 },
                                 "asset_id": {"type": "string"},
                                 "domain": {"type": "string"},
-                                "name": {"type": "string"},
+                                "name": {
+                                    "type": "string",
+                                    "description": "Explicit output name. For duplicate, allowed only when count is 1 so later operations can target its direct path.",
+                                },
                                 "position": {
                                     "type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3
                                 },
@@ -1915,4 +1920,3 @@ CODE_INTEL_AUDIT_TOOL_DEF: dict[str, Any] = {
         },
     },
 }
-

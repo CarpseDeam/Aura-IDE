@@ -322,6 +322,161 @@ def test_preview_schema_exposes_relational_duplicate_and_attach_operations(tmp_p
     assert "target_socket_facing" not in item["properties"]
 
 
+def test_preview_apply_prepares_named_sequential_construction_without_live_snapshot(
+    tmp_path: Path,
+) -> None:
+    terminal = {**_wall("terminal"), "path": "res://assets/modules/terminal.tscn"}
+    root, _catalog = _project(tmp_path, [_wall(), _corner(), terminal])
+    for scene_name in ("corner", "terminal"):
+        (root / f"assets/modules/{scene_name}.tscn").write_text(
+            f'[gd_scene format=3]\n\n[node name="{scene_name.title()}" type="Node3D"]\n',
+            encoding="utf-8",
+        )
+    public_operations = [
+        {
+            "operation": "instantiate", "asset_id": "wall", "name": "RearWall01",
+            "position": [2, 0, 3], "rotation_degrees_y": 90, "scale": [2, 1, 3],
+        },
+        {
+            "operation": "duplicate", "node_path": "AuraPreview/RearWall01",
+            "count": 1, "offset": [8, 0, 0], "name": "RearWall02",
+        },
+        {
+            "operation": "duplicate", "node_path": "AuraPreview/RearWall02",
+            "count": 1, "offset": [8, 0, 0], "name": "RearWall03",
+        },
+        {
+            "operation": "attach", "node_path": "AuraPreview/RearWall03",
+            "source_socket": "right", "asset_id": "corner", "target_socket": "left",
+            "name": "RearCorner",
+        },
+        {
+            "operation": "attach", "node_path": "AuraPreview/RearCorner",
+            "source_socket": "right", "asset_id": "wall", "target_socket": "left",
+            "name": "SideWall01", "scale": [1.5, 2, 0.75],
+        },
+        {
+            "operation": "duplicate", "node_path": "AuraPreview/SideWall01",
+            "count": 1, "offset": [6, 0, 0], "name": "SideWall02",
+        },
+        {
+            "operation": "attach", "node_path": "AuraPreview/SideWall02",
+            "source_socket": "right", "asset_id": "terminal", "target_socket": "left",
+            "name": "Terminal",
+        },
+    ]
+    with patch(
+        "aura.conversation.tools._godot_asset_preview_mixin.GodotEditorBridgeClient"
+    ) as client_type:
+        client_type.return_value.request.return_value = {
+            "applied": True,
+            "added_paths": [f"AuraPreview/{name}" for name in (
+                "RearWall01", "RearWall02", "RearWall03", "RearCorner",
+                "SideWall01", "SideWall02", "Terminal",
+            )],
+        }
+        result = ToolRegistry(root, mode="worker").execute(
+            "edit_godot_asset_preview",
+            {"action": "apply", "operations": public_operations},
+            lambda _request: ApprovalDecision("approve"),
+        )
+
+    assert result.ok is True
+    client_type.return_value.request.assert_called_once()
+    action, params = client_type.return_value.request.call_args.args
+    assert action == "preview.apply"
+    prepared = params["operations"]
+    assert [item.get("name") for item in prepared] == [
+        "RearWall01", "RearWall02", "RearWall03", "RearCorner",
+        "SideWall01", "SideWall02", "Terminal",
+    ]
+    assert prepared[1]["catalog_identity"] == "ruins:wall"
+    assert prepared[2]["catalog_identity"] == "ruins:wall"
+    assert prepared[3]["source_catalog_identity"] == "ruins:wall"
+    assert prepared[4]["source_catalog_identity"] == "ruins:corner"
+    assert prepared[5]["catalog_identity"] == "ruins:wall"
+    assert prepared[6]["source_catalog_identity"] == "ruins:wall"
+    assert prepared[3]["source_socket_position"] == [2.0, 0.0, 0.0]
+    assert prepared[3]["target_socket_position"] == [0.0, 0.0, -1.0]
+    assert all("resource_path" not in item for item in public_operations)
+    assert all("source_socket_position" not in item for item in public_operations)
+
+
+@pytest.mark.parametrize(
+    ("operations", "expected"),
+    [
+        (
+            [
+                {"operation": "instantiate", "asset_id": "wall", "name": "Same"},
+                {"operation": "instantiate", "asset_id": "wall", "name": "Same"},
+            ],
+            "duplicate new preview name",
+        ),
+        (
+            [
+                {"operation": "instantiate", "asset_id": "wall", "name": "Anchor"},
+                {
+                    "operation": "duplicate", "node_path": "AuraPreview/Anchor",
+                    "count": 2, "offset": [4, 0, 0], "name": "Copies",
+                },
+            ],
+            "name only when count is 1",
+        ),
+        (
+            [
+                {"operation": "instantiate", "asset_id": "wall", "name": "Anchor"},
+                {"operation": "remove", "node_path": "AuraPreview/Anchor"},
+            ],
+            "cannot remove an unattached planned node",
+        ),
+    ],
+)
+def test_preview_apply_rejects_bad_named_plans_before_bridge(
+    tmp_path: Path, operations: list[dict], expected: str
+) -> None:
+    root, _catalog = _project(tmp_path, [_wall()])
+    with patch(
+        "aura.conversation.tools._godot_asset_preview_mixin.GodotEditorBridgeClient"
+    ) as client_type:
+        result = ToolRegistry(root, mode="worker").execute(
+            "edit_godot_asset_preview",
+            {"action": "apply", "operations": operations},
+            lambda _request: ApprovalDecision("approve"),
+        )
+
+    assert result.ok is False
+    assert expected in result.payload["error"]
+    client_type.assert_not_called()
+
+
+def test_preview_apply_rejects_forward_planned_path_before_apply(tmp_path: Path) -> None:
+    root, _catalog = _project(tmp_path, [_wall()])
+    with patch(
+        "aura.conversation.tools._godot_asset_preview_mixin.GodotEditorBridgeClient"
+    ) as client_type:
+        client_type.return_value.request.return_value = {
+            "scene_open": True, "preview_exists": True, "instances": [], "diagnostics": [],
+        }
+        result = ToolRegistry(root, mode="worker").execute(
+            "edit_godot_asset_preview",
+            {
+                "action": "apply",
+                "operations": [
+                    {
+                        "operation": "duplicate", "node_path": "AuraPreview/Later",
+                        "count": 1, "offset": [4, 0, 0], "name": "TooEarly",
+                    },
+                    {"operation": "instantiate", "asset_id": "wall", "name": "Later"},
+                ],
+            },
+            lambda _request: ApprovalDecision("approve"),
+        )
+
+    assert result.ok is False
+    assert "source does not exist" in result.payload["error"]
+    client_type.return_value.request.assert_called_once_with("preview.snapshot", {})
+
+
 def test_old_preview_plugin_attach_error_requests_reinstall_and_reload() -> None:
     message = _preview_bridge_error(ValueError("unsupported revision operation: attach"))
 
@@ -961,3 +1116,241 @@ func _initialize() -> void:
     assert payload["forward_child_count"] == 2
     assert payload["undo_child_count"] == 1
     assert payload["scaled_target_undo_child_count"] == 1
+
+
+def test_godot_named_sequential_burst_uses_planned_nodes_and_undoes_atomically(
+    tmp_path: Path,
+) -> None:
+    executable = os.environ.get("GODOT_BIN") or shutil.which("godot")
+    if not executable:
+        pytest.skip("GODOT_BIN or godot on PATH is required for runtime burst validation")
+    project = tmp_path / "godot_named_burst_runtime"
+    actions_dir = project / "addons/aura_bridge/actions"
+    actions_dir.mkdir(parents=True)
+    shutil.copyfile(
+        "aura/godot_editor/addon/actions/asset_preview_actions.gd",
+        actions_dir / "asset_preview_actions.gd",
+    )
+    (project / "project.godot").write_text(
+        '[application]\nconfig/name="Aura Named Burst Runtime Test"\n', encoding="utf-8"
+    )
+    for scene_name in ("wall", "corner", "terminal"):
+        (project / f"{scene_name}.tscn").write_text(
+            f'[gd_scene format=3]\n\n[node name="{scene_name.title()}" type="Node3D"]\n',
+            encoding="utf-8",
+        )
+    (project / "test_named_burst.gd").write_text(
+        r'''extends SceneTree
+const Actions = preload("res://addons/aura_bridge/actions/asset_preview_actions.gd")
+
+func _attach(source_path: String, source_identity: String, source_resource: String,
+        source_position: Array, source_facing: Array, asset_id: String,
+        target_resource: String, target_position: Array, target_facing: Array,
+        name: String, scale: Array) -> Dictionary:
+    return {
+        "operation": "attach",
+        "node_path": source_path,
+        "source_catalog_identity": source_identity,
+        "source_resource_path": source_resource,
+        "source_socket_position": source_position,
+        "source_socket_facing": source_facing,
+        "catalog_identity": "ruins:" + asset_id,
+        "asset_id": asset_id,
+        "resource_path": target_resource,
+        "target_socket_position": target_position,
+        "target_socket_facing": target_facing,
+        "allowed_rotations_deg": [],
+        "name": name,
+        "scale": scale,
+    }
+
+func _prepare_batch(actions, raw_operations: Array, names: Dictionary,
+        nodes: Dictionary, targeted: Dictionary, planned_paths: Dictionary,
+        prepared: Array[Dictionary]) -> Dictionary:
+    for index in raw_operations.size():
+        var raw: Dictionary = raw_operations[index]
+        if planned_paths.has(str(raw.get("node_path", ""))) and str(raw.get("operation", "")) not in ["duplicate", "attach"]:
+            return {"ok": false, "error": "incompatible planned operation"}
+        var checked: Dictionary = actions._prepare_revision_operation(
+            raw, index, names, nodes, targeted)
+        if not checked.get("ok", false):
+            return checked
+        if checked.has("operations"):
+            prepared.append_array(checked["operations"])
+        else:
+            prepared.append(checked["operation"])
+        actions._register_prepared_outputs(checked, nodes, targeted, planned_paths)
+    return {"ok": true}
+
+func _point(node: Node3D, socket_position: Vector3) -> Vector3:
+    return node.transform * socket_position
+
+func _facing(node: Node3D, socket_facing: Vector3) -> Vector3:
+    return (node.transform.basis.orthonormalized() * socket_facing).normalized()
+
+func _initialize() -> void:
+    var actions = Actions.new(null, null)
+    var scene_root := Node3D.new()
+    var preview := Node3D.new()
+    preview.name = "AuraPreview"
+    preview.set_meta("aura_preview_root", true)
+    scene_root.add_child(preview)
+    var names := {}
+    var nodes := {}
+    var targeted := {}
+    var planned_paths := {}
+    var prepared: Array[Dictionary] = []
+    var raw_operations: Array = [
+        {
+            "operation": "instantiate", "catalog_identity": "ruins:wall",
+            "resource_path": "res://wall.tscn", "name": "RearWall01",
+            "position": [2.0, 0.0, 3.0], "rotation_degrees_y": 90.0,
+            "scale": [2.0, 1.0, 3.0], "allowed_rotations_deg": [],
+        },
+        {
+            "operation": "duplicate", "node_path": "AuraPreview/RearWall01",
+            "count": 1, "offset": [8.0, 0.0, 0.0], "offset_space": "local",
+            "catalog_identity": "ruins:wall", "resource_path": "res://wall.tscn",
+            "name": "RearWall02",
+        },
+        {
+            "operation": "duplicate", "node_path": "AuraPreview/RearWall02",
+            "count": 1, "offset": [8.0, 0.0, 0.0], "offset_space": "local",
+            "catalog_identity": "ruins:wall", "resource_path": "res://wall.tscn",
+            "name": "RearWall03",
+        },
+        _attach("AuraPreview/RearWall03", "ruins:wall", "res://wall.tscn",
+            [2.0, 0.0, 0.0], [1.0, 0.0, 0.0], "corner", "res://corner.tscn",
+            [0.0, 0.0, -1.0], [0.0, 0.0, -1.0], "RearCorner", [2.0, 1.0, 3.0]),
+        _attach("AuraPreview/RearCorner", "ruins:corner", "res://corner.tscn",
+            [2.0, 0.0, 0.0], [1.0, 0.0, 0.0], "wall", "res://wall.tscn",
+            [-2.0, 0.0, 0.0], [-1.0, 0.0, 0.0], "SideWall01", [1.5, 2.0, 0.75]),
+        {
+            "operation": "duplicate", "node_path": "AuraPreview/SideWall01",
+            "count": 1, "offset": [6.0, 0.0, 0.0], "offset_space": "local",
+            "catalog_identity": "ruins:wall", "resource_path": "res://wall.tscn",
+            "name": "SideWall02",
+        },
+        _attach("AuraPreview/SideWall02", "ruins:wall", "res://wall.tscn",
+            [2.0, 0.0, 0.0], [1.0, 0.0, 0.0], "terminal", "res://terminal.tscn",
+            [-2.0, 0.0, 0.0], [-1.0, 0.0, 0.0], "Terminal", [0.5, 1.0, 2.0]),
+    ]
+    var prepared_check := _prepare_batch(
+        actions, raw_operations, names, nodes, targeted, planned_paths, prepared)
+    if not prepared_check.get("ok", false):
+        push_error(str(prepared_check.get("error", "burst preparation failed")))
+        quit(1)
+        return
+
+    var bad_names := {}
+    var bad_nodes := {}
+    var bad_targeted := {}
+    var bad_paths := {}
+    var bad_prepared: Array[Dictionary] = []
+    var bad_operations: Array = [
+        {
+            "operation": "instantiate", "catalog_identity": "ruins:wall",
+            "resource_path": "res://wall.tscn", "name": "WouldMutate",
+            "position": [0.0, 0.0, 0.0], "rotation_degrees_y": 0.0,
+            "scale": [1.0, 1.0, 1.0], "allowed_rotations_deg": [],
+        },
+        _attach("AuraPreview/WouldMutate", "ruins:wall", "res://wall.tscn",
+            [2.0, 0.0, 0.0], [1.0, 0.0, 0.0], "missing", "res://missing.tscn",
+            [-2.0, 0.0, 0.0], [-1.0, 0.0, 0.0], "BadFinal", [1.0, 1.0, 1.0]),
+    ]
+    var bad_check := _prepare_batch(
+        actions, bad_operations, bad_names, bad_nodes, bad_targeted, bad_paths, bad_prepared)
+    var failed_child_count := preview.get_child_count()
+    actions._free_prepared_instances(bad_prepared)
+
+    var before_names: Array[String] = []
+    for child in preview.get_children():
+        before_names.append(str(child.name))
+    actions._execute_revision(scene_root, preview, prepared, false, true)
+    var expected_paths := [
+        "AuraPreview/RearWall01", "AuraPreview/RearWall02", "AuraPreview/RearWall03",
+        "AuraPreview/RearCorner", "AuraPreview/SideWall01", "AuraPreview/SideWall02",
+        "AuraPreview/Terminal",
+    ]
+    var all_paths_exist := true
+    var returned_paths: Array[String] = []
+    for operation in prepared:
+        if operation["operation"] == "instantiate":
+            returned_paths.append(str(operation["path"]))
+            all_paths_exist = all_paths_exist and scene_root.has_node(NodePath(operation["path"]))
+    var rear_1: Node3D = nodes["AuraPreview/RearWall01"]
+    var rear_2: Node3D = nodes["AuraPreview/RearWall02"]
+    var rear_3: Node3D = nodes["AuraPreview/RearWall03"]
+    var corner: Node3D = nodes["AuraPreview/RearCorner"]
+    var side_1: Node3D = nodes["AuraPreview/SideWall01"]
+    var side_2: Node3D = nodes["AuraPreview/SideWall02"]
+    var terminal: Node3D = nodes["AuraPreview/Terminal"]
+    var pairs := [
+        [rear_1, Vector3(2, 0, 0), Vector3(1, 0, 0), rear_2, Vector3(-2, 0, 0), Vector3(-1, 0, 0)],
+        [rear_2, Vector3(2, 0, 0), Vector3(1, 0, 0), rear_3, Vector3(-2, 0, 0), Vector3(-1, 0, 0)],
+        [rear_3, Vector3(2, 0, 0), Vector3(1, 0, 0), corner, Vector3(0, 0, -1), Vector3(0, 0, -1)],
+        [corner, Vector3(2, 0, 0), Vector3(1, 0, 0), side_1, Vector3(-2, 0, 0), Vector3(-1, 0, 0)],
+        [side_1, Vector3(2, 0, 0), Vector3(1, 0, 0), side_2, Vector3(-2, 0, 0), Vector3(-1, 0, 0)],
+        [side_2, Vector3(2, 0, 0), Vector3(1, 0, 0), terminal, Vector3(-2, 0, 0), Vector3(-1, 0, 0)],
+    ]
+    var distances: Array[float] = []
+    var facing_dots: Array[float] = []
+    for pair in pairs:
+        distances.append(_point(pair[0], pair[1]).distance_to(_point(pair[3], pair[4])))
+        facing_dots.append(_facing(pair[0], pair[2]).dot(_facing(pair[3], pair[5])))
+    var result := {
+        "bad_ok": bad_check.get("ok", false),
+        "bad_error": bad_check.get("error", ""),
+        "failed_child_count": failed_child_count,
+        "before_names": before_names,
+        "forward_child_count": preview.get_child_count(),
+        "expected_paths": expected_paths,
+        "returned_paths": returned_paths,
+        "all_paths_exist": all_paths_exist,
+        "distances": distances,
+        "facing_dots": facing_dots,
+        "rear_rotation": rear_1.rotation_degrees.y,
+        "rear_scale": [rear_1.scale.x, rear_1.scale.y, rear_1.scale.z],
+        "corner_scale": [corner.scale.x, corner.scale.y, corner.scale.z],
+        "side_scale": [side_1.scale.x, side_1.scale.y, side_1.scale.z],
+        "terminal_scale": [terminal.scale.x, terminal.scale.y, terminal.scale.z],
+    }
+    actions._execute_revision(scene_root, preview, prepared, false, false)
+    var after_names: Array[String] = []
+    for child in preview.get_children():
+        after_names.append(str(child.name))
+    result["undo_child_count"] = preview.get_child_count()
+    result["after_names"] = after_names
+    print("AURA_NAMED_BURST_RUNTIME:" + JSON.stringify(result))
+    actions._free_prepared_instances(prepared)
+    scene_root.free()
+    quit()
+''',
+        encoding="utf-8",
+    )
+    completed = subprocess.run(
+        [executable, "--headless", "--path", str(project), "--script", "res://test_named_burst.gd"],
+        cwd=project, capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=30, check=False,
+    )
+    output = completed.stdout + "\n" + completed.stderr
+    assert completed.returncode == 0, output
+    payload_line = next(
+        line for line in output.splitlines() if line.startswith("AURA_NAMED_BURST_RUNTIME:")
+    )
+    payload = json.loads(payload_line.split(":", 1)[1])
+    assert payload["bad_ok"] is False
+    assert "catalog scene does not exist" in payload["bad_error"]
+    assert payload["failed_child_count"] == 0
+    assert payload["forward_child_count"] == 7
+    assert payload["all_paths_exist"] is True
+    assert payload["returned_paths"] == payload["expected_paths"]
+    assert payload["distances"] == pytest.approx([0.0] * 6, abs=1e-5)
+    assert payload["facing_dots"] == pytest.approx([-1.0] * 6, abs=1e-5)
+    assert payload["rear_rotation"] == pytest.approx(90.0, abs=1e-5)
+    assert payload["rear_scale"] == [2.0, 1.0, 3.0]
+    assert payload["corner_scale"] == [2.0, 1.0, 3.0]
+    assert payload["side_scale"] == [1.5, 2.0, 0.75]
+    assert payload["terminal_scale"] == [0.5, 1.0, 2.0]
+    assert payload["before_names"] == payload["after_names"] == []
+    assert payload["undo_child_count"] == 0

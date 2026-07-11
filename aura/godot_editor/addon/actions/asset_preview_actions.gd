@@ -104,9 +104,17 @@ func apply_revision(params: Dictionary) -> Dictionary:
 			nodes[PREVIEW_ROOT_NAME + "/" + str(child.name)] = child
 	var prepared: Array[Dictionary] = []
 	var targeted: Dictionary = {}
+	var planned_paths: Dictionary = {}
 	var creates_preview := preview == null
 	for index in operations.size():
-		var checked := _prepare_revision_operation(operations[index], index, names, nodes, targeted)
+		var raw: Variant = operations[index]
+		if raw is Dictionary:
+			var raw_action := str(raw.get("operation", ""))
+			var raw_path := str(raw.get("node_path", ""))
+			if planned_paths.has(raw_path) and raw_action not in ["duplicate", "attach"]:
+				_free_prepared_instances(prepared)
+				return {"ok": false, "error": "operation %d cannot %s an unattached planned node: %s" % [index, raw_action, raw_path]}
+		var checked := _prepare_revision_operation(raw, index, names, nodes, targeted)
 		if not checked.get("ok", false):
 			_free_prepared_instances(prepared)
 			return checked
@@ -114,6 +122,7 @@ func apply_revision(params: Dictionary) -> Dictionary:
 			prepared.append_array(checked["operations"])
 		else:
 			prepared.append(checked["operation"])
+		_register_prepared_outputs(checked, nodes, targeted, planned_paths)
 	if names.size() > MAX_INSTANCES:
 		_free_prepared_instances(prepared)
 		return {"ok": false, "error": "revision would exceed the %d-instance preview limit" % MAX_INSTANCES}
@@ -156,6 +165,32 @@ func apply_revision(params: Dictionary) -> Dictionary:
 		"replaced_paths": replaced,
 		"instance_count": names.size(),
 	}}
+
+
+func _register_prepared_outputs(
+	checked: Dictionary,
+	nodes: Dictionary,
+	targeted: Dictionary,
+	planned_paths: Dictionary,
+) -> void:
+	var outputs: Array[Dictionary] = []
+	if checked.has("operations"):
+		outputs.assign(checked["operations"])
+	else:
+		var operation: Dictionary = checked["operation"]
+		if operation.has("new_node"):
+			outputs.append(operation)
+	for operation in outputs:
+		var node: Node3D = operation["new_node"]
+		node.position = operation["new_position"]
+		node.rotation_degrees = operation["new_rotation"]
+		node.scale = operation["new_scale"]
+		var output_path := str(operation.get("new_path", operation["path"]))
+		nodes[output_path] = node
+		planned_paths[output_path] = true
+		targeted.erase(output_path)
+		if operation["operation"] == "replace" and output_path != operation["path"]:
+			nodes.erase(operation["path"])
 
 
 func _prepare_revision_operation(
@@ -255,6 +290,9 @@ func _prepare_duplicate_operation(
 	var offset_space := str(raw.get("offset_space", "local"))
 	if offset_space != "local" and offset_space != "world":
 		return {"ok": false, "error": "duplicate offset_space must be local or world"}
+	var requested_name := str(raw.get("name", "")).strip_edges()
+	if count > 1 and not requested_name.is_empty():
+		return {"ok": false, "error": "duplicate name is allowed only when count is 1"}
 	var resource_path := str(raw.get("resource_path", ""))
 	if resource_path.is_empty() or source.scene_file_path != resource_path:
 		return {"ok": false, "error": "duplicate source is not the prepared catalog asset: %s" % source.name}
@@ -264,9 +302,12 @@ func _prepare_duplicate_operation(
 		position_step = source.transform.basis.orthonormalized() * offset
 	var duplicated: Array[Dictionary] = []
 	for copy_index in count:
+		var copy_name := requested_name
+		if copy_name.is_empty():
+			copy_name = _next_duplicate_name(str(source.name), names)
 		var placement_raw := {
 			"resource_path": resource_path,
-			"name": _next_duplicate_name(str(source.name), names),
+			"name": copy_name,
 			"position": [
 				source.position.x + position_step.x * float(copy_index + 1),
 				source.position.y + position_step.y * float(copy_index + 1),

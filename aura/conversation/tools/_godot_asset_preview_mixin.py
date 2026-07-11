@@ -168,6 +168,7 @@ class GodotAssetPreviewHandlersMixin:
         operations: list[dict] = []
         targeted: set[str] = set()
         added_names: set[str] = set()
+        planned_nodes: dict[str, GodotAsset] = {}
         preview_instances: list[dict] | None = None
         for index, raw in enumerate(raw_operations):
             if not isinstance(raw, dict):
@@ -181,9 +182,20 @@ class GodotAssetPreviewHandlersMixin:
                     raise ValueError(f"duplicate new preview name: {prepared['name']}")
                 added_names.add(prepared["name"])
                 operations.append({"operation": operation, **prepared})
+                planned_nodes[f"AuraPreview/{prepared['name']}"] = resolve_godot_asset(
+                    self._root,
+                    str(raw.get("asset_id") or ""),
+                    domain=str(raw.get("domain") or ""),
+                )
+                targeted.discard(f"AuraPreview/{prepared['name']}")
                 continue
 
             node_path = _direct_preview_path(raw.get("node_path"), index)
+            source_is_planned = node_path in planned_nodes
+            if source_is_planned and operation not in {"duplicate", "attach"}:
+                raise ValueError(
+                    f"operation {index} cannot {operation} an unattached planned node: {node_path}"
+                )
             if node_path in targeted:
                 raise ValueError(f"preview target appears in more than one operation: {node_path}")
             targeted.add(node_path)
@@ -192,27 +204,9 @@ class GodotAssetPreviewHandlersMixin:
                     raise ValueError(
                         f"attach operation {index} derives position and rotation from sockets"
                     )
-                if preview_instances is None:
-                    snapshot = GodotEditorBridgeClient(self._root).request("preview.snapshot", {})
-                    preview_instances = list(
-                        analyze_preview_snapshot(self._root, snapshot).get("instances") or []
-                    )
-                source = next(
-                    (item for item in preview_instances if str(item.get("path") or "") == node_path),
-                    None,
+                source_asset, preview_instances = self._preview_source_asset(
+                    node_path, "attach", planned_nodes, preview_instances
                 )
-                if source is None:
-                    raise ValueError(f"attach source does not exist: {node_path}")
-                source_asset_id = str(source.get("asset_id") or "")
-                source_domain = str(source.get("domain") or "")
-                if not source_asset_id or not source_domain:
-                    raise ValueError(f"attach source is not a recognized catalog asset: {node_path}")
-                source_asset = resolve_godot_asset(
-                    self._root, source_asset_id, domain=source_domain
-                )
-                source_resource_path = str(source.get("resource_path") or "")
-                if source_resource_path.casefold() != source_asset.resource_path.casefold():
-                    raise ValueError(f"attach source catalog identity is inconsistent: {node_path}")
                 source_socket = _catalog_socket(
                     source_asset,
                     str(raw.get("source_socket") or ""),
@@ -251,8 +245,14 @@ class GodotAssetPreviewHandlersMixin:
                     "scale": scale,
                 }
                 if name:
+                    if name in added_names:
+                        raise ValueError(f"duplicate new preview name: {name}")
+                    added_names.add(name)
                     prepared_attach["name"] = name
                 operations.append(prepared_attach)
+                if name:
+                    planned_nodes[f"AuraPreview/{name}"] = target_asset
+                    targeted.discard(f"AuraPreview/{name}")
                 continue
             if operation == "duplicate":
                 count = _bounded_int(raw.get("count"), f"duplicate operation {index} count", 1, 16)
@@ -264,36 +264,33 @@ class GodotAssetPreviewHandlersMixin:
                     raise ValueError(
                         f"duplicate operation {index} offset_space must be local or world"
                     )
-                if preview_instances is None:
-                    snapshot = GodotEditorBridgeClient(self._root).request("preview.snapshot", {})
-                    preview_instances = list(
-                        analyze_preview_snapshot(self._root, snapshot).get("instances") or []
+                name = str(raw.get("name") or "").strip()
+                if name and count != 1:
+                    raise ValueError(
+                        f"duplicate operation {index} can use name only when count is 1"
                     )
-                source = next(
-                    (item for item in preview_instances if str(item.get("path") or "") == node_path),
-                    None,
+                if name and any(char in name for char in ".:@/\""):
+                    raise ValueError(f"operation {index} has an invalid node name: {name}")
+                if name and name in added_names:
+                    raise ValueError(f"duplicate new preview name: {name}")
+                asset, preview_instances = self._preview_source_asset(
+                    node_path, "duplicate", planned_nodes, preview_instances
                 )
-                if source is None:
-                    raise ValueError(f"duplicate source does not exist: {node_path}")
-                asset_id = str(source.get("asset_id") or "")
-                domain = str(source.get("domain") or "")
-                if not asset_id or not domain:
-                    raise ValueError(f"duplicate source is not a recognized catalog asset: {node_path}")
-                asset = resolve_godot_asset(self._root, asset_id, domain=domain)
-                resource_path = str(source.get("resource_path") or "")
-                if resource_path.casefold() != asset.resource_path.casefold():
-                    raise ValueError(f"duplicate source catalog identity is inconsistent: {node_path}")
-                operations.append(
-                    {
-                        "operation": operation,
-                        "node_path": node_path,
-                        "count": count,
-                        "offset": offset,
-                        "offset_space": offset_space,
-                        "catalog_identity": f"{asset.domain}:{asset.id}",
-                        "resource_path": asset.resource_path,
-                    }
-                )
+                prepared_duplicate = {
+                    "operation": operation,
+                    "node_path": node_path,
+                    "count": count,
+                    "offset": offset,
+                    "offset_space": offset_space,
+                    "catalog_identity": f"{asset.domain}:{asset.id}",
+                    "resource_path": asset.resource_path,
+                }
+                if name:
+                    prepared_duplicate["name"] = name
+                    added_names.add(name)
+                    planned_nodes[f"AuraPreview/{name}"] = asset
+                    targeted.discard(f"AuraPreview/{name}")
+                operations.append(prepared_duplicate)
                 continue
             if operation == "remove":
                 operations.append({"operation": operation, "node_path": node_path})
@@ -313,7 +310,48 @@ class GodotAssetPreviewHandlersMixin:
                     **_optional_transform(raw, index),
                 }
             )
+            replacement_name = str(prepared.get("name") or node_path.split("/", 1)[1])
+            if replacement_name in added_names:
+                raise ValueError(f"duplicate new preview name: {replacement_name}")
+            added_names.add(replacement_name)
+            planned_nodes[f"AuraPreview/{replacement_name}"] = resolve_godot_asset(
+                self._root,
+                str(raw.get("asset_id") or ""),
+                domain=str(raw.get("domain") or ""),
+            )
+            targeted.discard(f"AuraPreview/{replacement_name}")
         return operations
+
+    def _preview_source_asset(
+        self,
+        node_path: str,
+        operation: str,
+        planned_nodes: dict[str, GodotAsset],
+        preview_instances: list[dict] | None,
+    ) -> tuple[GodotAsset, list[dict] | None]:
+        planned_asset = planned_nodes.get(node_path)
+        if planned_asset is not None:
+            return planned_asset, preview_instances
+        if preview_instances is None:
+            snapshot = GodotEditorBridgeClient(self._root).request("preview.snapshot", {})
+            preview_instances = list(
+                analyze_preview_snapshot(self._root, snapshot).get("instances") or []
+            )
+        source = next(
+            (item for item in preview_instances if str(item.get("path") or "") == node_path),
+            None,
+        )
+        if source is None:
+            raise ValueError(f"{operation} source does not exist: {node_path}")
+        asset_id = str(source.get("asset_id") or "")
+        domain = str(source.get("domain") or "")
+        if not asset_id or not domain:
+            raise ValueError(f"{operation} source is not a recognized catalog asset: {node_path}")
+        asset = resolve_godot_asset(self._root, asset_id, domain=domain)
+        resource_path = str(source.get("resource_path") or "")
+        if resource_path.casefold() != asset.resource_path.casefold():
+            raise ValueError(f"{operation} source catalog identity is inconsistent: {node_path}")
+        return asset, preview_instances
 
     def _prepare_catalog_revision_asset(self, raw: dict, index: int) -> dict:
         asset = resolve_godot_asset(

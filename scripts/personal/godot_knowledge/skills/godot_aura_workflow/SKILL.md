@@ -19,6 +19,7 @@ triggers: ["aura preview", "godot bridge", "inspect_godot_api", "inspect_godot_a
 - Uses inspect_godot_assets, inspect_godot_editor, inspect_godot_asset_preview, edit_godot_asset_preview, capture_godot_asset_preview, critique_godot_preview_local (when available), and edit_godot_editor.
 - Uses catalog asset IDs through edit_godot_asset_preview, never raw .tscn paths or direct TCP.
 - Keeps all composition nodes beneath the genuine AuraPreview root.
+- Builds each short connected structural burst in one atomic apply call with explicitly named intermediate nodes, then inspects the completed burst instead of pausing after every individual wall.
 - Never saves the scene unless explicitly requested.
 
 #### Layered Building Workflow
