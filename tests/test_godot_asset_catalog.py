@@ -1733,7 +1733,7 @@ func _initialize() -> void:
     var second_mut := actions._prepare_revision_operation({
         "operation": "remove", "node_path": "AuraPreview/Corner",
     }, 1, {"Corner": true}, mut_nodes, mut_targeted, mut_removed, mut_reads)
-    var mutations_conflict := first_mut.get("ok", false) and not second_mut.get("ok", false)
+    var mutations_conflict: bool = bool(first_mut.get("ok", false)) and not bool(second_mut.get("ok", false))
 
     # Reading from a removed path is rejected
     var rem_targeted := {}
@@ -1748,8 +1748,8 @@ func _initialize() -> void:
         "count": 1, "offset": [4, 0, 0],
         "resource_path": "res://corner.tscn",
     }, 1, {}, rem_nodes, rem_targeted, rem_removed, rem_reads)
-    var remove_rejects_dup := remove_op.get("ok", false) \
-        and not dup_after_remove.get("ok", false)
+    var remove_rejects_dup: bool = bool(remove_op.get("ok", false)) \
+        and not bool(dup_after_remove.get("ok", false))
 
     # Read after mutation is rejected
     var rw_targeted := {}
@@ -1775,8 +1775,8 @@ func _initialize() -> void:
         "name": "BadAttach",
         "scale": [1.0, 1.0, 1.0],
     }, 1, {}, rw_nodes, rw_targeted, rw_removed, rw_reads)
-    var set_then_attach_rejected := set_tf.get("ok", false) \
-        and not att_after_set.get("ok", false)
+    var set_then_attach_rejected: bool = bool(set_tf.get("ok", false)) \
+        and not bool(att_after_set.get("ok", false))
 
     # Mutation after read is rejected
     var wr_targeted := {}
@@ -1792,8 +1792,8 @@ func _initialize() -> void:
     var rm_after_dup := actions._prepare_revision_operation({
         "operation": "remove", "node_path": "AuraPreview/Corner",
     }, 1, {}, wr_nodes, wr_targeted, wr_removed, wr_reads)
-    var dup_then_remove_rejected := dup_first.get("ok", false) \
-        and not rm_after_dup.get("ok", false)
+    var dup_then_remove_rejected: bool = bool(dup_first.get("ok", false)) \
+        and not bool(rm_after_dup.get("ok", false))
 
     # Execute forward
     var child_before := preview.get_child_count()

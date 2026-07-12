@@ -216,8 +216,9 @@ def test_interactive_context_uses_latest_request_for_authored_skill(tmp_path: Pa
         content=request,
     )
 
-    assert "Godot Visual Iteration" in composed.system_prompt
-    assert "critique_godot_preview_local" in composed.system_prompt
+    assert "Godot Live Building — Procedural Co-Building" in composed.system_prompt
+    assert "describe_godot_preview_local" in composed.system_prompt
+    assert "critique_godot_preview_local" not in composed.system_prompt
 
 
 def test_persistence_round_trips_interactive_and_missing_mode_defaults_planner(tmp_path: Path) -> None:

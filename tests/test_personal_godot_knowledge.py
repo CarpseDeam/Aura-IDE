@@ -120,8 +120,8 @@ def test_live_composition_build_skill_context_selects_workflow(tmp_path: Path) -
         content=brief,
     )
 
-    assert "Godot Live Building — Fast Interactive Loop" in context
-    assert "describe_godot_preview_local" in context
+    assert "Godot Live Building — Procedural Co-Building" in context
+    assert "build_live_ruin" in context
 
 
 # ---------------------------------------------------------------------------
@@ -129,8 +129,9 @@ def test_live_composition_build_skill_context_selects_workflow(tmp_path: Path) -
 # ---------------------------------------------------------------------------
 
 
-def test_godot_workflow_skill_names_describe_not_critique() -> None:
+def test_godot_workflow_skill_names_procedural_tool_and_isolates_visual_description() -> None:
     text = _skill_text()
+    assert "build_live_ruin" in text
     assert "describe_godot_preview_local" in text
     assert "critique_godot_preview_local" not in text
 
@@ -141,6 +142,7 @@ def test_godot_workflow_skill_lists_live_tool_names() -> None:
         "inspect_godot_assets",
         "inspect_godot_editor",
         "inspect_godot_asset_preview",
+        "build_live_ruin",
         "edit_godot_asset_preview",
         "capture_godot_asset_preview",
         "describe_godot_preview_local",
@@ -156,22 +158,22 @@ def test_godot_workflow_skill_lists_live_tool_names() -> None:
 def test_godot_workflow_directs_same_turn_continued_building() -> None:
     text = _skill_text()
     lower = text.lower()
-    assert "immediately continues" in lower
-    assert "same tool loop" in lower or "same request" in lower
-    assert "do not stop after each burst" in lower
+    assert "immediately choose the next structural operation" in lower
+    assert "current request" in lower
+    assert "do not pause after every wall" in lower
 
 
 def test_godot_workflow_says_not_to_invoke_vision_per_individual_piece() -> None:
     text = _skill_text()
     lower = text.lower()
-    assert "not after every individual wall" in lower or "not after every individual piece" in lower
+    assert "do not call `capture_godot_asset_preview` or local vision during ordinary structural placement" in lower
 
 
 def test_godot_workflow_favors_several_connected_pieces_per_apply() -> None:
     text = _skill_text()
     lower = text.lower()
-    assert "several meaningful connected pieces" in lower
-    assert "one atomic" in lower
+    assert "ordered batch of meaningful operations" in lower
+    assert "one atomic godot undoredo action" in lower
 
 
 # ---------------------------------------------------------------------------
@@ -182,7 +184,8 @@ def test_godot_workflow_favors_several_connected_pieces_per_apply() -> None:
 def test_godot_workflow_defines_interactive_mode_role() -> None:
     text = _skill_text()
     assert "#### Interactive Mode" in text
-    assert "DeepSeek is the builder and sole decision-maker" in text
+    assert "DeepSeek chooses structural intent" in text
+    assert "project code owns exact mesh positions" in text
 
 
 def test_godot_workflow_defines_planner_and_worker_roles() -> None:
@@ -195,8 +198,8 @@ def test_godot_workflow_forbids_planner_mutations() -> None:
     text = _skill_text()
     lower = text.lower()
     assert "not attempt mutations" in lower
-    assert "not write helper scripts" in lower
-    assert "not read bridge credentials" in lower
+    assert "read bridge credentials" in lower
+    assert "author another execution path" in lower
 
 
 # ---------------------------------------------------------------------------
@@ -208,13 +211,13 @@ def test_godot_workflow_forbids_raw_tcp_and_arbitrary_paths() -> None:
     text = _skill_text()
     lower = text.lower()
     assert "no raw tcp" in lower
-    assert "not prescribe raw resource paths" in lower
+    assert "prescribe raw resource paths" in lower
 
 
 def test_godot_workflow_forbids_helper_builders_and_implicit_save() -> None:
     text = _skill_text()
     lower = text.lower()
-    assert "no helper builders" in lower
+    assert "helper generator authored during a live composition" in lower
     assert "never save the scene unless explicitly requested" in lower
 
 
@@ -262,9 +265,9 @@ def test_godot_workflow_has_no_critic_verdict_language() -> None:
     assert "declared coherent" not in text
     assert "visually coherent" not in text
 
-    # The skill must describe the fast build loop, not a critique loop
-    assert "describe locally" in text
-    assert "continue" in text
+    # The skill must describe deterministic progression, not a critique loop.
+    assert "deterministic batch" in text
+    assert "progression" in text
 
 
 def test_godot_workflow_has_no_semantic_critique_requirement() -> None:
@@ -288,17 +291,29 @@ def test_godot_workflow_has_no_planner_names_tool_language() -> None:
 def test_godot_workflow_describes_fast_interactive_loop() -> None:
     text = _skill_text()
     assert "inspect once" in text
-    assert "build a connected burst" in text
-    assert "describe locally" in text
-    assert "build the next burst" in text
+    assert "choose semantic operations" in text
+    assert "build_live_ruin applies one deterministic batch" in text
+    assert "choose the next structural operation" in text
 
 
 def test_godot_workflow_allows_later_user_modifications() -> None:
     text = _skill_text()
     lower = text.lower()
-    assert "add a tower" in lower
-    assert "make it more run down" in lower
-    assert "modify the existing live" in lower
+    assert "extend the east room" in lower
+    assert "breach the rear wall" in lower
+    assert "modify the named live structure" in lower
+
+
+def test_godot_workflow_exposes_semantic_vocabulary_and_forbids_mesh_transforms() -> None:
+    text = _skill_text()
+    lower = text.lower()
+    for operation in [
+        "create_run", "turn_run", "extend_run", "create_enclosure",
+        "insert_opening", "attach_room", "extend_room", "add_tower", "apply_damage",
+    ]:
+        assert operation in text
+    assert "never calculate a transform for every mesh" in lower
+    assert "stable handles" in lower
 
 
 def test_godot_workflow_preserves_aura_preview_root_and_undo_redo() -> None:

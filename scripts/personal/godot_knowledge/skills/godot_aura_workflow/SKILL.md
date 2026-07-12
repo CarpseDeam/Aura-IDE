@@ -1,64 +1,59 @@
 ---
 task_kinds: ["visual iteration", "godot_bridge", "godot_assembly", "godot_visual_iteration"]
-path_globs: ["addons/aura_bridge/**"]
-triggers: ["aura preview", "godot bridge", "inspect_godot_api", "inspect_godot_assets", "capture_godot", "visual iteration", "assemble", "edit_godot_asset_preview", "godot live", "live scene", "live composition"]
+path_globs: ["addons/aura_bridge/**", "scripts/live/**", ".aura/tools/**"]
+triggers: ["aura preview", "godot bridge", "build_live_ruin", "procedural construction", "assemble", "godot live", "live scene", "live composition"]
 ---
-### Godot Live Building — Fast Interactive Loop
+### Godot Live Building — Procedural Co-Building
 
-The intended same-turn loop is:
+The primary structural loop is:
 
-`inspect once → build a connected burst → capture → describe locally → DeepSeek reacts → build the next burst`
+`inspect once → choose semantic operations → build_live_ruin applies one deterministic batch → immediately choose the next structural operation`
 
 #### Interactive Mode
 
-- DeepSeek is the builder and sole decision-maker.
-- Inspect the asset catalog and current preview at the beginning, then reuse known asset IDs, sockets, and named `AuraPreview` paths.
-- Build several meaningful connected pieces per atomic `edit_godot_asset_preview` apply call. Think like building a Minecraft structure: establish a wall run, turn a corner, create an opening, extend a room, add a tower mass, then continue.
-- After a meaningful structural burst, call `capture_godot_asset_preview`, then pass the returned capture path to `describe_godot_preview_local`.
-- DeepSeek consumes that description and immediately continues the current request in the same tool loop.
-- Do not stop after each burst to wait for another user message.
-- Do not call vision after every individual wall, prop, or rubble piece.
-- Do not repeatedly inspect the full catalog.
-- Do not require a verdict, coherence proof, checklist, score, critic approval, or mandatory revision ritual.
-- Do not clear and rebuild when named duplicates, attachments, branches, replacements, removals, or transforms can extend the existing result.
-- Continue until the user's current requested construction or revision is actually developed, the user cancels or redirects, or a real tool failure prevents further progress.
-- Later user instructions such as `add a tower`, `make it more run down`, or `add another room` should modify the existing live `AuraPreview`, not begin a new autonomous design system.
-- Never save the scene unless explicitly requested.
-- Preserve catalog-only asset IDs, the genuine `AuraPreview` root, atomic UndoRedo-backed bursts, no raw TCP, no bridge credentials, no helper builders or generators, and no arbitrary `.tscn` paths.
+- DeepSeek chooses structural intent; project code owns exact mesh positions, rotations, spacing, socket alignment, corner selection, opening widths, occupancy checks, and stable names.
+- Prefer one `build_live_ruin` call containing an ordered batch of meaningful operations. Refer to returned stable handles in later calls.
+- Express footprint dimensions, cardinal directions, module counts, entrance sides, opening slots, attached sides, room dimensions, tower anchors, and selected damage sections. Never calculate a transform for every mesh.
+- Build incrementally beneath the existing real `AuraPreview`. Later requests such as `extend the east room` or `breach the rear wall` modify the named live structure.
+- Continue within the current request while another requested structural operation remains. Do not pause after every wall or module.
+- Never save the scene unless explicitly requested. Each procedural call is one atomic Godot UndoRedo action.
+
+#### Procedural Vocabulary
+
+- `create_run`: named straight run from a semantic start anchor, cardinal direction, module count, and catalog piece family.
+- `turn_run`: correctly selected and oriented corner from a named run into a new cardinal direction.
+- `extend_run`: add deterministic modules to an existing named run.
+- `create_enclosure`: connected four-sided enclosure with footprint/module dimensions and a deliberate entrance.
+- `insert_opening`: replace a named run slot with a doorway, breach, gap, damaged section, or intact wall.
+- `attach_room` and `extend_room`: add or extend a named secondary enclosure from a named wall slot.
+- `add_tower`: replace a compatible named corner with a heavier/taller catalog corner, or add a catalog mass at a named wall anchor.
+- `apply_damage`: deterministically replace selected intact run slots with compatible damaged catalog variants.
 
 #### Planner and Worker Role Split
 
 ##### Planner (read-only)
-- May inspect project conventions, catalog (`inspect_godot_assets`), live scene (`inspect_godot_editor`), AuraPreview (`inspect_godot_asset_preview`), uncertain Godot APIs (`inspect_godot_api`), and captured visual evidence (`capture_godot_asset_preview`).
-- Produces one compact Worker item for the complete live-editor composition request.
-- Preserves the user's original visual intent, constraints, and no-save instruction.
-- Names the existing conversation tools the Worker should use, including `describe_godot_preview_local` when local vision is available.
-- Must NOT write helper scripts, source files, builders, generators, resources, tests, or documentation for a live composition request.
-- Must NOT read bridge credentials, author TCP clients, call bridge protocol actions directly, or invent another execution path.
-- Must NOT prescribe raw resource paths or bypass catalog asset IDs.
-- Must NOT attempt mutations itself.
 
-##### Worker (owns every mutation and iteration step)
-- Uses `inspect_godot_assets`, `inspect_godot_editor`, `inspect_godot_asset_preview`, `edit_godot_asset_preview`, `capture_godot_asset_preview`, `describe_godot_preview_local` (when available), and `edit_godot_editor`.
-- Uses catalog asset IDs through `edit_godot_asset_preview`, never raw `.tscn` paths or direct TCP.
-- Keeps all composition nodes beneath the genuine `AuraPreview` root.
-- Builds several meaningful connected pieces in one atomic apply call per burst.
-- After a structural burst, captures and describes locally, then immediately continues building in the same request.
-- Never saves the scene unless explicitly requested.
+- May inspect project conventions, catalog (`inspect_godot_assets`), live scene (`inspect_godot_editor`), and AuraPreview (`inspect_godot_asset_preview`) once at the start when facts are unknown.
+- Produces one compact Worker item for the complete live procedural composition request, preserving the user’s semantic intent and no-save instruction.
+- Names `build_live_ruin` as the primary mutation tool.
+- Must not attempt mutations, read bridge credentials, prescribe raw resource paths, or author another execution path.
 
-#### Building Cadence
-- Establish footprint, major structural runs, entrances, and primary landmarks in the first few bursts.
-- Connect corners, complete spatial relationships, and add secondary structures.
-- Add breaches, damage, rubble, props, and visual storytelling.
-- Capture and describe after meaningful structural bursts, not after every individual piece.
-- DeepSeek consumes the local description and continues building — no verdict, no approval gate, no mandatory revision pass.
-- When the local description tool is unavailable, continue building from structural facts and preview inspection; do not claim visual coherence without visual evidence.
+##### Worker (owns every mutation)
 
-#### Forbidden Actions
-- No raw TCP or direct bridge-protocol calls from Planner or Worker prompts.
-- No bridge-token or credential access in skill text.
-- No helper scripts, builders, generators, resources, test files, or documentation produced for live composition.
-- No arbitrary `.tscn` paths — all assets must come from the catalog via `inspect_godot_assets`.
-- No scene saving unless explicitly requested.
-- No Planner-side mutations of the Godot editor.
-- No verdict, scoring, coherence checklist, mandatory critique, or forced revision-loop ritual.
+- Uses catalog facts and `build_live_ruin` with semantic parameters and stable handles.
+- Uses `edit_godot_asset_preview` only as a narrow fallback for a catalog operation the project vocabulary does not support; it is not the normal structural path.
+- Keeps every generated piece beneath the genuine `AuraPreview` and never saves unless explicitly requested.
+- On a rejected procedural batch, fix the semantic request or report the concrete geometry error. Do not nudge individual mesh transforms.
+
+#### Visual Checks Are Isolated
+
+- Do not call `capture_godot_asset_preview` or local vision during ordinary structural placement, and do not make visual description control progression.
+- Production capture infrastructure remains available. An occasional later composition check may use `capture_godot_asset_preview` and `describe_godot_preview_local` only when the user requests it or a genuinely visual question remains after deterministic construction.
+- Do not turn that optional check into critique, scoring, a verdict gate, an autonomous loop, or repeated correction passes.
+
+#### Safety and Scope
+
+- Use catalog-only asset IDs and project calibrations; no arbitrary `.tscn` paths.
+- No raw TCP, bridge tokens, second bridge, helper generator authored during a live composition, autonomous builder state machine, grammar engine, WFC, critic, or scoring system.
+- Invalid geometry must reject before mutation; never accept a half-applied structure.
+- Never save the scene unless explicitly requested.
