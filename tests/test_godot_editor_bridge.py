@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import socket
+import subprocess
 import threading
 from pathlib import Path
 from unittest.mock import patch
@@ -32,6 +35,7 @@ def test_installer_copies_modular_addon_for_normal_godot_activation(tmp_path: Pa
     assert (root / "addons/aura_bridge/perception/scene_snapshot.gd").is_file()
     assert (root / "addons/aura_bridge/actions/scene_actions.gd").is_file()
     assert (root / "addons/aura_bridge/actions/asset_preview_actions.gd").is_file()
+    assert (root / "addons/aura_bridge/actions/project_preview_planner.gd").is_file()
     assert (root / "addons/aura_bridge/perception/asset_preview_snapshot.gd").is_file()
     assert (root / "addons/aura_bridge/perception/api_introspection.gd").is_file()
     assert ADDON_SETTING not in (root / "project.godot").read_text(encoding="utf-8")
@@ -199,7 +203,7 @@ def test_capability_reporting_includes_preview_capture(tmp_path: Path) -> None:
                     "result": {
                         "bridge": "aura-godot-editor",
                         "protocol": 1,
-                        "bridge_version": 9,
+                        "bridge_version": 10,
                         "capabilities": [
                             "scene.snapshot",
                             "scene.select",
@@ -211,6 +215,8 @@ def test_capability_reporting_includes_preview_capture(tmp_path: Path) -> None:
                             "preview.apply",
                             "preview.publish_scene",
                             "preview.capture",
+                            "preview.planner.inspect",
+                            "preview.planner.apply",
                             "api.describe",
                         ],
                     },
@@ -223,11 +229,162 @@ def test_capability_reporting_includes_preview_capture(tmp_path: Path) -> None:
     thread.join(timeout=2)
 
     assert result["bridge"] == "aura-godot-editor"
-    assert result["bridge_version"] == 9
+    assert result["bridge_version"] == 10
     assert "preview.apply" in result["capabilities"]
     assert "preview.publish_scene" in result["capabilities"]
     assert "api.describe" in result["capabilities"]
     assert "preview.capture" in result["capabilities"]
+    assert "preview.planner.inspect" in result["capabilities"]
+    assert "preview.planner.apply" in result["capabilities"]
+
+
+def test_project_preview_planner_routes_through_focused_owner() -> None:
+    router = Path("aura/godot_editor/addon/protocol/request_router.gd").read_text(
+        encoding="utf-8"
+    )
+    owner = Path("aura/godot_editor/addon/actions/project_preview_planner.gd").read_text(
+        encoding="utf-8"
+    )
+
+    assert '"preview.planner.inspect"' in router
+    assert '"preview.planner.apply"' in router
+    assert "_project_preview_planner.inspect_contract(params)" in router
+    assert "_project_preview_planner.plan_and_apply(params)" in router
+    assert 'const PROJECT_SETTING := "aura/editor_bridge/preview_planner"' in owner
+    assert 'const INSPECT_METHOD := &"inspect_preview_contract"' in owner
+    assert 'const PLAN_METHOD := &"plan_preview_revision"' in owner
+    assert owner.count("_preview_snapshot.capture({})") == 1
+    assert owner.count("_preview_actions.apply_revision({") == 1
+    assert "ResourceSaver" not in owner
+    assert "save_scene" not in owner
+
+
+def test_project_preview_planner_runtime_contract_is_atomic_and_read_only(tmp_path: Path) -> None:
+    executable = (
+        os.environ.get("GODOT_BIN")
+        or shutil.which("godot")
+        or (r"C:\Tools\Godot\Godot.exe" if Path(r"C:\Tools\Godot\Godot.exe").is_file() else None)
+    )
+    if not executable:
+        pytest.skip("Godot is required for the project preview planner runtime harness")
+
+    project = tmp_path / "planner_project"
+    actions = project / "addons/aura_bridge/actions"
+    actions.mkdir(parents=True)
+    shutil.copyfile(
+        "aura/godot_editor/addon/actions/project_preview_planner.gd",
+        actions / "project_preview_planner.gd",
+    )
+    (project / "project.godot").write_text(
+        'config_version=5\n\n[aura]\neditor_bridge/preview_planner="res://fake_adapter.gd"\n',
+        encoding="utf-8",
+    )
+    (project / "fake_adapter.gd").write_text(
+        """extends RefCounted
+
+func preview_planner_interface() -> Dictionary:
+    return {"version": 1, "capabilities": ["inspect_contract", "plan_revision"]}
+
+func inspect_preview_contract(request: Dictionary):
+    return {"ok": true, "kind": "contract", "snapshot_count": request["snapshot"]["instances"].size()}
+
+func plan_preview_revision(request: Dictionary):
+    var operation := str(request.get("operations", [{}])[0].get("operation", ""))
+    if operation == "reject":
+        return {"ok": false, "error": "semantic rejection", "diagnostic": {"field": "wall", "valid_candidates": ["court_east"]}}
+    if operation == "bad_result":
+        return []
+    if operation == "missing_revision":
+        return {"ok": true, "handles": ["court"]}
+    return {"ok": true, "operations": [{"operation": "instantiate"}], "handles": ["court"], "diagnostics": [{"code": "semantic_summary"}]}
+""",
+        encoding="utf-8",
+    )
+    (project / "incompatible_adapter.gd").write_text(
+        """extends RefCounted
+
+func preview_planner_interface() -> Dictionary:
+    return {"version": 1, "capabilities": ["inspect_contract", "plan_revision"]}
+""",
+        encoding="utf-8",
+    )
+    (project / "test_planner.gd").write_text(
+        """extends SceneTree
+
+const Planner = preload("res://addons/aura_bridge/actions/project_preview_planner.gd")
+
+class FakeSnapshot:
+    extends RefCounted
+    var calls := 0
+    func capture(_params: Dictionary) -> Dictionary:
+        calls += 1
+        return {"ok": true, "result": {"instances": [{"name": "existing"}]}}
+
+class FakeActions:
+    extends RefCounted
+    var calls := 0
+    var last_label := ""
+    func apply_revision(params: Dictionary) -> Dictionary:
+        calls += 1
+        last_label = str(params.get("label", ""))
+        return {"ok": true, "result": {"applied": true, "operation_count": params["operations"].size(), "added_paths": ["AuraPreview/new"]}}
+
+func _require(value: bool, message: String) -> bool:
+    if value:
+        return true
+    push_error(message)
+    quit(1)
+    return false
+
+func _init() -> void:
+    var snapshot := FakeSnapshot.new()
+    var actions := FakeActions.new()
+    var planner = Planner.new(snapshot, actions)
+
+    var inspected: Dictionary = planner.inspect_contract({})
+    if not _require(inspected.get("ok", false), "contract inspection failed"): return
+    if not _require(inspected["result"]["snapshot_count"] == 1, "contract did not receive snapshot"): return
+    if not _require(snapshot.calls == 1 and actions.calls == 0, "contract inspection mutated preview"): return
+
+    var built: Dictionary = planner.plan_and_apply({"label": "One semantic revision", "request": {"operations": [{"operation": "build"}]}})
+    if not _require(built.get("ok", false) and built["result"].get("ok", false), "semantic build failed"): return
+    if not _require(snapshot.calls == 2 and actions.calls == 1, "semantic build did not snapshot and apply once"): return
+    if not _require(actions.last_label == "One semantic revision", "UndoRedo label was not preserved"): return
+    if not _require(built["result"]["handles"] == ["court"], "semantic summary was lost"): return
+    if not _require(built["result"]["revision"]["operation_count"] == 1, "revision result was lost"): return
+
+    var rejected: Dictionary = planner.plan_and_apply({"request": {"operations": [{"operation": "reject"}]}})
+    if not _require(rejected.get("ok", false) and not rejected["result"].get("ok", true), "semantic rejection was not returned"): return
+    if not _require(rejected["result"]["diagnostic"]["valid_candidates"] == ["court_east"], "structured diagnostic was lost"): return
+    if not _require(actions.calls == 1, "rejected semantic plan was applied"): return
+
+    var malformed: Dictionary = planner.plan_and_apply({"request": {"operations": [{"operation": "bad_result"}]}})
+    if not _require(not malformed.get("ok", true) and "dictionary" in malformed.get("error", ""), "non-dictionary result was accepted"): return
+    var no_revision: Dictionary = planner.plan_and_apply({"request": {"operations": [{"operation": "missing_revision"}]}})
+    if not _require(not no_revision.get("ok", true) and "operations array" in no_revision.get("error", ""), "missing revision was accepted"): return
+    if not _require(actions.calls == 1, "malformed plan was applied"): return
+
+    ProjectSettings.set_setting("aura/editor_bridge/preview_planner", "res://incompatible_adapter.gd")
+    var incompatible: Dictionary = Planner.new(snapshot, actions).inspect_contract({})
+    if not _require(not incompatible.get("ok", true) and "incompatible" in incompatible.get("error", ""), "incompatible adapter did not fail clearly"): return
+    ProjectSettings.set_setting("aura/editor_bridge/preview_planner", null)
+    var missing: Dictionary = Planner.new(snapshot, actions).inspect_contract({})
+    if not _require(not missing.get("ok", true) and "not declared" in missing.get("error", ""), "missing adapter did not fail clearly"): return
+    quit(0)
+""",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [str(executable), "--headless", "--path", str(project), "--script", "res://test_planner.gd"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=30,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
 
 
 def test_preview_capture_metadata_shape_is_rejected_by_client_when_malformed(tmp_path: Path) -> None:

@@ -5,6 +5,7 @@ const SceneActions = preload("../actions/scene_actions.gd")
 const SceneSnapshot = preload("../perception/scene_snapshot.gd")
 const AssetPreviewActions = preload("../actions/asset_preview_actions.gd")
 const AssetPreviewSnapshot = preload("../perception/asset_preview_snapshot.gd")
+const ProjectPreviewPlanner = preload("../actions/project_preview_planner.gd")
 const ApiIntrospection = preload("../perception/api_introspection.gd")
 const ViewportCapture = preload("../perception/viewport_capture.gd")
 
@@ -13,6 +14,7 @@ var _snapshot
 var _actions
 var _asset_preview_actions
 var _asset_preview_snapshot
+var _project_preview_planner
 var _api_introspection
 var _viewport_capture
 
@@ -23,6 +25,7 @@ func _init(editor_interface: EditorInterface, undo_redo: EditorUndoRedoManager) 
 	_actions = SceneActions.new(editor_interface, undo_redo)
 	_asset_preview_actions = AssetPreviewActions.new(editor_interface, undo_redo)
 	_asset_preview_snapshot = AssetPreviewSnapshot.new(editor_interface)
+	_project_preview_planner = ProjectPreviewPlanner.new(_asset_preview_snapshot, _asset_preview_actions)
 	_api_introspection = ApiIntrospection.new()
 	_viewport_capture = ViewportCapture.new(editor_interface)
 
@@ -33,8 +36,8 @@ func dispatch(action: String, params: Dictionary) -> Dictionary:
 			return {"ok": true, "result": {
 				"bridge": "aura-godot-editor",
 				"protocol": 1,
-				"bridge_version": 9,
-				"capabilities": ["scene.snapshot", "scene.select", "scene.apply", "scene.save", "preview.snapshot", "preview.instantiate", "preview.clear", "preview.apply", "preview.publish_scene", "preview.capture", "api.describe"],
+				"bridge_version": 10,
+				"capabilities": ["scene.snapshot", "scene.select", "scene.apply", "scene.save", "preview.snapshot", "preview.instantiate", "preview.clear", "preview.apply", "preview.publish_scene", "preview.capture", "preview.planner.inspect", "preview.planner.apply", "api.describe"],
 			}}
 		"scene.snapshot":
 			return _snapshot.capture(params)
@@ -57,6 +60,10 @@ func dispatch(action: String, params: Dictionary) -> Dictionary:
 			return _asset_preview_actions.publish_scene(params)
 		"preview.capture":
 			return _viewport_capture.capture(params)
+		"preview.planner.inspect":
+			return _project_preview_planner.inspect_contract(params)
+		"preview.planner.apply":
+			return _project_preview_planner.plan_and_apply(params)
 		"api.describe":
 			return _api_introspection.describe(params)
 		_:
