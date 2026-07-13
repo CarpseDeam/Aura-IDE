@@ -17,6 +17,7 @@ For a large multi-zone place, use one Worker item with progressive structural ba
 
 #### Interactive Mode
 
+- Use one Interactive Mode for live building. Small-edit and progressive large-build behavior are workflows selected by instruction scope, not separate execution modes.
 - DeepSeek chooses structural intent; project code owns exact mesh positions, rotations, spacing, socket alignment, corner selection, opening widths, occupancy checks, and stable names.
 - Classify the current instruction by scope. Keep one bounded room, level, stair, opening, connection, extension, or damage edit to one `build_live_ruin` call containing an ordered batch of meaningful operations.
 - Treat citadels, castles, fortress districts, monasteries, multi-zone ruins, and similarly large requests as progressive builds. Dispatch one compact Worker item for the whole requested structural pass, then make several connected `build_live_ruin` calls inside that same Worker item.
@@ -24,6 +25,14 @@ For a large multi-zone place, use one Worker item with progressive structural ba
 - Build incrementally beneath the existing real `AuraPreview`. Later requests such as `extend the east room` or `breach the rear wall` modify the named live structure.
 - Continue within the current request while another requested structural operation remains. Do not pause after every wall or module.
 - Never save the scene unless explicitly requested. Each procedural call is one atomic Godot UndoRedo action.
+
+Use this action-first rhythm inside Interactive Mode:
+
+- For live procedural construction, call `inspect_live_ruin_contract` at most once per request when the contract or current semantic state is unknown. Treat the contract and returned semantic state as authoritative.
+- After the contract returns, make the first useful `build_live_ruin` call immediately. Do not inspect V_Ruins constructor source, catalog files, exact node transforms, or implementation details before that call or during ordinary semantic construction when the contract is available.
+- Prefer a coarse but valid, meaningful architectural chunk that can be revised over prolonged preflight design intended to perfect the whole zone before applying anything. Use visible iteration as the planning mechanism: apply a meaningful chunk, observe its returned semantic result, then apply the next chunk.
+- After a successful build call, continue directly to the next `build_live_ruin` call from its returned handles, spaces, connections, and diagnostics without another inspection. Do not inspect the preview to determine exact coordinates for the next semantic operation.
+- Perform another read-only inspection only when a concrete structured diagnostic cannot be resolved from its returned valid candidates. Never create probe geometry to learn behavior.
 
 #### Rapid Supervised Construction
 
@@ -60,14 +69,14 @@ For a large multi-zone place, use one Worker item with progressive structural ba
 
 ##### Planner (read-only)
 
-- May inspect project conventions, catalog (`inspect_godot_assets`), live scene (`inspect_godot_editor`), AuraPreview (`inspect_godot_asset_preview`), and the project semantic contract (`inspect_live_ruin_contract`) when facts are unknown.
+- During ordinary semantic construction, use `inspect_live_ruin_contract` at most once when needed and dispatch the first useful build without catalog, scene, source, transform, or implementation preflight. Reserve catalog (`inspect_godot_assets`), live scene (`inspect_godot_editor`), and AuraPreview (`inspect_godot_asset_preview`) inspection for an explicit visual checkpoint or an unresolved concrete diagnostic.
 - Produces one compact Worker item for the current live procedural construction request, preserving the user’s semantic intent and no-save instruction.
 - Names `build_live_ruin` as the primary mutation tool.
 - Must not attempt mutations, read bridge credentials, prescribe raw resource paths, or author another execution path.
 
 ##### Worker (owns every mutation)
 
-- Uses `inspect_live_ruin_contract` once when needed, then uses `build_live_ruin` with semantic parameters and stable handles.
+- Uses `inspect_live_ruin_contract` at most once when needed, then immediately uses `build_live_ruin` with semantic parameters and stable handles.
 - For a large place, completes all requested connected zone batches inside the same Worker item and uses each successful call's returned handles and spaces in the next call.
 - Uses `edit_godot_asset_preview` only as a narrow fallback for a catalog operation the project vocabulary does not support; it is not the normal structural path.
 - Keeps every generated piece beneath the genuine `AuraPreview` and never saves unless explicitly requested.

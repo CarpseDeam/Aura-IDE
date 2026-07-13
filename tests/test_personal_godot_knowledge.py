@@ -244,6 +244,47 @@ def test_large_build_has_no_vision_or_pause_between_structural_batches() -> None
 
 
 # ---------------------------------------------------------------------------
+# Action-first construction within the single Interactive Mode
+# ---------------------------------------------------------------------------
+
+
+def test_contract_inspection_leads_directly_to_first_build_without_source_or_catalog_preflight() -> None:
+    text = _skill_text().lower()
+    assert "call `inspect_live_ruin_contract` at most once per request" in text
+    assert "after the contract returns, make the first useful `build_live_ruin` call immediately" in text
+    assert "do not inspect v_ruins constructor source, catalog files" in text
+    assert "before that call or during ordinary semantic construction" in text
+
+
+def test_successful_semantic_result_leads_directly_to_next_build_call() -> None:
+    text = _skill_text().lower()
+    assert "after a successful build call, continue directly to the next `build_live_ruin` call" in text
+    assert "returned handles, spaces, connections, and diagnostics" in text
+    assert "without another inspection" in text
+
+
+def test_exact_transform_inspection_is_not_used_for_ordinary_semantic_planning() -> None:
+    text = _skill_text().lower()
+    assert "exact node transforms, or implementation details" in text
+    assert "do not inspect the preview to determine exact coordinates for the next semantic operation" in text
+
+
+def test_coarse_first_visible_iteration_beats_prolonged_preflight_design() -> None:
+    text = _skill_text().lower()
+    assert "prefer a coarse but valid, meaningful architectural chunk" in text
+    assert "over prolonged preflight design" in text
+    assert "use visible iteration as the planning mechanism" in text
+    assert "apply a meaningful chunk, observe its returned semantic result, then apply the next chunk" in text
+
+
+def test_additional_read_only_inspection_requires_an_unresolved_concrete_diagnostic() -> None:
+    text = _skill_text().lower()
+    assert "perform another read-only inspection only when a concrete structured diagnostic" in text
+    assert "cannot be resolved from its returned valid candidates" in text
+    assert "never create probe geometry to learn behavior" in text
+
+
+# ---------------------------------------------------------------------------
 # Interactive Mode and Planner/Worker boundaries
 # ---------------------------------------------------------------------------
 
@@ -251,6 +292,8 @@ def test_large_build_has_no_vision_or_pause_between_structural_batches() -> None
 def test_godot_workflow_defines_interactive_mode_role() -> None:
     text = _skill_text()
     assert "#### Interactive Mode" in text
+    assert "Use one Interactive Mode for live building" in text
+    assert "not separate execution modes" in text
     assert "DeepSeek chooses structural intent" in text
     assert "project code owns exact mesh positions" in text
 
