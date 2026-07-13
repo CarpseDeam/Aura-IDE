@@ -146,6 +146,7 @@ def test_godot_workflow_skill_lists_live_tool_names() -> None:
         "inspect_godot_assets",
         "inspect_godot_editor",
         "inspect_godot_asset_preview",
+        "inspect_live_ruin_contract",
         "build_live_ruin",
         "edit_godot_asset_preview",
         "capture_godot_asset_preview",
@@ -194,6 +195,52 @@ def test_godot_workflow_favors_several_connected_pieces_per_apply() -> None:
     lower = text.lower()
     assert "ordered batch of meaningful operations" in lower
     assert "one atomic godot undoredo action" in lower
+
+
+def test_small_bounded_edits_still_use_one_semantic_call_and_wait() -> None:
+    text = _skill_text().lower()
+    assert "one instruction → one build_live_ruin call → short receipt → wait" in text
+    assert "one bounded room, level, stair, opening, connection, extension, or damage edit" in text
+    assert "one `build_live_ruin` call containing an ordered batch" in text
+
+
+def test_large_places_use_progressive_zone_batches_in_one_worker_item() -> None:
+    text = _skill_text().lower()
+    assert "#### progressive large construction" in text
+    assert "citadels, castles, fortress districts, monasteries, multi-zone ruins" in text
+    assert "several connected `build_live_ruin` calls inside that same worker item" in text
+    for zone in [
+        "approach and gatehouse", "outer court", "inner court", "central keep",
+        "major wing", "tower complex", "stair and upper-route connection",
+    ]:
+        assert zone in text
+    assert "do not force the entire place into one comprehensive `build_live_ruin` call" in text
+    assert "apply each successful zone immediately" in text
+
+
+def test_large_build_inspects_contract_once_without_source_or_probe_discovery() -> None:
+    text = _skill_text().lower()
+    assert "inspect `inspect_live_ruin_contract` once" in text
+    assert "semantic contract or current handles are unknown" in text
+    assert "do not inspect project source code to discover semantic operation syntax" in text
+    assert "do not create disposable probe walls, rooms, or openings" in text
+    assert "operation schemas, grammar, live reconstruction, and valid candidates as authoritative" in text
+
+
+def test_large_build_uses_returned_references_and_corrects_only_failed_zone() -> None:
+    text = _skill_text().lower()
+    assert "returned handles and spaces after each successful call" in text
+    assert "use the structured diagnostic to correct only the failed zone" in text
+    assert "failed zone applies nothing from that call" in text
+    assert "successful earlier zone calls remain" in text
+
+
+def test_large_build_has_no_vision_or_pause_between_structural_batches() -> None:
+    text = _skill_text().lower()
+    assert "do not call `capture_godot_asset_preview`, `critique_godot_preview_local`, or any vision tool between structural batches" in text
+    assert "do not pause for user input between zones" in text
+    assert "do not return a receipt after each zone" in text
+    assert "one concise final receipt" in text
 
 
 # ---------------------------------------------------------------------------

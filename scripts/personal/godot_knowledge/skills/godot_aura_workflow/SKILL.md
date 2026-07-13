@@ -5,14 +5,21 @@ triggers: ["aura preview", "godot bridge", "build_live_ruin", "procedural constr
 ---
 ### Godot Live Building — Procedural Co-Building
 
-The primary rapid-supervision loop is:
+For a small bounded edit, use the fast loop:
 
-`inspect once → dispatch one compact Worker item → semantic construction returns exact facts → report and wait for the next direction`
+`one instruction → one build_live_ruin call → short receipt → wait`
+
+Its supervision summary remains: `inspect once → dispatch one compact Worker item → semantic construction returns exact facts → report and wait for the next direction`.
+
+For a large multi-zone place, use one Worker item with progressive structural batches:
+
+`inspect_live_ruin_contract once if needed → gatehouse appears → court appears → keep appears → wings appear → stairs appear → one final receipt`
 
 #### Interactive Mode
 
 - DeepSeek chooses structural intent; project code owns exact mesh positions, rotations, spacing, socket alignment, corner selection, opening widths, occupancy checks, and stable names.
-- Prefer one `build_live_ruin` call containing an ordered batch of meaningful operations. Refer to returned stable handles in later calls.
+- Classify the current instruction by scope. Keep one bounded room, level, stair, opening, connection, extension, or damage edit to one `build_live_ruin` call containing an ordered batch of meaningful operations.
+- Treat citadels, castles, fortress districts, monasteries, multi-zone ruins, and similarly large requests as progressive builds. Dispatch one compact Worker item for the whole requested structural pass, then make several connected `build_live_ruin` calls inside that same Worker item.
 - Express footprint dimensions, cardinal directions, module counts, entrance sides, opening slots, attached sides, room dimensions, tower anchors, and selected damage sections. Never calculate a transform for every mesh.
 - Build incrementally beneath the existing real `AuraPreview`. Later requests such as `extend the east room` or `breach the rear wall` modify the named live structure.
 - Continue within the current request while another requested structural operation remains. Do not pause after every wall or module.
@@ -26,6 +33,17 @@ The primary rapid-supervision loop is:
 - Do not automatically call `capture_godot_asset_preview` or `critique_godot_preview_local`, start an unsolicited visual refinement loop, or capture merely to prove that a semantic edit succeeded.
 - Return a short factual receipt of the structural result and wait for the user's next direction. Do not claim visual coherence or quality without visual evidence.
 - If the semantic operation fails, use its exact geometry or topology diagnostics first. Vision is not the default recovery path for structural failure.
+
+#### Progressive Large Construction
+
+- Inspect `inspect_live_ruin_contract` once when the semantic contract or current handles are unknown. Treat its operation schemas, grammar, live reconstruction, and valid candidates as authoritative.
+- Do not inspect project source code to discover semantic operation syntax when the contract tool is available. Do not create disposable probe walls, rooms, or openings to infer coordinates, handles, anchors, attachment forms, or naming conventions.
+- Break the requested place into meaningful connected zone batches within the same Worker item: for example approach and gatehouse, outer court, inner court, central keep, major wing, tower complex, then stair and upper-route connection.
+- Do not force the entire place into one comprehensive `build_live_ruin` call. Apply each successful zone immediately with its own atomic `build_live_ruin` call so progress becomes visible.
+- Read the returned handles and spaces after each successful call and use them as references in the next zone. Do not guess a handle that the prior call did not return.
+- Do not pause for user input between zones while requested structural work remains. Do not return a receipt after each zone; return one concise final receipt after the requested pass completes or a real semantic failure prevents continuation.
+- Do not call `capture_godot_asset_preview`, `critique_godot_preview_local`, or any vision tool between structural batches.
+- If one zone fails, keep prior successful zones, use the structured diagnostic to correct only the failed zone, and retry that zone. Never request partial application of a failed atomic call and do not add speculative retry machinery.
 
 #### Procedural Vocabulary
 
@@ -42,17 +60,18 @@ The primary rapid-supervision loop is:
 
 ##### Planner (read-only)
 
-- May inspect project conventions, catalog (`inspect_godot_assets`), live scene (`inspect_godot_editor`), and AuraPreview (`inspect_godot_asset_preview`) once at the start when facts are unknown.
+- May inspect project conventions, catalog (`inspect_godot_assets`), live scene (`inspect_godot_editor`), AuraPreview (`inspect_godot_asset_preview`), and the project semantic contract (`inspect_live_ruin_contract`) when facts are unknown.
 - Produces one compact Worker item for the current live procedural construction request, preserving the user’s semantic intent and no-save instruction.
 - Names `build_live_ruin` as the primary mutation tool.
 - Must not attempt mutations, read bridge credentials, prescribe raw resource paths, or author another execution path.
 
 ##### Worker (owns every mutation)
 
-- Uses catalog facts and `build_live_ruin` with semantic parameters and stable handles.
+- Uses `inspect_live_ruin_contract` once when needed, then uses `build_live_ruin` with semantic parameters and stable handles.
+- For a large place, completes all requested connected zone batches inside the same Worker item and uses each successful call's returned handles and spaces in the next call.
 - Uses `edit_godot_asset_preview` only as a narrow fallback for a catalog operation the project vocabulary does not support; it is not the normal structural path.
 - Keeps every generated piece beneath the genuine `AuraPreview` and never saves unless explicitly requested.
-- On a rejected procedural batch, fix the semantic request or report the concrete geometry error. Do not nudge individual mesh transforms.
+- On a rejected procedural batch, use its structured diagnostic to fix only that zone or report the concrete semantic/geometry error. Do not nudge individual mesh transforms.
 
 #### Visual Checkpoints and Styling Work
 
@@ -65,4 +84,5 @@ The primary rapid-supervision loop is:
 - Use catalog-only asset IDs and project calibrations; no arbitrary `.tscn` paths.
 - No raw TCP, bridge tokens, second bridge, helper generator authored during a live composition, autonomous builder state machine, grammar engine, WFC, critic, or scoring system.
 - Invalid geometry must reject before mutation; never accept a half-applied structure.
+- Keep every `build_live_ruin` call atomic. A failed zone applies nothing from that call; successful earlier zone calls remain in the unsaved workshop.
 - Never save the scene unless explicitly requested.
