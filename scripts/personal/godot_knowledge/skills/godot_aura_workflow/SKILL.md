@@ -19,7 +19,7 @@ For a large multi-zone place, use one Worker item with progressive structural ba
 
 - Use one Interactive Mode for live building. Small-edit and progressive large-build behavior are workflows selected by instruction scope, not separate execution modes.
 - DeepSeek chooses structural intent; project code owns exact mesh positions, rotations, spacing, socket alignment, corner selection, opening widths, occupancy checks, and stable names.
-- Classify the current instruction by scope. Keep one bounded room, level, stair, opening, connection, extension, or damage edit to one `build_live_ruin` call containing an ordered batch of meaningful operations.
+- Classify the current instruction by scope. Keep one wall run, bounded room, floor region, level, tower section, stair, opening, connection, bounded facade motif, extension, or damage edit to one `build_live_ruin` call containing one cohesive semantic operation.
 - Treat citadels, castles, fortress districts, monasteries, multi-zone ruins, and similarly large requests as progressive builds. Dispatch one compact Worker item for the whole requested structural pass, then make several connected `build_live_ruin` calls inside that same Worker item.
 - Express footprint dimensions, cardinal directions, module counts, entrance sides, opening slots, attached sides, room dimensions, tower anchors, and selected damage sections. Never calculate a transform for every mesh.
 - Build incrementally beneath the existing real `AuraPreview`. Later requests such as `extend the east room` or `breach the rear wall` modify the named live structure.
@@ -31,8 +31,10 @@ Use this action-first rhythm inside Interactive Mode:
 - For live procedural construction, call `inspect_live_ruin_contract` at most once per request when the contract or current semantic state is unknown. Treat the contract and returned semantic state as authoritative.
 - After the contract returns, make the first useful `build_live_ruin` call immediately. Do not inspect V_Ruins constructor source, catalog files, exact node transforms, or implementation details before that call or during ordinary semantic construction when the contract is available.
 - Prefer a coarse but valid, meaningful architectural chunk that can be revised over prolonged preflight design intended to perfect the whole zone before applying anything. Use visible iteration as the planning mechanism: apply a meaningful chunk, observe its returned semantic result, then apply the next chunk.
+- Emit exactly one `build_live_ruin` call in each assistant tool-call round and put exactly one cohesive semantic operation in that call. The model must receive the completed call's compact post-apply state before choosing or submitting the next construction step; do not place future live-build calls beside it in the same assistant message.
 - After a successful build call, continue directly to the next `build_live_ruin` call from its returned handles, spaces, connections, and diagnostics without another inspection. Do not inspect the preview to determine exact coordinates for the next semantic operation.
 - Perform another read-only inspection only when a concrete structured diagnostic cannot be resolved from its returned valid candidates. Never create probe geometry to learn behavior.
+- If an API interruption ends the turn after a successful step, reconstruct current state with `inspect_live_ruin_contract` and continue from returned handles. Never repeat an already-present stable handle or recreate geometry to catch up.
 
 #### Rapid Supervised Construction
 
@@ -47,9 +49,9 @@ Use this action-first rhythm inside Interactive Mode:
 
 - Inspect `inspect_live_ruin_contract` once when the semantic contract or current handles are unknown. Treat its operation schemas, grammar, live reconstruction, and valid candidates as authoritative.
 - Do not inspect project source code to discover semantic operation syntax when the contract tool is available. Do not create disposable probe walls, rooms, or openings to infer coordinates, handles, anchors, attachment forms, or naming conventions.
-- Break the requested place into meaningful connected zone batches within the same Worker item: for example approach and gatehouse, outer court, inner court, central keep, major wing, tower complex, then stair and upper-route connection.
+- Break the requested place into meaningful connected semantic steps within the same Worker item: for example approach, gatehouse, outer court, inner court, central keep, major wing, tower section, then stair and upper-route connection.
 - Do not force the entire place into one comprehensive `build_live_ruin` call. Apply each successful zone immediately with its own atomic `build_live_ruin` call so progress becomes visible.
-- Read the returned handles and spaces after each successful call and use them as references in the next zone. Do not guess a handle that the prior call did not return.
+- Read the compact post-apply handles, created or modified spaces, piece-count delta, openings, connections, and validation diagnostics after each successful call and use them as references in the next step. Do not guess a handle that the prior call did not return.
 - Do not pause for user input between zones while requested structural work remains. Do not return a receipt after each zone; return one concise final receipt after the requested pass completes or a real semantic failure prevents continuation.
 - Do not call `capture_godot_asset_preview`, `critique_godot_preview_local`, or any vision tool between structural batches.
 - If one zone fails, keep prior successful zones, use the structured diagnostic to correct only the failed zone, and retry that zone. Never request partial application of a failed atomic call and do not add speculative retry machinery.
@@ -94,4 +96,5 @@ Use this action-first rhythm inside Interactive Mode:
 - No raw TCP, bridge tokens, second bridge, helper generator authored during a live composition, autonomous builder state machine, grammar engine, WFC, critic, or scoring system.
 - Invalid geometry must reject before mutation; never accept a half-applied structure.
 - Keep every `build_live_ruin` call atomic. A failed zone applies nothing from that call; successful earlier zone calls remain in the unsaved workshop.
+- Do not use sleeps, timers, staged playback, or one model call per mesh piece. Progressive construction is model-observed semantic iteration, not animation of a precomputed batch.
 - Never save the scene unless explicitly requested.

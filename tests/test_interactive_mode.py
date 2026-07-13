@@ -12,16 +12,21 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication
 
 from aura.bridge.qt_bridge import ConversationBridge, _Worker
+from aura.client import Done
 from aura.context_gearbox.models import RuntimeRole
 from aura.context_gearbox.runtime import SINGLE_SYSTEM_PROMPT, compose_system_prompt
 from aura.conversation.execution_mode import INTERACTIVE_MODE, PLANNER_WORKER_MODE
+from aura.conversation.history import History
+from aura.conversation.manager import ConversationManager
 from aura.conversation.persistence import load_conversation, save_conversation
 from aura.conversation.tools import ToolRegistry
+from aura.conversation.tools._types import ApprovalDecision
 from aura.gui.conv_persistence import ConversationPersistence
 from aura.gui.left_pane import LeftPane
 from aura.gui.main_window import MainWindow
 from aura.gui.main_window_toolbar import MainWindowToolbar
 from aura.settings import AppSettings
+from aura.model_streams import model_streams
 
 _APP = QApplication.instance() or QApplication([])
 
@@ -197,6 +202,117 @@ def test_interactive_prompt_states_direct_iterative_contract() -> None:
     assert "semantic critique tools" in prompt
     assert "Do not save a Godot scene unless explicitly requested" in prompt
     assert "arbitrary two-pass" in prompt
+
+
+def test_interactive_prompt_requires_result_driven_progressive_godot_rounds() -> None:
+    prompt = SINGLE_SYSTEM_PROMPT.lower()
+    assert "progressive interactive loop by default" in prompt
+    assert "apply the first safe, cohesive architectural step immediately" in prompt
+    assert "exactly one live-construction mutation call in a model tool-call round" in prompt
+    assert "wait for that call's result before choosing the next" in prompt
+    assert "do not pre-submit independent spaces" in prompt
+    assert "inside the same interactive turn without entering the planner" in prompt
+    assert "after an interruption, inspect the reconstructable live semantic state" in prompt
+    assert "without repeating its handle" in prompt
+
+
+def test_interactive_tool_loop_returns_each_live_step_before_model_selects_next(
+    tmp_path: Path,
+) -> None:
+    tools_dir = tmp_path / ".aura" / "tools"
+    tools_dir.mkdir(parents=True)
+    (tools_dir / "progressive_build.py").write_text(
+        "from pathlib import Path\n"
+        "import json\n"
+        "def build_live_ruin(operations: list[dict]) -> dict:\n"
+        "    state_path = Path('.aura/progressive_state.json')\n"
+        "    state = json.loads(state_path.read_text()) if state_path.exists() else {'steps': [], 'handles': []}\n"
+        "    operation = operations[0]\n"
+        "    handle = operation.get('name', operation.get('run', ''))\n"
+        "    if operation.get('name') and handle in state['handles']:\n"
+        "        return {'ok': False, 'applied': False, 'error': 'duplicate handle'}\n"
+        "    if operation.get('name'):\n"
+        "        state['handles'].append(handle)\n"
+        "    state['steps'].append(operation['operation'])\n"
+        "    state_path.write_text(json.dumps(state))\n"
+        "    count = [15, 26, 26][len(state['steps']) - 1]\n"
+        "    return {'ok': True, 'applied': True, 'piece_count': count, 'piece_count_delta': [15, 11, 0][len(state['steps']) - 1], 'created_handles': [handle] if operation.get('name') else [], 'connections_added': [{'a': 'court', 'b': 'wing'}] if operation['operation'] == 'attach_room' else [], 'openings_added': [{'reference': 'wing_north:0'}] if operation['operation'] == 'insert_opening' else []}\n",
+        encoding="utf-8",
+    )
+    history = History(messages=[{"role": "user", "content": "Build a court, dependent wing, and window."}])
+    manager = ConversationManager(history, ToolRegistry(tmp_path, mode="single"))
+    model_rounds: list[list[dict]] = []
+
+    def stream(**kwargs):
+        messages = kwargs["messages"]
+        model_rounds.append(messages)
+        round_index = len(model_rounds)
+        if round_index == 1:
+            operation = {"operation": "create_enclosure", "name": "court"}
+        elif round_index == 2:
+            previous = json.loads(messages[-1]["content"])
+            previous = previous.get("result", previous)
+            assert previous["piece_count"] == 15
+            assert previous["created_handles"] == ["court"]
+            operation = {"operation": "attach_room", "name": "wing", "wall": "court_east"}
+        elif round_index == 3:
+            previous = json.loads(messages[-1]["content"])
+            previous = previous.get("result", previous)
+            assert previous["piece_count"] == 26
+            assert previous["connections_added"] == [{"a": "court", "b": "wing"}]
+            operation = {"operation": "insert_opening", "run": "wing_north", "slot": 0}
+        else:
+            previous = json.loads(messages[-1]["content"])
+            previous = previous.get("result", previous)
+            assert previous["piece_count"] == 26
+            assert previous["openings_added"] == [{"reference": "wing_north:0"}]
+            yield Done(
+                finish_reason="stop",
+                full_message={"role": "assistant", "content": "Construction complete.", "reasoning_content": ""},
+            )
+            return
+        tool_call = {
+            "id": f"live-step-{round_index}",
+            "type": "function",
+            "function": {"name": "build_live_ruin", "arguments": json.dumps({"operations": [operation]})},
+        }
+        yield Done(
+            finish_reason="tool_calls",
+            full_message={
+                "role": "assistant", "content": None, "reasoning_content": "",
+                "tool_calls": [tool_call],
+            },
+        )
+
+    hook = "_test_progressive_interactive_godot"
+    model_streams.register(hook, stream)
+    try:
+        manager.send(
+            on_event=lambda _event: None,
+            approval_cb=lambda _request: ApprovalDecision(action="approve"),
+            cancel_event=threading.Event(),
+            model="test-model",
+            thinking="off",
+            hook_name=hook,
+            max_tool_rounds=8,
+        )
+    finally:
+        model_streams.unregister(hook)
+
+    assert len(model_rounds) == 4
+    assistant_calls = [
+        message for message in history.messages
+        if message.get("role") == "assistant" and message.get("tool_calls")
+    ]
+    assert [len(message["tool_calls"]) for message in assistant_calls] == [1, 1, 1]
+    assert [message["role"] for message in history.messages] == [
+        "user", "assistant", "tool", "assistant", "tool", "assistant", "tool", "assistant",
+    ]
+    state = json.loads((tmp_path / ".aura/progressive_state.json").read_text(encoding="utf-8"))
+    assert state == {
+        "steps": ["create_enclosure", "attach_room", "insert_opening"],
+        "handles": ["court", "wing"],
+    }
 
 
 def test_interactive_context_uses_latest_request_for_authored_skill(tmp_path: Path) -> None:

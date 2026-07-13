@@ -190,18 +190,19 @@ def test_godot_workflow_says_not_to_invoke_vision_per_individual_piece() -> None
     assert "not mandatory proof after each construction mutation" in lower
 
 
-def test_godot_workflow_favors_several_connected_pieces_per_apply() -> None:
+def test_godot_workflow_favors_one_semantic_step_with_project_owned_pieces() -> None:
     text = _skill_text()
     lower = text.lower()
-    assert "ordered batch of meaningful operations" in lower
+    assert "one cohesive semantic operation" in lower
+    assert "one model call per mesh piece" in lower
     assert "one atomic godot undoredo action" in lower
 
 
 def test_small_bounded_edits_still_use_one_semantic_call_and_wait() -> None:
     text = _skill_text().lower()
     assert "one instruction → one build_live_ruin call → short receipt → wait" in text
-    assert "one bounded room, level, stair, opening, connection, extension, or damage edit" in text
-    assert "one `build_live_ruin` call containing an ordered batch" in text
+    assert "one wall run, bounded room, floor region, level, tower section, stair, opening" in text
+    assert "one `build_live_ruin` call containing one cohesive semantic operation" in text
 
 
 def test_large_places_use_progressive_zone_batches_in_one_worker_item() -> None:
@@ -210,8 +211,8 @@ def test_large_places_use_progressive_zone_batches_in_one_worker_item() -> None:
     assert "citadels, castles, fortress districts, monasteries, multi-zone ruins" in text
     assert "several connected `build_live_ruin` calls inside that same worker item" in text
     for zone in [
-        "approach and gatehouse", "outer court", "inner court", "central keep",
-        "major wing", "tower complex", "stair and upper-route connection",
+        "approach, gatehouse", "outer court", "inner court", "central keep",
+        "major wing", "tower section", "stair and upper-route connection",
     ]:
         assert zone in text
     assert "do not force the entire place into one comprehensive `build_live_ruin` call" in text
@@ -229,7 +230,8 @@ def test_large_build_inspects_contract_once_without_source_or_probe_discovery() 
 
 def test_large_build_uses_returned_references_and_corrects_only_failed_zone() -> None:
     text = _skill_text().lower()
-    assert "returned handles and spaces after each successful call" in text
+    assert "compact post-apply handles, created or modified spaces" in text
+    assert "piece-count delta, openings, connections, and validation diagnostics" in text
     assert "use the structured diagnostic to correct only the failed zone" in text
     assert "failed zone applies nothing from that call" in text
     assert "successful earlier zone calls remain" in text
@@ -261,6 +263,21 @@ def test_successful_semantic_result_leads_directly_to_next_build_call() -> None:
     assert "after a successful build call, continue directly to the next `build_live_ruin` call" in text
     assert "returned handles, spaces, connections, and diagnostics" in text
     assert "without another inspection" in text
+
+
+def test_interactive_live_build_calls_are_interleaved_with_model_observation() -> None:
+    text = _skill_text().lower()
+    assert "exactly one `build_live_ruin` call in each assistant tool-call round" in text
+    assert "exactly one cohesive semantic operation in that call" in text
+    assert "model must receive the completed call's compact post-apply state" in text
+    assert "do not place future live-build calls beside it in the same assistant message" in text
+
+
+def test_interrupted_progress_resumes_from_reconstructed_handles_without_duplicates() -> None:
+    text = _skill_text().lower()
+    assert "if an api interruption ends the turn after a successful step" in text
+    assert "reconstruct current state with `inspect_live_ruin_contract`" in text
+    assert "never repeat an already-present stable handle" in text
 
 
 def test_exact_transform_inspection_is_not_used_for_ordinary_semantic_planning() -> None:
