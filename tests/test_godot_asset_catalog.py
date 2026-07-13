@@ -957,6 +957,188 @@ func _initialize() -> void:
     assert payload["reversed_child_count"] == 1
 
 
+def test_godot_preview_publish_scene_preserves_live_structure(tmp_path: Path) -> None:
+    executable = os.environ.get("GODOT_BIN") or shutil.which("godot")
+    if not executable:
+        pytest.skip("GODOT_BIN or godot on PATH is required for publish validation")
+
+    project = tmp_path / "godot_publish_runtime"
+    actions_dir = project / "addons/aura_bridge/actions"
+    actions_dir.mkdir(parents=True)
+    shutil.copyfile(
+        "aura/godot_editor/addon/actions/asset_preview_actions.gd",
+        actions_dir / "asset_preview_actions.gd",
+    )
+    (project / "project.godot").write_text(
+        '[application]\nconfig/name="Aura Publish Runtime Test"\n', encoding="utf-8"
+    )
+    (project / "piece.tscn").write_text(
+        """[gd_scene format=3]
+
+[node name="CatalogPiece" type="Node3D"]
+
+[node name="Visual" type="Node3D" parent="."]
+metadata/catalog_detail = "nested-resource-node"
+""",
+        encoding="utf-8",
+    )
+    (project / "test_publish.gd").write_text(
+        """extends SceneTree
+
+const Actions = preload("res://addons/aura_bridge/actions/asset_preview_actions.gd")
+
+func _fail(message: String) -> void:
+    push_error(message)
+    quit(1)
+
+func _piece_state(node: Node3D) -> Dictionary:
+    return {
+        "name": str(node.name),
+        "resource_path": node.scene_file_path,
+        "transform": node.transform,
+        "kind": str(node.get_meta("aura_kind", "")),
+        "nested_count": node.get_child_count(),
+    }
+
+func _initialize() -> void:
+    var workshop := Node3D.new()
+    workshop.name = "UnsavedWorkshop"
+    var preview := Node3D.new()
+    preview.name = "AuraPreview"
+    preview.set_meta("aura_preview_root", true)
+    preview.position = Vector3(40.0, 2.0, -10.0)
+    workshop.add_child(preview)
+    preview.owner = workshop
+
+    var packed_piece := load("res://piece.tscn") as PackedScene
+    for index in 2:
+        var piece := packed_piece.instantiate() as Node3D
+        piece.name = "AuraProc__wall__slot__%03d" % index
+        piece.position = Vector3(index * 4.0 + 1.0, index * 0.5, -index * 3.0)
+        piece.rotation_degrees.y = index * 90.0
+        piece.scale = Vector3(1.0 + index, 1.0, 1.0)
+        piece.set_meta("aura_kind", "wall-%d" % index)
+        preview.add_child(piece)
+        piece.owner = workshop
+
+    var branch := Node3D.new()
+    branch.name = "AuraProc__plain_branch__support__000"
+    branch.position = Vector3(-3.0, 1.0, 2.0)
+    branch.set_meta("aura_kind", "plain-tree")
+    var leaf := Node3D.new()
+    leaf.name = "UsefulMetadataLeaf"
+    leaf.set_meta("semantic_role", "support")
+    preview.add_child(branch)
+    branch.owner = workshop
+    branch.add_child(leaf)
+    leaf.owner = workshop
+
+    var before: Array[Dictionary] = []
+    for child in preview.get_children():
+        before.append(_piece_state(child))
+    var preview_transform := preview.transform
+    var actions = Actions.new(null, null)
+    var result: Dictionary = actions._publish_preview(workshop, preview, {
+        "path": "res://published/live_proof.tscn",
+        "root_name": "LiveProofRuin",
+    })
+    if not result.get("ok", false):
+        _fail(str(result.get("error", "publish failed")))
+        return
+    if result["result"]["piece_count"] != before.size():
+        _fail("piece count mismatch")
+        return
+
+    if preview.get_parent() != workshop or preview.transform != preview_transform:
+        _fail("live preview root was mutated")
+        return
+    for index in before.size():
+        if _piece_state(preview.get_child(index)) != before[index]:
+            _fail("live preview child was mutated")
+            return
+
+    var published_pack := ResourceLoader.load(
+        "res://published/live_proof.tscn", "PackedScene", ResourceLoader.CACHE_MODE_IGNORE
+    ) as PackedScene
+    if published_pack == null:
+        _fail("published resource did not load")
+        return
+    var published := published_pack.instantiate() as Node3D
+    if published == null or published.name != "LiveProofRuin" or published.transform != Transform3D.IDENTITY:
+        _fail("published root is not a clean identity Node3D")
+        return
+    if published.get_child_count() != before.size():
+        _fail("published child count mismatch")
+        return
+    for index in before.size():
+        var copied := published.get_child(index) as Node3D
+        if copied == null or _piece_state(copied) != before[index]:
+            _fail("published piece state mismatch")
+            return
+    if published.get_child(0).scene_file_path != "res://piece.tscn":
+        _fail("catalog PackedScene reference was flattened")
+        return
+    var copied_branch := published.get_node_or_null("AuraProc__plain_branch__support__000/UsefulMetadataLeaf")
+    if copied_branch == null or copied_branch.get_meta("semantic_role", "") != "support":
+        _fail("owned nested structure or metadata was omitted")
+        return
+
+    var empty_scene := Node3D.new()
+    empty_scene.add_child(published)
+    published.position = Vector3(100.0, 5.0, -20.0)
+    var first_piece := published.get_child(0) as Node3D
+    var expected_piece_position: Vector3 = published.transform * before[0]["transform"].origin
+    if empty_scene.get_child_count() != 1 or not first_piece.position.is_equal_approx(before[0]["transform"].origin):
+        _fail("published ruin is not one reusable root")
+        return
+    if not (published.transform * first_piece.position).is_equal_approx(expected_piece_position):
+        _fail("moving the reusable root did not move its contents")
+        return
+
+    var protected: Dictionary = actions._publish_preview(workshop, preview, {
+        "path": "res://published/live_proof.tscn",
+        "root_name": "LiveProofRuin",
+    })
+    if protected.get("ok", false) or not str(protected.get("error", "")).contains("overwrite"):
+        _fail("overwrite protection failed")
+        return
+    var invalid: Dictionary = actions._publish_preview(workshop, preview, {
+        "path": "res://published/../invalid.tscn",
+    })
+    if invalid.get("ok", false):
+        _fail("non-normalized path was accepted")
+        return
+
+    print("AURA_PUBLISH_RUNTIME:" + JSON.stringify(result["result"]))
+    empty_scene.free()
+    workshop.free()
+    quit()
+""",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [executable, "--headless", "--path", str(project), "--script", "res://test_publish.gd"],
+        cwd=project,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=30,
+        check=False,
+    )
+    output = completed.stdout + "\n" + completed.stderr
+    assert completed.returncode == 0, output
+    payload_line = next(
+        line for line in output.splitlines() if line.startswith("AURA_PUBLISH_RUNTIME:")
+    )
+    assert json.loads(payload_line.split(":", 1)[1]) == {
+        "path": "res://published/live_proof.tscn",
+        "root_name": "LiveProofRuin",
+        "piece_count": 3,
+    }
+
+
 def test_godot_socket_attachment_math_naming_validation_and_undo(tmp_path: Path) -> None:
     executable = os.environ.get("GODOT_BIN") or shutil.which("godot")
     if not executable:

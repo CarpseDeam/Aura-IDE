@@ -199,7 +199,7 @@ def test_capability_reporting_includes_preview_capture(tmp_path: Path) -> None:
                     "result": {
                         "bridge": "aura-godot-editor",
                         "protocol": 1,
-                        "bridge_version": 8,
+                        "bridge_version": 9,
                         "capabilities": [
                             "scene.snapshot",
                             "scene.select",
@@ -209,6 +209,7 @@ def test_capability_reporting_includes_preview_capture(tmp_path: Path) -> None:
                             "preview.instantiate",
                             "preview.clear",
                             "preview.apply",
+                            "preview.publish_scene",
                             "preview.capture",
                             "api.describe",
                         ],
@@ -222,8 +223,9 @@ def test_capability_reporting_includes_preview_capture(tmp_path: Path) -> None:
     thread.join(timeout=2)
 
     assert result["bridge"] == "aura-godot-editor"
-    assert result["bridge_version"] == 8
+    assert result["bridge_version"] == 9
     assert "preview.apply" in result["capabilities"]
+    assert "preview.publish_scene" in result["capabilities"]
     assert "api.describe" in result["capabilities"]
     assert "preview.capture" in result["capabilities"]
 
@@ -356,6 +358,22 @@ def test_bridge_holds_async_capture_request_until_render_job_finishes() -> None:
     assert "_router.cancel_pending" in server
     assert "func poll_pending" in router
     assert "func cancel_pending" in router
+
+
+def test_preview_publish_scene_is_routed_through_preview_actions() -> None:
+    router = Path("aura/godot_editor/addon/protocol/request_router.gd").read_text(
+        encoding="utf-8"
+    )
+    actions = Path("aura/godot_editor/addon/actions/asset_preview_actions.gd").read_text(
+        encoding="utf-8"
+    )
+
+    assert '"preview.publish_scene"' in router
+    assert "_asset_preview_actions.publish_scene(params)" in router
+    assert "func publish_scene(params: Dictionary)" in actions
+    assert "PackedScene.new()" in actions
+    assert "ResourceSaver.save(packed, resource_path)" in actions
+    assert "save_scene" not in actions
 
 
 def test_viewport_capture_rejects_malformed_width() -> None:

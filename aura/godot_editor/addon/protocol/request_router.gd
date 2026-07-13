@@ -33,8 +33,8 @@ func dispatch(action: String, params: Dictionary) -> Dictionary:
 			return {"ok": true, "result": {
 				"bridge": "aura-godot-editor",
 				"protocol": 1,
-				"bridge_version": 8,
-				"capabilities": ["scene.snapshot", "scene.select", "scene.apply", "scene.save", "preview.snapshot", "preview.instantiate", "preview.clear", "preview.apply", "preview.capture", "api.describe"],
+				"bridge_version": 9,
+				"capabilities": ["scene.snapshot", "scene.select", "scene.apply", "scene.save", "preview.snapshot", "preview.instantiate", "preview.clear", "preview.apply", "preview.publish_scene", "preview.capture", "api.describe"],
 			}}
 		"scene.snapshot":
 			return _snapshot.capture(params)
@@ -53,6 +53,8 @@ func dispatch(action: String, params: Dictionary) -> Dictionary:
 			return _asset_preview_actions.clear_preview(params)
 		"preview.apply":
 			return _asset_preview_actions.apply_revision(params)
+		"preview.publish_scene":
+			return _asset_preview_actions.publish_scene(params)
 		"preview.capture":
 			return _viewport_capture.capture(params)
 		"api.describe":

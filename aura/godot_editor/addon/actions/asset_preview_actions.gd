@@ -83,6 +83,104 @@ func clear_preview(params: Dictionary) -> Dictionary:
 	return {"ok": true, "result": {"applied": true, "preview_root": PREVIEW_ROOT_NAME, "removed_count": children.size()}}
 
 
+func publish_scene(params: Dictionary) -> Dictionary:
+	var scene_root := _editor_interface.get_edited_scene_root()
+	if scene_root == null:
+		return {"ok": false, "error": "no scene is open"}
+	if not scene_root is Node3D:
+		return {"ok": false, "error": "scene publishing requires a Node3D scene root"}
+	var preview := scene_root.get_node_or_null(NodePath(PREVIEW_ROOT_NAME))
+	if preview == null or not preview is Node3D or not bool(preview.get_meta("aura_preview_root", false)):
+		return {"ok": false, "error": "a valid Aura-owned %s root is required" % PREVIEW_ROOT_NAME}
+	return _publish_preview(scene_root, preview, params)
+
+
+func _publish_preview(_scene_root: Node3D, preview: Node3D, params: Dictionary) -> Dictionary:
+	var raw_path: Variant = params.get("path")
+	if not raw_path is String:
+		return {"ok": false, "error": "path is required and must be a string"}
+	var resource_path := str(raw_path)
+	if not _is_normalized_scene_path(resource_path):
+		return {"ok": false, "error": "path must be a normalized res:// path ending in .tscn"}
+	var raw_overwrite: Variant = params.get("overwrite", false)
+	if not raw_overwrite is bool:
+		return {"ok": false, "error": "overwrite must be a boolean"}
+	if FileAccess.file_exists(resource_path) and not raw_overwrite:
+		return {"ok": false, "error": "destination already exists; set overwrite to true: %s" % resource_path}
+	if preview.get_child_count() == 0:
+		return {"ok": false, "error": "%s is empty" % PREVIEW_ROOT_NAME}
+
+	var checked_name := _published_root_name(params, resource_path)
+	if not checked_name.get("ok", false):
+		return checked_name
+	var published_root := Node3D.new()
+	published_root.name = checked_name["root_name"]
+	for child in preview.get_children():
+		var copied := child.duplicate(
+			Node.DUPLICATE_SIGNALS
+			| Node.DUPLICATE_GROUPS
+			| Node.DUPLICATE_SCRIPTS
+			| Node.DUPLICATE_USE_INSTANTIATION
+		)
+		if copied == null:
+			published_root.free()
+			return {"ok": false, "error": "failed to copy preview child: %s" % child.name}
+		published_root.add_child(copied)
+		copied.owner = published_root
+		_assign_missing_owners(copied, published_root)
+
+	var packed := PackedScene.new()
+	var pack_error := packed.pack(published_root)
+	if pack_error != OK:
+		published_root.free()
+		return {"ok": false, "error": "failed to pack published scene: %s" % error_string(pack_error)}
+	var directory_error := DirAccess.make_dir_recursive_absolute(
+		ProjectSettings.globalize_path(resource_path.get_base_dir())
+	)
+	if directory_error != OK and directory_error != ERR_ALREADY_EXISTS:
+		published_root.free()
+		return {"ok": false, "error": "failed to create destination directory: %s" % error_string(directory_error)}
+	var save_error := ResourceSaver.save(packed, resource_path)
+	var piece_count := preview.get_child_count()
+	var root_name := str(published_root.name)
+	published_root.free()
+	if save_error != OK:
+		return {"ok": false, "error": "failed to save published scene: %s" % error_string(save_error)}
+	return {"ok": true, "result": {
+		"path": resource_path,
+		"root_name": root_name,
+		"piece_count": piece_count,
+	}}
+
+
+func _is_normalized_scene_path(path: String) -> bool:
+	return (
+		not path.is_empty()
+		and path.begins_with("res://")
+		and path.ends_with(".tscn")
+		and not path.contains("\\")
+		and path == path.simplify_path()
+		and path.get_file() != ".tscn"
+	)
+
+
+func _published_root_name(params: Dictionary, resource_path: String) -> Dictionary:
+	var raw_name: Variant = params.get("root_name", resource_path.get_file().get_basename())
+	if not raw_name is String:
+		return {"ok": false, "error": "root_name must be a string"}
+	var root_name := str(raw_name).strip_edges()
+	if root_name.is_empty() or root_name.validate_node_name() != root_name:
+		return {"ok": false, "error": "root_name must be a valid non-empty Godot node name"}
+	return {"ok": true, "root_name": root_name}
+
+
+func _assign_missing_owners(node: Node, published_root: Node) -> void:
+	for child in node.get_children(true):
+		if child.owner == null:
+			child.owner = published_root
+		_assign_missing_owners(child, published_root)
+
+
 func apply_revision(params: Dictionary) -> Dictionary:
 	var scene_root := _editor_interface.get_edited_scene_root()
 	if scene_root == null:
