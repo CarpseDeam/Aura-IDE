@@ -598,39 +598,48 @@ func _apply_prepared_operation(scene_root: Node, preview: Node3D, operation: Dic
 	elif action == "instantiate":
 		var node: Node3D = operation["new_node"]
 		if forward:
-			preview.add_child(node, true)
-			node.owner = scene_root
 			node.position = operation["new_position"]
 			node.rotation_degrees = operation["new_rotation"]
 			node.scale = operation["new_scale"]
+			_mount_owned_child(preview, node, scene_root)
 		elif node.get_parent() == preview:
-			preview.remove_child(node)
+			_detach_owned_child(preview, node)
 	elif action == "remove":
 		var node: Node3D = operation["old_node"]
 		if forward and node.get_parent() == preview:
-			preview.remove_child(node)
+			_detach_owned_child(preview, node)
 		elif not forward:
-			preview.add_child(node, true)
-			preview.move_child(node, mini(operation["old_index"], preview.get_child_count() - 1))
-			node.owner = operation["old_owner"]
+			_mount_owned_child(preview, node, operation["old_owner"], operation["old_index"])
 	elif action == "replace":
 		var old_node: Node3D = operation["old_node"]
 		var new_node: Node3D = operation["new_node"]
 		if forward:
-			if old_node.get_parent() == preview:
-				preview.remove_child(old_node)
-			preview.add_child(new_node, true)
-			preview.move_child(new_node, mini(operation["old_index"], preview.get_child_count() - 1))
-			new_node.owner = scene_root
 			new_node.position = operation["new_position"]
 			new_node.rotation_degrees = operation["new_rotation"]
 			new_node.scale = operation["new_scale"]
+			if old_node.get_parent() == preview:
+				_detach_owned_child(preview, old_node)
+			_mount_owned_child(preview, new_node, scene_root, operation["old_index"])
 		else:
 			if new_node.get_parent() == preview:
-				preview.remove_child(new_node)
-			preview.add_child(old_node, true)
-			preview.move_child(old_node, mini(operation["old_index"], preview.get_child_count() - 1))
-			old_node.owner = operation["old_owner"]
+				_detach_owned_child(preview, new_node)
+			_mount_owned_child(preview, old_node, operation["old_owner"], operation["old_index"])
+
+
+func _detach_owned_child(parent: Node, child: Node) -> void:
+	if child.get_parent() != parent:
+		return
+	child.owner = null
+	parent.remove_child(child)
+
+
+func _mount_owned_child(parent: Node, child: Node, child_owner: Node, index: int = -1) -> void:
+	if child.get_parent() != parent:
+		child.owner = null
+		parent.add_child(child, true)
+	if index >= 0:
+		parent.move_child(child, mini(index, parent.get_child_count() - 1))
+	child.owner = child_owner
 
 
 func _free_prepared_instances(prepared: Array[Dictionary]) -> void:
