@@ -5,9 +5,9 @@ triggers: ["aura preview", "godot bridge", "build_live_ruin", "procedural constr
 ---
 ### Godot Live Building — Procedural Co-Building
 
-The primary structural loop is:
+The primary rapid-supervision loop is:
 
-`inspect once → choose semantic operations → build_live_ruin applies one deterministic batch → immediately choose the next structural operation`
+`inspect once → dispatch one compact Worker item → semantic construction returns exact facts → report and wait for the next direction`
 
 #### Interactive Mode
 
@@ -17,6 +17,15 @@ The primary structural loop is:
 - Build incrementally beneath the existing real `AuraPreview`. Later requests such as `extend the east room` or `breach the rear wall` modify the named live structure.
 - Continue within the current request while another requested structural operation remains. Do not pause after every wall or module.
 - Never save the scene unless explicitly requested. Each procedural call is one atomic Godot UndoRedo action.
+
+#### Rapid Supervised Construction
+
+- This is the normal behavior while the user directs successive bounded edits such as adding or removing a room, level, stairs, opening, or connection; extending a hall; raising a wall or named space; or damaging a selected section.
+- Dispatch one compact Worker item for the current instruction. Use the existing semantic project-local construction tool, such as `build_live_ruin`, when available.
+- Trust the tool's returned snapshot reconstruction, validation, topology, stable handles, and atomic revision result as structural truth.
+- Do not automatically call `capture_godot_asset_preview` or `critique_godot_preview_local`, start an unsolicited visual refinement loop, or capture merely to prove that a semantic edit succeeded.
+- Return a short factual receipt of the structural result and wait for the user's next direction. Do not claim visual coherence or quality without visual evidence.
+- If the semantic operation fails, use its exact geometry or topology diagnostics first. Vision is not the default recovery path for structural failure.
 
 #### Procedural Vocabulary
 
@@ -34,7 +43,7 @@ The primary structural loop is:
 ##### Planner (read-only)
 
 - May inspect project conventions, catalog (`inspect_godot_assets`), live scene (`inspect_godot_editor`), and AuraPreview (`inspect_godot_asset_preview`) once at the start when facts are unknown.
-- Produces one compact Worker item for the complete live procedural composition request, preserving the user’s semantic intent and no-save instruction.
+- Produces one compact Worker item for the current live procedural construction request, preserving the user’s semantic intent and no-save instruction.
 - Names `build_live_ruin` as the primary mutation tool.
 - Must not attempt mutations, read bridge credentials, prescribe raw resource paths, or author another execution path.
 
@@ -45,11 +54,11 @@ The primary structural loop is:
 - Keeps every generated piece beneath the genuine `AuraPreview` and never saves unless explicitly requested.
 - On a rejected procedural batch, fix the semantic request or report the concrete geometry error. Do not nudge individual mesh transforms.
 
-#### Visual Checks Are Isolated
+#### Visual Checkpoints and Styling Work
 
-- Do not call `capture_godot_asset_preview` or local vision during ordinary structural placement, and do not make visual description control progression.
-- Production capture infrastructure remains available. An occasional later composition check may use `capture_godot_asset_preview` and `describe_godot_preview_local` only when the user requests it or a genuinely visual question remains after deterministic construction.
-- Do not turn that optional check into critique, scoring, a verdict gate, an autonomous loop, or repeated correction passes.
+- Use visual evidence when the user explicitly asks to take a look, inspect the composition, or judge how it reads, or when the task genuinely depends on visual judgment: styling, silhouette, imposing character, believable damage, or autonomous broad design and refinement.
+- Inspect exact scene facts, capture a useful view with `capture_godot_asset_preview`, and call `critique_godot_preview_local` when it is installed and callable. Make focused revisions when requested.
+- Never claim visual coherence or quality without useful visual evidence. Capture and critique are task-driven checkpoints, not mandatory proof after each construction mutation.
 
 #### Safety and Scope
 

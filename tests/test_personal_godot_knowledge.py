@@ -125,15 +125,19 @@ def test_live_composition_build_skill_context_selects_workflow(tmp_path: Path) -
 
 
 # ---------------------------------------------------------------------------
-# Tool naming: describe_godot_preview_local present, critique_godot_preview_local absent
+# Rapid construction and task-driven visual evidence
 # ---------------------------------------------------------------------------
 
 
-def test_godot_workflow_skill_names_procedural_tool_and_isolates_visual_description() -> None:
+def test_godot_workflow_describes_rapid_supervised_semantic_construction() -> None:
     text = _skill_text()
+    lower = text.lower()
+    assert "#### Rapid Supervised Construction" in text
     assert "build_live_ruin" in text
-    assert "describe_godot_preview_local" in text
-    assert "critique_godot_preview_local" not in text
+    assert "one compact worker item" in lower
+    assert "snapshot reconstruction, validation, topology, stable handles" in lower
+    assert "short factual receipt" in lower
+    assert "wait for the user's next direction" in lower
 
 
 def test_godot_workflow_skill_lists_live_tool_names() -> None:
@@ -145,9 +149,25 @@ def test_godot_workflow_skill_lists_live_tool_names() -> None:
         "build_live_ruin",
         "edit_godot_asset_preview",
         "capture_godot_asset_preview",
-        "describe_godot_preview_local",
+        "critique_godot_preview_local",
     ]:
         assert tool in text, f"{tool} not found in skill text"
+
+
+def test_godot_workflow_does_not_require_visual_proof_for_supervised_edits() -> None:
+    text = _skill_text().lower()
+    assert "do not automatically call `capture_godot_asset_preview` or `critique_godot_preview_local`" in text
+    assert "capture merely to prove that a semantic edit succeeded" in text
+    assert "vision is not the default recovery path" in text
+
+
+def test_godot_workflow_requires_evidence_for_visual_judgment_and_styling() -> None:
+    text = _skill_text().lower()
+    assert "#### visual checkpoints and styling work" in text
+    assert "capture a useful view with `capture_godot_asset_preview`" in text
+    assert "call `critique_godot_preview_local` when it is installed and callable" in text
+    assert "never claim visual coherence or quality without useful visual evidence" in text
+    assert "styling" in text and "silhouette" in text and "believable damage" in text
 
 
 # ---------------------------------------------------------------------------
@@ -158,15 +178,15 @@ def test_godot_workflow_skill_lists_live_tool_names() -> None:
 def test_godot_workflow_directs_same_turn_continued_building() -> None:
     text = _skill_text()
     lower = text.lower()
-    assert "immediately choose the next structural operation" in lower
     assert "current request" in lower
     assert "do not pause after every wall" in lower
+    assert "wait for the user's next direction" in lower
 
 
 def test_godot_workflow_says_not_to_invoke_vision_per_individual_piece() -> None:
     text = _skill_text()
     lower = text.lower()
-    assert "do not call `capture_godot_asset_preview` or local vision during ordinary structural placement" in lower
+    assert "not mandatory proof after each construction mutation" in lower
 
 
 def test_godot_workflow_favors_several_connected_pieces_per_apply() -> None:
@@ -229,21 +249,12 @@ def test_godot_workflow_preserves_catalog_only_assets() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Critic language absent
+# Visual critique remains checkpoint-driven
 # ---------------------------------------------------------------------------
 
 
-def test_godot_workflow_has_no_critic_verdict_language() -> None:
-    """Verify critic concepts are not used as positive workflow instructions.
-
-    Words like "verdict", "score", "coherent" may appear in prohibitions
-    ("Do not require a verdict / score / critic approval").  That is correct.
-    This test verifies that critic-driven workflow language (mandatory critique,
-    revision passes, verdict-gated progression) is absent.
-    """
+def test_godot_workflow_has_no_mandatory_critic_loop() -> None:
     text = _skill_text().lower()
-
-    # Critic workflow mechanics — must never appear as positive instructions
     forbidden_mechanics = [
         "needs_revision",
         "cannot_judge",
@@ -252,35 +263,13 @@ def test_godot_workflow_has_no_critic_verdict_language() -> None:
         "strongest_feature",
         "critique again",
         "semantic critique is required",
+        "until coherent",
+        "declared coherent",
     ]
     for word in forbidden_mechanics:
         assert word not in text, f"Critic mechanic '{word}' found in skill"
-
-    # Verify the old "critique (optional" escape hatch is gone
-    assert "critique (optional" not in text
-
-    # "coherent" should not appear as a quality bar
-    assert "must be coherent" not in text
-    assert "until coherent" not in text
-    assert "declared coherent" not in text
-    assert "visually coherent" not in text
-
-    # The skill must describe deterministic progression, not a critique loop.
-    assert "deterministic batch" in text
-    assert "progression" in text
-
-
-def test_godot_workflow_has_no_semantic_critique_requirement() -> None:
-    text = _skill_text().lower()
-    assert "semantic critique is required" not in text
-    assert "not proof that a rendered composition is visually coherent" not in text
-    assert "do not claim that the composition is visually successful" not in text
-
-
-def test_godot_workflow_has_no_planner_names_tool_language() -> None:
-    """The old critic workflow had 'Planner names the tool' — verify it's gone."""
-    text = _skill_text().lower()
-    assert "planner names the tool" not in text
+    assert "unsolicited visual refinement loop" in text
+    assert "task-driven checkpoints" in text
 
 
 # ---------------------------------------------------------------------------
@@ -291,9 +280,9 @@ def test_godot_workflow_has_no_planner_names_tool_language() -> None:
 def test_godot_workflow_describes_fast_interactive_loop() -> None:
     text = _skill_text()
     assert "inspect once" in text
-    assert "choose semantic operations" in text
-    assert "build_live_ruin applies one deterministic batch" in text
-    assert "choose the next structural operation" in text
+    assert "dispatch one compact Worker item" in text
+    assert "semantic construction returns exact facts" in text
+    assert "report and wait for the next direction" in text
 
 
 def test_godot_workflow_allows_later_user_modifications() -> None:
