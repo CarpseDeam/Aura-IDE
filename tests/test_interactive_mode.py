@@ -216,18 +216,17 @@ def test_interactive_prompt_requires_result_driven_progressive_godot_rounds() ->
     assert "without repeating its handle" in prompt
 
 
-def test_interactive_prompt_finishes_one_creative_building_beyond_blockout() -> None:
+def test_interactive_prompt_composes_architecture_before_detail() -> None:
     prompt = SINGLE_SYSTEM_PROMPT.lower()
-    assert "one major building through structural massing" in prompt
-    assert "vertical and silhouette shaping" in prompt
-    assert "facade and opening articulation" in prompt
-    assert "coherent localized ruin treatment" in prompt
-    assert "existing requested rooms or volumes are not completion" in prompt
-    assert "explicitly asked for a blockout or foundation only" in prompt
-    assert "finish that building to a visually meaningful checkpoint" in prompt
-    assert "instead of blocking out an entire compound first" in prompt
-    assert "styling affordances" in prompt
-    assert "do not force every operation, symmetry, fixed proportions, templates, or a fixed motif sequence" in prompt
+    assert "real spaces, wall courses, upper levels, openings, and floorless upper fragments" in prompt
+    assert "a tall corner or pillar is not a tower" in prompt
+    assert "multiple structural levels and a readable upper silhouette" in prompt
+    assert "one raised wall course does not automatically make it tall" in prompt
+    assert "complete structural massing and silhouette before arcades" in prompt
+    assert "never claim an architectural component exists merely because an operation has that name" in prompt
+    assert "if the user says no towers or no roof yet, do not add them" in prompt
+    assert "stop after one meaningful component or visual checkpoint" in prompt
+    assert "add_tower" not in prompt
 
 
 def test_interactive_tool_loop_returns_each_live_step_before_model_selects_next(

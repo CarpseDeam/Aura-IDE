@@ -201,7 +201,7 @@ def test_godot_workflow_favors_one_semantic_step_with_project_owned_pieces() -> 
 def test_small_bounded_edits_still_use_one_semantic_call_and_wait() -> None:
     text = _skill_text().lower()
     assert "one instruction → one build_live_ruin call → short receipt → wait" in text
-    assert "one wall run, bounded room, floor region, level, tower section, stair, opening" in text
+    assert "one wall run, bounded room, floor region, level, upper fragment, stair, opening" in text
     assert "one `build_live_ruin` call containing one cohesive semantic operation" in text
 
 
@@ -405,11 +405,24 @@ def test_godot_workflow_exposes_semantic_vocabulary_and_forbids_mesh_transforms(
     lower = text.lower()
     for operation in [
         "create_run", "turn_run", "extend_run", "create_enclosure",
-        "insert_opening", "attach_room", "extend_room", "add_tower", "apply_damage",
+        "insert_opening", "attach_room", "extend_room", "add_upper_level", "apply_damage",
     ]:
         assert operation in text
+    assert "add_tower" not in text
     assert "never calculate a transform for every mesh" in lower
     assert "stable handles" in lower
+
+
+def test_godot_workflow_requires_real_architectural_composition() -> None:
+    text = _skill_text().lower()
+    assert "real spaces, wall courses, upper levels, openings, and floorless upper fragments" in text
+    assert "substantial square enclosed base, multiple supported stages, openings, and an upper crown" in text
+    assert "do not consider a tall corner or pillar a tower" in text
+    assert "one raised wall course does not automatically satisfy tall" in text
+    assert "complete structural massing and silhouette before arcades" in text
+    assert "never select it automatically after creating a large hall" in text
+    assert "if the user says no towers or no roof yet, do not add them" in text
+    assert "stop after one meaningful component or visual checkpoint" in text
 
 
 def test_godot_workflow_preserves_aura_preview_root_and_undo_redo() -> None:
