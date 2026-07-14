@@ -272,7 +272,7 @@ def test_contract_inspection_leads_directly_to_first_build_without_source_or_cat
 def test_successful_semantic_result_leads_directly_to_next_build_call() -> None:
     text = _skill_text().lower()
     assert "after a successful build call, continue directly to the next `build_live_ruin` call" in text
-    assert "returned handles, spaces, connections, and diagnostics" in text
+    assert "returned mass map, vertical profiles, handles, spaces, connections, and diagnostics" in text
     assert "without another inspection" in text
 
 
@@ -416,7 +416,7 @@ def test_godot_workflow_exposes_semantic_vocabulary_and_forbids_mesh_transforms(
     lower = text.lower()
     for operation in [
         "create_run", "turn_run", "extend_run", "create_enclosure",
-        "insert_opening", "attach_room", "extend_room", "add_upper_level", "apply_damage",
+        "insert_opening", "attach_room", "extend_room", "add_upper_level", "add_supported_span", "apply_damage",
     ]:
         assert operation in text
     assert "add_tower" not in text
@@ -426,11 +426,15 @@ def test_godot_workflow_exposes_semantic_vocabulary_and_forbids_mesh_transforms(
 
 def test_godot_workflow_requires_real_architectural_composition() -> None:
     text = _skill_text().lower()
-    assert "real spaces, wall courses, upper levels, openings, and floorless upper fragments" in text
-    assert "substantial square enclosed base, multiple supported stages, openings, and an upper crown" in text
-    assert "do not consider a tall corner or pillar a tower" in text
-    assert "one raised wall course does not automatically satisfy tall" in text
-    assert "complete structural massing and silhouette before arcades" in text
+    assert "hierarchy of real connected spaces, wall courses, upper levels, supported spans" in text
+    assert "primary low or wide mass" in text
+    assert "secondary taller or narrower masses" in text
+    assert "the centre lies between the flank centres" in text
+    assert "a requested upper connector lists and touches both supports" in text
+    assert "do not call the composition complete because three rooms exist" in text
+    assert "do not encode fixed dimensions or mandatory symmetry" in text
+    assert "choose returned structural continuation candidates before windows or decorative candidates" in text
+    assert "complete structural massing and silhouette before windows" in text
     assert "never select it automatically after creating a large hall" in text
     assert "if the user says no towers or no roof yet, do not add them" in text
     assert "stop after one meaningful component or visual checkpoint" in text

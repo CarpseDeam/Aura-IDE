@@ -218,15 +218,27 @@ def test_interactive_prompt_requires_result_driven_progressive_godot_rounds() ->
 
 def test_interactive_prompt_composes_architecture_before_detail() -> None:
     prompt = SINGLE_SYSTEM_PROMPT.lower()
-    assert "real spaces, wall courses, upper levels, openings, and floorless upper fragments" in prompt
-    assert "a tall corner or pillar is not a tower" in prompt
-    assert "multiple structural levels and a readable upper silhouette" in prompt
-    assert "one raised wall course does not automatically make it tall" in prompt
-    assert "complete structural massing and silhouette before arcades" in prompt
+    assert "read the compact returned mass map and ordered vertical profiles after every mass operation" in prompt
+    assert "a primary low or wide mass" in prompt
+    assert "secondary taller or narrower masses" in prompt
+    assert "explicit height contrast and footprint transitions" in prompt
+    assert "real connectors or supported spans where required" in prompt
+    assert "three adjacent rooms do not establish those relationships" in prompt
+    assert "complete structural massing and silhouette before windows" in prompt
     assert "never claim an architectural component exists merely because an operation has that name" in prompt
     assert "if the user says no towers or no roof yet, do not add them" in prompt
     assert "stop after one meaningful component or visual checkpoint" in prompt
     assert "add_tower" not in prompt
+
+
+def test_interactive_prompt_defers_decoration_for_factual_mass_gaps() -> None:
+    prompt = SINGLE_SYSTEM_PROMPT.lower()
+    assert "vertical profiles repeatedly preserve the same footprint" in prompt
+    assert "requested height contrast or a connector is missing" in prompt
+    assert "requested crown transition is absent" in prompt
+    assert "masses remain disconnected" in prompt
+    assert "choose structural continuation candidates before wall decoration" in prompt
+    assert "fixed dimensions, symmetry rules, named templates, or hardcoded archetypes" in prompt
 
 
 def test_interactive_prompt_requires_exact_wall_assets_and_factual_visual_claims() -> None:
