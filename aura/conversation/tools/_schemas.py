@@ -1260,9 +1260,9 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
             "description": (
                 "Primary V_Ruins creative construction tool. Place exact catalog pieces beneath AuraPreview and "
                 "apply cohesive ordered revisions using instantiate, duplicate, attach, set_transform, replace, "
-                "and remove. One call may build a useful run, course, stack, tower footprint, opening pass, or "
-                "repair pass; do not call once per mesh. Duplicate and sockets are conveniences, while bounded "
-                "direct positions, offsets, and verified yaw rotations remain valid. Every call is approval-gated "
+                "and remove. Use calibrated relative_to anchors for structural adjacency and calibrated duplicate "
+                "stepping for runs and courses; use sockets where compatible. Raw positions remain useful for the "
+                "first anchor, rubble, and deliberate free placement. Every call is approval-gated "
                 "and one Godot UndoRedo action. Asset IDs must come from inspect_godot_assets; arbitrary resource "
                 f"paths are not accepted. AuraPreview supports {MAX_TOTAL_PREVIEW_INSTANCES} direct children. "
                 "The result includes bounded post-apply changed-instance facts and never saves the scene."
@@ -1342,6 +1342,31 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
                                     "enum": ["local", "world"],
                                     "default": "local",
                                     "description": "Interpret duplicate offset in the source's local basis or preview world space.",
+                                },
+                                "relative_to": {
+                                    "type": "object",
+                                    "description": "For instantiate, set_transform, or replace, derive position by meeting audited anchor planes. Cannot be combined with position.",
+                                    "properties": {
+                                        "node_path": {"type": "string"},
+                                        "reference_anchor": {"type": "array", "items": {"type": "integer", "enum": [-1, 0, 1]}, "minItems": 3, "maxItems": 3},
+                                        "piece_anchor": {"type": "array", "items": {"type": "integer", "enum": [-1, 0, 1]}, "minItems": 3, "maxItems": 3},
+                                        "offset": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3, "default": [0, 0, 0]},
+                                        "offset_space": {"type": "string", "enum": ["reference_local", "world"], "default": "reference_local"},
+                                    },
+                                    "required": ["node_path", "reference_anchor", "piece_anchor"],
+                                    "additionalProperties": False,
+                                },
+                                "alignment_step": {
+                                    "type": "object",
+                                    "description": "For duplicate, create each copy relative to the previous copy using audited geometry. Cannot be combined with numeric offset.",
+                                    "properties": {
+                                        "reference_anchor": {"type": "array", "items": {"type": "integer", "enum": [-1, 0, 1]}, "minItems": 3, "maxItems": 3},
+                                        "piece_anchor": {"type": "array", "items": {"type": "integer", "enum": [-1, 0, 1]}, "minItems": 3, "maxItems": 3},
+                                        "offset": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3, "default": [0, 0, 0]},
+                                        "offset_space": {"type": "string", "enum": ["reference_local", "world"], "default": "reference_local"},
+                                    },
+                                    "required": ["reference_anchor", "piece_anchor"],
+                                    "additionalProperties": False,
                                 },
                                 "source_socket": {
                                     "type": "string",

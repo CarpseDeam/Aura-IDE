@@ -27,6 +27,17 @@ from aura.godot_editor.limits import (
 )
 
 
+def _copy_preview_action_scripts(actions_dir: Path) -> None:
+    actions_dir.mkdir(parents=True)
+    source = Path("aura/godot_editor/addon/actions")
+    for name in (
+        "asset_preview_actions.gd",
+        "preview_alignment.gd",
+        "preview_revision_state.gd",
+    ):
+        shutil.copyfile(source / name, actions_dir / name)
+
+
 def _project(tmp_path: Path, entries: list[dict]) -> tuple[Path, Path]:
     (tmp_path / "project.godot").write_text('[application]\nconfig/name="Assets"\n', encoding="utf-8")
     scene = tmp_path / "assets/modules/wall.tscn"
@@ -1023,11 +1034,7 @@ def test_godot_duplicate_offsets_ignore_scale_and_preserve_inherited_scale(
 
     project = tmp_path / "godot_duplicate_runtime"
     actions_dir = project / "addons/aura_bridge/actions"
-    actions_dir.mkdir(parents=True)
-    shutil.copyfile(
-        "aura/godot_editor/addon/actions/asset_preview_actions.gd",
-        actions_dir / "asset_preview_actions.gd",
-    )
+    _copy_preview_action_scripts(actions_dir)
     (project / "project.godot").write_text(
         '[application]\nconfig/name="Aura Duplicate Runtime Test"\n', encoding="utf-8"
     )
@@ -1145,11 +1152,7 @@ def test_godot_preview_publish_scene_preserves_live_structure(tmp_path: Path) ->
 
     project = tmp_path / "godot_publish_runtime"
     actions_dir = project / "addons/aura_bridge/actions"
-    actions_dir.mkdir(parents=True)
-    shutil.copyfile(
-        "aura/godot_editor/addon/actions/asset_preview_actions.gd",
-        actions_dir / "asset_preview_actions.gd",
-    )
+    _copy_preview_action_scripts(actions_dir)
     (project / "project.godot").write_text(
         '[application]\nconfig/name="Aura Publish Runtime Test"\n', encoding="utf-8"
     )
@@ -1326,11 +1329,7 @@ def test_godot_socket_attachment_math_naming_validation_and_undo(tmp_path: Path)
         pytest.skip("GODOT_BIN or godot on PATH is required for runtime attachment validation")
     project = tmp_path / "godot_attach_runtime"
     actions_dir = project / "addons/aura_bridge/actions"
-    actions_dir.mkdir(parents=True)
-    shutil.copyfile(
-        "aura/godot_editor/addon/actions/asset_preview_actions.gd",
-        actions_dir / "asset_preview_actions.gd",
-    )
+    _copy_preview_action_scripts(actions_dir)
     (project / "project.godot").write_text(
         '[application]\nconfig/name="Aura Attach Runtime Test"\n', encoding="utf-8"
     )
@@ -1489,11 +1488,7 @@ def test_godot_named_sequential_burst_uses_planned_nodes_and_undoes_atomically(
         pytest.skip("GODOT_BIN or godot on PATH is required for runtime burst validation")
     project = tmp_path / "godot_named_burst_runtime"
     actions_dir = project / "addons/aura_bridge/actions"
-    actions_dir.mkdir(parents=True)
-    shutil.copyfile(
-        "aura/godot_editor/addon/actions/asset_preview_actions.gd",
-        actions_dir / "asset_preview_actions.gd",
-    )
+    _copy_preview_action_scripts(actions_dir)
     (project / "project.godot").write_text(
         '[application]\nconfig/name="Aura Named Burst Runtime Test"\n', encoding="utf-8"
     )
@@ -2000,11 +1995,7 @@ def test_godot_branching_construction(tmp_path: Path) -> None:
         pytest.skip("GODOT_BIN or godot on PATH is required for runtime branching test")
     project = tmp_path / "godot_branch_runtime"
     actions_dir = project / "addons/aura_bridge/actions"
-    actions_dir.mkdir(parents=True)
-    shutil.copyfile(
-        "aura/godot_editor/addon/actions/asset_preview_actions.gd",
-        actions_dir / "asset_preview_actions.gd",
-    )
+    _copy_preview_action_scripts(actions_dir)
     (project / "project.godot").write_text(
         '[application]\nconfig/name="Aura Branch Runtime Test"\n', encoding="utf-8"
     )

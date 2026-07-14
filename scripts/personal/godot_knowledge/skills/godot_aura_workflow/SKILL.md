@@ -30,7 +30,9 @@ A cohesive revision is a useful batch, not one model call per mesh piece. It may
 - replacements that introduce windows, openings, or damaged variants;
 - moves and removals for pieces that do not read correctly.
 
-Use `instantiate`, `duplicate`, `attach`, `set_transform`, `replace`, and `remove` directly. Prefer duplication and sockets when they make placement simpler and more coherent, but do not make either mandatory. Bounded positions, offsets, and verified yaw rotations are valid direct editor actions.
+Use `instantiate`, `duplicate`, `attach`, `set_transform`, `replace`, and `remove` directly. Use calibrated `relative_to` anchor planes for structural walls, corners, floors, and vertical courses. Use calibrated duplicate stepping for repeated runs and courses, and compatible sockets where they provide an exact connection. Bounded positions, offsets, and verified yaw rotations are valid; raw coordinates are mainly for the first anchor, deliberate free placement, rubble, and decoration. Never manually calculate asset pivot corrections; apply only small intentional offsets after calibrated alignment.
+
+Inspect the returned exact transforms and continue from changed-piece facts. Build a tall tower through its footprint and repeated vertical courses instead of stretching wall pieces unnaturally. Preserve and repair the current preview rather than rebuilding it automatically.
 
 Read the returned compact facts after every revision: operation and total instance counts, added/changed/replaced/removed paths, affected exact asset IDs and domains, current transforms, useful sockets, preview bounds, and conservative placement warnings. Overlap warnings are informational; intentional masonry intersections, wall embedding, rubble, floors meeting walls, and incomplete work remain valid.
 
