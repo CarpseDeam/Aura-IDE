@@ -167,8 +167,19 @@ def test_godot_workflow_requires_evidence_for_visual_judgment_and_styling() -> N
     assert "#### visual checkpoints and styling work" in text
     assert "capture a useful view with `capture_godot_asset_preview`" in text
     assert "call `critique_godot_preview_local` when it is installed and callable" in text
-    assert "never claim visual coherence or quality without useful visual evidence" in text
+    assert "never claim visual coherence or quality without findings from a vision-capable tool" in text
+    assert "capturing an image alone is not visual analysis" in text
     assert "styling" in text and "silhouette" in text and "believable damage" in text
+
+
+def test_godot_workflow_selects_exact_wall_piece_ids_without_hidden_motifs() -> None:
+    text = _skill_text().lower()
+    assert "#### exact wall-piece selection" in text
+    assert "select exact assets by `asset_id`" in text
+    assert "tags may filter catalog results but never silently choose an asset" in text
+    assert "never calculate or supply resource paths, world positions, rotations, scales" in text
+    assert "successful validation proves safe, reconstructable placement" in text
+    assert "does not prove coherent rhythm, hierarchy, visual quality" in text
 
 
 # ---------------------------------------------------------------------------

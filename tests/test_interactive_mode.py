@@ -229,6 +229,18 @@ def test_interactive_prompt_composes_architecture_before_detail() -> None:
     assert "add_tower" not in prompt
 
 
+def test_interactive_prompt_requires_exact_wall_assets_and_factual_visual_claims() -> None:
+    prompt = SINGLE_SYSTEM_PROMPT.lower()
+    assert "inspect the real wall-placeable catalog and select the exact `asset_id`" in prompt
+    assert "tags filter results but never select a piece" in prompt
+    assert "never substitute invented motif names" in prompt
+    assert "use `place_wall_piece` only after the main structural mass and silhouette exist" in prompt
+    assert "a successful operation proves safe placement, not good composition" in prompt
+    assert "a screenshot is only a capture" in prompt
+    assert "claim visual verification only when a vision-capable tool returns visual findings" in prompt
+    assert "do not add a mandatory vision pass" in prompt
+
+
 def test_interactive_tool_loop_returns_each_live_step_before_model_selects_next(
     tmp_path: Path,
 ) -> None:
