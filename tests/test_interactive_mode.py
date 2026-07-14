@@ -216,6 +216,20 @@ def test_interactive_prompt_requires_result_driven_progressive_godot_rounds() ->
     assert "without repeating its handle" in prompt
 
 
+def test_interactive_prompt_finishes_one_creative_building_beyond_blockout() -> None:
+    prompt = SINGLE_SYSTEM_PROMPT.lower()
+    assert "one major building through structural massing" in prompt
+    assert "vertical and silhouette shaping" in prompt
+    assert "facade and opening articulation" in prompt
+    assert "coherent localized ruin treatment" in prompt
+    assert "existing requested rooms or volumes are not completion" in prompt
+    assert "explicitly asked for a blockout or foundation only" in prompt
+    assert "finish that building to a visually meaningful checkpoint" in prompt
+    assert "instead of blocking out an entire compound first" in prompt
+    assert "styling affordances" in prompt
+    assert "do not force every operation, symmetry, fixed proportions, templates, or a fixed motif sequence" in prompt
+
+
 def test_interactive_tool_loop_returns_each_live_step_before_model_selects_next(
     tmp_path: Path,
 ) -> None:
