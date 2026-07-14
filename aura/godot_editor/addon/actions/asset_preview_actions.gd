@@ -2,8 +2,11 @@
 extends RefCounted
 
 const PREVIEW_ROOT_NAME := "AuraPreview"
-const MAX_INSTANCES := 64
-const MAX_DUPLICATE_COUNT := 16
+const MAX_INITIAL_PLACEMENTS := 64
+const MAX_REVISION_OPERATIONS := 128
+const MAX_TOTAL_INSTANCES := 1024
+const MAX_DUPLICATE_COUNT := 64
+const MAX_SEMANTIC_REVISION_OPERATIONS := 1024
 
 var _editor_interface: EditorInterface
 var _undo_redo: EditorUndoRedoManager
@@ -21,8 +24,8 @@ func instantiate_assets(params: Dictionary) -> Dictionary:
 	if not scene_root is Node3D:
 		return {"ok": false, "error": "asset preview requires a Node3D scene root"}
 	var placements = params.get("placements", [])
-	if not placements is Array or placements.is_empty() or placements.size() > MAX_INSTANCES:
-		return {"ok": false, "error": "placements must contain between 1 and %d items" % MAX_INSTANCES}
+	if not placements is Array or placements.is_empty() or placements.size() > MAX_INITIAL_PLACEMENTS:
+		return {"ok": false, "error": "placements must contain between 1 and %d items" % MAX_INITIAL_PLACEMENTS}
 	var preview := scene_root.get_node_or_null(NodePath(PREVIEW_ROOT_NAME))
 	if preview != null and (not preview is Node3D or not bool(preview.get_meta("aura_preview_root", false))):
 		return {"ok": false, "error": "%s already exists but is not an Aura preview root" % PREVIEW_ROOT_NAME}
@@ -37,6 +40,9 @@ func instantiate_assets(params: Dictionary) -> Dictionary:
 		if not checked.get("ok", false):
 			return checked
 		prepared.append(checked["placement"])
+	if names.size() > MAX_TOTAL_INSTANCES:
+		_free_prepared_placements(prepared)
+		return {"ok": false, "error": "placement would exceed the %d-instance preview limit" % MAX_TOTAL_INSTANCES}
 
 	_undo_redo.create_action(str(params.get("label", "Aura place catalog assets")), UndoRedo.MERGE_DISABLE, scene_root)
 	if preview == null:
@@ -59,7 +65,17 @@ func instantiate_assets(params: Dictionary) -> Dictionary:
 		_undo_redo.add_undo_method(preview, "remove_child", instance)
 		paths.append(PREVIEW_ROOT_NAME + "/" + str(instance.name))
 	_undo_redo.commit_action()
-	return {"ok": true, "result": {"applied": true, "preview_root": PREVIEW_ROOT_NAME, "instance_paths": paths, "instance_count": paths.size()}}
+	return {"ok": true, "result": {
+		"applied": true,
+		"preview_root": PREVIEW_ROOT_NAME,
+		"request_operation_count": placements.size(),
+		"instance_paths": paths,
+		"added_paths": paths,
+		"changed_paths": [],
+		"removed_paths": [],
+		"replaced_paths": [],
+		"instance_count": names.size(),
+	}}
 
 
 func clear_preview(params: Dictionary) -> Dictionary:
@@ -74,13 +90,26 @@ func clear_preview(params: Dictionary) -> Dictionary:
 	var children := preview.get_children()
 	if children.is_empty():
 		return {"ok": true, "result": {"applied": false, "preview_root": PREVIEW_ROOT_NAME, "removed_count": 0}}
+	var removed_paths: Array[String] = []
+	for child in children:
+		removed_paths.append(PREVIEW_ROOT_NAME + "/" + str(child.name))
 	_undo_redo.create_action(str(params.get("label", "Aura clear asset preview")), UndoRedo.MERGE_DISABLE, scene_root)
 	for child in children:
 		_undo_redo.add_do_method(preview, "remove_child", child)
 		_undo_redo.add_undo_method(preview, "add_child", child, true)
 		_undo_redo.add_undo_property(child, "owner", scene_root)
 	_undo_redo.commit_action()
-	return {"ok": true, "result": {"applied": true, "preview_root": PREVIEW_ROOT_NAME, "removed_count": children.size()}}
+	return {"ok": true, "result": {
+		"applied": true,
+		"preview_root": PREVIEW_ROOT_NAME,
+		"request_operation_count": children.size(),
+		"removed_count": children.size(),
+		"removed_paths": removed_paths,
+		"added_paths": [],
+		"changed_paths": [],
+		"replaced_paths": [],
+		"instance_count": 0,
+	}}
 
 
 func publish_scene(params: Dictionary) -> Dictionary:
@@ -188,8 +217,13 @@ func apply_revision(params: Dictionary) -> Dictionary:
 	if not scene_root is Node3D:
 		return {"ok": false, "error": "asset preview requires a Node3D scene root"}
 	var operations = params.get("operations", [])
-	if not operations is Array or operations.is_empty() or operations.size() > 25:
-		return {"ok": false, "error": "operations must contain between 1 and 25 items"}
+	var operation_limit := (
+		MAX_SEMANTIC_REVISION_OPERATIONS
+		if bool(params.get("semantic_builder", false))
+		else MAX_REVISION_OPERATIONS
+	)
+	if not operations is Array or operations.is_empty() or operations.size() > operation_limit:
+		return {"ok": false, "error": "operations must contain between 1 and %d items" % operation_limit}
 	var preview := scene_root.get_node_or_null(NodePath(PREVIEW_ROOT_NAME))
 	if preview != null and (not preview is Node3D or not bool(preview.get_meta("aura_preview_root", false))):
 		return {"ok": false, "error": "%s already exists but is not an Aura preview root" % PREVIEW_ROOT_NAME}
@@ -223,9 +257,9 @@ func apply_revision(params: Dictionary) -> Dictionary:
 		else:
 			prepared.append(checked["operation"])
 		_register_prepared_outputs(checked, nodes, targeted, planned_paths, discarded)
-	if names.size() > MAX_INSTANCES:
+	if names.size() > MAX_TOTAL_INSTANCES:
 		_free_prepared_instances(prepared)
-		return {"ok": false, "error": "revision would exceed the %d-instance preview limit" % MAX_INSTANCES}
+		return {"ok": false, "error": "revision would exceed the %d-instance preview limit" % MAX_TOTAL_INSTANCES}
 	if creates_preview:
 		for operation in prepared:
 			if operation["operation"] != "instantiate":
@@ -254,10 +288,11 @@ func apply_revision(params: Dictionary) -> Dictionary:
 			"set_transform": changed.append(operation["path"])
 			"instantiate": added.append(operation["path"])
 			"remove": removed.append(operation["path"])
-			"replace": replaced.append(operation["path"])
+			"replace": replaced.append(str(operation.get("new_path", operation["path"])))
 	return {"ok": true, "result": {
 		"applied": true,
 		"preview_root": PREVIEW_ROOT_NAME,
+		"request_operation_count": operations.size(),
 		"operation_count": prepared.size(),
 		"changed_paths": changed,
 		"added_paths": added,
@@ -304,8 +339,8 @@ func _prepare_revision_operation(
 	names: Dictionary,
 	nodes: Dictionary,
 	targeted: Dictionary,
-	discarded: Dictionary,
-	reads: Dictionary,
+	discarded: Dictionary = {},
+	reads: Dictionary = {},
 ) -> Dictionary:
 	if not raw is Dictionary:
 		return {"ok": false, "error": "operation %d must be an object" % index}
@@ -557,10 +592,15 @@ func _revision_transform(raw: Dictionary, position: Vector3, rotation_y: float, 
 	var decoded_rotation: Variant = raw.get("rotation_degrees_y", rotation_y)
 	if decoded_position == null or decoded_scale == null or (not decoded_rotation is int and not decoded_rotation is float):
 		return {"ok": false, "error": "revision transform is invalid"}
+	if not decoded_position.is_finite() or not decoded_scale.is_finite() or not is_finite(float(decoded_rotation)):
+		return {"ok": false, "error": "revision transform must be finite"}
 	if absf(decoded_position.x) > 10000.0 or absf(decoded_position.y) > 10000.0 or absf(decoded_position.z) > 10000.0:
 		return {"ok": false, "error": "revision position exceeds the 10 km preview bound"}
 	if decoded_scale.x < 0.01 or decoded_scale.y < 0.01 or decoded_scale.z < 0.01 or decoded_scale.x > 100.0 or decoded_scale.y > 100.0 or decoded_scale.z > 100.0:
 		return {"ok": false, "error": "revision scale must be between 0.01 and 100"}
+	var allowed_rotations: Variant = raw.get("allowed_rotations_deg", [])
+	if not allowed_rotations is Array or not _yaw_is_allowed(float(decoded_rotation), allowed_rotations):
+		return {"ok": false, "error": "revision rotation is not catalog-approved"}
 	return {"ok": true, "transform": {
 		"new_position": decoded_position,
 		"new_rotation": Vector3(0.0, float(decoded_rotation), 0.0),
@@ -650,6 +690,13 @@ func _free_prepared_instances(prepared: Array[Dictionary]) -> void:
 				node.free()
 
 
+func _free_prepared_placements(prepared: Array[Dictionary]) -> void:
+	for placement in prepared:
+		var node: Node = placement.get("instance")
+		if node != null and is_instance_valid(node) and node.get_parent() == null:
+			node.free()
+
+
 func _prepare_placement(raw: Variant, index: int, names: Dictionary) -> Dictionary:
 	if not raw is Dictionary:
 		return {"ok": false, "error": "placement %d must be an object" % index}
@@ -679,6 +726,9 @@ func _prepare_placement(raw: Variant, index: int, names: Dictionary) -> Dictiona
 	if position == null or scale == null or (not rotation_y is float and not rotation_y is int):
 		instance.free()
 		return {"ok": false, "error": "placement %d transform is invalid" % index}
+	if not position.is_finite() or not scale.is_finite() or not is_finite(float(rotation_y)):
+		instance.free()
+		return {"ok": false, "error": "placement %d transform must be finite" % index}
 	if absf(position.x) > 10000.0 or absf(position.y) > 10000.0 or absf(position.z) > 10000.0:
 		instance.free()
 		return {"ok": false, "error": "placement %d exceeds the 10 km preview bound" % index}
@@ -690,15 +740,19 @@ func _prepare_placement(raw: Variant, index: int, names: Dictionary) -> Dictiona
 		instance.free()
 		return {"ok": false, "error": "placement %d allowed rotations are invalid" % index}
 	if not allowed_rotations.is_empty():
-		var rotation_allowed := false
-		for allowed in allowed_rotations:
-			if (allowed is int or allowed is float) and is_equal_approx(fposmod(float(rotation_y), 360.0), fposmod(float(allowed), 360.0)):
-				rotation_allowed = true
-				break
-		if not rotation_allowed:
+		if not _yaw_is_allowed(float(rotation_y), allowed_rotations):
 			instance.free()
 			return {"ok": false, "error": "placement %d rotation is not catalog-approved" % index}
 	return {"ok": true, "placement": {"instance": instance, "position": position, "rotation_y": float(rotation_y), "scale": scale}}
+
+
+func _yaw_is_allowed(rotation_y: float, allowed_rotations: Array) -> bool:
+	if allowed_rotations.is_empty():
+		return true
+	for allowed in allowed_rotations:
+		if (allowed is int or allowed is float) and is_finite(float(allowed)) and is_equal_approx(fposmod(rotation_y, 360.0), fposmod(float(allowed), 360.0)):
+			return true
+	return false
 
 
 func _vector3(raw: Variant, default_value: Vector3) -> Variant:

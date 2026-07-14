@@ -19,6 +19,12 @@ from aura.conversation.tools.registry import ToolRegistry
 from aura.godot_assets import inspect_godot_assets, resolve_godot_asset
 from aura.godot_assets.models import GodotAssetSocket
 from aura.godot_assets.preview import analyze_preview_snapshot
+from aura.godot_editor.limits import (
+    MAX_DUPLICATE_COUNT,
+    MAX_INITIAL_PLACEMENTS,
+    MAX_REVISION_OPERATIONS,
+    MAX_TOTAL_PREVIEW_INSTANCES,
+)
 
 
 def _project(tmp_path: Path, entries: list[dict]) -> tuple[Path, Path]:
@@ -31,6 +37,33 @@ def _project(tmp_path: Path, entries: list[dict]) -> tuple[Path, Path]:
     catalog.write_text(json.dumps(entries, indent=2), encoding="utf-8")
     (catalog.parent / "calibrations.json").write_text(
         json.dumps({"wall": {"position_offset": [1.0, 0.0, 0.0]}}), encoding="utf-8"
+    )
+    orientation = {
+        "schema_version": 1,
+        "profiles": {
+            "cardinal": {
+                "valid_yaw_degrees": [0, 90, 180, 270],
+                "yaw_mode": "cardinal",
+                "continuous_yaw_range_degrees": None,
+                "free_yaw_safe": False,
+                "natural_forward_local": [0, 0, 1],
+                "attachment_facing_local": [0, 0, 1],
+                "natural_run_local": [1, 0, 0],
+                "natural_corner_normals_local": [],
+                "orientation_source": "wall_run",
+                "pitch_fixed": True,
+                "roll_fixed": True,
+                "mirroring_allowed": False,
+                "axis_stretching_allowed": False,
+                "scale_policy": "authored",
+            }
+        },
+        "kind_profiles": {"wall_straight": "cardinal", "wall_corner": "cardinal"},
+        "tag_overrides": {},
+        "unknown_profile": "cardinal",
+    }
+    (catalog.parent / "placeable_asset_orientations.json").write_text(
+        json.dumps(orientation, indent=2), encoding="utf-8"
     )
     return tmp_path, catalog
 
@@ -86,6 +119,53 @@ def test_inspection_returns_generic_asset_semantics_and_calibration(tmp_path: Pa
     assert asset["semantic_roles"] == ["barrier", "cover"]
     assert asset["placement_mode"] == "socket"
     assert asset["calibration"]["position_offset"] == [1.0, 0.0, 0.0]
+    assert asset["allowed_rotations_deg"] == [0.0, 90.0, 180.0, 270.0]
+    assert asset["orientation"]["profile_id"] == "cardinal"
+
+
+def test_unified_ruinlab_catalog_includes_audited_structural_assets(tmp_path: Path) -> None:
+    root, catalog = _project(tmp_path, [_wall()])
+    structural_scene = root / "assets/modules/pier.tscn"
+    structural_scene.write_text(
+        '[gd_scene format=3]\n\n[node name="Pier" type="Node3D"]\n', encoding="utf-8"
+    )
+    structural = {
+        "families": {
+            "pier": {
+                "kind": "architectural_column",
+                "tags": ["structural", "pillar"],
+                "semantic_role": "freestanding_support",
+                "orientation_profile": "cardinal",
+                "vertical_alignment": "ground",
+            }
+        },
+        "assets": [
+            {
+                "id": "audited_pier",
+                "path": "res://assets/modules/pier.tscn",
+                "family": "pier",
+                "exact_aabb_size_m": [1.5, 4.25, 1.25],
+                "pivot_to_center_m": [0.25, 2.0, -0.5],
+                "compatible_dimensions_m": [1.5, 1.25],
+                "presentation": "intact",
+            }
+        ],
+    }
+    (catalog.parent / "interior_structural_assets.json").write_text(
+        json.dumps(structural, indent=2), encoding="utf-8"
+    )
+
+    result = inspect_godot_assets(root, max_items=20)
+
+    assert result["catalog_asset_count"] == 2
+    asset = next(item for item in result["assets"] if item["id"] == "audited_pier")
+    assert asset["source"] == "assets/ruins/catalog/interior_structural_assets.json"
+    assert asset["local_bounds_m"] == [1.5, 4.25, 1.25]
+    assert asset["footprint_m"] == [1.5, 1.25]
+    assert asset["height_m"] == 4.25
+    assert asset["allowed_rotations_deg"] == [0.0, 90.0, 180.0, 270.0]
+    assert asset["calibration"]["pivot_to_center_m"] == [0.25, 2.0, -0.5]
+    assert "freestanding_support" in asset["semantic_roles"]
 
 
 def test_inspection_filters_by_generic_role_without_mutating_catalog(tmp_path: Path) -> None:
@@ -169,7 +249,7 @@ def test_preview_instancing_resolves_catalog_id_and_is_approval_gated(tmp_path: 
         )
 
     assert result.ok is True
-    request = client_type.return_value.request.call_args.args
+    request = client_type.return_value.request.call_args_list[-2].args
     assert request[0] == "preview.instantiate"
     placement = request[1]["placements"][0]
     assert placement["resource_path"] == "res://assets/modules/wall.tscn"
@@ -258,7 +338,7 @@ def test_atomic_preview_apply_resolves_replacement_and_addition_assets(tmp_path:
         )
 
     assert result.ok is True
-    action, params = client_type.return_value.request.call_args.args
+    action, params = client_type.return_value.request.call_args_list[-2].args
     assert action == "preview.apply"
     assert params["operations"][1]["resource_path"] == "res://assets/modules/wall.tscn"
     assert params["operations"][2]["catalog_identity"] == "ruins:wall"
@@ -312,7 +392,7 @@ def test_preview_schema_exposes_relational_duplicate_and_attach_operations(tmp_p
         "set_transform", "instantiate", "remove", "replace", "duplicate", "attach"
     ]
     assert item["properties"]["count"]["minimum"] == 1
-    assert item["properties"]["count"]["maximum"] == 16
+    assert item["properties"]["count"]["maximum"] == 64
     assert item["properties"]["offset_space"]["enum"] == ["local", "world"]
     assert {"source_socket", "target_socket", "asset_id", "domain", "name", "scale"} <= set(
         item["properties"]
@@ -320,6 +400,105 @@ def test_preview_schema_exposes_relational_duplicate_and_attach_operations(tmp_p
     assert "resource_path" not in item["properties"]
     assert "source_socket_position" not in item["properties"]
     assert "target_socket_facing" not in item["properties"]
+
+
+def test_direct_preview_limits_are_distinct_and_synchronized(tmp_path: Path) -> None:
+    schema = next(
+        tool["function"]
+        for tool in ToolRegistry(tmp_path, mode="worker").tool_defs()
+        if tool["function"]["name"] == "edit_godot_asset_preview"
+    )
+    properties = schema["parameters"]["properties"]
+    source = Path("aura/godot_editor/addon/actions/asset_preview_actions.gd").read_text(
+        encoding="utf-8"
+    )
+
+    assert MAX_INITIAL_PLACEMENTS == properties["placements"]["maxItems"] == 64
+    assert MAX_REVISION_OPERATIONS == properties["operations"]["maxItems"] == 128
+    assert MAX_DUPLICATE_COUNT == properties["operations"]["items"]["properties"]["count"]["maximum"] == 64
+    assert MAX_TOTAL_PREVIEW_INSTANCES == 1024
+    assert "const MAX_INITIAL_PLACEMENTS := 64" in source
+    assert "const MAX_REVISION_OPERATIONS := 128" in source
+    assert "const MAX_TOTAL_INSTANCES := 1024" in source
+    assert "const MAX_DUPLICATE_COUNT := 64" in source
+    assert "const MAX_SEMANTIC_REVISION_OPERATIONS := 1024" in source
+
+
+def test_direct_edit_returns_compact_changed_instance_facts(tmp_path: Path) -> None:
+    root, _catalog = _project(tmp_path, [_wall()])
+    snapshot = {
+        "scene_open": True,
+        "preview_exists": True,
+        "instance_count": 2,
+        "diagnostics": [],
+        "instances": [
+            {
+                "path": "AuraPreview/NewWall",
+                "resource_path": "res://assets/modules/wall.tscn",
+                "position": [0, 0, 0],
+                "rotation_degrees": [0, 90, 0],
+                "scale": [1, 1, 1],
+            },
+            {
+                "path": "AuraPreview/ExistingWall",
+                "resource_path": "res://assets/modules/wall.tscn",
+                "position": [1, 0, 0],
+                "rotation_degrees": [0, 0, 0],
+                "scale": [1, 1, 1],
+            },
+        ],
+    }
+    with patch(
+        "aura.conversation.tools._godot_asset_preview_mixin.GodotEditorBridgeClient"
+    ) as client_type:
+        client_type.return_value.request.side_effect = [
+            {
+                "applied": True,
+                "request_operation_count": 1,
+                "added_paths": ["AuraPreview/NewWall"],
+                "changed_paths": [],
+                "replaced_paths": [],
+                "removed_paths": [],
+                "instance_count": 2,
+            },
+            snapshot,
+        ]
+        result = ToolRegistry(root, mode="worker").execute(
+            "edit_godot_asset_preview",
+            {
+                "action": "apply",
+                "operations": [
+                    {
+                        "operation": "instantiate",
+                        "asset_id": "wall",
+                        "name": "NewWall",
+                        "rotation_degrees_y": 90,
+                    }
+                ],
+            },
+            lambda _request: ApprovalDecision("approve"),
+        )
+
+    facts = result.payload["post_apply"]
+    assert facts["operation_count"] == 1
+    assert facts["total_instance_count"] == 2
+    assert facts["added_paths"] == ["AuraPreview/NewWall"]
+    assert facts["affected_instances"] == [
+        {
+            "path": "AuraPreview/NewWall",
+            "asset_id": "wall",
+            "domain": "ruins",
+            "position": [0, 0, 0],
+            "rotation_degrees_y": 90.0,
+            "scale": [1, 1, 1],
+            "sockets": [
+                {"id": "left", "position": [-2.0, 0.0, 0.0], "facing": [-1.0, 0.0, 0.0]},
+                {"id": "right", "position": [2.0, 0.0, 0.0], "facing": [1.0, 0.0, 0.0]},
+            ],
+        }
+    ]
+    assert facts["overall_preview_bounds"]["width_m"] > 0
+    assert facts["placement_warnings"][0]["code"] == "footprint_overlap"
 
 
 def test_preview_apply_prepares_named_sequential_construction_without_live_snapshot(
@@ -382,8 +561,8 @@ def test_preview_apply_prepares_named_sequential_construction_without_live_snaps
         )
 
     assert result.ok is True
-    client_type.return_value.request.assert_called_once()
-    action, params = client_type.return_value.request.call_args.args
+    assert client_type.return_value.request.call_count == 2
+    action, params = client_type.return_value.request.call_args_list[-2].args
     assert action == "preview.apply"
     prepared = params["operations"]
     assert [item.get("name") for item in prepared] == [
@@ -514,6 +693,7 @@ def test_preview_duplicate_normalizes_live_catalog_source_and_relative_inputs(tm
                 ],
                 "instance_count": 4,
             },
+            snapshot,
         ]
         result = registry.execute(
             "edit_godot_asset_preview",
@@ -578,6 +758,7 @@ def test_preview_attach_normalizes_live_source_and_catalog_sockets(tmp_path: Pat
         client_type.return_value.request.side_effect = [
             snapshot,
             {"applied": True, "added_paths": ["AuraPreview/CornerPiece"]},
+            snapshot,
         ]
         result = ToolRegistry(root, mode="worker").execute(
             "edit_godot_asset_preview",
@@ -601,7 +782,7 @@ def test_preview_attach_normalizes_live_source_and_catalog_sockets(tmp_path: Pat
         "resource_path": "res://assets/modules/corner.tscn",
         "target_socket_position": [0.0, 0.0, -1.0],
         "target_socket_facing": [0.0, 0.0, -1.0],
-        "allowed_rotations_deg": [],
+        "allowed_rotations_deg": [0.0, 90.0, 180.0, 270.0],
         "scale": [2.0, 1.0, 3.0],
         "name": "CornerPiece",
     }
@@ -732,7 +913,7 @@ def test_preview_duplicate_rejects_invalid_count_before_live_lookup(tmp_path: Pa
     with patch(
         "aura.conversation.tools._godot_asset_preview_mixin.GodotEditorBridgeClient"
     ) as client_type:
-        for count in (0, 17, 1.5, True):
+        for count in (0, 65, 1.5, True):
             result = registry.execute(
                 "edit_godot_asset_preview",
                 {
@@ -1573,7 +1754,7 @@ def test_preview_branching_two_attaches_from_same_planned_corner(tmp_path: Path)
             lambda _request: ApprovalDecision("approve"),
         )
     assert result.ok is True
-    action, params = client_type.return_value.request.call_args.args
+    action, params = client_type.return_value.request.call_args_list[-2].args
     assert action == "preview.apply"
     assert params["operations"][1]["node_path"] == "AuraPreview/Corner"
     assert params["operations"][2]["node_path"] == "AuraPreview/Corner"
@@ -1608,7 +1789,7 @@ def test_preview_branching_two_duplicates_from_same_source(tmp_path: Path) -> No
             lambda _request: ApprovalDecision("approve"),
         )
     assert result.ok is True
-    action, params = client_type.return_value.request.call_args.args
+    action, params = client_type.return_value.request.call_args_list[-2].args
     assert action == "preview.apply"
     assert params["operations"][1]["node_path"] == "AuraPreview/Wall"
     assert params["operations"][2]["node_path"] == "AuraPreview/Wall"
@@ -1647,7 +1828,7 @@ def test_preview_branching_duplicate_and_attach_from_same_source(tmp_path: Path)
             lambda _request: ApprovalDecision("approve"),
         )
     assert result.ok is True
-    action, params = client_type.return_value.request.call_args.args
+    action, params = client_type.return_value.request.call_args_list[-2].args
     assert action == "preview.apply"
     assert params["operations"][1]["node_path"] == "AuraPreview/Wall"
     assert params["operations"][2]["node_path"] == "AuraPreview/Wall"
@@ -1796,7 +1977,7 @@ def test_preview_branching_sequential_courtyard_chain_still_passes(tmp_path: Pat
             lambda _request: ApprovalDecision("approve"),
         )
     assert result.ok is True
-    action, params = client_type.return_value.request.call_args.args
+    action, params = client_type.return_value.request.call_args_list[-2].args
     assert action == "preview.apply"
     prepared = params["operations"]
     assert [item.get("name") for item in prepared] == [

@@ -8,11 +8,22 @@ import re
 from aura.conversation.tools._types import ToolExecResult
 from aura.conversation.tools.write_payloads import _mark_not_applied
 from aura.godot_assets import resolve_godot_asset
+from aura.godot_assets.adapters import BUILTIN_ASSET_SOURCES
 from aura.godot_assets.capture_evidence import validate_capture_set
 from aura.godot_assets.models import GodotAsset, GodotAssetSocket
 from aura.godot_assets.preview import analyze_preview_snapshot
 from aura.godot_editor.client import GodotEditorBridgeClient, GodotEditorBridgeError
+from aura.godot_editor.limits import (
+    MAX_DUPLICATE_COUNT,
+    MAX_INITIAL_PLACEMENTS,
+    MAX_REVISION_OPERATIONS,
+)
 from aura.perception.decompiler import describe as _decompile_image
+
+_MAX_POST_APPLY_PATHS = 256
+_MAX_POST_APPLY_RECORDS = 128
+_MAX_POST_APPLY_WARNINGS = 32
+_MAX_POST_APPLY_SOCKETS = 32
 
 
 class GodotAssetPreviewHandlersMixin:
@@ -100,8 +111,9 @@ class GodotAssetPreviewHandlersMixin:
         )
         if rejected is not None:
             return rejected
+        client = GodotEditorBridgeClient(self._root)
         try:
-            result = GodotEditorBridgeClient(self._root).request(f"preview.{action}", params)
+            result = client.request(f"preview.{action}", params)
         except GodotEditorBridgeError as exc:
             return ToolExecResult(
                 ok=False,
@@ -109,7 +121,24 @@ class GodotAssetPreviewHandlersMixin:
                     {"ok": False, "error": _preview_bridge_error(exc), "failure_class": "godot_editor_bridge_error"}
                 ),
             )
-        return ToolExecResult(ok=True, payload={"ok": True, "applied": bool(result.get("applied")), "action": action, **result})
+        payload = {
+            "ok": True,
+            "applied": bool(result.get("applied")),
+            "action": action,
+            **result,
+        }
+        try:
+            snapshot = client.request("preview.snapshot", {})
+            analyzed = analyze_preview_snapshot(self._root, snapshot)
+            payload["post_apply"] = _compact_post_apply_summary(
+                self._root, action, params, result, analyzed
+            )
+        except (GodotEditorBridgeError, TypeError, ValueError) as exc:
+            payload["post_apply"] = {
+                "available": False,
+                "error": _preview_bridge_error(exc),
+            }
+        return ToolExecResult(ok=True, payload=payload)
 
     def _prepare_preview_params(self, action: str, args: dict) -> dict:
         default_labels = {
@@ -123,8 +152,13 @@ class GodotAssetPreviewHandlersMixin:
         if action == "apply":
             return {"label": label, "operations": self._prepare_preview_operations(args)}
         raw_placements = args.get("placements")
-        if not isinstance(raw_placements, list) or not 1 <= len(raw_placements) <= 64:
-            raise ValueError("placements must contain between 1 and 64 items")
+        if (
+            not isinstance(raw_placements, list)
+            or not 1 <= len(raw_placements) <= MAX_INITIAL_PLACEMENTS
+        ):
+            raise ValueError(
+                f"placements must contain between 1 and {MAX_INITIAL_PLACEMENTS} items"
+            )
         placements = []
         used_names: set[str] = set()
         for index, raw in enumerate(raw_placements):
@@ -157,14 +191,20 @@ class GodotAssetPreviewHandlersMixin:
                     "position": position,
                     "rotation_degrees_y": rotation,
                     "scale": scale,
+                    "allowed_rotations_deg": list(asset.allowed_rotations_deg),
                 }
             )
         return {"label": label, "placements": placements}
 
     def _prepare_preview_operations(self, args: dict) -> list[dict]:
         raw_operations = args.get("operations")
-        if not isinstance(raw_operations, list) or not 1 <= len(raw_operations) <= 25:
-            raise ValueError("operations must contain between 1 and 25 items")
+        if (
+            not isinstance(raw_operations, list)
+            or not 1 <= len(raw_operations) <= MAX_REVISION_OPERATIONS
+        ):
+            raise ValueError(
+                f"operations must contain between 1 and {MAX_REVISION_OPERATIONS} items"
+            )
         operations: list[dict] = []
         targeted: set[str] = set()
         removed_or_replaced: set[str] = set()
@@ -274,7 +314,12 @@ class GodotAssetPreviewHandlersMixin:
                     targeted.discard(f"AuraPreview/{name}")
                 continue
             if operation == "duplicate":
-                count = _bounded_int(raw.get("count"), f"duplicate operation {index} count", 1, 16)
+                count = _bounded_int(
+                    raw.get("count"),
+                    f"duplicate operation {index} count",
+                    1,
+                    MAX_DUPLICATE_COUNT,
+                )
                 if "offset" not in raw:
                     raise ValueError(f"duplicate operation {index} requires an offset")
                 offset = _vector(raw["offset"], f"duplicate operation {index} offset")
@@ -319,7 +364,20 @@ class GodotAssetPreviewHandlersMixin:
                 transform = _optional_transform(raw, index)
                 if not transform:
                     raise ValueError(f"set_transform operation {index} must change a transform value")
-                operations.append({"operation": operation, "node_path": node_path, **transform})
+                prepared_transform = {"operation": operation, "node_path": node_path, **transform}
+                if "rotation_degrees_y" in transform:
+                    asset, preview_instances = self._preview_source_asset(
+                        node_path, "set_transform", planned_nodes, preview_instances
+                    )
+                    _validate_allowed_rotation(
+                        transform["rotation_degrees_y"],
+                        asset.allowed_rotations_deg,
+                        asset.id,
+                    )
+                    prepared_transform["allowed_rotations_deg"] = list(
+                        asset.allowed_rotations_deg
+                    )
+                operations.append(prepared_transform)
                 continue
             removed_or_replaced.add(node_path)
             prepared = self._prepare_catalog_revision_asset(raw, index)
@@ -518,6 +576,133 @@ def _validate_horizontal_socket(facing, asset_id: str, socket_id: str) -> None:
             f"catalog asset {asset_id} socket {socket_id} has no usable horizontal facing "
             "for yaw-only attachment"
         )
+
+
+def _compact_post_apply_summary(
+    project_root,
+    action: str,
+    params: dict,
+    result: dict,
+    analyzed: dict,
+) -> dict:
+    """Return bounded continuation facts without echoing the whole preview."""
+    added = list(result.get("added_paths") or result.get("instance_paths") or [])
+    changed = list(result.get("changed_paths") or [])
+    replaced = list(result.get("replaced_paths") or [])
+    removed = list(result.get("removed_paths") or [])
+    if action == "clear" and not removed:
+        removed = list(result.get("instance_paths") or [])
+
+    current_paths = set(added) | set(changed) | set(replaced)
+    instances = list(analyzed.get("instances") or [])
+    by_path = {str(item.get("path") or ""): item for item in instances}
+    assets_by_identity = _preview_assets_by_identity(project_root)
+    affected_records: list[dict] = []
+    socket_budget = _MAX_POST_APPLY_SOCKETS
+    for path in [*added, *changed, *replaced]:
+        if len(affected_records) >= _MAX_POST_APPLY_RECORDS:
+            break
+        raw = by_path.get(str(path))
+        if raw is None:
+            continue
+        record = _compact_instance_record(raw)
+        asset_id = str(raw.get("asset_id") or "")
+        domain = str(raw.get("domain") or "")
+        if asset_id and domain and socket_budget > 0:
+            asset = assets_by_identity.get((domain.casefold(), asset_id.casefold()))
+            if asset is not None and asset.sockets:
+                sockets = [socket.to_dict() for socket in asset.sockets[:socket_budget]]
+                if sockets:
+                    record["sockets"] = sockets
+                    socket_budget -= len(sockets)
+        affected_records.append(record)
+
+    validation = analyzed.get("structural_validation")
+    facts = validation.get("facts") if isinstance(validation, dict) else []
+    placement_warnings: list[dict] = []
+    overall_bounds: dict = {}
+    for fact in facts if isinstance(facts, list) else []:
+        if not isinstance(fact, dict):
+            continue
+        if fact.get("code") == "footprint_bounds":
+            measured = fact.get("measured")
+            if isinstance(measured, dict):
+                overall_bounds = dict(measured)
+            continue
+        paths = {str(path) for path in fact.get("paths", [])}
+        if (
+            len(placement_warnings) < _MAX_POST_APPLY_WARNINGS
+            and paths
+            and paths.intersection(current_paths)
+            and fact.get("severity") in {"warning", "error", "info"}
+        ):
+            placement_warnings.append(
+                {
+                    key: fact[key]
+                    for key in ("code", "severity", "message", "paths", "measured")
+                    if key in fact
+                }
+            )
+
+    requested_operation_count = (
+        len(params.get("placements") or [])
+        if action == "instantiate"
+        else len(params.get("operations") or [])
+        if action == "apply"
+        else int(result.get("removed_count") or 0)
+    )
+    summary = {
+        "available": True,
+        "operation_count": int(
+            result.get("request_operation_count", requested_operation_count)
+        ),
+        "total_instance_count": int(
+            analyzed.get("instance_count", len(instances)) or len(instances)
+        ),
+        **_bounded_paths("added", added),
+        **_bounded_paths("changed", changed),
+        **_bounded_paths("replaced", replaced),
+        **_bounded_paths("removed", removed),
+        "affected_instances": affected_records,
+        "affected_instance_count": len(current_paths),
+        "affected_instances_truncated": len(affected_records) < len(current_paths),
+        "overall_preview_bounds": overall_bounds,
+        "placement_warnings": placement_warnings,
+    }
+    return summary
+
+
+def _compact_instance_record(raw: dict) -> dict:
+    rotation = raw.get("rotation_degrees") or [0.0, 0.0, 0.0]
+    yaw = float(rotation[1]) if isinstance(rotation, list) and len(rotation) == 3 else 0.0
+    return {
+        "path": str(raw.get("path") or ""),
+        "asset_id": str(raw.get("asset_id") or ""),
+        "domain": str(raw.get("domain") or ""),
+        "position": list(raw.get("position") or [0.0, 0.0, 0.0]),
+        "rotation_degrees_y": yaw,
+        "scale": list(raw.get("scale") or [1.0, 1.0, 1.0]),
+    }
+
+
+def _bounded_paths(prefix: str, paths: list) -> dict:
+    normalized = [str(path) for path in paths]
+    bounded = normalized[:_MAX_POST_APPLY_PATHS]
+    return {
+        f"{prefix}_paths": bounded,
+        f"{prefix}_count": len(normalized),
+        f"{prefix}_paths_truncated": len(bounded) < len(normalized),
+    }
+
+
+def _preview_assets_by_identity(project_root) -> dict[tuple[str, str], GodotAsset]:
+    result: dict[tuple[str, str], GodotAsset] = {}
+    for source in BUILTIN_ASSET_SOURCES:
+        if not source.is_available(project_root):
+            continue
+        for asset in source.load(project_root).assets:
+            result.setdefault((asset.domain.casefold(), asset.id.casefold()), asset)
+    return result
 
 
 def _preview_bridge_error(exc: Exception) -> str:

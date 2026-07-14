@@ -8,6 +8,13 @@ from __future__ import annotations
 
 from typing import Any
 
+from aura.godot_editor.limits import (
+    MAX_DUPLICATE_COUNT,
+    MAX_INITIAL_PLACEMENTS,
+    MAX_REVISION_OPERATIONS,
+    MAX_TOTAL_PREVIEW_INSTANCES,
+)
+
 READ_TOOL_DEFS: list[dict[str, Any]] = [
     {
         "type": "function",
@@ -16,7 +23,8 @@ READ_TOOL_DEFS: list[dict[str, Any]] = [
             "description": (
                 "Inspect recognized, project-specific Godot asset catalogs without changing files or the open "
                 "scene. Returns generic asset descriptors with resource paths, domains, kinds, tags, semantic "
-                "roles, dimensions, sockets, placement modes, calibrations, and catalog diagnostics. Use this "
+                "roles, exact dimensions and local bounds, sockets, placement modes, pivot/position calibrations, "
+                "verified yaw rotations, wall-face placement metadata, sources, and catalog diagnostics. Use this "
                 "to understand what ruins, camps, barriers, buildings, props, or other kits are available before "
                 "planning spatial work. Catalog adapters remain separate from Aura's conversation loop."
             ),
@@ -1250,15 +1258,14 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
         "function": {
             "name": "edit_godot_asset_preview",
             "description": (
-                "Safely assemble catalog-approved PackedScenes beneath a dedicated AuraPreview Node3D in the "
-                "scene currently open in Godot, revise it, or clear its children. With apply, duplicate extends "
-                "a repeated run, while attach connects a different catalog piece through named semantic sockets. "
-                "Build a short connected structural burst in one ordered apply call by explicitly naming each "
-                "instantiate, one-copy duplicate, and attach output, then target that ordinary AuraPreview path in "
-                "later operations. Inspect, capture, and visually critique after the burst instead of calling once "
-                "per wall. set_transform, remove, and replace revise the live result afterward. Every call is approval-gated and one "
-                "Godot UndoRedo action. Asset IDs must come from inspect_godot_assets; arbitrary resource paths "
-                "are not accepted. This never saves the scene automatically. Inspect the preview afterward."
+                "Primary V_Ruins creative construction tool. Place exact catalog pieces beneath AuraPreview and "
+                "apply cohesive ordered revisions using instantiate, duplicate, attach, set_transform, replace, "
+                "and remove. One call may build a useful run, course, stack, tower footprint, opening pass, or "
+                "repair pass; do not call once per mesh. Duplicate and sockets are conveniences, while bounded "
+                "direct positions, offsets, and verified yaw rotations remain valid. Every call is approval-gated "
+                "and one Godot UndoRedo action. Asset IDs must come from inspect_godot_assets; arbitrary resource "
+                f"paths are not accepted. AuraPreview supports {MAX_TOTAL_PREVIEW_INSTANCES} direct children. "
+                "The result includes bounded post-apply changed-instance facts and never saves the scene."
             ),
             "parameters": {
                 "type": "object",
@@ -1268,8 +1275,8 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
                     "placements": {
                         "type": "array",
                         "minItems": 1,
-                        "maxItems": 64,
-                        "description": "Required for instantiate and ignored for clear.",
+                        "maxItems": MAX_INITIAL_PLACEMENTS,
+                        "description": "Initial exact-piece batch for instantiate; ignored for clear.",
                         "items": {
                             "type": "object",
                             "properties": {
@@ -1291,8 +1298,8 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
                     "operations": {
                         "type": "array",
                         "minItems": 1,
-                        "maxItems": 25,
-                        "description": "Atomic ordered revision operations required for action=apply.",
+                        "maxItems": MAX_REVISION_OPERATIONS,
+                        "description": "Cohesive atomic ordered revision operations required for action=apply.",
                         "items": {
                             "type": "object",
                             "properties": {
@@ -1320,7 +1327,7 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
                                 "count": {
                                     "type": "integer",
                                     "minimum": 1,
-                                    "maximum": 16,
+                                    "maximum": MAX_DUPLICATE_COUNT,
                                     "description": "For duplicate, the bounded number of copies to add.",
                                 },
                                 "offset": {
