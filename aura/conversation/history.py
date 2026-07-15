@@ -18,8 +18,9 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
-# Tools whose results carry source code that the Worker needs to read and act on.
-# These get a higher truncation floor to avoid starvation during active coding tasks.
+# Tools whose results carry source code or a focused executable contract that the
+# Worker needs to read and act on. These get a higher truncation floor to avoid
+# starvation during active coding and semantic-building tasks.
 SOURCE_READ_TOOLS: frozenset[str] = frozenset({
     "read_file",
     "read_files",
@@ -27,6 +28,7 @@ SOURCE_READ_TOOLS: frozenset[str] = frozenset({
     "grep_search",
     "find_usages",
     "read_file_outline",
+    "inspect_live_ruin_contract",
 })
 
 # Minimum chars kept for source-reading tool results when under pressure.

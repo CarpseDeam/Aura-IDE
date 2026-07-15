@@ -65,34 +65,34 @@ def test_live_build_context_selects_workflow(tmp_path: Path) -> None:
         target_files=("addons/aura_bridge/transport/bridge_server.gd",),
         content="Build a ruined gatehouse with a real passage and connected walls beneath AuraPreview.",
     )
-    assert "Godot Live Building — Procedural Co-Building" in context
+    assert "Godot Live Building — Natural Language Architectural Programs" in context
     assert "build_live_ruin" in context
 
 
-def test_workflow_reads_request_literally_and_starts_with_defining_feature() -> None:
+def test_workflow_translates_plain_requests_into_one_architectural_program() -> None:
     text = _skill_text().lower()
     assert "read the user's requested place literally" in text
-    assert "start with its defining feature" in text
-    assert "gate passage, hall, courtyard, tower, room, or wall" in text
-    assert "build connected architecture with the existing semantic operations" in text
-    assert "floors, walls, openings, upper levels, ceilings, and stairs" in text
+    assert "without making them learn procedural vocabulary" in text
+    assert "never ask the user for operation names" in text
+    assert "use `build_architectural_program`" in text
+    assert "one program may contain several connected masses" in text
+    assert "do not assemble a monastery, tower, gatehouse, or fortress" in text
 
 
 def test_workflow_keeps_primary_tool_atomic_and_preview_incremental() -> None:
     text = _skill_text().lower()
     assert "`build_live_ruin` is the primary mutation tool" in text
-    assert "`edit_godot_asset_preview` is only a narrow fallback" in text
     assert "exactly one cohesive semantic operation" in text
     assert "completed post-apply state before choosing the next operation" in text
     assert "continue beneath the existing real `aurapreview`" in text
-    assert "preserve successful earlier work" in text
+    assert "preserve successful unaffected masses" in text
     assert "never save the scene unless explicitly requested" in text
 
 
 def test_workflow_uses_only_plain_returned_facts_for_next_step() -> None:
     text = _skill_text().lower()
-    assert "piece count, handles, spaces, levels, walls, openings, connections" in text
-    assert "choose what to build next from the user's request and the structure already present" in text
+    assert "blueprint identity, mass handles, mass deltas, entrance facts, piece counts" in text
+    assert "compact receipt is intentionally not a mesh or graph dump" in text
     assert "not treat returned metadata, operation names, or successful validation as proof" in text
     for removed in [
         "mass_map", "mass map", "vertical_profiles", "vertical profiles",
@@ -104,28 +104,29 @@ def test_workflow_uses_only_plain_returned_facts_for_next_step() -> None:
         assert removed not in text
 
 
-def test_workflow_restricts_supported_spans_to_explicit_requests() -> None:
+def test_workflow_encodes_silhouette_facade_depth_and_coherent_ruin() -> None:
     text = _skill_text().lower()
-    assert "do not add an elevated bridge, span, connector, upper chamber" in text
-    assert "unless the user explicitly requested one or it is plainly necessary for physical access" in text
-    assert "use `add_supported_span` only when the user explicitly asks" in text
-    assert "two spaces at the same level are not a reason to add one" in text
-    assert "it is not a normal completion step" in text
+    assert "make one mass visually dominant" in text
+    assert "stepped or orthogonal footprints" in text
+    assert "give long facades depth" in text
+    assert "paired towers should differ" in text
+    assert "concentrate ruin into one or two cause-and-effect regions" in text
 
 
-def test_workflow_preserves_semantic_capabilities_and_exact_wall_pieces() -> None:
+def test_workflow_prefers_program_revisions_and_quarantines_legacy_operations() -> None:
     text = _skill_text()
     for operation in [
-        "create_run", "turn_run", "extend_run", "create_enclosure", "attach_room",
-        "extend_room", "add_floor_region", "add_upper_level", "add_upper_wall_section",
-        "insert_opening", "connect_spaces", "add_approach", "add_stair_run",
-        "place_wall_piece", "apply_damage", "add_supported_span",
+        "build_architectural_program", "inspect_architectural_program",
+        "revise_architectural_mass", "revise_facade_grammar",
+        "revise_vertical_profile", "revise_roof", "revise_ruin_profile",
+        "revise_circulation", "apply_architectural_dressing",
+        "export_architectural_blueprint",
     ]:
         assert operation in text
     lower = text.lower()
-    assert "selects an exact catalog `asset_id`" in lower
-    assert "project calibration owns transforms" in lower
-    assert "stable handles" in lower
+    assert "compatibility controls" in lower
+    assert "never choose them for a new broad architectural request" in lower
+    assert "stable blueprint/mass handles" in lower
     assert "godot `undoredo`" in lower
 
 
@@ -139,10 +140,7 @@ def test_workflow_uses_exact_diagnostics_and_optional_visual_checks() -> None:
 
 def test_workflow_forbids_new_construction_systems_and_implicit_save() -> None:
     text = _skill_text().lower()
-    for forbidden_system in [
-        "templates", "named building generators", "new architecture engine",
-        "scoring", "critic gate", "mandatory vision",
-    ]:
+    for forbidden_system in ["named building generators", "mandatory vision"]:
         assert forbidden_system in text
     assert "no raw tcp" in text
     assert "no arbitrary `.tscn` paths" in text

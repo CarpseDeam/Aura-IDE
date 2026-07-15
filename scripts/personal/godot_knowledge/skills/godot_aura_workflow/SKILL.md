@@ -3,49 +3,50 @@ task_kinds: ["visual iteration", "godot_bridge", "godot_assembly", "godot_visual
 path_globs: ["addons/aura_bridge/**", "scripts/live/**", ".aura/tools/**"]
 triggers: ["aura preview", "godot bridge", "build_live_ruin", "procedural construction", "assemble", "godot live", "live scene", "live composition"]
 ---
-### Godot Live Building — Procedural Co-Building
+### Godot Live Building — Natural Language Architectural Programs
 
-Use the existing semantic workflow to build the place the user actually requested. `build_live_ruin` is the primary mutation tool. `edit_godot_asset_preview` is only a narrow fallback for a requested catalog edit that the semantic vocabulary cannot express.
+Build the place the user described without making them learn procedural vocabulary. `build_live_ruin` is the primary mutation tool. Translate ordinary language into the project-owned architectural program silently; never ask the user for operation names, facade terminals, prompt keywords, asset IDs, or other "magic words."
 
-For a small bounded edit:
+For a new structure:
 
-`one instruction → one build_live_ruin call → short factual receipt → wait`
+`inspect compact contract → inspect build schema if needed → build one connected architectural program → read compact receipt → revise that blueprint`
 
-For a broader request:
+For a bounded follow-up:
 
-`inspect once if needed → build the defining feature → read returned facts → continue the connected structure → useful checkpoint → user handoff`
+`inspect existing blueprint if needed → revise the named mass/profile → preserve unaffected geometry → short factual receipt`
 
 #### Interactive Mode
 
 - Use one Interactive Mode for live building. Small edits and progressive builds are workflows selected by instruction scope, not separate execution modes.
-- Read the user's requested place literally. Start with its defining feature, such as a gate passage, hall, courtyard, tower, room, or wall, so later construction grows from something recognizable.
-- Build connected architecture with the existing semantic operations. Add floors, walls, openings, upper levels, ceilings, and stairs where the requested structure or physical access requires them.
-- Inspect `inspect_live_ruin_contract` at most once per request when the contract or current semantic state is unknown. After it returns, make the first useful `build_live_ruin` call immediately.
+- Read the user's requested place literally, including mood and ruin history. Infer a clear approach axis, dominant mass, subordinate masses, silhouette, facade rhythm, circulation, roof/crown, and coherent damage story.
+- For any new building larger than a single wall edit, use `build_architectural_program`. One program may contain several connected masses; do not assemble a monastery, tower, gatehouse, or fortress from compatibility enclosures and attached rooms.
+- Start with `inspect_live_ruin_contract(detail="summary")`. If exact nested fields are unknown, request only `detail="operation", operation="build_architectural_program"`; do not load the compatibility catalog.
 - Put exactly one cohesive semantic operation in each `build_live_ruin` call. The model must receive that call's completed post-apply state before choosing the next operation; do not submit future live-build calls beside it.
-- Continue beneath the existing real `AuraPreview`. Later requests such as `extend the east room` or `breach the rear wall` modify the named live structure and preserve successful earlier work.
-- Use returned piece count, handles, spaces, levels, walls, openings, connections, created or modified references, and geometry or topology diagnostics as simple facts. Choose what to build next from the user's request and the structure already present.
+- Continue beneath the existing real `AuraPreview`. Later requests modify the same `blueprint_id` with stable mass handles and preserve successful unaffected masses.
+- Use returned blueprint identity, mass handles, mass deltas, entrance facts, piece counts, and diagnostics as facts. A compact receipt is intentionally not a mesh or graph dump.
 - Do not treat returned metadata, operation names, or successful validation as proof that the requested architecture is complete or visually successful.
 - Do not inspect constructor source, catalog files, exact node transforms, or implementation details during ordinary semantic construction when the contract supplies the needed syntax and references. Never create probe geometry to learn behavior.
 - Never save the scene unless explicitly requested. Each procedural call is one atomic Godot `UndoRedo` action.
 
-#### Connected Construction
+#### Architectural Composition
 
-- Complete one meaningful requested component or useful checkpoint at a time. For a large place such as a citadel, castle, fortress district, monastery, or multi-zone ruin, use several connected `build_live_ruin` calls rather than one comprehensive call.
-- Keep building inside the current request while another operation is plainly needed for the component being built. Do not pause after every wall or module, and do not discard successful earlier calls when a later operation is rejected.
+- Make one mass visually dominant. Vary subordinate height, footprint, setback, crown, or ruin state so the result does not read as equal boxes.
+- Use stepped or orthogonal footprints where the concept needs an apse, offset wing, irregular tower, or changing silhouette. Rectangles are valid components, not the whole architectural language.
+- Give long facades depth through buttressed bays, arcades, recesses, readable entrances, or attached masses. Keep windows subordinate and avoid uninterrupted slabs.
+- Frame the principal entrance and keep an approach axis readable. Paired towers should differ in at least one of height, setback, crown, or damage.
+- Concentrate ruin into one or two cause-and-effect regions: a fallen upper corner exposing a floor, a missing roof zone, a breached wall, or a surviving shell. Avoid uniform random deletion.
+- Prefer role-aware facade defaults. Author a facade grammar only for a defining rhythm such as a processional arcade or monumental recessed gate.
 - If a call fails, use its exact structured diagnostic and valid corrective candidates to fix only that operation. Geometry and topology failures do not require vision or individual mesh nudges.
-- If an API interruption follows a successful step, reconstruct current state with `inspect_live_ruin_contract`, continue from returned handles, and never repeat an already-present stable handle.
-- Do not add an elevated bridge, span, connector, upper chamber, or joining structure unless the user explicitly requested one or it is plainly necessary for physical access.
-- Use `add_supported_span` only when the user explicitly asks for an elevated bridge, skyway, upper passage, or another structure joining separate supports. Two spaces at the same level are not a reason to add one.
+- If an API interruption follows a successful step, inspect current state, continue from the returned blueprint and mass handles, and never rebuild an already-present blueprint.
 
-#### Procedural Vocabulary
+#### Architectural Operations
 
-- `create_run`, `turn_run`, and `extend_run` build connected wall runs from semantic anchors and cardinal directions.
-- `create_enclosure`, `attach_room`, and `extend_room` build or extend rooms and enclosures from named walls and slots.
-- `add_floor_region`, floor and ceiling options, `add_upper_level`, and `add_upper_wall_section` add the surfaces or upper construction the request needs.
-- `insert_opening`, `connect_spaces`, `add_approach`, and `add_stair_run` provide entrances, passages, and physical circulation.
-- `place_wall_piece` selects an exact catalog `asset_id` for an existing wall face. Tags may filter catalog results but never silently select an asset; project calibration owns transforms, orientation, embed, and backing-wall placement.
-- `apply_damage` and the existing surface-damage operations revise selected existing construction without rebuilding unrelated work.
-- `add_supported_span` remains available for the explicit joining cases described above; it is not a normal completion step.
+- `build_architectural_program` creates the connected mass composition and all project-owned realization beneath it.
+- `inspect_architectural_program` returns the durable blueprint facts needed for a follow-up.
+- `revise_architectural_mass`, `revise_facade_grammar`, `revise_vertical_profile`, `revise_roof`, `revise_ruin_profile`, and `revise_circulation` change one architectural concern while preserving unrelated masses.
+- `apply_architectural_dressing` is a finishing revision, not a substitute for silhouette or facade depth.
+- `export_architectural_blueprint` exports only when requested.
+- Older run, enclosure, room, wall-course, exact-piece, and surface operations are compatibility controls for explicitly requested maintenance of an existing legacy construction. Never choose them for a new broad architectural request.
 
 #### Planner and Worker Role Split
 
@@ -57,7 +58,7 @@ For a broader request:
 
 ##### Worker (owns every mutation)
 
-- Use `inspect_live_ruin_contract` once when needed, then use `build_live_ruin` with semantic parameters and stable handles.
+- Use the focused contract inspection, then `build_live_ruin` with one architectural-program operation and stable blueprint/mass handles.
 - Use `edit_godot_asset_preview` only as the narrow fallback described above.
 - Keep every generated piece beneath the genuine `AuraPreview`, every call atomic, and the scene unsaved unless the user explicitly permits saving.
 
@@ -70,6 +71,6 @@ For a broader request:
 #### Safety and Scope
 
 - Use catalog-only asset IDs and project calibration; no arbitrary `.tscn` paths or raw transforms.
-- No raw TCP, bridge tokens, second bridge, helper generator, autonomous builder state machine, templates, named building generators, new architecture engine, scoring, critic gate, or mandatory vision.
+- No raw TCP, bridge tokens, second bridge, helper generator, autonomous builder state machine, named building generators, or mandatory vision.
 - Invalid geometry must reject before mutation. A failed call applies nothing from that call; successful earlier calls remain in the unsaved preview.
 - Never save the scene unless explicitly requested.
