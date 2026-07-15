@@ -115,3 +115,29 @@ def test_scene_tool_is_exposed_to_workers_but_not_planners(tmp_path: Path) -> No
 
     assert "edit_godot_scene" in worker_names
     assert "edit_godot_scene" not in planner_names
+
+
+def test_scene_tool_refuses_live_preview_main_scene_disk_edits(tmp_path: Path) -> None:
+    scene = tmp_path / "scenes" / "ruin_preview.tscn"
+    scene.parent.mkdir()
+    scene.write_text(SCENE, encoding="utf-8")
+    (tmp_path / "project.godot").write_text(
+        '[application]\nrun/main_scene="res://scenes/ruin_preview.tscn"\n\n'
+        '[aura]\neditor_bridge/preview_planner="res://scripts/live/planner.gd"\n',
+        encoding="utf-8",
+    )
+    registry = ToolRegistry(tmp_path, mode="worker")
+
+    result = registry.execute(
+        "edit_godot_scene",
+        {
+            "path": "scenes/ruin_preview.tscn",
+            "operations": [{"action": "remove_node", "node_path": "Player", "recursive": True}],
+        },
+        lambda request: ApprovalDecision(action="approve"),
+    )
+
+    assert result.ok is False
+    assert result.payload["failure_class"] == "live_preview_scene_file_edit_forbidden"
+    assert result.payload["suggested_next_tool"] == "build_live_ruin"
+    assert scene.read_text(encoding="utf-8") == SCENE

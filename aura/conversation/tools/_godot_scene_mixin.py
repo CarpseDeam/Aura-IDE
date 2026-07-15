@@ -48,6 +48,23 @@ class GodotSceneHandlersMixin:
                     }
                 ),
             )
+        if self._is_live_preview_main_scene(target):
+            return ToolExecResult(
+                ok=False,
+                payload=_mark_not_applied(
+                    {
+                        "ok": False,
+                        "path": str(path_arg),
+                        "error": (
+                            "The project's live-preview main scene is editor-owned. Use build_live_ruin "
+                            "or edit_godot_asset_preview; never rewrite it on disk, hand-create "
+                            "AuraPreview, or relaunch Godot when the bridge is offline."
+                        ),
+                        "failure_class": "live_preview_scene_file_edit_forbidden",
+                        "suggested_next_tool": "build_live_ruin",
+                    }
+                ),
+            )
         try:
             content = target.read_text(encoding="utf-8")
         except FileNotFoundError:
@@ -107,6 +124,18 @@ class GodotSceneHandlersMixin:
             result.payload["operation_count"] = len(transformed.operations)
             result.payload["scene_operations"] = list(transformed.operations)
         return result
+
+    def _is_live_preview_main_scene(self, target) -> bool:
+        project_file = self._root / "project.godot"
+        try:
+            project_text = project_file.read_text(encoding="utf-8")
+            relative = target.relative_to(self._root).as_posix()
+        except (FileNotFoundError, OSError, ValueError):
+            return False
+        if "editor_bridge/preview_planner=" not in project_text:
+            return False
+        expected = f'run/main_scene="res://{relative}"'
+        return expected in project_text
 
 
 __all__ = ["GodotSceneHandlersMixin"]

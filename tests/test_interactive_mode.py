@@ -360,7 +360,7 @@ def test_interactive_context_uses_latest_request_for_authored_skill(tmp_path: Pa
         content=request,
     )
 
-    assert "Godot Live Building — Procedural Co-Building" in composed.system_prompt
+    assert "Godot Live Building — Natural Language Architectural Programs" in composed.system_prompt
     assert "capture_godot_asset_preview" in composed.system_prompt
     assert "critique_godot_preview_local" in composed.system_prompt
 

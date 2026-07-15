@@ -27,6 +27,7 @@ For a bounded follow-up:
 - Do not treat returned metadata, operation names, or successful validation as proof that the requested architecture is complete or visually successful.
 - Do not inspect constructor source, catalog files, exact node transforms, or implementation details during ordinary semantic construction when the contract supplies the needed syntax and references. Never create probe geometry to learn behavior.
 - Never save the scene unless explicitly requested. Each procedural call is one atomic Godot `UndoRedo` action.
+- Never create `AuraPreview` manually or edit the active live-preview `.tscn` on disk. The bridge owns that root and its required metadata. If the bridge goes offline, stop and report it; do not launch or relaunch Godot, edit bridge source, or fall back to `edit_godot_scene`.
 
 #### Architectural Composition
 
