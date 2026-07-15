@@ -199,58 +199,49 @@ def test_interactive_prompt_states_direct_iterative_contract() -> None:
     assert "one direct, persistent conversational agent" in prompt
     assert "Do not dispatch to another agent" in prompt
     assert "Inspect the current artifact before changing it" in prompt
-    assert "semantic critique tools" in prompt
-    assert "Do not save a Godot scene unless explicitly requested" in prompt
-    assert "arbitrary two-pass" in prompt
+    assert "Read the user's requested place literally" in prompt
+    assert "Never save a Godot scene unless explicitly requested" in prompt
 
 
 def test_interactive_prompt_requires_result_driven_progressive_godot_rounds() -> None:
     prompt = SINGLE_SYSTEM_PROMPT.lower()
-    assert "progressive interactive loop by default" in prompt
-    assert "apply the first safe, cohesive architectural step immediately" in prompt
-    assert "exactly one live-construction mutation call in a model tool-call round" in prompt
-    assert "wait for that call's result before choosing the next" in prompt
-    assert "do not pre-submit independent spaces" in prompt
-    assert "inside the same interactive turn without entering the planner" in prompt
+    assert "use `build_live_ruin` as the primary mutation tool" in prompt
+    assert "apply the first safe, cohesive step immediately" in prompt
+    assert "exactly one cohesive semantic operation in each `build_live_ruin` call" in prompt
+    assert "wait for its result before choosing the next operation" in prompt
+    assert "do not pre-submit future operations" in prompt
+    assert "inside the same interactive turn" in prompt
     assert "after an interruption, inspect the reconstructable live semantic state" in prompt
     assert "without repeating its handle" in prompt
 
 
-def test_interactive_prompt_composes_architecture_before_detail() -> None:
+def test_interactive_prompt_builds_literal_connected_architecture() -> None:
     prompt = SINGLE_SYSTEM_PROMPT.lower()
-    assert "read the compact returned mass map and ordered vertical profiles after every mass operation" in prompt
-    assert "a primary low or wide mass" in prompt
-    assert "secondary taller or narrower masses" in prompt
-    assert "explicit height contrast and footprint transitions" in prompt
-    assert "real connectors or supported spans where required" in prompt
-    assert "three adjacent rooms do not establish those relationships" in prompt
-    assert "complete structural massing and silhouette before windows" in prompt
-    assert "never claim an architectural component exists merely because an operation has that name" in prompt
-    assert "if the user says no towers or no roof yet, do not add them" in prompt
-    assert "stop after one meaningful component or visual checkpoint" in prompt
+    assert "build recognizable connected architecture" in prompt
+    assert "start with the defining feature of the request" in prompt
+    assert "gate passage, hall, courtyard, tower, room, or wall" in prompt
+    assert "add floors, walls, openings, upper levels, ceilings, and stairs" in prompt
+    assert "choose the next component from the user's request and the structure already present" in prompt
+    assert "handles, spaces, levels, walls, openings, connections, piece count" in prompt
     assert "add_tower" not in prompt
 
 
-def test_interactive_prompt_defers_decoration_for_factual_mass_gaps() -> None:
+def test_interactive_prompt_does_not_invent_joining_structures() -> None:
     prompt = SINGLE_SYSTEM_PROMPT.lower()
-    assert "vertical profiles repeatedly preserve the same footprint" in prompt
-    assert "requested height contrast or a connector is missing" in prompt
-    assert "requested crown transition is absent" in prompt
-    assert "masses remain disconnected" in prompt
-    assert "choose structural continuation candidates before wall decoration" in prompt
-    assert "fixed dimensions, symmetry rules, named templates, or hardcoded archetypes" in prompt
+    assert "do not add an elevated bridge, span, connector, upper chamber" in prompt
+    assert "unless the user explicitly requested it or it is plainly necessary for physical access" in prompt
+    assert "use `add_supported_span` only for an explicitly requested elevated bridge" in prompt
+    for removed in ["mass map", "vertical profiles", "styling affordances", "structural continuation candidates"]:
+        assert removed not in prompt
 
 
 def test_interactive_prompt_requires_exact_wall_assets_and_factual_visual_claims() -> None:
     prompt = SINGLE_SYSTEM_PROMPT.lower()
     assert "inspect the real wall-placeable catalog and select the exact `asset_id`" in prompt
-    assert "tags filter results but never select a piece" in prompt
-    assert "never substitute invented motif names" in prompt
-    assert "use `place_wall_piece` only after the main structural mass and silhouette exist" in prompt
-    assert "a successful operation proves safe placement, not good composition" in prompt
-    assert "a screenshot is only a capture" in prompt
-    assert "claim visual verification only when a vision-capable tool returns visual findings" in prompt
-    assert "do not add a mandatory vision pass" in prompt
+    assert "never provide raw transforms or embed values" in prompt
+    assert "successful semantic operation proves only the returned construction and validation facts" in prompt
+    assert "without visual findings, let the user judge appearance" in prompt
+    assert "mandatory vision" in prompt
 
 
 def test_interactive_tool_loop_returns_each_live_step_before_model_selects_next(
@@ -370,8 +361,8 @@ def test_interactive_context_uses_latest_request_for_authored_skill(tmp_path: Pa
     )
 
     assert "Godot Live Building — Procedural Co-Building" in composed.system_prompt
-    assert "describe_godot_preview_local" in composed.system_prompt
-    assert "critique_godot_preview_local" not in composed.system_prompt
+    assert "capture_godot_asset_preview" in composed.system_prompt
+    assert "critique_godot_preview_local" in composed.system_prompt
 
 
 def test_persistence_round_trips_interactive_and_missing_mode_defaults_planner(tmp_path: Path) -> None:
