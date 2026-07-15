@@ -52,7 +52,6 @@ func plan_and_apply(params: Dictionary) -> Dictionary:
 	var revision: Variant = _preview_actions.apply_revision({
 		"label": raw_label,
 		"operations": plan["operations"],
-		"semantic_builder": true,
 	})
 	if not revision is Dictionary or not revision.has("ok") or not revision["ok"] is bool:
 		return {"ok": false, "error": "preview revision owner returned an invalid result"}

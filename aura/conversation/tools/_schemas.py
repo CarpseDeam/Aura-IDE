@@ -8,13 +8,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from aura.godot_editor.limits import (
-    MAX_DUPLICATE_COUNT,
-    MAX_INITIAL_PLACEMENTS,
-    MAX_REVISION_OPERATIONS,
-    MAX_TOTAL_PREVIEW_INSTANCES,
-)
-
 READ_TOOL_DEFS: list[dict[str, Any]] = [
     {
         "type": "function",
@@ -23,8 +16,7 @@ READ_TOOL_DEFS: list[dict[str, Any]] = [
             "description": (
                 "Inspect recognized, project-specific Godot asset catalogs without changing files or the open "
                 "scene. Returns generic asset descriptors with resource paths, domains, kinds, tags, semantic "
-                "roles, exact dimensions and local bounds, sockets, placement modes, pivot/position calibrations, "
-                "verified yaw rotations, wall-face placement metadata, sources, and catalog diagnostics. Use this "
+                "roles, dimensions, sockets, placement modes, calibrations, and catalog diagnostics. Use this "
                 "to understand what ruins, camps, barriers, buildings, props, or other kits are available before "
                 "planning spatial work. Catalog adapters remain separate from Aura's conversation loop."
             ),
@@ -1258,14 +1250,15 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
         "function": {
             "name": "edit_godot_asset_preview",
             "description": (
-                "Primary V_Ruins creative construction tool. Place exact catalog pieces beneath AuraPreview and "
-                "apply cohesive ordered revisions using instantiate, duplicate, attach, set_transform, replace, "
-                "and remove. Use calibrated relative_to anchors for structural adjacency and calibrated duplicate "
-                "stepping for runs and courses; use sockets where compatible. Raw positions remain useful for the "
-                "first anchor, rubble, and deliberate free placement. Every call is approval-gated "
-                "and one Godot UndoRedo action. Asset IDs must come from inspect_godot_assets; arbitrary resource "
-                f"paths are not accepted. AuraPreview supports {MAX_TOTAL_PREVIEW_INSTANCES} direct children. "
-                "The result includes bounded post-apply changed-instance facts and never saves the scene."
+                "Safely assemble catalog-approved PackedScenes beneath a dedicated AuraPreview Node3D in the "
+                "scene currently open in Godot, revise it, or clear its children. With apply, duplicate extends "
+                "a repeated run, while attach connects a different catalog piece through named semantic sockets. "
+                "Build a short connected structural burst in one ordered apply call by explicitly naming each "
+                "instantiate, one-copy duplicate, and attach output, then target that ordinary AuraPreview path in "
+                "later operations. Inspect, capture, and visually critique after the burst instead of calling once "
+                "per wall. set_transform, remove, and replace revise the live result afterward. Every call is approval-gated and one "
+                "Godot UndoRedo action. Asset IDs must come from inspect_godot_assets; arbitrary resource paths "
+                "are not accepted. This never saves the scene automatically. Inspect the preview afterward."
             ),
             "parameters": {
                 "type": "object",
@@ -1275,8 +1268,8 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
                     "placements": {
                         "type": "array",
                         "minItems": 1,
-                        "maxItems": MAX_INITIAL_PLACEMENTS,
-                        "description": "Initial exact-piece batch for instantiate; ignored for clear.",
+                        "maxItems": 64,
+                        "description": "Required for instantiate and ignored for clear.",
                         "items": {
                             "type": "object",
                             "properties": {
@@ -1298,8 +1291,8 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
                     "operations": {
                         "type": "array",
                         "minItems": 1,
-                        "maxItems": MAX_REVISION_OPERATIONS,
-                        "description": "Cohesive atomic ordered revision operations required for action=apply.",
+                        "maxItems": 25,
+                        "description": "Atomic ordered revision operations required for action=apply.",
                         "items": {
                             "type": "object",
                             "properties": {
@@ -1327,7 +1320,7 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
                                 "count": {
                                     "type": "integer",
                                     "minimum": 1,
-                                    "maximum": MAX_DUPLICATE_COUNT,
+                                    "maximum": 16,
                                     "description": "For duplicate, the bounded number of copies to add.",
                                 },
                                 "offset": {
@@ -1342,31 +1335,6 @@ WRITE_TOOL_DEFS: list[dict[str, Any]] = [
                                     "enum": ["local", "world"],
                                     "default": "local",
                                     "description": "Interpret duplicate offset in the source's local basis or preview world space.",
-                                },
-                                "relative_to": {
-                                    "type": "object",
-                                    "description": "For instantiate, set_transform, or replace, derive position by meeting audited anchor planes. Cannot be combined with position.",
-                                    "properties": {
-                                        "node_path": {"type": "string"},
-                                        "reference_anchor": {"type": "array", "items": {"type": "integer", "enum": [-1, 0, 1]}, "minItems": 3, "maxItems": 3},
-                                        "piece_anchor": {"type": "array", "items": {"type": "integer", "enum": [-1, 0, 1]}, "minItems": 3, "maxItems": 3},
-                                        "offset": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3, "default": [0, 0, 0]},
-                                        "offset_space": {"type": "string", "enum": ["reference_local", "world"], "default": "reference_local"},
-                                    },
-                                    "required": ["node_path", "reference_anchor", "piece_anchor"],
-                                    "additionalProperties": False,
-                                },
-                                "alignment_step": {
-                                    "type": "object",
-                                    "description": "For duplicate, create each copy relative to the previous copy using audited geometry. Cannot be combined with numeric offset.",
-                                    "properties": {
-                                        "reference_anchor": {"type": "array", "items": {"type": "integer", "enum": [-1, 0, 1]}, "minItems": 3, "maxItems": 3},
-                                        "piece_anchor": {"type": "array", "items": {"type": "integer", "enum": [-1, 0, 1]}, "minItems": 3, "maxItems": 3},
-                                        "offset": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3, "default": [0, 0, 0]},
-                                        "offset_space": {"type": "string", "enum": ["reference_local", "world"], "default": "reference_local"},
-                                    },
-                                    "required": ["reference_anchor", "piece_anchor"],
-                                    "additionalProperties": False,
                                 },
                                 "source_socket": {
                                     "type": "string",

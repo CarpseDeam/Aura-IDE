@@ -6,19 +6,12 @@ import math
 import re
 
 from aura.conversation.tools._types import ToolExecResult
-from aura.conversation.tools.godot_preview_alignment import (
-    PreviewRevisionPreparer,
-    _catalog_socket,  # noqa: F401 - compatibility re-export for focused callers
-)
-from aura.conversation.tools.godot_preview_results import compact_post_apply_summary
 from aura.conversation.tools.write_payloads import _mark_not_applied
 from aura.godot_assets import resolve_godot_asset
 from aura.godot_assets.capture_evidence import validate_capture_set
+from aura.godot_assets.models import GodotAsset, GodotAssetSocket
 from aura.godot_assets.preview import analyze_preview_snapshot
 from aura.godot_editor.client import GodotEditorBridgeClient, GodotEditorBridgeError
-from aura.godot_editor.limits import (
-    MAX_INITIAL_PLACEMENTS,
-)
 from aura.perception.decompiler import describe as _decompile_image
 
 
@@ -107,9 +100,8 @@ class GodotAssetPreviewHandlersMixin:
         )
         if rejected is not None:
             return rejected
-        client = GodotEditorBridgeClient(self._root)
         try:
-            result = client.request(f"preview.{action}", params)
+            result = GodotEditorBridgeClient(self._root).request(f"preview.{action}", params)
         except GodotEditorBridgeError as exc:
             return ToolExecResult(
                 ok=False,
@@ -117,24 +109,7 @@ class GodotAssetPreviewHandlersMixin:
                     {"ok": False, "error": _preview_bridge_error(exc), "failure_class": "godot_editor_bridge_error"}
                 ),
             )
-        payload = {
-            "ok": True,
-            "applied": bool(result.get("applied")),
-            "action": action,
-            **result,
-        }
-        try:
-            snapshot = client.request("preview.snapshot", {})
-            analyzed = analyze_preview_snapshot(self._root, snapshot)
-            payload["post_apply"] = compact_post_apply_summary(
-                self._root, action, params, result, analyzed
-            )
-        except (GodotEditorBridgeError, TypeError, ValueError) as exc:
-            payload["post_apply"] = {
-                "available": False,
-                "error": _preview_bridge_error(exc),
-            }
-        return ToolExecResult(ok=True, payload=payload)
+        return ToolExecResult(ok=True, payload={"ok": True, "applied": bool(result.get("applied")), "action": action, **result})
 
     def _prepare_preview_params(self, action: str, args: dict) -> dict:
         default_labels = {
@@ -148,13 +123,8 @@ class GodotAssetPreviewHandlersMixin:
         if action == "apply":
             return {"label": label, "operations": self._prepare_preview_operations(args)}
         raw_placements = args.get("placements")
-        if (
-            not isinstance(raw_placements, list)
-            or not 1 <= len(raw_placements) <= MAX_INITIAL_PLACEMENTS
-        ):
-            raise ValueError(
-                f"placements must contain between 1 and {MAX_INITIAL_PLACEMENTS} items"
-            )
+        if not isinstance(raw_placements, list) or not 1 <= len(raw_placements) <= 64:
+            raise ValueError("placements must contain between 1 and 64 items")
         placements = []
         used_names: set[str] = set()
         for index, raw in enumerate(raw_placements):
@@ -187,13 +157,258 @@ class GodotAssetPreviewHandlersMixin:
                     "position": position,
                     "rotation_degrees_y": rotation,
                     "scale": scale,
-                    "allowed_rotations_deg": list(asset.allowed_rotations_deg),
                 }
             )
         return {"label": label, "placements": placements}
 
     def _prepare_preview_operations(self, args: dict) -> list[dict]:
-        return PreviewRevisionPreparer(self._root, GodotEditorBridgeClient).prepare(args)
+        raw_operations = args.get("operations")
+        if not isinstance(raw_operations, list) or not 1 <= len(raw_operations) <= 25:
+            raise ValueError("operations must contain between 1 and 25 items")
+        operations: list[dict] = []
+        targeted: set[str] = set()
+        removed_or_replaced: set[str] = set()
+        read: set[str] = set()
+        added_names: set[str] = set()
+        planned_nodes: dict[str, GodotAsset] = {}
+        preview_instances: list[dict] | None = None
+        for index, raw in enumerate(raw_operations):
+            if not isinstance(raw, dict):
+                raise ValueError(f"operation {index} must be an object")
+            operation = str(raw.get("operation") or "")
+            if operation not in {"set_transform", "instantiate", "remove", "replace", "duplicate", "attach"}:
+                raise ValueError(f"operation {index} has an unsupported operation")
+            if operation == "instantiate":
+                prepared = self._prepare_catalog_revision_asset(raw, index)
+                if prepared["name"] in added_names:
+                    raise ValueError(f"duplicate new preview name: {prepared['name']}")
+                added_names.add(prepared["name"])
+                operations.append({"operation": operation, **prepared})
+                planned_nodes[f"AuraPreview/{prepared['name']}"] = resolve_godot_asset(
+                    self._root,
+                    str(raw.get("asset_id") or ""),
+                    domain=str(raw.get("domain") or ""),
+                )
+                targeted.discard(f"AuraPreview/{prepared['name']}")
+                continue
+
+            node_path = _direct_preview_path(raw.get("node_path"), index)
+            source_is_planned = node_path in planned_nodes
+            if source_is_planned and operation not in {"duplicate", "attach"}:
+                raise ValueError(
+                    f"operation {index} cannot {operation} an unattached planned node: {node_path}"
+                )
+            if operation in {"duplicate", "attach"}:
+                if node_path in removed_or_replaced:
+                    raise ValueError(
+                        f"operation {index} cannot {operation} from a removed or replaced source: {node_path}"
+                    )
+                if node_path in targeted:
+                    raise ValueError(
+                        f"operation {index} cannot {operation} from a source already"
+                        f" targeted for mutation: {node_path}"
+                    )
+                read.add(node_path)
+            else:
+                if node_path in targeted:
+                    raise ValueError(f"preview target appears in more than one operation: {node_path}")
+                if node_path in read:
+                    raise ValueError(
+                        f"operation {index} cannot mutate a path already read"
+                        f" earlier in the batch: {node_path}"
+                    )
+                targeted.add(node_path)
+            if operation == "attach":
+                if "position" in raw or "rotation_degrees_y" in raw:
+                    raise ValueError(
+                        f"attach operation {index} derives position and rotation from sockets"
+                    )
+                source_asset, preview_instances = self._preview_source_asset(
+                    node_path, "attach", planned_nodes, preview_instances
+                )
+                source_socket = _catalog_socket(
+                    source_asset,
+                    str(raw.get("source_socket") or ""),
+                    f"attach source asset {source_asset.id}",
+                )
+                target_asset = resolve_godot_asset(
+                    self._root,
+                    str(raw.get("asset_id") or ""),
+                    domain=str(raw.get("domain") or ""),
+                )
+                target_socket = _catalog_socket(
+                    target_asset,
+                    str(raw.get("target_socket") or ""),
+                    f"attach target asset {target_asset.id}",
+                )
+                _validate_horizontal_socket(source_socket.facing, source_asset.id, source_socket.id)
+                _validate_horizontal_socket(target_socket.facing, target_asset.id, target_socket.id)
+                scale = _vector(raw.get("scale", [1, 1, 1]), f"operation {index} scale")
+                _validate_transform_bounds({"scale": scale}, index)
+                name = str(raw.get("name") or "").strip()
+                if name and any(char in name for char in ".:@/\""):
+                    raise ValueError(f"operation {index} has an invalid node name: {name}")
+                prepared_attach = {
+                    "operation": operation,
+                    "node_path": node_path,
+                    "source_catalog_identity": f"{source_asset.domain}:{source_asset.id}",
+                    "source_resource_path": source_asset.resource_path,
+                    "source_socket_position": list(source_socket.position),
+                    "source_socket_facing": list(source_socket.facing),
+                    "catalog_identity": f"{target_asset.domain}:{target_asset.id}",
+                    "asset_id": target_asset.id,
+                    "resource_path": target_asset.resource_path,
+                    "target_socket_position": list(target_socket.position),
+                    "target_socket_facing": list(target_socket.facing),
+                    "allowed_rotations_deg": list(target_asset.allowed_rotations_deg),
+                    "scale": scale,
+                }
+                if name:
+                    if name in added_names:
+                        raise ValueError(f"duplicate new preview name: {name}")
+                    added_names.add(name)
+                    prepared_attach["name"] = name
+                operations.append(prepared_attach)
+                if name:
+                    planned_nodes[f"AuraPreview/{name}"] = target_asset
+                    targeted.discard(f"AuraPreview/{name}")
+                continue
+            if operation == "duplicate":
+                count = _bounded_int(raw.get("count"), f"duplicate operation {index} count", 1, 16)
+                if "offset" not in raw:
+                    raise ValueError(f"duplicate operation {index} requires an offset")
+                offset = _vector(raw["offset"], f"duplicate operation {index} offset")
+                offset_space = str(raw.get("offset_space") or "local")
+                if offset_space not in {"local", "world"}:
+                    raise ValueError(
+                        f"duplicate operation {index} offset_space must be local or world"
+                    )
+                name = str(raw.get("name") or "").strip()
+                if name and count != 1:
+                    raise ValueError(
+                        f"duplicate operation {index} can use name only when count is 1"
+                    )
+                if name and any(char in name for char in ".:@/\""):
+                    raise ValueError(f"operation {index} has an invalid node name: {name}")
+                if name and name in added_names:
+                    raise ValueError(f"duplicate new preview name: {name}")
+                asset, preview_instances = self._preview_source_asset(
+                    node_path, "duplicate", planned_nodes, preview_instances
+                )
+                prepared_duplicate = {
+                    "operation": operation,
+                    "node_path": node_path,
+                    "count": count,
+                    "offset": offset,
+                    "offset_space": offset_space,
+                    "catalog_identity": f"{asset.domain}:{asset.id}",
+                    "resource_path": asset.resource_path,
+                }
+                if name:
+                    prepared_duplicate["name"] = name
+                    added_names.add(name)
+                    planned_nodes[f"AuraPreview/{name}"] = asset
+                    targeted.discard(f"AuraPreview/{name}")
+                operations.append(prepared_duplicate)
+                continue
+            if operation == "remove":
+                removed_or_replaced.add(node_path)
+                operations.append({"operation": operation, "node_path": node_path})
+                continue
+            if operation == "set_transform":
+                transform = _optional_transform(raw, index)
+                if not transform:
+                    raise ValueError(f"set_transform operation {index} must change a transform value")
+                operations.append({"operation": operation, "node_path": node_path, **transform})
+                continue
+            removed_or_replaced.add(node_path)
+            prepared = self._prepare_catalog_revision_asset(raw, index)
+            operations.append(
+                {
+                    "operation": operation,
+                    "node_path": node_path,
+                    **prepared,
+                    **_optional_transform(raw, index),
+                }
+            )
+            replacement_name = str(prepared.get("name") or node_path.split("/", 1)[1])
+            if replacement_name in added_names:
+                raise ValueError(f"duplicate new preview name: {replacement_name}")
+            added_names.add(replacement_name)
+            planned_nodes[f"AuraPreview/{replacement_name}"] = resolve_godot_asset(
+                self._root,
+                str(raw.get("asset_id") or ""),
+                domain=str(raw.get("domain") or ""),
+            )
+            targeted.discard(f"AuraPreview/{replacement_name}")
+        return operations
+
+    def _preview_source_asset(
+        self,
+        node_path: str,
+        operation: str,
+        planned_nodes: dict[str, GodotAsset],
+        preview_instances: list[dict] | None,
+    ) -> tuple[GodotAsset, list[dict] | None]:
+        planned_asset = planned_nodes.get(node_path)
+        if planned_asset is not None:
+            return planned_asset, preview_instances
+        if preview_instances is None:
+            snapshot = GodotEditorBridgeClient(self._root).request("preview.snapshot", {})
+            preview_instances = list(
+                analyze_preview_snapshot(self._root, snapshot).get("instances") or []
+            )
+        source = next(
+            (item for item in preview_instances if str(item.get("path") or "") == node_path),
+            None,
+        )
+        if source is None:
+            raise ValueError(f"{operation} source does not exist: {node_path}")
+        asset_id = str(source.get("asset_id") or "")
+        domain = str(source.get("domain") or "")
+        if not asset_id or not domain:
+            raise ValueError(f"{operation} source is not a recognized catalog asset: {node_path}")
+        asset = resolve_godot_asset(self._root, asset_id, domain=domain)
+        resource_path = str(source.get("resource_path") or "")
+        if resource_path.casefold() != asset.resource_path.casefold():
+            raise ValueError(f"{operation} source catalog identity is inconsistent: {node_path}")
+        return asset, preview_instances
+
+    def _prepare_catalog_revision_asset(self, raw: dict, index: int) -> dict:
+        asset = resolve_godot_asset(
+            self._root, str(raw.get("asset_id") or ""), domain=str(raw.get("domain") or "")
+        )
+        raw_name = str(raw.get("name") or "").strip()
+        operation = str(raw.get("operation") or "")
+        name = raw_name or (_default_name(asset.id, index) if operation == "instantiate" else "")
+        if name and any(char in name for char in ".:@/\""):
+            raise ValueError(f"operation {index} has an invalid node name: {name}")
+        result = {
+            "catalog_identity": f"{asset.domain}:{asset.id}",
+            "resource_path": asset.resource_path,
+            "allowed_rotations_deg": list(asset.allowed_rotations_deg),
+        }
+        if name:
+            result["name"] = name
+        if operation == "instantiate":
+            result.update(
+                {
+                    "position": _vector(raw.get("position", [0, 0, 0]), f"operation {index} position"),
+                    "rotation_degrees_y": _number(
+                        raw.get("rotation_degrees_y", 0), f"operation {index} rotation"
+                    ),
+                    "scale": _vector(raw.get("scale", [1, 1, 1]), f"operation {index} scale"),
+                }
+            )
+            _validate_transform_bounds(result, index)
+            _validate_allowed_rotation(result["rotation_degrees_y"], asset.allowed_rotations_deg, asset.id)
+        elif "rotation_degrees_y" in raw:
+            _validate_allowed_rotation(
+                _number(raw["rotation_degrees_y"], f"operation {index} rotation"),
+                asset.allowed_rotations_deg,
+                asset.id,
+            )
+        return result
 
 
 def _number(value, label: str) -> float:
@@ -214,9 +429,95 @@ def _vector(value, label: str) -> list[float]:
     return [_number(component, label) for component in value]
 
 
+def _bounded_int(value, label: str, minimum: int, maximum: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{label} must be an integer between {minimum} and {maximum}")
+    if value < minimum or value > maximum:
+        raise ValueError(f"{label} must be between {minimum} and {maximum}")
+    return value
+
+
 def _default_name(asset_id: str, index: int) -> str:
     stem = re.sub(r"[^A-Za-z0-9_-]+", "_", asset_id).strip("_") or "Asset"
     return f"{stem}_{index + 1:02d}"
+
+
+def _direct_preview_path(value, index: int) -> str:
+    path = str(value or "").strip()
+    if not path.startswith("AuraPreview/") or path.count("/") != 1:
+        raise ValueError(f"operation {index} must target one direct AuraPreview child")
+    name = path.split("/", 1)[1]
+    if not name or any(char in name for char in ".:@/\""):
+        raise ValueError(f"operation {index} has an invalid preview path")
+    return path
+
+
+def _optional_transform(raw: dict, index: int) -> dict:
+    result: dict = {}
+    if "position" in raw:
+        result["position"] = _vector(raw["position"], f"operation {index} position")
+    if "rotation_degrees_y" in raw:
+        result["rotation_degrees_y"] = _number(
+            raw["rotation_degrees_y"], f"operation {index} rotation"
+        )
+    if "scale" in raw:
+        result["scale"] = _vector(raw["scale"], f"operation {index} scale")
+    _validate_transform_bounds(result, index)
+    return result
+
+
+def _validate_transform_bounds(transform: dict, index: int) -> None:
+    if "position" in transform and any(abs(value) > 10000 for value in transform["position"]):
+        raise ValueError(f"operation {index} exceeds the 10 km preview bound")
+    if "scale" in transform and any(value < 0.01 or value > 100 for value in transform["scale"]):
+        raise ValueError(f"operation {index} scale must be between 0.01 and 100")
+
+
+def _validate_allowed_rotation(rotation: float, allowed: tuple[float, ...], asset_id: str) -> None:
+    if allowed and not any(
+        math.isclose(rotation % 360, candidate % 360, abs_tol=1e-4) for candidate in allowed
+    ):
+        raise ValueError(f"rotation is not allowed for catalog asset {asset_id}")
+
+
+def _catalog_socket(asset: GodotAsset, socket_id: str, label: str) -> GodotAssetSocket:
+    wanted = socket_id.strip()
+    if not wanted:
+        raise ValueError(f"{label} requires a socket ID")
+    matches: list[GodotAssetSocket] = []
+    for socket in asset.sockets:
+        if not isinstance(socket, GodotAssetSocket) or not isinstance(socket.id, str):
+            raise ValueError(f"{label} contains a malformed socket")
+        if socket.id == wanted:
+            matches.append(socket)
+    if not matches:
+        raise ValueError(f"{label} has no socket named {wanted}")
+    if len(matches) != 1:
+        raise ValueError(f"{label} has duplicated socket ID {wanted}")
+    socket = matches[0]
+    if (
+        not isinstance(socket.position, (list, tuple))
+        or not isinstance(socket.facing, (list, tuple))
+        or len(socket.position) != 3
+        or len(socket.facing) != 3
+    ):
+        raise ValueError(f"{label} socket {wanted} is malformed")
+    if any(
+        isinstance(value, bool) or not isinstance(value, (int, float))
+        for value in (*socket.position, *socket.facing)
+    ):
+        raise ValueError(f"{label} socket {wanted} contains a malformed vector")
+    if not all(math.isfinite(value) for value in (*socket.position, *socket.facing)):
+        raise ValueError(f"{label} socket {wanted} contains a non-finite vector")
+    return socket
+
+
+def _validate_horizontal_socket(facing, asset_id: str, socket_id: str) -> None:
+    if math.hypot(facing[0], facing[2]) < 1e-6:
+        raise ValueError(
+            f"catalog asset {asset_id} socket {socket_id} has no usable horizontal facing "
+            "for yaw-only attachment"
+        )
 
 
 def _preview_bridge_error(exc: Exception) -> str:

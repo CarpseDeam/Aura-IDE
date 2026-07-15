@@ -1,19 +1,13 @@
 @tool
 extends RefCounted
 
-const PreviewAlignment = preload("preview_alignment.gd")
-const PreviewRevisionState = preload("preview_revision_state.gd")
-
 const PREVIEW_ROOT_NAME := "AuraPreview"
-const MAX_INITIAL_PLACEMENTS := 64
-const MAX_REVISION_OPERATIONS := 128
-const MAX_TOTAL_INSTANCES := 1024
-const MAX_DUPLICATE_COUNT := 64
-const MAX_SEMANTIC_REVISION_OPERATIONS := 1024
+const MAX_INSTANCES := 1024
+const MAX_DUPLICATE_COUNT := 16
+const MAX_REVISION_OPERATIONS := 1024
 
 var _editor_interface: EditorInterface
 var _undo_redo: EditorUndoRedoManager
-var _alignment := PreviewAlignment.new()
 
 
 func _init(editor_interface: EditorInterface, undo_redo: EditorUndoRedoManager) -> void:
@@ -28,8 +22,8 @@ func instantiate_assets(params: Dictionary) -> Dictionary:
 	if not scene_root is Node3D:
 		return {"ok": false, "error": "asset preview requires a Node3D scene root"}
 	var placements = params.get("placements", [])
-	if not placements is Array or placements.is_empty() or placements.size() > MAX_INITIAL_PLACEMENTS:
-		return {"ok": false, "error": "placements must contain between 1 and %d items" % MAX_INITIAL_PLACEMENTS}
+	if not placements is Array or placements.is_empty() or placements.size() > MAX_INSTANCES:
+		return {"ok": false, "error": "placements must contain between 1 and %d items" % MAX_INSTANCES}
 	var preview := scene_root.get_node_or_null(NodePath(PREVIEW_ROOT_NAME))
 	if preview != null and (not preview is Node3D or not bool(preview.get_meta("aura_preview_root", false))):
 		return {"ok": false, "error": "%s already exists but is not an Aura preview root" % PREVIEW_ROOT_NAME}
@@ -44,9 +38,6 @@ func instantiate_assets(params: Dictionary) -> Dictionary:
 		if not checked.get("ok", false):
 			return checked
 		prepared.append(checked["placement"])
-	if names.size() > MAX_TOTAL_INSTANCES:
-		_free_prepared_placements(prepared)
-		return {"ok": false, "error": "placement would exceed the %d-instance preview limit" % MAX_TOTAL_INSTANCES}
 
 	_undo_redo.create_action(str(params.get("label", "Aura place catalog assets")), UndoRedo.MERGE_DISABLE, scene_root)
 	if preview == null:
@@ -69,17 +60,7 @@ func instantiate_assets(params: Dictionary) -> Dictionary:
 		_undo_redo.add_undo_method(preview, "remove_child", instance)
 		paths.append(PREVIEW_ROOT_NAME + "/" + str(instance.name))
 	_undo_redo.commit_action()
-	return {"ok": true, "result": {
-		"applied": true,
-		"preview_root": PREVIEW_ROOT_NAME,
-		"request_operation_count": placements.size(),
-		"instance_paths": paths,
-		"added_paths": paths,
-		"changed_paths": [],
-		"removed_paths": [],
-		"replaced_paths": [],
-		"instance_count": names.size(),
-	}}
+	return {"ok": true, "result": {"applied": true, "preview_root": PREVIEW_ROOT_NAME, "instance_paths": paths, "instance_count": paths.size()}}
 
 
 func clear_preview(params: Dictionary) -> Dictionary:
@@ -94,26 +75,13 @@ func clear_preview(params: Dictionary) -> Dictionary:
 	var children := preview.get_children()
 	if children.is_empty():
 		return {"ok": true, "result": {"applied": false, "preview_root": PREVIEW_ROOT_NAME, "removed_count": 0}}
-	var removed_paths: Array[String] = []
-	for child in children:
-		removed_paths.append(PREVIEW_ROOT_NAME + "/" + str(child.name))
 	_undo_redo.create_action(str(params.get("label", "Aura clear asset preview")), UndoRedo.MERGE_DISABLE, scene_root)
 	for child in children:
 		_undo_redo.add_do_method(preview, "remove_child", child)
 		_undo_redo.add_undo_method(preview, "add_child", child, true)
 		_undo_redo.add_undo_property(child, "owner", scene_root)
 	_undo_redo.commit_action()
-	return {"ok": true, "result": {
-		"applied": true,
-		"preview_root": PREVIEW_ROOT_NAME,
-		"request_operation_count": children.size(),
-		"removed_count": children.size(),
-		"removed_paths": removed_paths,
-		"added_paths": [],
-		"changed_paths": [],
-		"replaced_paths": [],
-		"instance_count": 0,
-	}}
+	return {"ok": true, "result": {"applied": true, "preview_root": PREVIEW_ROOT_NAME, "removed_count": children.size()}}
 
 
 func publish_scene(params: Dictionary) -> Dictionary:
@@ -221,30 +189,33 @@ func apply_revision(params: Dictionary) -> Dictionary:
 	if not scene_root is Node3D:
 		return {"ok": false, "error": "asset preview requires a Node3D scene root"}
 	var operations = params.get("operations", [])
-	var operation_limit := (
-		MAX_SEMANTIC_REVISION_OPERATIONS
-		if bool(params.get("semantic_builder", false))
-		else MAX_REVISION_OPERATIONS
-	)
-	if not operations is Array or operations.is_empty() or operations.size() > operation_limit:
-		return {"ok": false, "error": "operations must contain between 1 and %d items" % operation_limit}
+	if not operations is Array or operations.is_empty() or operations.size() > MAX_REVISION_OPERATIONS:
+		return {"ok": false, "error": "operations must contain between 1 and %d items" % MAX_REVISION_OPERATIONS}
 	var preview := scene_root.get_node_or_null(NodePath(PREVIEW_ROOT_NAME))
 	if preview != null and (not preview is Node3D or not bool(preview.get_meta("aura_preview_root", false))):
 		return {"ok": false, "error": "%s already exists but is not an Aura preview root" % PREVIEW_ROOT_NAME}
 
-	var state := PreviewRevisionState.new()
-	state.seed(preview)
+	var names: Dictionary = {}
+	var nodes: Dictionary = {}
+	if preview != null:
+		for child in preview.get_children():
+			names[str(child.name)] = true
+			nodes[PREVIEW_ROOT_NAME + "/" + str(child.name)] = child
 	var prepared: Array[Dictionary] = []
+	var targeted: Dictionary = {}
+	var discarded: Dictionary = {}
+	var reads: Dictionary = {}
+	var planned_paths: Dictionary = {}
 	var creates_preview := preview == null
 	for index in operations.size():
 		var raw: Variant = operations[index]
 		if raw is Dictionary:
 			var raw_action := str(raw.get("operation", ""))
 			var raw_path := str(raw.get("node_path", ""))
-			if state.planned_paths.has(raw_path) and raw_action not in ["duplicate", "attach"]:
+			if planned_paths.has(raw_path) and raw_action not in ["duplicate", "attach"]:
 				_free_prepared_instances(prepared)
 				return {"ok": false, "error": "operation %d cannot %s an unattached planned node: %s" % [index, raw_action, raw_path]}
-		var checked := _prepare_revision_operation(raw, index, state)
+		var checked := _prepare_revision_operation(raw, index, names, nodes, targeted, discarded, reads)
 		if not checked.get("ok", false):
 			_free_prepared_instances(prepared)
 			return checked
@@ -252,10 +223,10 @@ func apply_revision(params: Dictionary) -> Dictionary:
 			prepared.append_array(checked["operations"])
 		else:
 			prepared.append(checked["operation"])
-		state.register_checked(checked)
-	if state.names.size() > MAX_TOTAL_INSTANCES:
+		_register_prepared_outputs(checked, nodes, targeted, planned_paths, discarded)
+	if names.size() > MAX_INSTANCES:
 		_free_prepared_instances(prepared)
-		return {"ok": false, "error": "revision would exceed the %d-instance preview limit" % MAX_TOTAL_INSTANCES}
+		return {"ok": false, "error": "revision would exceed the %d-instance preview limit" % MAX_INSTANCES}
 	if creates_preview:
 		for operation in prepared:
 			if operation["operation"] != "instantiate":
@@ -279,94 +250,104 @@ func apply_revision(params: Dictionary) -> Dictionary:
 	var added: Array[String] = []
 	var removed: Array[String] = []
 	var replaced: Array[String] = []
-	var alignment_facts: Array[Dictionary] = []
 	for operation in prepared:
 		match operation["operation"]:
 			"set_transform": changed.append(operation["path"])
 			"instantiate": added.append(operation["path"])
 			"remove": removed.append(operation["path"])
-			"replace": replaced.append(str(operation.get("new_path", operation["path"])))
-		if operation.has("alignment_fact"):
-			var fact: Dictionary = operation["alignment_fact"].duplicate(true)
-			fact["path"] = str(operation.get("new_path", operation["path"]))
-			alignment_facts.append(fact)
+			"replace": replaced.append(operation["path"])
 	return {"ok": true, "result": {
 		"applied": true,
 		"preview_root": PREVIEW_ROOT_NAME,
-		"request_operation_count": operations.size(),
 		"operation_count": prepared.size(),
 		"changed_paths": changed,
 		"added_paths": added,
 		"removed_paths": removed,
 		"replaced_paths": replaced,
-		"instance_count": state.names.size(),
-		"alignment_facts": alignment_facts,
+		"instance_count": names.size(),
 	}}
+
+
+func _register_prepared_outputs(
+	checked: Dictionary,
+	nodes: Dictionary,
+	targeted: Dictionary,
+	planned_paths: Dictionary,
+	discarded: Dictionary,
+) -> void:
+	var outputs: Array[Dictionary] = []
+	if checked.has("operations"):
+		outputs.assign(checked["operations"])
+	else:
+		var operation: Dictionary = checked["operation"]
+		if operation.has("new_node"):
+			outputs.append(operation)
+	for operation in outputs:
+		var node: Node3D = operation["new_node"]
+		node.position = operation["new_position"]
+		node.rotation_degrees = operation["new_rotation"]
+		node.scale = operation["new_scale"]
+		var output_path := str(operation.get("new_path", operation["path"]))
+		nodes[output_path] = node
+		planned_paths[output_path] = true
+		targeted.erase(output_path)
+		if operation["operation"] == "replace" and output_path != operation["path"]:
+			nodes.erase(operation["path"])
+	if not checked.has("operations"):
+		var op: Dictionary = checked["operation"]
+		if op["operation"] == "remove":
+			discarded[op["path"]] = true
 
 
 func _prepare_revision_operation(
 	raw: Variant,
 	index: int,
-	state_or_names,
-	nodes: Dictionary = {},
-	targeted: Dictionary = {},
+	names: Dictionary,
+	nodes: Dictionary,
+	targeted: Dictionary,
 	discarded: Dictionary = {},
 	reads: Dictionary = {},
 ) -> Dictionary:
-	var state = state_or_names
-	if state_or_names is Dictionary:
-		state = PreviewRevisionState.new()
-		state.names = state_or_names
-		state.nodes = nodes
-		state.targeted = targeted
-		state.discarded = discarded
-		state.reads = reads
 	if not raw is Dictionary:
 		return {"ok": false, "error": "operation %d must be an object" % index}
 	var action := str(raw.get("operation", ""))
 	if action == "instantiate":
-		var placement_raw: Dictionary = raw.duplicate(true)
-		var alignment_fact: Dictionary = {}
-		if raw.has("relative_to"):
-			var reference_checked: Dictionary = state.resolve_reference(str(raw["relative_to"].get("node_path", "")))
-			if not reference_checked.get("ok", false):
-				return reference_checked
-			var aligned: Dictionary = _alignment.calculate(reference_checked["node"], float(raw.get("rotation_degrees_y", 0.0)), _vector3(raw.get("scale", []), Vector3.ONE), raw["relative_to"], raw.get("_alignment_geometry"))
-			if not aligned.get("ok", false):
-				return aligned
-			placement_raw["position"] = _vector_array(aligned["position"])
-			alignment_fact = aligned["fact"]
-		var placed := _prepare_placement(placement_raw, index, state.names)
+		var placed := _prepare_placement(raw, index, names)
 		if not placed.get("ok", false):
 			return placed
 		var placement: Dictionary = placed["placement"]
-		var instantiate_operation := {
+		return {"ok": true, "operation": {
 			"operation": action,
 			"path": PREVIEW_ROOT_NAME + "/" + str(placement["instance"].name),
 			"new_node": placement["instance"],
 			"new_position": placement["position"],
 			"new_rotation": Vector3(0.0, placement["rotation_y"], 0.0),
 			"new_scale": placement["scale"],
-		}
-		if raw.has("relative_to"):
-			instantiate_operation["alignment_fact"] = alignment_fact
-			instantiate_operation["alignment_fact"]["reference_path"] = str(raw["relative_to"]["node_path"])
-		return {"ok": true, "operation": instantiate_operation}
+		}}
 
 	var path := str(raw.get("node_path", ""))
 	if not path.begins_with(PREVIEW_ROOT_NAME + "/") or path.count("/") != 1:
 		return {"ok": false, "error": "operation %d must target one direct preview child" % index}
-	var access_checked: Dictionary = state.validate_access(path, action, index)
-	if not access_checked.get("ok", false):
-		return access_checked
-	var target: Node = state.nodes.get(path)
+	if action in ["duplicate", "attach"]:
+		if discarded.has(path):
+			return {"ok": false, "error": "operation %d cannot %s from a removed or replaced source: %s" % [index, action, path]}
+		if targeted.has(path):
+			return {"ok": false, "error": "operation %d cannot %s from a source already targeted for mutation: %s" % [index, action, path]}
+		reads[path] = true
+	else:
+		if targeted.has(path):
+			return {"ok": false, "error": "preview target appears more than once: %s" % path}
+		if reads.has(path):
+			return {"ok": false, "error": "operation %d cannot mutate a path already read earlier in the batch: %s" % [index, path]}
+		targeted[path] = true
+	var target: Node = nodes.get(path)
 	if target == null or not target is Node3D:
 		return {"ok": false, "error": "preview target does not exist or is not Node3D: %s" % path}
 	var target_3d := target as Node3D
 	if action == "duplicate":
-		return _prepare_duplicate_operation(raw, index, target_3d, state.names)
+		return _prepare_duplicate_operation(raw, index, target_3d, names)
 	if action == "attach":
-		return _prepare_attach_operation(raw, index, target_3d, state.names)
+		return _prepare_attach_operation(raw, index, target_3d, names)
 	var base := {
 		"operation": action,
 		"path": path,
@@ -378,51 +359,30 @@ func _prepare_revision_operation(
 		"old_scale": target_3d.scale,
 	}
 	if action == "remove":
-		state.names.erase(str(target_3d.name))
-		state.discarded[path] = true
+		names.erase(str(target_3d.name))
+		discarded[path] = true
 		return {"ok": true, "operation": base}
 	if action == "set_transform":
 		var transform := _revision_transform(raw, target_3d.position, target_3d.rotation_degrees.y, target_3d.scale)
 		if not transform.get("ok", false):
 			return transform
-		if raw.has("relative_to"):
-			var reference_checked: Dictionary = state.resolve_reference(str(raw["relative_to"].get("node_path", "")))
-			if not reference_checked.get("ok", false):
-				return reference_checked
-			var aligned: Dictionary = _alignment.calculate(reference_checked["node"], transform["transform"]["new_rotation"].y, transform["transform"]["new_scale"], raw["relative_to"], raw.get("_alignment_geometry"))
-			if not aligned.get("ok", false):
-				return aligned
-			transform["transform"]["new_position"] = aligned["position"]
-			base["alignment_fact"] = aligned["fact"]
-			base["alignment_fact"]["reference_path"] = str(raw["relative_to"]["node_path"])
 		base.merge(transform["transform"])
 		return {"ok": true, "operation": base}
 	if action == "replace":
-		state.names.erase(str(target_3d.name))
-		state.discarded[path] = true
+		names.erase(str(target_3d.name))
+		discarded[path] = true
 		var replacement_raw: Dictionary = raw.duplicate()
 		if str(replacement_raw.get("name", "")).is_empty():
 			replacement_raw["name"] = str(target_3d.name)
-		if not replacement_raw.has("position") and not replacement_raw.has("relative_to"):
+		if not replacement_raw.has("position"):
 			replacement_raw["position"] = [target_3d.position.x, target_3d.position.y, target_3d.position.z]
 		if not replacement_raw.has("rotation_degrees_y"):
 			replacement_raw["rotation_degrees_y"] = target_3d.rotation_degrees.y
 		if not replacement_raw.has("scale"):
 			replacement_raw["scale"] = [target_3d.scale.x, target_3d.scale.y, target_3d.scale.z]
-		if replacement_raw.has("relative_to"):
-			var reference_checked: Dictionary = state.resolve_reference(str(replacement_raw["relative_to"].get("node_path", "")))
-			if not reference_checked.get("ok", false):
-				return reference_checked
-			var replacement_scale: Variant = _vector3(replacement_raw.get("scale", []), target_3d.scale)
-			var aligned: Dictionary = _alignment.calculate(reference_checked["node"], float(replacement_raw["rotation_degrees_y"]), replacement_scale, replacement_raw["relative_to"], replacement_raw.get("_alignment_geometry"))
-			if not aligned.get("ok", false):
-				return aligned
-			replacement_raw["position"] = _vector_array(aligned["position"])
-			base["alignment_fact"] = aligned["fact"]
-			base["alignment_fact"]["reference_path"] = str(replacement_raw["relative_to"]["node_path"])
-		var replaced := _prepare_placement(replacement_raw, index, state.names)
+		var replaced := _prepare_placement(replacement_raw, index, names)
 		if not replaced.get("ok", false):
-			state.names[str(target_3d.name)] = true
+			names[str(target_3d.name)] = true
 			return replaced
 		var placement: Dictionary = replaced["placement"]
 		base["new_node"] = placement["instance"]
@@ -434,22 +394,6 @@ func _prepare_revision_operation(
 	return {"ok": false, "error": "unsupported revision operation: %s" % action}
 
 
-func _register_prepared_outputs(
-	checked: Dictionary,
-	nodes: Dictionary,
-	targeted: Dictionary,
-	planned_paths: Dictionary,
-	discarded: Dictionary,
-) -> void:
-	# Compatibility boundary for focused bridge harnesses; production owns one state object.
-	var state := PreviewRevisionState.new()
-	state.nodes = nodes
-	state.targeted = targeted
-	state.planned_paths = planned_paths
-	state.discarded = discarded
-	state.register_checked(checked)
-
-
 func _prepare_duplicate_operation(
 	raw: Dictionary,
 	index: int,
@@ -459,15 +403,11 @@ func _prepare_duplicate_operation(
 	var count: Variant = raw.get("count")
 	if not count is int or count < 1 or count > MAX_DUPLICATE_COUNT:
 		return {"ok": false, "error": "duplicate count must be between 1 and %d" % MAX_DUPLICATE_COUNT}
-	var has_offset := raw.has("offset")
-	var has_alignment := raw.has("alignment_step")
-	if has_offset == has_alignment:
-		return {"ok": false, "error": "duplicate requires exactly one of offset or alignment_step"}
-	var offset: Variant = _vector3(raw.get("offset", null), Vector3.ZERO) if has_offset else Vector3.ZERO
-	if has_offset and offset == null:
+	var offset: Variant = _vector3(raw.get("offset", null), Vector3.ZERO)
+	if offset == null:
 		return {"ok": false, "error": "duplicate offset must contain three numbers"}
 	var offset_space := str(raw.get("offset_space", "local"))
-	if has_offset and offset_space != "local" and offset_space != "world":
+	if offset_space != "local" and offset_space != "world":
 		return {"ok": false, "error": "duplicate offset_space must be local or world"}
 	var requested_name := str(raw.get("name", "")).strip_edges()
 	if count > 1 and not requested_name.is_empty():
@@ -477,34 +417,20 @@ func _prepare_duplicate_operation(
 		return {"ok": false, "error": "duplicate source is not the prepared catalog asset: %s" % source.name}
 
 	var position_step: Vector3 = offset
-	if has_offset and offset_space == "local":
+	if offset_space == "local":
 		position_step = source.transform.basis.orthonormalized() * offset
-	var output_names: Variant = raw.get("_output_names", [])
-	if not output_names is Array or (not output_names.is_empty() and output_names.size() != count):
-		return {"ok": false, "error": "duplicate planned output names are invalid"}
 	var duplicated: Array[Dictionary] = []
-	var previous := source
 	for copy_index in count:
 		var copy_name := requested_name
-		if not output_names.is_empty():
-			copy_name = str(output_names[copy_index])
 		if copy_name.is_empty():
 			copy_name = _next_duplicate_name(str(source.name), names)
-		var next_position := source.position + position_step * float(copy_index + 1)
-		var alignment_fact: Dictionary = {}
-		if has_alignment:
-			var aligned := _alignment.calculate(previous, source.rotation_degrees.y, source.scale, raw["alignment_step"], raw.get("_alignment_geometry"))
-			if not aligned.get("ok", false):
-				_free_prepared_instances(duplicated)
-				return aligned
-			next_position = aligned["position"]
-			alignment_fact = aligned["fact"]
-			alignment_fact["reference_path"] = PREVIEW_ROOT_NAME + "/" + str(previous.name)
 		var placement_raw := {
 			"resource_path": resource_path,
 			"name": copy_name,
 			"position": [
-				next_position.x, next_position.y, next_position.z,
+				source.position.x + position_step.x * float(copy_index + 1),
+				source.position.y + position_step.y * float(copy_index + 1),
+				source.position.z + position_step.z * float(copy_index + 1),
 			],
 			"rotation_degrees_y": source.rotation_degrees.y,
 			"scale": [source.scale.x, source.scale.y, source.scale.z],
@@ -514,21 +440,14 @@ func _prepare_duplicate_operation(
 			_free_prepared_instances(duplicated)
 			return placed
 		var placement: Dictionary = placed["placement"]
-		var duplicate_operation := {
+		duplicated.append({
 			"operation": "instantiate",
 			"path": PREVIEW_ROOT_NAME + "/" + str(placement["instance"].name),
 			"new_node": placement["instance"],
 			"new_position": placement["position"],
 			"new_rotation": Vector3(0.0, placement["rotation_y"], 0.0),
 			"new_scale": placement["scale"],
-		}
-		if has_alignment:
-			duplicate_operation["alignment_fact"] = alignment_fact
-		duplicated.append(duplicate_operation)
-		previous = placement["instance"]
-		previous.position = placement["position"]
-		previous.rotation_degrees = Vector3(0.0, placement["rotation_y"], 0.0)
-		previous.scale = placement["scale"]
+		})
 	return {"ok": true, "operations": duplicated}
 
 
@@ -639,15 +558,10 @@ func _revision_transform(raw: Dictionary, position: Vector3, rotation_y: float, 
 	var decoded_rotation: Variant = raw.get("rotation_degrees_y", rotation_y)
 	if decoded_position == null or decoded_scale == null or (not decoded_rotation is int and not decoded_rotation is float):
 		return {"ok": false, "error": "revision transform is invalid"}
-	if not decoded_position.is_finite() or not decoded_scale.is_finite() or not is_finite(float(decoded_rotation)):
-		return {"ok": false, "error": "revision transform must be finite"}
 	if absf(decoded_position.x) > 10000.0 or absf(decoded_position.y) > 10000.0 or absf(decoded_position.z) > 10000.0:
 		return {"ok": false, "error": "revision position exceeds the 10 km preview bound"}
 	if decoded_scale.x < 0.01 or decoded_scale.y < 0.01 or decoded_scale.z < 0.01 or decoded_scale.x > 100.0 or decoded_scale.y > 100.0 or decoded_scale.z > 100.0:
 		return {"ok": false, "error": "revision scale must be between 0.01 and 100"}
-	var allowed_rotations: Variant = raw.get("allowed_rotations_deg", [])
-	if not allowed_rotations is Array or not _yaw_is_allowed(float(decoded_rotation), allowed_rotations):
-		return {"ok": false, "error": "revision rotation is not catalog-approved"}
 	return {"ok": true, "transform": {
 		"new_position": decoded_position,
 		"new_rotation": Vector3(0.0, float(decoded_rotation), 0.0),
@@ -737,13 +651,6 @@ func _free_prepared_instances(prepared: Array[Dictionary]) -> void:
 				node.free()
 
 
-func _free_prepared_placements(prepared: Array[Dictionary]) -> void:
-	for placement in prepared:
-		var node: Node = placement.get("instance")
-		if node != null and is_instance_valid(node) and node.get_parent() == null:
-			node.free()
-
-
 func _prepare_placement(raw: Variant, index: int, names: Dictionary) -> Dictionary:
 	if not raw is Dictionary:
 		return {"ok": false, "error": "placement %d must be an object" % index}
@@ -773,9 +680,6 @@ func _prepare_placement(raw: Variant, index: int, names: Dictionary) -> Dictiona
 	if position == null or scale == null or (not rotation_y is float and not rotation_y is int):
 		instance.free()
 		return {"ok": false, "error": "placement %d transform is invalid" % index}
-	if not position.is_finite() or not scale.is_finite() or not is_finite(float(rotation_y)):
-		instance.free()
-		return {"ok": false, "error": "placement %d transform must be finite" % index}
 	if absf(position.x) > 10000.0 or absf(position.y) > 10000.0 or absf(position.z) > 10000.0:
 		instance.free()
 		return {"ok": false, "error": "placement %d exceeds the 10 km preview bound" % index}
@@ -787,19 +691,15 @@ func _prepare_placement(raw: Variant, index: int, names: Dictionary) -> Dictiona
 		instance.free()
 		return {"ok": false, "error": "placement %d allowed rotations are invalid" % index}
 	if not allowed_rotations.is_empty():
-		if not _yaw_is_allowed(float(rotation_y), allowed_rotations):
+		var rotation_allowed := false
+		for allowed in allowed_rotations:
+			if (allowed is int or allowed is float) and is_equal_approx(fposmod(float(rotation_y), 360.0), fposmod(float(allowed), 360.0)):
+				rotation_allowed = true
+				break
+		if not rotation_allowed:
 			instance.free()
 			return {"ok": false, "error": "placement %d rotation is not catalog-approved" % index}
 	return {"ok": true, "placement": {"instance": instance, "position": position, "rotation_y": float(rotation_y), "scale": scale}}
-
-
-func _yaw_is_allowed(rotation_y: float, allowed_rotations: Array) -> bool:
-	if allowed_rotations.is_empty():
-		return true
-	for allowed in allowed_rotations:
-		if (allowed is int or allowed is float) and is_finite(float(allowed)) and is_equal_approx(fposmod(rotation_y, 360.0), fposmod(float(allowed), 360.0)):
-			return true
-	return false
 
 
 func _vector3(raw: Variant, default_value: Vector3) -> Variant:
@@ -811,7 +711,3 @@ func _vector3(raw: Variant, default_value: Vector3) -> Variant:
 		if not value is float and not value is int:
 			return null
 	return Vector3(float(raw[0]), float(raw[1]), float(raw[2]))
-
-
-func _vector_array(value: Vector3) -> Array[float]:
-	return [value.x, value.y, value.z]

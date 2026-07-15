@@ -34,8 +34,6 @@ class GodotAsset:
     source: str
     semantic_source: str
     calibration: dict[str, Any] = field(default_factory=dict)
-    orientation: dict[str, Any] = field(default_factory=dict)
-    wall_face_placement: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -55,8 +53,6 @@ class GodotAsset:
             "source": self.source,
             "semantic_source": self.semantic_source,
             "calibration": self.calibration,
-            "orientation": self.orientation,
-            "wall_face_placement": self.wall_face_placement,
         }
 
 
