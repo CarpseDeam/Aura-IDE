@@ -85,6 +85,16 @@ def validate_planner_dispatch(args: dict[str, Any], latest_user_text: str) -> Di
             failure_constraint=failure_constraint,
         )
 
+    if errors:
+        return DispatchQualityResult(
+            ok=False,
+            errors=errors,
+            failure_constraint=(
+                "CONSTRAINT FOR NEXT PLANNER ATTEMPT:\n"
+                "Correct the rejected dispatch scope: " + "; ".join(errors)
+            ),
+        )
+
     return DispatchQualityResult(ok=True, errors=[])
 
 

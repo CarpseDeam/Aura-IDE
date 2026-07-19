@@ -1,11 +1,92 @@
 from __future__ import annotations
 
+import json
+from dataclasses import dataclass, field
+from typing import Any
+
 from aura.conversation.dispatch import WorkerDispatchResult
 
+MAX_PLANNER_DISPATCH_RECOVERY_FAILURES = 3
+PLANNER_DISPATCH_RECOVERY_EXHAUSTED_REASON = (
+    "Planner dispatch recovery exhausted after {attempts} failed attempts; "
+    "Worker was not started. Final failure: {failure}"
+)
+
 __all__ = [
+    "MAX_PLANNER_DISPATCH_RECOVERY_FAILURES",
+    "PLANNER_DISPATCH_RECOVERY_EXHAUSTED_REASON",
+    "PlannerDispatchRecovery",
     "classify_failed_worker_dispatch",
     "is_recoverable_worker_continuation",
+    "is_recoverable_pre_worker_failure",
 ]
+
+
+@dataclass
+class PlannerDispatchRecovery:
+    """Canonical per-turn owner of Planner dispatch recovery state.
+
+    Attempts are telemetry.  Only ``accepted`` means a dispatch crossed the
+    pre-Worker boundary, so a rejected attempt can never satisfy completion.
+    """
+
+    attempts: int = 0
+    accepted: int = 0
+    failed_attempts: int = 0
+    last_failure_payload: dict[str, Any] = field(default_factory=dict)
+
+    def begin_attempt(self) -> int:
+        self.attempts += 1
+        return self.attempts
+
+    def mark_accepted(self) -> None:
+        self.accepted += 1
+        self.last_failure_payload = {}
+
+    def record_pre_worker_failure(self, result: WorkerDispatchResult) -> None:
+        self.failed_attempts += 1
+        self.last_failure_payload = result.to_tool_payload()
+
+    @property
+    def recovery_required(self) -> bool:
+        return bool(self.failed_attempts and not self.accepted and not self.exhausted)
+
+    @property
+    def exhausted(self) -> bool:
+        return self.failed_attempts >= MAX_PLANNER_DISPATCH_RECOVERY_FAILURES
+
+    def corrective_message(self) -> str:
+        payload = json.dumps(self.last_failure_payload, ensure_ascii=False, sort_keys=True)
+        return "\n".join(
+            [
+                "INTERNAL PLANNER DISPATCH RECOVERY:",
+                "The attempted dispatch was not accepted and no Worker started.",
+                f"Exact structured failure: {payload}",
+                "Correct the dispatch_to_worker arguments and call dispatch_to_worker again now.",
+                "Do not answer with an empty response or implementation narration.",
+            ]
+        )
+
+    def exhaustion_reason(self) -> str:
+        extras = self.last_failure_payload.get("extras")
+        extras = extras if isinstance(extras, dict) else {}
+        quality_errors = extras.get("quality_errors")
+        exact_failure = (
+            str(quality_errors[0])
+            if isinstance(quality_errors, list) and quality_errors
+            else ""
+        )
+        failure = str(
+            exact_failure
+            or self.last_failure_payload.get("summary")
+            or self.last_failure_payload.get("error")
+            or self.last_failure_payload
+            or "unknown dispatch failure"
+        )
+        return PLANNER_DISPATCH_RECOVERY_EXHAUSTED_REASON.format(
+            attempts=self.failed_attempts,
+            failure=failure,
+        )
 
 
 def classify_failed_worker_dispatch(
@@ -23,6 +104,11 @@ def classify_failed_worker_dispatch(
     """
     if _is_worker_internal_error(result):
         return {"blocker_reason": "internal", "failure_constraint": ""}
+    if is_recoverable_pre_worker_failure(result):
+        return {
+            "blocker_reason": "",
+            "failure_constraint": _compute_failure_constraint(result),
+        }
     if is_recoverable_worker_continuation(result):
         return {"blocker_reason": "", "failure_constraint": ""}
     if result.extras.get("internal_planner_handoff"):
@@ -132,4 +218,20 @@ def is_recoverable_worker_continuation(result: WorkerDispatchResult) -> bool:
         and (result.recoverable or extras.get("recoverable"))
         and (result.phase_boundary or extras.get("phase_boundary"))
         and suggested_next_tool == "dispatch_to_worker"
+    )
+
+
+def is_recoverable_pre_worker_failure(result: WorkerDispatchResult) -> bool:
+    """Return whether Planner can repair a failure before any Worker started."""
+    extras = result.extras if isinstance(result.extras, dict) else {}
+    status = str(result.status or extras.get("status") or "")
+    return bool(
+        not result.cancelled
+        and extras.get("dispatch_not_started")
+        and (result.recoverable or extras.get("recoverable"))
+        and status != "approval_rejected"
+        and not extras.get("approval_rejected")
+        and not extras.get("terminal_environment_blocker")
+        and not extras.get("worker_internal_error")
+        and not extras.get("dispatch_internal_error")
     )

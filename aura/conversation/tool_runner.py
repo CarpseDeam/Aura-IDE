@@ -75,8 +75,29 @@ class ToolRunner:
         planner_dispatch_attempt: int = 1,
         previous_dispatch_tool_call_id: str = "",
     ) -> WorkerDispatchResult | None:
-        req = WorkerDispatchRequest.from_dict(args)
-        req = enrich_worker_dispatch_contract(req)
+        try:
+            req = WorkerDispatchRequest.from_dict(args)
+            req = enrich_worker_dispatch_contract(req)
+        except (TypeError, ValueError, KeyError) as exc:
+            result = WorkerDispatchResult(
+                ok=False,
+                summary="Planner dispatch could not be serialized.",
+                recoverable=True,
+                extras={
+                    "dispatch_not_started": True,
+                    "recoverable": True,
+                    "internal_planner_handoff": True,
+                    "dispatch_spec_rejected": True,
+                    "failure_class": "dispatch_serialization_failed",
+                    "quality_errors": [f"{type(exc).__name__}: {exc}"],
+                    "failure_constraint": (
+                        "CONSTRAINT FOR NEXT PLANNER ATTEMPT: Correct the dispatch "
+                        f"serialization error: {type(exc).__name__}: {exc}"
+                    ),
+                },
+            )
+            self._emit_dispatch_result(tool_call_id, result, on_event)
+            return result
 
         # ── Work Artifact handling ───────────────────────────────────────────
         raw_artifact = args.get("work_artifact") if isinstance(args.get("work_artifact"), dict) else None
@@ -138,17 +159,18 @@ class ToolRunner:
                 "dispatch_to_worker is not enabled for this manager - "
                 "planner/worker mode is off."
             )
-            payload = json.dumps({"ok": False, "error": err})
-            self._history.append_tool_result(tool_call_id, payload)
-            on_event(
-                ToolResult(
-                    tool_call_id=tool_call_id,
-                    name="dispatch_to_worker",
-                    ok=False,
-                    result=payload,
-                )
+            result = WorkerDispatchResult(
+                ok=False,
+                summary=err,
+                recoverable=False,
+                extras={
+                    "dispatch_not_started": True,
+                    "dispatch_internal_error": True,
+                    "failure_class": "dispatch_unavailable",
+                },
             )
-            return None
+            self._emit_dispatch_result(tool_call_id, result, on_event)
+            return result
 
         on_event(
             WorkerDispatchRequested(
@@ -169,6 +191,7 @@ class ToolRunner:
                 cancelled=False,
                 recoverable=False,
                 extras={
+                    "dispatch_not_started": True,
                     "worker_internal_error": True,
                     "error_type": type(exc).__name__,
                     "internal_error": redact_secrets(f"{type(exc).__name__}: {exc}"),
@@ -198,6 +221,32 @@ class ToolRunner:
             )
         )
         return result
+
+    def _emit_dispatch_result(
+        self,
+        tool_call_id: str,
+        result: WorkerDispatchResult,
+        on_event: Any,
+    ) -> None:
+        """Append and emit a dispatch result produced before callback entry."""
+        payload = json.dumps(result.to_tool_payload(), ensure_ascii=False)
+        self._history.append_tool_result(tool_call_id, payload)
+        extras = {
+            "dispatch": True,
+            "cancelled": result.cancelled,
+            "summary": result.summary,
+            "recoverable": result.recoverable,
+            **(result.extras if isinstance(result.extras, dict) else {}),
+        }
+        on_event(
+            ToolResult(
+                tool_call_id=tool_call_id,
+                name="dispatch_to_worker",
+                ok=bool(result.recoverable and not result.cancelled),
+                result=payload,
+                extras=extras,
+            )
+        )
 
     def handle_terminal_command(
         self,

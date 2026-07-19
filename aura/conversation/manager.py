@@ -15,7 +15,6 @@ the supplied DispatchCallback rather than the registry.
 """
 from __future__ import annotations
 
-import json
 import logging
 import threading
 
@@ -42,7 +41,6 @@ from aura.conversation.completion_guard import (
     assistant_message_text,
     is_repetitive_completion_final,
 )
-from aura.conversation.workflow_state import WorkflowStatus
 from aura.conversation.dispatch import (
     DispatchCallback,
     WorkerDispatchRequest,
@@ -52,8 +50,8 @@ from aura.conversation.history import History
 from aura.conversation.manager_send_state import _SendState
 from aura.conversation.manager_tool_round import ToolRoundRunner
 from aura.conversation.planner_dispatch_gate import maybe_force_worker_dispatch
-from aura.conversation.planner_stream_hygiene import PlannerStreamHygiene
 from aura.conversation.planner_refresh import PlannerRefreshState
+from aura.conversation.planner_stream_hygiene import PlannerStreamHygiene
 from aura.conversation.stream_event_router import StreamEventRouter
 from aura.conversation.tool_runner import ToolRunner
 from aura.conversation.tools._types import (
@@ -65,14 +63,15 @@ from aura.conversation.tools.registry import ToolRegistry
 from aura.conversation.worker_finalization_gate import (
     handle_worker_candidate_finalization,
 )
-from aura.events import EventBus
-from aura.lifecycle import LifecycleHooks
-from aura.work_artifact.model import ValidationCommandSpec
 from aura.conversation.worker_finish import (
     build_worker_unrecoverable_message,
 )
+from aura.conversation.workflow_state import WorkflowStatus
+from aura.events import EventBus
+from aura.lifecycle import LifecycleHooks
 from aura.model_streams import model_streams
 from aura.research.policy import decide_research_policy
+from aura.work_artifact.model import ValidationCommandSpec
 
 EventCallback = Callable[[Event], None]
 
@@ -275,7 +274,16 @@ class ConversationManager:
                         latest_user_text=_latest_user_text(self._history),
                         candidate_message=full_message,
                         planner_tool_calls_seen=state.limits.total_calls,
-                        dispatch_calls_seen=state.limits.dispatch_calls,
+                        dispatch_calls_seen=state.limits.dispatch_accepted_calls,
+                        dispatch_accepted=bool(state.planner_dispatch.accepted),
+                        dispatch_recovery_required=(
+                            state.planner_dispatch.recovery_required
+                        ),
+                        dispatch_recovery_message=(
+                            state.planner_dispatch.corrective_message()
+                            if state.planner_dispatch.recovery_required
+                            else ""
+                        ),
                         already_steered=state.planner_dispatch_gate_steered,
                     )
                     if dispatch_gate.should_continue:

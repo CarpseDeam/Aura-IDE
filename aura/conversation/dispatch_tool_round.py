@@ -11,10 +11,13 @@ from aura.client import Event, ToolResult
 from aura.conversation.attempt_brief import build_attempt_brief
 from aura.conversation.completion_guard import worker_dispatch_is_terminal
 from aura.conversation.dispatch import DispatchCallback, WorkerDispatchResult
-from aura.conversation.dispatch_failure import classify_failed_worker_dispatch
+from aura.conversation.dispatch_failure import classify_failed_worker_dispatch, is_recoverable_pre_worker_failure
 from aura.conversation.history import History
 from aura.conversation.manager_send_state import _SendState
-from aura.conversation.spec_quality import validate_planner_dispatch
+from aura.conversation.spec_quality import (
+    validate_planner_dispatch,
+    validate_worker_dispatch_spec,
+)
 from aura.conversation.workflow_state import WorkflowStatus
 from aura.research.policy import ANSWER_ONLY
 
@@ -57,8 +60,7 @@ def handle_dispatch_to_worker_round(
     - Repeated dispatch handling when ``planner_visible_dispatch_tool_call_id`` is set.
     - Dispatch result conversion and stale-read-file propagation.
     """
-    state.planner_dispatch_attempts += 1
-    dispatch_attempt = state.planner_dispatch_attempts
+    dispatch_attempt = state.planner_dispatch.begin_attempt()
     previous_dispatch_tool_call_id = state.planner_visible_dispatch_tool_call_id
     if previous_dispatch_tool_call_id:
         result = context.tool_runner.handle_dispatch(
@@ -70,10 +72,14 @@ def handle_dispatch_to_worker_round(
             planner_dispatch_attempt=dispatch_attempt,
             previous_dispatch_tool_call_id=previous_dispatch_tool_call_id,
         )
+        if _dispatch_reached_visible_worker(result):
+            _mark_dispatch_accepted(state)
         return _dispatch_result_to_round_result(
             tool_call_id=tool_call_id,
             result=result,
             state=state,
+            workflow_state_cb=workflow_state_cb,
+            args=args,
         )
 
     if (
@@ -85,20 +91,6 @@ def handle_dispatch_to_worker_round(
             tool_call_id=tool_call_id,
             on_event=on_event,
         )
-        action = classify_failed_worker_dispatch(
-            result=result,
-        )
-        blocker_reason = action["blocker_reason"]
-        failure_constraint = action.get("failure_constraint", "")
-        if blocker_reason or failure_constraint:
-            return {
-                "id": tool_call_id,
-                "blocker": True,
-                "result": result,
-                "blocker_reason": blocker_reason,
-                "terminal_dispatch": False,
-                "failure_constraint": failure_constraint,
-            }
         return {
             "id": tool_call_id,
             "skip": True,
@@ -108,25 +100,41 @@ def handle_dispatch_to_worker_round(
 
     # ── Planner dispatch scope validation ─────────────────────
     if state.mode in {"planner", "single"}:
+        schema_quality = validate_worker_dispatch_spec(
+            str(args.get("spec") or "") if isinstance(args, dict) else "",
+            str(args.get("acceptance") or "") if isinstance(args, dict) else "",
+            goal=str(args.get("goal") or "") if isinstance(args, dict) else "",
+        )
+        if not isinstance(args, dict):
+            schema_quality.errors.insert(0, "dispatch arguments must be a JSON object")
+            schema_quality.ok = False
+        if not schema_quality.ok:
+            return _synthetic_recoverable_dispatch_failure(
+                context=context,
+                tool_call_id=tool_call_id,
+                args=args if isinstance(args, dict) else {},
+                state=state,
+                on_event=on_event,
+                workflow_state_cb=workflow_state_cb,
+                failure_class="dispatch_schema_rejected",
+                summary="Planner dispatch arguments failed schema validation.",
+                errors=schema_quality.errors,
+            )
+
         latest_user_text = _get_latest_user_text(context.history)
         quality = validate_planner_dispatch(args, latest_user_text)
         if not quality.ok:
-            result = WorkerDispatchResult(
-                ok=False,
-                summary="Planner dispatch scope incomplete.",
-                recoverable=True,
-                extras={
-                    "internal_planner_handoff": True,
-                    "failure_constraint": quality.failure_constraint,
-                    "dispatch_not_started": True,
-                    "user_visible_blocker": False,
-                    "planner_dispatch_scope_incomplete": True,
-                },
-            )
-            return _dispatch_result_to_round_result(
+            return _synthetic_recoverable_dispatch_failure(
+                context=context,
                 tool_call_id=tool_call_id,
-                result=result,
+                args=args,
                 state=state,
+                on_event=on_event,
+                workflow_state_cb=workflow_state_cb,
+                failure_class="planner_dispatch_scope_incomplete",
+                summary="Planner dispatch scope incomplete.",
+                errors=quality.errors,
+                failure_constraint=quality.failure_constraint,
             )
 
     result = context.tool_runner.handle_dispatch(
@@ -140,10 +148,39 @@ def handle_dispatch_to_worker_round(
     )
     if _dispatch_reached_visible_worker(result):
         state.planner_visible_dispatch_tool_call_id = tool_call_id
+        _mark_dispatch_accepted(state)
     return _dispatch_result_to_round_result(
         tool_call_id=tool_call_id,
         result=result,
         state=state,
+        workflow_state_cb=workflow_state_cb,
+        args=args,
+    )
+
+
+def handle_invalid_dispatch_arguments_round(
+    *,
+    context: DispatchToolRoundContext,
+    tool_call_id: str,
+    raw_arguments: str,
+    error: str,
+    state: _SendState,
+    workflow_state_cb: Callable[[str, str, str, WorkflowStatus], None] | None,
+    on_event: EventCallback,
+) -> dict[str, Any]:
+    """Route malformed JSON through the same canonical recovery owner."""
+    state.planner_dispatch.begin_attempt()
+    return _synthetic_recoverable_dispatch_failure(
+        context=context,
+        tool_call_id=tool_call_id,
+        args={},
+        state=state,
+        on_event=on_event,
+        workflow_state_cb=workflow_state_cb,
+        failure_class="malformed_dispatch_arguments",
+        summary="Planner dispatch arguments were malformed JSON.",
+        errors=[error],
+        extra_payload={"raw_arguments": raw_arguments},
     )
 
 
@@ -200,6 +237,8 @@ def _dispatch_result_to_round_result(
     tool_call_id: str,
     result: WorkerDispatchResult | None,
     state: _SendState,
+    workflow_state_cb: Callable[[str, str, str, WorkflowStatus], None] | None = None,
+    args: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Convert a WorkerDispatchResult to the round result dict shape.
 
@@ -208,6 +247,13 @@ def _dispatch_result_to_round_result(
     attachment, and stale-read-file forwarding.
     """
     terminal_dispatch = False
+    if result is not None and result.cancelled:
+        return {
+            "id": tool_call_id,
+            "skip": True,
+            "completed_dispatch_for_final": False,
+            "terminal_dispatch": True,
+        }
     if result is not None and not result.cancelled:
         if result.ok:
             terminal_dispatch = True
@@ -215,30 +261,49 @@ def _dispatch_result_to_round_result(
             extras = result.extras if isinstance(result.extras, dict) else {}
             failure_constraint = str(extras.get("failure_constraint") or "")
             attempt_brief = build_attempt_brief(result)
-            if extras.get("internal_planner_handoff") and failure_constraint:
-                if failure_constraint in state.seen_internal_constraints:
-                    d = {
+            if is_recoverable_pre_worker_failure(result):
+                state.planner_dispatch.record_pre_worker_failure(result)
+                _project_repairing_state(
+                    workflow_state_cb,
+                    tool_call_id=tool_call_id,
+                    args=args or {},
+                )
+                if state.planner_dispatch.exhausted:
+                    terminal_reason = state.planner_dispatch.exhaustion_reason()
+                    _project_workflow_state(
+                        workflow_state_cb,
+                        tool_call_id=tool_call_id,
+                        args=args or {},
+                        status=WorkflowStatus.failed_nonrecoverable,
+                    )
+                    exhausted = WorkerDispatchResult(
+                        ok=False,
+                        summary=terminal_reason,
+                        recoverable=False,
+                        extras={
+                            "dispatch_not_started": True,
+                            "recovery_exhausted": True,
+                            "failure_class": "planner_dispatch_recovery_exhausted",
+                            "final_failure": state.planner_dispatch.last_failure_payload,
+                        },
+                    )
+                    return {
                         "id": tool_call_id,
                         "blocker": True,
-                        "result": result,
-                        "blocker_reason": "failed",
-                        "failure_constraint": failure_constraint,
+                        "result": exhausted,
+                        "blocker_reason": "recovery_exhausted",
+                        "failure_constraint": "",
+                        "terminal_reason": terminal_reason,
                         "terminal_dispatch": False,
                     }
-                    if attempt_brief is not None:
-                        d["attempt_brief"] = attempt_brief
-                    return d
-                state.seen_internal_constraints.add(failure_constraint)
                 d = {
                     "id": tool_call_id,
                     "skip": True,
                     "completed_dispatch_for_final": False,
                     "terminal_dispatch": False,
-                    "planner_internal_constraint": failure_constraint,
+                    "planner_internal_constraint": state.planner_dispatch.corrective_message(),
                     "enter_silent_preflight": True,
                 }
-                if attempt_brief is not None:
-                    d["attempt_brief"] = attempt_brief
                 return d
             action = classify_failed_worker_dispatch(
                 result=result,
@@ -279,6 +344,100 @@ def _dispatch_reached_visible_worker(result: WorkerDispatchResult | None) -> boo
         return False
     extras = result.extras if isinstance(result.extras, dict) else {}
     return not bool(extras.get("dispatch_not_started"))
+
+
+def _mark_dispatch_accepted(state: _SendState) -> None:
+    state.planner_dispatch.mark_accepted()
+    state.limits.record_dispatch_accepted()
+
+
+def _synthetic_recoverable_dispatch_failure(
+    *,
+    context: DispatchToolRoundContext,
+    tool_call_id: str,
+    args: dict[str, Any],
+    state: _SendState,
+    on_event: EventCallback,
+    workflow_state_cb: Callable[[str, str, str, WorkflowStatus], None] | None,
+    failure_class: str,
+    summary: str,
+    errors: list[str],
+    failure_constraint: str = "",
+    extra_payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    exact_errors = [str(error) for error in errors if str(error)]
+    constraint = failure_constraint or (
+        "CONSTRAINT FOR NEXT PLANNER ATTEMPT: Correct dispatch_to_worker: "
+        + "; ".join(exact_errors)
+    )
+    extras = {
+        "internal_planner_handoff": True,
+        "failure_constraint": constraint,
+        "dispatch_not_started": True,
+        "recoverable": True,
+        "user_visible_blocker": False,
+        "dispatch_spec_rejected": True,
+        "failure_class": failure_class,
+        "quality_errors": exact_errors,
+        **(extra_payload or {}),
+    }
+    if failure_class == "planner_dispatch_scope_incomplete":
+        extras["planner_dispatch_scope_incomplete"] = True
+    result = WorkerDispatchResult(
+        ok=False,
+        summary=summary,
+        recoverable=True,
+        extras=extras,
+    )
+    payload = json.dumps(result.to_tool_payload(), ensure_ascii=False)
+    context.history.append_tool_result(tool_call_id, payload)
+    on_event(
+        ToolResult(
+            tool_call_id=tool_call_id,
+            name="dispatch_to_worker",
+            ok=True,
+            result=payload,
+            extras={"dispatch": True, **extras},
+        )
+    )
+    return _dispatch_result_to_round_result(
+        tool_call_id=tool_call_id,
+        result=result,
+        state=state,
+        workflow_state_cb=workflow_state_cb,
+        args=args,
+    )
+
+
+def _project_repairing_state(
+    workflow_state_cb: Callable[[str, str, str, WorkflowStatus], None] | None,
+    *,
+    tool_call_id: str,
+    args: dict[str, Any],
+) -> None:
+    _project_workflow_state(
+        workflow_state_cb,
+        tool_call_id=tool_call_id,
+        args=args,
+        status=WorkflowStatus.planner_resolving,
+    )
+
+
+def _project_workflow_state(
+    workflow_state_cb: Callable[[str, str, str, WorkflowStatus], None] | None,
+    *,
+    tool_call_id: str,
+    args: dict[str, Any],
+    status: WorkflowStatus,
+) -> None:
+    if workflow_state_cb is None:
+        return
+    workflow_state_cb(
+        tool_call_id,
+        str(args.get("goal") or "Repair Worker plan"),
+        str(args.get("summary") or ""),
+        status,
+    )
 
 
 def _get_latest_user_text(history: History) -> str:
@@ -371,3 +530,10 @@ def _looks_like_local_path(value: Any) -> bool:
         or "." in Path(path).name
         or path.startswith(".")
     )
+
+
+__all__ = [
+    "DispatchToolRoundContext",
+    "handle_dispatch_to_worker_round",
+    "handle_invalid_dispatch_arguments_round",
+]

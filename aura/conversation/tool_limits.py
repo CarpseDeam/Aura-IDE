@@ -50,6 +50,7 @@ class ToolLimitState:
     terminal_calls: int = 0
     write_calls: int = 0
     dispatch_calls: int = 0
+    dispatch_accepted_calls: int = 0
     planner_context_calls: int = 0
     round_dispatch_calls: int = 0
 
@@ -89,6 +90,10 @@ class ToolLimitState:
             self.round_dispatch_calls += 1
         if self.mode == "planner" and tool_name in PLANNER_CONTEXT_TOOLS:
             self.planner_context_calls += 1
+
+    def record_dispatch_accepted(self) -> None:
+        """Record a dispatch that actually crossed the pre-Worker boundary."""
+        self.dispatch_accepted_calls += 1
 
     def _payload(
         self,
@@ -134,6 +139,7 @@ class ToolLimitState:
             "terminal_calls": self.terminal_calls,
             "write_calls": self.write_calls,
             "dispatch_calls": self.dispatch_calls,
+            "dispatch_accepted_calls": self.dispatch_accepted_calls,
             "planner_context_calls": self.planner_context_calls,
             "round_dispatch_calls": self.round_dispatch_calls,
         }

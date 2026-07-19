@@ -154,9 +154,16 @@ class WorkerEventHandler(QObject):
         card = self._dispatch_ui.get_spec_card(state.tool_call_id)
         if card is not None and hasattr(card, "update_workflow_state"):
             card.update_workflow_state(state)
-        # Forward to the plan writer card only while the backend says the
-        # dispatch is still in the pre-worker review state.
-        if state.status == WorkflowStatus.plan_ready:
+        # Forward all pre-Worker lifecycle snapshots. The card is a thin
+        # projection and remains the same card across repair attempts.
+        if state.status in {
+            WorkflowStatus.intent_captured,
+            WorkflowStatus.plan_ready,
+            WorkflowStatus.planner_resolving,
+            WorkflowStatus.failed_retryable,
+            WorkflowStatus.failed_nonrecoverable,
+            WorkflowStatus.cancelled,
+        }:
             plan_card = getattr(self._chat, "get_plan_writer_card", lambda tid: None)(state.tool_call_id)
             if plan_card is not None and hasattr(plan_card, "update_workflow_state"):
                 plan_card.update_workflow_state(state)

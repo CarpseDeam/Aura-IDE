@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from aura.client import Done, Event, ToolResult
+from aura.client import ContentDelta, Done, Event, ToolResult
 from aura.conversation.attempt_brief import render_for_planner
 from aura.conversation.dispatch import WorkerDispatchResult
 from aura.conversation.manager_send_state import _SendState
@@ -59,6 +59,7 @@ def append_dispatch_blocker_message(
     on_event: EventCallback,
     failure_constraint: str = "",
     attempt_brief: Any = None,
+    terminal_reason: str = "",
 ) -> None:
     """Append a dispatch-blocker message to history and emit a Done event.
 
@@ -71,14 +72,18 @@ def append_dispatch_blocker_message(
         )
     elif failure_constraint:
         context.history.append_internal_user_text(failure_constraint)
+    final_message = {
+        "role": "assistant",
+        "content": terminal_reason,
+        "reasoning_content": None,
+    }
+    if terminal_reason:
+        context.history.append_assistant(final_message)
+        on_event(ContentDelta(text=terminal_reason))
     on_event(
         Done(
             finish_reason="stop",
-            full_message={
-                "role": "assistant",
-                "content": "",
-                "reasoning_content": None,
-            },
+            full_message=final_message,
         )
     )
 

@@ -48,6 +48,9 @@ node_modules/
 # OS
 .DS_Store
 Thumbs.db
+
+# Godot-generated import metadata
+*.import
 /AGY.md
 /build/
 /aura/private_style.py

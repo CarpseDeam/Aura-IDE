@@ -26,7 +26,7 @@ class ToolStreamController(QObject):
     content_updated = Signal(str)
     # Emitted whenever arguments are updated (pretty-printed if possible)
     args_updated = Signal(str)
-    # Emitted when the tool state changes ("running", "done", "failed")
+    # Emitted when the tool state changes ("running", "repairing", "done", "failed")
     state_changed = Signal(str)
     # Emitted when the tool call is finished with the full result
     result_finalized = Signal(dict)
@@ -222,9 +222,6 @@ class ToolStreamController(QObject):
 
     def finalize(self, ok: bool, result_text: str) -> None:
         """Finalize the tool call with the result."""
-        self._state = "done" if ok else "failed"
-        self.state_changed.emit(self._state)
-
         result_dict: dict[str, Any] = {}
         formatted_result = result_text
         try:
@@ -233,6 +230,21 @@ class ToolStreamController(QObject):
                 formatted_result = json.dumps(result_dict, indent=2, ensure_ascii=False)
         except json.JSONDecodeError:
             result_dict = {"raw_result": result_text}
+
+        self._state = "done" if ok else "failed"
+        if self._tool_name == "dispatch_to_worker" and isinstance(result_dict, dict):
+            extras = result_dict.get("extras")
+            extras = extras if isinstance(extras, dict) else {}
+            dispatch_not_started = bool(
+                result_dict.get("dispatch_not_started")
+                or extras.get("dispatch_not_started")
+            )
+            cancelled = bool(result_dict.get("cancelled") or extras.get("dispatch_cancelled"))
+            recovery_exhausted = bool(extras.get("recovery_exhausted"))
+            recoverable = bool(result_dict.get("recoverable") or extras.get("recoverable"))
+            if dispatch_not_started and recoverable and not cancelled and not recovery_exhausted:
+                self._state = "repairing"
+        self.state_changed.emit(self._state)
 
         self.result_finalized.emit(result_dict)
         self.result_finalized_text.emit(formatted_result)

@@ -1,8 +1,6 @@
 """Compact status card for a worker plan being written."""
 from __future__ import annotations
 
-
-
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import (
@@ -33,6 +31,7 @@ class PlanWriterCard(QFrame):
     STATE_INCOMPLETE = "incomplete"
     STATE_NOT_STARTED = "not_started"
     STATE_RETRYING = "retrying"
+    STATE_REPAIRING = "repairing"
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -72,6 +71,7 @@ class PlanWriterCard(QFrame):
             self.STATE_INCOMPLETE: WARN,
             self.STATE_NOT_STARTED: WARN,
             self.STATE_RETRYING: WARN,
+            self.STATE_REPAIRING: WARN,
         }[self._state]
 
         text = {
@@ -83,7 +83,8 @@ class PlanWriterCard(QFrame):
             self.STATE_PHASE: "⚡ Phase complete — preparing follow-up",
             self.STATE_INCOMPLETE: self._incomplete_text,
             self.STATE_NOT_STARTED: self._incomplete_text,
-            self.STATE_RETRYING: "⚡ Working",
+            self.STATE_RETRYING: "⚡ Repairing plan…",
+            self.STATE_REPAIRING: "⚡ Repairing plan…",
         }[self._state]
 
         metrics = QFontMetrics(self._status.font())
@@ -145,6 +146,20 @@ class PlanWriterCard(QFrame):
         self._state = self.STATE_DONE if ok else self.STATE_FAILED
         self._refresh()
 
+    def set_stream_state(self, state: str) -> None:
+        """Project the thin controller fallback when no backend snapshot exists."""
+        if self._has_workflow_snapshot:
+            return
+        if state == "repairing":
+            self._state = self.STATE_REPAIRING
+        elif state == "done":
+            self._state = self.STATE_DONE
+        elif state == "failed":
+            self._state = self.STATE_FAILED
+        else:
+            self._state = self.STATE_RUNNING
+        self._refresh()
+
     def update_workflow_state(self, state: WorkflowState) -> None:
         """Render from the canonical backend WorkflowState snapshot.
 
@@ -171,7 +186,7 @@ class PlanWriterCard(QFrame):
             self._state = self.STATE_INCOMPLETE
             self._incomplete_text = "⚡ Plan incomplete"
         elif state.status == WorkflowStatus.failed_retryable:
-            self._state = self.STATE_RETRYING
+            self._state = self.STATE_REPAIRING
         elif state.status == WorkflowStatus.failed_nonrecoverable:
             self._state = self.STATE_FAILED
         elif state.status == WorkflowStatus.done:
@@ -180,8 +195,7 @@ class PlanWriterCard(QFrame):
             self._state = self.STATE_NOT_STARTED
             self._incomplete_text = "⚡ Plan cancelled"
         elif state.status == WorkflowStatus.planner_resolving:
-            self._state = self.STATE_INCOMPLETE
-            self._incomplete_text = "⚡ Plan incomplete"
+            self._state = self.STATE_REPAIRING
         else:
             self._state = self.STATE_RUNNING
 

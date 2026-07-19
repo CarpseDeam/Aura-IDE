@@ -15,6 +15,7 @@ from aura.conversation.dispatch import DispatchCallback
 from aura.conversation.dispatch_tool_round import (
     DispatchToolRoundContext,
     handle_dispatch_to_worker_round,
+    handle_invalid_dispatch_arguments_round,
 )
 from aura.conversation.history import History
 from aura.conversation.manager_recovery import (
@@ -22,7 +23,6 @@ from aura.conversation.manager_recovery import (
     worker_recovery_block,
 )
 from aura.conversation.manager_send_state import _SendState
-from aura.work_artifact.model import ValidationCommandSpec
 from aura.conversation.planner_refresh import PlannerRefreshState
 from aura.conversation.terminal_tool_round import (
     handle_run_and_watch_round,
@@ -49,6 +49,7 @@ from aura.conversation.worker_recovery_payload import (
 from aura.conversation.workflow_state import WorkflowStatus
 from aura.events import EventBus
 from aura.lifecycle import LifecycleHooks
+from aura.work_artifact.model import ValidationCommandSpec
 
 EventCallback = Callable[[Event], None]
 
@@ -114,6 +115,38 @@ class ToolRoundRunner:
                 args = json.loads(fn.get("arguments") or "{}")
             except json.JSONDecodeError as exc:
                 err = f"failed to parse tool arguments as JSON: {exc}"
+                if name == "dispatch_to_worker":
+                    allowed, limit_info = state.limits.check(name)
+                    if not allowed:
+                        append_limit_tool_result(
+                            context=ToolRoundEventsContext(history=self._history),
+                            tool_call_id=tool_call_id,
+                            name=name,
+                            info=limit_info,
+                            on_event=on_event,
+                        )
+                        continue
+                    state.limits.record(name)
+                    tasks.append(
+                        {
+                            "id": tool_call_id,
+                            "name": name,
+                            "args": {},
+                            "precomputed": handle_invalid_dispatch_arguments_round(
+                                context=DispatchToolRoundContext(
+                                    history=self._history,
+                                    tool_runner=self._tool_runner,
+                                ),
+                                tool_call_id=tool_call_id,
+                                raw_arguments=str(fn.get("arguments") or ""),
+                                error=err,
+                                state=state,
+                                workflow_state_cb=workflow_state_cb,
+                                on_event=on_event,
+                            ),
+                        }
+                    )
+                    continue
                 self._history.append_tool_result(
                     tool_call_id, json.dumps({"ok": False, "error": err})
                 )
@@ -175,6 +208,10 @@ class ToolRoundRunner:
                 if cancel_event.is_set():
                     break
 
+                if "precomputed" in task:
+                    results_to_append.append(task["precomputed"])
+                    continue
+
                 if task["name"] in _READ_ONLY_TOOLS:
                     futures[executor.submit(process_task, task)] = task
                 else:
@@ -221,6 +258,7 @@ class ToolRoundRunner:
                     on_event=on_event,
                     failure_constraint=failure_constraint,
                     attempt_brief=res.get("attempt_brief"),
+                    terminal_reason=str(res.get("terminal_reason", "") or ""),
                 )
                 return ToolRoundOutcome(action="return")
             if res.get("completed_dispatch_for_final"):

@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from aura.conversation.dispatch_failure import PlannerDispatchRecovery
 from aura.conversation.edit_orchestrator import EditRetryLedger
 from aura.conversation.tool_limits import ToolLimitState
 from aura.conversation.validation_ledger import WorkerValidationLedger
@@ -56,9 +57,15 @@ class _SendState:
 
 
     # --- dispatch ---
-    planner_dispatch_attempts: int = 0
+    planner_dispatch: PlannerDispatchRecovery = field(
+        default_factory=PlannerDispatchRecovery
+    )
     planner_visible_dispatch_tool_call_id: str = ""
-    seen_internal_constraints: set[str] = field(default_factory=set)
+
+    @property
+    def planner_dispatch_attempts(self) -> int:
+        """Compatibility telemetry; an attempt is not an accepted dispatch."""
+        return self.planner_dispatch.attempts
 
     # --- edit recovery ---
     edit_failed_shapes: set[str] = field(default_factory=set)

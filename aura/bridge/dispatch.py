@@ -70,6 +70,28 @@ DISPATCH_TIMEOUT = 300.0
 _log = logging.getLogger(__name__)
 
 
+def _recoverable_plan_creation_failure(exc: Exception) -> WorkerDispatchResult:
+    """Preserve an exact pre-Worker plan serialization failure for repair."""
+    exact_error = redact_secrets(f"{type(exc).__name__}: {exc}")
+    return WorkerDispatchResult(
+        ok=False,
+        summary="Planner dispatch could not be serialized.",
+        recoverable=True,
+        extras={
+            "dispatch_not_started": True,
+            "recoverable": True,
+            "internal_planner_handoff": True,
+            "dispatch_spec_rejected": True,
+            "failure_class": "dispatch_serialization_failed",
+            "quality_errors": [exact_error],
+            "failure_constraint": (
+                "CONSTRAINT FOR NEXT PLANNER ATTEMPT: Correct the dispatch "
+                f"serialization error: {exact_error}"
+            ),
+        },
+    )
+
+
 class _DispatchProxy(QObject):
     showSpecCard = Signal(str, str, list, str, str, str)  # tool_id, goal, files, spec, acceptance, summary
     workerStarted = Signal(str)  # tool_id
@@ -273,7 +295,15 @@ class _DispatchProxy(QObject):
             )
 
         # Register the artifact (idempotent — tool_runner may have created it).
-        self._register_artifact_from_request(tool_call_id, req)
+        try:
+            self._register_artifact_from_request(tool_call_id, req)
+        except (TypeError, ValueError, KeyError) as exc:
+            _log.info(
+                "request_dispatch plan creation rejected tool_call_id=%s error_type=%s",
+                tool_call_id,
+                type(exc).__name__,
+            )
+            return _recoverable_plan_creation_failure(exc)
 
         pending = self._pending_map.register(tool_call_id, req)
         _log.info("request_dispatch registered pending tool_call_id=%s", tool_call_id)
@@ -375,7 +405,16 @@ class _DispatchProxy(QObject):
         existing = self._artifact_controller.get_artifact(tool_call_id)
         if existing is not None:
             self._artifact_controller.remove_artifact(tool_call_id)
-        self._artifact_controller.create_artifact_from_request(tool_call_id, edited)
+        try:
+            self._artifact_controller.create_artifact_from_request(tool_call_id, edited)
+        except (TypeError, ValueError, KeyError) as exc:
+            self._pending_map.pop(tool_call_id)
+            _log.info(
+                "request_dispatch edited plan creation rejected tool_call_id=%s error_type=%s",
+                tool_call_id,
+                type(exc).__name__,
+            )
+            return _recoverable_plan_creation_failure(exc)
         _log.info(
             "Artifact refreshed from approved request tool_call_id=%s",
             tool_call_id,

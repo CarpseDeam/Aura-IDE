@@ -65,7 +65,17 @@ def _should_close_dispatch_assistant(
     dispatch_not_started: bool,
 ) -> bool:
     if dispatch_not_started:
-        return True
+        extras = data.get("extras", {})
+        if not isinstance(extras, dict):
+            extras = {}
+        cancelled = bool(data.get("cancelled") or extras.get("dispatch_cancelled"))
+        approval_rejected = bool(
+            data.get("status") == "approval_rejected"
+            or extras.get("approval_rejected")
+        )
+        recovery_exhausted = bool(extras.get("recovery_exhausted"))
+        recoverable = bool(data.get("recoverable") or extras.get("recoverable"))
+        return bool(cancelled or approval_rejected or recovery_exhausted or not recoverable)
     if status is not None and status not in _DISPATCH_COMPLETE_STATUSES:
         return False
     if bool(data.get("recoverable") or data.get("phase_boundary")):
@@ -462,8 +472,7 @@ class ChatView(QScrollArea):
                 self._remove_plan_writer_card(tid)
 
     def prepare_spec_card(self, tool_call_id: str) -> None:
-        """Remove transient plan-writing UI before showing an active spec card."""
-        self._remove_plan_writer_card(tool_call_id)
+        """Keep plan status visible until Worker start owns the transition."""
 
     def _code_card_key(self, path: str) -> str:
         return path.strip()
@@ -621,8 +630,27 @@ class ChatView(QScrollArea):
             # Idempotent plan card creation — if a card already exists for this
             # tool_call_id do not create a second one or re-wire signals.
             existing_card = self._plan_writer_cards.get(tool_call_id)
+            if existing_card is None:
+                repairing_id = next(
+                    (
+                        tid
+                        for tid, candidate in reversed(list(self._plan_writer_cards.items()))
+                        if candidate._state
+                        in {
+                            PlanWriterCard.STATE_REPAIRING,
+                            PlanWriterCard.STATE_RETRYING,
+                        }
+                    ),
+                    None,
+                )
+                if repairing_id is not None:
+                    existing_card = self._plan_writer_cards.pop(repairing_id)
+                    self._plan_writer_cards[tool_call_id] = existing_card
             if existing_card is not None:
                 self._tool_owner[tool_call_id] = ac
+                controller.goal_updated.connect(existing_card.set_goal)
+                controller.content_updated.connect(existing_card.update_spec)
+                controller.state_changed.connect(existing_card.set_stream_state)
                 if not ac._tool_cluster.isVisible():
                     ac._tool_cluster.setVisible(True)
                 self._scroll_to_bottom()
@@ -638,10 +666,7 @@ class ChatView(QScrollArea):
             # Wire plan writer signals
             controller.goal_updated.connect(card.set_goal)
             controller.content_updated.connect(card.update_spec)
-            controller.state_changed.connect(lambda s: card.set_result(s == "done"))
-            controller.result_finalized_text.connect(
-                lambda text, c=controller, card=card: card.set_result(c._state == "done", text)
-            )
+            controller.state_changed.connect(card.set_stream_state)
         else:
             ac = self.current_assistant()
             ac.notify_compact_tool_start(name)
@@ -719,7 +744,7 @@ class ChatView(QScrollArea):
                 # THEN update spec card for not-started scenarios (stale/cancelled/expired).
                 # Completed dispatches get one deduped final summary card so
                 # live UI and persisted replay show the same terminal state.
-                if dispatch_not_started:
+                if dispatch_not_started and should_close_for_continuation:
                     spec_card = self.get_spec_card(tool_call_id)
                     if spec_card:
                         if approval_timeout:
@@ -894,9 +919,6 @@ class ChatView(QScrollArea):
         acceptance: str,
         summary: str = "",
     ) -> SpecCard:
-        # Remove the in-flight plan writer card for this call ID (baton pass).
-        self._remove_plan_writer_card(tool_call_id)
-
         existing = self._spec_cards.get(tool_call_id)
         if existing is not None:
             existing.update_spec(goal, files, spec, acceptance, summary)

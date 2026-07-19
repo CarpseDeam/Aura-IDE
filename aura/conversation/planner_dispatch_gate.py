@@ -57,13 +57,28 @@ def maybe_force_worker_dispatch(
     latest_user_text: str,
     candidate_message: dict[str, Any],
     planner_tool_calls_seen: int,
-    dispatch_calls_seen: int,
-    already_steered: bool,
+    dispatch_calls_seen: int = 0,
+    dispatch_accepted: bool | None = None,
+    dispatch_recovery_required: bool = False,
+    dispatch_recovery_message: str = "",
+    already_steered: bool = False,
 ) -> PlannerDispatchGateDecision:
     """Return an internal steering message when Planner must dispatch now."""
-    if already_steered:
+    accepted = dispatch_calls_seen > 0 if dispatch_accepted is None else dispatch_accepted
+    if accepted:
         return PlannerDispatchGateDecision(False)
-    if dispatch_calls_seen > 0:
+    if dispatch_recovery_required:
+        return PlannerDispatchGateDecision(
+            True,
+            steering_message=(
+                dispatch_recovery_message
+                or "INTERNAL PLANNER DISPATCH RECOVERY: The previous dispatch was "
+                "not accepted and no Worker started. Correct dispatch_to_worker and "
+                "call it again now; an empty or narration-only response cannot end this turn."
+            ),
+            reason="planner_dispatch_recovery_required",
+        )
+    if already_steered:
         return PlannerDispatchGateDecision(False)
     if not _latest_user_is_local_implementation(latest_user_text):
         return PlannerDispatchGateDecision(False)
