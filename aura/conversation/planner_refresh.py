@@ -43,29 +43,46 @@ def stale_read_notice(modified_files: list[str]) -> str:
 
 
 class PlannerRefreshState:
-    """Holds planner refresh configuration and provides mid-turn methods."""
+    """Holds mid-turn context-refresh configuration for the active runtime role.
+
+    Historically planner-only; the production single-agent path uses the same
+    machinery with ``RuntimeRole.SINGLE``.  The class name is retained as a
+    compatibility alias.
+    """
 
     def __init__(self) -> None:
         self._base_system_prompt: str | None = None
         self._workspace_root: Path | None = None
+        self._role: RuntimeRole = RuntimeRole.PLANNER
 
-    def configure(self, base_prompt: str, workspace_root: Path) -> None:
-        """Store the base system prompt template and workspace root for mid-turn refresh."""
+    def configure(
+        self,
+        base_prompt: str,
+        workspace_root: Path,
+        role: RuntimeRole | str = RuntimeRole.PLANNER,
+    ) -> None:
+        """Store the base system prompt, workspace root, and role for mid-turn refresh."""
         self._base_system_prompt = base_prompt
         self._workspace_root = workspace_root
+        self._role = RuntimeRole.from_value(role)
+
+    @property
+    def role(self) -> RuntimeRole:
+        return self._role
 
     def refresh_tier1_after_writes(self, history) -> None:
         """Rebuild Tier 1 context with force-refreshed repo map and update system prompt.
 
-        Called after a worker dispatch completes with file writes. Forces repo map
-        regeneration so the planner's next LLM round sees updated code structure.
-        Does nothing if configure was not called.
+        Called after file writes land. Forces repo map regeneration so the next
+        model round sees updated code structure. Composes against the configured
+        runtime role, so the production single-agent path never re-injects a
+        Planner posture. Does nothing if configure was not called.
         """
         if self._base_system_prompt is None or self._workspace_root is None:
             return
         try:
             composed = compose_system_prompt(
-                RuntimeRole.PLANNER,
+                self._role,
                 self._base_system_prompt,
                 self._workspace_root,
                 force=True,
@@ -74,13 +91,14 @@ class PlannerRefreshState:
                 composed.ledger, workspace_root=self._workspace_root,
             )
             logger.info(
-                "planner_context_refresh_summary %s",
+                "%s_context_refresh_summary %s",
+                self._role.value,
                 metadata["summary"]["display"],
             )
             history.set_system(composed.system_prompt)
         except Exception:
             logger.warning(
-                "Failed to refresh Tier 1 context after worker writes", exc_info=True
+                "Failed to refresh Tier 1 context after writes", exc_info=True
             )
 
     def handle_post_write_notices(

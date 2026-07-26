@@ -375,10 +375,10 @@ class LeftPane(QFrame):
         model_label.setObjectName("paneTitleModel")
         footer_layout.addWidget(model_label)
 
-        # Planner model
+        # Production model — the one model that owns normal coding.
         planner_model_row = QHBoxLayout()
         planner_model_row.setSpacing(4)
-        planner_model_label = QLabel("Planner:")
+        planner_model_label = QLabel("Model:")
         planner_model_label.setStyleSheet(f"color: {FG_DIM};")
         planner_model_row.addWidget(planner_model_label)
         self._planner_model_combo = NoWheelComboBox()
@@ -405,7 +405,9 @@ class LeftPane(QFrame):
         planner_think_row.addWidget(self._planner_thinking_combo, 1)
         footer_layout.addLayout(planner_think_row)
 
-        # Worker model
+        # Legacy Worker model/thinking controls. Normal coding runs one
+        # production model, so these stay constructed (persistence and old
+        # conversation records still reference them) but are never shown.
         worker_model_row = QHBoxLayout()
         worker_model_row.setSpacing(4)
         self._worker_model_label = QLabel("Worker:")
@@ -437,6 +439,10 @@ class LeftPane(QFrame):
 
         layout.addWidget(self._model_config_footer)
 
+        # Production single-agent mode is the normal product: hide the legacy
+        # Worker role controls.
+        self.set_planner_worker_mode(False)
+
         self.update_workspace_label(workspace_root)
 
     def update_workspace_label(self, root: Path | None) -> None:
@@ -445,8 +451,29 @@ class LeftPane(QFrame):
             return
         self._workspace_label.setText(str(root))
 
-    def populate_models(self, planner_provider: ProviderId, worker_provider: ProviderId) -> None:
-        # Planner
+    def set_production_model(self, model: str) -> None:
+        """Select the production model (role-neutral entry point)."""
+        self.set_planner_model(model)
+
+    def set_production_thinking(self, thinking: ThinkingMode) -> None:
+        """Select the production thinking mode (role-neutral entry point)."""
+        self.set_planner_thinking(thinking)
+
+    def current_production_model(self) -> str:
+        return self.current_planner_model()
+
+    def current_production_thinking(self) -> ThinkingMode:
+        return self.current_planner_thinking()
+
+    def populate_models(
+        self,
+        planner_provider: ProviderId,
+        worker_provider: ProviderId | None = None,
+    ) -> None:
+        """Populate the production model list (and the hidden legacy worker list)."""
+        if worker_provider is None:
+            worker_provider = planner_provider
+        # Production
         self._planner_model_combo.blockSignals(True)
         self._planner_model_combo.clear()
         for mid, info in _models_with_default(planner_provider).items():

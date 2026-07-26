@@ -75,11 +75,12 @@ class MainWindowToolbar(QToolBar):
         self.addWidget(_toolbar_separator())
 
         # Group 3: auto toggles
+        # Auto-dispatch only means anything for the legacy Planner→Worker
+        # handoff, which is not part of the normal product. The control is kept
+        # (so settings and signal wiring keep working) but never shown.
         self._auto_dispatch_switch = GlassSwitch("Dispatch", self._settings.auto_dispatch, vertical=True, accent_color=LABEL_DISPATCH)
         self._auto_dispatch_switch.toggled.connect(self.auto_dispatch_toggled.emit)
-        self.addWidget(self._auto_dispatch_switch)
-
-        self.addWidget(_toolbar_separator())
+        self._auto_dispatch_switch.hide()
 
         self._auto_approve_switch = GlassSwitch("Approve", self._settings.auto_approve, vertical=True, accent_color=LABEL_APPROVE)
         self._auto_approve_switch.toggled.connect(self.auto_approve_toggled.emit)

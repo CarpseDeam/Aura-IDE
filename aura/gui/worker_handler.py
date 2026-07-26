@@ -141,6 +141,24 @@ class WorkerEventHandler(QObject):
         # WorkArtifact projection updates.
         self._bridge.artifactProjectionUpdated.connect(self._on_artifact_projection_updated)
 
+    # ---- production-run helpers ------------------------------------------------
+
+    def _is_production_run(self, tool_call_id: str) -> bool:
+        """True when *tool_call_id* is the active direct production run id."""
+        run_id = getattr(self._bridge, "production_run_id", "")
+        return bool(tool_call_id) and tool_call_id == run_id
+
+    def _mark_chat_working_in_workspace(self) -> None:
+        """Show a lightweight in-flight hint on the current chat assistant card."""
+        try:
+            card = self._chat.current_assistant()
+        except Exception:
+            _log.debug("No assistant card to mark as working", exc_info=True)
+            return
+        show = getattr(card, "show_thinking_message", None)
+        if callable(show):
+            show("Working in the workspace")
+
     # ---- canonical WorkflowState snapshot from backend -------------------------
 
     def _on_workflow_state_changed(self, state: WorkflowState) -> None:
@@ -255,7 +273,13 @@ class WorkerEventHandler(QObject):
             tool_call_id,
         )
         self._active_worker_tool_call_id = tool_call_id
-        self._chat.stop_current_aura()
+        if self._is_production_run(tool_call_id):
+            # Direct production execution: the run is still in flight, so keep
+            # the chat aura alive and point the user at the workspace instead
+            # of duplicating the transcript into the chat.
+            self._mark_chat_working_in_workspace()
+        else:
+            self._chat.stop_current_aura()
         # Remove any remaining PlanWriterCard — once the Worker is running,
         # the plan-writing UI is replaced by the Worker Log.  This covers
         # both the auto-dispatch path (no spec card) and the visible-dispatch
@@ -366,11 +390,19 @@ class WorkerEventHandler(QObject):
         self.worker_running_changed.emit(False)
 
     def _worker_result_metadata(self, tool_call_id: str) -> dict:
-        getter = getattr(self._bridge, "worker_result_metadata", None)
-        if not callable(getter):
-            return {}
-        metadata = getter(tool_call_id)
-        return metadata if isinstance(metadata, dict) else {}
+        """Read run metadata through the bridge's role-neutral accessor.
+
+        Falls back to the legacy dispatch-specific accessor so old, unreachable
+        Planner paths keep working.
+        """
+        for name in ("execution_result_metadata", "worker_result_metadata"):
+            getter = getattr(self._bridge, name, None)
+            if not callable(getter):
+                continue
+            metadata = getter(tool_call_id)
+            if isinstance(metadata, dict):
+                return metadata
+        return {}
 
     def _on_worker_cancelled(self, tool_call_id: str) -> None:
         """Stop worker aura and forward cancel to playground/spec card."""

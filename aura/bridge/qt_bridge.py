@@ -1,17 +1,25 @@
 """Bridge between the (sync) ConversationManager worker thread and Qt's GUI thread.
 
-- send() spawns a QThread that runs ConversationManager.send for the planner.
-- Each event becomes a Qt signal on the GUI thread.
+Normal Aura coding is one continuous production run:
+
+    user request
+      → selected production provider and model
+      → one ConversationManager over the original conversation
+      → inspection → live TODO → edits → terminal → diagnosis → repair
+      → validation rerun → one factual completion receipt
+
+- send() spawns a QThread that runs ConversationManager.send against the
+  role-neutral `generate_production_code` hook.
+- Every event is projected into the workspace through
+  ``ProductionExecutionSession`` under one stable run id.
 - The approval callback is bridged via QMetaObject.invokeMethod with
   Qt.BlockingQueuedConnection — the worker thread blocks until the user clicks
   in the modal dialog on the main thread.
 
-Planner / worker mode:
-- The planner runs as the long-lived manager. When it calls dispatch_to_worker,
-  the dispatch callback (`_DispatchProxy`) marshals the spec to the GUI thread,
-  blocks until the user dispatches or cancels, and (on dispatch) runs a worker
-  ConversationManager synchronously on the same background thread, forwarding
-  worker-prefixed signals up to the GUI for nested rendering.
+Planner / worker dispatch (`_DispatchProxy`, SpecCard, Worker capsules) remains
+as unreachable compatibility scaffolding for old persisted conversations. The
+normal application path never constructs a SpecCard, never calls
+``dispatch_to_worker``, and never triggers the Planner or Worker stream hooks.
 """
 from __future__ import annotations
 
@@ -36,6 +44,7 @@ from aura.backends import (
 )
 from aura.bridge.approval_proxy import _ApprovalProxy
 from aura.bridge.dispatch import _DispatchProxy
+from aura.bridge.production_execution import ProductionExecutionSession
 from aura.client import (
     AgentProcessFinished,
     AgentProcessOutput,
@@ -60,7 +69,6 @@ from aura.config import (
 )
 from aura.context_gearbox.models import RuntimeRole
 from aura.context_gearbox.runtime import (
-    PLANNER_SYSTEM_PROMPT,
     SINGLE_SYSTEM_PROMPT,
     build_context_text,
     compose_system_prompt,
@@ -73,14 +81,19 @@ from aura.conversation import (
 from aura.conversation.tools import (
     ToolRegistry,
 )
-from aura.model_streams import model_streams
+from aura.model_streams import (
+    PLANNER_STREAM_HOOK,
+    PRODUCTION_STREAM_HOOK,
+    WORKER_STREAM_HOOK,
+    model_streams,
+)
 from aura.research.policy import NO_RESEARCH, decide_research_policy
 
 _log = logging.getLogger(__name__)
 
 
 class _Worker(QObject):
-    """Lives on the worker thread. Runs the planner conversation loop."""
+    """Lives on the worker thread. Runs the production conversation loop."""
 
     reasoningDelta = Signal(str)
     contentDelta = Signal(str)
@@ -109,6 +122,8 @@ class _Worker(QObject):
         temperature: float = 0.7,
         workspace_root: Path | None = None,
         max_tool_rounds: int | None = None,
+        production_session: "ProductionExecutionSession | None" = None,
+        hook_name: str = PRODUCTION_STREAM_HOOK,
     ) -> None:
         super().__init__()
         self._manager = manager
@@ -120,6 +135,8 @@ class _Worker(QObject):
         self._temperature = temperature
         self._workspace_root = workspace_root
         self._max_tool_rounds = max_tool_rounds
+        self._production_session = production_session
+        self._hook_name = hook_name
 
     @Slot()
     def run(self) -> None:
@@ -143,7 +160,7 @@ class _Worker(QObject):
                 dispatch_cb=dispatch_cb,
                 workflow_state_cb=workflow_state_cb,
                 temperature=self._temperature,
-                hook_name='generate_planner_code',
+                hook_name=self._hook_name,
                 max_tool_rounds=self._max_tool_rounds,
             )
         except Exception as exc:
@@ -155,6 +172,33 @@ class _Worker(QObject):
             self.finished.emit()
 
     def _on_event(self, ev: Event) -> None:
+        session = self._production_session
+        if session is not None:
+            # Production execution projects into the workspace, not the chat
+            # transcript. Only the facts the chat/persistence layer needs
+            # (stream completion, usage, fatal API errors) surface here.
+            session.handle_event(ev)
+            self._emit_chat_facts(ev)
+            return
+        self._emit_all(ev)
+
+    def _emit_chat_facts(self, ev: Event) -> None:
+        """Emit the minimal event set the chat and persistence layers require."""
+        if isinstance(ev, Usage):
+            self.usageEmitted.emit(
+                ev.prompt_tokens, ev.completion_tokens, ev.cache_hit_tokens, ev.cache_miss_tokens
+            )
+        elif isinstance(ev, Done):
+            if ev.full_message:
+                self.streamDone.emit(ev.finish_reason or "", ev.full_message)
+        elif isinstance(ev, ApiError):
+            from aura.config import redact_secrets
+            self.apiError.emit(
+                ev.status_code if ev.status_code is not None else -1,
+                redact_secrets(ev.message)
+            )
+
+    def _emit_all(self, ev: Event) -> None:
         if isinstance(ev, ReasoningDelta):
             self.reasoningDelta.emit(ev.text)
         elif isinstance(ev, ContentDelta):
@@ -256,21 +300,32 @@ class ConversationBridge(QObject):
         self._provider = provider
         self._planner_provider = provider
         self._worker_provider = provider
-        
+
+        # The one active production backend. Normal coding always runs here.
+        self._production_backend = APIAgentBackend(provider=provider)
+        model_streams.unregister(PRODUCTION_STREAM_HOOK)
+        model_streams.register(PRODUCTION_STREAM_HOOK, self._production_backend.stream)
+
+        # Legacy Planner/Worker backends — unreachable compatibility scaffolding.
         self._planner_backend = APIAgentBackend(provider=provider)
         self._worker_backend = APIAgentBackend(provider=provider)
-        
-        # Register the backends for planner and worker
-        model_streams.unregister('generate_planner_code')
-        model_streams.register('generate_planner_code', self._planner_backend.stream)
-        model_streams.unregister('generate_worker_code')
-        model_streams.register('generate_worker_code', self._worker_backend.stream)
-        
+        model_streams.unregister(PLANNER_STREAM_HOOK)
+        model_streams.register(PLANNER_STREAM_HOOK, self._planner_backend.stream)
+        model_streams.unregister(WORKER_STREAM_HOOK)
+        model_streams.register(WORKER_STREAM_HOOK, self._worker_backend.stream)
+
         self._history = History()
         self._registry = ToolRegistry(workspace_root=_dummy_root(), mode="single")
         self._manager = ConversationManager(self._history, self._registry)
         self._parent_widget = parent_widget
         self._approval_proxy = _ApprovalProxy(parent_widget)
+
+        # Production execution session — owns the run identity, the single
+        # authoritative execution ledger, and workspace projection.
+        self._production_session = ProductionExecutionSession(
+            approval_proxy=self._approval_proxy,
+            parent=self,
+        )
 
         # Dispatch proxy (used only when planner_worker_mode is on).
         self._dispatch_proxy = _DispatchProxy(
@@ -323,6 +378,28 @@ class ConversationBridge(QObject):
         self._dispatch_proxy.workerAgentProcessFinished.connect(self.workerAgentProcessFinished)
         self._dispatch_proxy.artifactProjectionUpdated.connect(self.artifactProjectionUpdated)
 
+        # Re-emit production session signals on the same bridge signals so the
+        # polished workspace projection binds once and stays role-neutral.
+        session = self._production_session
+        session.workerStarted.connect(self.workerStarted)
+        session.workerFinished.connect(self.workerFinished)
+        session.workerCancelled.connect(self.workerCancelled)
+        session.workerReasoningDelta.connect(self.workerReasoningDelta)
+        session.workerContentDelta.connect(self.workerContentDelta)
+        session.workerToolCallStart.connect(self.workerToolCallStart)
+        session.workerToolCallArgs.connect(self.workerToolCallArgs)
+        session.workerToolCallEnd.connect(self.workerToolCallEnd)
+        session.workerToolResult.connect(self.workerToolResult)
+        session.workerDiffDecided.connect(self.workerDiffDecided)
+        session.workerApiError.connect(self.workerApiError)
+        session.workerUsage.connect(self.workerUsage)
+        session.workerActivityUpdated.connect(self.workerActivityUpdated)
+        session.workerTodoUpdated.connect(self.workerTodoUpdated)
+        session.workerTerminalOutput.connect(self.workerTerminalOutput)
+        session.workerAgentProcessStarted.connect(self.workerAgentProcessStarted)
+        session.workerAgentProcessOutput.connect(self.workerAgentProcessOutput)
+        session.workerAgentProcessFinished.connect(self.workerAgentProcessFinished)
+
     # ---- config -----------------------------------------------------------
 
     @property
@@ -351,8 +428,29 @@ class ConversationBridge(QObject):
     def clear_dispatch_records(self) -> None:
         self._dispatch_proxy.clear_records()
 
+    @property
+    def production_session(self) -> ProductionExecutionSession:
+        """The active production execution owner (run identity + ledger)."""
+        return self._production_session
+
+    @property
+    def production_run_id(self) -> str:
+        return self._production_session.run_id
+
+    def execution_result_metadata(self, run_id: str) -> dict:
+        """Role-neutral result metadata accessor for the active execution.
+
+        Production runs answer from the production session. Legacy dispatch
+        metadata is delegated only for old, unreachable dispatch paths.
+        """
+        metadata = self._production_session.result_metadata(run_id)
+        if metadata:
+            return metadata
+        return self._dispatch_proxy.result_metadata(run_id)
+
     def worker_result_metadata(self, tool_call_id: str) -> dict:
-        return self._dispatch_proxy.result_metadata(tool_call_id)
+        """Compatibility alias for ``execution_result_metadata``."""
+        return self.execution_result_metadata(tool_call_id)
 
     def context_gearbox_metadata(self) -> dict:
         return copy.deepcopy(self._context_gearbox_metadata)
@@ -399,10 +497,25 @@ class ConversationBridge(QObject):
         )
         self._history.set_system(composed.system_prompt)
 
+    def set_production_mode(self) -> None:
+        """Put the bridge in production single-agent mode (the normal product)."""
+        self.set_planner_worker_mode(False)
+
     def set_planner_worker_mode(self, enabled: bool) -> None:
-        self._planner_worker_mode = enabled
+        """Compatibility entry point.
+
+        Normal Aura coding is always production single-agent mode. A request to
+        enable Planner/Worker dispatch is logged and ignored: the registry mode
+        and runtime role stay ``single``, so the dispatch path is unreachable.
+        """
+        if enabled:
+            _log.info(
+                "planner_worker_mode requested but ignored — "
+                "production single-agent mode is the normal product"
+            )
+        self._planner_worker_mode = False
         self._compute_and_cache_tier1()
-        mode_key = "planner" if enabled else "single"
+        mode_key = "single"
         self._registry.set_mode(mode_key)
         if self._active_prompt_mode == mode_key:
             return  # Already set, avoid churn
@@ -439,7 +552,8 @@ class ConversationBridge(QObject):
         self._dispatch_proxy.set_auto_approve(enabled)
 
     def _active_runtime_role(self) -> RuntimeRole:
-        return RuntimeRole.PLANNER if self._planner_worker_mode else RuntimeRole.SINGLE
+        """Normal coding always runs the production single-agent role."""
+        return RuntimeRole.SINGLE
 
     def _custom_prompt_for_role(self, role: RuntimeRole) -> str:
         if role == RuntimeRole.PLANNER:
@@ -469,22 +583,37 @@ class ConversationBridge(QObject):
         self._dispatch_proxy.set_tier1_context(self._tier1_context)
         return composed
 
+    def set_production_provider(self, provider: ProviderId) -> None:
+        """Point the one production backend at *provider*.
+
+        This is the canonical provider entry point for normal coding.
+        """
+        self._provider = provider
+        self._production_backend = APIAgentBackend(provider=provider)
+        model_streams.unregister(PRODUCTION_STREAM_HOOK)
+        model_streams.register(PRODUCTION_STREAM_HOOK, self._production_backend.stream)
+
     def set_planner_provider(self, provider: ProviderId) -> None:
-        """Update the planner provider and its backend hook."""
+        """Compatibility alias — updates the production provider.
+
+        Also refreshes the legacy Planner backend so old, unreachable dispatch
+        paths stay coherent if they are ever exercised.
+        """
         self._planner_provider = provider
+        self.set_production_provider(provider)
         self._planner_backend = APIAgentBackend(provider=provider)
-        model_streams.unregister('generate_planner_code')
-        model_streams.register('generate_planner_code', self._planner_backend.stream)
+        model_streams.unregister(PLANNER_STREAM_HOOK)
+        model_streams.register(PLANNER_STREAM_HOOK, self._planner_backend.stream)
 
     def set_worker_provider(self, provider: ProviderId) -> None:
-        """Update the worker provider and its backend hook."""
+        """Update the legacy Worker provider and its (unreachable) backend hook."""
         self._worker_provider = provider
         self._worker_backend = APIAgentBackend(provider=provider)
-        model_streams.unregister('generate_worker_code')
-        model_streams.register('generate_worker_code', self._worker_backend.stream)
+        model_streams.unregister(WORKER_STREAM_HOOK)
+        model_streams.register(WORKER_STREAM_HOOK, self._worker_backend.stream)
 
     def set_provider(self, provider: ProviderId) -> None:
-        """Update both planner and worker to the same provider."""
+        """Update the production provider (and legacy role backends)."""
         self.set_planner_provider(provider)
         self.set_worker_provider(provider)
 
@@ -504,6 +633,7 @@ class ConversationBridge(QObject):
         self._history.messages.clear()
         self._index_to_id.clear()
         self._index_to_name.clear()
+        self._production_session.clear()
         self._dispatch_proxy.clear_records()
         # We do NOT reset _approve_all_session here, as it is managed by the
         # persistent toolbar toggle.
@@ -554,10 +684,16 @@ class ConversationBridge(QObject):
     # ---- send / cancel ----------------------------------------------------
 
     def send(self, model: ModelId, thinking: ThinkingMode, max_tool_rounds: int | None = None) -> None:
+        """Run one production turn over the existing conversation.
+
+        The manager already owns the persisted ``History``, so the model
+        receives the actual conversation and the user's latest original
+        request — never a SpecCard or a generated implementation capsule.
+        """
         if self.is_running():
             return
         self._prepare_turn_context()
-        # Capture pre-worker snapshot for reliable /undo
+        # Capture pre-run snapshot for reliable /undo.
         if self._registry.workspace_root is not None:
             from aura.git_ops import snapshot
             self._pre_worker_sha = snapshot(self._registry.workspace_root)
@@ -569,25 +705,33 @@ class ConversationBridge(QObject):
         self._active_model = str(model)
         self._dispatch_proxy.set_max_tool_rounds(max_tool_rounds)
         if self._registry.workspace_root is not None:
-            if self._planner_worker_mode:
-                base_prompt = self._planner_system_prompt if self._planner_system_prompt else PLANNER_SYSTEM_PROMPT
-            else:
-                base_prompt = self._single_system_prompt if self._single_system_prompt else SINGLE_SYSTEM_PROMPT
-            self._manager.configure_for_planner(
+            base_prompt = (
+                self._single_system_prompt
+                if self._single_system_prompt
+                else SINGLE_SYSTEM_PROMPT
+            )
+            self._manager.configure_runtime_context(
                 base_prompt=base_prompt,
                 workspace_root=self._registry.workspace_root,
+                role=RuntimeRole.SINGLE,
             )
+
+        # One stable execution identity for this production turn.
+        self._production_session.begin(model=str(model))
+
         self._thread = QThread()
         self._worker = _Worker(
             manager=self._manager,
             approval_proxy=self._approval_proxy,
-            dispatch_proxy=self._dispatch_proxy if self._planner_worker_mode else None,
+            dispatch_proxy=None,
             cancel_event=self._cancel,
             model=model,
             thinking=thinking,
             temperature=self._temperature,
             workspace_root=self._registry.workspace_root,
             max_tool_rounds=max_tool_rounds,
+            production_session=self._production_session,
+            hook_name=PRODUCTION_STREAM_HOOK,
         )
         self._worker.moveToThread(self._thread)
 
@@ -616,6 +760,8 @@ class ConversationBridge(QObject):
 
     def request_cancel(self) -> None:
         self._cancel.set()
+        self._production_session.note_cancelled()
+        self._approval_proxy.cancel_active_dialog()
         self._dispatch_proxy.cancel_all_pending()
 
     # ---- private slots ----------------------------------------------------
@@ -684,6 +830,13 @@ class ConversationBridge(QObject):
         worker = self._worker
         self._thread = None
         self._worker = None
+
+        # Exactly one completion receipt per production turn, built from the
+        # run's structured execution evidence, then back to idle.
+        try:
+            self._production_session.finish()
+        except Exception:
+            _log.exception("Failed to build production completion receipt")
 
         if worker is not None:
             worker.deleteLater()

@@ -41,12 +41,9 @@ class AutomationPage(QWidget):
         )
         form.addRow("", self._restore_chk)
 
-        self._auto_dispatch_chk = GlassSwitch(
-            "Auto-dispatch: Send specs to worker without approval",
-            self._settings.auto_dispatch,
-        )
-        form.addRow("", self._auto_dispatch_chk)
-
+        # Auto-dispatch only applies to the legacy Planner→Worker handoff, which
+        # is not part of the normal product. The setting is preserved for
+        # backward compatibility but is no longer exposed.
         self._auto_approve_chk = GlassSwitch(
             "Auto-approve: Apply file edits without diff approval",
             self._settings.auto_approve,
@@ -72,7 +69,7 @@ class AutomationPage(QWidget):
 
     def collect_settings(self, settings: AppSettings) -> None:
         settings.restore_last_conversation = self._restore_chk.isChecked()
-        settings.auto_dispatch = self._auto_dispatch_chk.isChecked()
+        # settings.auto_dispatch is intentionally left untouched (legacy field).
         settings.auto_approve = self._auto_approve_chk.isChecked()
         settings.auto_summon_drones = self._auto_summon_drones_chk.isChecked()
         settings.max_tool_rounds = self._max_rounds_spin.value()

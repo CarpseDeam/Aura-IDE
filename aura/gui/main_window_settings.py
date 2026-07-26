@@ -96,22 +96,18 @@ class MainWindowSettingsController(QObject):
         window._toolbar.update_settings(settings)
 
         window._left_pane.populate_models(
-            settings.planner_provider,
+            settings.provider,
             settings.worker_provider,
         )
-        window._bridge.set_planner_provider(settings.planner_provider)
+        window._bridge.set_production_provider(settings.provider)
         window._bridge.set_worker_provider(settings.worker_provider)
 
-        if settings.planner_worker_mode:
-            window.set_model(settings.default_planner_model)
-            window.set_thinking(settings.default_planner_thinking)
-        else:
-            window.set_model(settings.default_model)
-            window.set_thinking(settings.default_thinking)
+        window.set_model(settings.default_model)
+        window.set_thinking(settings.default_thinking)
         window.set_worker_model(settings.default_worker_model)
         window.set_worker_thinking(settings.default_worker_thinking)
-        window._set_sidebar_planner_worker_mode(settings.planner_worker_mode)
-        window._apply_planner_worker_mode_to_bridge(settings.planner_worker_mode)
+        window._set_sidebar_planner_worker_mode(False)
+        window._enter_production_mode()
         window._bridge.set_worker_model(settings.default_worker_model)
         window._bridge.set_worker_thinking(settings.default_worker_thinking)
         window._bridge.set_temperature(settings.temperature)

@@ -143,8 +143,11 @@ class ToolCatalog:
                 + [dict(REGISTER_DRONE_FOLDER_TOOL_DEF)]
             )
         else:
+            # Production single-agent mode: one continuous model owns
+            # inspection → live TODO → edits → validation → repair.
             tools = (
                 list(READ_TOOL_DEFS)
+                + [dict(WORKER_TODO_TOOL_DEF)]
                 + list(WRITE_TOOL_DEFS)
                 + [dict(TERMINAL_TOOL_DEF)]
                 + [dict(RUN_AND_WATCH_TOOL_DEF)]

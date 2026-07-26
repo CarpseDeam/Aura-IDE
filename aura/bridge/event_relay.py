@@ -98,6 +98,10 @@ class WorkerEventRelay(QObject):
         self._active_tool_names: dict[str, str] = {}
         self._tool_arg_fragments: dict[str, str] = {}
 
+    def set_model(self, model: str) -> None:
+        """Set the model id reported on usage events for the active run."""
+        self._worker_model = str(model or "")
+
     @property
     def terminal_results(self) -> list[dict]:
         """Terminal command result records, owned by _terminal_tracker."""

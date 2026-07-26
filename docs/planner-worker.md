@@ -1,4 +1,12 @@
-# Planner/Worker Architecture
+# Planner/Worker Architecture (historical)
+
+> **Not Aura's normal workflow.** Normal Aura coding runs one continuous
+> production model that receives your original conversation and owns the job
+> from repository inspection through validation — see
+> [Configuration](configuration.md#production-settings). The Planner-to-Worker
+> dispatch described below is retained only for backward compatibility with
+> older saved conversations and settings; it is not reachable during normal
+> coding.
 
 ## Two-Agent Architecture
 

@@ -22,7 +22,6 @@ from aura.config import (
     save_dynamic_catalog,
 )
 from aura.gui.theme import FG_DIM
-from aura.gui.widgets.glass_switch import GlassSwitch
 from aura.gui.widgets.no_wheel_combo import NoWheelComboBox
 from aura.providers.base import ProviderId
 from aura.providers.registry import provider_registry
@@ -52,6 +51,14 @@ class DiscoveryWorker(QObject):
 
 
 class ModelsPage(QWidget):
+    """One production configuration: provider, model, thinking, temperature.
+
+    Normal Aura coding runs one continuous production model. The historical
+    Planner/Worker mode toggle and its separate role controls are not part of
+    the normal product and are no longer exposed here. The legacy fields on
+    ``AppSettings`` are preserved untouched for backward compatibility.
+    """
+
     def __init__(self, settings: AppSettings, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._settings = settings
@@ -72,57 +79,38 @@ class ModelsPage(QWidget):
 
         # --- 1. Create Widgets ---
 
-        # P/W mode toggle
-        self._pw_mode_chk = GlassSwitch(
-            "Planner/Worker mode (planner chats; worker executes code changes)",
-            self._settings.planner_worker_mode,
+        heading = QLabel("Production model")
+        heading.setStyleSheet(
+            f"color: {FG_DIM}; font-weight: 600; font-size: 11px;"
+            " text-transform: uppercase; letter-spacing: 0.04em;"
         )
+        form.addRow("", heading)
 
-        # Planner Provider
-        self._planner_provider_combo = NoWheelComboBox()
+        self._provider_combo = NoWheelComboBox()
         for pid in provider_registry.ids():
             spec = provider_registry.get(pid)
             kind = get_provider_kind(pid)
-            kind_label = {"api_key": "API Key", "external_cli": "External CLI", "local": "Local"}.get(kind, kind)
-            self._planner_provider_combo.addItem(f"{spec.label} ({kind_label})", pid)
+            kind_label = {
+                "api_key": "API Key",
+                "external_cli": "External CLI",
+                "local": "Local",
+            }.get(kind, kind)
+            self._provider_combo.addItem(f"{spec.label} ({kind_label})", pid)
 
-        self._planner_model_combo = NoWheelComboBox()
+        self._model_combo = NoWheelComboBox()
 
-        self._planner_refresh_btn = QPushButton("↻ Refresh")
-        self._planner_refresh_btn.setFixedHeight(20)
-        self._planner_refresh_btn.setStyleSheet(
+        self._refresh_btn = QPushButton("↻ Refresh")
+        self._refresh_btn.setFixedHeight(20)
+        self._refresh_btn.setStyleSheet(
             "QPushButton { background: transparent; border: none; color: #888; font-size: 10px; padding: 0 4px; }"
             "QPushButton:hover { color: #ccc; }"
         )
-        self._planner_refresh_btn.setToolTip("Fetch latest models and pricing from provider")
+        self._refresh_btn.setToolTip("Fetch latest models and pricing from provider")
 
-        self._planner_thinking_combo = NoWheelComboBox()
+        self._thinking_combo = NoWheelComboBox()
         for label, val in _THINKING_ITEMS:
-            self._planner_thinking_combo.addItem(label, val)
+            self._thinking_combo.addItem(label, val)
 
-        # Worker Provider
-        self._worker_provider_combo = NoWheelComboBox()
-        for pid in provider_registry.ids():
-            spec = provider_registry.get(pid)
-            kind = get_provider_kind(pid)
-            kind_label = {"api_key": "API Key", "external_cli": "External CLI", "local": "Local"}.get(kind, kind)
-            self._worker_provider_combo.addItem(f"{spec.label} ({kind_label})", pid)
-
-        self._worker_model_combo = NoWheelComboBox()
-
-        self._worker_refresh_btn = QPushButton("↻ Refresh")
-        self._worker_refresh_btn.setFixedHeight(20)
-        self._worker_refresh_btn.setStyleSheet(
-            "QPushButton { background: transparent; border: none; color: #888; font-size: 10px; padding: 0 4px; }"
-            "QPushButton:hover { color: #ccc; }"
-        )
-        self._worker_refresh_btn.setToolTip("Fetch latest models and pricing from provider")
-
-        self._worker_thinking_combo = NoWheelComboBox()
-        for label, val in _THINKING_ITEMS:
-            self._worker_thinking_combo.addItem(label, val)
-
-        # Temperature
         self._temperature_spin = QDoubleSpinBox()
         self._temperature_spin.setRange(0.0, 2.0)
         self._temperature_spin.setSingleStep(0.1)
@@ -132,101 +120,45 @@ class ModelsPage(QWidget):
             "Only applied when thinking is Off."
         )
 
-        self._worker_temperature_spin = QDoubleSpinBox()
-        self._worker_temperature_spin.setRange(0.0, 2.0)
-        self._worker_temperature_spin.setSingleStep(0.1)
-        self._worker_temperature_spin.setDecimals(1)
-        self._worker_temperature_spin.setToolTip(
-            "Controls response randomness for the worker model. Lower = more deterministic."
-        )
-
         # --- 2. Setup Layout ---
 
-        form.addRow("", self._pw_mode_chk)
-        form.addRow("Planner provider:", self._planner_provider_combo)
+        form.addRow("Provider:", self._provider_combo)
 
-        planner_model_row = QHBoxLayout()
-        planner_model_row.setSpacing(4)
-        planner_model_row.addWidget(self._planner_model_combo, 1)
-        planner_model_row.addWidget(self._planner_refresh_btn)
-        form.addRow("Planner model:", planner_model_row)
+        model_row = QHBoxLayout()
+        model_row.setSpacing(4)
+        model_row.addWidget(self._model_combo, 1)
+        model_row.addWidget(self._refresh_btn)
+        form.addRow("Model:", model_row)
 
-        form.addRow("Planner thinking:", self._planner_thinking_combo)
-
-        sep1 = QLabel("Worker")
-        sep1.setStyleSheet(
-            f"color: {FG_DIM}; font-weight: 600; font-size: 11px;"
-            " text-transform: uppercase; letter-spacing: 0.04em;"
-        )
-        form.addRow("", sep1)
-
-        form.addRow("Worker provider:", self._worker_provider_combo)
-
-        worker_model_row = QHBoxLayout()
-        worker_model_row.setSpacing(4)
-        worker_model_row.addWidget(self._worker_model_combo, 1)
-        worker_model_row.addWidget(self._worker_refresh_btn)
-        form.addRow("Worker model:", worker_model_row)
-
-        form.addRow("Worker thinking:", self._worker_thinking_combo)
-
-        temp_sep = QLabel("Temperature")
-        temp_sep.setStyleSheet(
-            f"color: {FG_DIM}; font-weight: 600; font-size: 11px;"
-            " text-transform: uppercase; letter-spacing: 0.04em;"
-        )
-        form.addRow("", temp_sep)
-
+        form.addRow("Thinking:", self._thinking_combo)
         form.addRow("Temperature:", self._temperature_spin)
-        form.addRow("Worker Temperature:", self._worker_temperature_spin)
 
         layout.addLayout(form)
         layout.addStretch()
 
         # --- 3. Initial Values ---
 
-        planner_provider_idx = provider_registry.ids().index(self._settings.planner_provider)
-        self._planner_provider_combo.setCurrentIndex(planner_provider_idx)
-
-        worker_provider_idx = provider_registry.ids().index(self._settings.worker_provider)
-        self._worker_provider_combo.setCurrentIndex(worker_provider_idx)
-
-        self._populate_all_role_models()
-
-        self._planner_refresh_btn.setVisible(
-            self._planner_provider_combo.currentData() == "openrouter"
+        provider_ids = provider_registry.ids()
+        current_provider = (
+            self._settings.provider
+            if self._settings.provider in provider_ids
+            else (provider_ids[0] if provider_ids else self._settings.provider)
         )
-        self._worker_refresh_btn.setVisible(
-            self._worker_provider_combo.currentData() == "openrouter"
-        )
+        if current_provider in provider_ids:
+            self._provider_combo.setCurrentIndex(provider_ids.index(current_provider))
 
-        self._start_discovery(self._settings.planner_provider)
-        self._start_discovery(self._settings.worker_provider)
+        self._populate_models(current_provider, self._settings.default_model)
+        self._refresh_btn.setVisible(self._provider_combo.currentData() == "openrouter")
+        self._start_discovery(current_provider)
 
-        self._set_combo_to_data(
-            self._planner_thinking_combo, self._settings.default_planner_thinking
-        )
-        self._set_combo_to_data(
-            self._worker_thinking_combo, self._settings.default_worker_thinking
-        )
-
+        self._set_combo_to_data(self._thinking_combo, self._settings.default_thinking)
         self._temperature_spin.setValue(self._settings.temperature)
-        self._worker_temperature_spin.setValue(self._settings.worker_temperature)
-
-        self._refresh_pw_enabled()
 
         # --- 4. Connect Signals ---
-        # Connect AFTER initial population to avoid spurious signal firing
-        # while some widgets might still be partially initialized.
-        self._pw_mode_chk.toggled.connect(self._on_pw_toggled)
-        self._planner_provider_combo.currentIndexChanged.connect(self._on_planner_provider_changed)
-        self._worker_provider_combo.currentIndexChanged.connect(self._on_worker_provider_changed)
-
-        self._planner_refresh_btn.clicked.connect(
-            lambda: self._start_discovery(self._planner_provider_combo.currentData())
-        )
-        self._worker_refresh_btn.clicked.connect(
-            lambda: self._start_discovery(self._worker_provider_combo.currentData())
+        # Connect AFTER initial population to avoid spurious signal firing.
+        self._provider_combo.currentIndexChanged.connect(self._on_provider_changed)
+        self._refresh_btn.clicked.connect(
+            lambda: self._start_discovery(self._provider_combo.currentData())
         )
 
     # --- Thread cleanup ---
@@ -308,70 +240,28 @@ class ModelsPage(QWidget):
         cfg.pricing.update(pricing)
         save_dynamic_catalog(provider_id, models, pricing)  # type: ignore[arg-type]
 
-        planner_pid: ProviderId = self._planner_provider_combo.currentData()  # type: ignore[assignment]
-        worker_pid: ProviderId = self._worker_provider_combo.currentData()  # type: ignore[assignment]
-
-        if provider_id == planner_pid:
-            current = self._planner_model_combo.currentData()
-            self._populate_role_models(
-                self._planner_model_combo, planner_pid, current, role="planner"
-            )
-            self._planner_refresh_btn.setVisible(provider_id == "openrouter")
-
-        if provider_id == worker_pid:
-            current = self._worker_model_combo.currentData()
-            self._populate_role_models(
-                self._worker_model_combo, worker_pid, current, role="worker"
-            )
-            self._worker_refresh_btn.setVisible(provider_id == "openrouter")
+        active: ProviderId = self._provider_combo.currentData()  # type: ignore[assignment]
+        if provider_id == active:
+            self._populate_models(active, self._model_combo.currentData())
+            self._refresh_btn.setVisible(provider_id == "openrouter")
 
     # --- Provider / Model helpers ---
 
-    def _on_planner_provider_changed(self) -> None:
-        provider_id: ProviderId = self._planner_provider_combo.currentData()  # type: ignore[assignment]
-        self._populate_role_models(
-            self._planner_model_combo,
+    def _on_provider_changed(self) -> None:
+        provider_id: ProviderId = self._provider_combo.currentData()  # type: ignore[assignment]
+        self._populate_models(
             provider_id,
-            resolve_role_default_model(provider_id, "planner"),
-            role="planner",
+            resolve_role_default_model(provider_id, "production"),
         )
         self._start_discovery(provider_id)
-        self._planner_refresh_btn.setVisible(provider_id == "openrouter")
+        self._refresh_btn.setVisible(provider_id == "openrouter")
 
-    def _on_worker_provider_changed(self) -> None:
-        provider_id: ProviderId = self._worker_provider_combo.currentData()  # type: ignore[assignment]
-        self._populate_role_models(
-            self._worker_model_combo,
-            provider_id,
-            resolve_role_default_model(provider_id, "worker"),
-            role="worker",
-        )
-        self._start_discovery(provider_id)
-        self._worker_refresh_btn.setVisible(provider_id == "openrouter")
-
-    def _populate_all_role_models(self) -> None:
-        planner_pid: ProviderId = self._planner_provider_combo.currentData()  # type: ignore[assignment]
-        worker_pid: ProviderId = self._worker_provider_combo.currentData()  # type: ignore[assignment]
-        self._populate_role_models(
-            self._planner_model_combo,
-            planner_pid,
-            resolve_role_default_model(planner_pid, "planner"),
-            role="planner",
-        )
-        self._populate_role_models(
-            self._worker_model_combo,
-            worker_pid,
-            resolve_role_default_model(worker_pid, "worker"),
-            role="worker",
-        )
-
-    def _populate_role_models(
+    def _populate_models(
         self,
-        combo: QComboBox,
         provider_id: ProviderId | None,
         current_selection: str,
-        role: str = "",
     ) -> None:
+        combo = self._model_combo
         if not provider_id or not provider_registry.has(provider_id):
             combo.blockSignals(True)
             combo.clear()
@@ -386,43 +276,26 @@ class ModelsPage(QWidget):
         items: list[tuple[str, str]] = []  # (label, id)
 
         def add_model(mid: str, label: str = "") -> None:
-            if mid in seen:
+            if not mid or mid in seen:
                 return
             seen.add(mid)
             items.append((label or mid, mid))
 
         for info in cfg.models.values():
-            if info.id not in seen:
-                add_model(info.id, info.label)
+            add_model(info.id, info.label)
 
         add_model(cfg.default_model)
-
         if current_selection:
             add_model(current_selection)
-
-        if provider_id == "deepseek" and role == "worker":
-            from aura.providers.catalog import DEFAULT_WORKER_MODEL
-            add_model(DEFAULT_WORKER_MODEL)
-
-        if provider_id == "deepseek" and role == "planner":
-            from aura.providers.catalog import DEFAULT_PLANNER_MODEL
-            add_model(DEFAULT_PLANNER_MODEL)
 
         for label, mid in items:
             combo.addItem(label, mid)
 
-        if current_selection:
-            idx = combo.findData(current_selection)
-            if idx >= 0:
-                combo.setCurrentIndex(idx)
-            else:
-                idx = combo.findData(cfg.default_model)
-                if idx >= 0:
-                    combo.setCurrentIndex(idx)
-        else:
+        idx = combo.findData(current_selection) if current_selection else -1
+        if idx < 0:
             idx = combo.findData(cfg.default_model)
-            if idx >= 0:
-                combo.setCurrentIndex(idx)
+        if idx >= 0:
+            combo.setCurrentIndex(idx)
 
         combo.blockSignals(False)
 
@@ -431,32 +304,23 @@ class ModelsPage(QWidget):
         if idx >= 0:
             combo.setCurrentIndex(idx)
 
-    # --- P/W toggle ---
-
-    def _on_pw_toggled(self, _checked: bool) -> None:
-        self._refresh_pw_enabled()
-
-    def _refresh_pw_enabled(self) -> None:
-        enabled = self._pw_mode_chk.isChecked()
-        # Planner controls are always enabled — Planner is the primary brain
-        # Only Worker controls disable when planner/worker mode is off
-        self._worker_model_combo.setEnabled(enabled)
-        self._worker_thinking_combo.setEnabled(enabled)
-        self._worker_temperature_spin.setEnabled(enabled)
-
     # --- Collect ---
 
     def collect_settings(self, settings: AppSettings) -> None:
-        settings.planner_provider = self._planner_provider_combo.currentData()
-        settings.worker_provider = self._worker_provider_combo.currentData()
-        settings.planner_worker_mode = self._pw_mode_chk.isChecked()
-        settings.default_planner_model = self._planner_model_combo.currentData()
-        settings.default_worker_model = self._worker_model_combo.currentData()
-        settings.default_planner_thinking = self._planner_thinking_combo.currentData()
-        settings.default_worker_thinking = self._worker_thinking_combo.currentData()
+        """Write the one production configuration back onto *settings*.
+
+        Legacy Planner/Worker fields are intentionally left untouched so old
+        persisted configurations keep round-tripping.
+        """
+        provider = self._provider_combo.currentData()
+        model = self._model_combo.currentData()
+        thinking = self._thinking_combo.currentData()
+        if provider:
+            settings.provider = provider
+        if model:
+            settings.default_model = model
+        if thinking:
+            settings.default_thinking = thinking
         settings.temperature = self._temperature_spin.value()
-        settings.worker_temperature = self._worker_temperature_spin.value()
-        # Mirror planner → legacy compatibility fields
-        settings.provider = settings.planner_provider
-        settings.default_model = settings.default_planner_model
-        settings.default_thinking = settings.default_planner_thinking
+        # Normal startup always enters production single-agent mode.
+        settings.planner_worker_mode = False

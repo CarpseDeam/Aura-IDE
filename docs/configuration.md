@@ -4,33 +4,45 @@
 
 Settings are stored in `~/.config/Aura/config.json` (platform-specific via platformdirs). Edit this file directly or use the Settings dialog.
 
+## Production Settings
+
+Normal Aura coding runs **one continuous production model**. It receives your
+original conversation and owns the whole job — repository inspection, the live
+TODO, edits, terminal execution, diagnosis, repair, validation rerun, and one
+factual completion receipt. There is no Planner-to-Worker handoff in the normal
+product.
+
+Four settings define it:
+
+| Setting            | Type  | Default               | Description                               |
+|--------------------|-------|-----------------------|-------------------------------------------|
+| `provider`         | str   | `"deepseek"`          | Provider for the production model         |
+| `default_model`    | str   | `"deepseek-v4-flash"` | The production model                      |
+| `default_thinking` | str   | `"high"`              | Thinking mode: `"off"`, `"high"`, `"max"` |
+| `temperature`      | float | `0.7`                 | Sampling temperature (0.0–2.0)            |
+
+These are what the Models settings page and the left sidebar edit.
+
+### Migrating from older configurations
+
+Old configs that only carried Planner values still load. On startup Aura prefers
+valid generic production values; when they are absent it migrates the Planner
+provider, model, and thinking mode into the production settings. Legacy fields
+are preserved in `config.json` and are never destroyed on load. `planner_worker_mode`
+is read but not acted on — startup always enters production single-agent mode.
+
 ## Settings Table
 
 | Setting                       | Type    | Default                  | Description                                               |
 |-------------------------------|---------|--------------------------|-----------------------------------------------------------|
-| `provider`                    | str     | `"deepseek"`             | Default provider                                          |
-| `planner_provider`            | str     | `"deepseek"`             | Provider for the Planner agent                            |
-| `worker_provider`             | str     | `"deepseek"`             | Provider for the Worker agent                             |
-| `planner_backend`             | str     | `"default_api"`          | Backend for Planner (`"default_api"` or a CLI backend ID) |
-| `worker_backend`              | str     | `"default_api"`          | Backend for Worker                                        |
-| `default_model`               | str     | `"deepseek-v4-flash"`    | Default model for single-mode                             |
-| `default_planner_model`       | str     | `"deepseek-v4-flash"`    | Planner model                                             |
-| `default_worker_model`        | str     | `"deepseek-v4-pro"`      | Worker model                                              |
+| `provider`                    | str     | `"deepseek"`             | Production provider                                       |
+| `default_model`               | str     | `"deepseek-v4-flash"`    | Production model                                          |
 | `default_thinking`            | str     | `"high"`                 | Thinking mode: `"off"`, `"high"`, `"max"`                 |
-| `default_planner_thinking`    | str     | `"off"`                  | Planner thinking mode                                     |
-| `default_worker_thinking`     | str     | `"high"`                 | Worker thinking mode                                      |
-| `temperature`                 | float   | `0.7`                    | Planner temperature (0.0–2.0)                             |
-| `worker_temperature`          | float   | `0.1`                    | Worker temperature                                        |
-| `system_prompt`               | str     | `""`                     | Custom system prompt for single mode                      |
-| `planner_system_prompt`       | str     | `""`                     | Custom system prompt for Planner                          |
-| `worker_system_prompt`        | str     | `""`                     | Custom system prompt for Worker                           |
-| `planner_worker_mode`         | bool    | `true`                   | Enable Planner/Worker two-agent mode                      |
-| `show_planner_reasoning`      | bool    | `false`                  | Show Planner's reasoning in the UI                        |
+| `temperature`                 | float   | `0.7`                    | Production temperature (0.0–2.0)                          |
+| `system_prompt`               | str     | `""`                     | Custom system prompt for the production model             |
 | `restore_last_conversation`   | bool    | `true`                   | Restore the last conversation on launch                   |
-| `auto_commit_enabled`         | bool    | `true`                   | Auto-commit after Worker cycles                           |
-| `auto_dispatch`               | bool    | `false`                  | Skip manual dispatch confirmation                         |
 | `auto_approve`                | bool    | `false`                  | Skip diff approval for writes                             |
-| `auto_summon_drones`          | bool    | `false`                  | Allow Planner to suggest drones                           |
+| `auto_summon_drones`          | bool    | `false`                  | Summon suggested drones without a confirmation card       |
 | `sandbox_mode`                | str     | `"host"`                 | Execution sandbox: `"host"`, `"docker"`, `"wasm"`        |
 | `max_tool_rounds`             | int     | `50`                     | Maximum tool call rounds per conversation                 |
 | `tavily_api_key`              | str     | `""`                     | Tavily search API key                                     |
@@ -40,14 +52,24 @@ Settings are stored in `~/.config/Aura/config.json` (platform-specific via platf
 | `companion_web_url`           | str     | `"http://localhost:5173"`| Web UI URL for companion                                  |
 | `first_launch_done`           | bool    | `false`                  | Whether onboarding has completed                          |
 
+### Legacy fields
+
+These remain in `config.json` for backward compatibility. They are loaded and
+preserved, but the normal product does not use them: `planner_provider`,
+`worker_provider`, `planner_backend`, `worker_backend`, `default_planner_model`,
+`default_worker_model`, `default_planner_thinking`, `default_worker_thinking`,
+`worker_temperature`, `planner_system_prompt`, `worker_system_prompt`,
+`planner_worker_mode`, `show_planner_reasoning`, `auto_dispatch`,
+`auto_commit_enabled`.
+
 ## Settings Dialog
 
 Accessed from the gear icon in the bottom-left corner. Organized into pages:
 
-- **General** — Auto-Dispatch, Auto-Approve, Auto-Summon Drones, Tavily API key, tool rounds
-- **Models** — Provider selection, model selection, thinking mode, temperature per agent
-- **Backends** — API vs CLI backend selection per agent
-- **System Prompts** — Custom prompts for Single, Planner, and Worker modes
+- **General** — Auto-Approve, Auto-Summon Drones, Tavily API key, tool rounds
+- **Models** — Production provider, model, thinking mode, and temperature
+- **Backends** — API vs CLI backend selection
+- **System Prompts** — Custom prompt for the production model
 - **Sandbox** — Execution sandbox mode
 - **MCP** — MCP server commands
 - **Companion** — Mobile companion settings
@@ -71,9 +93,9 @@ Docker sandbox constraints:
 
 ## Custom System Prompts
 
-- **Single** — Used for non-Planner/Worker mode conversations
-- **Planner** — Prepended to the Planner's system prompt
-- **Worker** — Prepended to the Worker's system prompt
+- **Single** — The production model's prompt. This is the one normal coding uses.
+- **Planner** / **Worker** — Legacy role prompts, retained for backward
+  compatibility with older configurations. Not used by the normal product.
 
 Each supports `{tier1_context}` and `{private_worker_style}` template variables.
 

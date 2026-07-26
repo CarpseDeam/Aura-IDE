@@ -18,8 +18,21 @@ class WorkerFinishPresentation:
     outcome: WorkerFinishOutcome
 
 
+def _is_direct_production_run(metadata: dict) -> bool:
+    """True when the finished run was a direct production turn (no dispatch)."""
+    extras = metadata.get("extras") if isinstance(metadata, dict) else None
+    if not isinstance(extras, dict):
+        return False
+    return bool(extras.get("direct_production_execution"))
+
+
 class WorkerFinishPresenter:
-    """Presents a completed Worker run without owning dispatch sequencing."""
+    """Presents a completed execution run without owning dispatch sequencing.
+
+    Tolerates direct production execution: there is no SpecCard and no Planner
+    dispatch, so the completion receipt is rendered into the chat directly
+    while the full transcript stays in the workspace.
+    """
 
     def __init__(self, chat: ChatView, playground: AuraPlayground) -> None:
         self._chat = chat
@@ -82,6 +95,22 @@ class WorkerFinishPresenter:
                 ok,
                 summary,
                 status=status,
+            )
+        elif (
+            spec_card is None
+            and outcome.should_show_visible_summary
+            and _is_direct_production_run(metadata)
+        ):
+            # Direct production execution has no SpecCard. The main chat gets
+            # the concise completion receipt; the workspace keeps the transcript.
+            self._chat.add_worker_summary(
+                tool_call_id,
+                "",
+                ok,
+                summary,
+                needs_followup=bool(needs_followup),
+                status=status,
+                visible=True,
             )
         return WorkerFinishPresentation(outcome=outcome)
 

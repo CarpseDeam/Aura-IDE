@@ -333,9 +333,12 @@ class ConversationPersistence(QObject):
             loaded.path,
         )
         self._active_replay_id += 1
-        pwm = loaded.planner_worker_mode
-        from aura.prompts import PLANNER_SYSTEM_PROMPT, SINGLE_SYSTEM_PROMPT
-        default_prompt = PLANNER_SYSTEM_PROMPT if pwm else SINGLE_SYSTEM_PROMPT
+        # Old conversations may carry planner_worker_mode=True and dispatch
+        # records. They load safely, but the live session always resumes in
+        # production single-agent mode.
+        legacy_pwm = loaded.planner_worker_mode
+        from aura.prompts import SINGLE_SYSTEM_PROMPT
+        default_prompt = SINGLE_SYSTEM_PROMPT
 
         self._bridge.history.system_prompt = (
             loaded.history.system_prompt or default_prompt
@@ -357,26 +360,32 @@ class ConversationPersistence(QObject):
         self._settings.planner_provider = loaded.planner_provider
         self._settings.worker_provider = loaded.worker_provider
 
-        # Restore providers to bridge and sidebar
-        self._bridge.set_planner_provider(loaded.planner_provider)
+        # Restore providers to bridge and sidebar. The production provider is
+        # the generic one; legacy role providers are restored for compatibility.
+        self._bridge.set_production_provider(loaded.provider)
         self._bridge.set_worker_provider(loaded.worker_provider)
-        self._left_pane.populate_models(loaded.planner_provider, loaded.worker_provider)
+        self._left_pane.populate_models(loaded.provider, loaded.worker_provider)
 
-        # Sync mode (without overwriting the system prompt we just set).
-        self._bridge.set_planner_worker_mode(pwm)
+        # Always resume in production single-agent mode.
+        self._bridge.set_production_mode()
+        # Old dispatch records are retained so historical records keep loading.
         self._bridge.set_dispatch_records(loaded.worker_dispatches)
-        if pwm:
-            self._left_pane.set_planner_model(loaded.planner_model)
-            self._left_pane.set_planner_thinking(loaded.planner_thinking)
-            self._left_pane.set_worker_model(loaded.worker_model)
-            self._left_pane.set_worker_thinking(loaded.worker_thinking)
-            self._bridge.set_worker_model(loaded.worker_model)
-            self._bridge.set_worker_thinking(loaded.worker_thinking)
-        else:
-            self._left_pane.set_planner_model(loaded.model)
-            self._left_pane.set_planner_thinking(loaded.thinking)
+        # Prefer the conversation's production model; fall back to the legacy
+        # planner selection for records written before the migration.
+        production_model = loaded.model or (loaded.planner_model if legacy_pwm else "")
+        production_thinking = loaded.thinking or (
+            loaded.planner_thinking if legacy_pwm else ""
+        )
+        if production_model:
+            self._left_pane.set_production_model(production_model)
+        if production_thinking:
+            self._left_pane.set_production_thinking(production_thinking)
+        self._left_pane.set_worker_model(loaded.worker_model)
+        self._left_pane.set_worker_thinking(loaded.worker_thinking)
+        self._bridge.set_worker_model(loaded.worker_model)
+        self._bridge.set_worker_thinking(loaded.worker_thinking)
 
-        self._left_pane.set_planner_worker_mode(pwm)
+        self._left_pane.set_planner_worker_mode(False)
         self._chat.reset()
         self._playground.clear()
         self._bridge.clear_pre_worker_snapshot()

@@ -432,6 +432,14 @@ class ToolRunner:
             )
             command = command_plan.command
             original_command = command_plan.original_command or requested_command
+            # Production single-agent mode owns its own validation, so its
+            # terminal results must carry the same validation classification
+            # the Worker path produced. Without this, a genuinely passing
+            # validation has no pass label and cannot be reported as proof.
+            explicit = False
+            is_ad_hoc_validation = (
+                mode == "single" and looks_like_validation_command(str(command))
+            )
 
         timeout = resolve_terminal_timeout(
             command,
@@ -499,7 +507,7 @@ class ToolRunner:
         # ``looks_like_validation_command`` fallback ensures Worker
         # validation commands like ``python -m py_compile`` still count.
         should_classify_validation = (
-            mode == "worker"
+            mode in ("worker", "single")
             and (explicit or validation_command.normalized or is_ad_hoc_validation)
         )
         if should_classify_validation:

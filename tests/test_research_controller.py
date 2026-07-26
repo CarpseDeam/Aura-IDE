@@ -372,10 +372,15 @@ class TestBrowserResearchSessionStart:
         )
         if str(bundle_dir) not in sys.path:
             sys.path.insert(0, str(bundle_dir))
-        # Clear any cached imports so the path update takes effect
-        for mod in list(sys.modules):
-            if "browser_search" in mod or "models" in mod:
-                sys.modules.pop(mod, None)
+        # Clear the bundle's own top-level modules so the path update takes
+        # effect.  Match exact top-level names only: a substring match on
+        # "models" also evicts packaged modules such as
+        # aura.context_gearbox.models, and re-importing those creates a second
+        # RuntimeRole enum class whose members no longer compare equal to the
+        # ones already bound elsewhere — which silently breaks role-capsule
+        # loading for the rest of the test session.
+        for name in ("browser_search", "models"):
+            sys.modules.pop(name, None)
         mod = importlib.import_module("browser_search")
         return mod.BrowserResearchSession
 

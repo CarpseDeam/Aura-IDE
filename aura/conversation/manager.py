@@ -38,6 +38,7 @@ from aura.client import (
     WorkerDispatchRequested,
 )
 from aura.config import ModelId, ThinkingMode
+from aura.context_gearbox.models import RuntimeRole
 from aura.conversation.completion_guard import (
     assistant_message_text,
     is_repetitive_completion_final,
@@ -71,10 +72,19 @@ from aura.work_artifact.model import ValidationCommandSpec
 from aura.conversation.worker_finish import (
     build_worker_unrecoverable_message,
 )
-from aura.model_streams import model_streams
+from aura.model_streams import PRODUCTION_STREAM_HOOK, model_streams
 from aura.research.policy import decide_research_policy
 
 EventCallback = Callable[[Event], None]
+
+
+def _stream_log_label(hook_name: str) -> str:
+    """Return a short log label for the active model-generation hook."""
+    if "planner" in hook_name:
+        return "planner_stream"
+    if "worker" in hook_name:
+        return "worker_stream"
+    return "production_stream"
 
 class ConversationManager:
     def __init__(
@@ -112,9 +122,25 @@ class ConversationManager:
     def set_workspace_root(self, root: Path) -> None:
         self._tool_runner.set_workspace_root(root)
 
+    def configure_runtime_context(
+        self,
+        base_prompt: str,
+        workspace_root: Path,
+        role: RuntimeRole | str = RuntimeRole.SINGLE,
+    ) -> None:
+        """Role-neutral entry point: store the base prompt, root, and runtime role.
+
+        This is the canonical configuration call for the production
+        single-agent path.  Mid-turn context refreshes recompose against
+        *role*, so nothing Planner-specific leaks into production execution.
+        """
+        self._planner_refresh.configure(base_prompt, workspace_root, role)
+
     def configure_for_planner(self, base_prompt: str, workspace_root: Path) -> None:
-        """Store the base system prompt template and workspace root for mid-turn refresh."""
-        self._planner_refresh.configure(base_prompt, workspace_root)
+        """Compatibility alias for the historical Planner path."""
+        self.configure_runtime_context(
+            base_prompt, workspace_root, RuntimeRole.PLANNER
+        )
 
     def send(        self,
         on_event: EventCallback,
@@ -129,7 +155,7 @@ class ConversationManager:
         loaded_target_files: list[str] | None = None,
         temperature: float = 0.7,
         max_tool_rounds: int | None = None,
-        hook_name: str = 'generate_planner_code',
+        hook_name: str = PRODUCTION_STREAM_HOOK,
         explicit_validation_commands: list[ValidationCommandSpec] | None = None,
         declared_run_command: str | None = None,
     ) -> None:
@@ -143,7 +169,10 @@ class ConversationManager:
         the planner can recover rather than blocking forever.
 
         `hook_name` controls which hook to trigger for model generation.
-        The planner uses `generate_planner_code`; workers use `generate_worker_code`.
+        Normal production coding uses `generate_production_code` (the default).
+        The historical Planner/Worker dispatch path uses
+        `generate_planner_code` / `generate_worker_code`; those remain as
+        unreachable compatibility scaffolding.
         """
         mode = getattr(self._tools, "mode", "single")
         state = _SendState(
@@ -180,7 +209,7 @@ class ConversationManager:
             if state.stream_buffer is not None:
                 state.stream_buffer.begin_round()
 
-            label = "planner_stream" if "planner" in hook_name else "worker_stream"
+            label = _stream_log_label(hook_name)
             _log.info(
                 "%s_start model=%s thinking=%s hook_name=%s",
                 label, model, thinking, hook_name,

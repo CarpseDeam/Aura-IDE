@@ -20,7 +20,6 @@ from PySide6.QtWidgets import (
 )
 
 from aura.bridge import ConversationBridge
-from aura.bridge.qt_bridge import PLANNER_SYSTEM_PROMPT
 from aura.config import (
     APP_NAME,
     PROVIDERS,
@@ -103,15 +102,15 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         # Workspace.
         self._workspace_root: Path | None = load_workspace_root()
 
-        # Bridge — provider-aware.
+        # Bridge — one production provider owns normal coding.
         self._bridge = ConversationBridge(
             parent_widget=self,
             provider=self._settings.provider,
         )
-        self._bridge.set_planner_provider(self._settings.planner_provider)
+        self._bridge.set_production_provider(self._settings.provider)
         self._bridge.set_worker_provider(self._settings.worker_provider)
         self._bridge.set_workspace_root(self._workspace_root)
-        self._apply_planner_worker_mode_to_bridge(self._settings.planner_worker_mode)
+        self._enter_production_mode()
         self._bridge.set_worker_model(self._settings.default_worker_model)
         self._bridge.set_worker_thinking(self._settings.default_worker_thinking)
         self._bridge.set_temperature(self._settings.temperature)
@@ -148,7 +147,7 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
         # Left pane: workspace label + change root + tree + model config.
         self._left_pane = LeftPane(self._workspace_root, parent=self)
-        self._left_pane.populate_models(self._settings.planner_provider, self._settings.worker_provider)
+        self._left_pane.populate_models(self._settings.provider, self._settings.worker_provider)
         self._workspace_controller = MainWindowWorkspaceController(self)
         self._main_splitter.addWidget(self._left_pane)
 
@@ -171,8 +170,9 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
         self._chat = ChatView()
         self._chat.setParent(self)
-        if self._settings.planner_worker_mode:
-            self._chat.set_compact_tools(True)
+        # Production execution projects into the workspace, so the chat keeps
+        # its compact tool presentation.
+        self._chat.set_compact_tools(True)
         center_layout.addWidget(self._chat, 1)
 
         self._center_stack.addWidget(center)
@@ -253,16 +253,12 @@ class MainWindow(WindowChromeMixin, QMainWindow):
             parent=self,
         )
 
-        # Apply default model / thinking from settings.
-        if self._settings.planner_worker_mode:
-            self.set_model(self._settings.default_planner_model)
-            self.set_thinking(self._settings.default_planner_thinking)
-        else:
-            self.set_model(self._settings.default_model)
-            self.set_thinking(self._settings.default_thinking)
+        # Apply the production model / thinking from settings.
+        self.set_model(self._settings.default_model)
+        self.set_thinking(self._settings.default_thinking)
         self.set_worker_model(self._settings.default_worker_model)
         self.set_worker_thinking(self._settings.default_worker_thinking)
-        self._set_sidebar_planner_worker_mode(self._settings.planner_worker_mode)
+        self._set_sidebar_planner_worker_mode(False)
         center_layout.addWidget(self._input)
 
         # Show appropriate initial page
@@ -635,22 +631,21 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         )
         dlg.exec()
 
-    def _apply_planner_worker_mode_to_bridge(self, enabled: bool) -> None:
-        # HACK: Force planner/worker mode to always be enabled. The user is
-        # complaining about not seeing the rich playground UI, which is only
-        # active in this mode. This ensures all agent activity is routed
-        # through the AuraPlayground for the expected rich feedback.
-        effective_enabled = True
+    def _enter_production_mode(self) -> None:
+        """Put the bridge in production single-agent mode (the normal product).
 
-        self._bridge.set_planner_worker_mode(effective_enabled)
-        if effective_enabled:
-            prompt = self._settings.planner_system_prompt or PLANNER_SYSTEM_PROMPT
-        else:
-            # This branch is now effectively dead code.
-            prompt = self._settings.system_prompt or SINGLE_SYSTEM_PROMPT
+        One continuous production model owns the user's request end to end and
+        projects its execution into the workspace.
+        """
+        self._bridge.set_production_mode()
+        prompt = self._settings.system_prompt or SINGLE_SYSTEM_PROMPT
         self._bridge.set_system_prompt(prompt)
         if hasattr(self, "_chat"):
-            self._chat.set_compact_tools(effective_enabled)
+            self._chat.set_compact_tools(True)
+
+    def _apply_planner_worker_mode_to_bridge(self, enabled: bool) -> None:
+        """Compatibility shim — normal startup always enters production mode."""
+        self._enter_production_mode()
 
 
     def _on_started(self) -> None:
