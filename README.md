@@ -91,7 +91,7 @@ aura
 ### First run
 
 1. Open a workspace.
-2. Configure your own provider key, or choose optional Aura Credits.
+2. Configure a provider API key in Settings → API Keys.
 3. Ask for a small task such as `fix a typo in README.md`.
 4. Review the Planner's spec.
 5. Dispatch the approved work.
@@ -119,7 +119,7 @@ These figures are supporting evidence for sustained harness-driven development�
 - **Reviewable diffs** — proposed file writes can be inspected and approved before they reach disk.
 - **Project-aware validation** — Aura detects project tooling, selects focused checks for changed files, and reports results without hiding failures.
 - **Inspectable receipts** — completed runs retain tool, file, validation, cost, and outcome information as an audit record; receipt status does not drive internal item state.
-- **Provider flexibility** — choose providers independently for Planner and Worker, including a mix of BYOK and optional Aura Credits.
+- **Provider flexibility** — choose providers independently for Planner and Worker.
 - **Local-first control** — the desktop owns the real workspace, execution, keys, and approval surface.
 
 ### The harness effect
@@ -179,19 +179,11 @@ See [Drones](docs/drones.md) for manifest fields, execution contracts, policies,
 
 </details>
 
-## BYOK and Aura Credits
+## Providers
 
-**BYOK is first-class and forever. Aura Credits are optional convenience.**
+Aura works with user-configured AI providers. Connect directly to **DeepSeek**, **OpenAI**, **Anthropic**, **Gemini**, **OpenRouter**, **Claude Code**, or **Codex**. Your key, your provider billing, and your choice of models remain under your control. Keys can be supplied through Settings or environment variables.
 
-### Bring Your Own Keys
-
-Connect directly to **DeepSeek**, **OpenAI**, **Anthropic**, **Gemini**, or **OpenRouter**. Your key, your provider billing, and your choice of models remain under your control. Keys can be supplied through Settings or environment variables.
-
-### Aura Credits
-
-Aura Credits are an optional pay-as-you-go path for starting without provider key setup. They are not a subscription and are not required to use Aura.
-
-Planner and Worker are configured independently, so you can use different BYOK providers for each role or mix BYOK with Credits. See [Providers](docs/providers.md) for supported backends and configuration details.
+See [Providers](docs/providers.md) for supported backends and configuration details.
 
 ## Advanced capabilities
 

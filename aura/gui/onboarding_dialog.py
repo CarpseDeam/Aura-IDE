@@ -372,10 +372,9 @@ class OnboardingDialog(QDialog):
         layout.addWidget(title)
 
         body = self._make_body(
-            f"{APP_NAME} supports multiple AI providers. The easiest way to start is with "
-            "<b>Aura Credits</b> — buy credits or paste an Aura API key from the Aura Credits popout.\n\n"
-            "You can also bring your own API key for DeepSeek, OpenAI, Anthropic, Gemini, "
-            "OpenRouter, or other providers in Settings → API Keys.\n\n"
+            f"{APP_NAME} needs an AI provider to run Planner/Worker tasks.\n\n"
+            "Configure a provider key in Settings → API Keys. Supported providers include "
+            "DeepSeek, OpenAI, Anthropic, Gemini, OpenRouter, Claude Code, and Codex.\n\n"
             "You can still browse your project folder and explore the app without configuring AI."
         )
         layout.addWidget(body)

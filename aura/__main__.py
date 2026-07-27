@@ -110,60 +110,43 @@ def _run_app(log_path: Path, args: argparse.Namespace, qt_argv: list[str]) -> in
     selected_provider = settings.provider
 
     _should_open_api_settings = False
-    _should_open_aura_settings = False
 
     if not has_usable_provider_configuration():
-        logger.info("no providers configured — opening settings post-startup if not first launch")
+        logger.info("no providers configured — opening API settings post-startup if not first launch")
         if settings.first_launch_done:
-            _should_open_aura_settings = True
+            _should_open_api_settings = True
         # When first_launch_done is False, OnboardingDialog Step 4 covers
         # provider awareness with its "Open Settings" button.
     elif not has_usable_provider_configuration(selected_provider):
-        # Selected provider is not configured/available, but another one is.
-        # If Aura Credits is configured, auto-switch to it silently.
-        if has_usable_provider_configuration("aura"):
-            logger.info(
-                "selected provider %s not configured but Aura Credits is — auto-switching to aura",
-                selected_provider,
-            )
-            settings.planner_provider = "aura"
-            settings.worker_provider = "aura"
-            settings.provider = "aura"
-            from aura.config import save_settings
-            save_settings(settings)
-            # Re-read selected_provider for subsequent checks
-            selected_provider = "aura"
+        cfg = PROVIDERS[selected_provider]
+        kind = get_provider_kind(selected_provider)
+        if kind == "external_cli":
+            if not args.selfcheck:
+                logger.info("selected provider external CLI unavailable warning start")
+                QMessageBox.warning(
+                    None,
+                    APP_NAME,
+                    f"{cfg.label} is selected, but its CLI executable is not available.\n\n"
+                    "Install and sign in to the CLI, or choose another provider in "
+                    "Settings -> Provider Setup.\n\n"
+                    "The app will open, but chat with this provider will fail until "
+                    "the CLI is available.",
+                )
+                logger.info("selected provider external CLI unavailable warning end")
+            _should_open_api_settings = True
         else:
-            cfg = PROVIDERS[selected_provider]
-            kind = get_provider_kind(selected_provider)
-            if kind == "external_cli":
-                if not args.selfcheck:
-                    logger.info("selected provider external CLI unavailable warning start")
-                    QMessageBox.warning(
-                        None,
-                        APP_NAME,
-                        f"{cfg.label} is selected, but its CLI executable is not available.\n\n"
-                        "Install and sign in to the CLI, or choose another provider in "
-                        "Settings -> Provider Setup.\n\n"
-                        "The app will open, but chat with this provider will fail until "
-                        "the CLI is available.",
-                    )
-                    logger.info("selected provider external CLI unavailable warning end")
-                _should_open_aura_settings = True
-            else:
-                if not args.selfcheck:
-                    logger.info("provider key warning start")
-                    QMessageBox.warning(
-                        None,
-                        APP_NAME,
-                        f"{cfg.label} is selected, but no API key is configured.\n\n"
-                        "Choose one of these options:\n"
-                        "  • Set up Aura Credits (easiest — no provider setup)\n"
-                        "  • Bring your own API key in Settings → API Keys\n\n"
-                        "The app will open, but chat will fail until a provider is configured.",
-                    )
-                    logger.info("provider key warning end")
-                _should_open_aura_settings = True
+            if not args.selfcheck:
+                logger.info("provider key warning start")
+                QMessageBox.warning(
+                    None,
+                    APP_NAME,
+                    f"{cfg.label} is selected, but no API key is configured.\n\n"
+                    "Choose one of these options:\n"
+                    "  • Bring your own API key in Settings → API Keys\n\n"
+                    "The app will open, but chat will fail until a provider is configured.",
+                )
+                logger.info("provider key warning end")
+            _should_open_api_settings = True
 
     from aura.gui.main_window import MainWindow
 
@@ -176,10 +159,7 @@ def _run_app(log_path: Path, args: argparse.Namespace, qt_argv: list[str]) -> in
     logger.info("win.show end")
 
     if not args.selfcheck:
-        if _should_open_aura_settings:
-            logger.info("opening Aura settings post-startup")
-            QTimer.singleShot(100, win.open_aura_settings)
-        elif _should_open_api_settings:
+        if _should_open_api_settings:
             logger.info("opening API settings post-startup")
             QTimer.singleShot(100, win.open_api_settings)
 

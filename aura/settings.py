@@ -101,8 +101,6 @@ class AppSettings:
     auto_summon_drones: bool = False
     sandbox_mode: str = DEFAULT_SANDBOX_MODE
     max_tool_rounds: int = 300
-    aura_pending_session_id: str = ""
-    aura_pending_claim_secret: str = ""
     terminal_window_geometry: str = ""
     drone_reports_window_geometry: str = ""
     drone_workbay_window_geometry: str = ""
@@ -131,10 +129,6 @@ class AppSettings:
         # Flags
         if isinstance(data.get("first_launch_done"), bool):
             s.first_launch_done = data["first_launch_done"]
-        if isinstance(data.get("aura_pending_session_id"), str):
-            s.aura_pending_session_id = data["aura_pending_session_id"]
-        if isinstance(data.get("aura_pending_claim_secret"), str):
-            s.aura_pending_claim_secret = data["aura_pending_claim_secret"]
         if isinstance(data.get("terminal_window_geometry"), str):
             s.terminal_window_geometry = data["terminal_window_geometry"]
         if isinstance(data.get("drone_reports_window_geometry"), str):
@@ -257,6 +251,8 @@ def _valid_provider(raw: Any) -> ProviderId | None:
         return None
     if raw in ("google_ai", "vertex_ai"):  # removed providers
         return None
+    if raw == "aura":  # removed Aura Credits provider
+        return None
     if provider_registry.has(raw):
         return cast(ProviderId, raw)
     return None
@@ -345,7 +341,7 @@ def _provider_from_data(
     if not isinstance(raw, str):
         return current
     # Auto-migrate removed Google providers to DeepSeek.
-    if raw in ("google_ai", "vertex_ai"):
+    if raw in ("google_ai", "vertex_ai", "aura"):
         logger.warning(
             "Migrating removed provider %s (%r) -> %s",
             key,

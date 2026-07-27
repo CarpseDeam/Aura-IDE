@@ -47,11 +47,7 @@ class MainWindowSignalWiring:
         w._toolbar.maximize_requested.connect(w._toggle_maximize)
         w._toolbar.close_requested.connect(w.close)
 
-        # ---- group 2: balance + status bar ----
-        w._balance_controller.balance_changed.connect(w._refresh_status_bar)
-        w._status_bar.credits_chip_clicked.connect(w._settings_controller.open_credits_popout)
-
-        # ---- group 3: left pane ----
+        # ---- group 2: left pane ----
         w._left_pane.change_root_requested.connect(w._workspace_controller.on_change_root)
         w._left_pane.project_selected.connect(w._workspace_controller._on_project_selected)
         w._left_pane.new_project_requested.connect(w._workspace_controller.on_create_new_project)
@@ -85,7 +81,6 @@ class MainWindowSignalWiring:
 
         # ---- group 9: worker handler + playground ----
         w._worker_handler.usage_updated.connect(w._refresh_status_bar)
-        w._worker_handler.usage_updated.connect(lambda: w._balance_controller.refresh(w._settings))
         w._worker_handler.worker_started.connect(lambda: w._input.set_streaming(False))
         w._playground.stop_worker_requested.connect(w._bridge.request_cancel)
         w._worker_handler.worker_running_changed.connect(w._playground.set_worker_running)

@@ -61,31 +61,6 @@ class MainWindowSettingsController(QObject):
             logger.exception("Failed to open API Settings dialog")
             QMessageBox.critical(window, "Settings Error", "Could not open the API Settings dialog. See the log for details.")
 
-    def open_credits_popout(self) -> None:
-        """Open the standalone Aura Credits popout."""
-        window = self._window
-        try:
-            from aura.gui.credits_popout import AuraCreditsPopoutDialog
-
-            dlg = AuraCreditsPopoutDialog(
-                settings=window._settings,
-                parent=window,
-            )
-            dlg.credits_claimed.connect(lambda: window._balance_controller.refresh(window._settings))
-            dlg.credits_claimed.connect(window._refresh_status_bar)
-            dlg.credits_changed.connect(lambda: window._balance_controller.refresh(window._settings))
-            dlg.credits_changed.connect(window._refresh_status_bar)
-            dlg.exec()
-            window._balance_controller.refresh(window._settings)
-            window._refresh_status_bar()
-        except Exception:
-            logger.exception("Failed to open Aura Credits popout")
-            QMessageBox.critical(window, "Aura Credits Error", "Could not open Aura Credits. See the log for details.")
-
-    def open_aura_settings(self) -> None:
-        """Backward-compatible route for callers that used to open the Aura settings tab."""
-        self.open_credits_popout()
-
     def _apply_settings(self, settings: AppSettings) -> None:
         window = self._window
         window._settings = settings

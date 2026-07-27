@@ -116,8 +116,8 @@ class SettingsDialog(QDialog):
         """Read the current widget values and return a fresh AppSettings.
 
         Uses a deep copy of the working settings as the base so that any
-        field not managed by a settings page (e.g. aura_pending_*,
-        main_window_geometry, main_window_state, main_splitter_sizes) is
+        field not managed by a settings page (e.g. main_window_geometry,
+        main_window_state, main_splitter_sizes) is
         preserved rather than silently reset to its default value.
         """
         result = copy.deepcopy(self._settings)

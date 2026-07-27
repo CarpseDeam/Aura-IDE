@@ -25,7 +25,6 @@ from aura.config import (
     PROVIDERS,
     AppSettings,
     ThinkingMode,
-    get_api_key,
     has_usable_provider_configuration,
     icon_path,
     load_settings,
@@ -43,7 +42,6 @@ from aura.gui.edge_rails import EdgeTabRail
 from aura.gui.gui_event_probe import install_gui_event_probe
 from aura.gui.input_panel import InputPanel, SendPayload
 from aura.gui.left_pane import LeftPane
-from aura.gui.main_window_balance import MainWindowBalanceController
 from aura.gui.main_window_companion import MainWindowCompanionController
 from aura.gui.main_window_drones import MainWindowDroneController
 from aura.gui.main_window_handoff import MainWindowHandoffController
@@ -137,7 +135,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         )
         self.setStatusBar(self._status_bar)
 
-        self._balance_controller = MainWindowBalanceController(self)
         self._drone_controller = MainWindowDroneController(self)
         self._terminal_controller = MainWindowTerminalController(self)
 
@@ -328,7 +325,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         QTimer.singleShot(0, lambda: self._left_pane.refresh_drones(self._workspace_root))
 
         self._refresh_status_bar()
-        self._balance_controller.refresh(self._settings)
         self._position_edge_tabs()
 
         logger.debug(
@@ -384,7 +380,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._settings.playground_vertical_splitter_sizes = playground_vert
         save_settings(self._settings)
         self._companion_controller.stop()
-        self._balance_controller.shutdown()
         super().closeEvent(event)
 
     def showEvent(self, event) -> None:
@@ -504,15 +499,12 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
     def _refresh_status_bar(self) -> None:
         ws = str(self._workspace_root) if self._workspace_root else "(none)"
-        has_aura_key = bool(get_api_key("aura"))
         has_provider = has_usable_provider_configuration(self._settings.provider)
         self._status_bar.refresh(
             workspace_root=ws,
             model_id=self.current_model(),
             thinking=self.current_thinking(),
             session_usage=self._worker_handler.session_usage,
-            has_aura_key=has_aura_key,
-            balance_micros=self._balance_controller.balance_micros,
             has_provider=has_provider,
         )
 
@@ -566,11 +558,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
     def open_api_settings(self) -> None:
         """Open settings dialog directly to the API Keys tab."""
         self._settings_controller.open_api_settings()
-
-    def open_aura_settings(self) -> None:
-        """Open the standalone Aura Credits popout."""
-        self._settings_controller.open_aura_settings()
-
 
     def _on_open_update(self) -> None:
         dlg = UpdateDialog(self)

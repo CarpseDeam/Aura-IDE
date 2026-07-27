@@ -89,7 +89,7 @@ DRONE_RULES = """### drone_rules
 PROVIDER_RULES = """### provider_rules
 - Never leak keys, tokens, or provider secrets.
 - Preserve provider selection and settings behavior.
-- Keep BYOK, Aura Credits, and OpenRouter paths distinct.
+- Keep BYOK and OpenRouter paths distinct.
 - Surface provider errors cleanly without hiding useful diagnostics.
 - Do not hardcode pricing or model lists unless explicitly required."""
 
@@ -210,7 +210,6 @@ _SCOPED_PACK_RULES: dict[str, _ScopedPackRule] = {
             "api keys",
             "apikey",
             "credits",
-            "aura credits",
             "byok",
             "openrouter",
             "openai",

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QSizeGrip, QSizePolicy, QStatusBar, QWidget
 
@@ -87,22 +87,7 @@ class _ElidingLabel(QLabel):
         super().setText(self.fontMetrics().elidedText(self._full_text, self._elide_mode, width))
 
 
-class _ClickableLabel(QLabel):
-    clicked = Signal()
-
-    def __init__(self, text: str = "", parent=None) -> None:
-        super().__init__(text, parent)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-
-    def mousePressEvent(self, event) -> None:
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.clicked.emit()
-        super().mousePressEvent(event)
-
-
 class AuraStatusBar(QStatusBar):
-    credits_chip_clicked = Signal()
-
     def __init__(self, parent=None, show_resize_grip: bool = True) -> None:
         super().__init__(parent)
 
@@ -164,31 +149,6 @@ class AuraStatusBar(QStatusBar):
 
         self.addWidget(center_widget, 1)
 
-        # Right: Aura Credits pill
-        self._status_balance = _ClickableLabel("")
-        self._status_balance.setObjectName("aura_credits_status_chip")
-        self._status_balance.setAccessibleName("Aura Credits status")
-        self._status_balance.setStyleSheet(
-            "QLabel#aura_credits_status_chip {"
-            "    padding: 2px 10px;"
-            "    border: 1px solid rgba(122, 162, 247, 0.3);"
-            "    border-radius: 10px;"
-            "    background: rgba(122, 162, 247, 0.08);"
-            "    color: #7aa2f7;"
-            "    font-weight: 600;"
-            "}"
-            "QLabel#aura_credits_status_chip:hover {"
-            "    border-color: rgba(122, 162, 247, 0.6);"
-            "    background: rgba(122, 162, 247, 0.15);"
-            "}"
-        )
-        font_balance = QFont()
-        font_balance.setPointSize(11)
-        self._status_balance.setFont(font_balance)
-        self.addPermanentWidget(self._status_balance)
-        self._status_balance.clicked.connect(self.credits_chip_clicked)
-        self._status_balance.setVisible(True)
-
         self.setSizeGripEnabled(False)
         self._resize_grip = _StatusResizeGrip(self)
         self.addPermanentWidget(self._resize_grip)
@@ -206,8 +166,6 @@ class AuraStatusBar(QStatusBar):
         model_id: str, 
         thinking: ThinkingMode,
         session_usage: dict[str, dict[str, int]],
-        has_aura_key: bool = False,
-        balance_micros: int | None = None,
         has_provider: bool = False,
     ) -> None:
         # Workspace path truncation (left side)
@@ -236,22 +194,3 @@ class AuraStatusBar(QStatusBar):
         cost_str = _format_footer_cost(known_cost, unknown_count, total_models)
         self._status_cache.setText(usage_text)
         self._status_session.setText(f"Session {cost_str}")
-
-        # Balance display (right pill)
-        if has_aura_key:
-            if balance_micros is not None:
-                self._status_balance.setText(f"Aura Credits · ${balance_micros / 1_000_000:.2f}")
-                self._status_balance.setToolTip("Aura Credits balance. Click to open Aura Credits.")
-            else:
-                self._status_balance.setText("Aura Credits · $—")
-                self._status_balance.setToolTip("Aura Credits balance unavailable. Click to open Aura Credits.")
-        else:
-            if has_provider:
-                self._status_balance.setText("Add Credits")
-                self._status_balance.setToolTip(
-                    "Add Aura Credits. The easiest way to run Aura without provider setup."
-                )
-            else:
-                self._status_balance.setText("Set up AI")
-                self._status_balance.setToolTip("Set up Aura Credits or an API provider. Click to open.")
-        self._status_balance.setVisible(True)

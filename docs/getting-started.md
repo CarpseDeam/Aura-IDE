@@ -3,7 +3,7 @@
 ## Prerequisites
 
 - Python 3.10+ (only needed for pip install — the Windows installer bundles it)
-- An API key from at least one provider — or use Aura Credits to skip key management (see "Model Access Setup" below)
+- An API key from at least one provider
 - Optional: Git, Docker
 
 ## Install
@@ -18,13 +18,9 @@ pip install .
 pip install -e .[dev]
 ```
 
-## Model Access Setup
+## Provider Setup
 
-Aura offers two ways to access models:
-
-**Aura Credits** — No API keys needed. Open Settings → Credits, buy credits ($5, $10, $20, $50 packs), then select Aura as your Planner or Worker provider.
-
-**Bring Your Own Keys** — Connect one of the providers below. Set your key via environment variable or the Settings → API Keys dialog (encrypted to disk).
+Connect one of the supported providers below. Set your key via environment variable or the Settings → API Keys dialog (encrypted to disk).
 
 | Provider     | Environment Variable      | Default Model         |
 |--------------|---------------------------|-----------------------|
@@ -42,8 +38,6 @@ aura
 ```
 
 You can also set keys through Settings → API Keys, which encrypts them to `~/.config/Aura/keys.json`.
-
-Both paths support the full Planner/Worker architecture, and you can mix them — use your own key for one role and Aura Credits for the other.
 
 ## First Launch
 
