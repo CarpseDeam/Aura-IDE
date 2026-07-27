@@ -81,8 +81,7 @@ class MainWindowSignalWiring:
 
         # ---- group 9: worker handler + playground ----
         w._worker_handler.usage_updated.connect(w._refresh_status_bar)
-        w._worker_handler.worker_started.connect(lambda: w._input.set_streaming(False))
-        w._playground.stop_worker_requested.connect(w._bridge.request_cancel)
+        w._playground.stop_worker_requested.connect(w._send_handler.handle_stop)
         w._worker_handler.worker_running_changed.connect(w._playground.set_worker_running)
 
         # ---- group 10: persistence ----

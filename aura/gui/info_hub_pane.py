@@ -102,8 +102,8 @@ class InfoHubPane(QWidget):
         self._copy_receipt_btn.clicked.connect(self._on_header_copy_receipt)
         header_layout.addWidget(self._copy_receipt_btn)
 
-        # Stop Worker button
-        self._stop_worker_btn = QPushButton("Stop Worker")
+        # Stop button (cancels active run, clears queue, preserves draft)
+        self._stop_worker_btn = QPushButton("Stop")
         self._stop_worker_btn.setObjectName("danger")
         self._stop_worker_btn.setMinimumSize(44, 36)
         self._stop_worker_btn.setVisible(False)
@@ -292,22 +292,22 @@ class InfoHubPane(QWidget):
     def _on_stop_worker_clicked(self) -> None:
         """Click handler: disable button, show stopping text, emit signal."""
         self._stop_worker_btn.setEnabled(False)
-        self._stop_worker_btn.setText("Stopping Worker...")
+        self._stop_worker_btn.setText("Stopping...")
         self.stop_worker_requested.emit()
 
     def set_worker_running(self, running: bool) -> None:
-        """Show/hide the Stop Worker button based on worker running state."""
+        """Show/hide the Stop button based on worker running state."""
         self._stop_worker_btn.setVisible(running)
         if running:
             self._stop_worker_btn.setEnabled(True)
-            self._stop_worker_btn.setText("Stop Worker")
+            self._stop_worker_btn.setText("Stop")
             self._status_chip.setText("● Live")
             self._status_chip.setStyleSheet(f"color: {SUCCESS}; font-size: 10px; font-weight: 600;")
             self._copy_receipt_btn.setVisible(False)
         else:
             self._stop_worker_btn.setVisible(False)
             self._stop_worker_btn.setEnabled(True)
-            self._stop_worker_btn.setText("Stop Worker")
+            self._stop_worker_btn.setText("Stop")
 
     # Styling
 

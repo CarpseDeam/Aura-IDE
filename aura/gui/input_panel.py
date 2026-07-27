@@ -188,7 +188,8 @@ class InputPanel(QFrame):
         self.setGraphicsEffect(shadow)
 
         self._workspace_root = workspace_root
-        self._streaming = False
+        self._execution_active = False
+        self._queued_count = 0
         self._attachments: list[Attachment] = []
 
         outer = QVBoxLayout(self)
@@ -302,12 +303,24 @@ class InputPanel(QFrame):
     def set_workspace_root(self, root: Path | None) -> None:
         self._workspace_root = root
 
+    def set_execution_active(self, active: bool) -> None:
+        """Set whether a production run is active.
+
+        When active, the editor stays editable and a Queue button is shown
+        alongside the Stop button. When idle, a normal Send button is shown.
+        """
+        self._execution_active = active
+        self._stop_btn.setVisible(active)
+        self._update_send_button_text()
+        self._send_btn.setVisible(True)
+        self._handoff_btn.setEnabled(not active)
+
     def set_streaming(self, streaming: bool) -> None:
-        self._streaming = streaming
-        self._send_btn.setVisible(not streaming)
-        self._stop_btn.setVisible(streaming)
-        self._handoff_btn.setEnabled(not streaming)
-        self._editor.setEnabled(not streaming)
+        """Legacy wrapper — delegates to set_execution_active.
+
+        Editor stays enabled during execution so users can queue follow-ups.
+        """
+        self.set_execution_active(streaming)
 
     def set_placeholder(self, text: str) -> None:
         """Set the editor placeholder text."""
@@ -315,10 +328,22 @@ class InputPanel(QFrame):
 
     def set_queued_messages(self, count: int) -> None:
         """Update the send button to show how many messages are queued."""
-        if count > 0:
-            self._send_btn.setText(f"\u2192  {count}")
+        self._queued_count = count
+        self._update_send_button_text()
+
+    def _update_send_button_text(self) -> None:
+        """Update send button label and tooltip based on state."""
+        if self._execution_active and self._queued_count > 0:
+            self._send_btn.setText(f"Queue \u00b7 {self._queued_count}")
+            self._send_btn.setToolTip(
+                f"{self._queued_count} message(s) queued — will send after current run completes"
+            )
+        elif self._execution_active:
+            self._send_btn.setText("Queue")
+            self._send_btn.setToolTip("Queue message — sends after current run completes")
         else:
-            self._send_btn.setText("\u2192")
+            self._send_btn.setText("Send")
+            self._send_btn.setToolTip("Send message (Ctrl+Enter)")
 
     def _update_send_button_enabled(self) -> None:
         self._send_btn.setEnabled(

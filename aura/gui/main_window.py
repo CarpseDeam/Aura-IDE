@@ -636,7 +636,8 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
 
     def _on_started(self) -> None:
-        self._input.set_streaming(True)
+        self._input.set_execution_active(True)
+        self._input.set_queued_messages(0)
         # Switch from Drone Bay to workspace so the user sees the run —
         # but do NOT switch away from the Chain Editor (Workflow Studio).
         if not self._drone_controller.is_workbay_open():
@@ -647,11 +648,17 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         if self._answer_only_ui_guard is not None:
             self._answer_only_ui_guard.stop()
             self._answer_only_ui_guard = None
-        self._input.set_streaming(False)
+        self._input.set_execution_active(False)
         self._chat.assistant_done()
         self._chat.stop_current_aura()
         self._input.focus_editor()
-        self._send_handler.process_message_queue(self.current_model(), self.current_thinking())
+        # Drain one queued item (if any) after the current turn completes.
+        # Defer via singleShot(0) to avoid racing with the lifecycle's
+        # Qt presentation work.
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(0, lambda: self._send_handler.process_message_queue(
+            self.current_model(), self.current_thinking()
+        ))
 
     def _on_stream_done(self, finish_reason: str, full_message: dict) -> None:
         # If the model produced tool calls, it's not actually done — the bridge

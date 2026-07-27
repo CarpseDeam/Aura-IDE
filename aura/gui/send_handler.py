@@ -15,8 +15,11 @@ from PySide6.QtWidgets import QMessageBox
 
 _log = logging.getLogger(__name__)
 
+from dataclasses import dataclass
+
 from aura.config import PROVIDERS, AppSettings, ModelInfo, ThinkingMode, has_usable_provider_configuration
 from aura.conversation.task_router import TaskLane, classify_user_request
+from aura.gui.input_panel import Attachment
 from aura.git_ops import (
     recent_commit_log,
     restore_to_snapshot,
@@ -25,6 +28,19 @@ from aura.git_ops import (
     working_tree_status,
 )
 from aura.gui.input_panel import SendPayload
+
+
+@dataclass
+class QueuedItem:
+    """A captured send request waiting for the current production run to finish.
+
+    Each item preserves its own submission-time state so that changing controls
+    after queueing does not alter an already queued request.
+    """
+    text: str
+    attachments: list[Attachment]
+    model: str
+    thinking: ThinkingMode
 
 
 class SendHandler(QObject):
@@ -60,8 +76,8 @@ class SendHandler(QObject):
         self._settings = settings
         self._workspace_root = workspace_root
 
-        # Queued messages sent while worker is running.
-        self._message_queue: list[SendPayload] = []
+        # Queued messages sent while the bridge is running.
+        self._message_queue: list[QueuedItem] = []
 
         # Pending model/thinking stored while vision thread is running.
         self._pending_model: str = ""
@@ -119,7 +135,13 @@ class SendHandler(QObject):
             return
 
         if self._bridge.is_running():
-            self._message_queue.append(payload)
+            item = QueuedItem(
+                text=payload.text,
+                attachments=list(payload.attachments),
+                model=model,
+                thinking=thinking,
+            )
+            self._message_queue.append(item)
             self._input.set_queued_messages(len(self._message_queue))
             return
 
@@ -174,7 +196,8 @@ class SendHandler(QObject):
         self._finalize_send(payload, model, thinking, vision_descriptions, vision_error)
 
     def handle_stop(self) -> None:
-        """Cancel the current bridge response and clear the message queue."""
+        """Cancel the current bridge response, clear the message queue, but
+        preserve the current draft and attachments in the composer."""
         self._bridge.request_cancel()
         self._message_queue.clear()
         self._input.set_queued_messages(0)
@@ -429,6 +452,9 @@ class SendHandler(QObject):
         """Send the next queued message, if any."""
         if not self._message_queue:
             return
-        payload = self._message_queue.pop(0)
+        item = self._message_queue.pop(0)
         self._input.set_queued_messages(len(self._message_queue))
-        self.handle_send(payload, model, thinking)
+        # Reconstruct a SendPayload from the queued item, which captured its
+        # own model and thinking at queue time.
+        payload = SendPayload(text=item.text, attachments=list(item.attachments))
+        self.handle_send(payload, item.model, item.thinking)
