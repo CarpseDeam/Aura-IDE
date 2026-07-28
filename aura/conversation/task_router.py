@@ -11,6 +11,11 @@ from aura.research.policy import (
     decide_research_policy,
 )
 
+_BUILT_IN_MAX_WORDS = 10
+_POLITE_PREFIX = re.compile(
+    r"^(?:please|pls|hey|ok|okay|now|just|aura|can you|could you|would you)\b[,:]?\s+"
+)
+
 
 class TaskLane(str, Enum):
     built_in_action = "built_in_action"
@@ -35,7 +40,7 @@ def classify_user_request(text: str) -> TaskRoute:
     if not normalized:
         return TaskRoute(TaskLane.chat, "chat", 0.4, "empty request")
 
-    built_in_action = _classify_built_in(normalized)
+    built_in_action = _classify_built_in(raw, normalized)
     if built_in_action:
         return TaskRoute(
             TaskLane.built_in_action,
@@ -78,15 +83,26 @@ def _normalize(text: str) -> str:
     return " ".join(text.strip().lower().split())
 
 
-def _classify_built_in(normalized: str) -> str | None:
+def _classify_built_in(raw: str, normalized: str) -> str | None:
     if normalized == "/undo":
         return "undo"
-    if re.search(r"\bundo\b.*\b(?:last|most recent)\b.*\bcommit\b", normalized):
+    if normalized == "/drone":
+        return "drone_enter_mode"
+
+    # Everything below is a phrase match. Only let those fire on short,
+    # single-line messages: a long work request that happens to mention
+    # "restore" and "snapshot" is a task for the model, not a git command.
+    if not _is_command_like(raw, normalized):
+        return None
+
+    command = _strip_polite_prefix(normalized)
+
+    if re.match(r"undo\b(?:\s+\w+){0,3}\s+(?:last|most recent)\s+commit\b", command):
         return "undo"
-    if "reset --soft" in normalized or "soft reset" in normalized:
+    if command.startswith(("git reset --soft", "reset --soft", "soft reset")):
         return "undo"
 
-    if normalized in {
+    if command in {
         "git status",
         "show git status",
         "what is git status",
@@ -94,22 +110,41 @@ def _classify_built_in(normalized: str) -> str | None:
     }:
         return "git_status"
     if (
-        normalized == "git diff"
-        or normalized.startswith("git diff ")
-        or normalized == "show git diff"
+        command == "git diff"
+        or command.startswith("git diff ")
+        or command == "show git diff"
     ):
         return "git_diff"
     if (
-        normalized == "git log"
-        or normalized.startswith("git log ")
-        or normalized == "show git log"
+        command == "git log"
+        or command.startswith("git log ")
+        or command == "show git log"
     ):
         return "git_log"
-    if re.search(r"\brestore\b.*\bsnapshot\b", normalized):
+    if re.match(r"restore\b(?:\s+\w+){0,3}\s+snapshot\b", command):
         return "restore_snapshot"
-    if normalized == "/drone":
-        return "drone_enter_mode"
     return None
+
+
+def _is_command_like(raw: str, normalized: str) -> bool:
+    """True when the message is short enough to be a literal command.
+
+    Built-in actions bypass the model entirely and drop the request, so a
+    false positive silently swallows real work. Multi-line prompts and
+    anything longer than a terse command never qualify.
+    """
+    if "\n" in raw.strip():
+        return False
+    return len(normalized.split()) <= _BUILT_IN_MAX_WORDS
+
+
+def _strip_polite_prefix(normalized: str) -> str:
+    previous = ""
+    command = normalized
+    while command != previous:
+        previous = command
+        command = _POLITE_PREFIX.sub("", command).strip()
+    return command
 
 
 def _looks_like_validation(normalized: str) -> bool:

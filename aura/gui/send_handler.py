@@ -7,6 +7,7 @@ execution. Delegates to the bridge, chat view, and input panel.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 from pathlib import Path
 
@@ -28,6 +29,12 @@ from aura.git_ops import (
     working_tree_status,
 )
 from aura.gui.input_panel import SendPayload
+
+
+def _extract_snapshot_sha(text: str) -> str | None:
+    """Pull an explicit commit sha out of a restore request, if present."""
+    match = re.search(r"\b([0-9a-f]{7,40})\b", str(text or "").lower())
+    return match.group(1) if match else None
 
 
 @dataclass
@@ -131,7 +138,7 @@ class SendHandler(QObject):
         route = classify_user_request(payload.text)
         if route.lane == TaskLane.built_in_action:
             self._chat.add_user(payload.text)
-            self._handle_built_in_action(route.action)
+            self._handle_built_in_action(route.action, payload.text)
             return
 
         if self._bridge.is_running():
@@ -233,13 +240,13 @@ class SendHandler(QObject):
     # ---- drone construction --------------------------------------------------
 
     # ---- undo --------------------------------------------------------------
-    def _handle_built_in_action(self, action: str) -> None:
+    def _handle_built_in_action(self, action: str, text: str = "") -> None:
         """Run deterministic built-in actions without model or Worker dispatch."""
         if action == "undo":
             self._handle_undo()
             return
         if action == "restore_snapshot":
-            self._handle_restore_snapshot()
+            self._handle_restore_snapshot(text)
             return
         if action == "git_status":
             self._handle_git_status()
@@ -255,18 +262,53 @@ class SendHandler(QObject):
             return
         self._chat.add_error("Built-in action", f"Unsupported action: {action}")
 
-    def _handle_restore_snapshot(self) -> None:
-        """Prompt users to choose an explicit snapshot instead of guessing."""
+    def _handle_restore_snapshot(self, text: str = "") -> None:
+        """Restore an explicitly named snapshot, or list the ones available."""
         if self._bridge.is_running():
             self._chat.add_error(
                 "Restore snapshot",
                 "Stop the running task before undoing or restoring a snapshot.",
             )
             return
-        self._chat.add_error(
-            "Restore snapshot",
-            "Choose a specific snapshot to restore.",
-        )
+
+        ws_root = self._workspace_root
+        if ws_root is None:
+            self._chat.add_error("Restore snapshot", "No workspace root set.")
+            return
+
+        sha = _extract_snapshot_sha(text)
+        if sha:
+            reply = QMessageBox.question(
+                self._chat,
+                "Restore Snapshot",
+                f"This will discard ALL changes made after {sha}. Continue?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                self._chat.add_info("Restore snapshot", "Cancelled.")
+                return
+            ok, message = restore_to_snapshot(ws_root, sha)
+            if ok:
+                self._bridge.clear_pre_worker_snapshot()
+                self._chat.add_info("Restore snapshot", message)
+            else:
+                self._chat.add_error("Restore snapshot", message)
+            return
+
+        # No sha given — show what can actually be restored to.
+        lines = ["Name the snapshot to restore, e.g. `restore snapshot a1b2c3d`."]
+        pre_worker = self._bridge.get_pre_worker_snapshot()
+        if pre_worker:
+            lines.append(
+                f"\nPre-worker snapshot: {pre_worker} (or use /undo to return to it)."
+            )
+        ok, log_text, message = recent_commit_log(ws_root)
+        if ok and log_text.strip():
+            lines.append(f"\nRecent commits:\n{log_text.strip()}")
+        elif not ok:
+            lines.append(f"\nCould not read git history: {message}")
+        self._chat.add_info("Restore snapshot", "\n".join(lines))
 
     def _handle_undo(self) -> None:
         """Handle /undo command — restore to pre-worker snapshot or git reset."""
