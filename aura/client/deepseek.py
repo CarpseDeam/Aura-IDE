@@ -21,6 +21,7 @@ import httpx
 from openai import APIError, APIStatusError, OpenAI
 
 _log = logging.getLogger(__name__)
+from aura.client.dsml_parser import DsmlParser
 from aura.client.events import (
     ApiError,
     ContentDelta,
@@ -32,7 +33,6 @@ from aura.client.events import (
     ToolCallStart,
     Usage,
 )
-from aura.client.dsml_parser import DsmlParser
 from aura.config import (
     ProviderId,
     ThinkingMode,
@@ -267,7 +267,7 @@ class DeepSeekClient:
                                 f"Provider did not send a first response chunk within "
                                 f"{int(FIRST_STREAM_EVENT_TIMEOUT_SECONDS)} seconds. "
                                 f"Check connection, provider status, model availability, "
-                                f"or try Send Logs."
+                                f"or inspect the local logs."
                             ),
                         )
                         return

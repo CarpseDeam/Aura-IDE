@@ -28,7 +28,8 @@ Aura supports three CLI-based agent backends as alternative execution layers. Th
 | Codex CLI    | codex          | `codex`       | OAuth via OpenAI            |
 | Antigravity  | antigravity    | `antigravity` | OAuth via Antigravity       |
 
-CLI backends are selected independently for Planner and Worker in Settings → Backends.
+CLI providers can be selected as the production provider. Their own OAuth flow
+replaces API-key configuration in Aura.
 
 ## Plugable Backend Architecture
 

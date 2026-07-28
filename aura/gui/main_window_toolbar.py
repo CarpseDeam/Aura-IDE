@@ -34,7 +34,6 @@ class MainWindowToolbar(QToolBar):
     update_requested = Signal()
     settings_requested = Signal()
     logs_requested = Signal()
-    debug_report_requested = Signal()
     minimize_requested = Signal()
     maximize_requested = Signal()
     close_requested = Signal()
@@ -120,15 +119,7 @@ class MainWindowToolbar(QToolBar):
         self._logs_btn.clicked.connect(self.logs_requested.emit)
         self.addWidget(self._logs_btn)
 
-        self.addWidget(_toolbar_separator())
-
-        self._debug_report_btn = QToolButton()
-        self._debug_report_btn.setText("Send Logs")
-        self._debug_report_btn.setToolTip("Send recent Aura logs to help diagnose problems")
-        self._debug_report_btn.clicked.connect(self.debug_report_requested.emit)
-        self.addWidget(self._debug_report_btn)
-
-        # Spacer between Send Logs and Settings.
+        # Spacer between Logs and Settings.
         settings_spacer = QWidget()
         settings_spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.addWidget(settings_spacer)
@@ -180,13 +171,6 @@ class MainWindowToolbar(QToolBar):
         self._read_only_btn.setChecked(checked)
         self._read_only_btn.blockSignals(False)
         self._update_read_only_state(checked)
-
-    def set_send_logs_busy(self, busy: bool) -> None:
-        self._debug_report_btn.setEnabled(not busy)
-        self._debug_report_btn.setText("Sending..." if busy else "Send Logs")
-        self._debug_report_btn.setToolTip(
-            "Sending recent Aura logs..." if busy else "Send recent Aura logs to help diagnose problems"
-        )
 
     def update_settings(self, settings) -> None:
         """Use the latest settings object and refresh setting-backed controls."""

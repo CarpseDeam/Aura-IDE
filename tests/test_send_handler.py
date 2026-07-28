@@ -91,3 +91,34 @@ def test_answer_only_research_send_does_not_open_drone_workbay(monkeypatch, tmp_
     ]
     assert chat.errors == []
     assert chat.assistant_started == 1
+
+
+def test_no_provider_guard_directs_user_to_byok_settings(monkeypatch, tmp_path):
+    app = QCoreApplication.instance() or QCoreApplication([])
+    assert app is not None
+    monkeypatch.setattr(
+        "aura.gui.send_handler.has_usable_provider_configuration",
+        lambda: False,
+    )
+    bridge = _FakeBridge()
+    chat = _FakeChat()
+    handler = SendHandler(
+        bridge=bridge,
+        chat=chat,
+        input_panel=_FakeInput(),
+        settings=SimpleNamespace(max_tool_rounds=3, planner_provider="test"),
+        workspace_root=tmp_path,
+    )
+
+    handler.handle_send(
+        SendPayload("hello", []),
+        model="test-model",
+        thinking="off",
+    )
+
+    assert bridge.send_calls == []
+    assert len(chat.errors) == 1
+    title, message = chat.errors[0]
+    assert title == "No AI provider configured"
+    assert "Settings → API Keys" in message
+    assert "Credits" not in message

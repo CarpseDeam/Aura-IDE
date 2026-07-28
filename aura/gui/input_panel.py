@@ -315,13 +315,6 @@ class InputPanel(QFrame):
         self._send_btn.setVisible(True)
         self._handoff_btn.setEnabled(not active)
 
-    def set_streaming(self, streaming: bool) -> None:
-        """Legacy wrapper — delegates to set_execution_active.
-
-        Editor stays enabled during execution so users can queue follow-ups.
-        """
-        self.set_execution_active(streaming)
-
     def set_placeholder(self, text: str) -> None:
         """Set the editor placeholder text."""
         self._editor.setPlaceholderText(text)
@@ -455,8 +448,6 @@ class InputPanel(QFrame):
     # ---- send -------------------------------------------------------------
 
     def _on_submit(self) -> None:
-        if self._streaming:
-            return
         text = self._editor.toPlainText().strip()
         if not text and not self._attachments:
             return

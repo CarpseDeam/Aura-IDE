@@ -20,11 +20,7 @@ class PromptsPage(QWidget):
         super().__init__(parent)
         self._settings = settings
 
-        from aura.prompts import (
-            PLANNER_SYSTEM_PROMPT as _PLANNER_PROMPT,
-            WORKER_SYSTEM_PROMPT as _WORKER_PROMPT,
-            SINGLE_SYSTEM_PROMPT as _SINGLE_PROMPT,
-        )
+        from aura.prompts import SINGLE_SYSTEM_PROMPT as _SINGLE_PROMPT
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -50,7 +46,8 @@ class PromptsPage(QWidget):
         note.setWordWrap(True)
         form.addRow("", note)
 
-        # Single-mode prompt
+        # The normal product has one production agent. Legacy Planner/Worker
+        # prompt fields remain persisted but are intentionally not exposed.
         self._single_prompt_edit = QPlainTextEdit()
         self._single_prompt_edit.setFixedHeight(120)
         self._single_prompt_edit.setPlaceholderText(_SINGLE_PROMPT[:80] + "...")
@@ -63,42 +60,10 @@ class PromptsPage(QWidget):
         single_row.addWidget(single_reset_btn)
         single_widget = QWidget()
         single_widget.setLayout(single_row)
-        form.addRow("Single mode:", single_widget)
-
-        # Planner prompt
-        self._planner_prompt_edit = QPlainTextEdit()
-        self._planner_prompt_edit.setFixedHeight(120)
-        self._planner_prompt_edit.setPlaceholderText(_PLANNER_PROMPT[:80] + "...")
-        self._planner_prompt_edit.setPlainText(self._settings.planner_system_prompt)
-        planner_reset_btn = QPushButton("Reset")
-        planner_reset_btn.clicked.connect(lambda: self._planner_prompt_edit.clear())
-        planner_row = QHBoxLayout()
-        planner_row.setSpacing(6)
-        planner_row.addWidget(self._planner_prompt_edit, 1)
-        planner_row.addWidget(planner_reset_btn)
-        planner_widget = QWidget()
-        planner_widget.setLayout(planner_row)
-        form.addRow("Planner:", planner_widget)
-
-        # Worker prompt
-        self._worker_prompt_edit = QPlainTextEdit()
-        self._worker_prompt_edit.setFixedHeight(120)
-        self._worker_prompt_edit.setPlaceholderText(_WORKER_PROMPT[:80] + "...")
-        self._worker_prompt_edit.setPlainText(self._settings.worker_system_prompt)
-        worker_reset_btn = QPushButton("Reset")
-        worker_reset_btn.clicked.connect(lambda: self._worker_prompt_edit.clear())
-        worker_row = QHBoxLayout()
-        worker_row.setSpacing(6)
-        worker_row.addWidget(self._worker_prompt_edit, 1)
-        worker_row.addWidget(worker_reset_btn)
-        worker_widget = QWidget()
-        worker_widget.setLayout(worker_row)
-        form.addRow("Worker:", worker_widget)
+        form.addRow("Production:", single_widget)
 
         layout.addLayout(form)
         layout.addStretch()
 
     def collect_settings(self, settings: AppSettings) -> None:
         settings.system_prompt = self._single_prompt_edit.toPlainText().strip()
-        settings.planner_system_prompt = self._planner_prompt_edit.toPlainText().strip()
-        settings.worker_system_prompt = self._worker_prompt_edit.toPlainText().strip()

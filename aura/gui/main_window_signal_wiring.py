@@ -42,7 +42,6 @@ class MainWindowSignalWiring:
         w._toolbar.update_requested.connect(w._on_open_update)
         w._toolbar.settings_requested.connect(w._settings_controller.open_settings)
         w._toolbar.logs_requested.connect(w._open_logs_folder)
-        w._toolbar.debug_report_requested.connect(w._debug_report_handler.on_send_debug_report)
         w._toolbar.minimize_requested.connect(w.showMinimized)
         w._toolbar.maximize_requested.connect(w._toggle_maximize)
         w._toolbar.close_requested.connect(w.close)

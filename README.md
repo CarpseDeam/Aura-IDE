@@ -7,9 +7,9 @@
 
 **Bring any model. Aura makes it plan, prove, and validate its work.**
 
-Aura is an open-source desktop coding harness. Aura turns AI coding into a visible loop: approve the plan, review the diff, run validation, keep the receipt.
+Aura is an open-source desktop coding harness. Aura turns AI coding into a visible loop: inspect the work, review the diff, run validation, keep the receipt.
 
-**Chat is where the model talks. Aura is where the model works.** The Planner inspects your workspace and prepares the job, you approve it, and the Worker executes bounded changes against the real files on your desktop.
+**Chat is where the model talks. Aura is where the model works.** One production agent receives your original request and owns the job end to end while Aura keeps tools, diffs, validation, and the final receipt visible.
 
 [Website](https://carpsedeam.github.io/Aura-IDE/) · [Download](https://github.com/CarpseDeam/Aura-IDE/releases/latest) · [Start Here](https://aura-ide.hashnode.dev/start-here) · [Documentation](docs/README.md) · [Discord](https://discord.gg/aGSthBX2Bg) · [Blog](https://aura-ide.hashnode.dev/)
 
@@ -22,29 +22,21 @@ Aura is an open-source desktop coding harness. Aura turns AI coding into a visib
 ## The visible loop
 
 ```text
-Ask → Plan → Dispatch → Review → Validate → Done
+Ask → Inspect → Execute → Review → Validate → Done
 ```
 
 - **Ask** — Describe the change in plain language.
-- **Plan** — Planner inspects the workspace and prepares a focused spec.
-- **Dispatch** — You approve the plan before bounded work begins.
+- **Inspect** — The production agent reads the workspace and builds task context.
+- **Execute** — The same agent owns TODO progress, tools, edits, and repair.
 - **Review** — Proposed writes appear as readable diffs.
 - **Validate** — Aura runs checks suited to the project and changed files. Failures remain visible and clearly reported.
 - **Done** — Completed work leaves an inspectable receipt.
 
-Planning and execution are separate on purpose: the model gets a concrete job, and you keep a review point before work reaches the workspace.
+Execution has one stable owner per turn; reviewable diffs preserve your control before writes reach the workspace.
 
 ## Product proof
 
 These are real states from the current Aura desktop workflow.
-
-### Approve the work before execution
-
-<p align="center">
-  <img src="media/Aura-Dispatch-Worker.png" alt="Aura Plan Ready card showing strategy, file scope, validation expectations, and the Dispatch button" width="377">
-</p>
-
-The Plan Ready card keeps strategy, allowed scope, validation expectations, and dispatch control together.
 
 ### Watch bounded work advance live
 
@@ -93,10 +85,8 @@ aura
 1. Open a workspace.
 2. Configure a provider API key in Settings → API Keys.
 3. Ask for a small task such as `fix a typo in README.md`.
-4. Review the Planner's spec.
-5. Dispatch the approved work.
-6. Review proposed diffs and visible validation results.
-7. Inspect the completion receipt.
+4. Review proposed diffs and visible validation results.
+5. Inspect the completion receipt.
 
 See [Getting Started](docs/getting-started.md) for onboarding, model setup, shortcuts, and the full first-run walkthrough.
 
@@ -113,13 +103,13 @@ These figures are supporting evidence for sustained harness-driven development�
 
 ## Why Aura is different
 
-- **Planner and Worker separation** — the Planner researches and specifies; the Worker executes the approved job. Each role can use a different model, provider, or thinking depth.
-- **Repo-aware context** — language-aware code intelligence, local BM25 search, dependency context, project metadata, and targeted file reads give each role more than the latest chat message.
-- **WorkArtifact-bounded execution** — every approved dispatch becomes one WorkArtifact. Flat work is a one-item artifact; multi-step work is a multi-item artifact advanced internally through the same execution path, without creating new SpecCards for internal items.
+- **One production owner** — one configured model receives the real conversation and owns inspection, edits, repair, validation, and the final receipt.
+- **Repo-aware context** — language-aware code intelligence, local BM25 search, dependency context, project metadata, and targeted file reads give the agent more than the latest chat message.
+- **WorkArtifact projection** — active work remains inspectable through the existing TODO, activity, tool, validation, and receipt surfaces.
 - **Reviewable diffs** — proposed file writes can be inspected and approved before they reach disk.
 - **Project-aware validation** — Aura detects project tooling, selects focused checks for changed files, and reports results without hiding failures.
 - **Inspectable receipts** — completed runs retain tool, file, validation, cost, and outcome information as an audit record; receipt status does not drive internal item state.
-- **Provider flexibility** — choose providers independently for Planner and Worker.
+- **Provider flexibility** — choose any supported BYOK or CLI provider for production work.
 - **Local-first control** — the desktop owns the real workspace, execution, keys, and approval surface.
 
 ### The harness effect
@@ -144,7 +134,7 @@ These controls reduce risk, but they do not replace reviewing the plan, diffs, a
 
 **Your phone steers Aura. Your desktop does the work.**
 
-Companion is a remote control, not a separate IDE. The desktop owns the workspace and execution; the phone can browse projects and conversations, message the Planner, dispatch approved work, follow live execution, check Drone status, and inspect receipts.
+Companion is a remote control, not a separate IDE. The desktop owns the workspace and execution; the phone can browse projects and conversations, send messages, follow live execution, check Drone status, and inspect receipts.
 
 <p align="center">
   <img src="media/phone-home.jpg" alt="Aura Companion home screen showing desktop connection and recent activity" width="260">

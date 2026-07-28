@@ -83,9 +83,6 @@ class _FakeInput:
     def set_execution_active(self, active: bool) -> None:
         self.execution_active = active
 
-    def set_streaming(self, streaming: bool) -> None:
-        self.execution_active = streaming
-
     def setEnabled(self, enabled: bool) -> None:
         pass
 
@@ -101,7 +98,7 @@ class _FakeInput:
 
 @pytest.fixture
 def _handler(monkeypatch) -> SendHandler:
-    app = QCoreApplication.instance() or QCoreApplication([])
+    _app = QCoreApplication.instance() or QCoreApplication([])
     monkeypatch.setattr(
         "aura.gui.send_handler.has_usable_provider_configuration",
         lambda: True,

@@ -3,9 +3,15 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QPushButton,
-    QSizePolicy, QVBoxLayout, QWidget,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
 )
+
 from aura.gui.theme import ACCENT, BG_RAISED, BORDER, FG, FG_DIM, FG_MUTED
 
 
@@ -203,7 +209,7 @@ class ProjectLaunchpad(QWidget):
 
         demo_card = _ActionCard(
             "\U0001f680", "Try Demo Project",
-            "Create a tiny safe demo to try the Planner \u2192 Worker \u2192 Diff \u2192 Validation loop.",
+            "Create a tiny safe demo to try the production \u2192 Diff \u2192 Validation loop.",
             badge_text="\u2605 Recommended",
             border_color="rgba(122, 162, 247, 0.5)",
         )

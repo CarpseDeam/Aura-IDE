@@ -7,19 +7,18 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
     QDialog,
-    QVBoxLayout,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QPushButton,
     QStackedWidget,
+    QVBoxLayout,
     QWidget,
-    QFrame,
 )
 
 from aura.config import APP_NAME, has_usable_provider_configuration, icon_path
 from aura.gui._screen import clamp_to_screen
 from aura.gui.theme import ACCENT, BG_RAISED, BORDER, FG, FG_DIM, SUCCESS, WARN
-
 
 MISSION_CARDS = [
     (
@@ -237,9 +236,8 @@ class OnboardingDialog(QDialog):
 
         body = self._make_body(
             f"{APP_NAME} is an AI coding assistant that reads your project, "
-            "plans changes with a <b>Planner</b> model, and executes them with "
-            "a <b>Worker</b> model. Every file edit is reviewed by you before "
-            "it's applied."
+            "plans and executes changes with one <b>production agent</b>. "
+            "Every file edit is reviewed by you before it's applied."
         )
         body.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(body)
@@ -336,16 +334,7 @@ class OnboardingDialog(QDialog):
         )
         layout.addWidget(card2)
 
-        # Card 3: Auto-Dispatch (advanced, default OFF)
-        card3 = self._make_card(
-            "Sends specs directly to the Worker without your confirmation. "
-            "Faster but less guided.",
-            WARN,
-            bold_prefix="Auto-Dispatch  —  ",
-        )
-        layout.addWidget(card3)
-
-        # Card 4: Git Checkpoints
+        # Card 3: Git Checkpoints
         card4 = self._make_card(
             "Aura auto-commits before every change so you can always undo.",
             SUCCESS,
@@ -372,7 +361,7 @@ class OnboardingDialog(QDialog):
         layout.addWidget(title)
 
         body = self._make_body(
-            f"{APP_NAME} needs an AI provider to run Planner/Worker tasks.\n\n"
+            f"{APP_NAME} needs an AI provider to run production tasks.\n\n"
             "Configure a provider key in Settings → API Keys. Supported providers include "
             "DeepSeek, OpenAI, Anthropic, Gemini, OpenRouter, Claude Code, and Codex.\n\n"
             "You can still browse your project folder and explore the app without configuring AI."

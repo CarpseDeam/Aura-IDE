@@ -1,0 +1,13 @@
+{
+  "provider": "aura",
+  "planner_provider": "aura",
+  "worker_provider": "aura",
+  "default_model": "aura-fast",
+  "default_planner_model": "aura-pro",
+  "default_worker_model": "aura-fast",
+  "default_thinking": "high",
+  "aura_pending_session_id": "legacy-purchase-session",
+  "aura_pending_claim_secret": "legacy-claim-secret",
+  "first_launch_done": true,
+  "restore_last_conversation": false
+}

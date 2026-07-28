@@ -36,7 +36,6 @@ from aura.gui._screen import clamp_to_screen
 from aura.gui.chat_view import ChatView
 from aura.gui.checkpoint_dialog import CheckpointDialog
 from aura.gui.conv_persistence import ConversationPersistence
-from aura.gui.debug_report_handler import DebugReportHandler
 from aura.gui.drones.drone_reports_window import DroneReportsWindow
 from aura.gui.edge_rails import EdgeTabRail
 from aura.gui.gui_event_probe import install_gui_event_probe
@@ -125,7 +124,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
         self._toolbar = MainWindowToolbar(self._settings, self)
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self._toolbar)
         self._settings_controller = MainWindowSettingsController(self)
-        self._debug_report_handler = DebugReportHandler(window=self, parent=self)
         self._update_controller = MainWindowUpdateController(self._toolbar, parent=self)
 
         # ----- status bar -----

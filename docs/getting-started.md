@@ -43,27 +43,26 @@ You can also set keys through Settings → API Keys, which encrypts them to `~/.
 
 Run `aura` or `python -m aura`. The onboarding wizard walks you through 5 steps:
 
-1. **Welcome** — What Aura is and how Planner/Worker work.
+1. **Welcome** — What Aura's single production agent does.
 2. **Workspace** — Select a project folder. Aura indexes it for search and repo mapping.
-3. **Safety** — Diff approval is on by default. Auto-Approve and Auto-Dispatch are off.
-4. **Provider** — Choose your model path: set an API key (BYOK) or select Aura Credits as your provider.
+3. **Safety** — Diff approval is on by default. Auto-Approve is off.
+4. **Provider** — Choose a supported BYOK provider and configure its API key.
 5. **First Mission** — Choose a safe starter prompt (explain the project, suggest improvements, or write a README).
 
 ## Basic Workflow
 
 1. Open a project folder (File → Open Workspace or drag a folder onto the window).
 2. Type a request in the input panel: "Add error handling to the database module" or "Explain how the authentication flow works."
-3. The **Planner** reads your code and writes a technical spec. You see it in the spec card.
-4. Review the spec. Edit it if needed using the Spec Edit dialog.
-5. Click **Dispatch** or press **Ctrl+Enter**. The **Worker** executes the spec.
-6. Each file change shows a **diff** — approve, reject, approve all, or reject all.
-7. When done, the Worker reports back with a receipt. Changes are auto-committed with an AI-generated message.
+3. The production agent reads the workspace and owns the task end to end.
+4. Each file change shows a **diff** — approve, reject, approve all, or reject all.
+5. Tool activity, TODO progress, terminal output, and validation stay visible during the run.
+6. When done, Aura reports a factual receipt. Changes are auto-committed with an AI-generated message.
 
 ## Keyboard Shortcuts
 
 | Shortcut       | Action                          |
 |----------------|---------------------------------|
-| Ctrl+Enter     | Send / Dispatch                 |
+| Ctrl+Enter     | Send (or queue during a run)    |
 | Ctrl+Shift+A   | Ask about current selection     |
 | Ctrl+V in input | Paste image (attached as screenshot) |
 
@@ -73,5 +72,5 @@ Type these in the input panel:
 
 | Command  | Action                                                    |
 |----------|-----------------------------------------------------------|
-| `/undo`  | Soft-reset the last commit / restore pre-worker snapshot   |
+| `/undo`  | Soft-reset the last commit / restore the pre-run snapshot  |
 | `/help`  | Show available commands                                   |

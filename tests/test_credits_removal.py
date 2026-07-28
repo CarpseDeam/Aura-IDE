@@ -18,6 +18,7 @@ Covers:
 
 from __future__ import annotations
 
+import inspect
 import json
 from pathlib import Path
 
@@ -27,7 +28,6 @@ from PySide6.QtWidgets import QApplication
 from aura.config import cost_usd
 from aura.gui.status_bar import AuraStatusBar
 from aura.providers.registry import provider_registry
-
 
 # ---------------------------------------------------------------------------
 # 1.  Provider registry does not contain "aura"
@@ -79,15 +79,21 @@ class TestOldSettingsMigration:
 
         monkeypatch.setenv("AURA_CONFIG_DIR", str(profile))
         monkeypatch.setenv("AURA_DATA_DIR", str(profile))
+        monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
 
         import aura.paths
         monkeypatch.setattr(aura.paths, "config_dir", lambda: profile)
         monkeypatch.setattr(aura.paths, "data_dir", lambda: profile)
 
+        import aura.key_manager
+        from aura.config import has_usable_provider_configuration
         from aura.settings import load_settings
+
+        monkeypatch.setattr(aura.key_manager, "_key_manager", None)
         settings = load_settings()
         assert settings.provider != "aura", "aura provider should be migrated"
         assert settings.provider in provider_registry.ids(), "migrated to a valid provider"
+        assert has_usable_provider_configuration(settings.provider) is False
 
     def test_aura_provider_in_planner_worker_also_migrates(self, tmp_path, monkeypatch) -> None:
         profile = tmp_path / "profile"
@@ -189,6 +195,12 @@ class TestCreditsModulesDeleted:
         with pytest.raises(ImportError):
             import aura.gui.settings_pages.aura_page  # noqa: F401
 
+    def test_hosted_debug_report_modules_missing(self) -> None:
+        with pytest.raises(ImportError):
+            import aura.gui.debug_report_handler  # noqa: F401
+        with pytest.raises(ImportError):
+            import aura.gui.debug_report_worker  # noqa: F401
+
 
 # ---------------------------------------------------------------------------
 # 7.  No checkout or claim endpoint can be called from the GUI
@@ -205,13 +217,60 @@ class TestCheckoutClaimRemoved:
 
 
 # ---------------------------------------------------------------------------
-# 8.  No-provider send guard copy
+# 8.  No stale lifecycle or hosted API references remain
+# ---------------------------------------------------------------------------
+
+class TestNoStaleLifecycleReferences:
+    def test_runtime_sources_do_not_reference_deleted_credits_objects(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        forbidden = (
+            "_balance_controller",
+            "AuraCreditsPanel",
+            "credits_popout",
+            "credits_worker",
+            "balance_fetcher",
+            "main_window_balance",
+            "settings_pages.aura_page",
+            "aura-fast",
+            "aura-pro",
+            "sweet-manifestation-production",
+            "up.railway.app",
+            'get_provider("aura")',
+            "Add Credits",
+        )
+        for path in (repo_root / "aura").rglob("*.py"):
+            source = path.read_text(encoding="utf-8")
+            for token in forbidden:
+                assert token not in source, f"{token!r} remains in {path.relative_to(repo_root)}"
+
+    def test_main_window_has_no_deleted_debug_report_or_balance_controller(self) -> None:
+        from aura.gui.main_window import MainWindow
+
+        source = Path(inspect.getsourcefile(MainWindow)).read_text(encoding="utf-8")
+        assert "_balance_controller" not in source
+        assert "_debug_report_handler" not in source
+
+    def test_both_stop_controls_use_send_handler_cancellation(self) -> None:
+        from aura.gui.main_window_signal_wiring import MainWindowSignalWiring
+
+        source = inspect.getsource(MainWindowSignalWiring)
+        assert (
+            "w._input.stop_requested.connect(w._send_handler.handle_stop)" in source
+        )
+        assert (
+            "w._playground.stop_worker_requested.connect(w._send_handler.handle_stop)"
+            in source
+        )
+        assert "stop_worker_requested.connect(w._bridge.request_cancel)" not in source
+
+
+# ---------------------------------------------------------------------------
+# 9.  No-provider send guard copy
 # ---------------------------------------------------------------------------
 
 class TestSendGuardCopy:
     def test_send_handler_source_no_credits(self) -> None:
         """The source of SendHandler should not contain Aura Credits references."""
-        import inspect
         from aura.gui.send_handler import SendHandler
         full_source = inspect.getsource(SendHandler)
         assert "Aura Credits" not in full_source

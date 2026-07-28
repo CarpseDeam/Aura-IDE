@@ -98,7 +98,6 @@ class MainWindowSettingsController(QObject):
         window._toolbar.set_auto_approve(settings.auto_approve)
         window._toolbar.set_auto_summon_drones(settings.auto_summon_drones)
         window._refresh_status_bar()
-        window._balance_controller.refresh(window._settings)
 
     def on_auto_dispatch_toggled(self, checked: bool) -> None:
         self._window._settings.auto_dispatch = checked

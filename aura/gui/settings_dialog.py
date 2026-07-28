@@ -81,12 +81,16 @@ class SettingsDialog(QDialog):
 
         outer.addWidget(self._tabs, 1)
 
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        self._buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok
+            | QDialogButtonBox.StandardButton.Cancel
+            | QDialogButtonBox.StandardButton.Apply
         )
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        outer.addWidget(buttons)
+        self._buttons.accepted.connect(self.accept)
+        self._buttons.rejected.connect(self.reject)
+        apply_button = self._buttons.button(QDialogButtonBox.StandardButton.Apply)
+        apply_button.clicked.connect(self.apply)
+        outer.addWidget(self._buttons)
 
         if open_api_keys_tab:
             for i in range(self._tabs.count()):
@@ -127,6 +131,15 @@ class SettingsDialog(QDialog):
         self._sandbox_page.collect_settings(result)
         self._prompts_page.collect_settings(result)
         return result
+
+    def apply(self) -> None:
+        """Persist and live-apply the current values without closing."""
+        new_settings = self.result_settings()
+        save_settings(new_settings)
+        self._sandbox_page.apply_project_settings()
+        self._settings = new_settings
+        if self._on_live_settings_applied is not None:
+            self._on_live_settings_applied(new_settings)
 
     def accept(self) -> None:  # type: ignore[override]
         new_settings = self.result_settings()
