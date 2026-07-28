@@ -635,7 +635,6 @@ class MainWindow(WindowChromeMixin, QMainWindow):
 
     def _on_started(self) -> None:
         self._input.set_execution_active(True)
-        self._input.set_queued_messages(0)
         # Switch from Drone Bay to workspace so the user sees the run —
         # but do NOT switch away from the Chain Editor (Workflow Studio).
         if not self._drone_controller.is_workbay_open():

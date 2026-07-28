@@ -117,7 +117,7 @@ class SendHandler(QObject):
             return
 
         # Guard: no provider configured
-        if not has_usable_provider_configuration():
+        if not has_usable_provider_configuration(self._settings.provider):
             self._chat.add_error(
                 "No AI provider configured",
                 "Configure an AI provider in Settings → API Keys to start chatting. "
@@ -441,7 +441,7 @@ class SendHandler(QObject):
 
     def _get_current_model_info(self, model: str) -> ModelInfo | None:
         """Look up metadata for the model from the provider used for chat sends."""
-        cfg = PROVIDERS.get(self._settings.planner_provider)
+        cfg = PROVIDERS.get(self._settings.provider)
         if not cfg:
             return None
         return cfg.models.get(model)
@@ -450,6 +450,8 @@ class SendHandler(QObject):
 
     def _process_message_queue(self, model: str, thinking: ThinkingMode) -> None:
         """Send the next queued message, if any."""
+        if self._bridge.is_running():
+            return
         if not self._message_queue:
             return
         item = self._message_queue.pop(0)

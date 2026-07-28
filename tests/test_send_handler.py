@@ -59,7 +59,7 @@ def test_answer_only_research_send_does_not_open_drone_workbay(monkeypatch, tmp_
     assert app is not None
     monkeypatch.setattr(
         "aura.gui.send_handler.has_usable_provider_configuration",
-        lambda: True,
+        lambda provider: True,
     )
     bridge = _FakeBridge()
     chat = _FakeChat()
@@ -67,7 +67,11 @@ def test_answer_only_research_send_does_not_open_drone_workbay(monkeypatch, tmp_
         bridge=bridge,
         chat=chat,
         input_panel=_FakeInput(),
-        settings=SimpleNamespace(max_tool_rounds=3, planner_provider="test"),
+        settings=SimpleNamespace(
+            max_tool_rounds=3,
+            provider="test",
+            planner_provider="legacy-test",
+        ),
         workspace_root=tmp_path,
     )
     handler._get_current_model_info = lambda model: None
@@ -93,12 +97,18 @@ def test_answer_only_research_send_does_not_open_drone_workbay(monkeypatch, tmp_
     assert chat.assistant_started == 1
 
 
-def test_no_provider_guard_directs_user_to_byok_settings(monkeypatch, tmp_path):
+def test_selected_provider_without_credentials_is_rejected(monkeypatch, tmp_path):
     app = QCoreApplication.instance() or QCoreApplication([])
     assert app is not None
+    checked_providers = []
+
+    def _has_usable_provider_configuration(provider):
+        checked_providers.append(provider)
+        return provider == "configured-other"
+
     monkeypatch.setattr(
         "aura.gui.send_handler.has_usable_provider_configuration",
-        lambda: False,
+        _has_usable_provider_configuration,
     )
     bridge = _FakeBridge()
     chat = _FakeChat()
@@ -106,7 +116,11 @@ def test_no_provider_guard_directs_user_to_byok_settings(monkeypatch, tmp_path):
         bridge=bridge,
         chat=chat,
         input_panel=_FakeInput(),
-        settings=SimpleNamespace(max_tool_rounds=3, planner_provider="test"),
+        settings=SimpleNamespace(
+            max_tool_rounds=3,
+            provider="selected-no-key",
+            planner_provider="legacy-test",
+        ),
         workspace_root=tmp_path,
     )
 
@@ -117,6 +131,7 @@ def test_no_provider_guard_directs_user_to_byok_settings(monkeypatch, tmp_path):
     )
 
     assert bridge.send_calls == []
+    assert checked_providers == ["selected-no-key"]
     assert len(chat.errors) == 1
     title, message = chat.errors[0]
     assert title == "No AI provider configured"

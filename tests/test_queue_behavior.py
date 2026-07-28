@@ -101,7 +101,7 @@ def _handler(monkeypatch) -> SendHandler:
     _app = QCoreApplication.instance() or QCoreApplication([])
     monkeypatch.setattr(
         "aura.gui.send_handler.has_usable_provider_configuration",
-        lambda: True,
+        lambda provider: True,
     )
     monkeypatch.setattr(
         "aura.gui.send_handler.classify_user_request",
@@ -114,7 +114,11 @@ def _handler(monkeypatch) -> SendHandler:
         bridge=bridge,
         chat=chat,
         input_panel=inp,
-        settings=SimpleNamespace(max_tool_rounds=3, planner_provider="test"),
+        settings=SimpleNamespace(
+            max_tool_rounds=3,
+            provider="test",
+            planner_provider="legacy-test",
+        ),
         workspace_root=Path("/fake/workspace"),
     )
     return h
@@ -257,6 +261,61 @@ class TestQueueDraining:
     def test_drain_empty_queue(self, _handler):
         _handler._process_message_queue("m", "high")
 
+    def test_busy_deferred_drain_preserves_fifo(self, _handler):
+        bridge = _handler._bridge
+        bridge.set_running(True)
+        for text in ("first", "second", "third"):
+            _handler.handle_send(
+                SendPayload(text=text, attachments=[]),
+                "m",
+                "off",
+            )
+
+        _handler._process_message_queue("ignored", "off")
+
+        assert [item.text for item in _handler._message_queue] == [
+            "first",
+            "second",
+            "third",
+        ]
+        assert _handler._input.queued_messages == 3
+
+    def test_queue_count_survives_multiple_chained_run_starts(self, _handler):
+        from aura.gui.main_window import MainWindow
+
+        class _FakeDroneController:
+            def is_workbay_open(self) -> bool:
+                return True
+
+            def sync_drone_tab_checked(self) -> None:
+                pass
+
+        bridge = _handler._bridge
+        bridge.set_running(True)
+        for text in ("first", "second", "third"):
+            _handler.handle_send(
+                SendPayload(text=text, attachments=[]),
+                "m",
+                "off",
+            )
+
+        fake_window = SimpleNamespace(
+            _input=_handler._input,
+            _drone_controller=_FakeDroneController(),
+        )
+
+        bridge.set_running(False)
+        _handler._process_message_queue("ignored", "off")
+        assert _handler._input.queued_messages == 2
+        MainWindow._on_started(fake_window)
+        assert _handler._input.queued_messages == 2
+
+        bridge.set_running(False)
+        _handler._process_message_queue("ignored", "off")
+        assert _handler._input.queued_messages == 1
+        MainWindow._on_started(fake_window)
+        assert _handler._input.queued_messages == 1
+
     def test_queue_count_updates(self, _handler):
         bridge = _handler._bridge
         inp = _handler._input
@@ -268,6 +327,20 @@ class TestQueueDraining:
         _handler._message_queue.pop(0)
         _handler._input.set_queued_messages(len(_handler._message_queue))
         assert inp.queued_messages == 1
+
+
+def test_vision_model_lookup_uses_production_provider(_handler, monkeypatch):
+    production_info = SimpleNamespace(supports_vision=True)
+    legacy_info = SimpleNamespace(supports_vision=False)
+    monkeypatch.setattr(
+        "aura.gui.send_handler.PROVIDERS",
+        {
+            "test": SimpleNamespace(models={"shared-model": production_info}),
+            "legacy-test": SimpleNamespace(models={"shared-model": legacy_info}),
+        },
+    )
+
+    assert _handler._get_current_model_info("shared-model") is production_info
 
 
 class TestQueuedItem:
