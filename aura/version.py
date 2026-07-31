@@ -1,2 +1,2 @@
 """Version information for Aura."""
-__version__ = "1.9.17"
+__version__ = "1.9.18"
